@@ -4,6 +4,90 @@
   "locale": "tr-TR",
   "namespace": "editor",
   "messages": {
+    "workspace.global_dock.network.event.admitted": {
+      "text": "Oyun oturumu onaylandı"
+    },
+    "workspace.global_dock.network.replication": {
+      "text": "Çoğaltma"
+    },
+    "workspace.global_dock.network.rpc": {
+      "text": "RPC"
+    },
+    "workspace.global_dock.network.prediction": {
+      "text": "Zamanlama / tahmin"
+    },
+    "workspace.global_dock.network.interest": {
+      "text": "İlgi alanı"
+    },
+    "workspace.global_dock.network.source.detached": {
+      "text": "Bağlantı yok — tutulan veriler canlı değil"
+    },
+    "workspace.global_dock.network.source.disabled": {
+      "text": "Bu çalışma zamanı için ağ devre dışı"
+    },
+    "workspace.global_dock.network.source.stale": {
+      "text": "Güncel değil — kaynak artık veri yayımlamıyor"
+    },
+    "workspace.global_dock.network.source.live": {
+      "text": "Canlı çalışma zamanı tanılaması"
+    },
+    "workspace.global_dock.network.source.identity": {
+      "text": "İşlem / oturum / sahne / nesil | revizyon"
+    },
+    "workspace.global_dock.network.unavailable": {
+      "text": "Ölçülmüş veri yok"
+    },
+    "workspace.global_dock.network.dropped": {
+      "text": "Atılan yakalama kayıtları (sınır 256)"
+    },
+    "workspace.global_dock.network.history_evicted": {
+      "text": "Silinen geçmiş kayıtları (sınır 32)"
+    },
+    "workspace.global_dock.network.replication_legend": {
+      "text": "Kaydedilen / kaldırılan / incelenen / yayımlanan / başarısız / ertelenen (yalnızca işlenmiş durum)"
+    },
+    "workspace.global_dock.network.rpc_legend": {
+      "text": "Kabul edilen / başarılı / başarısız / iptal edilen"
+    },
+    "workspace.global_dock.network.prediction_legend": {
+      "text": "Yerel adım / sunucu adımı / örnek yaşı (yalnızca zamanlama verisi)"
+    },
+    "workspace.global_dock.network.interest_legend": {
+      "text": "İncelenen / ilgili / ertelenen"
+    },
+    "workspace.global_dock.network.timing.measured": {
+      "text": "Ölçülmüş eşleme"
+    },
+    "workspace.global_dock.network.event.listener": {
+      "text": "Dinleyici hazır"
+    },
+    "workspace.global_dock.network.event.accepted": {
+      "text": "Taşıma kabul edildi (oturum onayı yok)"
+    },
+    "workspace.global_dock.network.event.connected": {
+      "text": "Taşıma bağlantısı kuruldu (oturum onayı yok)"
+    },
+    "workspace.global_dock.network.event.received": {
+      "text": "Paket alındı"
+    },
+    "workspace.global_dock.network.event.closed": {
+      "text": "Kapalı"
+    },
+    "workspace.global_dock.network.event.failed": {
+      "text": "Başarısız"
+    },
+    "workspace.global_dock.network.provider.unavailable": {
+      "text": "Etkin ağ sağlayıcısı yok"
+    },
+    "workspace.global_dock.network.provider.deterministic": {
+      "text": "Bellek içi belirlenimci taşıma — yerel soket verisi değil"
+    },
+    "workspace.global_dock.network.provider.native": {
+      "text": "Yerel taşıma ölçümleri"
+    },
+    "workspace.global_dock.network.provider.other": {
+      "text": "Ana bilgisayarın seçtiği taşıma ölçümleri"
+    },
     "editor_workspace.action.return_to_welcome": {
       "text": "← Karşılama Ekranına Dön"
     },

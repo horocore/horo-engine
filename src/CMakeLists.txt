@@ -439,6 +439,7 @@ target_include_directories(HoroRuntime PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(HoroRuntime PUBLIC HoroEngine::Foundation HoroEngine::SaveApi PRIVATE nlohmann_json::nlohmann_json utf8proc miniz)
 
 add_library(HoroNetworkApi STATIC
+        runtime/networking/api/NetworkDebugger.cpp
         runtime/networking/api/MessageCodecRegistry.cpp
         runtime/networking/api/MessageDeliveryGate.cpp
         runtime/networking/api/NetworkAddress.cpp
@@ -707,6 +708,11 @@ add_library(HoroNetworkRuntime STATIC
 add_library(HoroEngine::NetworkRuntime ALIAS HoroNetworkRuntime)
 target_compile_features(HoroNetworkRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkRuntime PUBLIC HoroEngine::NetworkApi HoroEngine::RuntimeScene HoroEngine::Runtime)
+
+add_library(HoroNetworkDebuggerApplication STATIC application/network/NetworkDebugger.cpp)
+add_library(HoroEngine::NetworkDebuggerApplication ALIAS HoroNetworkDebuggerApplication)
+target_compile_features(HoroNetworkDebuggerApplication PUBLIC cxx_std_20)
+target_link_libraries(HoroNetworkDebuggerApplication PUBLIC HoroEngine::NetworkApi)
 
 add_library(HoroGameplayRuntime STATIC
         gameplay/runtime/BehaviorRegistry.cpp
@@ -2115,6 +2121,7 @@ target_link_libraries(HoroEditorServices
         HoroEngine::HostErrors
         HoroEngine::CinematicRuntime
         HoroEngine::NetworkApi
+        HoroEngine::NetworkDebuggerApplication
         HoroEngine::Application
         HoroEngine::Platform
         HoroEngine::RuntimeUi

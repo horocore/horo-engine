@@ -1,5 +1,6 @@
 #include "EditorWorkspaceView.h"
 #include "Horo/Application/GameplayBuildService.h"
+#include "Horo/Application/NetworkDebugger.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Editor/DefaultScreenFactories.h"
 #include "Horo/Editor/EditorGuiContext.h"
@@ -50,6 +51,8 @@ namespace Horo::Editor {
             const Application::GameplayBuildService *gameplayBuilds{nullptr};
             const IOperationQuery *operationQuery{nullptr};
             IOperationControl *operationControl{nullptr};
+            const Application::INetworkDebuggerQuery *networkDebuggerQuery{};
+            Application::INetworkDebuggerControl *networkDebuggerControl{};
         };
 
         struct WorkspaceProjectServices {
@@ -141,6 +144,8 @@ namespace Horo::Editor {
                       .gameplayBuilds = services.TryGetConst<Application::GameplayBuildService>(),
                       .operationQuery = services.TryGetConst<IOperationQuery>(),
                       .operationControl = services.TryGet<IOperationControl>(),
+                      .networkDebuggerQuery = services.TryGetConst<Application::INetworkDebuggerQuery>(),
+                      .networkDebuggerControl = services.TryGet<Application::INetworkDebuggerControl>(),
                   },
                   projectServices_{
                       .assetRegistry = services.TryGet<Assets::AssetRegistry>(),
@@ -184,6 +189,8 @@ namespace Horo::Editor {
                                                                             : Application::GameplayBuildEnvironment{},
                                                                     .localization = &context_.localization,
                                                                     .engineEvents = &context_.engineEvents,
+                                                                    .networkDebugger =
+                                                                        services_.TryGet<Application::NetworkDebuggerService>(),
                                                                 });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();
@@ -215,6 +222,8 @@ namespace Horo::Editor {
                     // Built-in panels have no extension activation identity; extension hosts inject
                     // their own provider-owned context at the descriptor activation boundary.
                     .surfaceEvents = nullptr,
+                    .networkDebuggerQuery = panelServices_.networkDebuggerQuery,
+                    .networkDebuggerControl = panelServices_.networkDebuggerControl,
                 };
                 registry_.AttachAll(panelContext);
                 UpdateStatusItems();

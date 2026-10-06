@@ -309,6 +309,18 @@ if(HORO_BUILD_NETWORK_GNS)
     target_link_libraries(HoroNetworkTransportGnsTests PRIVATE HoroEngine::NetworkTransportGNS)
     horo_register_catch_test(HoroNetworkTransportGnsTests LABELS "unit;network;gns;socket")
 endif()
+add_executable(HoroNetworkDebuggerTests
+    support/AllocationProbe.cpp
+    unit/runtime/networking/NetworkDebuggerTests.cpp
+)
+target_include_directories(HoroNetworkDebuggerTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_link_libraries(HoroNetworkDebuggerTests PRIVATE HoroEngine::NetworkDebuggerApplication HoroEngine::NetworkRuntime HoroEngine::NetworkTransportNull)
+horo_register_catch_test(HoroNetworkDebuggerTests LABELS "unit;network;debugger;headless")
+add_executable(HoroNetworkDebuggerPublicHeaderConsumer support/NetworkDebuggerPublicHeaderConsumer.cpp)
+target_compile_features(HoroNetworkDebuggerPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroNetworkDebuggerPublicHeaderConsumer PRIVATE HoroEngine::NetworkDebuggerApplication)
+add_test(NAME HoroNetworkDebuggerPublicHeaderConsumer COMMAND HoroNetworkDebuggerPublicHeaderConsumer)
+
 add_executable(HoroNetworkRuntimeTests
         unit/runtime/networking/AdmissionProtectionTests.cpp
         unit/runtime/networking/InboundMessageDispatcherTests.cpp
@@ -1884,14 +1896,17 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/GlobalDockBuildOutputPaneTests.cpp
             unit/editor/GlobalDockBuildOutputToolbarRenderTests.cpp
             unit/editor/GlobalDockPanelRenderTests.cpp
+            unit/editor/GlobalDockNetworkPaneTests.cpp
     )
 
     target_compile_features(HoroGlobalDockPanelRenderTests PRIVATE cxx_std_20)
     target_include_directories(HoroGlobalDockPanelRenderTests PRIVATE
+            ${PROJECT_SOURCE_DIR}/tests/support
             ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
     )
     target_link_libraries(HoroGlobalDockPanelRenderTests
             PRIVATE
+            HoroEngine::NetworkTransportNull
             HoroEngine::Gui
             HoroThirdParty::ImGui
     )

@@ -1,4 +1,5 @@
 #pragma once
+#include "Horo/Network/NetworkDebugger.h"
 
 /** @file ReplicationStateCapture.h
  * @brief Prepared authoritative capture of committed owner state into immutable bounded snapshots.
@@ -188,11 +189,13 @@ namespace Horo::Network {
          * @param serializers Exact immutable descriptor/codec generation.
          * @param targets Complete explicit owner bindings.
          * @param limits Finite storage and reconciliation bounds.
+         * @param debugger Optional owner-thread collector retained by the host through capture destruction.
          * @return Prepared coordinator or a typed error without publication.
          */
         [[nodiscard]] static Result<std::unique_ptr<ReplicationStateCapture>> Prepare(
             const ReplicationWorldCaptureRead &world, std::shared_ptr<const ReplicationSerializerRegistry> serializers,
-            std::span<const ReplicationCaptureTarget> targets, const ReplicationCaptureLimits &limits = {});
+            std::span<const ReplicationCaptureTarget> targets, const ReplicationCaptureLimits &limits = {},
+            NetworkDebugger *debugger = nullptr);
         ~ReplicationStateCapture();
         ReplicationStateCapture(const ReplicationStateCapture &) = delete;
         ReplicationStateCapture &operator=(const ReplicationStateCapture &) = delete;

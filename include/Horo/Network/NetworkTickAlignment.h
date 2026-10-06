@@ -1,4 +1,5 @@
 #pragma once
+#include "Horo/Network/NetworkDebugger.h"
 
 /**
  * @file NetworkTickAlignment.h
@@ -84,10 +85,11 @@ namespace Horo::Network {
          * @param connection Exact admitted transport generation.
          * @param session Exact admitted gameplay-session generation.
          * @param policy Positive finite sample and holdover bounds.
+         * @param debugger Optional owner-thread collector that outlives this mapper.
          * @return Mapper or typed invalid-policy failure.
          */
         [[nodiscard]] static Result<NetworkTickAlignment> Create(ConnectionHandle connection, NetworkOperationGeneration session,
-                                                                 NetworkTickAlignmentPolicy policy);
+                                                                 NetworkTickAlignmentPolicy policy, NetworkDebugger *debugger = nullptr);
 
         /**
          * @brief Admits one exact-generation, in-order sample without advancing simulation.
@@ -132,10 +134,13 @@ namespace Horo::Network {
             std::uint64_t serverTick{};
         };
 
-        NetworkTickAlignment(ConnectionHandle connection, NetworkOperationGeneration session, NetworkTickAlignmentPolicy policy) noexcept;
+        NetworkTickAlignment(ConnectionHandle connection, NetworkOperationGeneration session, NetworkTickAlignmentPolicy policy,
+                             NetworkDebugger *debugger) noexcept;
         [[nodiscard]] Result<std::uint64_t> MedianAt(std::uint64_t localTick) const;
         void ClearSamples() noexcept;
 
+        NetworkDebugger *debugger_{};
+        NetworkDiagnosticSource diagnosticSource_{};
         ConnectionHandle connection_{};
         NetworkOperationGeneration session_{};
         NetworkTickAlignmentPolicy policy_{};

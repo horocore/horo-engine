@@ -289,3 +289,28 @@ namespace Horo::Network {
         REQUIRE(fixture.Capture(3, 3.0).published == 1);
     }
 }  // namespace Horo::Network
+
+TEST_CASE("Replication debugger observes actual canonical commit success and failure reports", "[network][capture][debugger]") {
+    using namespace Horo::Network;
+    NetworkDebugger debugger;
+    const NetworkDiagnosticSource source{1, 2, CaptureTestSupport::World().scene.value, 5};
+    REQUIRE(debugger.Begin(source, true));
+    CaptureTestSupport::Fixture fixture{{}, &debugger};
+    REQUIRE(fixture.Capture(1, 4.0).published == 1);
+    fixture.owner->fail = true;
+    REQUIRE(fixture.Capture(2, 8.0).failed == 1);
+    REQUIRE(debugger.Publish(source, 100));
+    auto snapshot = debugger.Snapshot();
+    REQUIRE(snapshot.replication.size == 2);
+    REQUIRE(snapshot.replication.records[0].published == 1);
+    REQUIRE(snapshot.replication.records[1].failed == 1);
+    REQUIRE(snapshot.replication.records[1].considered == 1);
+    REQUIRE(fixture.owner->begins == fixture.owner->ends);
+    REQUIRE(fixture.Pin()->SimulationTick() == 1);
+    debugger.Detach();
+    REQUIRE(debugger.Begin({1, 3, source.scene, 6}, true));
+    fixture.owner->fail = false;
+    REQUIRE(fixture.Capture(3, 9.0).published == 1);
+    REQUIRE(debugger.Publish(debugger.Source(), 101));
+    REQUIRE(debugger.Snapshot().replication.size == 0);
+}

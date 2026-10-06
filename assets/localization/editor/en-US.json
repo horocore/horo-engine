@@ -4,6 +4,90 @@
   "locale": "en-US",
   "namespace": "editor",
   "messages": {
+    "workspace.global_dock.network.event.admitted": {
+      "text": "Gameplay session admitted"
+    },
+    "workspace.global_dock.network.replication": {
+      "text": "Replication"
+    },
+    "workspace.global_dock.network.rpc": {
+      "text": "RPC"
+    },
+    "workspace.global_dock.network.prediction": {
+      "text": "Timing / prediction"
+    },
+    "workspace.global_dock.network.interest": {
+      "text": "Interest"
+    },
+    "workspace.global_dock.network.source.detached": {
+      "text": "Detached — retained evidence is not live"
+    },
+    "workspace.global_dock.network.source.disabled": {
+      "text": "Networking disabled for this runtime"
+    },
+    "workspace.global_dock.network.source.stale": {
+      "text": "Stale — source has stopped publishing"
+    },
+    "workspace.global_dock.network.source.live": {
+      "text": "Live runtime diagnostics"
+    },
+    "workspace.global_dock.network.source.identity": {
+      "text": "Process / session / scene / generation | revision"
+    },
+    "workspace.global_dock.network.unavailable": {
+      "text": "No measured evidence"
+    },
+    "workspace.global_dock.network.dropped": {
+      "text": "Capture records dropped (limit 256)"
+    },
+    "workspace.global_dock.network.history_evicted": {
+      "text": "History records evicted (limit 32)"
+    },
+    "workspace.global_dock.network.replication_legend": {
+      "text": "Registered / retired / considered / published / failed / deferred (committed state only)"
+    },
+    "workspace.global_dock.network.rpc_legend": {
+      "text": "Accepted / succeeded / failed / cancelled"
+    },
+    "workspace.global_dock.network.prediction_legend": {
+      "text": "Local tick / server tick / sample age (timing evidence only)"
+    },
+    "workspace.global_dock.network.interest_legend": {
+      "text": "Considered / relevant / deferred"
+    },
+    "workspace.global_dock.network.timing.measured": {
+      "text": "Measured mapping"
+    },
+    "workspace.global_dock.network.event.listener": {
+      "text": "Listener ready"
+    },
+    "workspace.global_dock.network.event.accepted": {
+      "text": "Transport accepted (not admitted)"
+    },
+    "workspace.global_dock.network.event.connected": {
+      "text": "Transport connected (not admitted)"
+    },
+    "workspace.global_dock.network.event.received": {
+      "text": "Packet received"
+    },
+    "workspace.global_dock.network.event.closed": {
+      "text": "Closed"
+    },
+    "workspace.global_dock.network.event.failed": {
+      "text": "Failed"
+    },
+    "workspace.global_dock.network.provider.unavailable": {
+      "text": "No network provider active"
+    },
+    "workspace.global_dock.network.provider.deterministic": {
+      "text": "Deterministic in-memory transport — not native socket evidence"
+    },
+    "workspace.global_dock.network.provider.native": {
+      "text": "Native transport measurements"
+    },
+    "workspace.global_dock.network.provider.other": {
+      "text": "Host-selected transport measurements"
+    },
     "editor_workspace.action.return_to_welcome": {
       "text": "← Return to Welcome"
     },
