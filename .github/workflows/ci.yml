@@ -175,6 +175,22 @@ jobs:
         if: ${{ !cancelled() && runner.os == 'Linux' && needs.tooling.outputs.network == 'true' && steps.cache.outcome == 'success' }}
         run: cmake --preset ci-network-disabled
 
+      # This opt-in private backend qualification runs on every platform in the
+      # existing matrix. Injected native dispatch is not physical-device evidence.
+      - name: Configure OpenXR native lifecycle qualification
+        id: xr_configure
+        if: ${{ !cancelled() && steps.cache.outcome == 'success' }}
+        run: cmake --preset ci-xr-openxr
+
+      - name: Build OpenXR lifecycle and header boundaries
+        id: xr_build
+        if: ${{ !cancelled() && steps.xr_configure.outcome == 'success' }}
+        run: cmake --build --preset ci-xr-openxr
+
+      - name: Verify OpenXR omitted target graph
+        if: ${{ !cancelled() && steps.cache.outcome == 'success' }}
+        run: cmake --preset ci-xr-disabled
+
       - name: Checkpoint main build caches
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
         continue-on-error: true
@@ -183,7 +199,7 @@ jobs:
           compiler-key: ${{ steps.cache.outputs.compiler-key }}
           dependency-key: ${{ steps.cache.outputs.dependency-key }}
           dependency-hit: ${{ steps.cache.outputs.dependency-hit }}
-          dependency-ready: ${{ needs.tooling.outputs.network != 'true' || steps.network_configure.outcome == 'success' }}
+          dependency-ready: ${{ steps.xr_configure.outcome == 'success' && (needs.tooling.outputs.network != 'true' || steps.network_configure.outcome == 'success') }}
 
       - name: Prepare Windows mixer allocation diagnostics
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
@@ -205,6 +221,10 @@ jobs:
       - name: Test GNS connections, DNS, delivery and lifecycle
         if: ${{ !cancelled() && steps.network_build.outcome == 'success' }}
         run: ctest --preset ci-network-gns
+
+      - name: Test OpenXR rollback replacement and shutdown
+        if: ${{ !cancelled() && steps.xr_build.outcome == 'success' }}
+        run: ctest --preset ci-xr-openxr
 
       - name: Upload test reports
         if: always()
