@@ -32,6 +32,7 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
         "HoroCliCommandRegistryTests", "HoroPlatformTests", "HoroUpdateZipPackageProducerTests",
         "HoroCliOutputPublicHeaderConsumer", "HoroCliProductionOutputContract",
         "HoroVfxApiTests", "HoroCinematicModelTests", "HoroCinematicRuntimeTests",
+        "HoroFractureDocumentTests", "HoroFractureDocumentPublicHeaderConsumer",
         "HoroCinematicPropertyIntegrationTests", "HoroCinematicModelPublicHeaderConsumer",
         "HoroCinematicRuntimePublicHeaderConsumer", "HoroEditorServicesPublicHeaderConsumer",
         "HoroCameraCutRuntimeTests", "HoroCameraCutPublicHeaderConsumer",
