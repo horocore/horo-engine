@@ -82,7 +82,7 @@ namespace Horo::Extensions {
             using enum EditorSurfaceKind;
             if (policy == EditorSurfacePersistence::None)
                 return true;
-            return kind == Panel || kind == Tab || kind == SettingsPage;
+            return kind == Panel || kind == Tab || kind == SettingsPage || kind == ActivityItem;
         }
 
         template <typename Id> [[nodiscard]] bool HasUniqueCanonicalIds(const std::vector<Id> &ids, const std::size_t maximumBytes) {
@@ -140,6 +140,18 @@ namespace Horo::Extensions {
         if (descriptor.placement.target.size() > limits.maximumPlacementTargetBytes ||
             (!descriptor.placement.target.empty() && !IsCanonicalIdentity(descriptor.placement.target, limits.maximumPlacementTargetBytes)))
             return Invalid("Editor surface placement target is not a canonical bounded identity.");
+        if ((descriptor.kind == EditorSurfaceKind::ActivityItem) != descriptor.activity.has_value())
+            return Invalid("Activity destinations require an explicit typed drawer binding.");
+        if (descriptor.activity.has_value()) {
+            const auto &activity = *descriptor.activity;
+            if (static_cast<std::uint8_t>(activity.side) > static_cast<std::uint8_t>(EditorActivitySide::Bottom) || activity.group >= 3 ||
+                !IsCanonicalIdentity(activity.drawerId, limits.maximumIdentityBytes))
+                return Invalid("Activity destination side, group or drawer identity is invalid.");
+            if (activity.iconResource.empty() || activity.iconResource.size() > limits.maximumPlacementTargetBytes ||
+                activity.iconResource.front() == '/' || activity.iconResource.find("..") != std::string::npos ||
+                activity.iconResource.find('\\') != std::string::npos || activity.iconResource.find(':') != std::string::npos)
+                return Invalid("Activity icon must be a bounded package-relative resource.");
+        }
         if (!IsKnownPersistence(descriptor.persistence) || !PersistenceMatchesKind(descriptor.kind, descriptor.persistence))
             return Invalid("Editor surface persistence policy is not valid for this surface kind.");
         if (descriptor.openByDefault && descriptor.persistence == EditorSurfacePersistence::None)

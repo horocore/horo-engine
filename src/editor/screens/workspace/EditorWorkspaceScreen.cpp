@@ -12,7 +12,9 @@
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Editor/ProjectOpenService.h"
 #include "Horo/Editor/ScreenRegistry.h"
+#include "Horo/Editor/WorkspaceLayoutPersistence.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
+#include "Horo/Extensions/EditorActivityHost.h"
 #include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
@@ -129,7 +131,8 @@ namespace Horo::Editor {
                   statusItems_(services.Get<EditorStatusItemRegistry>()), inputRouter_(services.Get<Input::InputRouter>()),
                   workspaceInputContext_(
                       inputRouter_.PushContext(Input::InputContextId{"editor.workspace"}, Input::InputContextKind::EditorWorkspace)),
-                  view_(context_, registry_, services.Get<std::uintptr_t>(), inputRouter_, workspaceInputContext_),
+                  view_(context_, registry_, services.Get<std::uintptr_t>(), inputRouter_, workspaceInputContext_,
+                        services.TryGet<Extensions::EditorActivityHost>(), services.TryGet<IEditorGuiRenderer>()),
                   viewportSceneState_(services.Get<EditorViewportSceneState>()),
                   runtimeScene_(services.Get<Runtime::RuntimeSceneService>()), settings_(services.Get<EditorSettingsService>()),
                   projectOpenService_(services.Get<ProjectOpenService>()),
@@ -193,6 +196,7 @@ namespace Horo::Editor {
                 snackbarHost_ = std::make_unique<EditorSnackbarHost>(controller_->DataBus());
                 host_.SetCurrentProjectRoot(controller_->ViewModel().projectRoot);
                 LoadProjectInputProfile(controller_->ViewModel().projectRoot);
+                RestoreExtensionWorkspace();
                 viewportSceneState_.Replace(controller_->ViewportScene());
                 publishedRevisions_.scene = controller_->ViewportScene().documentRevision;
                 publishedRevisions_.selection = controller_->CurrentSelectionRevision();
@@ -229,6 +233,10 @@ namespace Horo::Editor {
 
             void OnUpdate(float dt) override {
                 if (controller_) {
+                    while (const auto destination = view_.UpdateExtensionActivities())
+                        controller_->ProcessCommand({.command = EditorWorkspaceViewCommand::ChangeActivePanel,
+                                                     .targetIndex = static_cast<int>(*destination),
+                                                     .stringPayload = std::string{}});
                     controller_->UpdatePlayPresentation(dt);
                     controller_->UpdateAutosave(dt, settings_.Snapshot().settings.autoSaveIntervalMinutes);
                     controller_->UpdateExternalSceneWatch(dt);
@@ -463,6 +471,7 @@ namespace Horo::Editor {
             void OnLeave() override {
                 LOG_INFO("editor.workspace", "EditorWorkspaceScreen leaving.");
                 if (controller_) {
+                    SaveExtensionWorkspace();
                     controller_->FlushAutosave();
                 }
                 static_cast<void>(statusItems_.Update("horo.status.document", EditorStatusItemContent{.available = false}));
@@ -481,6 +490,73 @@ namespace Horo::Editor {
             }
 
         private:
+            bool workspacePersistenceAdmitted_{};
+
+            void RestoreExtensionWorkspace() {
+                auto *const activities = services_.TryGet<Extensions::EditorActivityHost>();
+                if (!activities || !controller_)
+                    return;
+                const auto path = std::filesystem::path{controller_->ViewModel().projectRoot} / ".horo" / "editor_workspace.json";
+                Extensions::EditorSurfaceWorkspaceState state{.schemaVersion = Extensions::EditorSurfaceRegistry::WorkspaceSchemaVersion};
+                std::error_code existsError;
+                if (std::filesystem::exists(path, existsError)) {
+                    std::string error;
+                    const auto layout = WorkspaceLayoutPersistence::Load(path, &error);
+                    if (!layout) {
+                        LOG_WARN("editor.workspace", "Cannot restore workspace state: %s", error.c_str());
+                        return;
+                    }
+                    for (const auto &surface : layout->surfaces) {
+                        std::optional<Extensions::EditorActivityPlacement> placement;
+                        if (surface.activityPlacement)
+                            placement = Extensions::EditorActivityPlacement{static_cast<Extensions::EditorActivitySide>(
+                                                                                surface.activityPlacement->side),
+                                                                            surface.activityPlacement->group,
+                                                                            static_cast<std::int32_t>(surface.activityPlacement->order)};
+                        state.surfaces.push_back({.surfaceId = surface.id,
+                                                  .provider = {surface.extensionId, surface.moduleId},
+                                                  .open = surface.open,
+                                                  .focused = surface.focused,
+                                                  .opaqueState = surface.state,
+                                                  .activityVisible = surface.visible,
+                                                  .activityPlacement = placement});
+                    }
+                } else if (existsError)
+                    return;
+                if (const auto restored = activities->Registry().Restore(state); restored.HasError()) {
+                    LOG_WARN("editor.workspace", "Cannot admit workspace surface state: %s", restored.ErrorValue().message.c_str());
+                    return;
+                }
+                workspacePersistenceAdmitted_ = true;
+                activities->Update();
+                while (const auto destination = view_.UpdateExtensionActivities())
+                    controller_->ProcessCommand({.command = EditorWorkspaceViewCommand::ChangeActivePanel,
+                                                 .targetIndex = static_cast<int>(*destination),
+                                                 .stringPayload = std::string{}});
+            }
+
+            void SaveExtensionWorkspace() {
+                auto *const activities = services_.TryGet<Extensions::EditorActivityHost>();
+                if (!activities || !controller_ || !workspacePersistenceAdmitted_)
+                    return;
+                auto layout = controller_->ViewModel().workspacePanelHost.Layout();
+                layout.surfaces.clear();
+                for (const auto &surface : activities->Registry().Save().surfaces) {
+                    std::optional<WorkspaceActivityPlacement> placement;
+                    if (surface.activityPlacement)
+                        placement = WorkspaceActivityPlacement{static_cast<WorkspaceActivitySide>(surface.activityPlacement->side),
+                                                               surface.activityPlacement->group,
+                                                               static_cast<std::uint32_t>(surface.activityPlacement->order)};
+                    layout.surfaces.push_back({surface.surfaceId, surface.provider.extensionId, surface.provider.moduleId, surface.open,
+                                               surface.focused, surface.activityVisible, surface.opaqueState, placement});
+                }
+                std::string error;
+                const auto path = std::filesystem::path{controller_->ViewModel().projectRoot} / ".horo" / "editor_workspace.json";
+                if (!WorkspaceLayoutPersistence::Save(path, layout, &error))
+                    LOG_WARN("editor.workspace", "Cannot save workspace state: %s", error.c_str());
+                workspacePersistenceAdmitted_ = false;
+            }
+
             void OpenSceneComparison() {
                 Result<SceneDocumentComparisonRequest> captured = controller_->CaptureExternalSceneComparison();
                 if (captured.HasError()) {

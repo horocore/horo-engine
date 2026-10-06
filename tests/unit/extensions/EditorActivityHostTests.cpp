@@ -1,0 +1,216 @@
+#include "EditorActivityPackageSupport.h"
+#include "Horo/Extensions/EditorActivityAbi.h"
+#include "Horo/Extensions/EditorActivityHost.h"
+#include "Horo/Extensions/ExtensionManager.h"
+#include "Horo/Foundation/JobSystem.h"
+#include "Horo/Platform/DynamicLibrary.h"
+#include "SecurityTestSupport.h"
+
+#include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <thread>
+
+namespace Horo::Extensions::Tests {
+    namespace {
+        void RequirePackageLoad(ExtensionManager &manager, const std::filesystem::path &path) {
+            const auto loaded = manager.LoadExtension(path.string());
+            if (loaded.HasError()) {
+                for (const Error *error = &loaded.ErrorValue(); error; error = error->cause.Get())
+                    UNSCOPED_INFO("Package load error domain=" << error->domain.Value() << " code=" << error->code.Value()
+                                                               << " detail=" << error->message);
+            }
+            REQUIRE(loaded.HasValue());
+        }
+    }  // namespace
+
+    TEST_CASE("External ABI activity package publishes real copied SVG/form data and retires its exact generation",
+              "[Extensions][EditorSurface][Activity][ABI]") {
+        Horo::Tests::EditorActivityPackage package;
+        JobSystem jobs;
+        auto host = std::make_shared<EditorActivityHost>(jobs);
+        ExtensionManager manager{nullptr,
+                                 ExtensionHostProfile::Interactive,
+                                 {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                                 Horo::Tests::CreateAcceptingArtifactGate(),
+                                 {},
+                                 {},
+                                 host};
+        RequirePackageLoad(manager, package.root);
+        host->Update();
+        REQUIRE(host->Prepared().size() == 1);
+        const auto initial = host->Prepared().front();
+        REQUIRE(initial.icon);
+        CHECK(initial.icon->pixels.size() == 48U * 48U * 4U);
+        REQUIRE(initial.surface.form);
+        CHECK(initial.surface.form->nodes.size() == 2);
+        CHECK(host->LocalizedText(initial.surface.descriptor.provider, "fixture.label", "tr-TR") == "Deneme cekmecesi");
+        REQUIRE(host->Registry().ToggleActivity(initial.surface.descriptor.provider, "fixture.activity").HasValue());
+        host->Update();
+        CHECK(host->Prepared().front().surface.open);
+        REQUIRE(host->QueueAction(initial.surface.descriptor.provider, "fixture.activity", "fixture.run", "fixture.run", 1).HasValue());
+        host->Update();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+        while (host->Prepared().front().revision == 1 && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            host->Update();
+        }
+        CHECK(host->Prepared().front().revision == 2);
+        CHECK(host->Prepared().front().surface.activity.badgeCount == 1);
+        CHECK(host->QueueAction(initial.surface.descriptor.provider, "fixture.activity", "fixture.run", "fixture.run", 1).HasError());
+        REQUIRE(host->Registry().SetActivityVisibility("fixture.activity", false).HasValue());
+        const auto saved = host->Registry().Save();
+        manager.UnloadExtension("fixture.package");
+        host->Update();
+        CHECK(host->Prepared().empty());
+        CHECK_FALSE(host->IsLive(initial.surface.descriptor.provider));
+        CHECK(host->QueueAction(initial.surface.descriptor.provider, "fixture.activity", "fixture.run", "fixture.run", 2).HasError());
+        RequirePackageLoad(manager, package.root);
+        host->Update();
+        REQUIRE(host->Prepared().size() == 1);
+        CHECK(host->Prepared().front().surface.descriptor.provider.activationGeneration !=
+              initial.surface.descriptor.provider.activationGeneration);
+        REQUIRE(host->Registry().Restore(saved).HasValue());
+        host->Update();
+        CHECK_FALSE(host->Prepared().front().surface.activity.visible);
+    }
+
+    TEST_CASE("Cancelled action results cannot publish after the provider successfully completes", "[Extensions][Activity][ABI]") {
+        Horo::Tests::EditorActivityPackage package;
+        const auto library =
+            Platform::LoadDynamicLibrary((package.root / std::filesystem::path{HORO_EDITOR_ACTIVITY_FIXTURE}.filename()).string());
+        REQUIRE(library.HasValue());
+        const auto hold = reinterpret_cast<void (*)(std::uint32_t)>(library.Value()->GetSymbol("horo_test_activity_hold_action"));
+        const auto published = reinterpret_cast<std::uint32_t (*)()>(library.Value()->GetSymbol("horo_test_activity_result_published"));
+        REQUIRE(hold);
+        REQUIRE(published);
+        JobSystem jobs;
+        auto host = std::make_shared<EditorActivityHost>(jobs);
+        ExtensionManager manager{nullptr,
+                                 ExtensionHostProfile::Interactive,
+                                 {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                                 Horo::Tests::CreateAcceptingArtifactGate(),
+                                 {},
+                                 {},
+                                 host};
+        RequirePackageLoad(manager, package.root);
+        host->Update();
+        const auto provider = host->Prepared().front().surface.descriptor.provider;
+
+        struct ReleaseBarrier {
+            void (*release)(std::uint32_t);
+
+            ~ReleaseBarrier() {
+                release(0);
+            }
+        };
+
+        hold(1);
+        ReleaseBarrier release{hold};
+        REQUIRE(host->QueueAction(provider, "fixture.activity", "fixture.run", "fixture.run", 1).HasValue());
+        host->Update();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+        while (!published() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::yield();
+        REQUIRE(published());
+        const auto snapshot = jobs.SnapshotIfChanged(0);
+        REQUIRE(snapshot);
+        REQUIRE(snapshot->jobs.size() == 1);
+        REQUIRE(jobs.RequestCancel(snapshot->jobs.front().id).HasValue());
+        hold(0);
+        jobs.Shutdown(ShutdownPolicy::Drain);
+        host->Update();
+        REQUIRE(host->Prepared().size() == 1);
+        CHECK(host->Prepared().front().revision == 1);
+        CHECK(host->Prepared().front().surface.activity.badgeCount == 0);
+    }
+
+    TEST_CASE("ABI activity package rejects unsupported resources and absent application trust composition",
+              "[Extensions][EditorSurface][Activity][ABI]") {
+        Horo::Tests::EditorActivityPackage package;
+        JobSystem jobs;
+        auto host = std::make_shared<EditorActivityHost>(jobs);
+        SECTION("contribution-point spelling is not a canonical host capability") {
+            const auto path = package.root / "extension.json";
+            std::ifstream input{path};
+            std::string manifest{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+            const auto capability = manifest.find("\"requiredCapabilities\":[\"editor.activity\"]");
+            REQUIRE(capability != std::string::npos);
+            manifest.replace(capability, std::string_view{"\"requiredCapabilities\":[\"editor.activity\"]"}.size(),
+                             "\"requiredCapabilities\":[\"editor.activity_item\"]");
+            input.close();
+            std::ofstream output{path};
+            output << manifest;
+            output.close();
+            ExtensionManager manager{nullptr,
+                                     ExtensionHostProfile::Interactive,
+                                     {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                                     Horo::Tests::CreateAcceptingArtifactGate(),
+                                     {},
+                                     {},
+                                     host};
+            const auto rejected = manager.LoadExtension(package.root.string());
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == "invalid_manifest");
+            CHECK(host->Prepared().empty());
+        }
+        SECTION("canonical transport capability is rejected when not advertised") {
+            ExtensionManager manager{nullptr, ExtensionHostProfile::Interactive, {}, Horo::Tests::CreateAcceptingArtifactGate(), {}, {},
+                                     host};
+            CHECK(manager.LoadExtension(package.root.string()).HasError());
+            host->Update();
+            CHECK(host->Prepared().empty());
+        }
+        SECTION("headless composition cannot advertise the graphical transport") {
+            const auto path = package.root / "extension.json";
+            std::ifstream input{path};
+            std::string manifest{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+            const auto role = manifest.find("\"roles\":[\"editor-presentation\"]");
+            REQUIRE(role != std::string::npos);
+            // A mixed-role module is selected by headless resolution, so its explicit ABI requirement must reject.
+            manifest.replace(role, std::string_view{"\"roles\":[\"editor-presentation\"]"}.size(),
+                             "\"roles\":[\"backend-capability\",\"editor-presentation\"]");
+            input.close();
+            std::ofstream output{path};
+            output << manifest;
+            output.close();
+            ExtensionManager manager{nullptr,
+                                     ExtensionHostProfile::Headless,
+                                     {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                                     Horo::Tests::CreateAcceptingArtifactGate(),
+                                     {},
+                                     {},
+                                     host};
+            CHECK(manager.LoadExtension(package.root.string()).HasError());
+            host->Update();
+            CHECK(host->Prepared().empty());
+        }
+        SECTION("missing trust remains fail closed") {
+            ExtensionManager manager{nullptr, ExtensionHostProfile::Interactive, {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY}, {}, {}, {}, host};
+            CHECK(manager.LoadExtension(package.root.string()).HasError());
+            host->Update();
+            CHECK(host->Prepared().empty());
+        }
+        SECTION("active or external SVG resources never reach the live registry") {
+            package.Icon(R"(<svg xmlns="http://www.w3.org/2000/svg"><image href="file:///etc/passwd"/></svg>)");
+            ExtensionManager manager{nullptr,
+                                     ExtensionHostProfile::Interactive,
+                                     {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                                     Horo::Tests::CreateAcceptingArtifactGate(),
+                                     {},
+                                     {},
+                                     host};
+            CHECK(manager.LoadExtension(package.root.string()).HasError());
+            host->Update();
+            CHECK(host->Prepared().empty());
+        }
+        SECTION("an uncomposed surface host rejects explicit ABI 1.4 requirements") {
+            ExtensionManager manager{nullptr,
+                                     ExtensionHostProfile::Interactive,
+                                     {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                                     Horo::Tests::CreateAcceptingArtifactGate()};
+            CHECK(manager.LoadExtension(package.root.string()).HasError());
+        }
+    }
+}  // namespace Horo::Extensions::Tests

@@ -347,9 +347,10 @@ namespace Horo::Editor {
 
     EditorWorkspaceView::EditorWorkspaceView(const EditorGuiContext &context, const WorkspacePanelRegistry &panelRegistry,
                                              const std::uintptr_t logoTexture, Input::InputRouter &inputRouter,
-                                             Input::InputContextToken &workspaceInputContext)
-        : m_context(context), m_panelRegistry(panelRegistry), m_logoTexture(logoTexture), m_inputRouter(inputRouter),
-          m_workspaceInputContext(workspaceInputContext) {}
+                                             Input::InputContextToken &workspaceInputContext, Extensions::EditorActivityHost *activityHost,
+                                             IEditorGuiRenderer *renderer)
+        : m_extensions(context, activityHost, renderer), m_context(context), m_panelRegistry(panelRegistry), m_logoTexture(logoTexture),
+          m_inputRouter(inputRouter), m_workspaceInputContext(workspaceInputContext) {}
 
     bool EditorWorkspaceView::EnsurePanelDragCapture() {
         if (m_panelDragCapture.IsActive()) {
@@ -406,9 +407,10 @@ namespace Horo::Editor {
         // The shell has already removed its persistent status-bar height.
         const float activityBarH = (std::max)(0.0F, display.y - menuH - recoveryH - externalConflictH);
 
-        const bool bottomDockActive = viewModel.bottomDockMode == BottomDockMode::Full
-                                          ? !viewModel.activeBottomPanelId.empty()
-                                          : !viewModel.activeBottomLeftPanelId.empty() || !viewModel.activeBottomRightPanelId.empty();
+        const bool bottomDockActive = m_extensions.HasDrawer(Extensions::EditorActivitySide::Bottom) ||
+                                      (viewModel.bottomDockMode == BottomDockMode::Full
+                                           ? !viewModel.activeBottomPanelId.empty()
+                                           : !viewModel.activeBottomLeftPanelId.empty() || !viewModel.activeBottomRightPanelId.empty());
         const float contentH =
             !bottomDockActive ? 0.0F
                               : (std::max)(0.0F, (std::min)(viewModel.bottomPanelHeight, (std::max)(0.0F, activityBarH - kMinimumMainH)));
@@ -425,8 +427,12 @@ namespace Horo::Editor {
         const bool rightDockActive = viewModel.rightDockMode == SideDockMode::Full
                                          ? !viewModel.activeRightPanelId.empty()
                                          : !viewModel.activeRightTopPanelId.empty() || !viewModel.activeRightBottomPanelId.empty();
-        float hierarchyW = leftDockActive ? (std::max)(0.0F, viewModel.leftPanelWidth) : 0.0F;
-        float inspectorW = rightDockActive ? (std::max)(0.0F, viewModel.rightPanelWidth) : 0.0F;
+        float hierarchyW = (leftDockActive || m_extensions.HasDrawer(Extensions::EditorActivitySide::Left))
+                               ? (std::max)(0.0F, viewModel.leftPanelWidth)
+                               : 0.0F;
+        float inspectorW = (rightDockActive || m_extensions.HasDrawer(Extensions::EditorActivitySide::Right))
+                               ? (std::max)(0.0F, viewModel.rightPanelWidth)
+                               : 0.0F;
 
         hierarchyW = (std::min)(hierarchyW, (std::max)(0.0F, availableDockW - kMinimumDocumentW));
         inspectorW = (std::min)(inspectorW, (std::max)(0.0F, availableDockW - hierarchyW - kMinimumDocumentW));
@@ -920,7 +926,9 @@ namespace Horo::Editor {
 
         // Left Dock
         if (geo.hierarchyW > 0.0F) {
-            if (viewModel.leftDockMode == SideDockMode::Full) {
+            if (m_extensions.HasDrawer(Extensions::EditorActivitySide::Left)) {
+                m_extensions.DrawDrawer(Extensions::EditorActivitySide::Left, {curX, geo.curY}, {geo.hierarchyW, geo.mainH});
+            } else if (viewModel.leftDockMode == SideDockMode::Full) {
                 DrawDockArea(WorkspaceDockArea::Left, "##DockLeft", ImVec2(curX, geo.curY), ImVec2(geo.hierarchyW, geo.mainH),
                              viewModel.activeLeftPanelId, viewModel, outCommand);
             } else {
@@ -940,7 +948,9 @@ namespace Horo::Editor {
 
         // Right Dock
         if (geo.inspectorW > 0.0F) {
-            if (viewModel.rightDockMode == SideDockMode::Full) {
+            if (m_extensions.HasDrawer(Extensions::EditorActivitySide::Right)) {
+                m_extensions.DrawDrawer(Extensions::EditorActivitySide::Right, {curX, geo.curY}, {geo.inspectorW, geo.mainH});
+            } else if (viewModel.rightDockMode == SideDockMode::Full) {
                 DrawDockArea(WorkspaceDockArea::Right, "##DockRight", ImVec2(curX, geo.curY), ImVec2(geo.inspectorW, geo.mainH),
                              viewModel.activeRightPanelId, viewModel, outCommand);
             } else {
@@ -955,7 +965,9 @@ namespace Horo::Editor {
         // Bottom Dock
         if (geo.contentH > 0.0F) {
             const ImVec2 bottomPos(geo.leftActivityW, geo.curY + geo.mainH);
-            if (viewModel.bottomDockMode == BottomDockMode::Full) {
+            if (m_extensions.HasDrawer(Extensions::EditorActivitySide::Bottom)) {
+                m_extensions.DrawDrawer(Extensions::EditorActivitySide::Bottom, bottomPos, {geo.bottomDockW, geo.contentH});
+            } else if (viewModel.bottomDockMode == BottomDockMode::Full) {
                 DrawDockArea(WorkspaceDockArea::Bottom, "##DockBottom", bottomPos, ImVec2(geo.bottomDockW, geo.contentH),
                              viewModel.activeBottomPanelId, viewModel, outCommand);
             } else {
@@ -1050,8 +1062,7 @@ namespace Horo::Editor {
         const char *windowId = options.indicatorOnRight ? "##ActivityRight" : "##ActivityLeft";
         BeginWorkspaceSurface(windowId, pos, size, {0.0F, 6.0F},
                               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                                  ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNavInputs |
-                                  ImGuiWindowFlags_NoNavFocus);
+                                  ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
 
         ImDrawList *drawList = ImGui::GetWindowDrawList();
         const ImVec2 windowPos = ImGui::GetWindowPos();
@@ -1065,20 +1076,24 @@ namespace Horo::Editor {
         const float contentY = windowPos.y + contentMin.y;
         const auto &groups =
             viewModel.activityBarLayout.Groups(options.area == WorkspaceDockArea::Right ? ActivityBarRail::Right : ActivityBarRail::Left);
-        const bool draggingActivityItem = ImGui::GetDragDropPayload() != nullptr;
+        const auto *dragPayload = ImGui::GetDragDropPayload();
+        const bool draggingActivityItem = dragPayload && dragPayload->IsDataType("HORO_ACTIVITY_BAR_PANEL");
+        const bool draggingExtensionItem = dragPayload && dragPayload->IsDataType("HORO_EXTENSION_ACTIVITY");
 
         constexpr float activityBarBottomPadding = 6.0F;
         const float usableHeight = (std::max)(0.0F, size.y - contentMin.y - activityBarBottomPadding);
         const ActivityBarGeometry geometry{cellX, contentY, cellWidth, cellHeight, cellGap, drawList};
         const float cellStride = cellHeight + cellGap;
-        const auto groupExtent = [cellStride, draggingActivityItem](const ActivityBarGroup &group) {
-            const std::size_t slotCount = group.items.size() + (draggingActivityItem ? 1U : 0U);
+        const auto groupExtent = [this, cellStride, draggingActivityItem, draggingExtensionItem, &options](const ActivityBarGroup &group,
+                                                                                                           const std::size_t index) {
+            const std::size_t slotCount = group.items.size() + (draggingActivityItem || draggingExtensionItem ? 1U : 0U) +
+                                          m_extensions.Count(options.indicatorOnRight, index);
             return slotCount == 0U ? 0.0F : static_cast<float>(slotCount) * cellStride - cellGap;
         };
 
         float topGroupY = 0.0F;
         for (std::size_t groupIndex = 0; groupIndex < groups.size(); ++groupIndex) {
-            const float extent = groupExtent(groups[groupIndex]);
+            const float extent = groupExtent(groups[groupIndex], groupIndex);
             const bool bottomAnchored = groupIndex + 1U == groups.size();
             const float groupTop = bottomAnchored ? (std::max)(topGroupY, usableHeight - extent) : topGroupY;
             const float groupBottom = (std::min)(usableHeight, groupTop + extent);
@@ -1092,6 +1107,14 @@ namespace Horo::Editor {
                                                         .options = options,
                                                         .draggingActivityItem = draggingActivityItem},
                                  viewModel, outCommand);
+            if (m_extensions.DrawItems(options.indicatorOnRight, groupIndex,
+                                       {cellX, contentY + groupTop + static_cast<float>(groups[groupIndex].items.size()) * cellStride},
+                                       cellWidth, contentY + groupBottom)) {
+                outCommand.command = EditorWorkspaceViewCommand::ChangeActivePanel;
+                const auto destination = m_extensions.TakeNativePanelClear();
+                outCommand.targetIndex = destination ? static_cast<int>(*destination) : ActivityBarAreaIndex(options.area);
+                outCommand.stringPayload = std::string{};
+            }
             if (!bottomAnchored) {
                 topGroupY = groupBottom + (extent > 0.0F ? cellGap : 0.0F);
             }
@@ -1150,6 +1173,9 @@ namespace Horo::Editor {
         ImGui::SetCursorScreenPos(itemMin);
         ImGui::PushID(panelId.c_str());
         if (ImGui::InvisibleButton("##ActivityItem", ImVec2(geometry.cellWidth, geometry.cellHeight))) {
+            m_extensions.Close(panelArea == WorkspaceDockArea::Right    ? Extensions::EditorActivitySide::Right
+                               : panelArea == WorkspaceDockArea::Bottom ? Extensions::EditorActivitySide::Bottom
+                                                                        : Extensions::EditorActivitySide::Left);
             outCommand.command = EditorWorkspaceViewCommand::ChangeActivePanel;
             outCommand.targetIndex = ActivityBarAreaIndex(panelArea);
             outCommand.stringPayload = isActive && !activeInBottomSplit && !activeInSideSplit ? std::string{} : panelId;

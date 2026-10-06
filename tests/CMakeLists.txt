@@ -1318,7 +1318,8 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/GuiScreenHostLifecycleTests.cpp
     )
     target_compile_features(HoroGuiScreenHostLifecycleTests PRIVATE cxx_std_20)
-    target_link_libraries(HoroGuiScreenHostLifecycleTests PRIVATE HoroEngine::Gui)
+    target_link_libraries(HoroGuiScreenHostLifecycleTests PRIVATE HoroEngine::Gui HoroEngine::Extensions)
+    target_include_directories(HoroGuiScreenHostLifecycleTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 
     add_executable(HoroSettingsModalLifecycleTests
             unit/editor/SettingsModalLifecycleTests.cpp
@@ -1828,6 +1829,10 @@ if (HORO_BUILD_EDITOR_GUI)
             PRIVATE
             HoroEngine::Gui
     )
+    add_executable(HoroExtensionActivityViewTests unit/editor/ExtensionActivityViewTests.cpp)
+    target_compile_features(HoroExtensionActivityViewTests PRIVATE cxx_std_20)
+    target_include_directories(HoroExtensionActivityViewTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+    target_link_libraries(HoroExtensionActivityViewTests PRIVATE HoroEngine::Gui HoroEngine::Extensions HoroThirdParty::ImGui)
     add_executable(HoroEditorUiComponentsRenderTests
             unit/editor/EditorUiComponentsRenderTests.cpp
     )
@@ -2108,6 +2113,7 @@ set(HORO_EDITOR_WHITE_BOX_TEST_TARGETS
         HoroUpdateExperienceSessionTests
         HoroProjectGameplayRegistryTests
         HoroGuiScreenHostLifecycleTests
+        HoroExtensionActivityViewTests
         HoroProjectCreationControllerTests
         HoroRendererAvailabilityTests
         HoroProjectMetadataTests
@@ -2914,6 +2920,8 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/ExtensionCapabilityAdmissionTests.cpp
         unit/extensions/ExtensionActivationStateTests.cpp
         unit/extensions/EditorSurfaceDescriptorTests.cpp
+        unit/extensions/EditorSvgIconTests.cpp
+        unit/extensions/EditorActivityHostTests.cpp
         unit/extensions/EditorSurfaceContextTests.cpp
         unit/extensions/EditorSurfaceRegistryTests.cpp
         unit/extensions/EditorCommandRegistryTests.cpp
@@ -2928,6 +2936,22 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/ExternalImporterRegistrationTests.cpp
         integration/extensions/HeadlessExtensionHostTests.cpp
 )
+add_library(HoroEditorActivityFixture MODULE fixtures/extensions/EditorActivityModule.c)
+target_compile_features(HoroEditorActivityFixture PRIVATE c_std_11)
+set_target_properties(HoroEditorActivityFixture PROPERTIES C_EXTENSIONS OFF)
+target_link_libraries(HoroEditorActivityFixture PRIVATE HoroEngine::Extensions)
+add_dependencies(HoroExtensionManagerTests HoroEditorActivityFixture)
+if (TARGET HoroGuiScreenHostLifecycleTests)
+    add_dependencies(HoroGuiScreenHostLifecycleTests HoroEditorActivityFixture)
+    target_compile_definitions(HoroGuiScreenHostLifecycleTests PRIVATE HORO_EDITOR_ACTIVITY_FIXTURE="$<TARGET_FILE:HoroEditorActivityFixture>")
+endif ()
+
+if (TARGET HoroExtensionActivityViewTests)
+    add_dependencies(HoroExtensionActivityViewTests HoroEditorActivityFixture)
+    target_compile_definitions(HoroExtensionActivityViewTests PRIVATE HORO_EDITOR_ACTIVITY_FIXTURE="$<TARGET_FILE:HoroEditorActivityFixture>")
+endif()
+
+target_compile_definitions(HoroExtensionManagerTests PRIVATE HORO_EDITOR_ACTIVITY_FIXTURE="$<TARGET_FILE:HoroEditorActivityFixture>")
 foreach(abi_fixture_mode RANGE 0 11)
     set(abi_fixture_target HoroExtensionAbiFixture${abi_fixture_mode})
     add_library(${abi_fixture_target} MODULE fixtures/extensions/AbiModule.c)
@@ -3329,6 +3353,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroGlobalDockPanelRenderTests
         HoroAssetBrowserInteractionSessionTests
         HoroEditorUiComponentsRenderTests
+        HoroExtensionActivityViewTests
         HoroViewportPanelRenderTests
         HoroDataBusTests
         HoroFoundationResultTests

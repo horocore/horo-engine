@@ -7,6 +7,8 @@
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Editor/ProjectCreationService.h"
 #include "Horo/Editor/SettingsModal.h"
+#include "Horo/Extensions/EditorActivityAbi.h"
+#include "Horo/Extensions/EditorActivityHost.h"
 #include "Horo/Extensions/ExtensionInventory.h"
 #include "Horo/Extensions/ExtensionManager.h"
 #include "Horo/Extensions/ExtensionMarketplace.h"
@@ -84,7 +86,8 @@ namespace Horo::Editor {
                                  const RendererAvailabilitySnapshot &rendererAvailability, ScreenRegistry screenRegistry,
                                  WorkspacePanelRegistry workspacePanelRegistry, std::uintptr_t logoTexture,
                                  Extensions::ExtensionInventory *extensionInventory,
-                                 Extensions::ExtensionMarketplaceService *extensionMarketplace, NativeDialogs *nativeDialogs)
+                                 Extensions::ExtensionMarketplaceService *extensionMarketplace, NativeDialogs *nativeDialogs,
+                                 std::shared_ptr<const Security::NativeArtifactGate> extensionArtifactGate)
 
         : context_(&context), modalHost_(&modalHost), inputRouter_(&inputRouter), settingsService_(&settingsService),
           localization_(&localization), engineEvents_(&engineEvents), logoTexture_(logoTexture), extensionInventory_(extensionInventory),
@@ -109,7 +112,14 @@ namespace Horo::Editor {
         if (extensionMarketplace_ != nullptr)
             services_.Register<Extensions::ExtensionMarketplaceService>(*extensionMarketplace_);
         importerCatalogCandidate_ = std::make_unique<Assets::AssetImporterCatalog>();
-        extensionManager_ = std::make_unique<Extensions::ExtensionManager>(importerCatalogCandidate_.get());
+        editorActivityHost_ = std::make_shared<Extensions::EditorActivityHost>(jobs);
+        services_.Register<Extensions::EditorActivityHost>(*editorActivityHost_);
+        extensionManager_ =
+            std::make_unique<Extensions::ExtensionManager>(importerCatalogCandidate_.get(), Extensions::ExtensionHostProfile::Interactive,
+                                                           std::vector<std::string>{HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                                                           std::move(extensionArtifactGate),
+                                                           Extensions::ExtensionManager::NativeLibraryLoader{},
+                                                           Extensions::ExtensionPlatformProviderCommit{}, editorActivityHost_);
         ActivateBuiltInImporters(*importerCatalogCandidate_, extensionInventory_);
         if (extensionInventory_ != nullptr)
             ActivateUserExtensions(*extensionManager_, *extensionInventory_);
@@ -201,6 +211,10 @@ namespace Horo::Editor {
             activeScreen_->OnLeave();
             activeScreen_.reset();
         }
+        if (editorActivityHost_)
+            editorActivityHost_->BeginShutdown();
+        if (extensionManager_)
+            extensionManager_->UnloadAll();
         services_.Clear();
     }
 
@@ -404,6 +418,8 @@ namespace Horo::Editor {
     }
 
     void GuiScreenHost::OnUpdate(float dt) {
+        if (editorActivityHost_)
+            editorActivityHost_->Update();
         if (localization_ != nullptr) {
             static_cast<void>(
                 statusItemRegistry_.Update("horo.status.navigation",

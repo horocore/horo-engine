@@ -146,3 +146,23 @@ and the previous coherent host/package set; never force-unload retained code.
 
 Do not infer compatibility from “latest”, load order, successful compilation,
 archive integrity alone, or a version string shared by development snapshots.
+
+## External C ABI 1.3 → 1.4 editor activities
+
+Minor 4 appends `registerEditorActivity`; the 1.3 host prefix ends at
+`offsetof(HoroExtensionHostApi, registerEditorActivity)`. Old modules retain their
+prefix sizes and negotiate independently. Activity modules require minor 4 and
+`HORO_EXTENSION_REQUIRES_EDITOR_ACTIVITY`, include `EditorActivityAbi.h`, declare
+exact `editor.activity_item` and `editor.panel` claims and require the host
+`editor.activity` capability. Headless and uncomposed editor hosts reject the
+request explicitly. The generic conformance tool has no editor publication host;
+its rejection of this required profile is expected and does not prove GUI support.
+
+Session version 1 advertises a finite node mask for standard text, label, action,
+stack and group form nodes. Other standard controls need a later explicitly
+negotiated transport. A package never supplies a draw callback or renderer handle.
+Snapshots strictly increase revision and are copied synchronously on the owner
+lane. Semantic actions run through the application job system with cancellation
+and module-code leases; their borrowed result sink is valid only during that call.
+Discard the session before module unload. Package icon resources use the bounded
+static SVG profile documented in the engine migration guide.

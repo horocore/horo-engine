@@ -119,6 +119,24 @@ namespace Horo::Extensions::ManifestValidation {
         return false;
     }
 
+    /** @brief Validates extension-point names independently of package and capability identity grammar. */
+    [[nodiscard]] inline bool IsCanonicalContributionType(const std::string_view value, const std::size_t maximumBytes) {
+        if (value.empty() || value.size() > maximumBytes)
+            return false;
+        std::size_t start = 0;
+        while (start <= value.size()) {
+            const std::size_t end = value.find('.', start);
+            const auto segment = value.substr(start, end == std::string_view::npos ? value.size() - start : end - start);
+            if (segment.empty() || !IsAsciiLower(static_cast<unsigned char>(segment.front())) || segment.back() == '_' ||
+                segment.back() == '-' || !std::ranges::all_of(segment, IsCanonicalTokenCharacter))
+                return false;
+            if (end == std::string_view::npos)
+                return true;
+            start = end + 1;
+        }
+        return false;
+    }
+
     [[nodiscard]] inline bool IsCanonicalToken(const std::string_view value, const std::size_t maximumBytes) {
         if (value.empty() || value.size() > maximumBytes)
             return false;

@@ -90,7 +90,7 @@ namespace Horo::Extensions::Tests {
             return HORO_EXTENSION_SUCCESS;
         }, [](HoroExtensionRequirements *r) -> HoroExtensionStatus {
             QueryLegacy(r);
-            r->requiredFunctions = 4;
+            r->requiredFunctions = 8;
             return HORO_EXTENSION_SUCCESS;
         }};
         for (const auto query : invalid)
@@ -101,6 +101,37 @@ namespace Horo::Extensions::Tests {
         CHECK(NegotiateModuleAbi([](HoroExtensionRequirements *) -> HoroExtensionStatus {
             throw std::runtime_error("invalid native callback");
         }, host) == HORO_EXTENSION_ERROR_INIT_FAILED);
+    }
+
+    TEST_CASE("ABI 1.4 keeps the 1.3 prefix valid and rejects editor transport without exact negotiation", "[Extensions][ABI][Activity]") {
+        HoroExtensionHostApi oldHost{.structSize = offsetof(HoroExtensionHostApi, registerEditorActivity),
+                                     .abiVersion = 1,
+                                     .registerAssetImporter = RegisterUnused,
+                                     .abiMinorVersion = 3,
+                                     .registerPlatformServicesProvider = RegisterProviderUnused};
+        const HoroExtensionQueryFunc oldQuery = [](HoroExtensionRequirements *requirements) -> HoroExtensionStatus {
+            QueryProvider(requirements);
+            requirements->minimumHostMinor = 3;
+            requirements->requiredHostApiSize = offsetof(HoroExtensionHostApi, registerEditorActivity);
+            return HORO_EXTENSION_SUCCESS;
+        };
+        const HoroExtensionQueryFunc editorQuery = [](HoroExtensionRequirements *requirements) -> HoroExtensionStatus {
+            QueryCurrent(requirements);
+            requirements->requiredFunctions = HORO_EXTENSION_REQUIRES_EDITOR_ACTIVITY;
+            return HORO_EXTENSION_SUCCESS;
+        };
+        CHECK(NegotiateModuleAbi(oldQuery, oldHost) == HORO_EXTENSION_SUCCESS);
+        CHECK(NegotiateModuleAbi(editorQuery, oldHost) == HORO_EXTENSION_ERROR_VERSION_MISMATCH);
+        auto current = oldHost;
+        current.structSize = sizeof(HoroExtensionHostApi);
+        current.abiMinorVersion = 4;
+        CHECK(NegotiateModuleAbi(editorQuery, current) == HORO_EXTENSION_ERROR_INVALID_ARGS);
+        current.registerEditorActivity = [](void *, const HoroEditorActivityDescriptor *,
+                                            HoroEditorActivitySessionApi *) -> HoroExtensionStatus {
+            return HORO_EXTENSION_SUCCESS;
+        };
+        CHECK(NegotiateModuleAbi(editorQuery, current) == HORO_EXTENSION_SUCCESS);
+        CHECK(NegotiateModuleAbi(oldQuery, current) == HORO_EXTENSION_SUCCESS);
     }
 
     TEST_CASE("Module result sizes accept complete legacy prefixes only", "[Extensions][ABI]") {

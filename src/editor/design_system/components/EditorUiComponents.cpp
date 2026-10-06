@@ -8,13 +8,56 @@
 #include <array>
 #include <cfloat>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <format>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <string>
 #include <vector>
 
 namespace Horo::Editor::Ui {
+    /** @copydoc ActivityButton */
+    bool ActivityButton(const ActivityButtonProps &props, const Theme::Fonts &fonts) {
+        ImGui::BeginDisabled(!props.enabled);
+        ImGui::PushStyleColor(ImGuiCol_Button, props.active ? Theme::AccentSoft() : ImVec4{0, 0, 0, 0});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Theme::Hover());
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, Theme::AccentSoft());
+        const bool pressed = ImGui::Button(props.id, props.size);
+        const auto buttonItem = GImGui->LastItemData;
+        ImGui::PopStyleColor(3);
+        const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+        const auto minimum = ImGui::GetItemRectMin();
+        const auto maximum = ImGui::GetItemRectMax();
+        auto *const draw = ImGui::GetWindowDrawList();
+        const float icon = ScaledLayoutValue(20.0F);
+        const ImVec2 origin{minimum.x + (props.size.x - icon) * 0.5F, minimum.y + (props.size.y - icon) * 0.5F};
+        if (props.texture != 0)
+            draw->AddImage(static_cast<ImTextureID>(props.texture), origin, {origin.x + icon, origin.y + icon}, {0, 0}, {1, 1},
+                           Theme::U32(props.enabled ? Theme::Text() : Theme::Muted()));
+        if (props.active) {
+            const float x = props.indicatorOnRight ? maximum.x - 2.0F : minimum.x;
+            draw->AddRectFilled({x, minimum.y + 3.0F}, {x + 2.0F, maximum.y - 3.0F}, Theme::U32(Theme::Accent()));
+        }
+        if (props.badgeCount != 0) {
+            char badge[4]{};
+            if (props.badgeCount > 99)
+                std::snprintf(badge, sizeof(badge), "99+");
+            else
+                std::snprintf(badge, sizeof(badge), "%u", props.badgeCount);
+            const auto saved = ImGui::GetCursorScreenPos();
+            ImGui::SetCursorScreenPos({maximum.x - ScaledLayoutValue(22.0F), minimum.y});
+            Badge({.label = badge, .tone = BadgeTone::Neutral, .size = BadgeSize::Small}, fonts);
+            ImGui::SetCursorScreenPos(saved);
+        }
+        ImGui::EndDisabled();
+        if (hovered && props.tooltip[0] != '\0')
+            ShowTooltip(props.tooltip, &fonts);
+        // Decoration must not replace the control identity used by navigation and drag/drop callers.
+        GImGui->LastItemData = buttonItem;
+        return pressed;
+    }
+
     namespace {
         namespace InspectorTypography {
             constexpr float Scale = 0.92F;

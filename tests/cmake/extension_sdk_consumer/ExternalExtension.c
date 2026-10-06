@@ -1,3 +1,4 @@
+#include "Horo/Extensions/EditorActivityAbi.h"
 #include "Horo/Extensions/ExtensionAbi.h"
 
 #include <stddef.h>

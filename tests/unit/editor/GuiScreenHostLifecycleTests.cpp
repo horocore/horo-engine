@@ -1,3 +1,4 @@
+#include "EditorActivityPackageSupport.h"
 #include "Horo/Editor/EditorConfiguration.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorGuiContext.h"
@@ -8,11 +9,16 @@
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Editor/ProjectCreationService.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
+#include "Horo/Extensions/EditorActivityHost.h"
+#include "Horo/Extensions/ExtensionInventory.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "SecurityTestSupport.h"
 #include "editor/project_model/RendererAvailability.h"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <memory>
 
 namespace Horo::Editor::Theme {
@@ -80,6 +86,85 @@ namespace {
         REQUIRE((navigation.HasError()));
         REQUIRE((navigation.ErrorValue().domain.Value() == "horo.editor.screens"));
         REQUIRE((navigation.ErrorValue().code.Value() == "navigation.host_shutdown"));
+        jobs.Shutdown(ShutdownPolicy::Cancel);
+    }
+
+    TEST_CASE("GUI inventory activation uses explicit artifact authority and revokes package surfaces on shutdown",
+              "[unit][editor][Activity][ABI]") {
+        Horo::Tests::EditorActivityPackage package;
+        const auto installRoot = package.root.parent_path() / "horo107 GUI inventory";
+        std::filesystem::remove_all(installRoot);
+
+        struct RemoveInventory {
+            std::filesystem::path root;
+
+            ~RemoveInventory() {
+                std::error_code error;
+                std::filesystem::remove_all(root, error);
+            }
+        } removeInventory{installRoot};
+
+        Extensions::ExtensionInventory inventory{installRoot};
+        REQUIRE(inventory.InstallFromDirectory(package.root).HasValue());
+        REQUIRE(inventory.SetEnabled("fixture.package", true).HasValue());
+        REQUIRE(inventory.SetTrusted("fixture.package", true).HasValue());
+        EngineDataBus engineEvents;
+        EditorDataBus editorEvents;
+        Input::InputRouter input;
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8}};
+        ProjectCreationService creation{jobs, engineEvents};
+        LocalizationService localization{LocaleTag{"en-US"}};
+        ConfigurationService configuration = CreateEditorConfigurationService(DefaultEditorSettings());
+        EditorSettingsService settings{DefaultEditorSettings(), configuration, editorEvents, localization};
+        EditorModalHost modals{editorEvents, input};
+        const Theme::Fonts &fonts = *reinterpret_cast<const Theme::Fonts *>(static_cast<std::uintptr_t>(1));
+        ThemeContext theme{fonts};
+        EditorSettingsSnapshot settingsSnapshot = settings.Snapshot();
+        EditorGuiContext gui{engineEvents, editorEvents, localization, theme, settingsSnapshot};
+        RendererAvailabilitySnapshot renderers{{RendererBackendAvailability{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}},
+                                               "opengl"};
+        std::shared_ptr<const Security::NativeArtifactGate> gate;
+        const bool admitted = GENERATE(false, true);
+        if (admitted)
+            gate = Horo::Tests::CreateAcceptingArtifactGate();
+        GuiScreenHost host{gui,
+                           modals,
+                           settings,
+                           localization,
+                           engineEvents,
+                           creation,
+                           jobs,
+                           input,
+                           renderers,
+                           ScreenRegistry{},
+                           WorkspacePanelRegistry{},
+                           0,
+                           &inventory,
+                           nullptr,
+                           nullptr,
+                           std::move(gate)};
+        auto &activities = host.Services().Get<Extensions::EditorActivityHost>();
+        activities.Update();
+        const auto entry =
+            std::ranges::find(inventory.Entries(), std::string{"fixture.package"}, &Extensions::ExtensionInventoryEntry::packageId);
+        REQUIRE(entry != inventory.Entries().end());
+        CHECK(entry->runtimeActive == admitted);
+        if (admitted) {
+            REQUIRE(activities.Prepared().size() == 1);
+            const auto provider = activities.Prepared().front().surface.descriptor.provider;
+            REQUIRE(activities.Registry().ToggleActivity(provider, "fixture.activity").HasValue());
+            activities.Update();
+            CHECK(activities.Prepared().front().surface.focused);
+        } else {
+            CHECK(activities.Prepared().empty());
+            CHECK(entry->activationFailure.reason == Extensions::ExtensionActivationFailureReason::HostLoadFailed);
+            CHECK_FALSE(entry->loadError.empty());
+        }
+        const auto &registry = activities.Registry();  // Host retains the activity authority until its destructor.
+        host.Shutdown();
+        CHECK(host.Services().Empty());
+        CHECK(registry.Snapshot().empty());
+        CHECK(registry.MoveActivity({"fixture.package", "fixture.module", 1}, "fixture.activity", {}).HasError());
         jobs.Shutdown(ShutdownPolicy::Cancel);
     }
 

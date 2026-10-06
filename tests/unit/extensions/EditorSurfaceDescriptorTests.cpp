@@ -101,6 +101,28 @@ namespace Horo::Extensions::Tests {
         REQUIRE(ValidateEditorSurfaceDescriptor(descriptor, limits).HasError());
     }
 
+    TEST_CASE("Activity descriptors require bounded typed drawer placement", "[Extensions][EditorSurface][Activity]") {
+        auto descriptor = ValidDescriptor();
+        descriptor.kind = EditorSurfaceKind::ActivityItem;
+        descriptor.placement.kind = EditorSurfacePlacementKind::ActivityBar;
+        REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasError());
+        descriptor.activity = EditorActivityDestination{EditorActivitySide::Bottom, 2, "com.example.tools.drawer", "icons/tools.svg"};
+        REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasValue());
+        descriptor.activity->group = 3;
+        REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasError());
+        descriptor.activity->group = 0;
+        descriptor.activity->iconResource = "../tools.svg";
+        REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasError());
+        descriptor.activity->iconResource = "C:\\tools.svg";
+        REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasError());
+        descriptor.activity->iconResource = "icons/tools.svg";
+        descriptor.activity->drawerId.clear();
+        REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasError());
+        descriptor = ValidDescriptor();
+        descriptor.activity = EditorActivityDestination{EditorActivitySide::Left, 0, "com.example.tools.drawer", "icons/tools.svg"};
+        REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasError());
+    }
+
     TEST_CASE("Editor surface descriptors accept every typed placement mapping", "[Extensions][EditorSurface]") {
         struct PlacementCase final {
             EditorSurfaceKind kind;
@@ -129,6 +151,9 @@ namespace Horo::Extensions::Tests {
             descriptor.kind = test.kind;
             descriptor.placement.kind = test.placement;
             descriptor.persistence = test.persistence;
+            if (test.kind == EditorSurfaceKind::ActivityItem)
+                descriptor.activity =
+                    EditorActivityDestination{EditorActivitySide::Right, 0, "com.example.tools.drawer", "icons/tools.svg"};
             CHECK(ValidateEditorSurfaceDescriptor(descriptor).HasValue());
         }
     }

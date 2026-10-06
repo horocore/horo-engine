@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ExtensionActivityView.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "WorkspaceSplitterInteraction.h"
@@ -57,13 +58,21 @@ namespace Horo::Editor {
         };
 
         EditorWorkspaceView(const EditorGuiContext &context, const WorkspacePanelRegistry &panelRegistry, std::uintptr_t logoTexture,
-                            Input::InputRouter &inputRouter, Input::InputContextToken &workspaceInputContext);
+                            Input::InputRouter &inputRouter, Input::InputContextToken &workspaceInputContext,
+                            Extensions::EditorActivityHost *activityHost = nullptr, IEditorGuiRenderer *renderer = nullptr);
 
         void Draw(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand,
                   const GuiContentRegion &contentRegion);
+
+        [[nodiscard]] std::optional<Extensions::EditorActivitySide> UpdateExtensionActivities() {
+            m_extensions.Update();
+            return m_extensions.TakeNativePanelClear();
+        }
+
         void OnInputCaptureCancelled(Input::CaptureCancellationReason reason) noexcept override;
 
     private:
+        ExtensionActivityView m_extensions;
         const EditorGuiContext &m_context;
         const WorkspacePanelRegistry &m_panelRegistry;
         std::uintptr_t m_logoTexture;

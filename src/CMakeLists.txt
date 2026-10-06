@@ -2231,6 +2231,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserAssetOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
+            editor/screens/workspace/ExtensionActivityView.cpp
             editor/screens/workspace/EditorWorkspaceScreen.cpp
             editor/screens/NavigationErrors.cpp
             editor/screens/GuiScreenHost.cpp
@@ -2286,6 +2287,8 @@ add_library(HoroExtensions STATIC
         extensions/host/EditorRegistrationRetirement.cpp
         extensions/host/ExtensionCapabilityAdmission.cpp
         extensions/host/EditorSurfaceContext.cpp
+        extensions/host/EditorActivityAbiConversion.cpp
+        extensions/host/EditorActivitySession.cpp
         extensions/host/EditorSurfaceRegistry.cpp
         extensions/host/EditorSurfaceRegistryOperations.cpp
         extensions/host/EditorSurfaceRegistryPersistence.cpp
@@ -2310,6 +2313,7 @@ add_library(HoroExtensions STATIC
         extensions/manifest/ExtensionManifestParser.cpp
         extensions/manifest/ExtensionManifestJson.cpp
         extensions/manifest/EditorSurfaceDescriptor.cpp
+        extensions/manifest/EditorSvgIcon.cpp
     extensions/manifest/EditorUiForm.cpp
     extensions/manifest/EditorUiFormBuilder.cpp
     extensions/manifest/EditorUiFormRender.cpp
@@ -2358,7 +2362,7 @@ target_include_directories(HoroExtensions
 )
 target_link_libraries(HoroExtensions
         PUBLIC HoroEngine::Foundation HoroEngine::Platform HoroEngine::Assets HoroEngine::Security
-        PRIVATE nlohmann_json::nlohmann_json CURL::libcurl miniz
+        PRIVATE nlohmann_json::nlohmann_json CURL::libcurl miniz lunasvg::lunasvg
 )
 
 # Host-side bridge: sequence model and runtime remain independent of Extensions.

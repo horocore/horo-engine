@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <memory>
 #include <ranges>
+#include <tuple>
 #include <utility>
 
 namespace Horo::Extensions {
@@ -18,6 +19,42 @@ namespace Horo::Extensions {
         template <typename Value>
         [[nodiscard]] Result<Value> FailureValue(const ErrorCodeDescriptor &descriptor, const std::string_view detail = {}) {
             return Result<Value>::Failure(detail.empty() ? MakeError(descriptor) : MakeError(descriptor, std::string{detail}));
+        }
+
+        /** @brief Admits form text and interactions only through the exact surface context allowlists. */
+        [[nodiscard]] bool AllowsForm(const EditorSurfaceContext &context, const EditorUiForm &form) {
+            const auto allowsText = [&context](const EditorUiText &text) {
+                return text.value.empty() || text.kind == EditorUiTextKind::TechnicalText ||
+                       context.Allows(EditorSurfaceLocalizationKey{text.value});
+            };
+            if (!allowsText(form.title) || !allowsText(form.description))
+                return false;
+            for (const auto &node : form.nodes) {
+                const auto &base = EditorUiNodeBaseOf(node);
+                if (!allowsText(base.label) || !allowsText(base.description) || !allowsText(base.accessibleLabel))
+                    return false;
+                const bool allowed = std::visit([&context, &allowsText]<typename T>(const T &typed) {
+                    bool admitted = true;
+                    if constexpr (requires { typed.action; })
+                        admitted = context.Allows(EditorSurfaceCommandId{typed.action.value});
+                    if constexpr (requires { typed.binding; })
+                        admitted = admitted && context.Allows(EditorSurfaceStateKey{typed.binding.value});
+                    if constexpr (requires { typed.text; })
+                        admitted = admitted && allowsText(typed.text);
+                    if constexpr (requires { typed.message; })
+                        admitted = admitted && allowsText(typed.message) && context.Allows(EditorSurfaceDiagnosticCode{typed.code});
+                    if constexpr (requires { typed.placeholder; })
+                        admitted = admitted && allowsText(typed.placeholder);
+                    if constexpr (requires { typed.options; }) {
+                        for (const auto &option : typed.options)
+                            admitted = admitted && allowsText(option.label);
+                    }
+                    return admitted;
+                }, node.payload);
+                if (!allowed)
+                    return false;
+            }
+            return true;
         }
     }  // namespace
 
@@ -44,9 +81,36 @@ namespace Horo::Extensions {
         if (state_->surfaces.size() >= state_->limits.maximumSurfaces)
             return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryCapacityExceeded);
 
+        if (descriptor.activity.has_value()) {
+            const auto drawer = FindSurface(*state_, descriptor.activity->drawerId);
+            if (drawer == nullptr || drawer->descriptor.kind != EditorSurfaceKind::Panel ||
+                drawer->descriptor.provider != descriptor.provider ||
+                EffectiveStatus(*state_, *drawer) != EditorSurfaceProviderStatus::Active ||
+                std::ranges::any_of(state_->surfaces, [&descriptor](const auto &candidate) {
+                return candidate->descriptor.activity.has_value() &&
+                       candidate->descriptor.activity->drawerId == descriptor.activity->drawerId;
+            }))
+                return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryInvalid);
+        }
+
         const PendingSurfaceState *pending = FindPending(*state_, surfaceId);
         if (pending != nullptr && (!SameProvider(pending->entry.provider, provider) || pending->persistence != descriptor.persistence))
             return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryInvalid);
+        if (pending && pending->entry.activityPlacement && !descriptor.activity)
+            return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
+        if (descriptor.activity.has_value()) {
+            const auto drawer = FindSurface(*state_, descriptor.activity->drawerId);
+            const auto side =
+                pending && pending->entry.activityPlacement ? pending->entry.activityPlacement->side : descriptor.activity->side;
+            const bool open = pending ? pending->entry.open : descriptor.openByDefault;
+            const bool focused = pending && pending->entry.focused;
+            if (pending && (drawer->desiredOpen != open || drawer->desiredFocused != focused || (open && !pending->entry.activityVisible)))
+                return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
+            if (open && std::ranges::any_of(state_->surfaces, [side](const auto &candidate) {
+                return candidate->descriptor.activity.has_value() && candidate->desiredOpen && ActivityPlacementOf(*candidate).side == side;
+            }))
+                return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
+        }
         if (!HasPreservationCapacity(*state_) ||
             (pending == nullptr && state_->surfaces.size() >= state_->limits.maximumWorkspaceEntries - state_->pending.size()))
             return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryCapacityExceeded);
@@ -60,9 +124,17 @@ namespace Horo::Extensions {
             surface->desiredOpen = pending->entry.open;
             surface->desiredFocused = pending->entry.focused;
             surface->opaqueState = pending->entry.opaqueState;
+            surface->activityUserVisible = pending->entry.activityVisible;
+            surface->activityPlacement = pending->entry.activityPlacement;
         } else {
             surface->desiredOpen = descriptor.openByDefault;
         }
+        if (descriptor.activity.has_value()) {
+            const auto drawer = FindSurface(*state_, descriptor.activity->drawerId);
+            drawer->desiredOpen = surface->desiredOpen;
+            drawer->desiredFocused = surface->desiredFocused;
+        }
+        ++state_->revision;
         state_->surfaces.push_back(surface);
         if (pending != nullptr) {
             const auto found = std::ranges::find_if(state_->pending, [&surfaceId](const PendingSurfaceState &candidate) {
@@ -71,6 +143,177 @@ namespace Horo::Extensions {
             state_->pending.erase(found);
         }
         return Result<EditorSurfaceRegistration>::Success(EditorSurfaceRegistration{state_, std::move(surface)});
+    }
+
+    /** @copydoc EditorSurfaceRegistry::PublishForm */
+    Result<void> EditorSurfaceRegistry::PublishForm(const EditorSurfaceProviderIdentity &provider, const std::string_view surfaceId,
+                                                    EditorUiForm form) const {
+        if (const auto valid = ValidateEditorUiForm(form); valid.HasError())
+            return Result<void>::Failure(valid.ErrorValue());
+        if (state_ == nullptr)
+            return Failure(ExtensionErrors::EditorSurfaceRegistryShutdown);
+        auto lock = state_->Lock();
+        if (state_->shutdown)
+            return Failure(ExtensionErrors::EditorSurfaceRegistryShutdown);
+        const auto surface = FindSurface(*state_, surfaceId);
+        if (surface == nullptr || surface->descriptor.provider != provider || surface->descriptor.kind != EditorSurfaceKind::Panel)
+            return Failure(ExtensionErrors::EditorSurfaceRegistryInvalid);
+        if (EffectiveStatus(*state_, *surface) != EditorSurfaceProviderStatus::Active)
+            return Failure(ExtensionErrors::EditorSurfaceContextRevoked);
+        if (!AllowsForm(surface->context.Context(), form))
+            return Failure(ExtensionErrors::EditorSurfaceRegistryInvalid);
+        ++state_->revision;
+        surface->form = std::move(form);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorSurfaceRegistry::PublishActivity */
+    Result<void> EditorSurfaceRegistry::PublishActivity(const EditorSurfaceProviderIdentity &provider, const std::string_view surfaceId,
+                                                        const EditorActivityPresentation presentation) const {
+        if (state_ == nullptr)
+            return Failure(ExtensionErrors::EditorSurfaceRegistryShutdown);
+        auto lock = state_->Lock();
+        if (state_->shutdown)
+            return Failure(ExtensionErrors::EditorSurfaceRegistryShutdown);
+        const auto surface = FindSurface(*state_, surfaceId);
+        if (surface == nullptr || surface->descriptor.provider != provider || !surface->descriptor.activity.has_value())
+            return Failure(ExtensionErrors::EditorSurfaceRegistryInvalid);
+        if (EffectiveStatus(*state_, *surface) != EditorSurfaceProviderStatus::Active)
+            return Failure(ExtensionErrors::EditorSurfaceContextRevoked);
+        ++state_->revision;
+        surface->activity = presentation;
+        if (!presentation.visible || !presentation.enabled) {
+            surface->desiredOpen = false;
+            surface->desiredFocused = false;
+            if (const auto drawer = FindSurface(*state_, surface->descriptor.activity->drawerId); drawer != nullptr) {
+                drawer->desiredOpen = false;
+                drawer->desiredFocused = false;
+            }
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorSurfaceRegistry::SetActivityVisibility */
+    Result<void> EditorSurfaceRegistry::SetActivityVisibility(const std::string_view surfaceId, const bool visible) const {
+        if (state_ == nullptr)
+            return Failure(ExtensionErrors::EditorSurfaceRegistryShutdown);
+        auto lock = state_->Lock();
+        if (state_->shutdown)
+            return Failure(ExtensionErrors::EditorSurfaceRegistryShutdown);
+        const auto surface = FindSurface(*state_, surfaceId);
+        if (surface == nullptr || !surface->descriptor.activity.has_value())
+            return Failure(ExtensionErrors::EditorSurfaceRegistryInvalid);
+        ++state_->revision;
+        surface->activityUserVisible = visible;
+        if (!visible) {
+            surface->desiredOpen = false;
+            surface->desiredFocused = false;
+            if (const auto drawer = FindSurface(*state_, surface->descriptor.activity->drawerId); drawer != nullptr) {
+                drawer->desiredOpen = false;
+                drawer->desiredFocused = false;
+            }
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorSurfaceRegistry::ToggleActivity */
+    Result<EditorSurfaceOperation> EditorSurfaceRegistry::ToggleActivity(const EditorSurfaceProviderIdentity &provider,
+                                                                         const std::string_view surfaceId) const {
+        if (state_ == nullptr)
+            return FailureValue<EditorSurfaceOperation>(ExtensionErrors::EditorSurfaceRegistryShutdown);
+        auto lock = state_->Lock();
+        if (state_->shutdown)
+            return FailureValue<EditorSurfaceOperation>(ExtensionErrors::EditorSurfaceRegistryShutdown);
+        const auto surface = FindSurface(*state_, surfaceId);
+        if (surface == nullptr || surface->descriptor.provider != provider || !surface->descriptor.activity.has_value())
+            return FailureValue<EditorSurfaceOperation>(ExtensionErrors::EditorSurfaceRegistryInvalid);
+        if (const auto status = EffectiveStatus(*state_, *surface); status != EditorSurfaceProviderStatus::Active)
+            return ProviderFailure(status);
+        if (!surface->activityUserVisible || !surface->activity.visible || !surface->activity.enabled)
+            return FailureValue<EditorSurfaceOperation>(ExtensionErrors::EditorSurfaceRegistryInvalid);
+        const auto drawer = FindSurface(*state_, surface->descriptor.activity->drawerId);
+        ++state_->revision;
+        const bool close = surface->desiredOpen && drawer->desiredOpen;
+        for (const auto &candidate : state_->surfaces) {
+            if (!candidate->descriptor.activity.has_value() || ActivityPlacementOf(*candidate).side != ActivityPlacementOf(*surface).side)
+                continue;
+            candidate->desiredOpen = false;
+            candidate->desiredFocused = false;
+            if (const auto previous = FindSurface(*state_, candidate->descriptor.activity->drawerId); previous != nullptr) {
+                previous->desiredOpen = false;
+                previous->desiredFocused = false;
+            }
+        }
+        surface->desiredOpen = !close;
+        surface->desiredFocused = !close;
+        drawer->desiredOpen = !close;
+        drawer->desiredFocused = !close;
+        return Result<EditorSurfaceOperation>::Success({close ? EditorSurfaceOperationKind::Closed : EditorSurfaceOperationKind::Opened});
+    }
+
+    /** @copydoc EditorSurfaceRegistry::MoveActivity */
+    Result<void> EditorSurfaceRegistry::MoveActivity(const EditorSurfaceProviderIdentity &provider, const std::string_view surfaceId,
+                                                     const EditorActivityPlacement destination) const {
+        if (!state_)
+            return Failure(ExtensionErrors::EditorSurfaceRegistryShutdown);
+        auto lock = state_->Lock();
+        if (state_->shutdown)
+            return Failure(ExtensionErrors::EditorSurfaceRegistryShutdown);
+        const auto surface = FindSurface(*state_, surfaceId);
+        if (!surface || !surface->descriptor.activity || surface->descriptor.provider != provider)
+            return Failure(ExtensionErrors::EditorSurfaceRegistryInvalid);
+        if (EffectiveStatus(*state_, *surface) != EditorSurfaceProviderStatus::Active)
+            return Failure(ExtensionErrors::EditorSurfaceContextRevoked);
+        if (destination.side > EditorActivitySide::Bottom || destination.group > 2 || destination.order < 0)
+            return Failure(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
+        const auto source = ActivityPlacementOf(*surface);
+        const auto collect = [this](const EditorActivitySide side, const std::uint8_t group) {
+            std::vector<std::shared_ptr<EditorSurfaceState>> peers;
+            peers.reserve(state_->surfaces.size());
+            for (const auto &candidate : state_->surfaces)
+                if (candidate->descriptor.activity && ActivityPlacementOf(*candidate).side == side &&
+                    ActivityPlacementOf(*candidate).group == group)
+                    peers.push_back(candidate);
+            std::ranges::sort(peers, [](const auto &left, const auto &right) {
+                const auto a = ActivityPlacementOf(*left).order;
+                const auto b = ActivityPlacementOf(*right).order;
+                return std::tie(a, left->descriptor.id) < std::tie(b, right->descriptor.id);
+            });
+            return peers;
+        };
+        auto targetPeers = collect(destination.side, destination.group);
+        if (static_cast<std::size_t>(destination.order) > targetPeers.size())
+            return Failure(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
+        std::size_t insertion = static_cast<std::size_t>(destination.order);
+        if (const auto found = std::ranges::find(targetPeers, surface); found != targetPeers.end()) {
+            if (static_cast<std::size_t>(found - targetPeers.begin()) < insertion)
+                --insertion;
+            targetPeers.erase(found);
+        }
+        auto sourcePeers = collect(source.side, source.group);
+        std::erase(sourcePeers, surface);
+        targetPeers.insert(targetPeers.begin() + static_cast<std::ptrdiff_t>(insertion), surface);
+        // Every allocation and slot check precedes publication; the following bounded mutation cannot fail.
+        if (source.side != destination.side || source.group != destination.group)
+            for (std::size_t index = 0; index < sourcePeers.size(); ++index)
+                sourcePeers[index]->activityPlacement =
+                    EditorActivityPlacement{source.side, source.group, static_cast<std::int32_t>(index)};
+        for (std::size_t index = 0; index < targetPeers.size(); ++index)
+            targetPeers[index]->activityPlacement =
+                EditorActivityPlacement{destination.side, destination.group, static_cast<std::int32_t>(index)};
+        if (surface->desiredOpen)
+            for (const auto &candidate : state_->surfaces) {
+                if (candidate == surface || !candidate->descriptor.activity || ActivityPlacementOf(*candidate).side != destination.side)
+                    continue;
+                candidate->desiredOpen = false;
+                candidate->desiredFocused = false;
+                if (const auto drawer = FindSurface(*state_, candidate->descriptor.activity->drawerId)) {
+                    drawer->desiredOpen = false;
+                    drawer->desiredFocused = false;
+                }
+            }
+        ++state_->revision;
+        return Result<void>::Success();
     }
 
     /** @copydoc EditorSurfaceRegistry::Open */
@@ -88,13 +331,19 @@ namespace Horo::Extensions {
         }
         if (const EditorSurfaceProviderStatus status = EffectiveStatus(*state_, *surface); status != EditorSurfaceProviderStatus::Active)
             return ProviderFailure(status);
+        if (surface->descriptor.activity.has_value() || std::ranges::any_of(state_->surfaces, [&surfaceId](const auto &candidate) {
+            return candidate->descriptor.activity.has_value() && candidate->descriptor.activity->drawerId == surfaceId;
+        }))
+            return FailureValue<EditorSurfaceOperation>(ExtensionErrors::EditorSurfaceRegistryInvalid);
         if (surface->desiredOpen) {
             if (surface->desiredFocused)
                 return Result<EditorSurfaceOperation>::Success({EditorSurfaceOperationKind::AlreadyOpen});
+            ++state_->revision;
             surface->desiredFocused = true;
             return Result<EditorSurfaceOperation>::Success({EditorSurfaceOperationKind::Focused});
         }
         surface->desiredOpen = true;
+        ++state_->revision;
         surface->desiredFocused = true;
         return Result<EditorSurfaceOperation>::Success({EditorSurfaceOperationKind::Opened});
     }
@@ -114,10 +363,15 @@ namespace Horo::Extensions {
         }
         if (const EditorSurfaceProviderStatus status = EffectiveStatus(*state_, *surface); status != EditorSurfaceProviderStatus::Active)
             return ProviderFailure(status);
+        if (surface->descriptor.activity.has_value() || std::ranges::any_of(state_->surfaces, [&surfaceId](const auto &candidate) {
+            return candidate->descriptor.activity.has_value() && candidate->descriptor.activity->drawerId == surfaceId;
+        }))
+            return FailureValue<EditorSurfaceOperation>(ExtensionErrors::EditorSurfaceRegistryInvalid);
         if (!surface->desiredOpen)
             return FailureValue<EditorSurfaceOperation>(ExtensionErrors::EditorSurfaceRegistrySurfaceClosed);
         if (surface->desiredFocused)
             return Result<EditorSurfaceOperation>::Success({EditorSurfaceOperationKind::AlreadyFocused});
+        ++state_->revision;
         surface->desiredFocused = true;
         return Result<EditorSurfaceOperation>::Success({EditorSurfaceOperationKind::Focused});
     }
@@ -131,7 +385,20 @@ namespace Horo::Extensions {
         if (state_->shutdown)
             return FailureValue<EditorSurfaceOperation>(ExtensionErrors::EditorSurfaceRegistryShutdown);
         if (const std::shared_ptr<EditorSurfaceState> surface = FindSurface(*state_, surfaceId); surface != nullptr) {
-            if (!surface->desiredOpen)
+            ++state_->revision;
+            const bool wasOpen = surface->desiredOpen;
+            for (const auto &candidate : state_->surfaces) {
+                if (candidate->descriptor.activity.has_value() &&
+                    (candidate == surface || candidate->descriptor.activity->drawerId == surfaceId)) {
+                    candidate->desiredOpen = false;
+                    candidate->desiredFocused = false;
+                    if (const auto drawer = FindSurface(*state_, candidate->descriptor.activity->drawerId); drawer != nullptr) {
+                        drawer->desiredOpen = false;
+                        drawer->desiredFocused = false;
+                    }
+                }
+            }
+            if (!wasOpen)
                 return Result<EditorSurfaceOperation>::Success({AlreadyClosed});
             surface->desiredOpen = false;
             surface->desiredFocused = false;
@@ -140,6 +407,7 @@ namespace Horo::Extensions {
         if (PendingSurfaceState *pending = FindPending(*state_, surfaceId); pending != nullptr) {
             if (!pending->entry.open)
                 return Result<EditorSurfaceOperation>::Success({AlreadyClosed});
+            ++state_->revision;
             pending->entry.open = false;
             pending->entry.focused = false;
             return Result<EditorSurfaceOperation>::Success({Closed});
@@ -157,6 +425,7 @@ namespace Horo::Extensions {
         auto lock = state_->Lock();
         if (state_->shutdown)
             return Failure(ExtensionErrors::EditorSurfaceRegistryShutdown);
+        ++state_->revision;
         SetProviderConfiguredStatus(*state_, provider, status);
         return Result<void>::Success();
     }
@@ -174,6 +443,7 @@ namespace Horo::Extensions {
         const std::shared_ptr<EditorSurfaceState> surface = FindSurface(*state_, surfaceId);
         if (surface == nullptr)
             return Failure(ExtensionErrors::EditorSurfaceRegistryUnknown);
+        ++state_->revision;
         surface->opaqueState.assign(state.begin(), state.end());
         return Result<void>::Success();
     }

@@ -19,6 +19,8 @@ namespace Horo::Extensions {
 
         struct SurfaceRestoreState final {
             std::shared_ptr<EditorSurfaceState> surface;
+            bool activityVisible{true};
+            std::optional<EditorActivityPlacement> activityPlacement;
             bool desiredOpen{};
             bool desiredFocused{};
             std::vector<std::uint8_t> opaqueState;
@@ -53,6 +55,8 @@ namespace Horo::Extensions {
                     report.missingProvider.push_back(entry.surfaceId);
                 return nullptr;
             }
+            if (entry.activityPlacement && !surface->descriptor.activity)
+                return &ExtensionErrors::EditorSurfaceRegistryStateInvalid;
             if (surface->descriptor.persistence != EditorSurfacePersistence::Workspace || !SameProvider(surface->provider, entry.provider))
                 return &ExtensionErrors::EditorSurfaceRegistryStateInvalid;
             if (const EditorSurfaceProviderStatus status = EffectiveStatus(state, *surface); status == EditorSurfaceProviderStatus::Active)
@@ -83,6 +87,8 @@ namespace Horo::Extensions {
                     restored.desiredOpen = entry->open;
                     restored.desiredFocused = entry->focused;
                     restored.opaqueState = entry->opaqueState;
+                    restored.activityVisible = entry->activityVisible;
+                    restored.activityPlacement = entry->activityPlacement;
                 }
                 restoredSurfaces.push_back(std::move(restored));
             }
@@ -138,8 +144,41 @@ namespace Horo::Extensions {
         if (!RestoredOpaqueStateFits(*state_, pending, restoredSurfaces))
             return FailureValue<EditorSurfaceRestoreReport>(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
 
+        for (std::size_t index = 0; index < restoredSurfaces.size(); ++index) {
+            const auto &candidate = restoredSurfaces[index];
+            if (!candidate.surface->descriptor.activity.has_value())
+                continue;
+            if (candidate.desiredOpen &&
+                (!candidate.activityVisible || !candidate.surface->activity.visible || !candidate.surface->activity.enabled))
+                return FailureValue<EditorSurfaceRestoreReport>(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
+            const auto drawer = std::ranges::find_if(restoredSurfaces, [&candidate](const SurfaceRestoreState &entry) {
+                return entry.surface->descriptor.id == candidate.surface->descriptor.activity->drawerId;
+            });
+            if (drawer == restoredSurfaces.end() || drawer->desiredOpen != candidate.desiredOpen ||
+                drawer->surface->descriptor.provider != candidate.surface->descriptor.provider ||
+                candidate.desiredFocused != drawer->desiredFocused)
+                return FailureValue<EditorSurfaceRestoreReport>(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
+            for (std::size_t previous = 0; previous < index; ++previous) {
+                const auto &other = restoredSurfaces[previous];
+                if (candidate.desiredOpen && other.desiredOpen && other.surface->descriptor.activity.has_value() &&
+                    other.activityPlacement
+                            .value_or(EditorActivityPlacement{other.surface->descriptor.activity->side,
+                                                              other.surface->descriptor.activity->group,
+                                                              other.surface->descriptor.placement.order})
+                            .side == candidate.activityPlacement
+                                         .value_or(EditorActivityPlacement{candidate.surface->descriptor.activity->side,
+                                                                           candidate.surface->descriptor.activity->group,
+                                                                           candidate.surface->descriptor.placement.order})
+                                         .side)
+                    return FailureValue<EditorSurfaceRestoreReport>(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
+            }
+        }
+
+        ++state_->revision;
         state_->pending = std::move(pending);
         for (SurfaceRestoreState &restored : restoredSurfaces) {
+            restored.surface->activityUserVisible = restored.activityVisible;
+            restored.surface->activityPlacement = restored.activityPlacement;
             restored.surface->desiredOpen = restored.desiredOpen;
             restored.surface->desiredFocused = restored.desiredFocused;
             restored.surface->opaqueState = std::move(restored.opaqueState);
@@ -184,18 +223,35 @@ namespace Horo::Extensions {
         snapshots.reserve(state_->surfaces.size());
         for (const std::shared_ptr<EditorSurfaceState> &surface : state_->surfaces) {
             const EditorSurfaceProviderStatus status = EffectiveStatus(*state_, *surface);
+            auto descriptor = surface->descriptor;
+            if (descriptor.activity && surface->activityPlacement) {
+                descriptor.activity->side = surface->activityPlacement->side;
+                descriptor.activity->group = surface->activityPlacement->group;
+                descriptor.placement.order = surface->activityPlacement->order;
+            }
             snapshots.push_back(EditorSurfaceSnapshot{
-                .descriptor = surface->descriptor,
+                .descriptor = std::move(descriptor),
                 .providerStatus = status,
                 .open = status == EditorSurfaceProviderStatus::Active && surface->desiredOpen,
                 .focused = status == EditorSurfaceProviderStatus::Active && surface->desiredOpen && surface->desiredFocused,
                 .opaqueState = surface->opaqueState,
+                .activity = EditorActivityPresentation{surface->activityUserVisible && surface->activity.visible, surface->activity.enabled,
+                                                       surface->activity.badgeCount},
+                .form = status == EditorSurfaceProviderStatus::Active ? surface->form : std::nullopt,
             });
         }
         std::ranges::sort(snapshots, {}, [](const EditorSurfaceSnapshot &snapshot) {
             return snapshot.descriptor.id;
         });
         return snapshots;
+    }
+
+    /** @copydoc EditorSurfaceRegistry::Revision */
+    std::uint64_t EditorSurfaceRegistry::Revision() const noexcept {
+        if (state_ == nullptr)
+            return 0;
+        auto lock = state_->Lock();
+        return state_->revision;
     }
 
     /** @copydoc EditorSurfaceRegistry::BeginShutdown */
@@ -205,6 +261,7 @@ namespace Horo::Extensions {
         auto lock = state_->Lock();
         if (state_->shutdown)
             return;
+        ++state_->revision;
         state_->shutdown = true;
         for (const std::shared_ptr<EditorSurfaceState> &surface : state_->surfaces)
             surface->registered.store(false, std::memory_order_release);
@@ -232,6 +289,7 @@ namespace Horo::Extensions {
         const auto found = std::ranges::find(registry->surfaces, surface);
         if (found == registry->surfaces.end())
             return;
+        ++registry->revision;
         if (!registry->shutdown) {
             assert(HasPreservationCapacity(*registry));
             assert(registry->pending.size() < registry->limits.maximumWorkspaceEntries);

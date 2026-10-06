@@ -20,6 +20,10 @@
 #include <variant>
 #include <vector>
 
+namespace Horo::Security {
+    class NativeArtifactGate;
+}
+
 namespace Horo {
     class EngineDataBus;
     class NativeDialogs;
@@ -33,6 +37,7 @@ namespace Horo::Extensions {
     class ExtensionInventory;
     class ExtensionMarketplaceService;
     class ExtensionManager;
+    class EditorActivityHost;
 }  // namespace Horo::Extensions
 
 namespace Horo::Editor {
@@ -79,6 +84,7 @@ namespace Horo::Editor {
          * @param extensionInventory Optional installed-extension inventory.
          * @param extensionMarketplace Optional extension marketplace service.
          * @param nativeDialogs Optional host-owned file picker for editor workflows.
+         * @param extensionArtifactGate Explicit artifact verification authority; native packages fail closed when absent.
          */
         explicit GuiScreenHost(const EditorGuiContext &context, EditorModalHost &modalHost,  // NOSONAR(cpp:S107) Service aggregate
                                EditorSettingsService &settingsService, LocalizationService &localization, EngineDataBus &engineEvents,
@@ -87,7 +93,8 @@ namespace Horo::Editor {
                                WorkspacePanelRegistry workspacePanelRegistry, std::uintptr_t logoTexture = 0,
                                Extensions::ExtensionInventory *extensionInventory = nullptr,
                                Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr,
-                               NativeDialogs *nativeDialogs = nullptr);
+                               NativeDialogs *nativeDialogs = nullptr,
+                               std::shared_ptr<const Security::NativeArtifactGate> extensionArtifactGate = {});
 
         ~GuiScreenHost();
 
@@ -223,6 +230,7 @@ namespace Horo::Editor {
 
         JobSystem m_importJobs{JobSystemConfig{.workerCount = 1}};
         std::unique_ptr<Assets::AssetImporterCatalog> importerCatalogCandidate_;
+        std::shared_ptr<Extensions::EditorActivityHost> editorActivityHost_;
         std::unique_ptr<Extensions::ExtensionManager> extensionManager_;
         std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> importerCatalog_;
 
