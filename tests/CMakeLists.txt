@@ -560,6 +560,7 @@ set_tests_properties(HoroCharacterSurfacePublicHeaderConsumer PROPERTIES LABELS 
 
 add_executable(HoroPhysicsTests
         support/AllocationProbe.cpp
+        unit/runtime/physics/CharacterFoundationQualificationTests.cpp
         unit/runtime/physics/CharacterControllerContractsTests.cpp
         unit/runtime/physics/CharacterDiagnosticsTests.cpp
         unit/runtime/physics/CharacterFastPathStorageTests.cpp
