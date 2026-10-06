@@ -3616,7 +3616,7 @@ target_link_libraries(HoroScriptCapabilityPublicHeaderConsumer PRIVATE HoroEngin
 add_test(NAME HoroScriptCapabilityPublicHeaderConsumer COMMAND HoroScriptCapabilityPublicHeaderConsumer)
 set_tests_properties(HoroScriptCapabilityPublicHeaderConsumer PROPERTIES LABELS "unit;extensions;headless")
 
-horo_finalize_ci_suites()
+
 
 add_executable(HoroWorldPackageChunkPublicConsumer support/WorldPackageChunkPublicConsumer.cpp)
 target_compile_features(HoroWorldPackageChunkPublicConsumer PRIVATE cxx_std_20)
@@ -3635,3 +3635,9 @@ target_link_libraries(HoroCliProductionOutputContract PRIVATE HoroEngine::Platfo
 add_dependencies(HoroCliProductionOutputContract horo-engine)
 add_test(NAME HoroCliProductionOutputContract COMMAND HoroCliProductionOutputContract "$<TARGET_FILE:horo-engine>")
 set_tests_properties(HoroCliProductionOutputContract PROPERTIES LABELS "cli;integration;headless;sonar-coverage;ci-windows" TIMEOUT 120)
+
+add_executable(HoroMixerDocumentTests unit/editor/MixerAssetDocumentTests.cpp)
+target_link_libraries(HoroMixerDocumentTests PRIVATE HoroEngine::EditorServices)
+horo_register_catch_test(HoroMixerDocumentTests LABELS "unit;editor;audio;headless")
+
+horo_finalize_ci_suites()
