@@ -395,7 +395,7 @@ target_compile_features(HoroNetworkTransportCompositionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkTransportCompositionTests PRIVATE HoroEngine::NetworkRuntime HoroEngine::NetworkTransportNull)
 add_dependencies(HoroNetworkTransportCompositionTests HoroNetworkDisabledLinkProbe HoroNetworkNullLinkProbe)
 horo_register_catch_test(HoroNetworkTransportCompositionTests LABELS "unit;network;headless")
-target_sources(HoroAudioApiPublicHeaderConsumer PRIVATE support/AudioStreamingFactoryPublicContract.cpp)
+target_sources(HoroAudioApiPublicHeaderConsumer PRIVATE support/AudioStreamingFactoryPublicContract.cpp support/AudioSpatialPublicContract.cpp)
 add_executable(HoroAudioApiTests
         support/AllocationProbe.cpp
         unit/runtime/audio/AudioAcousticQueryTests.cpp
@@ -518,7 +518,10 @@ if(MSVC)
     target_compile_definitions(HoroMixerAllocationFailureWorker PRIVATE NOMINMAX)
     target_link_libraries(HoroMixerAllocationFailureWorker PRIVATE Dbghelp)
 endif()
+target_sources(HoroAudioMixerPublicHeaderConsumer PRIVATE support/MixerSnapshotPublicContract.cpp)
 add_executable(HoroAudioMixerTests
+        unit/runtime/audio/MixerSnapshotRenderTests.cpp
+        unit/runtime/audio/MixerSnapshotTests.cpp
         unit/runtime/audio/MixerGraphCompilerTests.cpp
         unit/runtime/audio/MixerGraphRuntimeTests.cpp
         unit/runtime/audio/MixerRenderPlanTests.cpp
@@ -571,6 +574,7 @@ set_tests_properties(HoroCharacterSurfacePublicHeaderConsumer PROPERTIES LABELS 
 
 add_executable(HoroPhysicsTests
         support/AllocationProbe.cpp
+        unit/runtime/physics/CharacterFoundationQualificationTests.cpp
         unit/runtime/physics/CharacterControllerContractsTests.cpp
         unit/runtime/physics/CharacterDiagnosticsTests.cpp
         unit/runtime/physics/CharacterFastPathStorageTests.cpp
@@ -891,6 +895,18 @@ target_include_directories(HoroNavigationApiTests PRIVATE ${CMAKE_CURRENT_SOURCE
 target_link_libraries(HoroNavigationApiTests PRIVATE HoroEngine::NavigationApi HoroEngine::NavigationNull)
 horo_register_catch_test(HoroNavigationApiTests LABELS "unit;navigation;headless")
 
+add_executable(HoroNavigationDataQualificationTests
+        unit/runtime/navigation/NavigationDataQualificationTests.cpp
+        unit/runtime/navigation/NavigationPrefabDataQualificationTests.cpp
+        support/AllocationProbe.cpp)
+target_compile_features(HoroNavigationDataQualificationTests PRIVATE cxx_std_20)
+target_compile_definitions(HoroNavigationDataQualificationTests PRIVATE
+        HORO_QUALIFICATION_BUILD_TYPE="$<CONFIG>"
+        HORO_QUALIFICATION_PLATFORM="${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}")
+target_include_directories(HoroNavigationDataQualificationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroNavigationDataQualificationTests PRIVATE HoroEngine::NavigationApi HoroEngine::PrefabSceneExpansion)
+horo_register_catch_test(HoroNavigationDataQualificationTests LABELS "unit;navigation;headless;qualification")
+
 add_executable(HoroNavigationRuntimeTests
         support/AllocationProbe.cpp
         unit/runtime/navigation/NavigationBakeJobsTests.cpp
@@ -936,6 +952,16 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_include_directories(HoroNavigationAssetLoadingTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
     target_link_libraries(HoroNavigationAssetLoadingTests PRIVATE HoroEngine::NavigationAssetSceneIntegration HoroEngine::NavigationBakeService HoroEngine::NavigationRecastDetour)
     horo_register_catch_test(HoroNavigationAssetLoadingTests LABELS "unit;navigation;headless;assets;lifecycle;provider")
+    add_executable(HoroNavigationAssetDataQualificationTests
+            unit/runtime/navigation/NavigationAssetDataQualificationTests.cpp
+            support/AllocationProbe.cpp)
+    target_compile_features(HoroNavigationAssetDataQualificationTests PRIVATE cxx_std_20)
+    target_compile_definitions(HoroNavigationAssetDataQualificationTests PRIVATE
+            HORO_QUALIFICATION_BUILD_TYPE="$<CONFIG>"
+            HORO_QUALIFICATION_PLATFORM="${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}")
+    target_include_directories(HoroNavigationAssetDataQualificationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+    target_link_libraries(HoroNavigationAssetDataQualificationTests PRIVATE HoroEngine::NavigationAssetSceneIntegration HoroEngine::NavigationRecastDetour)
+    horo_register_catch_test(HoroNavigationAssetDataQualificationTests LABELS "unit;navigation;headless;assets;qualification;provider")
     add_executable(HoroNavigationCrowdDetourTests unit/runtime/navigation/RecastDetourCrowdProviderTests.cpp)
     target_compile_features(HoroNavigationCrowdDetourTests PRIVATE cxx_std_20)
     target_include_directories(HoroNavigationCrowdDetourTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
@@ -1229,6 +1255,13 @@ target_compile_features(HoroLuaReplicationPublicHeaderConsumer PRIVATE cxx_std_2
 target_link_libraries(HoroLuaReplicationPublicHeaderConsumer PRIVATE HoroEngine::GameplayLua)
 add_test(NAME HoroLuaReplicationPublicHeaderConsumer COMMAND HoroLuaReplicationPublicHeaderConsumer)
 set_tests_properties(HoroLuaReplicationPublicHeaderConsumer PROPERTIES LABELS "unit;gameplay;headless")
+
+# Only the declared gameplay dependency closure is visible; no root includes or concrete backend targets.
+add_executable(HoroGameplayReplicationPublicHeaderConsumer support/GameplayReplicationPublicHeaderConsumer.cpp)
+target_compile_features(HoroGameplayReplicationPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroGameplayReplicationPublicHeaderConsumer PRIVATE HoroEngine::GameplayLua)
+add_test(NAME HoroGameplayReplicationPublicHeaderConsumer COMMAND HoroGameplayReplicationPublicHeaderConsumer)
+set_tests_properties(HoroGameplayReplicationPublicHeaderConsumer PROPERTIES LABELS "unit;gameplay;headless;public_headers")
 
 add_executable(HoroLuaBehaviorTests
         unit/gameplay/LuaBehaviorTests.cpp
@@ -2734,13 +2767,16 @@ add_executable(HoroRuntimeSaveTestCompositionsTests
 target_compile_features(HoroRuntimeSaveTestCompositionsTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveTestCompositionsTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSceneTests
+        unit/runtime/scene/AudioSceneExtractionTests.cpp
         unit/runtime/scene/NavigationSceneComponentsTests.cpp
         unit/runtime/scene/NavigationSceneActivationTests.cpp
         unit/runtime/scene/NavigationSceneLinkCaptureTests.cpp
         unit/runtime/scene/PhysicsSceneComponentsTests.cpp
+        unit/runtime/scene/RuntimeSceneLifecycleTests.cpp
         unit/runtime/scene/RuntimeSceneTests.cpp
         unit/runtime/scene/RuntimeSceneGroupReferenceTests.cpp
 )
+target_sources(HoroRuntimeScenePublicHeaderConsumer PRIVATE support/AudioScenePublicContract.cpp)
 target_compile_features(HoroRuntimeSceneTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSceneTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroRuntimeSceneTests PRIVATE HoroEngine::NavigationSceneIntegration HoroEngine::RuntimeScene)

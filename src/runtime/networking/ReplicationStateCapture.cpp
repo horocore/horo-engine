@@ -106,7 +106,7 @@ namespace Horo::Network {
 
     /** @brief Captures one candidate with owner/world fences before atomic immutable publication. */
     Result<bool> ReplicationStateCapture::Impl::CaptureTarget(Target &target, const ReplicationWorldCaptureRead &worldRead,
-                                                              const std::uint64_t tick, const CancellationToken &cancellation) {
+                                                              const std::uint64_t tick, const CancellationToken &cancellation) const {
         if (const auto mapping = worldRead.Resolve(target.binding.object.object);
             mapping.HasError() || mapping.Value() != target.binding.object) {
             target.latest.reset();
@@ -262,13 +262,13 @@ namespace Horo::Network {
         const std::size_t allowance = std::min(targets.size(), limits.maximumTargetsPerTick);
         for (std::size_t attempts{}; attempts < allowance - 1; ++attempts) {
             if (hintCount == 0 || !Continue(work))
-                break;
+                return;
             const auto index = hints[hintHead];
             hintHead = (hintHead + 1) % hints.size();
             --hintCount;
             targets[index].dirty = false;
             if (!Consider(index, work))
-                break;
+                return;
         }
     }
 
@@ -277,8 +277,11 @@ namespace Horo::Network {
         Reconcile(work);
         ServeHints(work);
         const std::size_t allowance = std::min(targets.size(), limits.maximumTargetsPerTick);
-        for (std::size_t steps = 1; steps < allowance && Continue(work); ++steps)
+        for (std::size_t steps = 1; steps < allowance; ++steps) {
+            if (!Continue(work))
+                return;
             Reconcile(work);
+        }
     }
 
     /** @copydoc ReplicationStateCapture::Latest */

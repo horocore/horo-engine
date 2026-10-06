@@ -33,6 +33,7 @@ namespace Horo::Runtime {
         std::optional<CameraComponent> camera;
         std::optional<LightComponent> light;
         std::optional<AudioSourceComponent> audioSource;
+        std::optional<AudioListenerComponent> audioListener;
         std::optional<UiCanvasComponent> uiCanvas; /**< Optional canvas asset instantiated by the Runtime UI owner. */
         std::optional<NavigationSurfaceComponent> navigationSurface;
         std::optional<NavigationRegionComponent> navigationRegion;

@@ -309,3 +309,35 @@ namespace Horo::Network {
         REQUIRE(result.RequireAdmission().ErrorValue().diagnostics.front().message.find(malformed.owner.value) == std::string::npos);
     }
 }  // namespace Horo::Network
+
+namespace Horo::Network {
+    TEST_CASE("Declaration qualification respects both ends of the explicit compatibility window",
+              "[unit][network][replication][qualification]") {
+        auto published = Schema();
+        published.version = {1, 2};
+        published.compatibility = {{1, 1}, {1, 2}};
+        const auto snapshot = Registered(published);
+        const auto fingerprint = snapshot->Fingerprint();
+        for (const std::uint16_t minor : {0, 1, 2, 3}) {
+            auto declaration = Schema();
+            declaration.version = {1, minor};
+            declaration.compatibility = minor == published.version.minor
+                                            ? published.compatibility
+                                            : ReplicationCompatibilityRange{declaration.version, declaration.version};
+            INFO("declared minor: " << minor);
+            const auto assessment = Assessment({declaration}, snapshot);
+            const bool inWindow = minor == 1 || minor == 2;
+            CHECK(assessment.Admitted() == inWindow);
+            CHECK(assessment.RequireAdmission().HasValue() == inWindow);
+            if (!inWindow)
+                CHECK(HasProblem(assessment, ReplicationDeclarationProblem::VersionIncompatible));
+            CHECK(snapshot->Fingerprint() == fingerprint);
+        }
+        auto changedWindow = published;
+        changedWindow.compatibility.minimum = published.version;
+        const auto changed = Assessment({changedWindow}, snapshot);
+        CHECK_FALSE(changed.Admitted());
+        CHECK(HasProblem(changed, ReplicationDeclarationProblem::VersionIncompatible));
+        CHECK(snapshot->Fingerprint() == fingerprint);
+    }
+}  // namespace Horo::Network

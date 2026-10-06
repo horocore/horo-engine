@@ -439,3 +439,34 @@ TEST_CASE("event registration SDK rejects prior generation descriptors and bundl
     REQUIRE(bundle.HasError());
     CHECK(bundle.ErrorValue().code.Value() == GameplayErrors::InvalidGeneratedDescriptorBundle.code.Value());
 }
+
+TEST_CASE("native module restart after releasing generation leases preserves replication semantics") {
+    GameModuleHost host;
+    const auto schema = Network::ReplicationSchemaId::Create(1001).Value();
+    const auto field = Network::FieldId::Create(1).Value();
+    Sha256Digest fingerprint;
+    Network::ReplicationEncodedValue encodedEvidence;
+    GameplayReplicationOwner owner;
+    {
+        auto first = host.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
+        REQUIRE(first.HasValue());
+        std::unique_ptr<LoadedGameModule> loaded = std::move(first).Value();
+        auto prior = loaded->Replication().Acquire();
+        REQUIRE(prior.HasValue());
+        fingerprint = prior.Value().Descriptors()->Fingerprint();
+        const auto encoded = prior.Value().Serializers().Encode(schema, field, 3.5);
+        REQUIRE(encoded.HasValue());
+        encodedEvidence = encoded.Value();
+        owner = prior.Value().Registrations().front().owner;
+        RequireRestartRequired(loaded->PrepareReload());
+        loaded.reset();
+        CHECK(prior.Value().Serializers().Encode(schema, field, 3.5).Value() == encodedEvidence);
+    }  // Every old native generation lease is released before restart; only copied inert evidence remains.
+    auto replacement = host.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
+    REQUIRE(replacement.HasValue());
+    auto current = replacement.Value()->Replication().Acquire();
+    REQUIRE(current.HasValue());
+    CHECK(current.Value().Descriptors()->Fingerprint() == fingerprint);
+    CHECK(current.Value().Serializers().Encode(schema, field, 3.5).Value() == encodedEvidence);
+    CHECK(current.Value().Registrations().front().owner == owner);
+}

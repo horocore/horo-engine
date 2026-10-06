@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
 
 #include "Horo/Assets/NavMeshAssetType.h"
+#include "Horo/Audio/AudioSpatialModel.h"
 #include "RuntimeSceneErrors.h"
 
 #include <algorithm>
@@ -71,14 +72,24 @@ namespace Horo::Runtime {
             return Gameplay::ValidateSerializedComponents(components).HasValue();
         }
 
+        /** @brief Validates source playback and listener selection values as one audio component contract. */
+        [[nodiscard]] bool ValidAudioComponents(const RuntimeComponentSet &components) noexcept {
+            if (components.audioSource && (Audio::ValidateAudioSoundReference(components.audioSource->sound).HasError() ||
+                                           Audio::ValidateAudioSoundPlaybackDefaults(components.audioSource->playback).HasError() ||
+                                           Audio::ValidateAudioSceneLifecyclePolicy(components.audioSource->sceneLifecycle).HasError()))
+                return false;
+            if (components.audioListener && (components.audioListener->view > Audio::MaximumSpatialAudioViews ||
+                                             !std::isfinite(components.audioListener->weight) || components.audioListener->weight <= 0))
+                return false;
+            return true;
+        }
+
         [[nodiscard]] bool ValidComponents(const RuntimeComponentSet &components) noexcept {
             if (components.camera && !ValidCamera(*components.camera))
                 return false;
             if (components.light && !ValidLight(*components.light))
                 return false;
-            if (components.audioSource && (Audio::ValidateAudioSoundReference(components.audioSource->sound).HasError() ||
-                                           Audio::ValidateAudioSoundPlaybackDefaults(components.audioSource->playback).HasError() ||
-                                           Audio::ValidateAudioSceneLifecyclePolicy(components.audioSource->sceneLifecycle).HasError()))
+            if (!ValidAudioComponents(components))
                 return false;
             if (components.uiCanvas && Ui::ValidateUiCanvasAssetReference(components.uiCanvas->canvas).HasError())
                 return false;

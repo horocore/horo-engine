@@ -328,6 +328,54 @@ namespace Horo::Audio {
         return Ok;
     }
 
+    /** @copydoc AudioParameterAutomation::ResolveValue */
+    bool AudioParameterAutomation::ResolveValue(const AudioParameterAddress &address,
+                                                AudioAutomationValueSelector &selector) const noexcept {
+        if (closed_ || !sealed_)
+            return false;
+        const auto index = Find(address);
+        if (index == parameterCount_)
+            return false;
+        selector.owner_ = this;
+        selector.index_ = index;
+        return true;
+    }
+
+    /** @copydoc AudioParameterAutomation::Value */
+    AudioAutomationStatus AudioParameterAutomation::Value(const AudioAutomationValueSelector &selector, float &value) const noexcept {
+        using enum AudioAutomationStatus;
+        if (closed_)
+            return Closed;
+        if (!sealed_ || selector.owner_ != this || selector.index_ >= parameterCount_)
+            return MissingParameter;
+        value = parameters_[selector.index_].value;
+        return Ok;
+    }
+
+    /** @copydoc AudioParameterAutomation::HasRequest */
+    bool AudioParameterAutomation::HasRequest(const std::uint64_t requestId) const noexcept {
+        if (closed_ || requestId == 0)
+            return false;
+        for (std::size_t index = 0; index < pendingCount_; ++index)
+            if (pending_[index].request.requestId == requestId)
+                return true;
+        for (std::size_t index = 0; index < parameterCount_; ++index)
+            if (parameters_[index].activeId == requestId)
+                return true;
+        return false;
+    }
+
+    /** @copydoc AudioParameterAutomation::Binding */
+    bool AudioParameterAutomation::Binding(const AudioParameterAddress &address, AudioAutomationParameter &binding) const noexcept {
+        if (closed_ || !sealed_)
+            return false;
+        const auto index = Find(address);
+        if (index == parameterCount_)
+            return false;
+        binding = parameters_[index].descriptor;
+        return true;
+    }
+
     /** @copydoc AudioParameterAutomation::Close */
     void AudioParameterAutomation::Close() noexcept {
         closed_ = true;

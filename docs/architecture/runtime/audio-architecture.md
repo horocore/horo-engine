@@ -1180,6 +1180,49 @@ acoustic-material contribution, zones and environment sends are the AUD-006 M5 â
 1.0 environmental baseline; rooms/portals, diffraction, baked/geometric
 propagation and advanced reflections are AUD-014 Post-1.0.
 
+### Spatial scene extraction and listener policy
+
+`AudioSpatialModel.h` belongs to `HoroAudioApi`. `AudioSceneExtraction.h` belongs
+only to `HoroRuntimeScene`, which explicitly depends on the Audio value contract.
+An `AudioListenerComponent` is typed authored RuntimeScene data; it does not
+implicitly activate a camera, audio device or backend. Editor listener authoring
+remains the AUD-009 authoring surface. Existing source documents and sound schemas
+retain their representation; the listener addition is an additive runtime contract.
+
+The exclusive control owner calls `AudioSceneExtractor::Capture` with a current
+Scene view, an Audio-owned scene context, a strictly increasing sequence and a
+finite positive update interval. RuntimeScene entities, local transforms and
+parent links are read only during extraction. The returned value owns source
+references/playback defaults and listener/motion data; it contains no ECS reference,
+borrowed component, provider or native object. The host transfers the frame at an
+explicit quiescent ownership boundary and the callback consumes it as immutable
+values. No concurrent publication, automatic backend activation or AudioFrontend
+ownership is implied.
+
+Positions include all parent transforms and scale. Orientations compose normalized
+proper rotations, deliberately excluding scale/reflection/shear. Velocity is metres
+per second, supplied explicitly in world space or derived from successive world
+positions. First samples, changed context/entity generation, changed per-object
+discontinuity revisions and global discontinuities set previous equal to current
+and velocity to zero. The host marks teleport, tracking loss, reparenting or authority
+replacement with a changed revision (or the global flag for an affected hierarchy).
+History retains unselected listeners, and disabled/destroyed objects are removed.
+Scene replacement requires a fresh non-reused Audio scene-context generation.
+
+Listener selection is explicit. `Primary` selects highest priority, breaking ties
+by the lowest complete spatial identity. `PerView` makes the same choice independently
+for each exact view and orders results by view; global view 0 never becomes an
+implicit fallback. `WeightedAll` retains every enabled authored listener in identity
+order. Selected weights are normalized; an empty set remains explicitly empty.
+Authored views are 0..16 and weights must be finite and positive.
+
+Capture is bounded to 256 sources, 16 authored listeners before selection, 4096
+Scene slots, 64 ancestor nodes per object and 272 unique motion overrides. Valid
+capture performs no heap allocation or I/O. Rejected stale, malformed or over-capacity
+input leaves sequence and history unchanged. Shutdown permanently closes the owner.
+The new headers have single target ownership and generated consumer coverage; no
+public repository-wide include path is introduced.
+
 ### Occlusion Provider Interface
 
 Occlusion, obstruction, and diffraction are not computed by the audio runtime.
@@ -1322,6 +1365,62 @@ Dialogue starts
   -> SFX   -3 dB over 250 ms
   -> Voice unchanged
 ```
+
+### AUD-004.9 bounded mixer snapshots
+
+`HoroEngine::AudioMixer` owns `MixerSnapshot.h`. A version-one named snapshot
+contains a stable mixer asset reference and at most eight stable bus, send or DSP
+parameter references with finite model-unit targets. Names are presentation only.
+The fixed little-endian `MSNP` version-one codec persists only these values;
+runtime generations, clock timestamps, precedence and editor solo/debug state are
+excluded. Decode admits exact framing and bounded counts before reading records,
+rejects unsupported versions, duplicates and trailing fields, and publishes no
+partial asset. The codec is an additive snapshot format, not a MixerAsset schema
+change. Hosts own catalog resolution and storage.
+
+Control resolves every reference against its prepared live automation binding
+set, pinning exact runtime and graph generations. `PreparedMixerSnapshot` retains
+one ordinary `ScheduledAudioCommandBatch` plus transition ID and priority metadata.
+The host uses `MakeScheduledAudioBatchCommand` and existing staging/SPSC transport,
+retains the whole sidecar through callback acknowledgement, and resolves that exact
+storage on dispatch. Applying its batch directly bypasses snapshot precedence and
+is not a snapshot dispatch. At the exact target sample, the callback first advances
+its sealed automation engine, then dispatches to `MixerSnapshotTransitions::Apply`.
+Late, stale, closed or capacity-rejected work remains the host's reconciliation
+responsibility; neither preparation nor queue publication proves application.
+
+One callback owns the transition controller and borrowed automation engine. Higher
+priority wins while any owned trajectory remains pending/active; equal-priority
+later IDs replace. This is whole-preset precedence, not per-bus stacking or automatic
+restoration. Replacement atomically cancels the old group's remaining requests and
+admits every new target via `ApplyBatch`; the eight-target ceiling reserves room
+for eight cancellations within the existing sixteen-command batch limit. All
+ranges, continuity limits, request ordering and capacity are rechecked transactionally.
+Failure preserves previous trajectories and both identity sequences. Completed
+groups release precedence. Explicit cancellation holds current values; unrelated
+future requests remain queued. Cancelled/completed IDs cannot be replayed. Matching
+unload/reset closes the borrowed engine through its existing normal FIFO path.
+
+Control binds exact descriptors through `MixerRenderPlan::BindAutomation` before
+publication. This freezes projections into callback-exclusive bus/send gain and
+DSP value/target cells, separate from immutable compiled descriptors. Binding
+storage and worst-case per-sample engine/DAG dispatch are charged to the compile
+profile; failed admission leaves the plan unchanged. Published plans cannot be
+rebound, and stale graph generations never acquire replacement cells.
+
+`MixerGraphRuntime::RenderAutomated` validates the complete clock, scene and sealed
+binding table before advancement, resolves opaque engine-owned value selectors
+once per block, then projects every target before rendering each sample. The
+optional retained sidecar admits atomically at its interior start sample; rejection
+reports separately and the previous trajectories continue rendering. Aligned
+sample-zero scratch taps preserve DSP alignment while voice reads use the actual
+source offset. The existing DSP process contract accepts any positive frame count
+up to its prepared maximum; strategies retain state across one-frame calls, with
+normal bypass, fault and retirement handling. This path makes no speed claim.
+Static `Render` preserves ordinary block processing. Actual compiled-graph tests
+cover bus, send and real core gain output, block partition invariance, stale bindings,
+failed admission, immutable metadata and zero callback allocation/deallocation.
+Dedicated editor authoring UI remains AUD-009's responsibility.
 
 Advanced adaptive music and procedural modulation remain package or extension
 features. Adaptive-music product delivery is AUD-015 Post-1.0; the 1.0 core

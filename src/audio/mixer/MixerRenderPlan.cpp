@@ -35,10 +35,12 @@ namespace Horo::Audio::MixerDetail {
         }
 
         /** @brief Accumulate a completed source tap in canonical incoming order, preserving finite headroom. */
-        bool Accumulate(const AudioPlanarBlockView &source, const AudioPlanarBlockView &destination, const float gain) noexcept {
+        bool Accumulate(const AudioPlanarBlockView &source, const AudioPlanarBlockView &destination, const float gain,
+                        const std::uint32_t sourceOffset = 0) noexcept {
             for (std::size_t c = 0; c < destination.planes.size(); ++c)
                 for (std::uint32_t f = 0; f < destination.validFrames; ++f)
-                    if (!Store(static_cast<double>(destination.planes[c][f]) + static_cast<double>(source.planes[c][f]) * gain,
+                    if (!Store(static_cast<double>(destination.planes[c][f]) +
+                                   static_cast<double>(source.planes[c][f + sourceOffset]) * gain,
                                destination.planes[c][f]))
                         return false;
             return true;
@@ -113,7 +115,7 @@ namespace Horo::Audio::MixerDetail {
                 const MixerCompiledRoute &route = s.routes[i];
                 const BusState &source = s.processing[route.sourceBus];
                 const auto &planes = route.tap == MixerSendTap::PostFader ? source.post : source.pre;
-                if (!Accumulate(Block(source, planes, accumulator.validFrames, s.profile.maximumFrames), accumulator, route.gain))
+                if (!Accumulate(Block(source, planes, accumulator.validFrames, s.profile.maximumFrames), accumulator, s.routeState[i].gain))
                     return false;
             }
             return true;
@@ -123,7 +125,8 @@ namespace Horo::Audio::MixerDetail {
         bool Fader(const MixerCompiledBus &bus, const BusState &processing, const std::uint32_t frames) noexcept {
             for (std::size_t c = 0; c < bus.layout.orderedChannels.size(); ++c)
                 for (std::uint32_t f = 0; f < frames; ++f)
-                    if (!Store(static_cast<double>(processing.pre[c][f]) * bus.gain, processing.post[c][f]))
+                    if (!Store(static_cast<double>(processing.pre[c][f]) * (processing.muted ? 0.0F : processing.gain),
+                               processing.post[c][f]))
                         return false;
             return true;
         }
@@ -141,7 +144,7 @@ namespace Horo::Audio::MixerDetail {
 
         /** @brief Execute one bounded bus; direct voices precede sorted incoming routes and persisted inserts. */
         bool RenderBus(MixerRenderPlan::State &s, const std::size_t index, const std::span<const MixerVoiceInput> voices,
-                       const std::uint32_t frames) noexcept {
+                       const std::uint32_t frames, const std::uint32_t sourceOffset = 0) noexcept {
             const MixerCompiledBus &bus = s.buses[index];
             BusState &processing = s.processing[index];
             const AudioPlanarBlockView accumulator = Block(processing, processing.pre, frames, s.profile.maximumFrames);
@@ -150,7 +153,7 @@ namespace Horo::Audio::MixerDetail {
             Silence(Block(processing, processing.work, frames, s.profile.maximumFrames));
             if (!bus.paused) {
                 for (const MixerVoiceInput &voice : voices)
-                    if (voice.busIndex == index && !Accumulate(voice.samples, accumulator, 1.0F))
+                    if (voice.busIndex == index && !Accumulate(voice.samples, accumulator, 1.0F, sourceOffset))
                         return false;
             }
             return Routes(s, bus, accumulator) && Inserts(s, processing, frames) && Fader(bus, processing, frames);
@@ -183,5 +186,77 @@ namespace Horo::Audio::MixerDetail {
             std::fill(output.planes[c] + output.validFrames, output.planes[c] + output.capacityFrames, 0.0F);
         }
         return MixerRenderStatus::Rendered;
+    }
+
+    namespace {
+        /** @brief Project all admitted physical values before rendering one source-offset sample through the prepared graph. */
+        MixerRenderStatus RenderAutomatedSample(MixerRenderPlan::State &state, const std::span<const MixerVoiceInput> voices,
+                                                const AudioPlanarBlockView &output, const AudioParameterAutomation &automation,
+                                                const std::span<const AudioAutomationValueSelector> selectors,
+                                                const std::uint32_t frame) noexcept {
+            using enum MixerRenderStatus;
+            if (!ProjectAutomation(state, automation, selectors))
+                return InvalidEpoch;
+            for (std::size_t bus = 0; bus < state.buses.size(); ++bus) {
+                if (!RenderBus(state, bus, voices, 1, frame)) {
+                    ResetAfterFault(state);
+                    return DSPFault;
+                }
+            }
+            const auto &master = state.processing.back();
+            for (std::size_t channel = 0; channel < output.planes.size(); ++channel)
+                output.planes[channel][frame] = master.post[channel][0];
+            return Rendered;
+        }
+    }  // namespace
+
+    /** @copydoc RenderAutomatedPlan */
+    MixerRenderResult RenderAutomatedPlan(MixerRenderPlan::State &state, const std::span<const MixerVoiceInput> voices,
+                                          const AudioPlanarBlockView &output, const MixerAutomationRenderContext &context) noexcept {
+        if (!ValidVoices(state, voices, output.validFrames)) {
+            Silence(output);
+            return {MixerRenderStatus::InvalidBuffer};
+        }
+        std::array<AudioAutomationValueSelector, MaximumAudioAutomationParameters> selectorStorage{};
+        const std::span selectors{selectorStorage.data(), state.projections.size()};
+        if (!ValidateAutomationContext(state, context, output.validFrames, selectors)) {
+            Silence(output);
+            return {MixerRenderStatus::InvalidEpoch};
+        }
+        MixerRenderResult result{MixerRenderStatus::Rendered};
+        const PreparedMixerSnapshot *snapshot = context.snapshot;
+        if (const auto end = context.clock.sampleFrame + output.validFrames - 1U;
+            snapshot && (snapshot->batch.target.kind != AudioCommandTargetKind::ExactSampleFrame ||
+                         snapshot->batch.target.clockGeneration != context.clock.generation ||
+                         snapshot->batch.target.discontinuityRevision != context.clock.discontinuityRevision ||
+                         snapshot->batch.target.sampleFrame < context.clock.sampleFrame || snapshot->batch.target.sampleFrame > end)) {
+            result.snapshotStatus = MixerSnapshotStatus::InvalidTransition;
+            snapshot = nullptr;
+        }
+        auto clock = context.clock;
+        for (std::uint32_t frame = 0; frame < output.validFrames; ++frame) {
+            clock.sampleFrame = context.clock.sampleFrame + frame;
+            if (context.automation.Advance(clock) != AudioAutomationStatus::Ok) {
+                Silence(output);
+                result.status = MixerRenderStatus::InvalidEpoch;
+                return result;
+            }
+            if (snapshot && snapshot->batch.target.sampleFrame == clock.sampleFrame) {
+                result.snapshotStatus = context.transitions->Apply(*snapshot);
+                if (context.automation.Advance(clock) != AudioAutomationStatus::Ok) {
+                    Silence(output);
+                    result.status = MixerRenderStatus::InvalidEpoch;
+                    return result;
+                }
+            }
+            result.status = RenderAutomatedSample(state, voices, output, context.automation, selectors, frame);
+            if (result.status != MixerRenderStatus::Rendered) {
+                Silence(output);
+                return result;
+            }
+        }
+        for (AudioSample *plane : output.planes)
+            std::fill(plane + output.validFrames, plane + output.capacityFrames, 0.0F);
+        return result;
     }
 }  // namespace Horo::Audio::MixerDetail

@@ -198,3 +198,47 @@ Required tests cover:
 - [Gameplay Behavior Authoring](./gameplay-behavior-authoring.md)
 - [Gameplay Runtime Integration](./gameplay-runtime-integration.md)
 - [Game Project Testing](../delivery/game-project-testing.md)
+
+## Replication Declaration Qualification
+
+`HORO-1129` / [NET-003.10] qualifies the descriptor/declaration contract through
+`HoroNetworkApiTests`, `HoroGameplayRuntimeTests`, `HoroLuaBehaviorTests`,
+`HoroGameModuleHostTests`, and `HoroGameplayReplicationPublicHeaderConsumer`.
+The native and Lua declarations use the same stable schema, field and codec IDs.
+Source paths, sidecar paths, component categories and display names may change
+without changing their canonical schema fingerprint or encoded field values.
+
+The v1 fingerprint input uses big-endian fixed-width integers, 64-bit lengths
+for text/collections, identity-sorted schemas/fields/tombstones and the domain
+`horo.network.replication-schema-set.v1`. The fixed reference vectors below were
+encoded independently with Python `struct` and hashed with `hashlib.sha256`;
+the C++ tests compare against literal digests, never compute the expected result
+by calling the production fingerprint implementation.
+
+| Declaration | Canonical bytes | SHA-256 (without the display prefix) |
+|---|---:|---|
+| Schema 42, owner `game.tests`, version/window 1.0, required owner-only number field 7 (type 1, codec 2, 8 bytes/1 element) | 137 | `4baf64ed25af9cc8f64b622de9c6eb3f089244456252553b637a5787a15f72f7` |
+| Same schema at 1.1, window 1.0–1.1, plus optional always boolean field 9 (type 3, codec 4, introduced 1.1, 1 byte/1 element, canonical false default) | 175 | `c80416267e305c91974697b75e721236450d060e07b2b2fb038cd7f6908cced7` |
+
+Both vectors use authority-server-only writes, no custom conditions and no
+tombstones. Cross-platform CI runs the same literal assertions on Linux/GCC,
+macOS/Clang and Windows/MSVC. The compatibility qualification checks admission
+at both ends of an explicit minor-version window and rejection outside it.
+Malformed metadata, duplicate identities and failed script reloads retain their
+existing focused regression cases. Missing native codec code and conflicting
+codec contributions fail freeze without publishing a generation.
+
+The native module restart test first proves codec usability while an external
+generation lease pins the code after its host owner is released. It then releases
+all old module/replication leases before loading a replacement, comparing only
+copied digest, payload and owner evidence. This qualifies the explicit restart
+boundary; it does not assert operating-system loader residency or hot reload
+while external code leases remain admitted.
+
+The public gameplay consumer uses only the declared GameplayLua dependency
+closure. Compile assertions pin the Horo owner/schema/schedule types; local
+poisoned-token probes reject transport/backend interfaces in the declaration
+include closure, and concrete transport/Lua headers must be unavailable. The
+existing GameplayApi dependency on NetworkApi still makes other backend-neutral
+NetworkApi headers reachable: this qualification does not claim that the entire
+transitive transport header surface is inaccessible.

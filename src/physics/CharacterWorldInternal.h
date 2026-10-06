@@ -54,6 +54,11 @@ namespace Horo::Character {
                 return std::scoped_lock{publicationMutex_};
             }
 
+            /** @brief Producer admission never waits behind owner mutation or a concurrent copied-state reader. */
+            [[nodiscard]] std::unique_lock<std::mutex> TryLockRegistry() const {
+                return std::unique_lock{registryMutex_, std::try_to_lock};
+            }
+
             [[nodiscard]] std::scoped_lock<std::mutex> LockRegistry() const {
                 return std::scoped_lock{registryMutex_};
             }

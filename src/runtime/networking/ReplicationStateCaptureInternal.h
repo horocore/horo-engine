@@ -73,6 +73,6 @@ namespace Horo::Network {
         [[nodiscard]] Result<bool> CompareCandidate(const Target &target, const ReplicationCapturedState &candidate,
                                                     const ReplicationCapturedStatePin &prior) const;
         [[nodiscard]] Result<bool> CaptureTarget(Target &target, const ReplicationWorldCaptureRead &read, std::uint64_t tick,
-                                                 const CancellationToken &cancellation);
+                                                 const CancellationToken &cancellation) const;
     };
 }  // namespace Horo::Network

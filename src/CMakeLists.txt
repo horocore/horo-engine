@@ -654,6 +654,7 @@ target_compile_definitions(HoroGameplayApi PRIVATE
 )
 
 add_library(HoroRuntimeScene STATIC
+        runtime/scene/AudioSceneExtraction.cpp
         runtime/scene/NavigationSceneComponents.cpp
         runtime/scene/PersistentEntityIdentity.cpp
         runtime/scene/SaveableComponentState.cpp
@@ -949,6 +950,8 @@ target_compile_features(HoroAudioCommands PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioCommands PUBLIC HoroEngine::AudioMemory PRIVATE HoroAudioSafetyHooks)
 
 add_library(HoroAudioMixer STATIC
+        audio/mixer/MixerAutomationProjection.cpp
+        audio/mixer/MixerSnapshot.cpp
         audio/mixer/MixerGraphCompiler.cpp
         audio/mixer/MixerCycleEvidence.cpp
         audio/mixer/MixerGraphRuntime.cpp
@@ -1789,7 +1792,7 @@ target_link_libraries(HoroCinematicModel PUBLIC HoroEngine::SceneModel)
 
 # RuntimeSceneDefinition exposes PrimitiveMeshDescriptor in its public scene
 # contract, so the owning SceneModel dependency is part of the public edge.
-target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::SceneModel)
+target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::SceneModel HoroEngine::AudioApi)
 
 add_library(HoroRenderNull STATIC
         runtime/renderer/modules/null/NullRenderBackend.cpp

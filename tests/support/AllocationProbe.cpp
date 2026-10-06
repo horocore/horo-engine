@@ -10,6 +10,9 @@
 #endif
 
 namespace {
+    // Scoped stack-owned observation on the calling thread; fixture/framework allocations stay outside its window.
+    thread_local Horo::Tests::AllocationProbe::Measurement *activeMeasurement{};
+
     class AllocationMeter final {
     public:
         [[nodiscard]] static void *Acquire(const std::size_t byteCount) {
@@ -71,6 +74,12 @@ namespace {
     private:
         /** @brief Disable the one-shot failure before notifying or throwing, so exception cleanup can allocate. */
         static void RecordAllocation(const std::size_t byteCount) {
+            if (activeMeasurement != nullptr) {
+                ++activeMeasurement->requests;
+                const auto remaining = std::numeric_limits<std::size_t>::max() - activeMeasurement->requestedBytes;
+                activeMeasurement->requestedBytes += std::min(byteCount, remaining);
+                activeMeasurement->largestRequest = std::max(activeMeasurement->largestRequest, byteCount);
+            }
             count_.fetch_add(1, std::memory_order_relaxed);
             std::size_t remaining = failureCountdown_.load(std::memory_order_relaxed);
             while (remaining != DisabledFailureCountdown) {
@@ -143,6 +152,18 @@ void operator delete[](void *memory, std::size_t, const std::align_val_t) noexce
 }
 
 namespace Horo::Tests::AllocationProbe {
+    ScopedMeasurement::ScopedMeasurement() noexcept : previous_(activeMeasurement) {
+        activeMeasurement = &measurement_;
+    }
+
+    ScopedMeasurement::~ScopedMeasurement() {
+        activeMeasurement = previous_;
+    }
+
+    Measurement ScopedMeasurement::Snapshot() const noexcept {
+        return measurement_;
+    }
+
     /** @copydoc ScopedFailure::ScopedFailure */
     ScopedFailure::ScopedFailure(const std::size_t successfulAllocationsBeforeFailure, FailureObserver observer) noexcept {
         AllocationMeter::FailAfter(successfulAllocationsBeforeFailure, observer);
