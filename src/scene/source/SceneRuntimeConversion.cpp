@@ -364,6 +364,21 @@ namespace Horo::SceneSource {
             return Result<void>::Success();
         }
 
+        /** @brief Owns the scene builder and its occupied identity set throughout authored and optional prefab admission. */
+        struct SceneAssembly final {
+            Runtime::SceneDefinitionBuilder builder;
+            std::vector<Prefab::PrefabSceneObjectId> occupied;
+        };
+
+        /** @brief Admits authored objects once for both public conversion paths, keeping collision state beside its builder. */
+        Result<SceneAssembly> BeginSceneAssembly(const SceneSourceView &document, const Runtime::SceneDefinitionId sceneId,
+                                                 const Runtime::SceneDefinitionRevision revision) {
+            SceneAssembly assembly{Runtime::SceneDefinitionBuilder{sceneId, revision}, {}};
+            if (auto authored = AddAuthoredObjects(document, assembly.builder, assembly.occupied); authored.HasError())
+                return Result<SceneAssembly>::Failure(authored.ErrorValue());
+            return Result<SceneAssembly>::Success(std::move(assembly));
+        }
+
         [[nodiscard]] Result<void> AddPrefabCandidate(const ScenePrefabInstance &instance,
                                                       const Prefab::EffectivePrefabCandidate &candidate,
                                                       const Prefab::PrefabSceneIdentityMap &identityMap,
@@ -425,11 +440,11 @@ namespace Horo::SceneSource {
                                                                         const Runtime::SceneDefinitionRevision revision) {
         if (!document.prefabInstances.empty())
             return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(PrefabResolutionRequired));
-        Runtime::SceneDefinitionBuilder builder{sceneId, revision};
-        std::vector<Prefab::PrefabSceneObjectId> occupied;
-        if (const auto authored = AddAuthoredObjects(document, builder, occupied); authored.HasError())
-            return Result<Runtime::RuntimeSceneDefinition>::Failure(authored.ErrorValue());
-        return std::move(builder).Build();
+        auto assembly = BeginSceneAssembly(document, sceneId, revision);
+        if (assembly.HasError())
+            return Result<Runtime::RuntimeSceneDefinition>::Failure(assembly.ErrorValue());
+        auto owned = std::move(assembly).Value();
+        return std::move(owned.builder).Build();
     }
 
     /** @copydoc ConvertSceneSourceToRuntime */
@@ -438,10 +453,12 @@ namespace Horo::SceneSource {
                                                                         const Runtime::SceneDefinitionRevision revision,
                                                                         const Prefab::PrefabSourceResolverSnapshot &resolver,
                                                                         const Prefab::PrefabLimitProfile &limits) {
-        Runtime::SceneDefinitionBuilder builder{sceneId, revision};
-        std::vector<Prefab::PrefabSceneObjectId> occupied;
-        if (const auto authored = AddAuthoredObjects(document, builder, occupied); authored.HasError())
-            return Result<Runtime::RuntimeSceneDefinition>::Failure(authored.ErrorValue());
+        auto prepared = BeginSceneAssembly(document, sceneId, revision);
+        if (prepared.HasError())
+            return Result<Runtime::RuntimeSceneDefinition>::Failure(prepared.ErrorValue());
+        auto assembly = std::move(prepared).Value();
+        auto &builder = assembly.builder;
+        auto &occupied = assembly.occupied;
 
         for (const ScenePrefabInstance &instance : document.prefabInstances) {
             if (auto candidate = resolver.Resolve(instance.sourcePrefab.Asset(), instance.instanceId, limits); candidate.HasError()) {

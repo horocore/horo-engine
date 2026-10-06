@@ -1,9 +1,9 @@
 #include "Horo/Packages/PackageLockfile.h"
 
+#include "PackageJsonGuard.h"
 #include "PackageValidation.h"
 
 #include <algorithm>
-#include <array>
 #include <functional>
 #include <limits>
 #include <map>
@@ -55,29 +55,6 @@ namespace Horo::Packages {
                 return !less(left, right);
             }) == std::ranges::end(range);
         }
-
-        /** @brief Rejects duplicate keys and oversized strings before values enter the validated model. */
-        struct DecodeGuard {
-            std::array<std::set<std::string, std::less<>>, 12> keys;
-            bool valid{true};
-
-            bool operator()(const int depth, const Json::parse_event_t event, const Json &value) {
-                if (depth < 0 || static_cast<std::size_t>(depth) >= keys.size() - 1U) {
-                    valid = false;
-                    return false;
-                }
-                const auto index = static_cast<std::size_t>(depth);
-                if (event == Json::parse_event_t::object_start) {
-                    keys[index + 1U].clear();
-                } else if (event == Json::parse_event_t::key) {
-                    valid &= value.is_string() && value.get_ref<const std::string &>().size() <= 64U &&
-                             keys[index].insert(value.get_ref<const std::string &>()).second;
-                } else if (event == Json::parse_event_t::value && value.is_string()) {
-                    valid &= value.get_ref<const std::string &>().size() <= 1024U;
-                }
-                return valid;
-            }
-        };
 
         [[nodiscard]] bool HasExactKeys(const Json &value, const std::initializer_list<std::string_view> keys) {
             if (!value.is_object() || value.size() != keys.size())
@@ -397,9 +374,9 @@ namespace Horo::Packages {
         if (json.size() > limits.documentBytes)
             return Result<ValidatedPackageLockfileV1>::Failure(MakeError(ResourceLimit));
         try {
-            DecodeGuard guard;
+            Detail::PackageJsonGuard guard;
             const Json root = Json::parse(json, std::ref(guard));
-            if (!guard.valid || !HasExactKeys(root, {"schemaVersion", "requestHash", "roots", "packages"}) ||
+            if (!guard.IsValid() || !HasExactKeys(root, {"schemaVersion", "requestHash", "roots", "packages"}) ||
                 !root.at("schemaVersion").is_number_unsigned() || root.at("schemaVersion") != 1U || !root.at("requestHash").is_string() ||
                 !root.at("roots").is_array() || !root.at("packages").is_array())
                 return Result<ValidatedPackageLockfileV1>::Failure(MakeError(InvalidLock));
