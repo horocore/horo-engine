@@ -1153,7 +1153,7 @@ add_executable(HoroPrefabCookPublicHeaderConsumer support/PrefabCookPublicHeader
 add_executable(HoroPrefabSceneCookHostTests unit/application/PrefabSceneCookHostTests.cpp unit/application/PrefabCookSchemaContextTests.cpp)
 target_compile_features(HoroPrefabSceneCookHostTests PRIVATE cxx_std_20)
 target_include_directories(HoroPrefabSceneCookHostTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
-target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE HoroEngine::PrefabCookHost HoroEngine::SceneSource nlohmann_json::nlohmann_json miniz)
+target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE HoroEngine::PrefabCookHost HoroEngine::PrefabRuntime HoroEngine::SceneSource nlohmann_json::nlohmann_json miniz)
 horo_register_catch_test(HoroPrefabSceneCookHostTests LABELS "unit;prefab;headless;host")
 target_compile_features(HoroPrefabCookPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroPrefabCookPublicHeaderConsumer PRIVATE HoroEngine::SceneRuntimeConversion HoroEngine::SceneCook HoroEngine::Assets HoroEngine::PrefabCookHost)

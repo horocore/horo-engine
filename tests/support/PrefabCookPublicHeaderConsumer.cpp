@@ -11,6 +11,7 @@ static_assert(std::is_copy_constructible_v<Horo::Assets::AssetCookInputSnapshot>
 static_assert(!std::is_default_constructible_v<Horo::Assets::AssetCookInputSnapshot>);
 static_assert(!std::is_default_constructible_v<Horo::Application::PrefabSceneCookHost>);
 static_assert(!std::is_default_constructible_v<Horo::Application::PrefabCookSchemaContext>);
+static_assert(std::is_same_v<decltype(Horo::Application::PrefabSceneCookRequest{}.runtimePrefabRoots), std::vector<Horo::Assets::AssetId>>);
 
 int main() {
     const auto intent = Horo::Packages::ValidatedPackageRequest::Parse(R"({"sources":{},"dependencies":{}})");

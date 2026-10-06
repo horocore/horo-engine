@@ -2444,6 +2444,7 @@ add_library(HoroPrefabCookHost STATIC
         application/assets/PrefabSceneCookHost.cpp
         application/assets/PrefabSceneCookCapture.cpp
         application/assets/PrefabSceneCookCatalog.cpp
+        application/assets/PrefabTemplateCookCatalog.cpp
         application/assets/PrefabSceneCookState.h)
 add_library(HoroEngine::PrefabCookHost ALIAS HoroPrefabCookHost)
 target_compile_features(HoroPrefabCookHost PUBLIC cxx_std_20)

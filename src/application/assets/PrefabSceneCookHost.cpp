@@ -1,5 +1,7 @@
 #include "PrefabSceneCookState.h"
 
+#include <algorithm>
+
 namespace Horo::Application {
     /** @copydoc PrefabSceneCookHost::PrefabSceneCookHost */
     PrefabSceneCookHost::PrefabSceneCookHost(JobSystem &jobs, std::shared_ptr<const Assets::CookerCatalogSnapshot> catalog,
@@ -21,7 +23,8 @@ namespace Horo::Application {
                                                                   const Release::ReleaseExecutionPlan *releasePlan) {
         if (cancellation.IsCancellationRequested())
             return Result<Assets::AssetCookReport>::Failure(MakeError(PrefabSceneCookErrors::Cancelled));
-        if (!catalog_ || !request.assets.publicationFiles || !request.assets.newPublicationOperationId)
+        if (!catalog_ || !request.assets.publicationFiles || !request.assets.newPublicationOperationId ||
+            request.runtimePrefabRoots.size() > request.assets.limits.maximumAssets)
             return Result<Assets::AssetCookReport>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
         auto limits = Prefab::PrefabLimitProfile::Create(request.prefabPolicy);
         if (limits.HasError())
@@ -50,7 +53,8 @@ namespace Horo::Application {
             return Result<Assets::AssetCookReport>::Failure(composed.ErrorValue());
         std::vector<Assets::AssetRecord> runtimeRecords;
         for (const auto &record : inputs->Registry().Records()) {
-            if (record.type.Value() != "core.prefab")
+            if (record.type.Value() != "core.prefab" ||
+                std::ranges::find(request.runtimePrefabRoots, record.id) != request.runtimePrefabRoots.end())
                 runtimeRecords.push_back(record);
         }
         Assets::AssetRegistry selected;
@@ -59,8 +63,7 @@ namespace Horo::Application {
         Assets::AssetCookRequest cook = request.assets;
         cook.registry = selected.Snapshot();
         cook.pinnedInputs = inputs;
-        // This static host owns its composition. The dynamic host explicitly supplies a dependent phase in HORO-1068.
-        cook.dependentPhase.reset();
+        cook.dependentPhase = composed.Value().templates;
         // Capture references are synchronous: AssetCook joins all accepted work before returning, and projectLease outlives it.
         cook.validateHostInputs = [this, &request, &host, &cancellation, releasePlan, capturedRevision] {
             if (cancellation.IsCancellationRequested())
@@ -71,7 +74,7 @@ namespace Horo::Application {
                 return verified;
             return request.assets.validateHostInputs ? request.assets.validateHostInputs() : Result<void>::Success();
         };
-        Assets::AssetCookService operation{jobs_, composed.Value()};
+        Assets::AssetCookService operation{jobs_, composed.Value().catalog};
         return operation.Cook(cook, cancellation);
     }
 

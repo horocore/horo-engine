@@ -2,12 +2,16 @@
 #include "Horo/Application/PrefabSceneCookHost.h"
 #include "Horo/Packages/PackageRequest.h"
 #include "Horo/Prefab/PrefabDocument.h"
+#include "Horo/Prefab/PrefabTemplateProvider.h"
 #include "Horo/Scene/SceneSource.h"
 #include "ReleaseTestFixtures.h"
 #include "assets/AssetCookServiceFixture.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <thread>
 
 namespace {
     using namespace Horo;
@@ -21,9 +25,12 @@ namespace {
         std::function<void()> staged;
         bool failReplacement{};
         bool observed{};
+        std::size_t selectorWrites{};
 
         Result<void> WriteDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes) override {
             auto written = native.WriteDurable(path, bytes);
+            if (written.HasValue() && path.filename() == "current.json")
+                ++selectorWrites;
             if (written.HasValue() && path.filename() == "current.json" && !observed) {
                 observed = true;
                 if (staged)
@@ -85,7 +92,7 @@ namespace {
             WriteFile(project.dir.path / relative, {reinterpret_cast<const std::uint8_t *>(text.data()), text.size()});
         }
 
-        void WritePrefab(const float offset = 4) const {
+        void WritePrefab(const float offset = 4, std::vector<AssetId> resources = {}) const {
             const auto limits = Prefab::PrefabLimitProfile::Create({});
             REQUIRE(limits.HasValue());
             auto document = Prefab::PrefabDocument::Create({.projectVersion = version,
@@ -93,7 +100,8 @@ namespace {
                                                             .objects = {{.localId = {0}, .name = "Prefab root"},
                                                                         {.localId = {3},
                                                                          .parentLocalId = Prefab::LocalObjectId{0},
-                                                                         .localTransform = {.translation = {0, offset, 0}}}}},
+                                                                         .localTransform = {.translation = {0, offset, 0}}}},
+                                                            .referencedAssets = std::move(resources)},
                                                            limits.Value());
             REQUIRE(document.HasValue());
             auto canonical = document.Value().SerializeCanonical();
@@ -108,13 +116,13 @@ namespace {
                         .status == AssetRegistryBuildStatus::Complete);
         }
 
-        PrefabSceneCookHost MakeHost() {
+        PrefabSceneCookHost MakeHost(const std::uint8_t resourceSetting = 1) {
             CookerCatalog catalog;
             REQUIRE(catalog
                         .Register({.contributionId = "test.mesh",
                                    .assetType = Type("core.mesh"),
                                    .targets = {request.assets.target},
-                                   .strategy = std::make_shared<const SettingsCooker>(1)})
+                                   .strategy = std::make_shared<const SettingsCooker>(resourceSetting)})
                         .HasValue());
             auto sealed = catalog.Publish();
             REQUIRE(sealed.HasValue());
@@ -131,6 +139,22 @@ namespace {
             CHECK(active.Value().manifestDigest == previous.manifestDigest);
             CHECK(active.Value().generationRoot == previous.generationRoot);
             CHECK(ReadCookGenerationContents(previous, 1024U * 1024U).HasValue());
+        }
+
+        AssetId AddSpawnableRoot() {
+            const auto id = Id("00000000-0000-0000-0000-0000000000b2");
+            auto document = Prefab::PrefabDocument::Create({.projectVersion = version,
+                                                            .assetId = id,
+                                                            .objects = {{.localId = {0}, .name = "Second root"}}},
+                                                           Prefab::PrefabLimitProfile::Create({}).Value());
+            REQUIRE(document.HasValue());
+            WriteText("assets/second.prefab", document.Value().SerializeCanonical().Value());
+            WriteText("assets/second.prefab.horo", SidecarJson(id.ToString(), "core.prefab"));
+            REQUIRE(registry
+                        .Publish({TestMeshRecord(), Record(prefabId, "core.prefab", "assets/hierarchy.prefab"),
+                                  Record(sceneId, "core.scene", "assets/level.scene"), Record(id, "core.prefab", "assets/second.prefab")})
+                        .status == AssetRegistryBuildStatus::Complete);
+            return id;
         }
 
     private:
@@ -188,7 +212,8 @@ namespace {
             const auto inventory = ReadCookGenerationContents(active.Value(), 1024U * 1024U);
             if (inventory.HasError())
                 return Result<Release::ReleaseStagedPayload>::Failure(inventory.ErrorValue());
-            packagedPinnedGeneration = inventory.Value().entries.size() == 2 && cooked.root != fixture_.cache.path;
+            packagedPinnedGeneration =
+                inventory.Value().entries.size() == 2 + fixture_.request.runtimePrefabRoots.size() && cooked.root != fixture_.cache.path;
             return Result<Release::ReleaseStagedPayload>::Success({cooked.root, cooked.bytesDigest});
         }
 
@@ -224,6 +249,49 @@ namespace {
         const Release::ReleaseExecutionPlan &plan_;
         Release::IReleasePreflightFactsProvider &facts_;
     };
+
+    /** @brief Reads actual published envelope bytes without treating a cache directory as authority. */
+    Result<AssetCookArtifact> GenerationArtifact(const AssetCookGeneration &generation, const AssetId id) {
+        auto inventory = ReadCookGenerationContents(generation, 1024U * 1024U);
+        if (inventory.HasError())
+            return Result<AssetCookArtifact>::Failure(inventory.ErrorValue());
+        for (const auto &bytes : inventory.Value().artifacts) {
+            auto artifact = DecodeCookedArtifact(bytes);
+            if (artifact.HasError())
+                return artifact;
+            if (artifact.Value().id == id)
+                return artifact;
+        }
+        return Result<AssetCookArtifact>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
+    }
+
+    /** @brief Prepares the host-produced template through the existing generation and asynchronous provider path. */
+    void AssertProviderTemplate(HostFixture &fixture, const AssetCookGeneration &generation, const Sha256Digest &digest) {
+        FilesystemAssetProvider bytes{generation.generationRoot};
+        AssetLoadService loads{fixture.jobs, bytes};
+        Runtime::RuntimeSceneService scenes{fixture.registry, loads};
+        REQUIRE(scenes.Startup({}).HasValue());
+        Runtime::SceneDefinitionBuilder builder{{7}, {1}};
+        auto definition = std::move(builder).Build();
+        REQUIRE(definition.HasValue());
+        REQUIRE(scenes.QueuePreparation(std::move(definition).Value()).HasValue());
+        REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, {1, {}, 0.0, 0, {}, false, {}}).HasValue());
+        Prefab::PrefabTemplateProvider provider{fixture.registry, loads, scenes, Prefab::PrefabLimitProfile::Create({}).Value()};
+        REQUIRE(provider.Startup({}).HasValue());
+        auto loading = provider.LoadAsync({fixture.prefabId, digest, fixture.request.assets.target});
+        REQUIRE(loading.HasValue());
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (loading.Value().State() == Prefab::PrefabTemplateLoadState::Loading && std::chrono::steady_clock::now() < deadline) {
+            REQUIRE(provider.Advance().HasValue());
+            std::this_thread::yield();
+        }
+        auto lease = provider.TakeResult(loading.Value());
+        REQUIRE(lease.HasValue());
+        CHECK(lease.Value().Template()->GetObjectCount() == 2);
+        CHECK(lease.Value().Dependencies().size() == 1);
+        provider.Shutdown();
+        CHECK(lease.Value().Template()->Data().entities[1].localTransform.translation.y == 4);
+    }
 }  // namespace
 
 TEST_CASE("Host prefab scene cook publishes expanded source-free scenes and validates cache reuse", "[native][prefab-cook][host]") {
@@ -340,6 +408,7 @@ TEST_CASE("Host retains project mutation authority and checks final selector fai
     REQUIRE(fixture.Cook(cancellation.Token()).HasError());
     CHECK(competingMutationRejected);
     CHECK(files->observed);
+    CHECK(files->selectorWrites == 1);
     fixture.AssertRetained(first.Value().generation);
 }
 
@@ -375,6 +444,10 @@ TEST_CASE("Release cook handoff pins the actual generation and rejects changed f
 
 TEST_CASE("Release executor packages the concrete static prefab cook generation", "[native][prefab-cook][host][release]") {
     HostFixture fixture;
+    SECTION("explicit dynamic template shares the release handoff") {
+        fixture.request.runtimePrefabRoots = {fixture.prefabId};
+    }
+    SECTION("static only retains the existing inventory") {}
     auto request = ReleaseTestFixtures::Request();
     request.projectRoot = fixture.project.dir.path;
     request.outputRoot = fixture.cooked.path;
@@ -390,6 +463,199 @@ TEST_CASE("Release executor packages the concrete static prefab cook generation"
     CHECK(stages.packagedPinnedGeneration);
     REQUIRE(result.candidate.has_value());
     CHECK(result.candidate->state == Release::ReleaseCandidateState::FinalVerified);
+}
+
+TEST_CASE("Host publishes dynamic templates resources and expanded scenes once and loads the generation provider",
+          "[native][prefab-cook][host][template]") {
+    HostFixture fixture;
+    fixture.WritePrefab(4, {TestMeshRecord().id});
+    fixture.request.runtimePrefabRoots = {fixture.prefabId};
+    auto files = std::make_shared<HostPublicationFiles>();
+    fixture.request.assets.publicationFiles = files;
+    const auto first = fixture.Cook();
+    REQUIRE(first.HasValue());
+    CHECK(first.Value().generation.artifactCount == 3);
+    CHECK(files->observed);
+    CHECK(files->selectorWrites == 1);
+    const auto artifact = GenerationArtifact(first.Value().generation, fixture.prefabId);
+    REQUIRE(artifact.HasValue());
+    auto cooked = Prefab::CookedPrefab::Parse(std::as_bytes(std::span{artifact.Value().payload}), fixture.prefabId,
+                                              Prefab::PrefabLimitProfile::Create({}).Value());
+    REQUIRE(cooked.HasValue());
+    REQUIRE(cooked.Value().Data().dependencies.size() == 1);
+    const auto inventory = ReadCookGenerationContents(first.Value().generation, 1024U * 1024U);
+    REQUIRE(inventory.HasValue());
+    const auto resource = std::ranges::find(inventory.Value().entries, TestMeshRecord().id, &AssetCookManifestEntry::assetId);
+    REQUIRE(resource != inventory.Value().entries.end());
+    CHECK(cooked.Value().Data().dependencies[0].artifactDigest == resource->artifactHash);
+    const auto root = std::ranges::find(inventory.Value().entries, fixture.prefabId, &AssetCookManifestEntry::assetId);
+    REQUIRE(root != inventory.Value().entries.end());
+    AssertProviderTemplate(fixture, first.Value().generation, root->artifactHash);
+    const auto repeated = fixture.Cook();
+    REQUIRE(repeated.HasValue());
+    CHECK(repeated.Value().cacheHits == 3);
+    CHECK(repeated.Value().generation.manifestDigest == first.Value().generation.manifestDigest);
+}
+
+TEST_CASE("Dynamic root selection is canonical and excludes unselected templates under the same registry revision",
+          "[native][prefab-cook][host][template]") {
+    HostFixture fixture;
+    const auto other = fixture.AddSpawnableRoot();
+    const auto revision = fixture.registry.Snapshot().Revision();
+    fixture.request.runtimePrefabRoots = {other, fixture.prefabId};
+    const auto first = fixture.Cook();
+    REQUIRE(first.HasValue());
+    CHECK(first.Value().generation.artifactCount == 4);
+    std::ranges::reverse(fixture.request.runtimePrefabRoots);
+    const auto reordered = fixture.Cook();
+    REQUIRE(reordered.HasValue());
+    CHECK(reordered.Value().cacheHits == 4);
+    CHECK(reordered.Value().generation.manifestDigest == first.Value().generation.manifestDigest);
+    fixture.request.runtimePrefabRoots = {other};
+    const auto selected = fixture.Cook();
+    REQUIRE(selected.HasValue());
+    CHECK(selected.Value().generation.artifactCount == 3);
+    CHECK(GenerationArtifact(selected.Value().generation, fixture.prefabId).HasError());
+    CHECK(GenerationArtifact(selected.Value().generation, other).HasValue());
+    CHECK(fixture.registry.Snapshot().Revision() == revision);
+}
+
+TEST_CASE("Invalid dynamic root selection preserves the current complete generation", "[native][prefab-cook][host][template]") {
+    HostFixture fixture;
+    fixture.request.runtimePrefabRoots = {fixture.prefabId};
+    const auto first = fixture.Cook();
+    REQUIRE(first.HasValue());
+    SECTION("duplicate") {
+        fixture.request.runtimePrefabRoots.push_back(fixture.prefabId);
+    }
+    SECTION("missing") {
+        fixture.request.runtimePrefabRoots = {Id("00000000-0000-0000-0000-000000000099")};
+    }
+    SECTION("wrong type") {
+        fixture.request.runtimePrefabRoots = {TestMeshRecord().id};
+    }
+    SECTION("too many roots") {
+        fixture.request.runtimePrefabRoots.assign(fixture.request.assets.limits.maximumAssets + 1, fixture.prefabId);
+    }
+    REQUIRE(fixture.Cook().HasError());
+    fixture.AssertRetained(first.Value().generation);
+}
+
+TEST_CASE("Dynamic template cache binds actual changed resource envelopes without a registry replacement",
+          "[native][prefab-cook][host][template]") {
+    HostFixture fixture;
+    fixture.WritePrefab(4, {TestMeshRecord().id});
+    fixture.request.runtimePrefabRoots = {fixture.prefabId};
+    const auto revision = fixture.registry.Snapshot().Revision();
+    const auto first = fixture.Cook();
+    REQUIRE(first.HasValue());
+    const auto oldArtifact = GenerationArtifact(first.Value().generation, fixture.prefabId);
+    REQUIRE(oldArtifact.HasValue());
+    WriteFile(fixture.project.sourceFile, std::array<std::uint8_t, 3>{7, 8, 9});
+    const auto changed = fixture.Cook();
+    REQUIRE(changed.HasValue());
+    CHECK(changed.Value().cacheHits == 0);
+    const auto newArtifact = GenerationArtifact(changed.Value().generation, fixture.prefabId);
+    REQUIRE(newArtifact.HasValue());
+    CHECK(oldArtifact.Value().payloadDigest != newArtifact.Value().payloadDigest);
+    CHECK(oldArtifact.Value().sourceDigest == newArtifact.Value().sourceDigest);
+    CHECK(oldArtifact.Value().cacheKeyDigest != newArtifact.Value().cacheKeyDigest);
+    CHECK(fixture.registry.Snapshot().Revision() == revision);
+}
+
+TEST_CASE("Dynamic template keys bind changed resource cooker settings with identical source and registry inputs",
+          "[native][prefab-cook][host][template][cache]") {
+    HostFixture fixture;
+    fixture.WritePrefab(4, {TestMeshRecord().id});
+    fixture.request.runtimePrefabRoots = {fixture.prefabId};
+    const auto revision = fixture.registry.Snapshot().Revision();
+    const auto first = fixture.Cook();
+    REQUIRE(first.HasValue());
+    const auto oldArtifact = GenerationArtifact(first.Value().generation, fixture.prefabId);
+    REQUIRE(oldArtifact.HasValue());
+    const auto changed = fixture.MakeHost(2).Cook(fixture.request);
+    REQUIRE(changed.HasValue());
+    const auto newArtifact = GenerationArtifact(changed.Value().generation, fixture.prefabId);
+    REQUIRE(newArtifact.HasValue());
+    CHECK(oldArtifact.Value().sourceDigest == newArtifact.Value().sourceDigest);
+    CHECK(oldArtifact.Value().cacheKeyDigest != newArtifact.Value().cacheKeyDigest);
+    CHECK(oldArtifact.Value().payloadDigest != newArtifact.Value().payloadDigest);
+    CHECK(fixture.registry.Snapshot().Revision() == revision);
+}
+
+TEST_CASE("Dynamic candidate failures retain the prior generation at the common selector fence", "[native][prefab-cook][host][template]") {
+    HostFixture fixture;
+    fixture.request.runtimePrefabRoots = {fixture.prefabId};
+    const auto first = fixture.Cook();
+    REQUIRE(first.HasValue());
+    fixture.WritePrefab(8);
+    auto files = std::make_shared<HostPublicationFiles>();
+    CancellationSource cancelled;
+    SECTION("cancelled after candidate staging") {
+        files->staged = [&cancelled] {
+            cancelled.RequestCancellation();
+        };
+    }
+    SECTION("source drift after staging") {
+        files->staged = [&fixture] {
+            fixture.WritePrefab(9);
+        };
+    }
+    SECTION("selector replacement failure") {
+        files->failReplacement = true;
+    }
+    fixture.request.assets.publicationFiles = files;
+    REQUIRE(fixture.Cook(cancelled.Token()).HasError());
+    CHECK(files->observed);
+    fixture.AssertRetained(first.Value().generation);
+}
+
+TEST_CASE("Dynamic host captures required portable schemas and rejects their absence without replacing the generation",
+          "[native][prefab-cook][host][template][schema]") {
+    HostFixture fixture;
+    const auto type = Gameplay::ComponentTypeId::Parse("game.tests.data").Value();
+    Gameplay::ComponentRegistry components;
+    REQUIRE(components.Register({.typeId = type, .schemaVersion = 1, .displayName = "Data", .category = "Tests"}).HasValue());
+    REQUIRE(components.Freeze().HasValue());
+    auto schemas = PrefabCookSchemaContext::Capture(components, {});
+    REQUIRE(schemas.HasValue());
+    fixture.request.schemas = schemas.Value();
+    fixture.request.runtimePrefabRoots = {fixture.prefabId};
+    Prefab::PrefabObjectNode root{.localId = {0}, .name = "Portable root"};
+    root.components.push_back({.instance = Prefab::PrefabComponentInstanceId::Create(1).Value(),
+                               .component = {.typeId = type, .schemaVersion = 1, .payload = {std::byte{'{'}, std::byte{'}'}}}});
+    auto document = Prefab::PrefabDocument::Create({.projectVersion = fixture.version, .assetId = fixture.prefabId, .objects = {root}},
+                                                   Prefab::PrefabLimitProfile::Create({}).Value());
+    REQUIRE(document.HasValue());
+    fixture.WriteText("assets/hierarchy.prefab", document.Value().SerializeCanonical().Value());
+    fixture.WriteText("assets/level.scene", SceneSource::EncodeSceneSource({{}, {}}));
+    const auto first = fixture.Cook();
+    REQUIRE(first.HasValue());
+    const auto artifact = GenerationArtifact(first.Value().generation, fixture.prefabId);
+    REQUIRE(artifact.HasValue());
+    const auto cooked = Prefab::CookedPrefab::Parse(std::as_bytes(std::span{artifact.Value().payload}), fixture.prefabId,
+                                                    Prefab::PrefabLimitProfile::Create({}).Value());
+    REQUIRE(cooked.HasValue());
+    CHECK(std::get<Prefab::RawComponentPayload>(cooked.Value().Data().entities[0].members[0]).component.typeId == type);
+    fixture.request.schemas.reset();
+    REQUIRE(fixture.Cook().HasError());
+    fixture.AssertRetained(first.Value().generation);
+}
+
+TEST_CASE("Dynamic template payload ceilings accept the exact encoded boundary and reject the next byte",
+          "[native][prefab-cook][host][template][limits]") {
+    HostFixture fixture;
+    fixture.request.runtimePrefabRoots = {fixture.prefabId};
+    const auto first = fixture.Cook();
+    REQUIRE(first.HasValue());
+    const auto artifact = GenerationArtifact(first.Value().generation, fixture.prefabId);
+    REQUIRE(artifact.HasValue());
+    fixture.request.prefabPolicy.maximumCookedPayloadBytes = artifact.Value().payload.size() - Prefab::CookedPrefabHeaderBytes;
+    const auto exact = fixture.Cook();
+    REQUIRE(exact.HasValue());
+    --fixture.request.prefabPolicy.maximumCookedPayloadBytes;
+    REQUIRE(fixture.Cook().HasError());
+    fixture.AssertRetained(exact.Value().generation);
 }
 
 TEST_CASE("Host package capture binds current intent lock and verified archive", "[native][prefab-cook][host][packages]") {
