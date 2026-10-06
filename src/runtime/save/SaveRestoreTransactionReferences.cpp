@@ -8,6 +8,24 @@
 #include <utility>
 
 namespace Horo::Runtime {
+    namespace {
+        /** @brief Contains resolver faults with preconstructed failures while preserving the caller's rollback boundary. */
+        Result<SaveRestoreReferenceContext> InvokeReferenceResolver(IStagedRestoreReferenceResolver &resolver,
+                                                                    const StagedRestoreContext &context,
+                                                                    const std::span<const StagedRestorePreparedParticipant> prepared,
+                                                                    Result<SaveRestoreReferenceContext> allocationFailure,
+                                                                    Result<SaveRestoreReferenceContext> callbackFailure) noexcept {
+            static_assert(std::is_nothrow_move_constructible_v<Result<SaveRestoreReferenceContext>>);
+            try {
+                return resolver.Resolve(context, prepared);
+            } catch (const std::bad_alloc &) {
+                return std::move(allocationFailure);
+            } catch (...) {
+                return std::move(callbackFailure);
+            }
+        }
+    }  // namespace
+
     /** @copydoc StagedRestoreTransaction::SetReferenceResolver */
     Result<void> StagedRestoreTransaction::SetReferenceResolver(std::unique_ptr<IStagedRestoreReferenceResolver> resolver) {
         if (!resolver || referenceResolver_ || state_ != StagedRestoreTransactionState::Created)
@@ -30,21 +48,11 @@ namespace Horo::Runtime {
                                            index);
                 prepared.emplace_back(requirements_[index], projection);
             }
-            static_assert(std::is_nothrow_move_constructible_v<Result<SaveRestoreReferenceContext>>);
-            // Construct both errors before resolver entry. Unwinding and returning a foreign failure cannot allocate.
-            auto resolved = [this, &prepared,
-                             allocationFailure =
-                                 Result<SaveRestoreReferenceContext>::Failure(MakeError(SaveErrors::RestoreAllocationFailed)),
-                             callbackFailure = Result<SaveRestoreReferenceContext>::Failure(
-                                 MakeError(SaveErrors::RestoreAdapterContractInvalid))]() mutable noexcept {
-                try {
-                    return referenceResolver_->Resolve(context_, prepared);
-                } catch (const std::bad_alloc &) {
-                    return std::move(allocationFailure);
-                } catch (...) {
-                    return std::move(callbackFailure);
-                }
-            }();
+            // Prepare owned failures before foreign entry; the invocation itself cannot allocate on failure.
+            auto allocationFailure = Result<SaveRestoreReferenceContext>::Failure(MakeError(SaveErrors::RestoreAllocationFailed));
+            auto callbackFailure = Result<SaveRestoreReferenceContext>::Failure(MakeError(SaveErrors::RestoreAdapterContractInvalid));
+            auto resolved =
+                InvokeReferenceResolver(*referenceResolver_, context_, prepared, std::move(allocationFailure), std::move(callbackFailure));
             if (resolved.HasError())
                 return FailPreparation(resolved.ErrorValue(), StagedRestorePhase::FixupReferences, requirements_.size());
             if (const auto generation = resolved.Value().Generation(); generation.registry != context_.registryGeneration ||

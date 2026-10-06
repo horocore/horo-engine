@@ -214,6 +214,26 @@ namespace Horo::Runtime {
             State &state;
         };
 
+        /** @brief Transfers the sole ready producer into a staged transaction and prepares its reference resolver. */
+        Result<bool> PrepareReadyOwners() {
+            auto ready = source->TakeReady(scene->View());
+            if (ready.HasError())
+                return Result<bool>::Failure(ready.ErrorValue());
+            if (!ready.Value())
+                return Result<bool>::Success(false);
+            auto owners = *std::move(ready).Value();
+            auto created = StagedRestoreTransaction::Create(request.context, std::move(owners.operation), request.participants,
+                                                            std::move(owners.receipts));
+            if (created.HasError())
+                return Result<bool>::Failure(created.ErrorValue());
+            transaction = std::move(created).Value();
+            if (const auto bound = transaction->SetReferenceResolver(std::make_unique<Resolver>(*this)); bound.HasError())
+                return Result<bool>::Failure(bound.ErrorValue());
+            if (const auto prepared = transaction->Prepare(); prepared.HasError())
+                return Result<bool>::Failure(prepared.ErrorValue());
+            return Result<bool>::Success(true);
+        }
+
         SceneRestoreBundleRequest request;
         std::unique_ptr<ISceneRestoreOwnerSource> source;
         std::shared_ptr<const ISceneRestoreGenerationAuthority> authority;
@@ -322,22 +342,7 @@ namespace Horo::Runtime {
         return [&state, allocationFailure = Failure<bool>(SaveErrors::RestoreAllocationFailed),
                 callbackFailure = Failure<bool>(SaveErrors::RestoreAdapterContractInvalid)]() mutable noexcept {
             try {
-                auto ready = state.source->TakeReady(state.scene->View());
-                if (ready.HasError())
-                    return Result<bool>::Failure(ready.ErrorValue());
-                if (!ready.Value())
-                    return Result<bool>::Success(false);
-                auto owners = *std::move(ready).Value();
-                auto transaction = StagedRestoreTransaction::Create(state.request.context, std::move(owners.operation),
-                                                                    state.request.participants, std::move(owners.receipts));
-                if (transaction.HasError())
-                    return Result<bool>::Failure(transaction.ErrorValue());
-                state.transaction = std::move(transaction).Value();
-                if (const auto bound = state.transaction->SetReferenceResolver(std::make_unique<State::Resolver>(state)); bound.HasError())
-                    return Result<bool>::Failure(bound.ErrorValue());
-                if (const auto prepared = state.transaction->Prepare(); prepared.HasError())
-                    return Result<bool>::Failure(prepared.ErrorValue());
-                return Result<bool>::Success(true);
+                return state.PrepareReadyOwners();
 
             } catch (const std::bad_alloc &) {
                 return std::move(allocationFailure);
