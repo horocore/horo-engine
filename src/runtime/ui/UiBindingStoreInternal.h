@@ -37,6 +37,7 @@ namespace Horo::Runtime::Ui {
             std::optional<UiBindingWriteCommand> command;
             std::optional<UiBindingWriteResult> outcome;
             UiBindingValue draft;
+            bool deferredAbandon{};
         };
 
         struct Staged final {

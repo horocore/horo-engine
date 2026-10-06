@@ -266,6 +266,50 @@ namespace Horo::Runtime::Ui {
         return Result<std::size_t>::Success(count);
     }
 
+    /** @copydoc UiBindingStore::ReloadCompatible */
+    bool UiBindingStore::ReloadCompatible(const UiBindingStore &source, const UiElementTree &sourceTree, const UiElementTree &tree,
+                                          const UiElementId element) const {
+        if (!storage_ || !source.storage_ || !storage_->MatchesTree(tree) || !source.storage_->MatchesTree(sourceTree))
+            return false;
+        const auto current = tree.Find(element);
+        const auto previous = sourceTree.Find(element);
+        if (current.HasError() || previous.HasError())
+            return false;
+        std::size_t matches = 0;
+        for (const auto &target : storage_->targets) {
+            if (target.bound.element != current.Value())
+                continue;
+            const auto old = std::ranges::find(source.storage_->targets, target.bound.binding, [](const Storage::Target &value) {
+                return value.bound.binding;
+            });
+            if (old == source.storage_->targets.end() || old->bound.element != previous.Value() ||
+                old->bound.property != target.bound.property || old->bound.value != target.bound.value ||
+                old->bound.origin != target.bound.origin || old->limits != target.limits || old->direction != target.direction ||
+                old->admission.has_value() != target.admission.has_value())
+                return false;
+            const auto &a = storage_->providers[target.provider];
+            if (const auto &b = source.storage_->providers[old->provider];
+                !a.active || !b.active || a.instance != b.instance || a.scope != b.scope || a.schema.Type() != b.schema.Type() ||
+                a.schema.Version() != b.schema.Version() || a.revision != b.revision || target.property != old->property)
+                return false;
+            if (target.admission &&
+                (target.fence != old->fence || target.admission->action != old->admission->action ||
+                 target.admission->trigger != old->admission->trigger || target.admission->conflict != old->admission->conflict))
+                return false;
+            ++matches;
+        }
+        return matches == static_cast<std::size_t>(std::ranges::count_if(source.storage_->targets, [&](const Storage::Target &target) {
+            return target.bound.element == previous.Value();
+        }));
+    }
+
+    /** @copydoc UiBindingStore::ValidateOwner */
+    Result<void> UiBindingStore::ValidateOwner(const UiElementTree &tree) const {
+        if (!storage_ || !storage_->active || storage_->processingWrite)
+            return Result<void>::Failure(MakeError(UiErrors::BindingLifecycleUnavailable));
+        return storage_->ValidateTree(tree);
+    }
+
     /** @copydoc UiBindingStore::Current */
     UiBindingApplyResult UiBindingStore::Current() const noexcept {
         return storage_ ? storage_->current : UiBindingApplyResult{};

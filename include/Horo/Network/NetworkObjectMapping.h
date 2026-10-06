@@ -122,6 +122,12 @@ namespace Horo::Network {
         /** @brief Resolves an exact live occurrence. @param object Exact object generation. @return Exact EntityRef or unknown error. */
         [[nodiscard]] Result<Runtime::EntityRef> Resolve(NetworkObjectId object) const;
 
+        /** @brief Copies one exact live occurrence without constructing a mapping snapshot.
+         * @param object Exact authority/slot/generation occurrence.
+         * @return Owned entry or the original lifecycle/identity error.
+         */
+        [[nodiscard]] Result<NetworkObjectMappingEntry> ResolveEntry(NetworkObjectId object) const;
+
         /** @brief Reverse-resolves one exact live entity generation. @param entity Scene-qualified entity. @return Object or unknown error.
          */
         [[nodiscard]] Result<NetworkObjectId> Find(Runtime::EntityRef entity) const;

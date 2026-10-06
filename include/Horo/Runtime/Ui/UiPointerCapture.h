@@ -273,6 +273,9 @@ namespace Horo::Runtime::Ui {
         void Shutdown() noexcept;
         /** @brief Returns the explicit store lifecycle state. */
         [[nodiscard]] UiPointerCaptureStoreState State() const noexcept;
+        /** @brief Returns the actual capture registry ownership generation. @return Owner or invalid after move. */
+        [[nodiscard]] UiOwnershipGeneration Ownership() const noexcept;
+
         /** @brief Reports whether every capture slot is free or permanently retired. */
         [[nodiscard]] bool IsDrained() const noexcept;
         /** @brief Returns the number of currently active leases. */

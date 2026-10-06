@@ -84,8 +84,40 @@ namespace Horo::Runtime::Ui {
         return nullptr;
     }
 
+    /** @copydoc UiBindingStore::CloseReloadAdmission */
+    Result<void> UiBindingStore::CloseReloadAdmission() {
+        if (!storage_ || !storage_->active || storage_->processingWrite)
+            return Result<void>::Failure(MakeError(UiErrors::BindingLifecycleUnavailable));
+        storage_->active = false;
+        for (auto &target : storage_->targets) {
+            if (target.command && !target.outcome) {
+                target.outcome = Outcome(*target.command, UiBindingWriteDisposition::Cancelled);
+                target.outcome->cancellation = UiBindingWriteCancellationReason::OwnerRetired;
+                target.deferredAbandon = true;
+            }
+            target.edit = {};
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiBindingStore::DrainReloadRetirement */
+    Result<void> UiBindingStore::DrainReloadRetirement() {
+        if (!storage_ || storage_->processingWrite)
+            return Result<void>::Failure(MakeError(UiErrors::BindingLifecycleUnavailable));
+        for (auto &target : storage_->targets)
+            storage_->CancelWrite(target, UiBindingWriteCancellationReason::OwnerRetired);
+        return Result<void>::Success();
+    }
+
     /** @copydoc UiBindingStore::Storage::CancelWrite */
     void UiBindingStore::Storage::CancelWrite(Target &target, const UiBindingWriteCancellationReason reason) noexcept {
+        if (target.deferredAbandon) {
+            target.deferredAbandon = false;
+            const bool wasProcessing = processingWrite;
+            processingWrite = true;
+            target.admission->authority->Abandon(*target.command);
+            processingWrite = wasProcessing;
+        }
         if (target.command && !target.outcome) {
             target.outcome = Outcome(*target.command, UiBindingWriteDisposition::Cancelled);
             target.outcome->cancellation = reason;
@@ -246,13 +278,13 @@ namespace Horo::Runtime::Ui {
         if (!storage_ || storage_->processingWrite)
             return Failure<std::size_t>(UiErrors::BindingLifecycleUnavailable);
         const auto count = static_cast<std::size_t>(std::ranges::count_if(storage_->targets, [](const Storage::Target &target) {
-            return target.outcome.has_value();
+            return target.outcome.has_value() && !target.deferredAbandon;
         }));
         if (output.size() < count)
             return Failure<std::size_t>(UiErrors::BindingCapacityExceeded);
         std::size_t index = 0;
         for (auto &target : storage_->targets)
-            if (target.outcome) {
+            if (target.outcome && !target.deferredAbandon) {
                 output[index++] = std::move(*target.outcome);
                 target.outcome.reset();
                 target.command.reset();

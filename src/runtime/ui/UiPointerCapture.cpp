@@ -520,6 +520,11 @@ namespace Horo::Runtime::Ui {
         storage_->lifecycle = UiPointerCaptureStoreState::Stopped;
     }
 
+    /** @copydoc UiPointerCaptureStore::Ownership */
+    UiOwnershipGeneration UiPointerCaptureStore::Ownership() const noexcept {
+        return storage_ ? storage_->ownership : UiOwnershipGeneration{};
+    }
+
     /** @copydoc UiPointerCaptureStore::State */
     UiPointerCaptureStoreState UiPointerCaptureStore::State() const noexcept {
         return storage_ ? storage_->lifecycle : UiPointerCaptureStoreState::Stopped;

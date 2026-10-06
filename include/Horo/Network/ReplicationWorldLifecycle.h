@@ -170,6 +170,33 @@ namespace Horo::Network {
         std::optional<NetworkObjectMappingSnapshot> mapping_;
     };
 
+    /** @brief Allocation-free owner-thread capture pin; it never copies the object mapping.
+     * Mapping lookup is permitted only synchronously on the lifecycle owner thread. Generation
+     * validity may be read from any thread; any structural mapping change revokes old reads.
+     */
+    class ReplicationWorldCaptureRead final {
+    public:
+        ReplicationWorldCaptureRead() noexcept = default;
+        /** @brief Tests complete logical generation validity without consulting mutable mapping storage. @return Current pin. */
+        [[nodiscard]] bool IsCurrent() const noexcept;
+        /** @brief Returns immutable world identity. @pre IsCurrent(). @return Pinned descriptor. */
+        [[nodiscard]] const ReplicationWorldActivationDescriptor &Descriptor() const noexcept;
+        /** @brief Returns captured structural mapping revision. @return Nonzero revision for a valid pin. */
+        [[nodiscard]] std::uint64_t MappingRevision() const noexcept;
+        /** @brief Returns the exact NetworkFlush simulation tick that opened this read. @return Positive committed tick. */
+        [[nodiscard]] std::uint64_t SimulationTick() const noexcept;
+        /** @brief Copies one exact mapping on the lifecycle owner thread. @param object Exact occurrence. @return Entry or stale error. */
+        [[nodiscard]] Result<NetworkObjectMappingEntry> Resolve(NetworkObjectId object) const;
+
+    private:
+        friend class ReplicationWorldLifecycle;
+        ReplicationWorldCaptureRead(std::shared_ptr<const Detail::ReplicationWorldRecord> record, std::uint64_t revision,
+                                    std::uint64_t tick) noexcept;
+        std::shared_ptr<const Detail::ReplicationWorldRecord> record_;
+        std::uint64_t revision_{};
+        std::uint64_t tick_{};
+    };
+
     /**
      * @brief Owner-thread publication authority for one active Scene/session replication world.
      * @details Stage builds all bounded mapping storage before publication. Safe-point commit swaps complete immutable
@@ -222,6 +249,14 @@ namespace Horo::Network {
         /** @brief Acquires an immutable capability and checks one role-derived permission. */
         [[nodiscard]] Result<ReplicationWorldReadLease> AcquireFor(const ReplicationWorldWorkRequest &request,
                                                                    ReplicationWorldCapability capability) const;
+
+        /** @brief Opens allocation-free canonical capture at the declared post-commit network phase.
+         * @param request Exact active scene/session, NetworkFlush phase and positive committed tick.
+         * @return Authority-server capture pin or a typed phase, role, cancellation or lifecycle error.
+         * @pre Caller serializes lifecycle mutation and capture on its owner thread.
+         * @post No mapping vector is copied and no allocation occurs on success.
+         */
+        [[nodiscard]] Result<ReplicationWorldCaptureRead> AcquireCaptureRead(const ReplicationWorldWorkRequest &request) const;
 
         /** @brief Begins idempotent shutdown, revoking all staged, active, and retired worlds. */
         void BeginShutdown() noexcept;

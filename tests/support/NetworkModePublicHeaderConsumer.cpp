@@ -1,7 +1,9 @@
 #include "Horo/Network/AdmissionProtection.h"
 #include "Horo/Network/InboundMessageDispatcher.h"
 #include "Horo/Network/NetworkModeComposition.h"
+#include "Horo/Network/ReplicationStateCapture.h"
 #include "Horo/Network/RpcGameplayDispatch.h"
+#include "Horo/Network/SceneReplicationCommitSource.h"
 
 #include <type_traits>
 
@@ -14,10 +16,21 @@ namespace {
     concept BypassesInboundFactory =
         requires(Horo::Network::INetworkTransport &transport, const Horo::Network::MessageCodecRegistry &codecs,
                  const Horo::Network::InboundDispatchLimits &limits) { Dispatcher({}, transport, codecs, limits); };
+    template <typename Capture>
+    concept BypassesCaptureFactory = requires { Capture({}, nullptr); };
+    template <typename Source>
+    concept BypassesSceneSourceFactory =
+        requires(std::shared_ptr<Horo::Runtime::RuntimeScene> scene, std::vector<Horo::Network::SceneReplicationFieldBinding> fields) {
+            Source({}, scene, fields);
+        };
     static_assert(!BypassesRpcFactory<Horo::Network::RpcGameplayDispatch>);
     static_assert(!BypassesInboundFactory<Horo::Network::InboundMessageDispatcher>);
+    static_assert(!BypassesCaptureFactory<Horo::Network::ReplicationStateCapture>);
+    static_assert(!BypassesSceneSourceFactory<Horo::Network::SceneReplicationCommitSource>);
     static_assert(std::is_same_v<Horo::Network::RpcScalar, std::variant<std::int64_t, std::uint64_t, double>>);
     static_assert(std::is_default_constructible_v<Horo::Network::RpcGameplayPolicy>);
+    static_assert(!std::is_copy_constructible_v<Horo::Network::ReplicationStateCapture>);
+    static_assert(!std::is_copy_constructible_v<Horo::Network::ReplicationCaptureWriter>);
     static_assert(std::is_trivially_copyable_v<Horo::Network::RpcTerminalTotals>);
 }  // namespace
 
