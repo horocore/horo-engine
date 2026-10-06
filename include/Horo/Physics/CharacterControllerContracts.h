@@ -319,9 +319,9 @@ namespace Horo::Character {
 
     private:
         /** @brief Runs a filtered capsule overlap and canonically selects one recovery normal/depth. */
-        static Result<CharacterOverlapProbeResult> Overlap(void *context, const CharacterOverlapProbeRequest &request) noexcept;
+        Result<CharacterOverlapProbeResult> Overlap(const CharacterOverlapProbeRequest &request) const noexcept;
         /** @brief Runs a filtered capsule sweep and copies only Horo-owned evidence. */
-        static Result<CharacterSweepProbeResult> Sweep(void *context, const CharacterSweepProbeRequest &request) noexcept;
+        Result<CharacterSweepProbeResult> Sweep(const CharacterSweepProbeRequest &request) const noexcept;
         Physics::PhysicsWorld *world_;
     };
 
