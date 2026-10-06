@@ -82,11 +82,13 @@ typedef struct HoroEditorActivitySnapshot HoroEditorActivitySnapshot;
 
 /** @brief Typed action identity and exact copied projection revision admitted by the host. */
 struct HoroEditorActivityAction {
+    // Invoke in EditorActivityModule.c validates this prefix before reading action members.
+    // cppcheck-suppress unusedStructMember
     uint32_t structSize;
     HoroExtensionStringView nodeId;
     HoroExtensionStringView actionId;
-    // Read across the C/C++ package boundary by Invoke in EditorActivityModule.c; populated from the admitted action revision by
-    // ExecuteAction. cppcheck-suppress unusedStructMember
+    // Invoke in EditorActivityModule.c reads the admitted revision supplied by ExecuteAction.
+    // cppcheck-suppress unusedStructMember
     uint64_t revision;
     HoroExtensionCancellation cancellation;
 };

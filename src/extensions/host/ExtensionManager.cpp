@@ -391,8 +391,8 @@ namespace Horo::Extensions {
             std::shared_ptr<EditorActivityHost> editorHost;
         };
 
-        /** @brief Stages selected native modules without publishing contributions or relinquishing rollback ownership. */
-        [[nodiscard]] Result<std::vector<ExtensionPlatformProviderCandidate>> StageNativeModules(
+        /** @brief Stages the exact declared native contributions without publishing or relinquishing rollback ownership. */
+        [[nodiscard]] Result<std::vector<ExtensionPlatformProviderCandidate>> StageDeclaredNativeModules(
             const NativeActivationInputs &inputs, std::vector<std::shared_ptr<ExtensionModuleLifetime>> &dependencies,
             ExtensionActivationTransaction &transaction) {
             std::vector<ExtensionPlatformProviderCandidate> candidates;
@@ -422,6 +422,9 @@ namespace Horo::Extensions {
                                   std::make_move_iterator(native.platformProviders.end()));
                 transaction.Stage(std::move(native.lifetime), std::move(native.contributions));
             }
+            if (candidates.size() != inputs.platformDeclarations)
+                return Result<std::vector<ExtensionPlatformProviderCandidate>>::Failure(
+                    MakeError(ExtensionErrors::ContributionRejected, "Provider module did not register its exact declared contribution."));
             return Result<std::vector<ExtensionPlatformProviderCandidate>>::Success(std::move(candidates));
         }
 
@@ -561,15 +564,12 @@ namespace Horo::Extensions {
         const auto platformDeclarations = std::move(declarationsResult).Value();
 
         ExtensionActivationTransaction transaction;
-        auto staged =
-            StageNativeModules({manifest, plan, retirement, m_libraryLoader, m_artifactGate, platformDeclarations, m_editorActivityHost},
-                               dependencies, transaction);
+        auto staged = StageDeclaredNativeModules({manifest, plan, retirement, m_libraryLoader, m_artifactGate, platformDeclarations,
+                                                  m_editorActivityHost},
+                                                 dependencies, transaction);
         if (staged.HasError())
             return Result<std::string>::Failure(transaction.Rollback(staged.ErrorValue()));
         auto platformCandidates = std::move(staged).Value();
-        if (platformCandidates.size() != static_cast<std::size_t>(platformDeclarations))
-            return Result<std::string>::Failure(transaction.Rollback(
-                MakeError(ExtensionErrors::ContributionRejected, "Provider module did not register its exact declared contribution.")));
         std::string extensionId = manifest.id;
         std::string activationId = extensionId;
         auto record = PrepareLoadedExtension(std::move(manifest), std::move(plan), std::move(retirement), providerExtensions);

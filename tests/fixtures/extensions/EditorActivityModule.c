@@ -22,6 +22,8 @@ static const HoroEditorActivityNode nodes[] = {{.structSize = sizeof(HoroEditorA
 
 static HoroExtensionStatus Invoke(void *context, const HoroEditorActivityAction *action, const HoroEditorActivitySnapshotSink *sink) {
     (void)context;
+    if (action == NULL || action->structSize < sizeof(HoroEditorActivityAction))
+        return HORO_EXTENSION_ERROR_VERSION_MISMATCH;
     if (action->cancellation.isCancellationRequested(action->cancellation.context))
         return HORO_EXTENSION_ERROR_CANCELLED;
     ++actionCount;
@@ -108,4 +110,8 @@ HORO_EXTENSION_EXPORT void horo_test_activity_hold_action(uint32_t hold) {
 
 HORO_EXTENSION_EXPORT uint32_t horo_test_activity_result_published(void) {
     return atomic_load(&resultPublished);
+}
+
+HORO_EXTENSION_EXPORT HoroExtensionStatus horo_test_activity_invoke_prefix(const HoroEditorActivityAction *action) {
+    return Invoke(NULL, action, NULL);
 }

@@ -8,6 +8,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <thread>
@@ -74,6 +75,20 @@ namespace Horo::Extensions::Tests {
         REQUIRE(host->Registry().Restore(saved).HasValue());
         host->Update();
         CHECK_FALSE(host->Prepared().front().surface.activity.visible);
+    }
+
+    TEST_CASE("External activity callback rejects missing and short action prefixes before reading members",
+              "[Extensions][Activity][ABI]") {
+        Horo::Tests::EditorActivityPackage package;
+        const auto library =
+            Platform::LoadDynamicLibrary((package.root / std::filesystem::path{HORO_EDITOR_ACTIVITY_FIXTURE}.filename()).string());
+        REQUIRE(library.HasValue());
+        const auto invoke = reinterpret_cast<HoroExtensionStatus (*)(const HoroEditorActivityAction *)>(
+            library.Value()->GetSymbol("horo_test_activity_invoke_prefix"));
+        REQUIRE(invoke);
+        CHECK(invoke(nullptr) == HORO_EXTENSION_ERROR_VERSION_MISMATCH);
+        const HoroEditorActivityAction shortPrefix{.structSize = offsetof(HoroEditorActivityAction, revision)};
+        CHECK(invoke(&shortPrefix) == HORO_EXTENSION_ERROR_VERSION_MISMATCH);
     }
 
     TEST_CASE("Cancelled action results cannot publish after the provider successfully completes", "[Extensions][Activity][ABI]") {

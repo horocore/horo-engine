@@ -96,6 +96,19 @@ namespace Horo::Extensions {
             return nullptr;
         }
 
+        /** @brief Applies pending workspace intent or the admitted default to a detached surface before publication. */
+        void ApplyInitialSurfaceIntent(EditorSurfaceState &surface, const PendingSurfaceState *pending) {
+            if (pending == nullptr) {
+                surface.desiredOpen = surface.descriptor.openByDefault;
+                return;
+            }
+            surface.desiredOpen = pending->entry.open;
+            surface.desiredFocused = pending->entry.focused;
+            surface.opaqueState = pending->entry.opaqueState;
+            surface.activityUserVisible = pending->entry.activityVisible;
+            surface.activityPlacement = pending->entry.activityPlacement;
+        }
+
         /** @brief Copies the bounded peer set in stable insertion order before a placement transaction mutates state. */
         [[nodiscard]] std::vector<std::shared_ptr<EditorSurfaceState>> CollectActivityPeers(const EditorSurfaceRegistryState &state,
                                                                                             const EditorActivitySide side,
@@ -151,15 +164,7 @@ namespace Horo::Extensions {
             SetProviderConfiguredStatus(*state_, provider, EditorSurfaceProviderStatus::Active);
 
         auto surface = std::make_shared<EditorSurfaceState>(std::move(context));
-        if (pending != nullptr) {
-            surface->desiredOpen = pending->entry.open;
-            surface->desiredFocused = pending->entry.focused;
-            surface->opaqueState = pending->entry.opaqueState;
-            surface->activityUserVisible = pending->entry.activityVisible;
-            surface->activityPlacement = pending->entry.activityPlacement;
-        } else {
-            surface->desiredOpen = descriptor.openByDefault;
-        }
+        ApplyInitialSurfaceIntent(*surface, pending);
         if (descriptor.activity.has_value()) {
             const auto drawer = FindSurface(*state_, descriptor.activity->drawerId);
             drawer->desiredOpen = surface->desiredOpen;
