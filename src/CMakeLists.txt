@@ -27,6 +27,7 @@ add_library(HoroFoundation STATIC
         foundation/diagnostics/OperationHistory.cpp
         foundation/data_bus/DataBus.cpp
         foundation/jobs/JobSystem.cpp
+        foundation/jobs/JobAdmission.cpp
         foundation/config/Configuration.cpp
         foundation/diagnostics/DiagnosticsEngine.cpp
         foundation/paths/PathUtils.cpp
