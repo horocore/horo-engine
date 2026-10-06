@@ -138,11 +138,11 @@ namespace Horo::Editor {
          * @brief Opens an asset session and migrates/validates detached source data.
          * @param identity Host-issued Asset document identity.
          * @param source Immutable source schema; supported older versions are migrated.
-         * @param limits Fixed project-lowered schema limits for this session.
+         * @param limits Project-lowered schema limits copied into this session; no caller reference is retained.
          * @return Open document or typed identity/schema error. Migration marks the source dirty.
          */
         [[nodiscard]] static Result<MixerAssetDocument> Open(DocumentIdentity identity, const Audio::MixerAssetSchema &source,
-                                                             Audio::MixerAssetSchemaLimits limits = {});
+                                                             const Audio::MixerAssetSchemaLimits &limits = {});
         MixerAssetDocument(MixerAssetDocument &&) noexcept;
         MixerAssetDocument &operator=(MixerAssetDocument &&) noexcept;
         ~MixerAssetDocument();

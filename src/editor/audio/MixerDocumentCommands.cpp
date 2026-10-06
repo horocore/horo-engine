@@ -54,8 +54,8 @@ namespace Horo::Editor::MixerDocumentInternal {
                 if (route.destination == command.id || (route.source == command.id && route.kind != Audio::MixerRouteKind::Primary))
                     return Invalid();
             }
-            std::erase_if(asset.routes, [&](const auto &route) {
-                return route.source == command.id;
+            std::erase_if(asset.routes, [busId = command.id](const auto &route) {
+                return route.source == busId;
             });
             asset.buses.erase(bus);
             return Result<void>::Success();
@@ -64,8 +64,7 @@ namespace Horo::Editor::MixerDocumentInternal {
         /** @brief Stages a stable route replacement or bounded insertion. */
         Result<void> ApplyCommand(Audio::MixerAssetSchema &asset, const SetMixerRoute &command,
                                   const Audio::MixerAssetSchemaLimits &limits) {
-            const auto route = Find(asset.routes, command.route.id);
-            if (route != asset.routes.end())
+            if (const auto route = Find(asset.routes, command.route.id); route != asset.routes.end())
                 *route = command.route;
             else {
                 if (asset.routes.size() >= limits.maximumRoutes)
@@ -127,8 +126,7 @@ namespace Horo::Editor::MixerDocumentInternal {
             const auto effect = Find(bus->effects, command.effect);
             if (effect == bus->effects.end())
                 return Invalid();
-            const auto target = bus->effects.begin() + static_cast<std::ptrdiff_t>(command.index);
-            if (effect < target)
+            if (const auto target = bus->effects.begin() + static_cast<std::ptrdiff_t>(command.index); effect < target)
                 std::rotate(effect, effect + 1, target + 1);
             else
                 std::rotate(target, effect, effect + 1);
@@ -139,7 +137,7 @@ namespace Horo::Editor::MixerDocumentInternal {
     /** @copydoc Apply */
     Result<void> Apply(Audio::MixerAssetSchema &candidate, const MixerDocumentCommand &command,
                        const Audio::MixerAssetSchemaLimits &limits) {
-        return std::visit([&](const auto &operation) {
+        return std::visit([&candidate, &limits](const auto &operation) {
             return ApplyCommand(candidate, operation, limits);
         }, command);
     }

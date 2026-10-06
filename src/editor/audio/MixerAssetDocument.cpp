@@ -89,7 +89,7 @@ namespace Horo::Editor {
         template <typename T> void ApplyChanges(std::vector<T> &values, const std::vector<Change<T>> &changes, const bool undo) {
             for (const auto &change : changes) {
                 const auto id = change.before ? change.before->id : change.after->id;
-                std::erase_if(values, [&](const T &value) {
+                std::erase_if(values, [id](const T &value) {
                     return value.id == id;
                 });
             }
@@ -136,7 +136,7 @@ namespace Horo::Editor {
 
     /** @copydoc MixerAssetDocument::Open */
     Result<MixerAssetDocument> MixerAssetDocument::Open(DocumentIdentity identity, const Audio::MixerAssetSchema &source,
-                                                        const Audio::MixerAssetSchemaLimits limits) {
+                                                        const Audio::MixerAssetSchemaLimits &limits) {
         if (!identity.IsValid() || identity.key.kind != DocumentKind::Asset)
             return Result<MixerAssetDocument>::Failure(MakeError(MixerDocumentErrors::InvalidCommand));
         auto migrated = Audio::MigrateMixerAssetSchema(source, limits);
@@ -196,8 +196,7 @@ namespace Horo::Editor {
 
     /** @copydoc MixerAssetDocument::Execute */
     Result<void> MixerAssetDocument::Execute(const std::uint64_t expectedRevision, const std::span<const MixerDocumentCommand> commands) {
-        auto checked = CheckRevision(expectedRevision);
-        if (checked.HasError())
+        if (auto checked = CheckRevision(expectedRevision); checked.HasError())
             return checked;
         if (commands.empty() || commands.size() > MaximumMixerDocumentCommands)
             return Result<void>::Failure(MakeError(MixerDocumentErrors::InvalidCommand));
@@ -207,8 +206,7 @@ namespace Horo::Editor {
             if (applied.HasError())
                 return applied;
         }
-        auto validated = Audio::ValidateMixerAssetSchema(candidate, state_->limits);
-        if (validated.HasError())
+        if (auto validated = Audio::ValidateMixerAssetSchema(candidate, state_->limits); validated.HasError())
             return validated;
         if (candidate == state_->asset)
             return Result<void>::Success();
@@ -240,8 +238,7 @@ namespace Horo::Editor {
 
     /** @copydoc MixerAssetDocument::ApplyHistory */
     Result<void> MixerAssetDocument::ApplyHistory(const std::uint64_t expectedRevision, const bool undo) {
-        auto checked = CheckRevision(expectedRevision);
-        if (checked.HasError())
+        if (auto checked = CheckRevision(expectedRevision); checked.HasError())
             return checked;
         if (undo ? !CanUndo() : !CanRedo())
             return Result<void>::Failure(MakeError(MixerDocumentErrors::HistoryUnavailable));
@@ -249,8 +246,7 @@ namespace Horo::Editor {
         auto candidate = state_->asset;
         ApplyChanges(candidate.buses, entry.buses, undo);
         ApplyChanges(candidate.routes, entry.routes, undo);
-        auto validated = Audio::ValidateMixerAssetSchema(candidate, state_->limits);
-        if (validated.HasError())
+        if (auto validated = Audio::ValidateMixerAssetSchema(candidate, state_->limits); validated.HasError())
             return validated;
         std::swap(state_->asset, candidate);
         state_->currentState = undo ? entry.beforeState : entry.afterState;
@@ -279,8 +275,7 @@ namespace Horo::Editor {
         if (snapshot.Identity() != state_->identity || snapshot.Revision() > state_->revision || snapshot.State() < state_->firstState ||
             snapshot.State() >= state_->nextState)
             return Result<void>::Failure(MakeError(MixerDocumentErrors::StaleRevision));
-        auto validated = Audio::ValidateMixerAssetSchema(snapshot.Asset(), state_->limits);
-        if (validated.HasError())
+        if (auto validated = Audio::ValidateMixerAssetSchema(snapshot.Asset(), state_->limits); validated.HasError())
             return validated;
         state_->savedState = snapshot.State();
         return Result<void>::Success();
@@ -288,8 +283,7 @@ namespace Horo::Editor {
 
     /** @copydoc MixerAssetDocument::Reload */
     Result<void> MixerAssetDocument::Reload(const Audio::MixerAssetSchema &source, const MixerDocumentDiscardPolicy policy) {
-        auto checked = CheckRevision(Revision());
-        if (checked.HasError())
+        if (auto checked = CheckRevision(Revision()); checked.HasError())
             return checked;
         if (!ValidPolicy(policy))
             return Result<void>::Failure(MakeError(MixerDocumentErrors::InvalidCommand));

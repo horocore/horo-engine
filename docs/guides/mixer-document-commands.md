@@ -12,6 +12,13 @@ usable headlessly and does not create devices, select backends, retain scene
 memory, or register ambient services. Dedicated mixer controls and preview are
 separate AUD-009 children; this change provides their shared command authority.
 
+`Open` borrows limits by const reference only for the call, then copies the
+validated policy into the session. It avoids an unnecessary large input copy
+without retaining caller storage. Existing invocation syntax, including default
+and temporary limits, is unchanged; consumers rebuild against the updated header.
+The regression suite changes caller limits after open and proves the retained
+session ceilings remain enforced.
+
 All methods run on the document owner thread. Mutations capture `Revision()` and
 submit typed commands in one bounded transaction. Bus insertion includes its
 primary route. Removing a leaf bus removes its own primary route but rejects any
