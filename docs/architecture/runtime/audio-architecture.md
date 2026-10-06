@@ -1180,6 +1180,49 @@ acoustic-material contribution, zones and environment sends are the AUD-006 M5 â
 1.0 environmental baseline; rooms/portals, diffraction, baked/geometric
 propagation and advanced reflections are AUD-014 Post-1.0.
 
+### Spatial scene extraction and listener policy
+
+`AudioSpatialModel.h` belongs to `HoroAudioApi`. `AudioSceneExtraction.h` belongs
+only to `HoroRuntimeScene`, which explicitly depends on the Audio value contract.
+An `AudioListenerComponent` is typed authored RuntimeScene data; it does not
+implicitly activate a camera, audio device or backend. Editor listener authoring
+remains the AUD-009 authoring surface. Existing source documents and sound schemas
+retain their representation; the listener addition is an additive runtime contract.
+
+The exclusive control owner calls `AudioSceneExtractor::Capture` with a current
+Scene view, an Audio-owned scene context, a strictly increasing sequence and a
+finite positive update interval. RuntimeScene entities, local transforms and
+parent links are read only during extraction. The returned value owns source
+references/playback defaults and listener/motion data; it contains no ECS reference,
+borrowed component, provider or native object. The host transfers the frame at an
+explicit quiescent ownership boundary and the callback consumes it as immutable
+values. No concurrent publication, automatic backend activation or AudioFrontend
+ownership is implied.
+
+Positions include all parent transforms and scale. Orientations compose normalized
+proper rotations, deliberately excluding scale/reflection/shear. Velocity is metres
+per second, supplied explicitly in world space or derived from successive world
+positions. First samples, changed context/entity generation, changed per-object
+discontinuity revisions and global discontinuities set previous equal to current
+and velocity to zero. The host marks teleport, tracking loss, reparenting or authority
+replacement with a changed revision (or the global flag for an affected hierarchy).
+History retains unselected listeners, and disabled/destroyed objects are removed.
+Scene replacement requires a fresh non-reused Audio scene-context generation.
+
+Listener selection is explicit. `Primary` selects highest priority, breaking ties
+by the lowest complete spatial identity. `PerView` makes the same choice independently
+for each exact view and orders results by view; global view 0 never becomes an
+implicit fallback. `WeightedAll` retains every enabled authored listener in identity
+order. Selected weights are normalized; an empty set remains explicitly empty.
+Authored views are 0..16 and weights must be finite and positive.
+
+Capture is bounded to 256 sources, 16 authored listeners before selection, 4096
+Scene slots, 64 ancestor nodes per object and 272 unique motion overrides. Valid
+capture performs no heap allocation or I/O. Rejected stale, malformed or over-capacity
+input leaves sequence and history unchanged. Shutdown permanently closes the owner.
+The new headers have single target ownership and generated consumer coverage; no
+public repository-wide include path is introduced.
+
 ### Occlusion Provider Interface
 
 Occlusion, obstruction, and diffraction are not computed by the audio runtime.

@@ -87,6 +87,15 @@ namespace Horo::Runtime {
         [[nodiscard]] constexpr auto operator<=>(const AudioSourceComponent &) const noexcept = default;
     };
 
+    /** @brief Authored listener attached to an ordinary scene transform; policy never discovers cameras. */
+    struct AudioListenerComponent final {
+        std::uint32_t view{}; /**< Global (0) or one declared split view (1..16). */
+        std::int32_t priority{};
+        float weight{1.0F}; /**< Finite positive relative weight for the WeightedAll policy. */
+        bool enabled{true};
+        [[nodiscard]] constexpr auto operator<=>(const AudioListenerComponent &) const noexcept = default;
+    };
+
     /** @brief Authored scene component that instantiates one canvas asset without owning Runtime UI lifetime. */
     struct UiCanvasComponent final {
         Ui::UiCanvasAssetReference canvas; /**< Stable canvas asset reference resolved by the Runtime UI owner. */

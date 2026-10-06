@@ -654,6 +654,7 @@ target_compile_definitions(HoroGameplayApi PRIVATE
 )
 
 add_library(HoroRuntimeScene STATIC
+        runtime/scene/AudioSceneExtraction.cpp
         runtime/scene/NavigationSceneComponents.cpp
         runtime/scene/PersistentEntityIdentity.cpp
         runtime/scene/SaveableComponentState.cpp
@@ -1787,7 +1788,7 @@ target_link_libraries(HoroCinematicModel PUBLIC HoroEngine::SceneModel)
 
 # RuntimeSceneDefinition exposes PrimitiveMeshDescriptor in its public scene
 # contract, so the owning SceneModel dependency is part of the public edge.
-target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::SceneModel)
+target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::SceneModel HoroEngine::AudioApi)
 
 add_library(HoroRenderNull STATIC
         runtime/renderer/modules/null/NullRenderBackend.cpp

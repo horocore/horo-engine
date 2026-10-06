@@ -136,6 +136,23 @@ namespace Horo::Prefab {
             CHECK(result.Value().Entities().size() == 3);
         }
 
+        TEST_CASE("Prefab listener projections retain authored data and count against component budgets",
+                  "[unit][prefab][expansion][audio]") {
+            const auto candidate = ExpansionCandidate({ExpansionObject(0)});
+            const auto identities = ExpansionIdentities(candidate);
+            auto components = ExpansionProjections(candidate);
+            components[0].components.audioListener = Runtime::AudioListenerComponent{2, 8, 3};
+            PrefabProjectPolicy policy;
+            policy.maximumComponentsPerObject = 1;
+            auto output = ExpandPrefabSceneSubtree(candidate, identities, components, {}, ExpansionLimits(policy));
+            REQUIRE(output.HasValue());
+            REQUIRE(output.Value().Entities()[0].components.audioListener == components[0].components.audioListener);
+            components[0].components.audioSource = Runtime::AudioSourceComponent{};
+            auto denied = ExpandPrefabSceneSubtree(candidate, identities, components, {}, ExpansionLimits(policy));
+            REQUIRE(denied.HasError());
+            REQUIRE(denied.ErrorValue().code.Value() == PrefabErrors::ComponentCountExceeded.code.Value());
+        }
+
         TEST_CASE("Prefab runtime expansion rejects missing duplicate and foreign typed projections",
                   "[unit][prefab][expansion][malformed]") {
             const auto candidate = ExpansionCandidate({ExpansionObject(0), ExpansionObject(8, LocalObjectId{0})});

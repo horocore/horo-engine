@@ -385,6 +385,7 @@ horo_configure_target_header_boundary(HoroGameplayApi PUBLIC_HEADERS
     Horo/Gameplay/SystemRegistry.h
 )
 horo_configure_target_header_boundary(HoroRuntimeScene PUBLIC_HEADERS
+    Horo/Runtime/Scene/AudioSceneExtraction.h
     Horo/Runtime/Scene/NavigationSceneComponents.h
     Horo/Runtime/Scene/PersistentEntityIdentity.h
     Horo/Runtime/Scene/SaveableComponentState.h
@@ -440,6 +441,7 @@ horo_configure_target_header_boundary(HoroAssets PUBLIC_HEADERS
     Horo/Assets/PreFracturedSource.h
 )
 horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
+    Horo/Audio/AudioSpatialModel.h
     Horo/Audio/AudioAssetSchema.h
     Horo/Audio/AudioBackendCapabilities.h
     Horo/Audio/AudioCallbackEvents.h
