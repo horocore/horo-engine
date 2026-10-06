@@ -146,7 +146,7 @@ TEST_CASE("Terrain host generation fences and owner lane reject stale replacemen
     bool rejected = false;
     std::thread other([&] {
         const auto result = owner.Snapshot();
-        rejected = result.HasError() && result.ErrorValue().code == TerrainMaterialBindingErrors::WrongThread.code;
+        rejected = result.HasError() && result.ErrorValue().code.Value() == TerrainMaterialBindingErrors::WrongThread.code.Value();
     });
     other.join();
     CHECK(rejected);
