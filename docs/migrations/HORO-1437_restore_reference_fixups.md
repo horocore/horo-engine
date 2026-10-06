@@ -123,3 +123,10 @@ terminal-error copies are not incorrectly declared nonthrowing. No public ABI or
 rollback ordering changes. Regression coverage injects all three foreign fault types
 at component/source/resolver boundaries and rejects allocator work during a real
 Gameplay receipt fixup's failure translation, with no publication or lost producer.
+
+The reference-resolution phase is implemented in the Runtime-owned
+`SaveRestoreTransactionReferences.cpp` compilation unit. It retains the same
+prepared-owner projection, generation checks, and allocation-free foreign
+resolver invocation; activation and rollback ownership stay in the transaction.
+Component publication and foreign component fault qualification are separate
+executable cases using the same real payload/adapter request construction.
