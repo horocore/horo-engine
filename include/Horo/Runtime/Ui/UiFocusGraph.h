@@ -16,6 +16,7 @@
 
 namespace Horo::Runtime::Ui {
     class UiLayoutSnapshot;
+    struct UiLogicalRect;
     class UiElementTree;
     inline constexpr std::uint32_t MaximumUiFocusNodes = 4'096;
     inline constexpr std::uint32_t MaximumUiFocusModalDepth = 64;
@@ -359,6 +360,12 @@ namespace Horo::Runtime::Ui {
         void Shutdown() noexcept;
 
     private:
+        friend class UiAnimationOwner;
+        /** @brief Validates actual layout into existing scratch; unique aggregate ownership forbids intervening mutation. */
+        [[nodiscard]] Result<void> PrepareLayout(const UiLayoutSnapshot &layout, std::span<const UiLogicalRect> projected = {},
+                                                 std::span<const std::uint8_t> eligibility = {});
+        /** @brief Publishes previously validated scratch without callbacks after the aggregate's final admission fence. */
+        void PublishPreparedLayout(const UiLayoutSnapshot &layout) noexcept;
         struct Storage;
         explicit UiFocusGraph(std::unique_ptr<Storage> storage) noexcept;
         std::unique_ptr<Storage> storage_;

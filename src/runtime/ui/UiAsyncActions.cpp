@@ -365,4 +365,43 @@ namespace Horo::Runtime::Ui {
             if (record->retained)
                 record->Cancel(reason);
     }
+
+    /** @copydoc UiAsyncActionStore::CanPrepareReplacementSource */
+    bool UiAsyncActionStore::CanPrepareReplacementSource() const noexcept {
+        const auto *const storage = StateStorage();
+        if (!storage || storage->ownerThread != std::this_thread::get_id())
+            return false;
+        for (const auto &record : storage->records)
+            if (record.use_count() != 1 || record->retained || record->snapshot.error)
+                return false;
+        return true;
+    }
+
+    /** @copydoc UiAsyncActionStore::PrepareReplacementSource */
+    void UiAsyncActionStore::PrepareReplacementSource(const UiActionOwnerContext &owner, const std::uint64_t previousRequest) noexcept {
+        auto *const storage = StateStorage();
+        storage->owner = owner;
+        storage->lastRequestSequence = previousRequest;
+        storage->active = true;
+        for (auto &record : storage->records) {
+            record->snapshot = {};
+            record->cancelled.store(false);
+        }
+    }
+
+    /** @copydoc UiAsyncActionStore::DrainReplacementSource */
+    std::size_t UiAsyncActionStore::DrainReplacementSource() noexcept {
+        auto *const storage = StateStorage();
+        if (!storage || storage->ownerThread != std::this_thread::get_id())
+            return 0;
+        std::size_t drained{};
+        for (auto &record : storage->records) {
+            if (record.use_count() == 1 && !record->retained && record->snapshot.error) {
+                record->snapshot.error.reset();
+                ++drained;
+            }
+        }
+        return drained;
+    }
+
 }  // namespace Horo::Runtime::Ui

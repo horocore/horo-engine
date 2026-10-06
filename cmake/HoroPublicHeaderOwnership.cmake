@@ -240,6 +240,8 @@ horo_configure_target_header_boundary(HoroSaveApi PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/FrameScheduler.h
+    Horo/Runtime/RuntimeDispatchEvidence.h
+    Horo/Runtime/RuntimeSimulationTiming.h
     Horo/Runtime/RuntimeHost.h
     Horo/Runtime/RuntimeLifecycle.h
     Horo/Runtime/Scene/SceneIdentity.h
@@ -296,6 +298,10 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiEventDispatch.h
     Horo/Runtime/Ui/UiPointerCapture.h
     Horo/Runtime/Ui/UiActions.h
+    Horo/Runtime/Ui/UiAnimationClock.h
+    Horo/Runtime/Ui/UiAnimationTimeline.h
+    Horo/Runtime/Ui/UiAnimationTracks.h
+    Horo/Runtime/Ui/UiAnimationOwner.h
     Horo/Runtime/Ui/UiAsyncActions.h
     Horo/Runtime/Ui/UiFeedback.h
     Horo/Runtime/Ui/UiScreenStack.h
@@ -1049,6 +1055,9 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
 
 horo_configure_target_header_boundary(HoroHostErrors PUBLIC_HEADERS
     Horo/Hosts/ErrorTranslation.h)
+
+horo_configure_target_header_boundary(HoroUiAnimationRuntimeIntegration PUBLIC_HEADERS
+    Horo/Runtime/UiAnimationRuntimeParticipant.h)
 
 horo_verify_public_header_inventory()
 message(STATUS "Target-specific public header inventory is complete")

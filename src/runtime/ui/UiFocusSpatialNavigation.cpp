@@ -46,6 +46,15 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiFocusGraph::UpdateLayout */
     Result<void> UiFocusGraph::UpdateLayout(const UiLayoutSnapshot &layout) {
+        if (auto prepared = PrepareLayout(layout); prepared.HasError())
+            return prepared;
+        PublishPreparedLayout(layout);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiFocusGraph::PrepareLayout */
+    Result<void> UiFocusGraph::PrepareLayout(const UiLayoutSnapshot &layout, const std::span<const UiLogicalRect> projected,
+                                             const std::span<const std::uint8_t> eligibility) {
         using FocusGraphDetail::Failure;
         if (!storage_ || storage_->lifecycle != UiFocusGraphState::Active)
             return Failure(UiErrors::FocusLifecycleUnavailable);
@@ -57,11 +66,16 @@ namespace Horo::Runtime::Ui {
             source.sources.tree != owner.treeRevision || source.interaction.Compare(owner.interaction) == UiRevisionRelation::Older)
             return Failure(UiErrors::FocusSourceStale);
         const auto records = layout.Records();
-        if (records.size() > MaximumUiTreeElements)
+        if (records.size() > MaximumUiTreeElements || (!projected.empty() && projected.size() != records.size()) ||
+            (!eligibility.empty() && (eligibility.size() != records.size() || std::ranges::any_of(eligibility, [](const auto value) {
+            return value > 1;
+        }))))
             return Failure(UiErrors::FocusCapacityExceeded);
 
         std::ranges::fill(storage_->layoutScratch, std::nullopt);
-        for (const UiLayoutRecord &record : records) {
+        std::fill(storage_->eligibilityScratch.begin(), storage_->eligibilityScratch.end(), eligibility.empty());
+        for (std::size_t recordIndex = 0; recordIndex < records.size(); ++recordIndex) {
+            const auto &record = records[recordIndex];
             if (!record.element.IsValid() || record.element.ownership != owner.instance.ownership || !record.arrangement.IsValid())
                 return Failure(UiErrors::FocusInvalid);
             const auto found = std::ranges::lower_bound(storage_->handleOrder, record.element, {}, [this](const std::size_t index) {
@@ -72,12 +86,24 @@ namespace Horo::Runtime::Ui {
             auto &bounds = storage_->layoutScratch[*found];
             if (bounds.has_value())
                 return Failure(UiErrors::FocusInvalid);
-            bounds = record.arrangement.hitTest;
+            const auto box = projected.empty() ? record.arrangement.hitTest : projected[recordIndex];
+            if (!box.IsValid())
+                return Failure(UiErrors::FocusInvalid);
+            bounds = box;
+            storage_->eligibilityScratch[*found] = eligibility.empty() || eligibility[recordIndex] != 0;
         }
-        for (std::size_t index = 0; index < storage_->nodes.size(); ++index)
-            storage_->nodes[index].bounds = storage_->layoutScratch[index];
-        storage_->descriptor.owner.interaction = source.interaction;
         return Result<void>::Success();
+    }
+
+    /** @copydoc UiFocusGraph::PublishPreparedLayout */
+    void UiFocusGraph::PublishPreparedLayout(const UiLayoutSnapshot &layout) noexcept {
+        for (std::size_t index = 0; index < storage_->nodes.size(); ++index) {
+            storage_->nodes[index].bounds = storage_->layoutScratch[index];
+            storage_->nodes[index].presentationEligible = storage_->eligibilityScratch[index];
+        }
+        if (storage_->focusedIndex && !storage_->IsAllowed(*storage_->focusedIndex))
+            storage_->focusedIndex = storage_->ResolveInitial();
+        storage_->descriptor.owner.interaction = layout.Descriptor().interaction;
     }
 
     /** @copydoc UiFocusGraph::Storage::SpatialTarget */

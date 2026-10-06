@@ -375,8 +375,26 @@ add_library(HoroEngine::SaveApi ALIAS HoroSaveApi)
 target_compile_features(HoroSaveApi PUBLIC cxx_std_20)
 target_link_libraries(HoroSaveApi PUBLIC HoroEngine::Foundation)
 
+# Shared non-installed checked duration arithmetic; no host or UI authority crosses this boundary.
+add_library(HoroRationalDurationInternal INTERFACE)
+target_include_directories(HoroRationalDurationInternal INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/foundation/time/internal>)
+target_link_libraries(HoroRationalDurationInternal INTERFACE HoroEngine::Foundation)
+
+# Non-installed, owner-scoped presentation baseline qualification; no repository-wide includes.
+add_library(HoroRuntimeFrameInternal INTERFACE)
+target_include_directories(HoroRuntimeFrameInternal INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/frame/internal>)
+target_link_libraries(HoroRuntimeFrameInternal INTERFACE HoroEngine::Foundation)
+
 add_library(HoroRuntime STATIC
         runtime/frame/FrameScheduler.cpp
+        runtime/frame/FrameSchedulerDispatch.cpp
+        runtime/frame/RuntimeDispatchEvidence.cpp
+        runtime/frame/RuntimeSimulationLeases.cpp
+        runtime/frame/RuntimeSimulationControl.cpp
+        runtime/frame/RuntimeSimulationCutoff.cpp
+        runtime/frame/RuntimeSimulationAccumulator.cpp
         runtime/lifecycle/RuntimeLifecycle.cpp
         runtime/lifecycle/RuntimeHost.cpp
         runtime/lifecycle/RuntimeErrors.cpp
@@ -435,6 +453,10 @@ add_library(HoroEngine::Runtime ALIAS HoroRuntime)
 target_compile_features(HoroRuntime PUBLIC cxx_std_20)
 target_include_directories(HoroRuntime PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(HoroRuntime PUBLIC HoroEngine::Foundation HoroEngine::SaveApi PRIVATE nlohmann_json::nlohmann_json utf8proc miniz)
+# Compile-only arithmetic has no archive link dependency or exported internal surface.
+target_include_directories(HoroRuntime PRIVATE
+        $<TARGET_PROPERTY:HoroRationalDurationInternal,INTERFACE_INCLUDE_DIRECTORIES>)
+add_dependencies(HoroRuntime HoroRationalDurationInternal)
 
 add_library(HoroNetworkApi STATIC
         runtime/networking/api/MessageCodecRegistry.cpp
@@ -561,7 +583,8 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiFocusSpatialNavigation.cpp
         runtime/ui/UiControls.cpp
         runtime/ui/UiControlStateMachine.cpp
-        runtime/ui/UiControlStateMachineReload.cpp
+        runtime/ui/UiControlStateMachinePresentation.cpp
+    runtime/ui/UiControlStateMachineReload.cpp
         runtime/ui/UiHotReload.cpp
         runtime/ui/UiHotReloadGeneration.cpp
         runtime/ui/UiHotReloadValidation.cpp
@@ -589,6 +612,26 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiGlyphAtlasStorage.cpp
         runtime/ui/UiGlyphAtlasValidation.cpp
         runtime/ui/UiStyle.cpp
+        runtime/ui/UiAnimationTrackSampling.cpp
+        runtime/ui/UiAnimationLayoutProjection.cpp
+        runtime/ui/UiAnimationFrameLease.cpp
+        runtime/ui/UiAnimationOwnerInput.cpp
+        runtime/ui/UiAnimationOwnerLifecycle.cpp
+        runtime/ui/UiAnimationOwnerAdmission.cpp
+        runtime/ui/UiAnimationOwnerReload.cpp
+        runtime/ui/UiAnimationOwnerControlSources.cpp
+        runtime/ui/UiAnimationOwnerRoutes.cpp
+        runtime/ui/UiAnimationOwnerRoutePublication.cpp
+        runtime/ui/UiAnimationOwnerCommands.cpp
+        runtime/ui/UiAnimationOwnerClocks.cpp
+        runtime/ui/UiAnimationOwnerFocusGeometry.cpp
+        runtime/ui/UiAnimationOwnerPreparation.cpp
+        runtime/ui/UiAnimationOwnerSampling.cpp
+        runtime/ui/UiAnimationOwnerPresentation.cpp
+        runtime/ui/UiAnimationOwnerPublication.cpp
+        runtime/ui/UiAnimationOwnerVisualState.cpp
+        runtime/ui/UiAnimationAdmission.cpp
+        runtime/ui/UiAnimationRouteAdmission.cpp
         runtime/ui/UiStyleHash.cpp
         runtime/ui/UiStyleRegistry.cpp
         runtime/ui/UiStyleResolution.cpp
@@ -606,10 +649,31 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiTextShaper.cpp
 )
 add_library(HoroEngine::RuntimeUi ALIAS HoroRuntimeUi)
+add_library(HoroUiAnimationRuntimeIntegration STATIC
+        runtime/ui/integration/UiAnimationRuntimeParticipant.cpp
+        runtime/ui/integration/UiAnimationRuntimeFrames.cpp
+        runtime/ui/integration/UiAnimationRuntimeReload.cpp
+        runtime/ui/integration/UiAnimationClockController.cpp)
+add_library(HoroEngine::UiAnimationRuntimeIntegration ALIAS HoroUiAnimationRuntimeIntegration)
+target_compile_features(HoroUiAnimationRuntimeIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroUiAnimationRuntimeIntegration PUBLIC HoroEngine::Runtime HoroEngine::RuntimeUi)
+target_include_directories(HoroUiAnimationRuntimeIntegration PRIVATE
+        $<TARGET_PROPERTY:HoroRationalDurationInternal,INTERFACE_INCLUDE_DIRECTORIES>)
+add_dependencies(HoroUiAnimationRuntimeIntegration HoroRationalDurationInternal)
+# Non-installed application-boundary source qualification; RuntimeUi retains its own dependency direction.
+add_library(HoroUiAnimationIntegrationInternal INTERFACE)
+target_include_directories(HoroUiAnimationIntegrationInternal INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/ui/integration>)
+target_link_libraries(HoroUiAnimationIntegrationInternal INTERFACE HoroEngine::Runtime HoroEngine::RuntimeUi)
+
+
 target_compile_features(HoroRuntimeUi PUBLIC cxx_std_20)
 target_include_directories(HoroRuntimeUi PRIVATE ${PROJECT_SOURCE_DIR}/src/foundation/json)
 target_link_libraries(HoroRuntimeUi PUBLIC HoroEngine::Foundation HoroEngine::Assets
         PRIVATE nlohmann_json::nlohmann_json utf8proc harfbuzz)
+target_include_directories(HoroRuntimeUi PRIVATE
+        $<TARGET_PROPERTY:HoroRationalDurationInternal,INTERFACE_INCLUDE_DIRECTORIES>)
+add_dependencies(HoroRuntimeUi HoroRationalDurationInternal)
 
 add_library(HoroUiTemplateGraph STATIC
         ui_templates/UiTemplateDependencyGraph.cpp

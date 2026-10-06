@@ -27,7 +27,7 @@ namespace Horo::Runtime::Ui {
         if (!generation.IsValid())
             return StyleInternal::Failure<RuntimeStyleRegistry>(UiErrors::StyleInvalid);
         try {
-            auto storage = std::make_unique<Storage>(std::move(definition), generation);
+            auto storage = std::make_shared<Storage>(std::move(definition), generation);
             std::ranges::sort(storage->definition.properties, {}, &UiStylePropertyDescriptor::id);
             std::ranges::sort(storage->definition.assets, {}, &UiStyleAssetDefinition::id);
             for (auto &asset : storage->definition.assets) {
@@ -58,7 +58,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc RuntimeStyleRegistry::RuntimeStyleRegistry */
-    RuntimeStyleRegistry::RuntimeStyleRegistry(std::unique_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
+    RuntimeStyleRegistry::RuntimeStyleRegistry(std::shared_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
 
     /** @copydoc RuntimeStyleRegistry::~RuntimeStyleRegistry */
     RuntimeStyleRegistry::~RuntimeStyleRegistry() {

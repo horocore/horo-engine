@@ -37,6 +37,7 @@ namespace Horo::Runtime::Ui {
     struct UiStyleContentRevisionTag;
     struct UiStylePolicyRevisionTag;
     struct UiStylePublicationRevisionTag;
+    struct UiStyleGeometryRevisionTag;
 
     /** @brief Stable identity of one authored/cooked runtime style namespace. */
     using RuntimeStyleAssetId = UiStableId<RuntimeStyleAssetIdentityTag>;
@@ -56,6 +57,8 @@ namespace Horo::Runtime::Ui {
     using UiStylePolicyRevision = UiRevision<UiStylePolicyRevisionTag>;
     /** @brief Monotonic published computed-style snapshot revision. */
     using UiStylePublicationRevision = UiRevision<UiStylePublicationRevisionTag>;
+    /** @brief Resolver-issued revision of effective measure, hit-test, accessibility, topology, or registry semantics. */
+    using UiStyleGeometryRevision = UiRevision<UiStyleGeometryRevisionTag>;
 
     /** @brief Stable class identity qualified by its declaring style asset. */
     struct UiStyleClassReference final {
@@ -213,7 +216,11 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsValid() const noexcept;
     };
 
-    /** @brief Effect domains used to route invalidation to layout, paint, hit testing, and policy consumers. */
+    /**
+     * @brief Registered effect domains used to route invalidation to geometry and paint consumers.
+     * Measure includes layout and clipping; hitTest and accessibility include input and focus eligibility.
+     * A property affecting any such domain must declare it even when it also affects paint.
+     */
     struct UiStylePropertyEffects final {
         bool measure{};
         bool paint{};
@@ -388,8 +395,9 @@ namespace Horo::Runtime::Ui {
 
     private:
         struct Storage;
-        explicit RuntimeStyleRegistry(std::unique_ptr<Storage> storage) noexcept;
-        std::unique_ptr<Storage> storage_;
+        friend class UiStyleResolver;
+        explicit RuntimeStyleRegistry(std::shared_ptr<Storage> storage) noexcept;
+        std::shared_ptr<Storage> storage_;
     };
 
     /** @brief Complete immutable source revisions for one style resolution candidate. */
@@ -406,6 +414,17 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] auto operator<=>(const UiStyleSourceRevisions &) const noexcept = default;
     };
 
+    /**
+     * @brief One already sampled animation value consumed by the sole computed-style owner.
+     * @details Carries no token, sealing, clock or completion authority. The animation owner supplies bounded literal samples;
+     *          visual-state rules resolve first and accessibility policy resolves last. Registry type/range/sealing checks remain
+     *          authoritative. Only continuous Color, Dimension, Shape and Scalar categories are admitted.
+     */
+    struct UiStyleAnimationSample final {
+        UiStylePropertyId property;
+        UiStyleValue value;
+    };
+
     /** @brief Per-element typed style inputs borrowed only for one owner-thread update. */
     struct UiStyleElementInput final {
         UiElementHandle element;
@@ -415,6 +434,7 @@ namespace Horo::Runtime::Ui {
         std::span<const UiStyleAssignment> inlineProperties;
         std::span<const UiStyleAssignment> policyProperties;
         UiVisualStateMask state;
+        std::span<const UiStyleAnimationSample> animation; /**< Borrowed sampled values, never retained by resolution. */
     };
 
     /** @brief Inputs for one bounded VariableUpdate style candidate. */
@@ -445,6 +465,14 @@ namespace Horo::Runtime::Ui {
         UiDocumentId document;
         UiStyleSourceRevisions sources;
         UiStylePublicationRevision publication;
+        /**
+         * @brief Resolver-issued effective geometry fence, independent of full observation provenance.
+         * Scoped to this resolver owner; a replacement producer must invalidate its layout consumer explicitly.
+         * Advances for tree/registry semantic changes or effective values with registered measure, hitTest,
+         * or accessibility effects, including inherited values. Paint-only and provenance-only observations
+         * retain this fence. Layout bounds and context remain separately fenced by the layout owner.
+         */
+        UiStyleGeometryRevision geometry;
     };
 
     /** @brief Origin/provenance retained beside one resolved property value. */
@@ -457,6 +485,7 @@ namespace Horo::Runtime::Ui {
         Inline,
         VisualState,
         AccessibilityPolicy,
+        Animation,
     };
 
     struct UiStyleProvenance final {
@@ -544,7 +573,45 @@ namespace Horo::Runtime::Ui {
      *          performs source I/O or allocates fallback frame storage. Failed candidates leave the last-good snapshot intact.
      */
     class UiStyleResolver final {
+        struct Storage;
+
     public:
+        /**
+         * @brief Move-only prepared style lease; no mutable owner publication occurs until Commit.
+         * @details Pins the original resolver storage and its copied candidate snapshot. One candidate may be outstanding per
+         * resolver. Destroying the candidate cancels its reservation. Retirement, changed tree lineage, or changed registry
+         * generation rejects publication without changing the last-good snapshot. Owner-thread use only.
+         */
+        class PreparedUpdate final {
+        public:
+            ~PreparedUpdate();
+            /** @brief Idempotently releases this candidate reservation without publishing. */
+            void Abandon() noexcept;
+            PreparedUpdate(PreparedUpdate &&) noexcept;
+            PreparedUpdate &operator=(PreparedUpdate &&) noexcept;
+            PreparedUpdate(const PreparedUpdate &) = delete;
+            PreparedUpdate &operator=(const PreparedUpdate &) = delete;
+            /** @brief Borrows the immutable candidate for downstream validation. @return Candidate snapshot. @pre Not moved from. */
+            [[nodiscard]] const UiComputedStyleSnapshot &Candidate() const noexcept;
+            /** @brief Revalidates actual source owners. @param tree Current tree. @param registry Current style registry. @return
+             * Admission. */
+            [[nodiscard]] Result<void> CanPublish(const UiElementTree &tree, const RuntimeStyleRegistry &registry) const;
+
+        private:
+            friend class UiStyleResolver;
+            friend class UiAnimationOwner;
+            PreparedUpdate(std::shared_ptr<Storage> owner, UiComputedStyleSnapshot snapshot, bool changes, const UiElementTree &tree,
+                           const RuntimeStyleRegistry &registry) noexcept;
+            /** @brief Releases the outstanding owner reservation and all candidate pins. */
+            void Cancel() noexcept;
+            std::shared_ptr<Storage> owner_;
+            std::optional<UiComputedStyleSnapshot> snapshot_;
+            bool changes_{};
+            std::shared_ptr<const void> treeIssuer_;
+            std::shared_ptr<const void> registryOwner_;
+            UiElementHandle root_;
+        };
+
         /** @brief Creates one exact instance/canvas resolver with all frame storage reserved. */
         [[nodiscard]] static Result<UiStyleResolver> Create(const UiStyleResolverDescriptor &descriptor);
         ~UiStyleResolver();
@@ -554,7 +621,21 @@ namespace Horo::Runtime::Ui {
         UiStyleResolver &operator=(const UiStyleResolver &) = delete;
         /** @brief Queues one bounded invalidation without resolving it immediately. */
         [[nodiscard]] Result<void> Invalidate(const UiStyleInvalidation &invalidation);
-        /** @brief Resolves and atomically publishes one complete style candidate. */
+        /**
+         * @brief Resolves a copied candidate without exposing its target values as the current style generation.
+         * @param tree Actual active retained tree. @param registry Actual active registry. @param request Borrowed typed inputs.
+         * @return Reserved candidate, or typed failure leaving the current generation unchanged.
+         */
+        [[nodiscard]] Result<PreparedUpdate> Prepare(const UiElementTree &tree, const RuntimeStyleRegistry &registry,
+                                                     const UiStyleUpdateRequest &request);
+        /**
+         * @brief Revalidates and commits this resolver's exact outstanding candidate.
+         * @param candidate Candidate consumed on success. @param tree Current tree. @param registry Current registry.
+         * @return Published lease, or typed failure with unchanged last-good state.
+         */
+        [[nodiscard]] Result<UiComputedStyleSnapshot> Commit(PreparedUpdate &&candidate, const UiElementTree &tree,
+                                                             const RuntimeStyleRegistry &registry);
+        /** @brief Resolves and atomically publishes one complete style candidate; equivalent to Prepare followed by Commit. */
         [[nodiscard]] Result<UiComputedStyleSnapshot> Update(const UiElementTree &tree, const RuntimeStyleRegistry &registry,
                                                              const UiStyleUpdateRequest &request);
         /** @brief Stops new work while retaining outstanding immutable snapshot leases. */
@@ -567,8 +648,10 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsDrained() const noexcept;
 
     private:
-        struct Storage;
-        explicit UiStyleResolver(std::unique_ptr<Storage> storage) noexcept;
-        std::unique_ptr<Storage> storage_;
+        friend class UiAnimationOwner;
+        /** @brief Publishes an already validated candidate during a callback-free owner-thread commit. */
+        [[nodiscard]] UiComputedStyleSnapshot PublishValidated(PreparedUpdate &&candidate) noexcept;
+        explicit UiStyleResolver(std::shared_ptr<Storage> storage) noexcept;
+        std::shared_ptr<Storage> storage_;
     };
 }  // namespace Horo::Runtime::Ui

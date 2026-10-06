@@ -2350,11 +2350,19 @@ target_compile_features(HoroRenderMemoryBudgetTests PRIVATE cxx_std_20)
 target_include_directories(HoroRenderMemoryBudgetTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroRenderMemoryBudgetTests PRIVATE HoroEngine::RenderFrontend)
 add_executable(HoroRuntimeLifecycleTests
+        support/AllocationProbe.cpp
+        unit/runtime/lifecycle/RuntimeDispatchEvidenceTests.cpp
         unit/runtime/lifecycle/RuntimeLifecycleTests.cpp
+        unit/runtime/lifecycle/UiAnimationCommittedTicksTests.cpp
+        unit/runtime/lifecycle/UiPresentationEvidenceTests.cpp
+        unit/runtime/lifecycle/RuntimeSimulationTimingTests.cpp
 )
 target_compile_features(HoroRuntimeLifecycleTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeLifecycleTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroRuntimeLifecycleTests
         PRIVATE
+        HoroRuntimeFrameInternal
+        HoroUiAnimationIntegrationInternal
         HoroEngine::Runtime
         HoroEngine::Platform
         HoroEngine::RenderFrontend
@@ -2555,6 +2563,40 @@ add_executable(HoroRuntimeUiGlyphAtlasTests
 )
 target_compile_features(HoroRuntimeUiGlyphAtlasTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiGlyphAtlasTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiAnimationPublicHeaderConsumer support/RuntimeUiAnimationPublicHeaderConsumer.cpp)
+target_compile_features(HoroRuntimeUiAnimationPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiAnimationPublicHeaderConsumer PRIVATE HoroEngine::RuntimeUi)
+add_test(NAME HoroRuntimeUiAnimationPublicHeaderConsumer COMMAND HoroRuntimeUiAnimationPublicHeaderConsumer)
+set_tests_properties(HoroRuntimeUiAnimationPublicHeaderConsumer PROPERTIES LABELS "unit;runtime_ui;headless;public_headers")
+add_executable(HoroPresentationClockPublicHeaderConsumer support/PresentationClockPublicHeaderConsumer.cpp)
+target_compile_features(HoroPresentationClockPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPresentationClockPublicHeaderConsumer PRIVATE HoroEngine::Runtime)
+add_test(NAME HoroPresentationClockPublicHeaderConsumer COMMAND HoroPresentationClockPublicHeaderConsumer)
+set_tests_properties(HoroPresentationClockPublicHeaderConsumer PROPERTIES LABELS "unit;runtime;headless;public_headers")
+add_executable(HoroRuntimeUiAnimationTests
+        unit/runtime/ui/UiAnimationPlaybackTests.cpp
+        unit/runtime/ui/UiAnimationMarkerTests.cpp
+        unit/runtime/ui/UiAnimationInterpolationTests.cpp
+        unit/runtime/ui/UiAnimationIncarnationTests.cpp
+        unit/runtime/ui/UiAnimationTrackTests.cpp
+)
+target_compile_features(HoroRuntimeUiAnimationTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiAnimationTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/ui)
+target_link_libraries(HoroRuntimeUiAnimationTests PRIVATE HoroEngine::RuntimeUi HoroRationalDurationInternal)
+add_executable(HoroRuntimeUiAnimationIntegrationTests
+        unit/runtime/ui/UiAnimationOwnerIntegrationTests.cpp
+        unit/runtime/ui/UiBindingWriteTestFixture.cpp
+        unit/runtime/ui/UiBindingWriteTestAuthority.cpp
+        support/AllocationProbe.cpp
+        unit/runtime/ui/UiHotReloadTestFixture.cpp)
+target_compile_features(HoroRuntimeUiAnimationIntegrationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiAnimationIntegrationTests PRIVATE HoroEngine::UiAnimationRuntimeIntegration)
+add_executable(HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer
+        support/RuntimeUiAnimationIntegrationPublicHeaderConsumer.cpp)
+target_compile_features(HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer PRIVATE HoroEngine::UiAnimationRuntimeIntegration)
+add_test(NAME HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer COMMAND HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer)
+set_tests_properties(HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer PROPERTIES LABELS "unit;runtime;headless;public_headers")
 add_executable(HoroRuntimeUiStyleTests
         unit/runtime/ui/UiStyleTests.cpp
 )
@@ -3496,6 +3538,8 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiTextLayoutTests
         HoroRuntimeUiGlyphAtlasTests
         HoroRuntimeUiStyleTests
+        HoroRuntimeUiAnimationTests
+        HoroRuntimeUiAnimationIntegrationTests
         HoroRuntimeUiHitTestingTests
         HoroRuntimeUiEventDispatchTests
         HoroRuntimeUiPointerCaptureTests

@@ -6,6 +6,19 @@
 namespace Horo::Runtime::Ui::DiagnosticsInternal {
     namespace {
         const std::array core{
+            &UiErrors::LayoutCandidateBusy,
+            &UiErrors::StyleCandidateBusy,
+            &UiErrors::ClockInputInvalid,
+            &UiErrors::ClockSourceStale,
+            &UiErrors::ClockOverflow,
+            &UiErrors::ClockUnavailable,
+            &UiErrors::AnimationPolicyInvalid,
+            &UiErrors::AnimationTargetStale,
+            &UiErrors::AnimationConflict,
+            &UiErrors::AnimationBudgetExceeded,
+            &UiErrors::AnimationLifecycleUnavailable,
+            &UiErrors::AnimationStorageExhausted,
+
             &UiErrors::IdentityInvalid,
             &UiErrors::OwnershipGenerationInvalid,
             &UiErrors::HandleMalformed,

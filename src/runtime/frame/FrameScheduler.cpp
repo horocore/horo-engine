@@ -2,7 +2,10 @@
 
 #include "../lifecycle/RuntimeErrors.h"
 #include "Horo/Runtime/RuntimeLifecycle.h"
+#include "internal/FixedAttemptEvidence.h"
+#include "internal/PresentationClockGeneration.h"
 
+#include <limits>
 #include <memory>
 
 namespace Horo::Runtime {
@@ -45,7 +48,13 @@ namespace Horo::Runtime {
         if (!IsPositive(config.fixedStep) || !IsPositive(config.maximumFrameDelta) || config.maximumCatchUpSteps == 0) {
             return Result<std::unique_ptr<FrameScheduler>>::Failure(MakeError(RuntimeErrors::InvalidSchedulerConfig));
         }
-        return Result<std::unique_ptr<FrameScheduler>>::Success(std::make_unique<FrameScheduler>(clock, config, ConstructionKey{}));
+        auto scheduler = std::make_unique<FrameScheduler>(clock, config, ConstructionKey{});
+        if (!scheduler->dispatchSource_.Initialize())
+            return Result<std::unique_ptr<FrameScheduler>>::Failure(MakeError(RuntimeErrors::DispatchStorageExhausted));
+        if (const auto initialized = scheduler->simulationControl_.Initialize(config.maximumPauseLeases, config.maximumStepReceipts);
+            initialized.HasError())
+            return Result<std::unique_ptr<FrameScheduler>>::Failure(initialized.ErrorValue());
+        return Result<std::unique_ptr<FrameScheduler>>::Success(std::move(scheduler));
     }
 
     FrameScheduler::FrameScheduler(Clock &clock, const FrameSchedulerConfig config, ConstructionKey) noexcept
@@ -63,21 +72,9 @@ namespace Horo::Runtime {
         }
     }
 
-    /** @copydoc FrameScheduler::DispatchPhaseChecked */
-    Result<void> FrameScheduler::DispatchPhaseChecked(RuntimeLifecycle &lifecycle, const CancellationToken &cancellation,
-                                                      const FrameContext &context, const RuntimePhase phase) const {
-        if (cancellation.IsCancellationRequested())
-            return CancelledResult();
-        if (Result<void> result = lifecycle.DispatchPhase(phase, context); result.HasError())
-            return result;
-        if (cancellation.IsCancellationRequested())
-            return CancelledResult();
-        return Result<void>::Success();
-    }
-
     /** @copydoc FrameScheduler::DispatchPumpPhases */
     Result<void> FrameScheduler::DispatchPumpPhases(RuntimeLifecycle &lifecycle, const CancellationToken &cancellation,
-                                                    const FrameContext &context, const bool suspended) {
+                                                    FrameContext &context, const bool suspended) {
         using enum RuntimePhase;
         if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, context, BeginFrame); result.HasError())
             return result;
@@ -89,6 +86,9 @@ namespace Horo::Runtime {
         }
         if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, context, ApplyQueuedOwnerThreadCommands); result.HasError())
             return result;
+        if (const auto cutoff = simulationControl_.CommitCutoff(suspended); cutoff.HasError())
+            return cutoff;
+        context.simulationPolicy = simulationControl_.Policy();
         if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, context, NetworkPoll); result.HasError())
             return result;
 
@@ -106,23 +106,37 @@ namespace Horo::Runtime {
                                                Duration &droppedSimulationTime) {
         droppedSimulationTime = {};
         std::uint32_t executedSteps = 0;
-        while (accumulator_ >= config_.fixedStep && executedSteps < config_.maximumCatchUpSteps) {
+        const bool paused = simulationControl_.Policy().paused;
+        while ((paused ? simulationControl_.HasAdmittedStep() : accumulator_ >= config_.fixedStep) &&
+               executedSteps < config_.maximumCatchUpSteps) {
             if (cancellation.IsCancellationRequested())
                 return CancelledResult();
-            const FixedStepContext fixedContext{.simulationTick = completedSimulationTick_ + 1,
-                                                .fixedDelta = config_.fixedStep,
-                                                .cancellation = cancellation};
-            if (Result<void> result = lifecycle.DispatchFixedUpdate(fixedContext); result.HasError())
+            if (completedSimulationTick_ == std::numeric_limits<std::uint64_t>::max())
+                return Result<void>::Failure(MakeError(RuntimeErrors::SimulationTimingOverflow));
+            const auto attempt = Internal::ReserveFixedAttempt(fixedAttemptNumber_);
+            if (attempt.HasError())
+                return Result<void>::Failure(attempt.ErrorValue());
+            FixedStepContext fixedContext{.simulationTick = completedSimulationTick_ + 1,
+                                          .fixedDelta = config_.fixedStep,
+                                          .cancellation = cancellation,
+                                          .attemptNumber = attempt.Value(),
+                                          .frameNumber = frameNumber_};
+            if (Result<void> result = DispatchFixedChecked(lifecycle, fixedContext); result.HasError())
                 return result;
             if (cancellation.IsCancellationRequested())
                 return CancelledResult();
-            accumulator_ -= config_.fixedStep;
+            if (!paused)
+                accumulator_ -= config_.fixedStep;
             ++completedSimulationTick_;
+            if (paused)
+                simulationControl_.CommitStep(completedSimulationTick_, fixedContext.attemptNumber, fixedContext.frameNumber,
+                                              fixedContext.fixedDelta);
+            committedFixedStep_ = {completedSimulationTick_, fixedContext.attemptNumber, fixedContext.frameNumber, fixedContext.fixedDelta};
             statistics_.completedSimulationTick = completedSimulationTick_;
             ++executedSteps;
         }
 
-        if (accumulator_ >= config_.fixedStep) {
+        if (!paused && accumulator_ >= config_.fixedStep) {
             const auto droppedSteps = static_cast<std::uint64_t>(accumulator_.ToNanoseconds() / config_.fixedStep.ToNanoseconds());
             const auto dropped = Duration::FromNanoseconds(static_cast<std::int64_t>(droppedSteps) * config_.fixedStep.ToNanoseconds());
             accumulator_ -= dropped;
@@ -136,11 +150,23 @@ namespace Horo::Runtime {
 
     /** @copydoc FrameScheduler::RunFrame */
     Result<void> FrameScheduler::RunFrame(RuntimeLifecycle &lifecycle, const CancellationToken &cancellation, const bool suspended) {
-        ++frameNumber_;
+        if (auto admitted = AdmitRun(); admitted.HasError())
+            return admitted;
+        if (auto admitted = Internal::AdmitPresentationBaseline(presentationClockExhausted_); admitted.HasError())
+            return admitted;
+        if (auto admitted = Internal::AdmitPresentationDuration(presentationAdmittedDuration_, {}, presentationDurationExhausted_);
+            admitted.HasError())
+            return admitted;
+        if (const auto frame = Internal::ReservePresentationFrame(frameNumber_); frame.HasError())
+            return Result<void>::Failure(frame.ErrorValue());
         const Duration rawDelta = suspended ? Duration{} : clock_.Sample();
         Duration variableDelta = rawDelta;
         bool clamped = false;
         NormalizeSampleDelta(rawDelta, variableDelta, clamped);
+        if (auto admitted =
+                Internal::AdmitPresentationDuration(presentationAdmittedDuration_, variableDelta, presentationDurationExhausted_);
+            admitted.HasError())
+            return admitted;
 
         FrameContext frameContext{.frameNumber = frameNumber_,
                                   .variableDelta = variableDelta,
@@ -148,28 +174,38 @@ namespace Horo::Runtime {
                                   .completedSimulationTick = completedSimulationTick_,
                                   .droppedSimulationTime = {},
                                   .realDeltaWasClamped = clamped,
-                                  .cancellation = cancellation};
+                                  .cancellation = cancellation,
+                                  .presentationClockGeneration = presentationClockGeneration_,
+                                  .presentationContinuity = presentationContinuity_,
+                                  .committedFixedStep = committedFixedStep_,
+                                  .presentationAdmittedDuration = presentationAdmittedDuration_};
 
         if (Result<void> result = DispatchPumpPhases(lifecycle, cancellation, frameContext, suspended); result.HasError())
             return result;
         if (suspended)
             return Result<void>::Success();
 
-        accumulator_ += variableDelta;
+        if (const auto accumulated = simulationControl_.AddAccumulatorTime(variableDelta, accumulator_); accumulated.HasError())
+            return accumulated;
         Duration droppedSimulationTime{};
         if (Result<void> result = RunFixedSteps(lifecycle, cancellation, droppedSimulationTime); result.HasError())
             return result;
+        frameContext.completedSimulationTick = completedSimulationTick_;
+        frameContext.committedFixedStep = committedFixedStep_;
+        frameContext.simulationPolicy = simulationControl_.Policy();
         if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, frameContext, RuntimePhase::NetworkFlush);
             result.HasError())
             return result;
         frameContext.droppedSimulationTime = droppedSimulationTime;
         frameContext.completedSimulationTick = completedSimulationTick_;
-        frameContext.interpolationAlpha =
-            static_cast<double>(accumulator_.ToNanoseconds()) / static_cast<double>(config_.fixedStep.ToNanoseconds());
+        frameContext.interpolationAlpha = static_cast<double>(accumulator_.ToNanoseconds() % config_.fixedStep.ToNanoseconds()) /
+                                          static_cast<double>(config_.fixedStep.ToNanoseconds());
 
         if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, frameContext, RuntimePhase::VariableUpdate);
             result.HasError())
             return result;
+        completedVariableUpdateFrame_ = frameNumber_;
+        presentationContinuity_ = PresentationClockContinuity::Continuous;
         if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, frameContext, RuntimePhase::RenderExtraction);
             result.HasError())
             return result;
@@ -190,6 +226,8 @@ namespace Horo::Runtime {
     /** @copydoc FrameScheduler::ResetClock */
     void FrameScheduler::ResetClock() noexcept {
         clock_.Reset();
+        Internal::AdvancePresentationBaseline(presentationClockGeneration_, presentationClockExhausted_);
+        presentationContinuity_ = PresentationClockContinuity::BaselineReset;
     }
 
     /** @copydoc FrameScheduler::Statistics */

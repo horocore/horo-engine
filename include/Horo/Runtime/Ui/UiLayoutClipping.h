@@ -199,7 +199,39 @@ namespace Horo::Runtime::Ui {
 
     private:
         struct Storage;
-        explicit UiLayoutClipEngine(std::unique_ptr<Storage> storage) noexcept;
-        std::unique_ptr<Storage> storage_;
+        friend class UiAnimationOwner;
+
+        /** @brief Pins one copied inactive projection and releases its exclusive reservation exactly once. */
+        class PreparedUpdate final {
+        public:
+            ~PreparedUpdate();
+            PreparedUpdate(PreparedUpdate &&other) noexcept;
+            PreparedUpdate &operator=(PreparedUpdate &&other) noexcept;
+            PreparedUpdate(const PreparedUpdate &) = delete;
+            PreparedUpdate &operator=(const PreparedUpdate &) = delete;
+            /** @brief Releases admission without changing the current projection. */
+            void Abandon() noexcept;
+            /** @brief Revalidates the exact live tree issuer and source lineage. @return Admission or typed failure. */
+            [[nodiscard]] Result<void> CanPublish(const UiElementTree &tree) const;
+            /** @brief Borrows the copied immutable projection. @return Candidate snapshot. */
+            [[nodiscard]] const UiLayoutClipSnapshot &Candidate() const noexcept;
+
+        private:
+            friend class UiLayoutClipEngine;
+            friend class UiAnimationOwner;
+            PreparedUpdate(std::shared_ptr<Storage> owner, UiLayoutClipSnapshot snapshot, const UiElementTree &tree) noexcept;
+            std::shared_ptr<Storage> owner_;
+            std::optional<UiLayoutClipSnapshot> snapshot_;
+            std::shared_ptr<const void> treeIssuer_;
+            UiElementHandle root_;
+        };
+
+        /** @brief Builds an inactive projection while rejecting competing updates immediately. @return Reserved candidate or failure. */
+        [[nodiscard]] Result<PreparedUpdate> Prepare(const UiElementTree &tree, const UiLayoutSnapshot &layout,
+                                                     const UiLayoutClipUpdateRequest &request);
+        /** @brief Publishes an already revalidated candidate without allocation or callbacks. @return Immutable projection. */
+        [[nodiscard]] UiLayoutClipSnapshot PublishValidated(PreparedUpdate &&candidate) noexcept;
+        explicit UiLayoutClipEngine(std::shared_ptr<Storage> storage) noexcept;
+        std::shared_ptr<Storage> storage_;
     };
 }  // namespace Horo::Runtime::Ui

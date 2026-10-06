@@ -1,11 +1,15 @@
+#include "FixedAttemptEvidence.h"
 #include "Horo/Runtime/Render/NullBackendModule.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/RuntimeHost.h"
+#include "Horo/Runtime/RuntimeLifecycle.h"
+#include "PresentationClockGeneration.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <limits>
 #include <memory>
 #include <new>
 #include <optional>
@@ -74,11 +78,17 @@ namespace {
         Result<void> OnPhase(const RuntimePhase phase, const FrameContext &context) override {
             if (phases_)
                 phases_->push_back(phase);
+            if (phase == RuntimePhase::VariableUpdate) {
+                presentationGeneration = context.presentationClockGeneration;
+                presentationContinuity = context.presentationContinuity;
+                ++variableUpdateCount;
+            }
             lastVariableDelta = context.variableDelta;
             lastInterpolationAlpha = context.interpolationAlpha;
             lastCompletedSimulationTick = context.completedSimulationTick;
             lastDroppedSimulationTime = context.droppedSimulationTime;
             lastRealDeltaWasClamped = context.realDeltaWasClamped;
+            lastCommittedFixedStep = context.committedFixedStep;
             if (throwPhase.has_value() && *throwPhase == phase)
                 throw std::runtime_error{"Injected exception."};
             if (failPhase.has_value() && *failPhase == phase)
@@ -90,6 +100,11 @@ namespace {
 
         Result<void> OnFixedUpdate(const FixedStepContext &context) override {
             fixedTicks.push_back(context.simulationTick);
+            fixedEvidence.push_back({context.simulationTick, context.attemptNumber, context.frameNumber, context.fixedDelta});
+            if (throwFixedTick == context.simulationTick)
+                throw std::runtime_error{"Injected fixed exception."};
+            if (cancelFixedTick == context.simulationTick)
+                host->RequestShutdown();
             if (failFixedTick == context.simulationTick)
                 return Result<void>::Failure(TestError("runtime.test.fixed"));
             return Result<void>::Success();
@@ -103,17 +118,24 @@ namespace {
 
         std::vector<RuntimePhase> *phases_{};
         std::vector<std::uint64_t> fixedTicks;
+        std::vector<CommittedFixedStepEvidence> fixedEvidence;
         std::vector<int> *shutdownOrder{};
         RuntimeHost *host{};
         std::optional<RuntimePhase> failPhase;
         std::optional<RuntimePhase> throwPhase;
         std::optional<RuntimePhase> cancelPhase;
         std::uint64_t failFixedTick{};
+        std::uint64_t throwFixedTick{};
+        std::uint64_t cancelFixedTick{};
+        CommittedFixedStepEvidence lastCommittedFixedStep;
         Duration lastVariableDelta{};
         double lastInterpolationAlpha{};
         std::uint64_t lastCompletedSimulationTick{};
         Duration lastDroppedSimulationTime{};
         bool lastRealDeltaWasClamped{};
+        std::uint64_t presentationGeneration{};
+        PresentationClockContinuity presentationContinuity{PresentationClockContinuity::Initial};
+        std::uint64_t variableUpdateCount{};
         int id{};
         int startupCount{};
         int shutdownCount{};
@@ -195,6 +217,148 @@ namespace {
         auto created = RuntimeHost::Create(clock, config);
         Check(created.HasValue());
         return std::move(created).Value();
+    }
+
+    TEST_CASE("Scheduler success fence distinguishes a failed tick from its retry", "[unit][runtime][clock]") {
+        DeterministicClock clock;
+        RuntimeLifecycle lifecycle;
+        CancellationSource cancellation;
+        auto created = FrameScheduler::Create(clock, {.fixedStep = Duration::FromMilliseconds(10)});
+        Check(created.HasValue());
+        auto scheduler = std::move(created).Value();
+        auto observer = std::make_unique<RecordingParticipant>();
+        auto *observed = observer.get();
+        auto failing = std::make_unique<RecordingParticipant>();
+        auto *failure = failing.get();
+        failure->throwFixedTick = 1;
+        bool failBeforeObserver = false;
+        SECTION("failure after observation") {}
+        SECTION("failure before observation") {
+            failBeforeObserver = true;
+        }
+        if (failBeforeObserver)
+            Check(lifecycle.AddParticipant(std::move(failing)).HasValue());
+        Check(lifecycle.AddParticipant(std::move(observer)).HasValue());
+        if (!failBeforeObserver)
+            Check(lifecycle.AddParticipant(std::move(failing)).HasValue());
+        Check(lifecycle.Startup(cancellation.Token()).HasValue());
+        Check(scheduler->RunFrame(lifecycle, cancellation.Token(), false).HasValue());
+        clock.Advance(Duration::FromMilliseconds(10));
+        Check(scheduler->RunFrame(lifecycle, cancellation.Token(), false).HasError());
+        Check(scheduler->Statistics().completedSimulationTick == 0);
+        Check(observed->lastCommittedFixedStep.simulationTick == 0);
+        Check(observed->fixedEvidence.size() == (failBeforeObserver ? 0U : 1U));
+        Check(lifecycle.State() == RuntimeLifecycleState::Running);
+        failure->throwFixedTick = 0;
+        Check(scheduler->RunFrame(lifecycle, cancellation.Token(), false).HasValue());
+        const auto &committed = observed->lastCommittedFixedStep;
+        Check(committed.simulationTick == 1);
+        Check(committed.attemptNumber == 2);
+        Check(committed.frameNumber == 3);
+        Check(committed.duration == Duration::FromMilliseconds(10));
+        Check(observed->fixedEvidence.back().attemptNumber == committed.attemptNumber);
+        Check(observed->fixedEvidence.back().duration == committed.duration);
+        Check(observed->lastCompletedSimulationTick == 1);
+    }
+
+    TEST_CASE("Scheduler retains earlier successful catch-up ticks across a later failed attempt", "[unit][runtime][clock]") {
+        DeterministicClock clock;
+        RuntimeLifecycle lifecycle;
+        CancellationSource cancellation;
+        auto created = FrameScheduler::Create(clock, {.fixedStep = Duration::FromMilliseconds(10)});
+        Check(created.HasValue());
+        auto scheduler = std::move(created).Value();
+        auto observer = std::make_unique<RecordingParticipant>();
+        auto *observed = observer.get();
+        auto failing = std::make_unique<RecordingParticipant>();
+        auto *failure = failing.get();
+        failure->failFixedTick = 3;
+        Check(lifecycle.AddParticipant(std::move(observer)).HasValue());
+        Check(lifecycle.AddParticipant(std::move(failing)).HasValue());
+        Check(lifecycle.Startup(cancellation.Token()).HasValue());
+        Check(scheduler->RunFrame(lifecycle, cancellation.Token(), false).HasValue());
+        clock.Advance(Duration::FromMilliseconds(30));
+        Check(scheduler->RunFrame(lifecycle, cancellation.Token(), false).HasError());
+        Check(scheduler->Statistics().completedSimulationTick == 2);
+        Check(observed->variableUpdateCount == 1);
+        Check(observed->fixedTicks == std::vector<std::uint64_t>{1, 2, 3});
+        Check(lifecycle.State() == RuntimeLifecycleState::Running);
+        failure->failFixedTick = 0;
+        Check(scheduler->RunFrame(lifecycle, cancellation.Token(), false).HasValue());
+        Check(scheduler->Statistics().completedSimulationTick == 3);
+        Check(observed->fixedTicks == std::vector<std::uint64_t>{1, 2, 3, 3});
+        Check(observed->lastCommittedFixedStep.simulationTick == 3);
+        Check(observed->lastCommittedFixedStep.attemptNumber == 4);
+        Check(observed->lastCommittedFixedStep.frameNumber == 3);
+        Check(observed->lastCommittedFixedStep.duration == Duration::FromMilliseconds(10));
+    }
+
+    TEST_CASE("Runtime host failure retires attempted fixed evidence without retry", "[unit][runtime][clock]") {
+        DeterministicClock clock;
+        auto host = MakeHost(clock, {.fixedStep = Duration::FromMilliseconds(10)});
+        auto participant = std::make_unique<RecordingParticipant>();
+        auto *observed = participant.get();
+        observed->failFixedTick = 3;
+        Check(host->AddParticipant(std::move(participant)).HasValue());
+        Check(host->Startup().HasValue());
+        Check(host->RunFrame().HasValue());
+        clock.Advance(Duration::FromMilliseconds(30));
+        const auto failed = host->RunFrame();
+        Check(failed.HasError());
+        Check(failed.ErrorValue().code.Value() == "runtime.test.fixed");
+        Check(host->Statistics().completedSimulationTick == 2);
+        Check(host->State() == RuntimeLifecycleState::Stopped);
+        Check(observed->shutdownCount == 1);
+        Check(observed->fixedTicks == std::vector<std::uint64_t>{1, 2, 3});
+        Check(observed->variableUpdateCount == 1);
+        Check(observed->lastCommittedFixedStep.simulationTick == 0);
+        Check(host->RunFrame().HasError());
+        Check(host->Statistics().completedSimulationTick == 2);
+        Check(observed->fixedTicks == std::vector<std::uint64_t>{1, 2, 3});
+        Check(observed->shutdownCount == 1);
+    }
+
+    TEST_CASE("Cancellation after fixed dispatch never publishes its attempted success fence", "[unit][runtime][clock]") {
+        DeterministicClock clock;
+        auto host = MakeHost(clock, {.fixedStep = Duration::FromMilliseconds(10)});
+        auto participant = std::make_unique<RecordingParticipant>();
+        auto *observed = participant.get();
+        observed->host = host.get();
+        observed->cancelFixedTick = 1;
+        Check(host->AddParticipant(std::move(participant)).HasValue());
+        Check(host->Startup().HasValue());
+        Check(host->RunFrame().HasValue());
+        clock.Advance(Duration::FromMilliseconds(10));
+        Check(host->RunFrame().HasError());
+        Check(host->Statistics().completedSimulationTick == 0);
+        Check(observed->fixedEvidence.size() == 1);
+        Check(observed->fixedEvidence.front().attemptNumber == 1);
+        Check(observed->lastCommittedFixedStep.simulationTick == 0);
+        Check(observed->variableUpdateCount == 1);
+    }
+
+    TEST_CASE("Actual fixed attempt reservation exhausts without wrapping or changing its last identity", "[unit][runtime][clock]") {
+        auto attempt = std::numeric_limits<std::uint64_t>::max() - 1;
+        const auto last = Internal::ReserveFixedAttempt(attempt);
+        REQUIRE(last.HasValue());
+        REQUIRE(last.Value() == std::numeric_limits<std::uint64_t>::max());
+        const auto exhausted = Internal::ReserveFixedAttempt(attempt);
+        REQUIRE(exhausted.HasError());
+        REQUIRE(exhausted.ErrorValue().code.Value() == RuntimeErrors::FixedAttemptIdentityExhausted.code.Value());
+        REQUIRE(attempt == std::numeric_limits<std::uint64_t>::max());
+        REQUIRE(Internal::ReserveFixedAttempt(attempt).HasError());
+    }
+
+    TEST_CASE("Actual presentation frame reservation rejects wrap before sampling or dispatch", "[unit][runtime][clock]") {
+        auto frame = std::numeric_limits<std::uint64_t>::max() - 1;
+        const auto last = Internal::ReservePresentationFrame(frame);
+        REQUIRE(last.HasValue());
+        REQUIRE(last.Value() == std::numeric_limits<std::uint64_t>::max());
+        const auto exhausted = Internal::ReservePresentationFrame(frame);
+        REQUIRE(exhausted.HasError());
+        REQUIRE(exhausted.ErrorValue().code.Value() == RuntimeErrors::FrameIdentityExhausted.code.Value());
+        REQUIRE(frame == std::numeric_limits<std::uint64_t>::max());
+        REQUIRE(Internal::ReservePresentationFrame(frame).HasError());
     }
 
     TEST_CASE("Phase Order And Tick Contexts Are Canonical", "[unit][runtime]") {
@@ -373,6 +537,51 @@ namespace {
         phases.clear();
         Check(host->RunFrame().HasValue());
         Check(observed->fixedTicks.empty());
+    }
+
+    TEST_CASE("Presentation baseline reset is explicit and preserves simulation commitment", "[unit][runtime]") {
+        DeterministicClock clock;
+        auto participant = std::make_unique<RecordingParticipant>();
+        auto *observed = participant.get();
+        auto host = MakeHost(clock);
+        Check(host->AddParticipant(std::move(participant)).HasValue());
+        Check(host->Startup().HasValue());
+        Check(host->RunFrame().HasValue());
+        Check(observed->presentationGeneration == 1);
+        Check(observed->presentationContinuity == PresentationClockContinuity::Initial);
+        clock.Advance(Duration::FromNanoseconds(16'666'667));
+        Check(host->RunFrame().HasValue());
+        Check(observed->presentationContinuity == PresentationClockContinuity::Continuous);
+        Check(host->Statistics().completedSimulationTick == 1);
+        Check(host->Suspend().HasValue());
+        clock.Advance(Duration::FromMilliseconds(20'000));
+        Check(host->RunFrame().HasValue());
+        Check(observed->variableUpdateCount == 2);
+        Check(host->Resume().HasValue());
+        Check(host->RunFrame().HasValue());
+        Check(observed->presentationGeneration == 3);
+        Check(observed->presentationContinuity == PresentationClockContinuity::BaselineReset);
+        Check(observed->lastVariableDelta == Duration{});
+        Check(host->Statistics().completedSimulationTick == 1);
+        Check(host->RunFrame().HasValue());
+        Check(observed->presentationContinuity == PresentationClockContinuity::Continuous);
+        Check(observed->presentationGeneration == 3);
+    }
+
+    TEST_CASE("Actual checked presentation baseline operations latch exhaustion before dispatch", "[unit][runtime]") {
+        std::uint64_t generation = std::numeric_limits<std::uint64_t>::max() - 1;
+        bool exhausted = false;
+        Internal::AdvancePresentationBaseline(generation, exhausted);
+        Check(generation == std::numeric_limits<std::uint64_t>::max());
+        Check(Internal::AdmitPresentationBaseline(exhausted).HasValue());
+        Internal::AdvancePresentationBaseline(generation, exhausted);
+        Check(generation == std::numeric_limits<std::uint64_t>::max());
+        const auto failed = Internal::AdmitPresentationBaseline(exhausted);
+        Check(failed.HasError());
+        Check(failed.ErrorValue().code.Value() == "runtime.scheduler.presentation_clock_generation_exhausted");
+        Internal::AdvancePresentationBaseline(generation, exhausted);
+        Check(generation == std::numeric_limits<std::uint64_t>::max());
+        Check(Internal::AdmitPresentationBaseline(exhausted).HasError());
     }
 
     TEST_CASE("Mid Frame Cancellation Stops Later Phases", "[unit][runtime]") {

@@ -64,6 +64,8 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeHost::Shutdown */
     void RuntimeHost::Shutdown() noexcept {
+        scheduler_->RetireDispatch();
+        scheduler_->simulationControl_.Close();
         cancellation_.RequestCancellation();
         lifecycle_.Shutdown();
     }
@@ -76,5 +78,20 @@ namespace Horo::Runtime {
     /** @copydoc RuntimeHost::Statistics */
     FrameSchedulerStatistics RuntimeHost::Statistics() const noexcept {
         return scheduler_->Statistics();
+    }
+
+    /** @copydoc RuntimeHost::SimulationControl */
+    RuntimeSimulationControl &RuntimeHost::SimulationControl() noexcept {
+        return scheduler_->SimulationControl();
+    }
+
+    /** @copydoc RuntimeHost::SimulationControl */
+    const RuntimeSimulationControl &RuntimeHost::SimulationControl() const noexcept {
+        return std::as_const(*scheduler_).SimulationControl();
+    }
+
+    /** @copydoc RuntimeHost::DispatchSource */
+    RuntimeDispatchSource RuntimeHost::DispatchSource() const noexcept {
+        return scheduler_->DispatchSource();
     }
 }  // namespace Horo::Runtime

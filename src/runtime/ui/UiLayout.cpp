@@ -128,6 +128,23 @@ namespace Horo::Runtime::Ui {
         std::shared_ptr<UiLayoutSnapshot::Storage> current;
         std::size_t nextSlot{};
         PublishedState published;
+        bool prepared{};
+
+        struct Reservation final {
+            explicit Reservation(Storage &owner) noexcept : owner(owner) {
+                owner.prepared = true;
+            }
+
+            ~Reservation() {
+                if (!retained)
+                    owner.prepared = false;
+            }
+
+            Reservation(const Reservation &) = delete;
+            Reservation &operator=(const Reservation &) = delete;
+            Storage &owner;
+            bool retained{};
+        };
 
         explicit Storage(const UiLayoutEngineDescriptor &source)
             : descriptor(source), published{.interaction = source.initialInteractionRevision} {
@@ -407,7 +424,7 @@ namespace Horo::Runtime::Ui {
             return {};
         }
 
-        [[nodiscard]] Result<std::shared_ptr<UiLayoutSnapshot::Storage>> PublishCandidate(const UiLayoutUpdateRequest &request) {
+        [[nodiscard]] Result<std::shared_ptr<UiLayoutSnapshot::Storage>> BuildSnapshot(const UiLayoutUpdateRequest &request) {
             UiInteractionRevision publication = published.interaction;
             if (current) {
                 const auto next = published.interaction.Next();
@@ -432,17 +449,6 @@ namespace Horo::Runtime::Ui {
                 return records[index].element;
             });
 
-            ReleaseCurrent();
-            current = slot;
-            activeNodes.swap(candidateNodes);
-            activeChildren.swap(candidateChildren);
-            published.sources = request.sources;
-            published.rootConstraints = request.rootConstraints;
-            published.rootContent = request.rootContent;
-            published.fontScale = request.fontScale;
-            published.interaction = publication;
-            invalidations.clear();
-            slot->leases.fetch_add(1);
             return Result<std::shared_ptr<UiLayoutSnapshot::Storage>>::Success(std::move(slot));
         }
 
@@ -530,14 +536,14 @@ namespace Horo::Runtime::Ui {
         if (!descriptor.IsValid())
             return Failure<UiLayoutEngine>(UiErrors::LayoutInvalid);
         try {
-            return Result<UiLayoutEngine>::Success(UiLayoutEngine{std::make_unique<Storage>(descriptor)});
+            return Result<UiLayoutEngine>::Success(UiLayoutEngine{std::make_shared<Storage>(descriptor)});
         } catch (const std::bad_alloc &) {
             return Failure<UiLayoutEngine>(UiErrors::CapacityExceeded);
         }
     }
 
     /** @copydoc UiLayoutEngine::UiLayoutEngine */
-    UiLayoutEngine::UiLayoutEngine(std::unique_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
+    UiLayoutEngine::UiLayoutEngine(std::shared_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
 
     /** @copydoc UiLayoutEngine::~UiLayoutEngine */
     UiLayoutEngine::~UiLayoutEngine() {
@@ -548,12 +554,20 @@ namespace Horo::Runtime::Ui {
     UiLayoutEngine::UiLayoutEngine(UiLayoutEngine &&) noexcept = default;
 
     /** @copydoc UiLayoutEngine::operator= */
-    UiLayoutEngine &UiLayoutEngine::operator=(UiLayoutEngine &&) noexcept = default;
+    UiLayoutEngine &UiLayoutEngine::operator=(UiLayoutEngine &&other) noexcept {
+        if (this != &other) {
+            Shutdown();
+            storage_ = std::move(other.storage_);
+        }
+        return *this;
+    }
 
     /** @copydoc UiLayoutEngine::Invalidate */
     Result<void> UiLayoutEngine::Invalidate(const UiLayoutInvalidation &invalidation) {
         if (!storage_ || storage_->lifecycle != UiLayoutEngineState::Active)
             return Failure(UiErrors::LayoutLifecycleUnavailable);
+        if (storage_->prepared)
+            return Failure(UiErrors::LayoutCandidateBusy);
         if (!invalidation.tree.IsValid() || !IsDirtyKind(invalidation.kind) ||
             (invalidation.kind != UiLayoutDirtyKind::All && !invalidation.element.IsValid()))
             return Failure(UiErrors::LayoutInvalid);
@@ -583,6 +597,8 @@ namespace Horo::Runtime::Ui {
     Result<void> UiLayoutEngine::InvalidateBatch(const UiElementTree &tree, const std::span<const UiLayoutInvalidation> invalidations) {
         if (!storage_ || storage_->lifecycle != UiLayoutEngineState::Active || tree.State() != UiElementTreeState::Active)
             return Failure(UiErrors::LayoutLifecycleUnavailable);
+        if (storage_->prepared)
+            return Failure(UiErrors::LayoutCandidateBusy);
         const auto &owner = storage_->descriptor;
         if (const auto valid = ValidateLayoutOwner(tree, owner); valid.HasError())
             return valid;
@@ -601,41 +617,153 @@ namespace Horo::Runtime::Ui {
         return Result<void>::Success();
     }
 
-    /** @copydoc UiLayoutEngine::Update */
-    Result<UiLayoutSnapshot> UiLayoutEngine::Update(const UiElementTree &tree, const UiLayoutUpdateRequest &request) {
-        if (!storage_ || storage_->lifecycle != UiLayoutEngineState::Active)
-            return Failure<UiLayoutSnapshot>(UiErrors::LayoutLifecycleUnavailable);
+    /** @copydoc UiLayoutEngine::Prepare */
+    Result<UiLayoutEngine::PreparedUpdate> UiLayoutEngine::Prepare(const UiElementTree &tree, const UiLayoutUpdateRequest &request) {
+        const auto owner = storage_;
+        if (!owner || owner->lifecycle != UiLayoutEngineState::Active)
+            return Failure<PreparedUpdate>(UiErrors::LayoutLifecycleUnavailable);
+        if (owner->prepared)
+            return Failure<PreparedUpdate>(UiErrors::LayoutCandidateBusy);
+        Storage::Reservation reservation{*owner};
         if (!request.sources.IsValid() || !request.rootConstraints.IsValid() || !request.rootContent.IsValid() ||
             !request.fontScale.IsValid() || request.evaluator == nullptr)
-            return Failure<UiLayoutSnapshot>(UiErrors::LayoutInvalid);
-        if (tree.State() != UiElementTreeState::Active || tree.Instance() != storage_->descriptor.instance ||
-            tree.Canvas() != storage_->descriptor.canvas || tree.SourceDocument() != storage_->descriptor.document ||
+            return Failure<PreparedUpdate>(UiErrors::LayoutInvalid);
+        if (tree.State() != UiElementTreeState::Active || tree.Instance() != owner->descriptor.instance ||
+            tree.Canvas() != owner->descriptor.canvas || tree.SourceDocument() != owner->descriptor.document ||
             tree.SourceDocumentRevision() != request.sources.document || tree.Revision() != request.sources.tree ||
-            tree.Size() > storage_->descriptor.elementCapacity)
-            return Failure<UiLayoutSnapshot>(UiErrors::LayoutSourceStale);
+            tree.Size() > owner->descriptor.elementCapacity)
+            return Failure<PreparedUpdate>(UiErrors::LayoutSourceStale);
 
-        const bool topologyChanged = storage_->activeNodes.empty() || storage_->published.sources.tree != request.sources.tree;
-        const bool rootChanged = storage_->current && (storage_->published.rootConstraints != request.rootConstraints ||
-                                                       storage_->published.rootContent != request.rootContent ||
-                                                       storage_->published.fontScale != request.fontScale);
-        const bool sourcesChanged = !storage_->current || storage_->published.sources != request.sources ||
-                                    storage_->published.rootConstraints != request.rootConstraints ||
-                                    storage_->published.rootContent != request.rootContent ||
-                                    storage_->published.fontScale != request.fontScale;
-        if (!sourcesChanged && storage_->invalidations.empty()) {
-            storage_->current->leases.fetch_add(1);
-            return Result<UiLayoutSnapshot>::Success(UiLayoutSnapshot{storage_->current});
+        const auto treeIssuer = tree.IssuerPin();
+        const auto admittedRoot = tree.Root();
+        if (admittedRoot.HasError())
+            return Failure<PreparedUpdate>(UiErrors::LayoutSourceStale);
+        const bool topologyChanged = owner->activeNodes.empty() || owner->published.sources.tree != request.sources.tree;
+        const bool rootChanged =
+            owner->current && (owner->published.rootConstraints != request.rootConstraints ||
+                               owner->published.rootContent != request.rootContent || owner->published.fontScale != request.fontScale);
+        const bool sourcesChanged = !owner->current || owner->published.sources != request.sources ||
+                                    owner->published.rootConstraints != request.rootConstraints ||
+                                    owner->published.rootContent != request.rootContent || owner->published.fontScale != request.fontScale;
+        if (!sourcesChanged && owner->invalidations.empty()) {
+            owner->current->leases.fetch_add(1);
+            reservation.retained = true;
+            return Result<PreparedUpdate>::Success(PreparedUpdate{owner, UiLayoutSnapshot{owner->current}, false, tree, request});
         }
 
-        if (const auto prepared = storage_->PrepareCandidate(tree, request, topologyChanged, rootChanged, sourcesChanged);
-            prepared.HasError())
-            return Result<UiLayoutSnapshot>::Failure(prepared.ErrorValue());
-        if (const auto evaluated = storage_->EvaluateCandidate(request); evaluated.HasError())
-            return Result<UiLayoutSnapshot>::Failure(evaluated.ErrorValue());
-        auto published = storage_->PublishCandidate(request);
+        if (const auto prepared = owner->PrepareCandidate(tree, request, topologyChanged, rootChanged, sourcesChanged); prepared.HasError())
+            return Result<PreparedUpdate>::Failure(prepared.ErrorValue());
+        if (const auto evaluated = owner->EvaluateCandidate(request); evaluated.HasError())
+            return Result<PreparedUpdate>::Failure(evaluated.ErrorValue());
+        if (owner->lifecycle != UiLayoutEngineState::Active)
+            return Failure<PreparedUpdate>(UiErrors::LayoutLifecycleUnavailable);
+        const auto evaluatedRoot = tree.Root();
+        if (evaluatedRoot.HasError() || evaluatedRoot.Value().handle != admittedRoot.Value().handle || tree.IssuerPin() != treeIssuer ||
+            tree.State() != UiElementTreeState::Active || tree.Revision() != request.sources.tree ||
+            tree.SourceDocumentRevision() != request.sources.document)
+            return Failure<PreparedUpdate>(UiErrors::LayoutSourceStale);
+        auto published = owner->BuildSnapshot(request);
         if (published.HasError())
-            return Result<UiLayoutSnapshot>::Failure(published.ErrorValue());
-        return Result<UiLayoutSnapshot>::Success(UiLayoutSnapshot{std::move(published).Value()});
+            return Result<PreparedUpdate>::Failure(published.ErrorValue());
+        reservation.retained = true;
+        return Result<PreparedUpdate>::Success(PreparedUpdate{owner, UiLayoutSnapshot{std::move(published).Value()}, true, tree, request});
+    }
+
+    /** @copydoc UiLayoutEngine::PreparedUpdate::PreparedUpdate */
+    UiLayoutEngine::PreparedUpdate::PreparedUpdate(std::shared_ptr<Storage> owner, UiLayoutSnapshot snapshot, const bool changes,
+                                                   const UiElementTree &tree, const UiLayoutUpdateRequest &request) noexcept
+        : owner_(std::move(owner)), snapshot_(std::move(snapshot)), treeIssuer_(tree.IssuerPin()),
+          root_(snapshot_->Records().front().element), rootConstraints_(request.rootConstraints), rootContent_(request.rootContent),
+          fontScale_(request.fontScale), changes_(changes) {}
+
+    /** @copydoc UiLayoutEngine::PreparedUpdate::~PreparedUpdate */
+    UiLayoutEngine::PreparedUpdate::~PreparedUpdate() {
+        Abandon();
+    }
+
+    /** @copydoc UiLayoutEngine::PreparedUpdate::PreparedUpdate */
+    UiLayoutEngine::PreparedUpdate::PreparedUpdate(PreparedUpdate &&other) noexcept
+        : owner_(std::move(other.owner_)), snapshot_(std::move(other.snapshot_)), treeIssuer_(std::move(other.treeIssuer_)),
+          root_(other.root_), rootConstraints_(other.rootConstraints_), rootContent_(other.rootContent_), fontScale_(other.fontScale_),
+          changes_(other.changes_) {}
+
+    /** @copydoc UiLayoutEngine::PreparedUpdate::operator= */
+    UiLayoutEngine::PreparedUpdate &UiLayoutEngine::PreparedUpdate::operator=(PreparedUpdate &&other) noexcept {
+        if (this != &other) {
+            Abandon();
+            owner_ = std::move(other.owner_);
+            snapshot_ = std::move(other.snapshot_);
+            treeIssuer_ = std::move(other.treeIssuer_);
+            root_ = other.root_;
+            rootConstraints_ = other.rootConstraints_;
+            rootContent_ = other.rootContent_;
+            fontScale_ = other.fontScale_;
+            changes_ = other.changes_;
+        }
+        return *this;
+    }
+
+    /** @copydoc UiLayoutEngine::PreparedUpdate::Abandon */
+    void UiLayoutEngine::PreparedUpdate::Abandon() noexcept {
+        if (owner_)
+            owner_->prepared = false;
+        snapshot_.reset();
+        treeIssuer_.reset();
+        owner_.reset();
+    }
+
+    /** @copydoc UiLayoutEngine::PreparedUpdate::Candidate */
+    const UiLayoutSnapshot &UiLayoutEngine::PreparedUpdate::Candidate() const noexcept {
+        return *snapshot_;
+    }
+
+    /** @copydoc UiLayoutEngine::PreparedUpdate::CanPublish */
+    Result<void> UiLayoutEngine::PreparedUpdate::CanPublish(const UiElementTree &tree) const {
+        if (!owner_ || !snapshot_ || !owner_->prepared || owner_->lifecycle != UiLayoutEngineState::Active)
+            return Failure(UiErrors::LayoutLifecycleUnavailable);
+        const auto &candidate = snapshot_->Descriptor();
+        const auto root = tree.Root();
+        if (root.HasError() || root.Value().handle != root_ || tree.IssuerPin() != treeIssuer_ ||
+            tree.State() != UiElementTreeState::Active || tree.Instance() != candidate.instance || tree.Canvas() != candidate.canvas ||
+            tree.SourceDocument() != candidate.document || tree.SourceDocumentRevision() != candidate.sources.document ||
+            tree.Revision() != candidate.sources.tree)
+            return Failure(UiErrors::LayoutSourceStale);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiLayoutEngine::PublishValidated */
+    UiLayoutSnapshot UiLayoutEngine::PublishValidated(PreparedUpdate &&candidate) noexcept {
+        if (candidate.changes_) {
+            storage_->ReleaseCurrent();
+            storage_->current = std::const_pointer_cast<UiLayoutSnapshot::Storage>(candidate.snapshot_->storage_);
+            storage_->current->leases.fetch_add(1);
+            storage_->activeNodes.swap(storage_->candidateNodes);
+            storage_->activeChildren.swap(storage_->candidateChildren);
+            const auto &descriptor = candidate.snapshot_->Descriptor();
+            storage_->published = {descriptor.sources, candidate.rootConstraints_, candidate.rootContent_, candidate.fontScale_,
+                                   descriptor.interaction};
+            storage_->invalidations.clear();
+        }
+        auto published = std::move(*candidate.snapshot_);
+        candidate.Abandon();
+        return published;
+    }
+
+    /** @copydoc UiLayoutEngine::Commit */
+    Result<UiLayoutSnapshot> UiLayoutEngine::Commit(PreparedUpdate &&candidate, const UiElementTree &tree) {
+        if (candidate.owner_ != storage_)
+            return Failure<UiLayoutSnapshot>(UiErrors::LayoutSourceStale);
+        if (const auto admitted = candidate.CanPublish(tree); admitted.HasError())
+            return Result<UiLayoutSnapshot>::Failure(admitted.ErrorValue());
+        return Result<UiLayoutSnapshot>::Success(PublishValidated(std::move(candidate)));
+    }
+
+    /** @copydoc UiLayoutEngine::Update */
+    Result<UiLayoutSnapshot> UiLayoutEngine::Update(const UiElementTree &tree, const UiLayoutUpdateRequest &request) {
+        auto candidate = Prepare(tree, request);
+        if (candidate.HasError())
+            return Result<UiLayoutSnapshot>::Failure(candidate.ErrorValue());
+        return Commit(std::move(candidate).Value(), tree);
     }
 
     /** @copydoc UiLayoutEngine::BeginRetirement */
@@ -653,16 +781,24 @@ namespace Horo::Runtime::Ui {
             return;
         storage_->lifecycle = UiLayoutEngineState::Stopped;
         storage_->invalidations.clear();
-        storage_->activeNodes.clear();
-        storage_->candidateNodes.clear();
-        storage_->activeChildren.clear();
-        storage_->candidateChildren.clear();
+        // An evaluator may reenter Shutdown. Its bounded scratch references stay alive until preparation unwinds.
+        if (!storage_->prepared) {
+            storage_->activeNodes.clear();
+            storage_->candidateNodes.clear();
+            storage_->activeChildren.clear();
+            storage_->candidateChildren.clear();
+        }
         storage_->ReleaseCurrent();
     }
 
     /** @copydoc UiLayoutEngine::State */
     UiLayoutEngineState UiLayoutEngine::State() const noexcept {
         return storage_ ? storage_->lifecycle : UiLayoutEngineState::Stopped;
+    }
+
+    /** @copydoc UiLayoutEngine::PublishedInteraction */
+    UiInteractionRevision UiLayoutEngine::PublishedInteraction() const noexcept {
+        return storage_ ? storage_->published.interaction : UiInteractionRevision{};
     }
 
     /** @copydoc UiLayoutEngine::IsDrained */

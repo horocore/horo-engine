@@ -149,6 +149,13 @@ namespace Horo::Runtime::Ui {
 
     private:
         struct Storage;
+        friend class UiActionRouter;
+        /** @brief Checks all requests, completion/cancellation pins and error storage drained before a source generation is reused. */
+        [[nodiscard]] bool CanPrepareReplacementSource() const noexcept;
+        /** @brief Reinitializes only an inactive, fully drained preallocated source; caller has checked admission. */
+        void PrepareReplacementSource(const UiActionOwnerContext &owner, std::uint64_t previousRequest) noexcept;
+        /** @brief Releases drained terminal error pins at explicit application quiescence. @return Number of released records. */
+        [[nodiscard]] std::size_t DrainReplacementSource() noexcept;
         explicit UiAsyncActionStore(std::unique_ptr<Storage> storage) noexcept;
         /** @brief Borrows mutable owner state. @return Null after move; unavailable on const stores. */
         [[nodiscard]] Storage *StateStorage() noexcept;

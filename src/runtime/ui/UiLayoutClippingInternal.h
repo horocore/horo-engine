@@ -52,6 +52,7 @@ namespace Horo::Runtime::Ui {
         std::vector<std::shared_ptr<UiLayoutClipSnapshot::Storage>> slots;
         std::shared_ptr<UiLayoutClipSnapshot::Storage> current;
         std::size_t nextSlot{};
+        bool prepared{};
 
         std::vector<std::uint32_t> recordLookup;
         std::vector<std::uint32_t> parents;
@@ -105,6 +106,6 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> BuildProjection(std::span<const UiLayoutRecord> records,
                                                    std::span<const UiLayoutClipDescriptor> descriptors);
         [[nodiscard]] Result<void> ValidateProjection(std::size_t recordCount) const;
-        [[nodiscard]] Result<std::shared_ptr<UiLayoutClipSnapshot::Storage>> Publish(const UiLayoutSnapshotDescriptor &source);
+        [[nodiscard]] Result<std::shared_ptr<UiLayoutClipSnapshot::Storage>> BuildInactive(const UiLayoutSnapshotDescriptor &source);
     };
 }  // namespace Horo::Runtime::Ui

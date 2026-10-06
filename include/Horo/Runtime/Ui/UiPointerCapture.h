@@ -282,6 +282,11 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] std::uint32_t ActiveCount() const noexcept;
 
     private:
+        friend class UiAnimationOwner;
+        /** @brief Revalidates the actual active capture owner before aggregate interaction publication. */
+        [[nodiscard]] Result<void> CanPublishInteraction(UiCanvasInstanceId canvas) const;
+        /** @brief Cancels only obsolete interaction leases after all aggregate checks, without callbacks or reclamation. */
+        void PublishInteractionValidated(UiCanvasInstanceId canvas, UiInteractionRevision interaction) noexcept;
         explicit UiPointerCaptureStore(std::shared_ptr<Detail::UiPointerCaptureStorage> storage) noexcept;
 
         std::shared_ptr<Detail::UiPointerCaptureStorage> storage_;

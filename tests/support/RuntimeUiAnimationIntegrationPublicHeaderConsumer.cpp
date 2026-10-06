@@ -1,0 +1,40 @@
+#include "Horo/Runtime/UiAnimationRuntimeParticipant.h"
+
+#include <type_traits>
+
+using Horo::Runtime::RuntimeDispatchFacts;
+using Horo::Runtime::RuntimeDispatchSource;
+using Horo::Runtime::RuntimeDispatchStatus;
+using Horo::Runtime::UiAnimationClockController;
+using Horo::Runtime::UiAnimationRuntimeComposition;
+using Horo::Runtime::UiAnimationRuntimeParticipant;
+
+static_assert(!std::is_copy_constructible_v<UiAnimationRuntimeComposition>);
+static_assert(std::is_move_constructible_v<UiAnimationRuntimeComposition>);
+static_assert(!std::is_default_constructible_v<UiAnimationRuntimeParticipant>);
+static_assert(!std::is_copy_constructible_v<UiAnimationRuntimeParticipant>);
+static_assert(std::is_default_constructible_v<UiAnimationClockController>);
+static_assert(!std::is_copy_constructible_v<UiAnimationClockController>);
+static_assert(std::is_nothrow_move_constructible_v<UiAnimationClockController>);
+static_assert(std::is_same_v<decltype(std::declval<const RuntimeDispatchSource &>().BindingStatus()), RuntimeDispatchStatus>);
+static_assert(std::is_trivially_copyable_v<RuntimeDispatchFacts>);
+
+static_assert(
+    std::is_same_v<decltype(std::declval<UiAnimationRuntimeParticipant &>().Navigate(Horo::Runtime::Ui::UiRouteOperationRequest{})),
+                   Horo::Result<Horo::Runtime::Ui::UiRouteOperationId>>);
+static_assert(std::is_same_v<decltype(std::declval<UiAnimationRuntimeParticipant &>().CancelNavigation(
+                                 Horo::Runtime::Ui::UiRouteOperationId{}, Horo::Runtime::Ui::UiAnimationCancellation::Explicit)),
+                             Horo::Result<void>>);
+
+static_assert(std::is_nothrow_move_constructible_v<Horo::Runtime::Ui::UiAnimationReloadResult>);
+static_assert(std::is_nothrow_move_constructible_v<UiAnimationRuntimeReload>);
+static_assert(!std::is_copy_constructible_v<UiAnimationRuntimeReload>);
+static_assert(std::is_member_function_pointer_v<decltype(&UiAnimationRuntimeParticipant::Reload)>);
+
+int main() {
+    const RuntimeDispatchSource absent;
+    if (absent.BindingStatus() != RuntimeDispatchStatus::Invalid)
+        return 1;
+    UiAnimationClockController absentController;
+    return absentController.Clock(Horo::Runtime::Ui::UiTimeDomain::Manual).HasError() ? 0 : 2;
+}

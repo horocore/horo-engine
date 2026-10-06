@@ -34,6 +34,24 @@ namespace Horo::Runtime::Ui {
             return std::move(stack).Value();
         }
 
+        UiActionRouter MakeRouteActions() {
+            const auto owner = Owner();
+            const UiActionOwnerContext context{{owner, 1, 1},
+                                               {owner, 2, 1},
+                                               AuthoredId<UiDocumentId>(1),
+                                               UiDocumentRevision::Create(1).Value(),
+                                               UiRuntimeTreeRevision::Create(2).Value(),
+                                               UiInteractionRevision::Create(3).Value()};
+            auto router = UiActionRouter::Create({context, 4});
+            REQUIRE(router.HasValue());
+            return std::move(router).Value();
+        }
+
+        void AttachTopActions(UiScreenStack &stack) {
+            REQUIRE(stack.Top().has_value());
+            REQUIRE(stack.AttachActions(stack.Top()->id, MakeRouteActions()).HasValue());
+        }
+
         template <typename T> void ExpectError(const Result<T> &result, const ErrorCodeDescriptor &expected) {
             REQUIRE(result.HasError());
             CHECK(result.ErrorValue().code.Value() == expected.code.Value());
@@ -199,6 +217,122 @@ namespace Horo::Runtime::Ui {
             REQUIRE(full.HasValue());
             CHECK(full.Value().rejection == UiRouteOperationRejection::Capacity);
             CHECK(stack.Size() == 1);
+        }
+
+        TEST_CASE("Route removal publishes without allocating or reclaiming attached routers", "[runtime_ui][screen_stack][retirement]") {
+            auto stack = MakeStack();
+            REQUIRE(stack.Push(AuthoredId<UiRouteId>(1)).HasValue());
+            const auto bottom = stack.Top()->id;
+            REQUIRE(stack.Push(AuthoredId<UiRouteId>(2)).HasValue());
+            const auto top = stack.Top()->id;
+            // Attach in reverse route order so popping erases a non-final actions-vector entry.
+            AttachTopActions(stack);
+            REQUIRE(stack.AttachActions(bottom, MakeRouteActions()).HasValue());
+            auto prepared = stack.Prepare(UiRouteOperationRequest::Pop());
+            REQUIRE(prepared.HasValue());
+            auto transaction = std::move(prepared).Value();
+            const auto allocations = ::Horo::Tests::AllocationProbe::Count();
+            const auto frees = ::Horo::Tests::AllocationProbe::FreeCount();
+            const auto popped = transaction.Commit();
+            const auto afterAllocations = ::Horo::Tests::AllocationProbe::Count();
+            const auto afterFrees = ::Horo::Tests::AllocationProbe::FreeCount();
+            RequireCommitted(popped, UiRouteOperationKind::Pop);
+            CHECK(afterAllocations == allocations);
+            CHECK(afterFrees == frees);
+            CHECK(stack.Actions(top) == nullptr);
+            REQUIRE(stack.Actions(bottom) != nullptr);
+            CHECK(stack.Actions(bottom)->State() == UiActionRouterState::Active);
+            const auto beforeDrain = ::Horo::Tests::AllocationProbe::FreeCount();
+            const auto drained = stack.DrainRetiredActions();
+            const auto afterDrain = ::Horo::Tests::AllocationProbe::FreeCount();
+            REQUIRE(drained.HasValue());
+            CHECK(drained.Value() == 1);
+            CHECK(afterDrain > beforeDrain);
+        }
+
+        TEST_CASE("Deferred route retirement capacity rejects atomically and draining permits retry",
+                  "[runtime_ui][screen_stack][retirement][capacity]") {
+            const std::array definitions{Route(1), Route(2)};
+            auto created = UiScreenStack::Create({Owner(), Stack(), definitions, 2, 0, 1});
+            REQUIRE(created.HasValue());
+            auto stack = std::move(created).Value();
+            REQUIRE(stack.Push(AuthoredId<UiRouteId>(1)).HasValue());
+            AttachTopActions(stack);
+            RequireCommitted(stack.Replace(AuthoredId<UiRouteId>(2)), UiRouteOperationKind::Replace);
+            AttachTopActions(stack);
+            const auto revision = stack.Revision();
+            const auto route = stack.Top()->id;
+            const auto rejected = stack.Clear();
+            REQUIRE(rejected.HasValue());
+            CHECK(rejected.Value().rejection == UiRouteOperationRejection::Capacity);
+            CHECK(stack.Revision() == revision);
+            REQUIRE(stack.Top().has_value());
+            CHECK(stack.Top()->id == route);
+            REQUIRE(stack.Actions(route) != nullptr);
+            CHECK(stack.Actions(route)->State() == UiActionRouterState::Active);
+            const auto drained = stack.DrainRetiredActions();
+            REQUIRE(drained.HasValue());
+            CHECK(drained.Value() == 1);
+            RequireCommitted(stack.Clear(), UiRouteOperationKind::Clear);
+            CHECK(stack.Empty());
+            const auto finalDrain = stack.DrainRetiredActions();
+            REQUIRE(finalDrain.HasValue());
+            CHECK(finalDrain.Value() == 1);
+        }
+
+        TEST_CASE("Replace and clear retain every retired router until quiescent drain",
+                  "[runtime_ui][screen_stack][retirement][publication]") {
+            auto stack = MakeStack();
+            REQUIRE(stack.Push(AuthoredId<UiRouteId>(1)).HasValue());
+            AttachTopActions(stack);
+            REQUIRE(stack.Push(AuthoredId<UiRouteId>(2)).HasValue());
+            AttachTopActions(stack);
+            auto request = UiRouteOperationRequest::Clear();
+            std::size_t expectedRetired = 2;
+            SECTION("replace only the attached top") {
+                request = UiRouteOperationRequest::Replace(AuthoredId<UiRouteId>(3));
+                expectedRetired = 1;
+            }
+            SECTION("clear all attached routes") {}
+            auto prepared = stack.Prepare(request);
+            REQUIRE(prepared.HasValue());
+            auto transaction = std::move(prepared).Value();
+            ExpectError(stack.DrainRetiredActions(), UiErrors::RouteOperationReentrant);
+            const auto allocations = ::Horo::Tests::AllocationProbe::Count();
+            const auto frees = ::Horo::Tests::AllocationProbe::FreeCount();
+            const auto committed = transaction.Commit();
+            const auto afterAllocations = ::Horo::Tests::AllocationProbe::Count();
+            const auto afterFrees = ::Horo::Tests::AllocationProbe::FreeCount();
+            RequireCommitted(committed, request.kind);
+            CHECK(afterAllocations == allocations);
+            CHECK(afterFrees == frees);
+            const auto drained = stack.DrainRetiredActions();
+            REQUIRE(drained.HasValue());
+            CHECK(drained.Value() == expectedRetired);
+        }
+
+        TEST_CASE("Shutdown closes held route transactions before router reclamation", "[runtime_ui][screen_stack][retirement][shutdown]") {
+            auto stack = MakeStack();
+            REQUIRE(stack.Push(AuthoredId<UiRouteId>(1)).HasValue());
+            AttachTopActions(stack);
+            auto prepared = stack.Prepare(UiRouteOperationRequest::Clear());
+            REQUIRE(prepared.HasValue());
+            auto transaction = std::move(prepared).Value();
+            const auto allocations = ::Horo::Tests::AllocationProbe::Count();
+            const auto frees = ::Horo::Tests::AllocationProbe::FreeCount();
+            stack.Shutdown();
+            const auto afterAllocations = ::Horo::Tests::AllocationProbe::Count();
+            const auto afterFrees = ::Horo::Tests::AllocationProbe::FreeCount();
+            CHECK(afterAllocations == allocations);
+            CHECK(afterFrees == frees);
+            CHECK(stack.Empty());
+            ExpectError(transaction.Commit(), UiErrors::RouteOperationLifecycleUnavailable);
+            const auto drained = stack.DrainRetiredActions();
+            REQUIRE(drained.HasValue());
+            CHECK(drained.Value() == 1);
+            const auto again = stack.DrainRetiredActions();
+            REQUIRE(again.HasValue());
+            CHECK(again.Value() == 0);
         }
     }  // namespace
 }  // namespace Horo::Runtime::Ui

@@ -15,6 +15,7 @@ namespace Horo::Runtime::Ui {
             std::uint64_t contentHash{};
             std::uint64_t stateHash{};
             bool dirty{};
+            bool resolved{};
         };
 
         UiStyleResolverDescriptor descriptor;
@@ -27,7 +28,9 @@ namespace Horo::Runtime::Ui {
         std::shared_ptr<UiComputedStyleSnapshot::Storage> current;
         UiStyleSourceRevisions sources;
         UiStylePublicationRevision publication;
+        UiStyleGeometryRevision geometry;
         bool hasPublication{};
+        bool prepared{};
         std::size_t nextSlot{};
 
         explicit Storage(const UiStyleResolverDescriptor &source) : descriptor(source), publication(source.initialPublication) {
@@ -131,8 +134,10 @@ namespace Horo::Runtime::Ui {
                 MarkAll();
             } else {
                 candidateNodes = activeNodes;
-                for (auto &node : candidateNodes)
+                for (auto &node : candidateNodes) {
                     node.dirty = false;
+                    node.resolved = false;
+                }
             }
             const bool registryChanged = !hasPublication || sources.registry != request.sources.registry;
             const bool contentChanged = !hasPublication || sources.content != request.sources.content;
@@ -157,6 +162,9 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> ResolveCandidate(const RuntimeStyleRegistry &registry, const UiStyleUpdateRequest &request) {
             for (std::uint32_t index = 0; index < candidateNodes.size(); ++index) {
                 auto &node = candidateNodes[index];
+                // Parent-first topology propagates inherited changes without a separate subtree walk.
+                if (node.parent >= 0 && candidateNodes[static_cast<std::uint32_t>(node.parent)].resolved)
+                    node.dirty = true;
                 if (!node.dirty)
                     continue;
                 const StyleInternal::WorkingStyle *parent =
@@ -166,6 +174,7 @@ namespace Horo::Runtime::Ui {
                     return Result<void>::Failure(resolved.ErrorValue());
                 node.style = std::move(resolved).Value();
                 node.dirty = false;
+                node.resolved = true;
             }
             return Result<void>::Success();
         }
@@ -230,7 +239,40 @@ namespace Horo::Runtime::Ui {
             return Result<std::uint32_t>::Success(styleIndex);
         }
 
-        [[nodiscard]] Result<std::shared_ptr<UiComputedStyleSnapshot::Storage>> Publish(const UiStyleUpdateRequest &request) {
+        /** @brief Compares only registered geometry/eligibility effects in actual resolved parent-first values. */
+        [[nodiscard]] bool GeometryChanged(const RuntimeStyleRegistry &registry, const UiStyleUpdateRequest &request) const noexcept {
+            if (!hasPublication || sources.tree != request.sources.tree || sources.registry != request.sources.registry ||
+                activeNodes.size() != candidateNodes.size())
+                return true;
+            for (std::size_t index = 0; index < candidateNodes.size(); ++index) {
+                const auto &active = activeNodes[index];
+                const auto &candidate = candidateNodes[index];
+                if (active.element != candidate.element || active.parent != candidate.parent)
+                    return true;
+                for (const auto &property : registry.Properties()) {
+                    if (!property.effects.measure && !property.effects.hitTest && !property.effects.accessibility)
+                        continue;
+                    const auto *previous = active.style.Find(property.id);
+                    const auto *next = candidate.style.Find(property.id);
+                    if (!previous || !next || previous->value.value != next->value.value)
+                        return true;
+                }
+            }
+            return false;
+        }
+
+        /** @brief Checks the sole producer counter before acquiring any publication storage; observations cannot consume it. */
+        [[nodiscard]] Result<UiStyleGeometryRevision> NextGeometry(const RuntimeStyleRegistry &registry,
+                                                                   const UiStyleUpdateRequest &request) const {
+            if (!hasPublication)
+                return UiStyleGeometryRevision::Create(1);
+            if (GeometryChanged(registry, request))
+                return geometry.Next();
+            return Result<UiStyleGeometryRevision>::Success(geometry);
+        }
+
+        [[nodiscard]] Result<std::shared_ptr<UiComputedStyleSnapshot::Storage>> BuildSnapshot(const RuntimeStyleRegistry &registry,
+                                                                                              const UiStyleUpdateRequest &request) {
             UiStylePublicationRevision nextPublication = descriptor.initialPublication;
             if (hasPublication) {
                 const auto next = publication.Next();
@@ -238,10 +280,14 @@ namespace Horo::Runtime::Ui {
                     return Result<std::shared_ptr<UiComputedStyleSnapshot::Storage>>::Failure(next.ErrorValue());
                 nextPublication = next.Value();
             }
+            const auto nextGeometry = NextGeometry(registry, request);
+            if (nextGeometry.HasError())
+                return Result<std::shared_ptr<UiComputedStyleSnapshot::Storage>>::Failure(nextGeometry.ErrorValue());
             auto slot = TryAcquire();
             if (!slot)
                 return StyleInternal::Failure<std::shared_ptr<UiComputedStyleSnapshot::Storage>>(UiErrors::StyleSnapshotStorageExhausted);
-            slot->descriptor = {descriptor.instance, descriptor.canvas, descriptor.document, request.sources, nextPublication};
+            slot->descriptor = {descriptor.instance, descriptor.canvas, descriptor.document,
+                                request.sources,     nextPublication,   nextGeometry.Value()};
             slot->records.resize(candidateNodes.size());
             slot->lookup.resize(candidateNodes.size());
             slot->properties.clear();
@@ -260,14 +306,6 @@ namespace Horo::Runtime::Ui {
             std::ranges::sort(slot->lookup, {}, [&records = slot->records](const std::uint32_t index) {
                 return records[index].element;
             });
-            ReleaseCurrent();
-            current = slot;
-            activeNodes.swap(candidateNodes);
-            sources = request.sources;
-            publication = nextPublication;
-            hasPublication = true;
-            invalidations.clear();
-            slot->leases.fetch_add(1);
             return Result<std::shared_ptr<UiComputedStyleSnapshot::Storage>>::Success(std::move(slot));
         }
     };
@@ -277,14 +315,14 @@ namespace Horo::Runtime::Ui {
         if (!descriptor.IsValid())
             return StyleInternal::Failure<UiStyleResolver>(UiErrors::StyleInvalid);
         try {
-            return Result<UiStyleResolver>::Success(UiStyleResolver{std::make_unique<Storage>(descriptor)});
+            return Result<UiStyleResolver>::Success(UiStyleResolver{std::make_shared<Storage>(descriptor)});
         } catch (const std::bad_alloc &) {
             return StyleInternal::Failure<UiStyleResolver>(UiErrors::CapacityExceeded);
         }
     }
 
     /** @copydoc UiStyleResolver::UiStyleResolver */
-    UiStyleResolver::UiStyleResolver(std::unique_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
+    UiStyleResolver::UiStyleResolver(std::shared_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
 
     /** @copydoc UiStyleResolver::~UiStyleResolver */
     UiStyleResolver::~UiStyleResolver() {
@@ -295,12 +333,20 @@ namespace Horo::Runtime::Ui {
     UiStyleResolver::UiStyleResolver(UiStyleResolver &&) noexcept = default;
 
     /** @copydoc UiStyleResolver::operator= */
-    UiStyleResolver &UiStyleResolver::operator=(UiStyleResolver &&) noexcept = default;
+    UiStyleResolver &UiStyleResolver::operator=(UiStyleResolver &&other) noexcept {
+        if (this != &other) {
+            Shutdown();
+            storage_ = std::move(other.storage_);
+        }
+        return *this;
+    }
 
     /** @copydoc UiStyleResolver::Invalidate */
     Result<void> UiStyleResolver::Invalidate(const UiStyleInvalidation &invalidation) {
         if (!storage_ || storage_->lifecycle != UiStyleResolverState::Active)
             return StyleInternal::Failure(UiErrors::StyleLifecycleUnavailable);
+        if (storage_->prepared)
+            return StyleInternal::Failure(UiErrors::StyleCandidateBusy);
         if (!invalidation.tree.IsValid())
             return StyleInternal::Failure(UiErrors::StyleInvalid);
         if (invalidation.kind != UiStyleInvalidationKind::All && !invalidation.element.IsValid())
@@ -338,53 +384,161 @@ namespace Horo::Runtime::Ui {
         return Result<void>::Success();
     }
 
-    /** @copydoc UiStyleResolver::Update */
-    Result<UiComputedStyleSnapshot> UiStyleResolver::Update(const UiElementTree &tree, const RuntimeStyleRegistry &registry,
-                                                            const UiStyleUpdateRequest &request) {
+    /** @copydoc UiStyleResolver::Prepare */
+    Result<UiStyleResolver::PreparedUpdate> UiStyleResolver::Prepare(const UiElementTree &tree, const RuntimeStyleRegistry &registry,
+                                                                     const UiStyleUpdateRequest &request) {
         if (!storage_ || storage_->lifecycle != UiStyleResolverState::Active)
-            return StyleInternal::Failure<UiComputedStyleSnapshot>(UiErrors::StyleLifecycleUnavailable);
+            return StyleInternal::Failure<PreparedUpdate>(UiErrors::StyleLifecycleUnavailable);
+        if (storage_->prepared)
+            return StyleInternal::Failure<PreparedUpdate>(UiErrors::StyleCandidateBusy);
         if (registry.State() != RuntimeStyleRegistryState::Active)
-            return StyleInternal::Failure<UiComputedStyleSnapshot>(UiErrors::StyleLifecycleUnavailable);
+            return StyleInternal::Failure<PreparedUpdate>(UiErrors::StyleLifecycleUnavailable);
         if (!request.sources.IsValid() || request.elements.empty() || request.elements.size() > storage_->descriptor.elementCapacity)
-            return StyleInternal::Failure<UiComputedStyleSnapshot>(UiErrors::StyleInvalid);
+            return StyleInternal::Failure<PreparedUpdate>(UiErrors::StyleInvalid);
         if (request.sources.registry != registry.Generation())
-            return StyleInternal::Failure<UiComputedStyleSnapshot>(UiErrors::StyleSourceStale);
+            return StyleInternal::Failure<PreparedUpdate>(UiErrors::StyleSourceStale);
         if (!storage_->hasPublication && request.sources.registry != storage_->descriptor.initialRegistryGeneration)
-            return StyleInternal::Failure<UiComputedStyleSnapshot>(UiErrors::StyleSourceStale);
+            return StyleInternal::Failure<PreparedUpdate>(UiErrors::StyleSourceStale);
         if (tree.State() != UiElementTreeState::Active || tree.Instance() != storage_->descriptor.instance ||
             tree.Canvas() != storage_->descriptor.canvas || tree.SourceDocument() != storage_->descriptor.document ||
             tree.SourceDocumentRevision() != request.sources.document || tree.Revision() != request.sources.tree ||
             tree.Size() != request.elements.size() || tree.Size() > storage_->descriptor.elementCapacity)
-            return StyleInternal::Failure<UiComputedStyleSnapshot>(UiErrors::StyleSourceStale);
+            return StyleInternal::Failure<PreparedUpdate>(UiErrors::StyleSourceStale);
         for (std::size_t index = 0; index < request.elements.size(); ++index)
             if (const auto valid =
                     StyleInternal::ValidateElementInput(registry, request.elements[index], storage_->descriptor.propertyCapacity);
                 valid.HasError())
-                return Result<UiComputedStyleSnapshot>::Failure(valid.ErrorValue());
+                return Result<PreparedUpdate>::Failure(valid.ErrorValue());
 
         const auto preorder = tree.Preorder(std::span<UiElementHandle>{storage_->traversalScratch.data(), tree.Size()});
         if (preorder.HasError())
-            return StyleInternal::Failure<UiComputedStyleSnapshot>(UiErrors::StyleSourceStale);
+            return StyleInternal::Failure<PreparedUpdate>(UiErrors::StyleSourceStale);
         for (std::size_t index = 0; index < request.elements.size(); ++index)
             if (request.elements[index].element != storage_->traversalScratch[index])
-                return StyleInternal::Failure<UiComputedStyleSnapshot>(UiErrors::StyleSourceStale);
+                return StyleInternal::Failure<PreparedUpdate>(UiErrors::StyleSourceStale);
 
         if (const auto prepared = storage_->PrepareCandidate(tree, request); prepared.HasError())
-            return Result<UiComputedStyleSnapshot>::Failure(prepared.ErrorValue());
+            return Result<PreparedUpdate>::Failure(prepared.ErrorValue());
         const bool sourcesChanged = !storage_->hasPublication || storage_->sources != request.sources;
         const bool anyDirty = std::ranges::any_of(storage_->candidateNodes, [](const Storage::Node &node) {
             return node.dirty;
         });
         if (!sourcesChanged && !anyDirty && storage_->invalidations.empty()) {
             storage_->current->leases.fetch_add(1);
-            return Result<UiComputedStyleSnapshot>::Success(UiComputedStyleSnapshot{storage_->current});
+            storage_->prepared = true;
+            return Result<PreparedUpdate>::Success(
+                PreparedUpdate{storage_, UiComputedStyleSnapshot{storage_->current}, false, tree, registry});
         }
         if (const auto resolved = storage_->ResolveCandidate(registry, request); resolved.HasError())
-            return Result<UiComputedStyleSnapshot>::Failure(resolved.ErrorValue());
-        auto published = storage_->Publish(request);
+            return Result<PreparedUpdate>::Failure(resolved.ErrorValue());
+        auto published = storage_->BuildSnapshot(registry, request);
         if (published.HasError())
-            return Result<UiComputedStyleSnapshot>::Failure(published.ErrorValue());
-        return Result<UiComputedStyleSnapshot>::Success(UiComputedStyleSnapshot{std::move(published).Value()});
+            return Result<PreparedUpdate>::Failure(published.ErrorValue());
+        storage_->prepared = true;
+        return Result<PreparedUpdate>::Success(
+            PreparedUpdate{storage_, UiComputedStyleSnapshot{std::move(published).Value()}, true, tree, registry});
+    }
+
+    /** @copydoc UiStyleResolver::PreparedUpdate::PreparedUpdate */
+    UiStyleResolver::PreparedUpdate::PreparedUpdate(std::shared_ptr<Storage> owner, UiComputedStyleSnapshot snapshot, const bool changes,
+                                                    const UiElementTree &tree, const RuntimeStyleRegistry &registry) noexcept
+        : owner_(std::move(owner)), snapshot_(std::move(snapshot)), changes_(changes), treeIssuer_(tree.IssuerPin()),
+          registryOwner_(registry.storage_), root_(snapshot_->Records().front().element) {}
+
+    /** @copydoc UiStyleResolver::PreparedUpdate::~PreparedUpdate */
+    UiStyleResolver::PreparedUpdate::~PreparedUpdate() {
+        Cancel();
+    }
+
+    /** @copydoc UiStyleResolver::PreparedUpdate::PreparedUpdate */
+    UiStyleResolver::PreparedUpdate::PreparedUpdate(PreparedUpdate &&other) noexcept
+        : owner_(std::move(other.owner_)), snapshot_(std::move(other.snapshot_)), changes_(other.changes_),
+          treeIssuer_(std::move(other.treeIssuer_)), registryOwner_(std::move(other.registryOwner_)), root_(other.root_) {}
+
+    /** @copydoc UiStyleResolver::PreparedUpdate::operator= */
+    UiStyleResolver::PreparedUpdate &UiStyleResolver::PreparedUpdate::operator=(PreparedUpdate &&other) noexcept {
+        if (this != &other) {
+            Cancel();
+            owner_ = std::move(other.owner_);
+            snapshot_ = std::move(other.snapshot_);
+            changes_ = other.changes_;
+            treeIssuer_ = std::move(other.treeIssuer_);
+            registryOwner_ = std::move(other.registryOwner_);
+            root_ = other.root_;
+        }
+        return *this;
+    }
+
+    /** @copydoc UiStyleResolver::PreparedUpdate::Abandon */
+    void UiStyleResolver::PreparedUpdate::Abandon() noexcept {
+        Cancel();
+    }
+
+    /** @copydoc UiStyleResolver::PreparedUpdate::Cancel */
+    void UiStyleResolver::PreparedUpdate::Cancel() noexcept {
+        if (owner_)
+            owner_->prepared = false;
+        snapshot_.reset();
+        treeIssuer_.reset();
+        registryOwner_.reset();
+        owner_.reset();
+    }
+
+    /** @copydoc UiStyleResolver::PreparedUpdate::Candidate */
+    const UiComputedStyleSnapshot &UiStyleResolver::PreparedUpdate::Candidate() const noexcept {
+        return *snapshot_;
+    }
+
+    /** @copydoc UiStyleResolver::PreparedUpdate::CanPublish */
+    Result<void> UiStyleResolver::PreparedUpdate::CanPublish(const UiElementTree &tree, const RuntimeStyleRegistry &registry) const {
+        if (!owner_ || !snapshot_ || !owner_->prepared || owner_->lifecycle != UiStyleResolverState::Active ||
+            registry.State() != RuntimeStyleRegistryState::Active)
+            return StyleInternal::Failure(UiErrors::StyleLifecycleUnavailable);
+        const auto &candidate = snapshot_->Descriptor();
+        const auto root = tree.Root();
+        if (root.HasError() || root.Value().handle != root_ || tree.IssuerPin() != treeIssuer_ || registry.storage_ != registryOwner_ ||
+            tree.State() != UiElementTreeState::Active || tree.Instance() != candidate.instance || tree.Canvas() != candidate.canvas ||
+            tree.SourceDocument() != candidate.document || tree.SourceDocumentRevision() != candidate.sources.document ||
+            tree.Revision() != candidate.sources.tree || registry.Generation() != candidate.sources.registry)
+            return StyleInternal::Failure(UiErrors::StyleSourceStale);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiStyleResolver::PublishValidated */
+    UiComputedStyleSnapshot UiStyleResolver::PublishValidated(PreparedUpdate &&candidate) noexcept {
+        if (candidate.changes_) {
+            storage_->ReleaseCurrent();
+            storage_->current = std::const_pointer_cast<UiComputedStyleSnapshot::Storage>(candidate.snapshot_->storage_);
+            storage_->current->leases.fetch_add(1);
+            storage_->activeNodes.swap(storage_->candidateNodes);
+            storage_->sources = candidate.snapshot_->Descriptor().sources;
+            storage_->publication = candidate.snapshot_->Descriptor().publication;
+            storage_->geometry = candidate.snapshot_->Descriptor().geometry;
+            storage_->hasPublication = true;
+            storage_->invalidations.clear();
+        }
+        auto published = std::move(*candidate.snapshot_);
+        candidate.Cancel();
+        return published;
+    }
+
+    /** @copydoc UiStyleResolver::Commit */
+    Result<UiComputedStyleSnapshot> UiStyleResolver::Commit(PreparedUpdate &&candidate, const UiElementTree &tree,
+                                                            const RuntimeStyleRegistry &registry) {
+        if (candidate.owner_ != storage_)
+            return StyleInternal::Failure<UiComputedStyleSnapshot>(UiErrors::StyleSourceStale);
+        if (const auto admitted = candidate.CanPublish(tree, registry); admitted.HasError())
+            return Result<UiComputedStyleSnapshot>::Failure(admitted.ErrorValue());
+        return Result<UiComputedStyleSnapshot>::Success(PublishValidated(std::move(candidate)));
+    }
+
+    /** @copydoc UiStyleResolver::Update */
+    Result<UiComputedStyleSnapshot> UiStyleResolver::Update(const UiElementTree &tree, const RuntimeStyleRegistry &registry,
+                                                            const UiStyleUpdateRequest &request) {
+        auto candidate = Prepare(tree, registry, request);
+        if (candidate.HasError())
+            return Result<UiComputedStyleSnapshot>::Failure(candidate.ErrorValue());
+        return Commit(std::move(candidate).Value(), tree, registry);
     }
 
     /** @copydoc UiStyleResolver::BeginRetirement */

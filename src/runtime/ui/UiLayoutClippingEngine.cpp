@@ -367,7 +367,8 @@ namespace Horo::Runtime::Ui {
         return Result<void>::Success();
     }
 
-    Result<std::shared_ptr<UiLayoutClipSnapshot::Storage>> UiLayoutClipEngine::Storage::Publish(const UiLayoutSnapshotDescriptor &source) {
+    Result<std::shared_ptr<UiLayoutClipSnapshot::Storage>> UiLayoutClipEngine::Storage::BuildInactive(
+        const UiLayoutSnapshotDescriptor &source) {
         auto slot = TryAcquire();
         if (!slot)
             return Failure<std::shared_ptr<UiLayoutClipSnapshot::Storage>>(UiErrors::LayoutClipSnapshotStorageExhausted);
@@ -384,9 +385,6 @@ namespace Horo::Runtime::Ui {
         std::ranges::sort(slot->recordLookup, {}, [&records = slot->records](const std::uint32_t index) {
             return records[index].element;
         });
-        ReleaseCurrent();
-        current = slot;
-        slot->leases.fetch_add(1);
         return Result<std::shared_ptr<UiLayoutClipSnapshot::Storage>>::Success(std::move(slot));
     }
 
@@ -395,14 +393,14 @@ namespace Horo::Runtime::Ui {
         if (!descriptor.IsValid())
             return Failure<UiLayoutClipEngine>(UiErrors::LayoutClipInvalid);
         try {
-            return Result<UiLayoutClipEngine>::Success(UiLayoutClipEngine{std::make_unique<Storage>(descriptor)});
+            return Result<UiLayoutClipEngine>::Success(UiLayoutClipEngine{std::make_shared<Storage>(descriptor)});
         } catch (const std::bad_alloc &) {
             return Failure<UiLayoutClipEngine>(UiErrors::CapacityExceeded);
         }
     }
 
     /** @copydoc UiLayoutClipEngine::UiLayoutClipEngine */
-    UiLayoutClipEngine::UiLayoutClipEngine(std::unique_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
+    UiLayoutClipEngine::UiLayoutClipEngine(std::shared_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
 
     /** @copydoc UiLayoutClipEngine::~UiLayoutClipEngine */
     UiLayoutClipEngine::~UiLayoutClipEngine() {
@@ -413,35 +411,120 @@ namespace Horo::Runtime::Ui {
     UiLayoutClipEngine::UiLayoutClipEngine(UiLayoutClipEngine &&other) noexcept = default;
 
     /** @copydoc UiLayoutClipEngine::operator= */
-    UiLayoutClipEngine &UiLayoutClipEngine::operator=(UiLayoutClipEngine &&other) noexcept = default;
+    UiLayoutClipEngine &UiLayoutClipEngine::operator=(UiLayoutClipEngine &&other) noexcept {
+        if (this != &other) {
+            Shutdown();
+            storage_ = std::move(other.storage_);
+        }
+        return *this;
+    }
 
     /** @copydoc UiLayoutClipEngine::Update */
     Result<UiLayoutClipSnapshot> UiLayoutClipEngine::Update(const UiElementTree &tree, const UiLayoutSnapshot &layout,
                                                             const UiLayoutClipUpdateRequest &request) {
-        if (!storage_ || storage_->lifecycle != UiLayoutClipEngineState::Active)
-            return Failure<UiLayoutClipSnapshot>(UiErrors::LayoutClipLifecycleUnavailable);
+        auto result = Prepare(tree, layout, request);
+        if (result.HasError())
+            return Result<UiLayoutClipSnapshot>::Failure(result.ErrorValue());
+        auto candidate = std::move(result).Value();
+        if (const auto valid = candidate.CanPublish(tree); valid.HasError())
+            return Result<UiLayoutClipSnapshot>::Failure(valid.ErrorValue());
+        return Result<UiLayoutClipSnapshot>::Success(PublishValidated(std::move(candidate)));
+    }
+
+    /** @copydoc UiLayoutClipEngine::Prepare */
+    Result<UiLayoutClipEngine::PreparedUpdate> UiLayoutClipEngine::Prepare(const UiElementTree &tree, const UiLayoutSnapshot &layout,
+                                                                           const UiLayoutClipUpdateRequest &request) {
+        if (!storage_ || storage_->lifecycle != UiLayoutClipEngineState::Active || storage_->prepared)
+            return Failure<PreparedUpdate>(UiErrors::LayoutClipLifecycleUnavailable);
         const auto &source = layout.Descriptor();
         const auto records = layout.Records();
         if (const auto validation = storage_->ValidateUpdate(tree, source, records, request); validation.HasError())
-            return Result<UiLayoutClipSnapshot>::Failure(validation.ErrorValue());
+            return Result<PreparedUpdate>::Failure(validation.ErrorValue());
 
         if (const auto topology = storage_->BuildParentIndex(tree, records); topology.HasError())
-            return Result<UiLayoutClipSnapshot>::Failure(topology.ErrorValue());
+            return Result<PreparedUpdate>::Failure(topology.ErrorValue());
         if (const auto bounds = storage_->BuildScrollBounds(records, request.elements); bounds.HasError())
-            return Result<UiLayoutClipSnapshot>::Failure(bounds.ErrorValue());
+            return Result<PreparedUpdate>::Failure(bounds.ErrorValue());
         if (request.bringIntoView.has_value()) {
             if (const auto reveal = storage_->ApplyBringIntoView(records, *request.bringIntoView); reveal.HasError())
-                return Result<UiLayoutClipSnapshot>::Failure(reveal.ErrorValue());
+                return Result<PreparedUpdate>::Failure(reveal.ErrorValue());
         }
         if (const auto projection = storage_->BuildProjection(records, request.elements); projection.HasError())
-            return Result<UiLayoutClipSnapshot>::Failure(projection.ErrorValue());
+            return Result<PreparedUpdate>::Failure(projection.ErrorValue());
         if (const auto projection = storage_->ValidateProjection(records.size()); projection.HasError())
-            return Result<UiLayoutClipSnapshot>::Failure(projection.ErrorValue());
+            return Result<PreparedUpdate>::Failure(projection.ErrorValue());
 
-        auto published = storage_->Publish(source);
-        if (published.HasError())
-            return Result<UiLayoutClipSnapshot>::Failure(published.ErrorValue());
-        return Result<UiLayoutClipSnapshot>::Success(UiLayoutClipSnapshot{std::move(published).Value()});
+        auto inactive = storage_->BuildInactive(source);
+        if (inactive.HasError())
+            return Result<PreparedUpdate>::Failure(inactive.ErrorValue());
+        storage_->prepared = true;
+        return Result<PreparedUpdate>::Success(PreparedUpdate{storage_, UiLayoutClipSnapshot{std::move(inactive).Value()}, tree});
+    }
+
+    /** @copydoc UiLayoutClipEngine::PreparedUpdate::PreparedUpdate */
+    UiLayoutClipEngine::PreparedUpdate::PreparedUpdate(std::shared_ptr<Storage> owner, UiLayoutClipSnapshot snapshot,
+                                                       const UiElementTree &tree) noexcept
+        : owner_(std::move(owner)), snapshot_(std::move(snapshot)), treeIssuer_(tree.IssuerPin()),
+          root_(snapshot_->Records().front().element) {}
+
+    /** @copydoc UiLayoutClipEngine::PreparedUpdate::~PreparedUpdate */
+    UiLayoutClipEngine::PreparedUpdate::~PreparedUpdate() {
+        Abandon();
+    }
+
+    /** @copydoc UiLayoutClipEngine::PreparedUpdate::PreparedUpdate */
+    UiLayoutClipEngine::PreparedUpdate::PreparedUpdate(PreparedUpdate &&other) noexcept
+        : owner_(std::move(other.owner_)), snapshot_(std::move(other.snapshot_)), treeIssuer_(std::move(other.treeIssuer_)),
+          root_(other.root_) {}
+
+    /** @copydoc UiLayoutClipEngine::PreparedUpdate::operator= */
+    UiLayoutClipEngine::PreparedUpdate &UiLayoutClipEngine::PreparedUpdate::operator=(PreparedUpdate &&other) noexcept {
+        if (this != &other) {
+            Abandon();
+            owner_ = std::move(other.owner_);
+            snapshot_ = std::move(other.snapshot_);
+            treeIssuer_ = std::move(other.treeIssuer_);
+            root_ = other.root_;
+        }
+        return *this;
+    }
+
+    /** @copydoc UiLayoutClipEngine::PreparedUpdate::Abandon */
+    void UiLayoutClipEngine::PreparedUpdate::Abandon() noexcept {
+        if (owner_)
+            owner_->prepared = false;
+        snapshot_.reset();
+        treeIssuer_.reset();
+        owner_.reset();
+    }
+
+    /** @copydoc UiLayoutClipEngine::PreparedUpdate::Candidate */
+    const UiLayoutClipSnapshot &UiLayoutClipEngine::PreparedUpdate::Candidate() const noexcept {
+        return *snapshot_;
+    }
+
+    /** @copydoc UiLayoutClipEngine::PreparedUpdate::CanPublish */
+    Result<void> UiLayoutClipEngine::PreparedUpdate::CanPublish(const UiElementTree &tree) const {
+        if (!owner_ || !snapshot_ || !owner_->prepared || owner_->lifecycle != UiLayoutClipEngineState::Active)
+            return Failure(UiErrors::LayoutClipLifecycleUnavailable);
+        const auto &source = snapshot_->Descriptor();
+        const auto root = tree.Root();
+        if (root.HasError() || root.Value().handle != root_ || tree.IssuerPin() != treeIssuer_ ||
+            tree.State() != UiElementTreeState::Active || tree.Instance() != source.instance || tree.Canvas() != source.canvas ||
+            tree.SourceDocument() != source.document || tree.SourceDocumentRevision() != source.sources.document ||
+            tree.Revision() != source.sources.tree)
+            return Failure(UiErrors::LayoutClipSourceStale);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiLayoutClipEngine::PublishValidated */
+    UiLayoutClipSnapshot UiLayoutClipEngine::PublishValidated(PreparedUpdate &&candidate) noexcept {
+        storage_->ReleaseCurrent();
+        storage_->current = std::const_pointer_cast<UiLayoutClipSnapshot::Storage>(candidate.snapshot_->storage_);
+        storage_->current->leases.fetch_add(1);
+        auto published = std::move(*candidate.snapshot_);
+        candidate.Abandon();
+        return published;
     }
 
     /** @copydoc UiLayoutClipEngine::BeginRetirement */

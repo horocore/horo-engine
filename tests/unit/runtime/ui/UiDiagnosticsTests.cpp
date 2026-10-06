@@ -40,14 +40,36 @@ namespace Horo::Runtime::Ui {
 
         TEST_CASE("Runtime UI diagnostic records map every canonical error and reject invented sources", "[runtime_ui][diagnostics]") {
             const auto descriptors = UiDiagnosticErrorDescriptors();
-            REQUIRE(descriptors.size() == 194);
+            REQUIRE(descriptors.size() == 206);
             const std::array newlyRegistered{
-                &UiErrors::CookedFormatUnsupported,     &UiErrors::CookedPayloadMalformed, &UiErrors::AssetMissing,
-                &UiErrors::AssetTypeMismatch,           &UiErrors::AssetIdentityMismatch,  &UiErrors::AssetTargetMismatch,
-                &UiErrors::AssetRegistryStale,          &UiErrors::AssetPayloadEmpty,      &UiErrors::AssetBudgetExceeded,
-                &UiErrors::AssetLoadQueueFull,          &UiErrors::AssetLoadNotReady,      &UiErrors::AssetLoadConsumed,
-                &UiErrors::AssetLoadShutdown,           &UiErrors::AssetLoadCancelled,     &UiErrors::BindingValueInvalid,
+                &UiErrors::CookedFormatUnsupported,
+                &UiErrors::CookedPayloadMalformed,
+                &UiErrors::AssetMissing,
+                &UiErrors::AssetTypeMismatch,
+                &UiErrors::AssetIdentityMismatch,
+                &UiErrors::AssetTargetMismatch,
+                &UiErrors::AssetRegistryStale,
+                &UiErrors::AssetPayloadEmpty,
+                &UiErrors::AssetBudgetExceeded,
+                &UiErrors::AssetLoadQueueFull,
+                &UiErrors::AssetLoadNotReady,
+                &UiErrors::AssetLoadConsumed,
+                &UiErrors::AssetLoadShutdown,
+                &UiErrors::AssetLoadCancelled,
+                &UiErrors::BindingValueInvalid,
                 &UiErrors::BindingLifecycleUnavailable,
+                &UiErrors::LayoutCandidateBusy,
+                &UiErrors::StyleCandidateBusy,
+                &UiErrors::ClockInputInvalid,
+                &UiErrors::ClockSourceStale,
+                &UiErrors::ClockOverflow,
+                &UiErrors::ClockUnavailable,
+                &UiErrors::AnimationPolicyInvalid,
+                &UiErrors::AnimationTargetStale,
+                &UiErrors::AnimationConflict,
+                &UiErrors::AnimationBudgetExceeded,
+                &UiErrors::AnimationLifecycleUnavailable,
+                &UiErrors::AnimationStorageExhausted,
             };
             for (const ErrorCodeDescriptor *expected : newlyRegistered)
                 REQUIRE(std::ranges::find(descriptors, expected) != descriptors.end());
