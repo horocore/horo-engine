@@ -195,6 +195,7 @@ namespace Horo::Runtime {
     /** @copydoc StagedRestoreTransaction::StagedRestoreTransaction */
     StagedRestoreTransaction::StagedRestoreTransaction(StagedRestoreTransaction &&other) noexcept
         : context_(other.context_), operation_(std::move(other.operation_)), participants_(std::move(other.participants_)),
+          referenceResolver_(std::move(other.referenceResolver_)), references_(std::move(other.references_)),
           staged_(std::move(other.staged_)), requirements_(std::move(other.requirements_)), restorePlan_(std::move(other.restorePlan_)),
           trace_(std::move(other.trace_)), state_(other.state_) {
         other.state_ = StagedRestoreTransactionState::RolledBack;
@@ -210,6 +211,8 @@ namespace Horo::Runtime {
         context_ = other.context_;
         operation_ = std::move(other.operation_);
         participants_ = std::move(other.participants_);
+        referenceResolver_ = std::move(other.referenceResolver_);
+        references_ = std::move(other.references_);
         staged_ = std::move(other.staged_);
         requirements_ = std::move(other.requirements_);
         restorePlan_ = std::move(other.restorePlan_);
@@ -282,6 +285,8 @@ namespace Horo::Runtime {
             return instantiated;
         if (auto applied = RunRestorePlanPhase(ApplyState, completedUnits, totalUnits); applied.HasError())
             return applied;
+        if (auto references = ResolveReferences(); references.HasError())
+            return references;
         if (auto fixedUp = RunRestorePlanPhase(FixupReferences, completedUnits, totalUnits); fixedUp.HasError())
             return fixedUp;
 
@@ -303,8 +308,70 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
+    /** @copydoc StagedRestoreTransaction::SetReferenceResolver */
+    Result<void> StagedRestoreTransaction::SetReferenceResolver(std::unique_ptr<IStagedRestoreReferenceResolver> resolver) {
+        if (!resolver || referenceResolver_ || state_ != StagedRestoreTransactionState::Created)
+            return Failure<void>(SaveErrors::RestoreTransitionInvalid);
+        referenceResolver_ = std::move(resolver);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc StagedRestoreTransaction::ResolveReferences */
+    Result<void> StagedRestoreTransaction::ResolveReferences() {
+        if (!referenceResolver_)
+            return Result<void>::Success();
+        try {
+            std::vector<StagedRestorePreparedParticipant> prepared;
+            prepared.reserve(staged_.size());
+            for (std::size_t index = 0; index < staged_.size(); ++index) {
+                const auto *projection = staged_[index]->PreparedState();
+                if (!projection)
+                    return FailPreparation(MakeError(SaveErrors::RestoreAdapterContractInvalid), StagedRestorePhase::FixupReferences,
+                                           index);
+                prepared.emplace_back(requirements_[index], projection);
+            }
+            auto resolved = referenceResolver_->Resolve(context_, prepared);
+            if (resolved.HasError())
+                return FailPreparation(resolved.ErrorValue(), StagedRestorePhase::FixupReferences, requirements_.size());
+            if (const auto generation = resolved.Value().Generation(); generation.registry != context_.registryGeneration ||
+                                                                       generation.session != context_.sessionGeneration ||
+                                                                       generation.candidateScene == 0)
+                return FailPreparation(MakeError(SaveErrors::RestoreActivationStale), StagedRestorePhase::FixupReferences,
+                                       requirements_.size());
+            for (const auto &reference : resolved.Value().Results())
+                if (FindRequirement(requirements_, reference.owner) == requirements_.size())
+                    return FailPreparation(MakeError(SaveErrors::RestoreParticipantInvalid), StagedRestorePhase::FixupReferences,
+                                           requirements_.size());
+            references_ = std::move(resolved).Value();
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            return FailPreparation(MakeError(SaveErrors::RestoreAllocationFailed), StagedRestorePhase::FixupReferences,
+                                   requirements_.size());
+        } catch (...) {
+            // Module-owned resolvers may throw non-standard exceptions; rollback must still precede any activation.
+            return FailPreparation(MakeError(SaveErrors::RestoreAdapterContractInvalid), StagedRestorePhase::FixupReferences,
+                                   requirements_.size());
+        }
+    }
+
     /** @copydoc StagedRestoreTransaction::Activate */
     Result<void> StagedRestoreTransaction::Activate(const StagedRestoreActivationEvidence evidence) {
+        /** @brief Empty transfer for compositions whose entire bundle consists of staged participants. */
+        class ParticipantOnlyPublication final : public IStagedRestoreAggregatePublication {
+        public:
+            void PublishPrepared() noexcept override {
+                // Participant publication owns every root in this composition; there is no additional aggregate to transfer.
+            }
+        };
+
+        ParticipantOnlyPublication aggregate;
+
+        return Activate(evidence, aggregate);
+    }
+
+    /** @copydoc StagedRestoreTransaction::Activate */
+    Result<void> StagedRestoreTransaction::Activate(const StagedRestoreActivationEvidence evidence,
+                                                    IStagedRestoreAggregatePublication &aggregate) {
         if (state_ != StagedRestoreTransactionState::ReadyToActivate)
             return Failure<void>(SaveErrors::RestoreTransitionInvalid);
         if (evidence.registryGeneration != context_.registryGeneration || evidence.sessionGeneration != context_.sessionGeneration ||
@@ -327,6 +394,7 @@ namespace Horo::Runtime {
             staged_[index]->PublishPrepared();
             Record(StagedRestorePhase::Activate, StagedRestoreEventOutcome::Succeeded, index);
         }
+        aggregate.PublishPrepared();
         state_ = StagedRestoreTransactionState::Activated;
         // Publication cannot be reversed safely; this impossible bookkeeping violation is a host fault under the save architecture.
         if (operation_.Complete(SaveOperationCommitOutcome::Committed) != SaveOperationTransitionResult::Applied)
@@ -446,7 +514,9 @@ namespace Horo::Runtime {
                     result = staged_[participantIndex]->ApplyState(dependencies);
                     break;
                 case FixupReferences:
-                    result = staged_[participantIndex]->FixupReferences(dependencies);
+                    result =
+                        staged_[participantIndex]->FixupReferences(dependencies,
+                                                                   references_.ForParticipant(requirements_[participantIndex].participant));
                     break;
                 default:
                     result = Failure<void>(SaveErrors::RestoreTransitionInvalid);

@@ -152,11 +152,27 @@ namespace Horo::Runtime {
                 }();
             }
 
-            [[nodiscard]] Result<void> FixupReferences(const ICanonicalRestoreDependencyLookup &) override {
+            [[nodiscard]] Result<void> FixupReferences(const ICanonicalRestoreDependencyLookup &dependencies) override {
+                return FixupReferences(dependencies, {});
+            }
+
+            [[nodiscard]] Result<void> FixupReferences(const ICanonicalRestoreDependencyLookup &,
+                                                       const SaveRestoreReferenceView &references) override {
                 if (!candidate_)
                     return Result<void>::Failure(MakeError(SaveErrors::RestoreAdapterContractInvalid));
-                ready_ = true;
-                return Result<void>::Success();
+                auto allocationFailure = Result<void>::Failure(MakeError(SaveErrors::RestoreAllocationFailed));
+                auto callbackFailure = Result<void>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed));
+                try {
+                    if (auto fixed = candidate_->FixupRuntimeReferences(references); fixed.HasError())
+                        return fixed;
+                    ready_ = true;
+                    return Result<void>::Success();
+                } catch (const std::bad_alloc &) {
+                    return allocationFailure;
+                } catch (...) {
+                    // Project fixups may throw non-standard exceptions; no such exception may escape the restore boundary.
+                    return callbackFailure;
+                }
             }
 
             void PublishPrepared() noexcept override {

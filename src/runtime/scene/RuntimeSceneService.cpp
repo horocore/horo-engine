@@ -69,6 +69,26 @@ namespace Horo::Runtime {
         std::size_t residentBytes{};
     };
 
+    /** @brief Keeps observer-triggered shutdown outside preparation, rollback, publication and retirement stacks. */
+    struct RuntimeSceneService::LifecycleMutation final {
+        explicit LifecycleMutation(RuntimeSceneService &service) noexcept
+            : service(service), outer(!std::exchange(service.mutatingLifecycle_, true)) {}
+
+        ~LifecycleMutation() {
+            if (!outer)
+                return;
+            service.mutatingLifecycle_ = false;
+            if (std::exchange(service.shutdownDeferred_, false) && !service.shutdown_)
+                service.Shutdown();
+        }
+
+        LifecycleMutation(const LifecycleMutation &) = delete;
+        LifecycleMutation &operator=(const LifecycleMutation &) = delete;
+
+        RuntimeSceneService &service;
+        bool outer{};
+    };
+
     RuntimeSceneService::RuntimeSceneService() = default;
 
     RuntimeSceneService::RuntimeSceneService(Assets::AssetRegistry &registry, Assets::AssetLoadService &loads,
@@ -100,8 +120,9 @@ namespace Horo::Runtime {
                                                                            const RuntimeSceneConfig config) {
         if (shutdown_)
             return Result<void>::Failure(MakeError(SceneErrors::ServiceShutdown));
-        if (transition_ != TransitionKind::None || structuralCommands_ || preparation_)
+        if (mutatingLifecycle_ || transition_ != TransitionKind::None || structuralCommands_ || preparation_)
             return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
+        const LifecycleMutation mutation{*this};
         if (publicationCheck) {
             if (const auto valid = publicationCheck->ValidatePublication(); valid.HasError())
                 return valid;
@@ -110,6 +131,27 @@ namespace Horo::Runtime {
         const auto admitted = BeginPreparation(std::move(definition), config);
         if (admitted.HasValue())
             publicationCheck_ = std::move(publicationCheck);
+        return admitted;
+    }
+
+    /** @copydoc RuntimeSceneService::QueuePreparationWithRestore */
+    Result<void> RuntimeSceneService::QueuePreparationWithRestore(RuntimeSceneDefinition definition,
+                                                                  std::unique_ptr<SceneAggregateRestore> restore,
+                                                                  const RuntimeSceneConfig config) {
+        if (!restore)
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
+        if (shutdown_)
+            return Result<void>::Failure(MakeError(SceneErrors::ServiceShutdown));
+        if (mutatingLifecycle_ || transition_ != TransitionKind::None || structuralCommands_ || preparation_)
+            return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
+        const LifecycleMutation mutation{*this};
+        operationError_.reset();
+        aggregateRestore_ = std::move(restore);
+        const auto admitted = BeginPreparation(std::move(definition), config);
+        if (admitted.HasError()) {
+            aggregateRestore_->Rollback();
+            aggregateRestore_.reset();
+        }
         return admitted;
     }
 
@@ -169,12 +211,18 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeSceneService::QueueUnload */
     Result<void> RuntimeSceneService::QueueUnload() {
+        if (mutatingLifecycle_)
+            return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
+        const LifecycleMutation mutation{*this};
         using enum TransitionKind;
         if (transition_ == Unload)
             return Result<void>::Success();
         if (structuralCommands_)
             return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
         CancelPreparation(false);
+        if (aggregateRestore_)
+            aggregateRestore_->Rollback();
+        aggregateRestore_.reset();
         ShutdownCandidates(pending_.candidates);
         pending_.scene.reset();
         publicationCheck_.reset();
@@ -189,7 +237,7 @@ namespace Horo::Runtime {
     Result<void> RuntimeSceneService::QueueStructuralCommands(SceneCommandBuffer commands) {
         if (!active_.scene)
             return Result<void>::Failure(MakeError(SceneErrors::NoActiveScene));
-        if (transition_ != TransitionKind::None || structuralCommands_ || preparation_)
+        if (mutatingLifecycle_ || transition_ != TransitionKind::None || structuralCommands_ || preparation_)
             return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
         const auto revision = assetRegistry_ ? assetRegistry_->Snapshot().Revision() : Assets::AssetRegistryRevision{};
         if (auto admission = commands.ValidateAdmission(active_.scene->View().RuntimeId(), revision); admission.HasError())
@@ -230,6 +278,8 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeSceneService::Startup */
     Result<void> RuntimeSceneService::Startup(const CancellationToken &cancellation) {
+        if (mutatingLifecycle_)
+            return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
         if (cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Scene service startup was cancelled."));
         started_ = true;
@@ -240,6 +290,9 @@ namespace Horo::Runtime {
     /** @copydoc RuntimeSceneService::OnPhase */
     Result<void> RuntimeSceneService::OnPhase(const RuntimePhase phase, const FrameContext &) {
         if (phase == RuntimePhase::CommitDeferredLifecycleChanges) {
+            if (mutatingLifecycle_)
+                return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
+            const LifecycleMutation mutation{*this};
             if (preparation_ && publicationCheck_) {
                 if (const auto valid = publicationCheck_->ValidatePublication(); valid.HasError()) {
                     operationError_ = valid.ErrorValue();
@@ -261,7 +314,15 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeSceneService::Shutdown */
     void RuntimeSceneService::Shutdown() noexcept {
+        if (mutatingLifecycle_) {
+            shutdownDeferred_ = true;
+            return;
+        }
+        const LifecycleMutation mutation{*this};
         CancelPreparation(true);
+        if (aggregateRestore_)
+            aggregateRestore_->Rollback();
+        aggregateRestore_.reset();
         structuralCommands_.reset();
         structuralResult_.reset();
         operationError_.reset();
@@ -269,6 +330,7 @@ namespace Horo::Runtime {
         pending_.scene.reset();
         publicationCheck_.reset();
         ShutdownCandidates(active_.candidates);
+        active_.restore.reset();
         active_.scene.reset();
         transition_ = TransitionKind::None;
         started_ = false;
@@ -348,7 +410,16 @@ namespace Horo::Runtime {
             return Result<void>::Failure(candidate.ErrorValue());
         ++nextRuntimeId_;
         pending_.scene = std::move(candidate).Value();
+        if (aggregateRestore_) {
+            if (const auto prepared = aggregateRestore_->PrepareScene(*pending_.scene); prepared.HasError()) {
+                aggregateRestore_->Rollback();
+                pending_.scene.reset();
+                return prepared;
+            }
+        }
         if (const auto prepared = PrepareParticipants(definition); prepared.HasError()) {
+            if (aggregateRestore_)
+                aggregateRestore_->Rollback();
             pending_.scene.reset();
             return Result<void>::Failure(prepared.ErrorValue());
         }
@@ -359,9 +430,9 @@ namespace Horo::Runtime {
         if (!preparation_)
             return;
         if (const Result<void> processed = ProcessCompletedPreparationLoads(); processed.HasError()) {
-            operationError_ = processed.ErrorValue();
+            const Error error = processed.ErrorValue();
             CancelPreparation(false);
-            publicationCheck_.reset();
+            RejectPendingPublication(error);
             return;
         }
         if (preparation_->activeLoads != 0 || std::ranges::any_of(preparation_->entries, [](const Preparation::Entry &entry) {
@@ -369,9 +440,9 @@ namespace Horo::Runtime {
         }))
             return;
         if (const Result<void> finalized = FinalizePreparation(); finalized.HasError()) {
-            operationError_ = finalized.ErrorValue();
+            const Error error = finalized.ErrorValue();
             CancelPreparation(false);
-            publicationCheck_.reset();
+            RejectPendingPublication(error);
         }
     }
 
@@ -386,60 +457,6 @@ namespace Horo::Runtime {
                 if (entry.load)
                     static_cast<void>(entry.load->Wait());
         preparation_.reset();
-    }
-
-    Result<void> RuntimeSceneService::CommitDeferredChanges() {
-        using enum TransitionKind;
-        if (structuralCommands_) {
-            const auto revision = assetRegistry_ ? assetRegistry_->Snapshot().Revision() : Assets::AssetRegistryRevision{};
-            auto admitted = structuralCommands_->ValidateAdmission(active_.scene->View().RuntimeId(), revision);
-            Result<StructuralCommitResult> committed =
-                admitted.HasValue()
-                    ? active_.scene->CommitWithRegistry(*structuralCommands_, assetRegistry_, structuralParticipants_, &operationError_)
-                    : Result<StructuralCommitResult>::Failure(admitted.ErrorValue());
-            structuralCommands_.reset();
-            if (committed.HasError())
-                operationError_ = committed.ErrorValue();
-            else
-                structuralResult_ = std::move(committed).Value();
-        }
-        if (transition_ == Activate) {
-            if (publicationCheck_) {
-                const auto valid = publicationCheck_->ValidatePublication();
-                if (valid.HasError()) {
-                    RejectPendingPublication(valid.ErrorValue());
-                    return Result<void>::Success();
-                }
-            }
-            for (const auto &candidate : pending_.candidates) {
-                if (const Result<void> result = candidate->ValidatePublication(); result.HasError()) {
-                    RejectPendingPublication(result.ErrorValue());
-                    return Result<void>::Success();
-                }
-            }
-            for (const auto &candidate : pending_.candidates)
-                candidate->Publish();
-            SceneAggregate retired = std::move(active_);
-            active_ = std::move(pending_);
-            publicationCheck_.reset();
-            ShutdownCandidates(retired.candidates);
-            retired.scene.reset();
-        } else if (transition_ == Unload) {
-            SceneAggregate retired = std::move(active_);
-            ShutdownCandidates(retired.candidates);
-            retired.scene.reset();
-        }
-        transition_ = None;
-        return Result<void>::Success();
-    }
-
-    /** @copydoc RuntimeSceneService::RejectPendingPublication */
-    void RuntimeSceneService::RejectPendingPublication(Error error) {
-        operationError_ = std::move(error);
-        ShutdownCandidates(pending_.candidates);
-        pending_.scene.reset();
-        publicationCheck_.reset();
-        transition_ = TransitionKind::None;
     }
 
     Result<void> RuntimeSceneService::PrepareParticipants(const RuntimeSceneDefinition &definition) {
