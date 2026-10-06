@@ -2061,6 +2061,7 @@ target_link_libraries(HoroFoundationValidationResultTests PRIVATE HoroEngine::Fo
 add_executable(HoroFoundationJobSystemTests
         unit/foundation/JobSystemTests.cpp
         unit/foundation/JobAdmissionTests.cpp
+        unit/foundation/JobAdmissionTelemetryTests.cpp
         support/AllocationProbe.cpp
 )
 
@@ -2070,6 +2071,7 @@ target_link_libraries(HoroFoundationJobSystemTests PRIVATE HoroEngine::Foundatio
 # Excluded from ALL and CTest discovery so ordinary builds do not silently add another test/build stream.
 add_executable(HoroJobAdmissionThreadFallbackTests EXCLUDE_FROM_ALL
         unit/foundation/JobAdmissionTests.cpp
+        unit/foundation/JobAdmissionTelemetryTests.cpp
         support/AllocationProbe.cpp)
 target_compile_features(HoroJobAdmissionThreadFallbackTests PRIVATE cxx_std_20)
 target_compile_definitions(HoroJobAdmissionThreadFallbackTests PRIVATE HORO_JOB_TEST_FORCE_THREAD_FALLBACK=1)
