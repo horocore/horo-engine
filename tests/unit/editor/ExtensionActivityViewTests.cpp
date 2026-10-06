@@ -1,3 +1,4 @@
+#include "AllocationProbe.h"
 #include "EditorActivityPackageSupport.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorGuiContext.h"
@@ -16,6 +17,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <memory>
+#include <new>
+#include <optional>
 #include <type_traits>
 
 static_assert(!std::is_copy_constructible_v<Horo::Editor::ExtensionActivityView>);
@@ -31,6 +35,8 @@ namespace {
     public:
         std::size_t creates{};
         std::size_t destroys{};
+        bool failAfterUpload{};
+        std::optional<Horo::Tests::AllocationProbe::ScopedFailure> uploadFailure;
 
         Result<void> Initialize() override {
             return Result<void>::Success();
@@ -47,6 +53,8 @@ namespace {
         Result<std::uintptr_t> CreateTexture(const EditorRgba8ImageView &image) override {
             REQUIRE(image.IsValid());
             ++creates;
+            if (failAfterUpload)
+                uploadFailure.emplace();
             return Result<std::uintptr_t>::Success(42);
         }
 
@@ -55,10 +63,20 @@ namespace {
                 ++destroys;
         }
 
-        void Shutdown() noexcept override {}
+        void Shutdown() noexcept override {
+            // This recorder owns no native renderer; texture withdrawal is checked through DestroyTexture.
+        }
+    };
+
+    struct ImGuiContextDeleter {
+        void operator()(ImGuiContext *context) const noexcept {
+            ImGui::DestroyContext(context);
+        }
     };
 
     struct Gui final {
+        // Last destroyed, including on constructor failure: all borrowed font/context members expire first.
+        std::unique_ptr<ImGuiContext, ImGuiContextDeleter> imgui{ImGui::CreateContext()};
         EngineDataBus engine;
         EditorDataBus editor;
         LocalizationService localization{LocaleTag{"tr-TR"}};
@@ -68,7 +86,6 @@ namespace {
         EditorGuiContext context{engine, editor, localization, theme, settings};
 
         Gui() {
-            ImGui::CreateContext();
             auto &io = ImGui::GetIO();
             io.DisplaySize = {640, 480};
             io.DeltaTime = 1.0F / 60.0F;
@@ -81,10 +98,58 @@ namespace {
             settings.settings.languageTag = "tr-TR";
         }
 
-        ~Gui() {
-            ImGui::DestroyContext();
-        }
+        Gui(const Gui &) = delete;
+        Gui &operator=(const Gui &) = delete;
+        Gui(Gui &&) = delete;
+        Gui &operator=(Gui &&) = delete;
     };
+
+    static_assert(!std::is_copy_constructible_v<Gui> && !std::is_move_constructible_v<Gui>);
+
+    TEST_CASE("Activity texture candidates retire on allocation failure without stealing the published cache",
+              "[unit][editor][Activity][ownership]") {
+        Horo::Tests::EditorActivityPackage package;
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8}};
+        auto host = std::make_shared<Extensions::EditorActivityHost>(jobs);
+        Extensions::ExtensionManager manager{nullptr,
+                                             Extensions::ExtensionHostProfile::Interactive,
+                                             {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                                             Horo::Tests::CreateAcceptingArtifactGate(),
+                                             {},
+                                             {},
+                                             host};
+        REQUIRE(manager.LoadExtension(package.root.string()).HasValue());
+        host->Update();
+        Gui gui;
+        RecordingRenderer renderer;
+        ExtensionActivityView view{gui.context, host.get(), &renderer};
+        renderer.failAfterUpload = true;
+        CHECK_THROWS_AS(view.Update(), std::bad_alloc);
+        CHECK(renderer.creates == 1);
+        CHECK(renderer.destroys == 1);
+        CHECK(view.Count(false, 0) == 0);
+        renderer.failAfterUpload = false;
+        view.Update();
+        REQUIRE(view.Count(false, 0) == 1);
+        CHECK(renderer.creates == 2);
+        gui.settings.settings.languageTag = "en-US";
+        bool failed{};
+        {
+            const Horo::Tests::AllocationProbe::ScopedFailure failure;
+            try {
+                view.Update();
+            } catch (const std::bad_alloc &) {
+                failed = true;
+            }
+        }
+        REQUIRE(failed);
+        CHECK(view.Count(false, 0) == 1);
+        CHECK(renderer.creates == 2);
+        CHECK(renderer.destroys == 1);
+        view.Update();
+        CHECK(renderer.creates == 2);
+        CHECK(renderer.destroys == 1);
+    }
 
     void CheckDrawerFocusAndNarrowFrames(ExtensionActivityView &view) {
         for (int frame = 0; frame < 3; ++frame) {
@@ -135,7 +200,7 @@ namespace {
 
     void CheckPlacementAndStaleMove(ExtensionActivityView &view, const std::shared_ptr<Extensions::EditorActivityHost> &host,
                                     const Extensions::EditorSurfaceProviderIdentity &provider, EditorWorkspaceController &workspace,
-                                    const std::string &leftPanel) {
+                                    const std::string_view leftPanel) {
         REQUIRE(view.QueueMove(provider, "fixture.activity", {Extensions::EditorActivitySide::Right, 1, 0}));
         CHECK(view.Count(false, 0) == 1);  // Draw-side command only queues; Update owns publication.
         view.Update();
@@ -161,7 +226,7 @@ namespace {
     }
 
     void CheckBottomMouseActivation(ExtensionActivityView &view, const std::shared_ptr<Extensions::EditorActivityHost> &host,
-                                    EditorWorkspaceController &workspace, const std::string &leftPanel) {
+                                    EditorWorkspaceController &workspace, const std::string_view leftPanel) {
         REQUIRE(host->Registry().Close("fixture.activity").HasValue());
         host->Update();
         view.Update();

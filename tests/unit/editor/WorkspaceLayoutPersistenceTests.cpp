@@ -1,10 +1,13 @@
+#include "../../support/AllocationProbe.h"
 #include "../../support/OwnedTestDirectory.h"
 #include "Horo/Editor/WorkspaceLayoutPersistence.h"
 #include "Horo/Editor/WorkspacePanelHost.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
+#include <format>
 #include <fstream>
+#include <new>
 #include <type_traits>
 
 using namespace Horo::Editor;
@@ -13,6 +16,37 @@ static_assert(!std::is_copy_constructible_v<Horo::Tests::OwnedTestDirectory> &&
               !std::is_move_constructible_v<Horo::Tests::OwnedTestDirectory>);
 static_assert(!std::is_copy_constructible_v<SplitNode> && std::is_nothrow_move_constructible_v<SplitNode>);
 static_assert(std::is_nothrow_move_constructible_v<LayoutNode> && std::is_nothrow_move_assignable_v<LayoutNode>);
+
+TEST_CASE("Split parsing releases every owned allocation when any allocation fails", "[unit][editor][persistence][ownership]") {
+    namespace Probe = Horo::Tests::AllocationProbe;
+    constexpr std::string_view json =
+        R"({"schemaVersion":3,"root":{"type":"split","id":"root","axis":"horizontal","ratio":0.5,"first":{"type":"panel","id":"first","panel":"first.panel"},"second":{"type":"panel","id":"second","panel":"second.panel"}}})";
+    REQUIRE(WorkspaceLayoutPersistence::Deserialize(json));
+    const auto before = Probe::Count();
+    {
+        static_cast<void>(WorkspaceLayoutPersistence::Deserialize(json));
+    }
+    const auto successfulAllocations = Probe::Count() - before;
+    REQUIRE(successfulAllocations >= 2);
+    for (std::size_t index = 0; index < successfulAllocations; ++index) {
+        const auto allocationsBefore = Probe::Count();
+        const auto freesBefore = Probe::FreeCount();
+        bool failed{};
+        {
+            const Probe::ScopedFailure failure{index};
+            try {
+                static_cast<void>(WorkspaceLayoutPersistence::Deserialize(json));
+            } catch (const std::bad_alloc &) {
+                failed = true;
+            }
+        }
+        const auto allocations = Probe::Count() - allocationsBefore;
+        const auto frees = Probe::FreeCount() - freesBefore;
+        CHECK(failed);
+        // Count includes the one failed request; all successful requests must have been freed.
+        CHECK(allocations == frees + 1);
+    }
+}
 
 TEST_CASE("Split children transfer exclusive ownership into the layout variant", "[unit][editor][persistence][ownership]") {
     SplitNode split;
@@ -119,7 +153,7 @@ TEST_CASE("Workspace serialization accepts registry state bounds without unbound
     WorkspacePanelHost host;
     for (unsigned index = 0; index < 512; ++index)
         host.Layout().surfaces.push_back(
-            {"fixture.surface." + std::to_string(index), "fixture.package", "fixture.module", false, false, true, {}});
+            {std::format("fixture.surface.{}", index), "fixture.package", "fixture.module", false, false, true, {}});
     for (unsigned index = 0; index < 128; ++index)
         host.Layout().surfaces[index].state.resize(8192, 255);
     const auto encoded = WorkspaceLayoutPersistence::Serialize(host.Layout());

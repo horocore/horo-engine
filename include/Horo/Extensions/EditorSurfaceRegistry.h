@@ -92,8 +92,8 @@ namespace Horo::Extensions {
 
         /** @brief Returns whether the request changed the host-owned state. */
         [[nodiscard]] bool Changed() const noexcept {
-            return kind == EditorSurfaceOperationKind::Opened || kind == EditorSurfaceOperationKind::Focused ||
-                   kind == EditorSurfaceOperationKind::Closed;
+            using enum EditorSurfaceOperationKind;
+            return kind == Opened || kind == Focused || kind == Closed;
         }
     };
 

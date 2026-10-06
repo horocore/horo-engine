@@ -86,10 +86,19 @@ long localized labels and narrow drawers through the real host composition.
 
 The current change stages `EditorActivityAbi.h` in the source-free SDK and
 publishes ABI minor 4 in its compatibility metadata. `ExtensionManager` appends
-an optional `EditorActivityHost` composition parameter. `GuiScreenHost` appends an
-optional native-artifact gate and composes that host with its application job
-system. Existing callers compile with the omitted arguments and keep the
-previous fail-closed native-load policy.
+an optional `EditorActivityHost` composition parameter. `GuiScreenHost` now takes
+the GUI context and a `GuiScreenHostComposition` value rather than sixteen
+positional arguments. Application service references and optional service pointers
+remain borrowed and must outlive the host; screen/panel registry values transfer
+into host ownership, and the shared native-artifact gate retains its verification
+authority. This is a C++ source migration, not an installed C11 ABI change.
+Callers must place the former arguments in the composition's named fields and
+rebuild. HoroEditor, the lifecycle fixtures and the full UI test host use the new
+constructor; the GUI public-header consumer checks its aggregate/constructor
+contract. Omitting the artifact gate still preserves fail-closed native loading.
+The bundle itself is inert: explicit host helpers register services, activate
+extensions, and publish initial status items in their original order. Member
+destruction order and shutdown revocation are unchanged.
 
 The production HoroEditor caller currently supplies no native-artifact gate.
 There is no existing editor trusted-root/envelope configuration to reuse. The

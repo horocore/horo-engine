@@ -9,7 +9,7 @@
 namespace {
     Horo::Editor::LocalizationCatalog Catalog(const char *locale, const char *text) {
         Horo::Editor::LocalizationCatalog catalog{.locale = Horo::Editor::LocaleTag{locale}};
-        catalog.messages.emplace(Horo::Editor::MessageKey{"editor", "settings.title"}, text);
+        catalog.messages.try_emplace(Horo::Editor::MessageKey{"editor", "settings.title"}, text);
         return catalog;
     }
 

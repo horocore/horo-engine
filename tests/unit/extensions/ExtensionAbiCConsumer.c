@@ -20,6 +20,12 @@ _Static_assert(_Generic((HoroRegisterEditorActivityFunc)0,
                    HoroExtensionStatus (*)(void *, const struct HoroEditorActivityDescriptor *, struct HoroEditorActivitySessionApi *): 1,
                    default: 0),
                "C11 registration callback source contract is unchanged");
+_Static_assert(_Generic((HoroEditorActivityActionFunc)0,
+                   HoroExtensionStatus (*)(void *, const HoroEditorActivityAction *, const HoroEditorActivitySnapshotSink *): 1,
+                   default: 0),
+               "C11 action callback source contract is unchanged");
+_Static_assert(offsetof(HoroEditorActivityDescriptor, structSize) == 0, "Activity descriptor starts with its size");
+_Static_assert(offsetof(HoroEditorActivitySessionApi, structSize) == 0, "Activity session starts with its size");
 
 /** @brief Compile the public ABI as C, independently of C++ language extensions. */
 int main(void) {

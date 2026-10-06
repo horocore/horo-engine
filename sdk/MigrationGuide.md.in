@@ -166,3 +166,11 @@ lane. Semantic actions run through the application job system with cancellation
 and module-code leases; their borrowed result sink is valid only during that call.
 Discard the session before module unload. Package icon resources use the bounded
 static SVG profile documented in the engine migration guide.
+
+The shared activity header keeps its C11 typedef spellings and exposes the same
+struct names directly to C++ consumers; its action callback uses an equivalent
+C++ type alias. These declaration-only differences do not alter transport layout,
+numeric constants, callback signatures, or version negotiation. No package data
+migration is required. Both the strict C11 consumer and C++ public-header consumer
+check the append-only host prefix and callback contracts; the relocated installed
+SDK consumer remains the packaging compatibility check.

@@ -16,6 +16,26 @@
 
 namespace Horo::Extensions::Tests {
     namespace {
+        /** @brief Releases the fixture's held provider before manager/job teardown; never owns or outlives the loaded library. */
+        class ReleaseBarrier final {
+        public:
+            explicit ReleaseBarrier(void (*callback)(std::uint32_t)) : release_(callback) {}
+
+            ReleaseBarrier(const ReleaseBarrier &) = delete;
+            ReleaseBarrier &operator=(const ReleaseBarrier &) = delete;
+            ReleaseBarrier(ReleaseBarrier &&) = delete;
+            ReleaseBarrier &operator=(ReleaseBarrier &&) = delete;
+
+            ~ReleaseBarrier() {
+                release_(0);
+            }
+
+        private:
+            void (*release_)(std::uint32_t);
+        };
+
+        static_assert(!std::is_copy_constructible_v<ReleaseBarrier> && !std::is_move_constructible_v<ReleaseBarrier>);
+
         void RequirePackageLoad(ExtensionManager &manager, const std::filesystem::path &path) {
             const auto loaded = manager.LoadExtension(path.string());
             if (loaded.HasError()) {
@@ -121,23 +141,6 @@ namespace Horo::Extensions::Tests {
         host->Update();
         const auto provider = host->Prepared().front().surface.descriptor.provider;
 
-        struct ReleaseBarrier {
-            void (*release)(std::uint32_t);
-
-            explicit ReleaseBarrier(void (*callback)(std::uint32_t)) : release(callback) {}
-
-            ReleaseBarrier(const ReleaseBarrier &) = delete;
-            ReleaseBarrier &operator=(const ReleaseBarrier &) = delete;
-            ReleaseBarrier(ReleaseBarrier &&) = delete;
-            ReleaseBarrier &operator=(ReleaseBarrier &&) = delete;
-
-            ~ReleaseBarrier() {
-                release(0);
-            }
-        };
-
-        static_assert(!std::is_copy_constructible_v<ReleaseBarrier> && !std::is_move_constructible_v<ReleaseBarrier>);
-
         hold(1);
         ReleaseBarrier release{hold};
         REQUIRE(host->QueueAction(provider, "fixture.activity", "fixture.run", "fixture.run", 1).HasValue());
@@ -173,9 +176,9 @@ namespace Horo::Extensions::Tests {
         REQUIRE(output);
     }
 
-    void CheckInvalidCapability(Horo::Tests::EditorActivityPackage &package, const std::shared_ptr<EditorActivityHost> &host) {
-        RewriteFixtureManifest(package, "\"requiredCapabilities\":[\"editor.activity\"]",
-                               "\"requiredCapabilities\":[\"editor.activity_item\"]");
+    void CheckInvalidCapability(const Horo::Tests::EditorActivityPackage &package, const std::shared_ptr<EditorActivityHost> &host) {
+        RewriteFixtureManifest(package, R"("requiredCapabilities":["editor.activity"])",
+                               R"("requiredCapabilities":["editor.activity_item"])");
         ExtensionManager manager{nullptr,
                                  ExtensionHostProfile::Interactive,
                                  {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
@@ -189,17 +192,16 @@ namespace Horo::Extensions::Tests {
         CHECK(host->Prepared().empty());
     }
 
-    void CheckMissingCapability(Horo::Tests::EditorActivityPackage &package, const std::shared_ptr<EditorActivityHost> &host) {
+    void CheckMissingCapability(const Horo::Tests::EditorActivityPackage &package, const std::shared_ptr<EditorActivityHost> &host) {
         ExtensionManager manager{nullptr, ExtensionHostProfile::Interactive, {}, Horo::Tests::CreateAcceptingArtifactGate(), {}, {}, host};
         CHECK(manager.LoadExtension(package.root.string()).HasError());
         host->Update();
         CHECK(host->Prepared().empty());
     }
 
-    void CheckHeadlessCapability(Horo::Tests::EditorActivityPackage &package, const std::shared_ptr<EditorActivityHost> &host) {
+    void CheckHeadlessCapability(const Horo::Tests::EditorActivityPackage &package, const std::shared_ptr<EditorActivityHost> &host) {
         // A mixed-role module is selected by headless resolution, so its explicit ABI requirement must reject.
-        RewriteFixtureManifest(package, "\"roles\":[\"editor-presentation\"]",
-                               "\"roles\":[\"backend-capability\",\"editor-presentation\"]");
+        RewriteFixtureManifest(package, R"("roles":["editor-presentation"])", R"("roles":["backend-capability","editor-presentation"])");
         ExtensionManager manager{nullptr,
                                  ExtensionHostProfile::Headless,
                                  {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
@@ -212,14 +214,14 @@ namespace Horo::Extensions::Tests {
         CHECK(host->Prepared().empty());
     }
 
-    void CheckMissingTrust(Horo::Tests::EditorActivityPackage &package, const std::shared_ptr<EditorActivityHost> &host) {
+    void CheckMissingTrust(const Horo::Tests::EditorActivityPackage &package, const std::shared_ptr<EditorActivityHost> &host) {
         ExtensionManager manager{nullptr, ExtensionHostProfile::Interactive, {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY}, {}, {}, {}, host};
         CHECK(manager.LoadExtension(package.root.string()).HasError());
         host->Update();
         CHECK(host->Prepared().empty());
     }
 
-    void CheckExternalResource(Horo::Tests::EditorActivityPackage &package, const std::shared_ptr<EditorActivityHost> &host) {
+    void CheckExternalResource(const Horo::Tests::EditorActivityPackage &package, const std::shared_ptr<EditorActivityHost> &host) {
         package.Icon(R"(<svg xmlns="http://www.w3.org/2000/svg"><image href="file:///etc/passwd"/></svg>)");
         ExtensionManager manager{nullptr,
                                  ExtensionHostProfile::Interactive,
@@ -233,7 +235,7 @@ namespace Horo::Extensions::Tests {
         CHECK(host->Prepared().empty());
     }
 
-    void CheckMissingHost(Horo::Tests::EditorActivityPackage &package) {
+    void CheckMissingHost(const Horo::Tests::EditorActivityPackage &package) {
         ExtensionManager manager{nullptr,
                                  ExtensionHostProfile::Interactive,
                                  {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},

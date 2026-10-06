@@ -52,7 +52,9 @@ struct HoroEditorActivityNode {
     HoroExtensionStringView text;
     HoroExtensionStringView actionId;
 };
+#ifndef __cplusplus
 typedef struct HoroEditorActivityNode HoroEditorActivityNode;
+#endif
 
 /** @brief Bounded immutable view snapshot; revisions strictly increase within an activation. */
 struct HoroEditorActivitySnapshot {
@@ -78,7 +80,9 @@ struct HoroEditorActivitySnapshot {
     // cppcheck-suppress unusedStructMember
     uint32_t nodeCount;
 };
+#ifndef __cplusplus
 typedef struct HoroEditorActivitySnapshot HoroEditorActivitySnapshot;
+#endif
 
 /** @brief Typed action identity and exact copied projection revision admitted by the host. */
 struct HoroEditorActivityAction {
@@ -92,7 +96,9 @@ struct HoroEditorActivityAction {
     uint64_t revision;
     HoroExtensionCancellation cancellation;
 };
+#ifndef __cplusplus
 typedef struct HoroEditorActivityAction HoroEditorActivityAction;
+#endif
 
 /** @brief Bounded result sink borrowed by a scheduled module action; publication occurs later on the owner lane. */
 struct HoroEditorActivitySnapshotSink {
@@ -103,10 +109,17 @@ struct HoroEditorActivitySnapshotSink {
     // cppcheck-suppress unusedStructMember
     HoroExtensionStatus (*publish)(void *context, const HoroEditorActivitySnapshot *snapshot);
 };
+#ifndef __cplusplus
 typedef struct HoroEditorActivitySnapshotSink HoroEditorActivitySnapshotSink;
+#endif
 /** @brief Executes an approved semantic action outside GUI traversal; cancellation must be honored. */
+#ifdef __cplusplus
+using HoroEditorActivityActionFunc = HoroExtensionStatus (*)(void *moduleContext, const HoroEditorActivityAction *action,
+                                                             const HoroEditorActivitySnapshotSink *result);
+#else
 typedef HoroExtensionStatus (*HoroEditorActivityActionFunc)(void *moduleContext, const HoroEditorActivityAction *action,
                                                             const HoroEditorActivitySnapshotSink *result);
+#endif
 
 /** @brief Copied package-localized message; locale/key/value strings are inert borrowed data. */
 struct HoroEditorActivityMessage {
@@ -114,7 +127,9 @@ struct HoroEditorActivityMessage {
     HoroExtensionStringView key;
     HoroExtensionStringView value;
 };
+#ifndef __cplusplus
 typedef struct HoroEditorActivityMessage HoroEditorActivityMessage;
+#endif
 
 /** @brief Version-1 manifest-owned activity+panel binding; no host drawing callback or native object is exposed. */
 struct HoroEditorActivityDescriptor {
@@ -155,7 +170,9 @@ struct HoroEditorActivityDescriptor {
     // cppcheck-suppress unusedStructMember
     HoroEditorActivityActionFunc invokeAction;
 };
+#ifndef __cplusplus
 typedef struct HoroEditorActivityDescriptor HoroEditorActivityDescriptor;
+#endif
 
 /**
  * @brief Owner-lane session API; the opaque context is valid until module unload, then must be discarded.
@@ -178,4 +195,6 @@ struct HoroEditorActivitySessionApi {
     // cppcheck-suppress unusedStructMember
     HoroExtensionStatus (*publish)(void *context, const HoroEditorActivitySnapshot *snapshot);
 };
+#ifndef __cplusplus
 typedef struct HoroEditorActivitySessionApi HoroEditorActivitySessionApi;
+#endif

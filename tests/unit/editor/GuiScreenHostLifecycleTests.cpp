@@ -55,9 +55,13 @@ namespace {
             return Result<void>::Success();
         }
 
-        void OnUpdate(float) override {}
+        void OnUpdate(float) override {
+            // Lifecycle-only screen: it owns no frame-updated model.
+        }
 
-        void Draw(const GuiContentRegion &) override {}
+        void Draw(const GuiContentRegion &) override {
+            // This shutdown fixture intentionally submits no graphical controls.
+        }
 
         [[nodiscard]] LeaveDecision CanLeave(const LeaveTarget &) const override {
             return {.disposition = LeaveDisposition::Allow, .requirement = std::nullopt};
@@ -75,7 +79,7 @@ namespace {
         ScreenStats &stats_;
     };
 
-    void ShutdownAndCheckGuiScreenHost(GuiScreenHost &host, ScreenStats &stats, JobSystem &jobs) {
+    void ShutdownAndCheckGuiScreenHost(GuiScreenHost &host, const ScreenStats &stats, const JobSystem &jobs) {
         host.Shutdown();
         REQUIRE((host.IsShutdown()));
         REQUIRE((stats.leaves == 1));
@@ -92,7 +96,17 @@ namespace {
         jobs.Shutdown(ShutdownPolicy::Cancel);
     }
 
-    void CheckInventoryActivityShutdown(GuiScreenHost &host, Extensions::ExtensionInventory &inventory, const bool admitted) {
+    /** @brief Checks that composition keeps application services borrowed and publishes the host-owned screen registry. */
+    void CheckApplicationServiceBorrows(const GuiScreenHost &host, const JobSystem &jobs, const Input::InputRouter &input,
+                                        const EditorModalHost &modals, const EditorSettingsService &settings) {
+        REQUIRE((&host.Services().Get<JobSystem>() == &jobs));
+        REQUIRE((&host.Services().Get<Input::InputRouter>() == &input));
+        REQUIRE((&host.Services().Get<EditorModalHost>() == &modals));
+        REQUIRE((&host.Services().Get<EditorSettingsService>() == &settings));
+        REQUIRE((&host.Services().Get<ScreenRegistry>() == &host.Screens()));
+    }
+
+    void CheckInventoryActivityShutdown(GuiScreenHost &host, const Extensions::ExtensionInventory &inventory, const bool admitted) {
         auto &activities = host.Services().Get<Extensions::EditorActivityHost>();
         activities.Update();
         const auto entry =
@@ -153,22 +167,18 @@ namespace {
         const bool admitted = GENERATE(false, true);
         if (admitted)
             gate = Horo::Tests::CreateAcceptingArtifactGate();
-        GuiScreenHost host{gui,
-                           modals,
-                           settings,
-                           localization,
-                           engineEvents,
-                           creation,
-                           jobs,
-                           input,
-                           renderers,
-                           ScreenRegistry{},
-                           WorkspacePanelRegistry{},
-                           0,
-                           &inventory,
-                           nullptr,
-                           nullptr,
-                           std::move(gate)};
+        GuiScreenHost host{gui, GuiScreenHostComposition{.modalHost = modals,
+                                                         .settingsService = settings,
+                                                         .localization = localization,
+                                                         .engineEvents = engineEvents,
+                                                         .creationService = creation,
+                                                         .jobs = jobs,
+                                                         .inputRouter = input,
+                                                         .rendererAvailability = renderers,
+                                                         .screenRegistry = {},
+                                                         .workspacePanelRegistry = {},
+                                                         .extensionInventory = &inventory,
+                                                         .extensionArtifactGate = std::move(gate)}};
         CheckInventoryActivityShutdown(host, inventory, admitted);
         jobs.Shutdown(ShutdownPolicy::Cancel);
     }
@@ -196,11 +206,19 @@ namespace {
         });
         WorkspacePanelRegistry panels;
 
-        GuiScreenHost host{gui,  modals, settings,  localization,       engineEvents,     creation,
-                           jobs, input,  renderers, std::move(screens), std::move(panels)};
+        GuiScreenHost host{gui, GuiScreenHostComposition{.modalHost = modals,
+                                                         .settingsService = settings,
+                                                         .localization = localization,
+                                                         .engineEvents = engineEvents,
+                                                         .creationService = creation,
+                                                         .jobs = jobs,
+                                                         .inputRouter = input,
+                                                         .rendererAvailability = renderers,
+                                                         .screenRegistry = std::move(screens),
+                                                         .workspacePanelRegistry = std::move(panels)}};
         REQUIRE((host.StatusItems().Find("horo.status.backend") != nullptr));
         REQUIRE((host.StatusItems().Find("horo.status.cpu") == nullptr));
-        REQUIRE((&host.Services().Get<JobSystem>() == &jobs));
+        CheckApplicationServiceBorrows(host, jobs, input, modals, settings);
         REQUIRE((stats.enters == 0));
         REQUIRE((host.Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}).HasError()));
         host.Services().Register(stats);

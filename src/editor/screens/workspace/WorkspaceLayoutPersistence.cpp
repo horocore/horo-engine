@@ -339,10 +339,12 @@ namespace Horo::Editor {
                 auto second = Node(error);
                 if (!second || !ObjectEnd())
                     return std::nullopt;
+                // Own each child before preparing the next; unwinding releases the first if the second allocation fails.
+                auto firstChild = std::make_unique<LayoutNode>(std::move(*first));
+                auto secondChild = std::make_unique<LayoutNode>(std::move(*second));
                 return LayoutNode(SplitNode{std::move(id),
                                             axis == "vertical" ? WorkspaceSplitAxis::Vertical : WorkspaceSplitAxis::Horizontal, ratio,
-                                            160.0F, 160.0F, std::make_unique<LayoutNode>(std::move(*first)),
-                                            std::make_unique<LayoutNode>(std::move(*second))});
+                                            160.0F, 160.0F, std::move(firstChild), std::move(secondChild)});
             }
 
             std::optional<LayoutNode> Node(std::string &error) {

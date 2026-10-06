@@ -50,7 +50,8 @@ namespace Horo::Extensions::Tests {
         CHECK_FALSE(FindSnapshot(registry.Snapshot(), registered.Id())->open);
     }
 
-    void CheckPlacementRestore(EditorSurfaceRegistry &registry, const EditorSurfaceProviderIdentity &provider, const std::string_view id) {
+    void CheckPlacementRestore(const EditorSurfaceRegistry &registry, const EditorSurfaceProviderIdentity &provider,
+                               const std::string_view id) {
         const auto saved = registry.Save();
         auto malformedPlacement = saved;
         for (auto &entry : malformedPlacement.surfaces)

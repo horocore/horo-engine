@@ -11,19 +11,51 @@
 #include <memory>
 #include <ranges>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 
 namespace Horo::Editor {
+    /** @copydoc ExtensionActivityView::OwnedTexture::OwnedTexture(IEditorGuiRenderer &, std::uintptr_t) */
+    ExtensionActivityView::OwnedTexture::OwnedTexture(IEditorGuiRenderer &renderer, const std::uintptr_t id) noexcept
+        : renderer_(&renderer), id_(id) {}
+
+    /** @copydoc ExtensionActivityView::OwnedTexture::~OwnedTexture */
+    ExtensionActivityView::OwnedTexture::~OwnedTexture() {
+        Reset();
+    }
+
+    /** @copydoc ExtensionActivityView::OwnedTexture::OwnedTexture(OwnedTexture &&) */
+    ExtensionActivityView::OwnedTexture::OwnedTexture(OwnedTexture &&other) noexcept
+        : renderer_(std::exchange(other.renderer_, nullptr)), id_(std::exchange(other.id_, 0)) {}
+
+    /** @copydoc ExtensionActivityView::OwnedTexture::operator= */
+    ExtensionActivityView::OwnedTexture &ExtensionActivityView::OwnedTexture::operator=(OwnedTexture &&other) noexcept {
+        if (this != &other) {
+            Reset();
+            renderer_ = std::exchange(other.renderer_, nullptr);
+            id_ = std::exchange(other.id_, 0);
+        }
+        return *this;
+    }
+
+    /** @copydoc ExtensionActivityView::OwnedTexture::Id */
+    std::uintptr_t ExtensionActivityView::OwnedTexture::Id() const noexcept {
+        return id_;
+    }
+
+    /** @copydoc ExtensionActivityView::OwnedTexture::Reset */
+    void ExtensionActivityView::OwnedTexture::Reset() noexcept {
+        if (renderer_ && id_)
+            renderer_->DestroyTexture(id_);
+        renderer_ = nullptr;
+        id_ = 0;
+    }
+
     ExtensionActivityView::ExtensionActivityView(const EditorGuiContext &context, Extensions::EditorActivityHost *host,
                                                  IEditorGuiRenderer *renderer)
         : context_(context), host_(host), renderer_(renderer) {}
 
-    ExtensionActivityView::~ExtensionActivityView() {
-        if (renderer_)
-            for (const auto &entry : entries_)
-                if (entry.texture)
-                    renderer_->DestroyTexture(entry.texture);
-    }
+    ExtensionActivityView::~ExtensionActivityView() = default;
 
     /** @copydoc ExtensionActivityView::ApplyPendingMove */
     void ExtensionActivityView::ApplyPendingMove() {
@@ -52,19 +84,18 @@ namespace Horo::Editor {
                    entry.projection.surface.descriptor.provider == projection.surface.descriptor.provider;
         });
         Entry entry{.projection = projection};
-        PrepareResources(entry, previous != entries_.end() ? std::to_address(previous) : nullptr);
         const auto &descriptor = projection.surface.descriptor;
         entry.label = host_->LocalizedText(descriptor.provider, descriptor.labelLocalizationKey, locale);
         entry.tooltip = host_->LocalizedText(descriptor.provider, descriptor.tooltipLocalizationKey, locale);
         PrepareNodeText(entry, locale);
+        PrepareResources(entry, previous != entries_.end() ? std::to_address(previous) : nullptr);
         return entry;
     }
 
     /** @copydoc ExtensionActivityView::PrepareResources */
-    void ExtensionActivityView::PrepareResources(Entry &entry, Entry *previous) {
+    void ExtensionActivityView::PrepareResources(Entry &entry, const Entry *previous) {
         entry.token = previous != nullptr ? previous->token : nextToken_++;
         if (previous != nullptr) {
-            entry.texture = std::exchange(previous->texture, 0);
             entry.focusPending =
                 previous->focusPending ||
                 (entry.projection.surface.focused &&
@@ -72,16 +103,17 @@ namespace Horo::Editor {
                   previous->projection.surface.descriptor.activity->side != entry.projection.surface.descriptor.activity->side));
         } else {
             entry.focusPending = entry.projection.surface.focused;
-            if (renderer_ && entry.projection.icon) {
-                const auto &icon = *entry.projection.icon;
-                if (auto uploaded = renderer_->CreateTexture({icon.width, icon.height, icon.pixels}); uploaded.HasValue())
-                    entry.texture = uploaded.Value();
-            }
+        }
+        // Existing textures stay with the published projection until every candidate is prepared.
+        if ((previous == nullptr || previous->texture.Id() == 0) && renderer_ && entry.projection.icon) {
+            const auto &icon = *entry.projection.icon;
+            if (auto uploaded = renderer_->CreateTexture({icon.width, icon.height, icon.pixels}); uploaded.HasValue())
+                entry.texture = OwnedTexture{*renderer_, uploaded.Value()};
         }
         if (entry.projection.surface.open &&
             (previous == nullptr || !previous->projection.surface.open ||
              previous->projection.surface.descriptor.activity->side != entry.projection.surface.descriptor.activity->side))
-            nativePanelClear_[static_cast<std::size_t>(entry.projection.surface.descriptor.activity->side)] = entry.token;
+            entry.requestNativePanelClear = true;
     }
 
     /** @copydoc ExtensionActivityView::PrepareNodeText */
@@ -161,10 +193,6 @@ namespace Horo::Editor {
         for (const auto &projection : host_->Prepared()) {
             next.push_back(PrepareEntry(projection, locale));
         }
-        if (renderer_)
-            for (const auto &old : entries_)
-                if (old.texture)
-                    renderer_->DestroyTexture(old.texture);
         std::ranges::sort(next, [](const Entry &a, const Entry &b) {
             const auto &left = a.projection.surface.descriptor;
             const auto &right = b.projection.surface.descriptor;
@@ -179,14 +207,34 @@ namespace Horo::Editor {
                 ordinal = 0;
             next[index].ordinal = ordinal++;
         }
-        moveLabels_ = {context_.localization.Get("editor", "workspace.activity.move_left"),
-                       context_.localization.Get("editor", "workspace.activity.move_right"),
-                       context_.localization.Get("editor", "workspace.activity.move_bottom")};
-        moveEarlierLabel_ = context_.localization.Get("editor", "workspace.activity.move_earlier");
-        moveLaterLabel_ = context_.localization.Get("editor", "workspace.activity.move_later");
-        entries_ = std::move(next);
+        std::array<std::string, 3> moveLabels{context_.localization.Get("editor", "workspace.activity.move_left"),
+                                              context_.localization.Get("editor", "workspace.activity.move_right"),
+                                              context_.localization.Get("editor", "workspace.activity.move_bottom")};
+        auto moveEarlierLabel = context_.localization.Get("editor", "workspace.activity.move_earlier");
+        auto moveLaterLabel = context_.localization.Get("editor", "workspace.activity.move_later");
+        std::string nextLocale{locale};
+        CommitEntries(std::move(next));
+        moveLabels_ = std::move(moveLabels);
+        moveEarlierLabel_ = std::move(moveEarlierLabel);
+        moveLaterLabel_ = std::move(moveLaterLabel);
         revision_ = revision;
-        locale_ = locale;
+        locale_ = std::move(nextLocale);
+    }
+
+    /** @copydoc ExtensionActivityView::CommitEntries */
+    void ExtensionActivityView::CommitEntries(std::vector<Entry> next) noexcept {
+        static_assert(std::is_nothrow_move_constructible_v<Entry> && std::is_nothrow_move_assignable_v<Entry>);
+        for (auto &entry : next) {
+            const auto previous = std::ranges::find_if(entries_, [&entry](const Entry &old) {
+                return old.projection.surface.descriptor.id == entry.projection.surface.descriptor.id &&
+                       old.projection.surface.descriptor.provider == entry.projection.surface.descriptor.provider;
+            });
+            if (previous != entries_.end() && !entry.texture.Id())
+                entry.texture = std::move(previous->texture);
+            if (entry.requestNativePanelClear)
+                nativePanelClear_[static_cast<std::size_t>(entry.projection.surface.descriptor.activity->side)] = entry.token;
+        }
+        entries_ = std::move(next);
     }
 
     bool ExtensionActivityView::QueueMove(const Extensions::EditorSurfaceProviderIdentity &provider, const std::string_view id,
@@ -266,7 +314,7 @@ namespace Horo::Editor {
             ImGui::SetCursorScreenPos(origin);
             ImGui::PushID(surface.descriptor.id.c_str());
             if (Ui::ActivityButton({.tooltip = entry.tooltip.c_str(),
-                                    .texture = entry.texture,
+                                    .texture = entry.texture.Id(),
                                     .size = {width, 30.0F},
                                     .active = surface.open,
                                     .enabled = surface.activity.enabled,
@@ -314,7 +362,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc ExtensionActivityView::DrawForm */
-    void ExtensionActivityView::DrawForm(const Entry &entry) {
+    void ExtensionActivityView::DrawForm(const Entry &entry) const {
         const auto &surface = entry.projection.surface;
         if (!surface.form)
             return;

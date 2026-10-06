@@ -270,6 +270,25 @@ namespace Horo::Extensions {
                     .registerEditorActivity = registration.editorHost ? &RegisterExternalEditorActivity : nullptr};
         }
 
+        /** @brief Validates the returned module table and exact activity/drawer declarations before activation publication. */
+        [[nodiscard]] Result<void> ValidateLoadedModule(HoroExtensionModuleApi &moduleApi, const ExtensionManifest &manifest,
+                                                        const ExtensionModuleManifest &manifestModule,
+                                                        const std::size_t registeredActivities) {
+            if (!NormalizeModuleApi(moduleApi) || !MatchesDeclaredModule(moduleApi, manifestModule.id, manifestModule.version))
+                return Result<void>::Failure(
+                    MakeError(ExtensionErrors::InvalidManifest, "Loaded module table or identity/version is invalid."));
+            const auto declaredActivities = std::ranges::count_if(manifest.contributions, [&manifestModule](const auto &claim) {
+                return claim.owningModule == manifestModule.id && claim.type == "editor.activity_item";
+            });
+            const auto declaredPanels = std::ranges::count_if(manifest.contributions, [&manifestModule](const auto &claim) {
+                return claim.owningModule == manifestModule.id && claim.type == "editor.panel";
+            });
+            if (static_cast<std::size_t>(declaredActivities) != registeredActivities || declaredPanels != declaredActivities)
+                return Result<void>::Failure(MakeError(ExtensionErrors::ContributionRejected,
+                                                       "Native module did not register every declared activity/drawer pair."));
+            return Result<void>::Success();
+        }
+
         /** @brief Loads and validates one native module while retaining rollback ownership. */
         [[nodiscard]] Result<ActivatedModule> ActivateModule(const std::shared_ptr<Platform::DynamicLibrary> &library,
                                                              const ExtensionManifest &manifest,
@@ -312,22 +331,9 @@ namespace Horo::Extensions {
                                                   : MakeError(ExtensionErrors::LoadFailed, "Extension load function returned an error.");
                 return RejectActivatedModule(lifetime, moduleApi, registration, std::move(error));
             }
-            if (!NormalizeModuleApi(moduleApi) || !MatchesDeclaredModule(moduleApi, manifestModule.id, manifestModule.version)) {
-                return RejectActivatedModule(lifetime, moduleApi, registration,
-                                             MakeError(ExtensionErrors::InvalidManifest,
-                                                       "Loaded module table or identity/version is invalid."));
-            }
-            const auto declaredActivities = std::ranges::count_if(manifest.contributions, [&manifestModule](const auto &claim) {
-                return claim.owningModule == manifestModule.id && claim.type == "editor.activity_item";
-            });
-            if (const auto declaredPanels = std::ranges::count_if(manifest.contributions,
-                                                                  [&manifestModule](const auto &claim) {
-                return claim.owningModule == manifestModule.id && claim.type == "editor.panel";
-            });
-                static_cast<std::size_t>(declaredActivities) != lifetime->editorActivities.size() || declaredPanels != declaredActivities)
-                return RejectActivatedModule(lifetime, moduleApi, registration,
-                                             MakeError(ExtensionErrors::ContributionRejected,
-                                                       "Native module did not register every declared activity/drawer pair."));
+            if (auto validated = ValidateLoadedModule(moduleApi, manifest, manifestModule, lifetime->editorActivities.size());
+                validated.HasError())
+                return RejectActivatedModule(lifetime, moduleApi, registration, std::move(validated).ErrorValue());
             lifetime->moduleApi = moduleApi;
             lifetime->loaded = true;
             return Result<ActivatedModule>::Success({.lifetime = std::move(lifetime),

@@ -172,8 +172,17 @@ namespace Horo::Tests {
             Editor::RegisterEditorWorkspaceScreen(screens);
             Editor::WorkspacePanelRegistry panels;
             Editor::RegisterDefaultWorkspacePanels(panels);
-            screenHost = std::make_unique<Editor::GuiScreenHost>(gui, modals, settings, localization, engineEvents, creation, jobs, input,
-                                                                 rendererAvailability, std::move(screens), std::move(panels));
+            screenHost =
+                std::make_unique<Editor::GuiScreenHost>(gui, Editor::GuiScreenHostComposition{.modalHost = modals,
+                                                                                              .settingsService = settings,
+                                                                                              .localization = localization,
+                                                                                              .engineEvents = engineEvents,
+                                                                                              .creationService = creation,
+                                                                                              .jobs = jobs,
+                                                                                              .inputRouter = input,
+                                                                                              .rendererAvailability = rendererAvailability,
+                                                                                              .screenRegistry = std::move(screens),
+                                                                                              .workspacePanelRegistry = std::move(panels)});
             screenHost->Services().Register<Editor::IEditorViewportRenderer>(viewportRenderer);
             screenHost->Services().Register<Editor::EditorViewportSceneState>(viewportScene);
             screenHost->Services().Register<Runtime::RuntimeSceneService>(runtimeScene);

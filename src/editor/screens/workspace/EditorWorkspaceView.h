@@ -106,8 +106,14 @@ namespace Horo::Editor {
         /** @brief Draws one persistent document tab and emits its select or close command. */
         void DrawDocumentTab(const TabStackNode &stack, const std::string &panelId, EditorWorkspaceViewCommandData &outCommand);
         void DrawDocumentTabs(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand);
+        /** @brief Calculates clamped dock geometry from native and extension visibility without mutating layout or submitting UI. */
+        [[nodiscard]] WorkspaceLayoutGeometry CalculateWorkspaceGeometry(const EditorWorkspaceViewModel &viewModel, const ImVec2 &display,
+                                                                         float activityBarH, float curY) const;
         void DrawMiddleAndBottomDocks(const WorkspaceLayoutGeometry &geo, const EditorWorkspaceViewModel &viewModel,
                                       EditorWorkspaceViewCommandData &outCommand);
+        /** @brief Draws the bottom extension drawer or native full/split dock, preserving command publication order. */
+        void DrawBottomDock(const WorkspaceLayoutGeometry &geo, const EditorWorkspaceViewModel &viewModel,
+                            EditorWorkspaceViewCommandData &outCommand);
         void DrawWorkspaceDropTarget(const char *targetNodeId, const char *id, const ImVec2 &position, const ImVec2 &size,
                                      WorkspacePanelHost::DropKind kind, EditorWorkspaceViewCommandData &outCommand) const;
 
@@ -116,6 +122,9 @@ namespace Horo::Editor {
                              ActivityBarOptions options);
         void DrawActivityBarGroup(const ActivityBarGroupParams &params, const EditorWorkspaceViewModel &viewModel,
                                   EditorWorkspaceViewCommandData &outCommand);
+        /** @brief Draws native items followed by extension items in one clipped rail group and publishes any native-panel clear command. */
+        void DrawCombinedActivityBarGroup(const ActivityBarGroupParams &params, const EditorWorkspaceViewModel &viewModel,
+                                          EditorWorkspaceViewCommandData &outCommand);
         bool DrawActivityDropSlot(ActivityBarSlot slot, float y, bool draggingActivityItem, const ActivityBarGeometry &geometry,
                                   EditorWorkspaceViewCommandData &outCommand) const;
         float DrawActivityItem(const std::string &panelId, float y, const ActivityBarGeometry &geometry,

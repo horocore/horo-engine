@@ -33,13 +33,38 @@ namespace Horo::Editor {
         void Close(Extensions::EditorActivitySide side);
 
     private:
+        /** @brief Move-only UI-thread release owner; the borrowed renderer outlives the view and all its candidate entries. */
+        class OwnedTexture final {
+        public:
+            OwnedTexture() noexcept = default;
+            /** @brief Adopts one successful upload; renderer must outlive this owner. */
+            OwnedTexture(IEditorGuiRenderer &renderer, std::uintptr_t id) noexcept;
+            /** @brief Releases the owned texture through its renderer on the UI thread. */
+            ~OwnedTexture();
+            OwnedTexture(const OwnedTexture &) = delete;
+            OwnedTexture &operator=(const OwnedTexture &) = delete;
+            /** @brief Transfers texture release responsibility without allocation. */
+            OwnedTexture(OwnedTexture &&other) noexcept;
+            /** @brief Releases the current texture and transfers another owner's responsibility. */
+            OwnedTexture &operator=(OwnedTexture &&other) noexcept;
+            /** @brief Returns the borrowed draw identity, or zero for an empty owner. */
+            [[nodiscard]] std::uintptr_t Id() const noexcept;
+
+        private:
+            /** @brief Releases the texture exactly once and clears its renderer borrow. */
+            void Reset() noexcept;
+            IEditorGuiRenderer *renderer_{};
+            std::uintptr_t id_{};
+        };
+
         struct Entry {
             Extensions::EditorActivityProjection projection;
-            std::uintptr_t texture{};
+            OwnedTexture texture;
             std::string label;
             std::string tooltip;
             std::vector<std::string> nodeText;
             bool focusPending{};
+            bool requestNativePanelClear{};
             std::uint64_t token{};
             std::int32_t ordinal{};
         };
@@ -59,12 +84,14 @@ namespace Horo::Editor {
         void ApplyPendingMove();
         /** @brief Refreshes copied localization and transfers texture ownership at the owner Update boundary. */
         [[nodiscard]] Entry PrepareEntry(const Extensions::EditorActivityProjection &projection, const std::string &locale);
-        /** @brief Transfers unique texture ownership and tracks opening/focus transitions before retiring the old projection. */
-        void PrepareResources(Entry &entry, Entry *previous);
+        /** @brief Prepares candidate resources and opening/focus transitions without changing published texture ownership. */
+        void PrepareResources(Entry &entry, const Entry *previous);
+        /** @brief Commits prepared entries without allocation, transferring published textures only after all preparation succeeds. */
+        void CommitEntries(std::vector<Entry> next) noexcept;
         /** @brief Copies provider-localized node text during the owner update phase. */
         void PrepareNodeText(Entry &entry, const std::string &locale);
         /** @brief Draws the admitted form using retained text and queues typed actions without invoking providers. */
-        void DrawForm(const Entry &entry);
+        void DrawForm(const Entry &entry) const;
         /** @brief Presents localized destination and insertion actions for one retained control. */
         void DrawPlacementMenu(const Entry &entry, std::size_t group);
         /** @brief Presents durable user visibility choices for the current activity rail. */
