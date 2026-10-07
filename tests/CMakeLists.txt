@@ -848,6 +848,15 @@ target_compile_features(HoroDestructionReplicationTests PRIVATE cxx_std_20)
 target_link_libraries(HoroDestructionReplicationTests PRIVATE HoroEngine::DestructionReplication)
 horo_register_catch_test(HoroDestructionReplicationTests LABELS "unit;destruction;network;headless")
 
+add_executable(HoroFractureDocumentTests
+        unit/editor/fracture/FractureAssetDocumentTests.cpp
+        unit/editor/fracture/FractureSourceCodecTests.cpp
+)
+target_compile_features(HoroFractureDocumentTests PRIVATE cxx_std_20)
+target_link_libraries(HoroFractureDocumentTests PRIVATE HoroEngine::FractureDocument)
+horo_register_catch_test(HoroFractureDocumentTests LABELS "unit;editor;destruction;headless")
+target_sources(HoroFractureDocumentPublicHeaderConsumer PRIVATE support/FractureDocumentPublicHeaderConsumer.cpp)
+
 add_executable(HoroCinematicModelTests
         support/AllocationProbe.cpp
         unit/runtime/cinematic/CurveSamplingTests.cpp

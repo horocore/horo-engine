@@ -1303,6 +1303,16 @@ add_library(HoroEngine::DestructionReplication ALIAS HoroDestructionReplication)
 target_compile_features(HoroDestructionReplication PUBLIC cxx_std_20)
 target_link_libraries(HoroDestructionReplication PUBLIC HoroEngine::DestructionApi HoroEngine::NetworkApi)
 
+add_library(HoroFractureDocument STATIC
+        editor/fracture/FractureAssetDocument.cpp
+        editor/fracture/FractureDocumentErrors.cpp
+        editor/fracture/FractureSourceCodec.cpp
+        editor/fracture/FractureSourceValidation.cpp
+)
+add_library(HoroEngine::FractureDocument ALIAS HoroFractureDocument)
+target_compile_features(HoroFractureDocument PUBLIC cxx_std_20)
+target_link_libraries(HoroFractureDocument PUBLIC HoroEngine::DestructionApi)
+
 add_library(HoroCinematicModel STATIC
         runtime/cinematic/model/CurveSampling.cpp
         runtime/cinematic/model/CinematicErrors.cpp

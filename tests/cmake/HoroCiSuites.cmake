@@ -25,6 +25,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroUpdateZipPackageProducerTests
     HoroVfxApiTests
     HoroCinematicModelTests
+    HoroFractureDocumentTests
+    HoroFractureDocumentPublicHeaderConsumer
     HoroCinematicRuntimeTests
     HoroCameraCutRuntimeTests
     HoroCameraCutPublicHeaderConsumer
@@ -70,6 +72,7 @@ set(HORO_CI_NETWORK_TARGETS
 
 # These editor-labelled suites were explicitly run by the coverage workflow.
 set(HORO_SONAR_EDITOR_TARGETS
+    HoroFractureDocumentTests
     HoroTerrainAuthoringTests
     HoroMixerDocumentTests
     HoroCameraCutEditorIntegrationTests
