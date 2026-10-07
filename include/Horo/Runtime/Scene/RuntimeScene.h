@@ -542,6 +542,9 @@ namespace Horo::Runtime {
         };
 
         struct CommandApplier;
+        [[nodiscard]] static Result<void> ValidateBaselineCapacity(const RuntimeSceneStorage &storage,
+                                                                   const RuntimeSceneDefinition &definition, std::size_t resourceCount,
+                                                                   SceneBaselineAttachmentLimits limits);
         [[nodiscard]] Result<void> ApplyBaseline(RuntimeSceneStorage &storage,
                                                  const SceneCommandBuffer::AttachBaselineCommand &command) const;
         [[nodiscard]] Result<void> RemoveBaseline(RuntimeSceneStorage &storage, SceneDefinitionId id, SceneDefinitionRevision revision,

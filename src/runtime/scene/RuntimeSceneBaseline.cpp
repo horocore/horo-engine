@@ -4,23 +4,22 @@
 #include <algorithm>
 
 namespace Horo::Runtime {
-    namespace {
-        Result<void> ValidateBaselineCapacity(const RuntimeSceneStorage &storage, const RuntimeSceneDefinition &definition,
-                                              const std::size_t resourceCount, const SceneBaselineAttachmentLimits limits) {
-            if (storage.baselines.size() >= limits.maximumAttachments)
+    /** @brief Validates aggregate resident bounds before an attachment allocates its candidate entities. */
+    Result<void> RuntimeScene::ValidateBaselineCapacity(const RuntimeSceneStorage &storage, const RuntimeSceneDefinition &definition,
+                                                        const std::size_t resourceCount, const SceneBaselineAttachmentLimits limits) {
+        if (storage.baselines.size() >= limits.maximumAttachments)
+            return Result<void>::Failure(MakeError(SceneErrors::BaselineCapacityExceeded));
+        std::size_t entities = definition.Entities().size();
+        std::size_t resources = resourceCount;
+        for (const auto &baseline : storage.baselines) {
+            if (baseline.entities.size() > limits.maximumEntities - entities ||
+                baseline.resources->size() > limits.maximumResources - resources)
                 return Result<void>::Failure(MakeError(SceneErrors::BaselineCapacityExceeded));
-            std::size_t entities = definition.Entities().size();
-            std::size_t resources = resourceCount;
-            for (const auto &baseline : storage.baselines) {
-                if (baseline.entities.size() > limits.maximumEntities - entities ||
-                    baseline.resources->size() > limits.maximumResources - resources)
-                    return Result<void>::Failure(MakeError(SceneErrors::BaselineCapacityExceeded));
-                entities += baseline.entities.size();
-                resources += baseline.resources->size();
-            }
-            return Result<void>::Success();
+            entities += baseline.entities.size();
+            resources += baseline.resources->size();
         }
-    }  // namespace
+        return Result<void>::Success();
+    }
 
     /** @copydoc RuntimeScene::RemoveBaseline */
     Result<void> RuntimeScene::RemoveBaseline(RuntimeSceneStorage &storage, const SceneDefinitionId id,
