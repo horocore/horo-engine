@@ -8,6 +8,7 @@
 #include <limits>
 #include <new>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 namespace Horo::Runtime {
@@ -58,14 +59,24 @@ namespace Horo::Runtime {
     /** @copydoc SceneCommandBuffer::ValidateAdmission */
     Result<void> SceneCommandBuffer::ValidateAdmission(SceneRuntimeId scene, Assets::AssetRegistryRevision registry) const {
         for (const auto &command : commands_) {
-            if (const auto *group = std::get_if<CreateGroupCommand>(&command)) {
-                if (group->admission.cancellation.IsCancellationRequested() || group->admission.ownerCancellation.IsCancellationRequested())
-                    return JobCancelled();
-                if (group->admission.scene != scene)
-                    return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
-                if (group->admission.registry != registry)
-                    return Result<void>::Failure(MakeError(SceneErrors::AssetRevisionStale));
-            }
+            const auto valid = std::visit([&](const auto &value) -> Result<void> {
+                using T = std::decay_t<decltype(value)>;
+                if constexpr (std::is_same_v<T, CreateGroupCommand> || std::is_same_v<T, AttachBaselineCommand> ||
+                              std::is_same_v<T, DetachBaselineCommand>) {
+                    if (value.admission.cancellation.IsCancellationRequested() ||
+                        value.admission.ownerCancellation.IsCancellationRequested())
+                        return JobCancelled();
+                    if (value.admission.scene != scene)
+                        return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
+                    if (value.admission.registry != registry)
+                        return Result<void>::Failure(MakeError(SceneErrors::AssetRevisionStale));
+                    if constexpr (!std::is_same_v<T, CreateGroupCommand>)
+                        return value.publicationCheck->ValidatePublication();
+                }
+                return Result<void>::Success();
+            }, command);
+            if (valid.HasError())
+                return valid;
         }
         return Result<void>::Success();
     }
@@ -215,6 +226,7 @@ namespace Horo::Runtime {
         slot.parent.reset();
         slot.primitiveMesh.reset();
         slot.components = {};
+        slot.baselineOwner.reset();
         slot.groupResources.reset();
         slot.groupPhysicsReferences.reset();
         if (slot.generation == config_.maximumGeneration)
@@ -245,10 +257,27 @@ namespace Horo::Runtime {
         }
 
         Result<void> operator()(const SceneCommandBuffer::DestroyCommand &destroy) const {
+            if (scene.IsValid(candidate, destroy.entity) && candidate.slots[destroy.entity.entity.index].baselineOwner)
+                return Result<void>::Failure(
+                    MakeError(SceneErrors::BaselineInvalid, "Baseline entities retire only through exact baseline ownership."));
             if (const Result<void> destroyedResult = scene.DestroyEntity(candidate, destroy.entity); destroyedResult.HasError())
                 return Result<void>::Failure(destroyedResult.ErrorValue());
             ++result.destroyed;
             return Result<void>::Success();
+        }
+
+        Result<void> operator()(const SceneCommandBuffer::AttachBaselineCommand &command) const {
+            auto attached = scene.ApplyBaseline(candidate, command);
+            if (attached.HasValue())
+                ++result.baselinesAttached;
+            return attached;
+        }
+
+        Result<void> operator()(const SceneCommandBuffer::DetachBaselineCommand &command) const {
+            auto detached = scene.RemoveBaseline(candidate, command.id, command.revision, *command.ownership);
+            if (detached.HasValue())
+                ++result.baselinesDetached;
+            return detached;
         }
 
         Result<void> operator()(const SceneCommandBuffer::CreateGroupCommand &group) const {
@@ -368,17 +397,18 @@ namespace Horo::Runtime {
         /** @brief Projects additions and retirements from detached storage, retaining every admitted asset lease. */
         bool ProjectResourceGroup(std::vector<RuntimeEntityView> &created, std::vector<EntityRef> &destroyed) const {
             bool resourceGroup{};
-            created.reserve(result.created.size());
-            for (const auto &resolution : result.created) {
-                if (!scene.IsValid(candidate, resolution.entity))
+            created.reserve(candidate.slots.size());
+            for (std::size_t index = 0; index < candidate.slots.size(); ++index) {
+                const auto &slot = candidate.slots[index];
+                if (!slot.active || (index < scene.storage_.slots.size() && scene.storage_.slots[index].active &&
+                                     scene.storage_.slots[index].generation == slot.generation))
                     continue;
-                const auto &slot = candidate.slots[resolution.entity.entity.index];
+                const EntityRef entity{scene.runtimeId_, {static_cast<std::uint32_t>(index), slot.generation}};
                 if (!slot.groupResources)
                     continue;
                 resourceGroup = true;
                 const auto parent = slot.parent ? std::optional<EntityRef>{{scene.runtimeId_, *slot.parent}} : std::nullopt;
-                created.emplace_back(resolution.entity, slot.authoredObject, parent, &slot.localTransform, &slot.primitiveMesh,
-                                     &slot.components,
+                created.emplace_back(entity, slot.authoredObject, parent, &slot.localTransform, &slot.primitiveMesh, &slot.components,
                                      slot.groupPhysicsReferences
                                          ? std::span<const ResolvedGroupPhysicsBodyReference>{*slot.groupPhysicsReferences}
                                          : std::span<const ResolvedGroupPhysicsBodyReference>{},
@@ -422,8 +452,13 @@ namespace Horo::Runtime {
                 if (needs(owner) && !std::ranges::any_of(participants, [owner](const auto &participant) {
                     return participant->Owner() == owner;
                 }))
-                    return Result<void>::Failure(
-                        MakeError(SceneErrors::AssetServicesUnavailable, "Required structural subsystem owner is not composed."));
+                    return Result<void>::Failure(MakeError(std::ranges::any_of(candidate.slots,
+                                                                               [](const auto &slot) {
+                        return slot.active && slot.baselineOwner.has_value();
+                    })
+                                                               ? SceneErrors::BaselineUnsupported
+                                                               : SceneErrors::AssetServicesUnavailable,
+                                                           "Required structural subsystem owner is not composed."));
             }
             return Result<void>::Success();
         }
@@ -479,6 +514,8 @@ namespace Horo::Runtime {
         const auto revision = registry ? registry->Snapshot().Revision() : Assets::AssetRegistryRevision{};
         if (auto admission = commands.ValidateAdmission(runtimeId_, revision); admission.HasError())
             return Result<StructuralCommitResult>::Failure(admission.ErrorValue());
+        if (const auto valid = commands.ValidateBaselineResources(registry); valid.HasError())
+            return Result<StructuralCommitResult>::Failure(valid.ErrorValue());
         RuntimeSceneStorage candidate = storage_;
         StructuralCommitResult result;
         result.created.reserve(commands.commands_.size());
@@ -497,6 +534,7 @@ namespace Horo::Runtime {
             return Result<StructuralCommitResult>::Failure(admission.ErrorValue());
         for (const auto &owner : owners)
             owner->Publish();
+        RuntimeSceneStorage retired = std::move(storage_);
         storage_ = std::move(candidate);
         ++structuralRevision_;
         for (const auto &owner : owners) {

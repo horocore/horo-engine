@@ -3,6 +3,10 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::Runtime::SceneErrors {
+    extern const ErrorCodeDescriptor BaselineInvalid;
+    extern const ErrorCodeDescriptor BaselineStale;
+    extern const ErrorCodeDescriptor BaselineCapacityExceeded;
+    extern const ErrorCodeDescriptor BaselineUnsupported;
     extern const ErrorCodeDescriptor InvalidDefinition;
     extern const ErrorCodeDescriptor InvalidAssetDependency;
     extern const ErrorCodeDescriptor ConflictingAssetDependency;

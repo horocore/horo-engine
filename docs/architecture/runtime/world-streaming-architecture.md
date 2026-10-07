@@ -1873,3 +1873,14 @@ retry allowance. After its exact canonical terminal proves cleanup, an active
 begin the next cooldown or quarantine. Duplicate acknowledgements and live
 retirement snapshots are rejected. A closed authority simply retains history
 until teardown; it admits no new retry work.
+
+## Implemented Canonical Multi-Cell Scene Ownership
+
+WST-005.6 integrates the CoreEcs baseline through
+`QueueRuntimeSceneCellAttachment` in `HoroEngine::SceneCellPayload`. Independent
+cells share one canonical RuntimeScene service and one runtime domain. The host
+supplies exact prepared asset pins, residency/catalog/cancellation evidence and
+the complete provider-readiness authority; Scene performs no provider discovery.
+Exact revision replacement/retirement and aggregate resident count ceilings are
+part of the structural transaction. See [Scene Runtime](scene-runtime.md#independent-cell-baseline-ownership-wst-0056)
+for ownership, failure, cancellation, hierarchy and shutdown contracts.

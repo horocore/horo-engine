@@ -82,6 +82,28 @@ namespace Horo::Runtime {
         [[nodiscard]] virtual Result<void> ValidatePublication() const = 0;
     };
 
+    /** @brief Immutable integration-owned identity evidence retained with a published independent baseline.
+     * @details Contains only identity values. This seam preserves owning-module identity types without a reverse
+     * dependency from Scene into that integration. Readiness authorities and cancellation stay in publication checks.
+     */
+    class SceneBaselineOwnership {
+    public:
+        virtual ~SceneBaselineOwnership() = default;
+        /** @brief Compares exact durable owner namespace and incarnation without callbacks or allocation.
+         * @param other Proposed replacement/retirement owner evidence.
+         * @return True only for the same typed owner; foreign evidence types must return false.
+         */
+        [[nodiscard]] virtual bool Matches(const SceneBaselineOwnership &other) const noexcept = 0;
+
+        /** @brief Compares the exact pending operation incarnation, including content revision and attempt generation.
+         * @param other Captured cancellation evidence. @return True only for the same operation; default denies cancellation.
+         */
+        [[nodiscard]] virtual bool MatchesOperation(const SceneBaselineOwnership &other) const noexcept {
+            (void)other;
+            return false;
+        }
+    };
+
     /** @brief Host-injected subsystem participating in aggregate runtime-scene publication. */
     class SceneActivationParticipant {
     public:
@@ -235,6 +257,24 @@ namespace Horo::Runtime {
         std::vector<DeferredEntityResolution> created;
         std::size_t destroyed{};
         std::size_t transformsUpdated{};
+        std::size_t baselinesAttached{}; /**< Complete attached or replaced ownership records. */
+        std::size_t baselinesDetached{}; /**< Complete explicitly retired ownership records. */
+    };
+
+    /** @brief Explicit aggregate ceilings for independent baselines attached to one canonical scene. */
+    struct SceneBaselineAttachmentLimits final {
+        std::size_t maximumAttachments{}; /**< Positive resident baseline ceiling. */
+        std::size_t maximumEntities{};    /**< Positive aggregate attached entity ceiling. */
+        std::size_t maximumResources{};   /**< Positive aggregate named resource pin ceiling. */
+    };
+
+    /** @brief Borrowed published ownership of one independent baseline in the canonical runtime domain. */
+    struct SceneBaselineAttachmentView final {
+        SceneDefinitionId id;
+        SceneDefinitionRevision revision;
+        std::span<const EntityId> entities;                /**< Generation-qualified slots owned by this baseline. */
+        std::span<const RuntimeGroupAssetLease> resources; /**< Exact shared immutable closure, including empty baselines. */
+        const SceneBaselineOwnership *ownership{};         /**< Immutable identity borrow; invalidated with this view. */
     };
 
     /** @brief Owner-thread command buffer for structural changes at the lifecycle safe point. */
@@ -252,6 +292,32 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<std::vector<DeferredEntity>> CreateGroup(std::vector<RuntimeEntityGroupEntry> entries,
                                                                       std::vector<RuntimeGroupAssetLease> resources,
                                                                       const SceneStructuralAdmission &admission);
+        /** @brief Queues an independent baseline or an exact revision replacement in the receiving scene.
+         * @param definition Owned validated flattened input; authored IDs must be unique in the final scene.
+         * @param resources Complete exact named dependency closure, already prepared by the asset owner.
+         * @param admission Exact scene, registry and cancellation evidence rechecked before publication.
+         * @param limits Positive aggregate resident ceilings, including empty baselines.
+         * @param expectedRevision Zero requires absence; otherwise names the exact baseline replaced by a newer revision.
+         * @param publicationCheck Non-null pure owner predicate retained through rollback or publication.
+         * @param ownership Non-null immutable owner namespace/incarnation evidence retained by the published record.
+         * @return Typed admission result without modifying this buffer on failure.
+         * @details Safe-point commit transfers every entity, hierarchy, resource pin and ownership record atomically.
+         */
+        [[nodiscard]] Result<void> AttachBaseline(RuntimeSceneDefinition definition, std::vector<RuntimeGroupAssetLease> resources,
+                                                  const SceneStructuralAdmission &admission, SceneBaselineAttachmentLimits limits,
+                                                  SceneDefinitionRevision expectedRevision,
+                                                  std::shared_ptr<const ScenePublicationCheck> publicationCheck,
+                                                  std::shared_ptr<const SceneBaselineOwnership> ownership);
+        /** @brief Queues exact baseline retirement; unrelated resident slots remain unchanged.
+         * @param id Stable baseline Scene identity. @param revision Exact committed source revision.
+         * @param admission Current scene/catalog/cancellation fence. @param publicationCheck Retained owner predicate.
+         * @param ownership Exact immutable owner namespace/incarnation evidence.
+         * @return Typed admission result; deferred errors preserve the complete active baseline.
+         */
+        [[nodiscard]] Result<void> DetachBaseline(SceneDefinitionId id, SceneDefinitionRevision revision,
+                                                  const SceneStructuralAdmission &admission,
+                                                  std::shared_ptr<const ScenePublicationCheck> publicationCheck,
+                                                  std::shared_ptr<const SceneBaselineOwnership> ownership);
         /** @brief Queues destruction of an existing generation-checked entity. @param entity Reference validated when the
          * batch commits. */
         void Destroy(EntityRef entity);
@@ -285,8 +351,28 @@ namespace Horo::Runtime {
             SceneStructuralAdmission admission;
         };
 
-        using Command = std::variant<CreateCommand, DestroyCommand, SetLocalTransformCommand, CreateGroupCommand>;
+        struct AttachBaselineCommand {
+            RuntimeSceneDefinition definition;
+            std::vector<RuntimeGroupAssetLease> resources;
+            SceneStructuralAdmission admission;
+            SceneBaselineAttachmentLimits limits;
+            SceneDefinitionRevision expectedRevision;
+            std::shared_ptr<const ScenePublicationCheck> publicationCheck;
+            std::shared_ptr<const SceneBaselineOwnership> ownership;
+        };
+
+        struct DetachBaselineCommand {
+            SceneDefinitionId id;
+            SceneDefinitionRevision revision;
+            SceneStructuralAdmission admission;
+            std::shared_ptr<const ScenePublicationCheck> publicationCheck;
+            std::shared_ptr<const SceneBaselineOwnership> ownership;
+        };
+
+        using Command = std::variant<CreateCommand, DestroyCommand, SetLocalTransformCommand, CreateGroupCommand, AttachBaselineCommand,
+                                     DetachBaselineCommand>;
         [[nodiscard]] Result<void> ValidateAdmission(SceneRuntimeId scene, Assets::AssetRegistryRevision registry) const;
+        [[nodiscard]] Result<void> ValidateBaselineResources(const Assets::AssetRegistry *registry) const;
         std::vector<Command> commands_;
         std::uint64_t nextDeferred_{1};
     };
@@ -361,6 +447,11 @@ namespace Horo::Runtime {
         /** @brief Returns an active slot view or an empty value for inactive/out-of-range slots. @param slot Zero-based
          * slot index. @return Borrowed active entity view when present. */
         [[nodiscard]] std::optional<RuntimeEntityView> EntityAt(std::size_t slot) const noexcept;
+        /** @brief Finds exact independent baseline ownership. @param id Stable baseline identity.
+         * @return Borrowed committed ownership, or empty for a stale view or absent baseline. */
+        [[nodiscard]] std::optional<SceneBaselineAttachmentView> FindBaseline(SceneDefinitionId id) const noexcept;
+        /** @brief Returns committed independent baseline count; zero for a stale view. */
+        [[nodiscard]] std::size_t BaselineCount() const noexcept;
         /** @brief Resolves a stable authored identity without allocation. @param object Non-zero authored identity. @return
          * Current runtime reference when mapped. */
         [[nodiscard]] std::optional<EntityRef> Find(SceneObjectId object) const noexcept;
@@ -429,18 +520,33 @@ namespace Horo::Runtime {
             Math::Transform localTransform;
             std::optional<PrimitiveMeshDescriptor> primitiveMesh;
             RuntimeComponentSet components;
+            std::optional<SceneDefinitionId> baselineOwner;
             std::shared_ptr<const std::vector<RuntimeGroupAssetLease>> groupResources;
             std::shared_ptr<const std::vector<ResolvedGroupPhysicsBodyReference>> groupPhysicsReferences;
         };
 
+        struct BaselineAttachment final {
+            SceneDefinitionId id;
+            SceneDefinitionRevision revision;
+            std::vector<EntityId> entities;
+            std::shared_ptr<const std::vector<RuntimeGroupAssetLease>> resources;
+            std::shared_ptr<const SceneBaselineOwnership> ownership;
+        };
+
         /** @brief Copyable transactional state without a runtime-domain identity. */
         struct RuntimeSceneStorage {
+            std::vector<BaselineAttachment> baselines;
             std::vector<Slot> slots;
             std::vector<std::uint32_t> freeList;
             std::vector<std::pair<SceneObjectId, EntityId>> authoredIndex;
         };
 
         struct CommandApplier;
+        [[nodiscard]] Result<void> ApplyBaseline(RuntimeSceneStorage &storage,
+                                                 const SceneCommandBuffer::AttachBaselineCommand &command) const;
+        [[nodiscard]] Result<void> RemoveBaseline(RuntimeSceneStorage &storage, SceneDefinitionId id, SceneDefinitionRevision revision,
+                                                  const SceneBaselineOwnership &ownership) const;
+        [[nodiscard]] Result<void> BindBaselineReferences(RuntimeSceneStorage &storage, const BaselineAttachment &baseline) const;
         [[nodiscard]] Result<EntityRef> CreateEntity(RuntimeSceneStorage &storage, const RuntimeEntityCreateInfo &info) const;
         [[nodiscard]] Result<void> DestroyEntity(RuntimeSceneStorage &storage, EntityRef entity) const;
         [[nodiscard]] bool IsValid(const RuntimeSceneStorage &storage, EntityRef entity) const noexcept;
@@ -497,6 +603,13 @@ namespace Horo::Runtime {
         /** @brief Queues one structural batch against the current active scene. @param commands Batch consumed on success.
          * @return Success or a typed state/pending-operation error. */
         [[nodiscard]] Result<void> QueueStructuralCommands(SceneCommandBuffer commands);
+        /** @brief Cancels a single queued baseline attachment/retirement without touching resident state.
+         * @param scene Exact active runtime domain. @param baseline Exact queued baseline identity.
+         * @param ownership Exact immutable operation evidence, including pending revision and attempt generation.
+         * @return Success or typed stale/invalid/lifecycle result; foreign or mixed batches are preserved.
+         */
+        [[nodiscard]] Result<void> CancelPendingBaseline(SceneRuntimeId scene, SceneDefinitionId baseline,
+                                                         const SceneBaselineOwnership &ownership);
         /** @brief Registers exactly one explicit owner adapter before service startup.
          * @param participant Owned adapter; its borrowed subsystem authority outlives the service.
          * @return Success or null/duplicate/late registration failure without replacing another owner.
