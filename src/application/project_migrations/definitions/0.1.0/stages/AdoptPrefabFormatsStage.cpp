@@ -112,10 +112,12 @@ namespace Horo::ProjectMigrations::R0_1_0 {
                 const auto *begin = reinterpret_cast<const char *>(document.bytes.data());
                 Json parsed = Json::parse(begin, begin + document.bytes.size(), callback);
                 if (!shape.IsValid() || !parsed.is_object())
-                    return Result<Json>::Failure(InvalidPrefabMigration(std::string{family} + " must be a unique-key JSON object."));
+                    return Result<Json>::Failure(
+                        InvalidPrefabMigration(std::string{family} + " must be a unique-key JSON object: " + std::string{document.path}));
                 return Result<Json>::Success(std::move(parsed));
             } catch (const Json::exception &) {
-                return Result<Json>::Failure(InvalidPrefabMigration(std::string{family} + " is malformed JSON."));
+                return Result<Json>::Failure(
+                    InvalidPrefabMigration(std::string{family} + " is malformed JSON: " + std::string{document.path}));
             }
         }
 
@@ -311,28 +313,130 @@ namespace Horo::ProjectMigrations::R0_1_0 {
             return Result<void>::Success();
         }
 
-        class PrefabMigrationAdoptionStage final : public Application::IProjectMigrationStage {
+        /** @brief Verifies adopted source identities without rewriting the candidate. */
+        [[nodiscard]] Result<void> ValidatePrefabSources(const ProjectMigrationContext &context, const PrefabIdentityIndex &index,
+                                                         const CancellationToken &cancellation) {
+            const auto sources = context.ListDocuments(Application::MigrationDocumentQuery::Kind(MigrationDocumentKind::Prefab));
+            if (sources.size() != index.byPortablePath.size())
+                return Result<void>::Failure(InvalidPrefabMigration("Prefab identity sidecar has no matching source."));
+            for (const auto &entry : sources) {
+                if (cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(Application::ProjectErrors::MigrationCancelled));
+                const auto identity = index.byPortablePath.find(PortablePath(entry.path));
+                if (identity == index.byPortablePath.end())
+                    return Result<void>::Failure(InvalidPrefabMigration("Prefab source has no typed identity sidecar: " + entry.path));
+                auto document = Read(context, entry);
+                if (document.HasError())
+                    return Result<void>::Failure(document.ErrorValue());
+                auto parsed = ParseDocument(document.Value(), "Prefab source");
+                if (parsed.HasError())
+                    return Result<void>::Failure(parsed.ErrorValue());
+                Json adopted = parsed.Value();
+                auto migrated = MigratePrefabDocument(adopted, identity->second);
+                if (migrated.HasError())
+                    return migrated;
+                if (adopted != parsed.Value())
+                    return Result<void>::Failure(InvalidPrefabMigration("Prefab source adoption is incomplete: " + entry.path));
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Verifies every scene reference resolves to an adopted source without mutation. */
+        [[nodiscard]] Result<void> ValidatePrefabReferences(const ProjectMigrationContext &context, const PrefabIdentityIndex &index,
+                                                            const CancellationToken &cancellation) {
+            for (const auto &entry : context.ListDocuments(Application::MigrationDocumentQuery::Kind(MigrationDocumentKind::Scene))) {
+                if (cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(Application::ProjectErrors::MigrationCancelled));
+                auto document = Read(context, entry);
+                if (document.HasError())
+                    return Result<void>::Failure(document.ErrorValue());
+                auto parsed = ParseDocument(document.Value(), "Scene document");
+                if (parsed.HasError())
+                    return Result<void>::Failure(parsed.ErrorValue());
+                if (!parsed.Value().contains("prefabInstances"))
+                    continue;
+                const Json &references = parsed.Value()["prefabInstances"];
+                if (!references.is_array() || references.size() > MaximumScenePrefabReferences)
+                    return Result<void>::Failure(InvalidPrefabMigration("Scene prefab reference set exceeds its bounded array contract."));
+                for (const Json &reference : references) {
+                    Json adopted = reference;
+                    auto migrated = MigrateSceneReference(adopted, index);
+                    if (migrated.HasError())
+                        return Result<void>::Failure(migrated.ErrorValue());
+                    if (adopted != reference)
+                        return Result<void>::Failure(
+                            InvalidPrefabMigration("Scene prefab reference adoption is incomplete: " + entry.path));
+                }
+            }
+            return Result<void>::Success();
+        }
+
+        class PrefabSourceAdoptionStage final : public Application::IProjectMigrationStage {
         public:
             [[nodiscard]] Application::MigrationStageDescriptor Describe() const override {
-                return {.id = {"adopt_prefab_identity_and_scene_references"},
-                        .readFamilies = {"asset.sidecar", "prefab.source", "scene.prefab_reference"},
-                        .writeFamilies = {"prefab.source", "scene.prefab_reference"},
-                        .estimatedWeight = 3};
+                return {.id = {"adopt_prefab_source_identity"},
+                        .readFamilies = {"asset.sidecar", "prefab.source"},
+                        .writeFamilies = {"prefab.source"},
+                        .estimatedWeight = 2};
             }
 
             [[nodiscard]] Result<void> Execute(ProjectMigrationContext &context, const CancellationToken &cancellation) const override {
                 auto index = BuildPrefabIdentityIndex(context, cancellation);
                 if (index.HasError())
                     return Result<void>::Failure(index.ErrorValue());
-                if (auto prefabs = MigratePrefabDocuments(context, index.Value(), cancellation); prefabs.HasError())
-                    return prefabs;
+                return MigratePrefabDocuments(context, index.Value(), cancellation);
+            }
+        };
+
+        class PrefabReferenceAdoptionStage final : public Application::IProjectMigrationStage {
+        public:
+            [[nodiscard]] Application::MigrationStageDescriptor Describe() const override {
+                return {.id = {"adopt_scene_prefab_references"},
+                        .readFamilies = {"asset.sidecar", "prefab.source", "scene.prefab_reference"},
+                        .writeFamilies = {"scene.prefab_reference"},
+                        .estimatedWeight = 1};
+            }
+
+            [[nodiscard]] Result<void> Execute(ProjectMigrationContext &context, const CancellationToken &cancellation) const override {
+                auto index = BuildPrefabIdentityIndex(context, cancellation);
+                if (index.HasError())
+                    return Result<void>::Failure(index.ErrorValue());
+                if (auto valid = ValidatePrefabSources(context, index.Value(), cancellation); valid.HasError())
+                    return valid;
                 return MigrateSceneDocuments(context, index.Value(), cancellation);
+            }
+        };
+
+        class PrefabAdoptionValidator final : public Application::IProjectMigrationValidator {
+        public:
+            [[nodiscard]] Application::MigrationStageDescriptor Describe() const override {
+                return {.id = {"validate_prefab_adoption"}, .readFamilies = {"asset.sidecar", "prefab.source", "scene.prefab_reference"}};
+            }
+
+            [[nodiscard]] Result<void> Validate(const ProjectMigrationContext &context,
+                                                const CancellationToken &cancellation) const override {
+                auto index = BuildPrefabIdentityIndex(context, cancellation);
+                if (index.HasError())
+                    return Result<void>::Failure(index.ErrorValue());
+                if (auto valid = ValidatePrefabSources(context, index.Value(), cancellation); valid.HasError())
+                    return valid;
+                return ValidatePrefabReferences(context, index.Value(), cancellation);
             }
         };
     }  // namespace
 
-    /** @copydoc BuildPrefabMigrationAdoptionStage */
-    std::shared_ptr<const Application::IProjectMigrationStage> BuildPrefabMigrationAdoptionStage() {
-        return std::make_shared<PrefabMigrationAdoptionStage>();
+    /** @copydoc BuildPrefabSourceAdoptionStage */
+    std::shared_ptr<const Application::IProjectMigrationStage> BuildPrefabSourceAdoptionStage() {
+        return std::make_shared<PrefabSourceAdoptionStage>();
+    }
+
+    /** @copydoc BuildPrefabReferenceAdoptionStage */
+    std::shared_ptr<const Application::IProjectMigrationStage> BuildPrefabReferenceAdoptionStage() {
+        return std::make_shared<PrefabReferenceAdoptionStage>();
+    }
+
+    /** @copydoc BuildPrefabAdoptionValidator */
+    std::shared_ptr<const Application::IProjectMigrationValidator> BuildPrefabAdoptionValidator() {
+        return std::make_shared<PrefabAdoptionValidator>();
     }
 }  // namespace Horo::ProjectMigrations::R0_1_0

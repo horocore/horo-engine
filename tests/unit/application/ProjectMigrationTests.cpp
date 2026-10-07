@@ -493,6 +493,95 @@ namespace project_migration_tests {
         REQUIRE((project.Read("assets/scenes/main.horo") == sourceScene));
     }
 
+    TEST_CASE("Prefab migration exposes source adoption before references and a read only barrier", "[unit][application][prefab]") {
+        const auto definition = ProductionCompressionDefinition();
+        const auto nodes = definition.pipeline->Nodes();
+        REQUIRE(nodes.size() == 5);
+        REQUIRE(nodes[1].kind == Horo::Application::ProjectMigrationNodeKind::Then);
+        REQUIRE(nodes[1].stage->Describe().id.value == "adopt_prefab_source_identity");
+        REQUIRE(nodes[2].kind == Horo::Application::ProjectMigrationNodeKind::Then);
+        REQUIRE(nodes[2].stage->Describe().id.value == "adopt_scene_prefab_references");
+        REQUIRE(nodes[3].kind == Horo::Application::ProjectMigrationNodeKind::Validate);
+        REQUIRE(nodes[3].validator->Describe().id.value == "validate_prefab_adoption");
+        REQUIRE(nodes[3].validator->Describe().writeFamilies.empty());
+        REQUIRE(definition.hash == ProductionCompressionDefinition().hash);
+        REQUIRE(std::ranges::any_of(definition.hash.bytes, [](const auto byte) {
+            return byte != 0;
+        }));
+    }
+
+    TEST_CASE("Prefab verified dry run reports deterministic affected files without changing identities", "[unit][application][prefab]") {
+        ProductionMigrationFixture fixture;
+        TemporaryProject project;
+        project.Write(".horo/project.json", R"({"projectId":"prefab-dry-run","settings":{}})");
+        const std::string sidecar = R"({"schemaVersion":1,"assetId":"00112233-4455-6677-8899-aabbccddeeff","assetType":"core.prefab"})";
+        const std::string prefab = R"({"projectVersion":"0.0.1","unknown":{"kept":true}})";
+        const std::string scene = R"({"prefabInstances":[{"sourcePath":"assets/player.prefab"}]})";
+        project.Write("assets/player.prefab.horo", sidecar);
+        project.Write("assets/player.prefab", prefab);
+        project.Write("assets/main.scene.horo", scene);
+        const auto originalRoot = project.Read(".horo/project.json");
+        const auto first = Horo::Application::ProjectMigrationExecutor::VerifiedDryRun(project.root, fixture.plan, fixture.jobs);
+        const auto second = Horo::Application::ProjectMigrationExecutor::VerifiedDryRun(project.root, fixture.plan, fixture.jobs);
+        REQUIRE(first.HasValue());
+        REQUIRE(second.HasValue());
+        REQUIRE(first.Value().changedFiles ==
+                std::vector<std::string>{".horo/project.json", "assets/main.scene.horo", "assets/player.prefab"});
+        REQUIRE(first.Value().changedFiles == second.Value().changedFiles);
+        REQUIRE(first.Value().inputBytes == second.Value().inputBytes);
+        REQUIRE(first.Value().outputBytes == second.Value().outputBytes);
+        REQUIRE(first.Value().diagnostics.empty());
+        REQUIRE(project.Read(".horo/project.json") == originalRoot);
+        REQUIRE(project.Read("assets/player.prefab.horo") == sidecar);
+        REQUIRE(project.Read("assets/player.prefab") == prefab);
+        REQUIRE(project.Read("assets/main.scene.horo") == scene);
+    }
+
+    TEST_CASE("Prefab dry run rejects dangling registry entries before dependent references", "[unit][application][prefab]") {
+        ProductionMigrationFixture fixture;
+        TemporaryProject project;
+        project.Write(".horo/project.json", R"({"projectId":"prefab-orphan","settings":{}})");
+        const std::string sidecar = R"({"schemaVersion":1,"assetId":"00112233-4455-6677-8899-aabbccddeeff","assetType":"core.prefab"})";
+        project.Write("assets/missing.prefab.horo", sidecar);
+        project.Write("assets/main.scene.horo", R"({"prefabInstances":[{"sourceAsset":"00112233-4455-6677-8899-aabbccddeeff"}]})");
+        const auto originalRoot = project.Read(".horo/project.json");
+        const auto originalScene = project.Read("assets/main.scene.horo");
+        const auto rejected = Horo::Application::ProjectMigrationExecutor::VerifiedDryRun(project.root, fixture.plan, fixture.jobs);
+        REQUIRE(rejected.HasError());
+        REQUIRE(rejected.ErrorValue().message.find("adopt_scene_prefab_references") != std::string::npos);
+        REQUIRE(rejected.ErrorValue().message.find("no matching source") != std::string::npos);
+        REQUIRE(project.Read(".horo/project.json") == originalRoot);
+        REQUIRE(project.Read("assets/main.scene.horo") == originalScene);
+        REQUIRE(project.Read("assets/missing.prefab.horo") == sidecar);
+    }
+
+    TEST_CASE("Prefab dry run reports corrupt sources and cancellation without publication", "[unit][application][prefab]") {
+        ProductionMigrationFixture fixture;
+        TemporaryProject project;
+        project.Write(".horo/project.json", R"({"projectId":"prefab-failure","settings":{}})");
+        const std::string sidecar = R"({"schemaVersion":1,"assetId":"00112233-4455-6677-8899-aabbccddeeff","assetType":"core.prefab"})";
+        project.Write("assets/player.prefab.horo", sidecar);
+        project.Write("assets/player.prefab", "{broken");
+        const auto originalRoot = project.Read(".horo/project.json");
+        Horo::CancellationSource cancellation;
+        SECTION("malformed source identifies the affected asset") {
+            const auto rejected = Horo::Application::ProjectMigrationExecutor::VerifiedDryRun(project.root, fixture.plan, fixture.jobs);
+            REQUIRE(rejected.HasError());
+            REQUIRE(rejected.ErrorValue().message.find("adopt_prefab_source_identity") != std::string::npos);
+            REQUIRE(rejected.ErrorValue().message.find("assets/player.prefab") != std::string::npos);
+        }
+        SECTION("cancelled operation retains the prior authored generation") {
+            cancellation.RequestCancellation();
+            const auto rejected = Horo::Application::ProjectMigrationExecutor::VerifiedDryRun(project.root, fixture.plan, fixture.jobs, {},
+                                                                                              cancellation.Token());
+            REQUIRE(rejected.HasError());
+            REQUIRE(rejected.ErrorValue().code.Value() == "project.migration.cancelled");
+        }
+        REQUIRE(project.Read(".horo/project.json") == originalRoot);
+        REQUIRE(project.Read("assets/player.prefab.horo") == sidecar);
+        REQUIRE(project.Read("assets/player.prefab") == "{broken");
+    }
+
     TEST_CASE("Production Prefab Migration Enforces Source Payload Boundary", "[unit][application][prefab]") {
         ProductionMigrationFixture fixture;
         TemporaryProject project;
