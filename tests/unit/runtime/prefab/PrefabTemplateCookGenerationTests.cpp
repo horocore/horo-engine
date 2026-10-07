@@ -3,6 +3,7 @@
 #include "PrefabTestUtils.h"
 #include "assets/AssetCookOutputFixture.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <thread>
@@ -78,7 +79,7 @@ namespace Horo::Prefab {
                     .Publish({{Test::Asset(), Type("core.prefab"), ProjectPath::Parse("assets/root.prefab").Value(),
                                ProjectPath::Parse("assets/root.prefab.horo").Value()}})
                     .status == Assets::AssetRegistryBuildStatus::Complete);
-        const std::vector<std::vector<std::uint8_t>> payloads{CookRoot(registry.Snapshot(), 3)};
+        const std::array payloads{CookRoot(registry.Snapshot(), 3)};
         const std::vector entries{RootEntry(payloads.front())};
         auto published = PublishFixture(directory.path, Target("headless-null"), entries, payloads);
         REQUIRE(published.HasValue());
@@ -96,7 +97,7 @@ namespace Horo::Prefab {
         REQUIRE(lease.HasValue());
         CHECK(lease.Value().Template()->Data().entities.front().localTransform.translation.x == 3);
 
-        const std::vector<std::vector<std::uint8_t>> replacementPayloads{CookRoot(registry.Snapshot(), 9)};
+        const std::array replacementPayloads{CookRoot(registry.Snapshot(), 9)};
         const std::vector replacementEntries{RootEntry(replacementPayloads.front())};
         NativeDurableFileSystem files;
         auto lock = files.TryAcquireExclusive(directory.path / ".cook-writer.lock", "cancelled template generation");

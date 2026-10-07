@@ -7,6 +7,8 @@
 
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Runtime/Save/SaveCanonicalCodec.h"
+#include "Horo/Runtime/Save/SaveErrors.h"
+#include "Horo/Runtime/Save/SaveRestoreReferenceContext.h"
 #include "Horo/Runtime/Scene/PersistentEntityIdentity.h"
 
 #include <cstddef>
@@ -60,6 +62,16 @@ namespace Horo::Runtime {
         virtual ~IPreparedSaveableComponentState() = default;
         /** @brief Publishes the already validated candidate at the Scene lifecycle commit boundary. */
         virtual void PublishPrepared() noexcept = 0;
+
+        /** @brief Consumes schema-owned references while this component candidate is still inactive.
+         * @param references Exact participant-filtered results, borrowed only for this call.
+         * @return Success after fixups, or a typed failure before aggregate publication.
+         * @details The default permits only a component schema with no declared references.
+         */
+        [[nodiscard]] virtual Result<void> FixupReferences(const SaveRestoreReferenceView &references) {
+            return references.references.empty() ? Result<void>::Success()
+                                                 : Result<void>::Failure(MakeError(SaveErrors::RestoreAdapterContractInvalid));
+        }
 
     protected:
         IPreparedSaveableComponentState() = default;

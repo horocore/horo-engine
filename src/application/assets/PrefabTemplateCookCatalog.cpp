@@ -2,6 +2,8 @@
 #include "PrefabSceneCookState.h"
 
 #include <algorithm>
+#include <format>
+#include <memory>
 
 namespace Horo::Application::PrefabCookDetail {
     namespace {
@@ -57,7 +59,7 @@ namespace Horo::Application::PrefabCookDetail {
                 if (found == artifacts.end())
                     return Result<std::vector<Prefab::PrefabTemplateCookResource>>::Failure(
                         MakeError(Prefab::PrefabErrors::DependencyUnavailable));
-                resources.push_back({asset, found->envelope});
+                resources.emplace_back(asset, found->envelope);
             }
             return Result<std::vector<Prefab::PrefabTemplateCookResource>>::Success(std::move(resources));
         }
@@ -70,7 +72,7 @@ namespace Horo::Application::PrefabCookDetail {
             if (resources.HasError())
                 return Result<PreparedTemplate>::Failure(resources.ErrorValue());
             auto cooked = Prefab::CookPrefabTemplate(state.resolver, state.registry, root, resources.Value(), state.target, state.limits,
-                                                     cancellation, state.assetLimits);
+                                                     {cancellation, state.assetLimits});
             if (cooked.HasError())
                 return Result<PreparedTemplate>::Failure(cooked.ErrorValue());
             if (auto admitted = ValidateSchemas(cooked.Value().Data(), state, cancellation); admitted.HasError())
@@ -92,7 +94,7 @@ namespace Horo::Application::PrefabCookDetail {
         /** @brief Supplies immutable templates to the generic joined cook, with identical fresh/cache domain validation. */
         class TemplateStrategy final : public Assets::ICookerStrategy {
         public:
-            TemplateStrategy(std::vector<PreparedTemplate> templates, const Sha256Digest settings, Prefab::PrefabLimitProfile limits)
+            TemplateStrategy(std::vector<PreparedTemplate> templates, const Sha256Digest &settings, Prefab::PrefabLimitProfile limits)
                 : templates_(std::move(templates)), settings_(settings), limits_(std::move(limits)) {}
 
             Assets::CookerCacheIdentity CacheIdentity() const noexcept override {
@@ -114,8 +116,7 @@ namespace Horo::Application::PrefabCookDetail {
                 const auto *prepared = Find(source);
                 if (!prepared)
                     return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Stale));
-                auto decoded = Prefab::CookedPrefab::Parse(std::as_bytes(payload), source.id, limits_);
-                if (decoded.HasError())
+                if (auto decoded = Prefab::CookedPrefab::Parse(std::as_bytes(payload), source.id, limits_); decoded.HasError())
                     return Result<void>::Failure(decoded.ErrorValue());
                 if (!std::ranges::equal(payload, prepared->payload))
                     return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
@@ -126,7 +127,7 @@ namespace Horo::Application::PrefabCookDetail {
             /** @brief Matches captured source identity rather than accepting another valid template under this key. */
             const PreparedTemplate *Find(const Assets::CookSourceView &source) const {
                 const auto found = std::ranges::find(templates_, source.id, &PreparedTemplate::asset);
-                return found != templates_.end() && found->sourceDigest == source.sourceDigest ? &*found : nullptr;
+                return found != templates_.end() && found->sourceDigest == source.sourceDigest ? std::to_address(found) : nullptr;
             }
 
             const std::vector<PreparedTemplate> templates_;
@@ -151,11 +152,12 @@ namespace Horo::Application::PrefabCookDetail {
                 templates.push_back(std::move(prepared).Value());
             }
             Assets::CookerCatalog candidate;
-            auto registered = candidate.Register({"horo.builtin.prefab_template",
-                                                  Assets::AssetTypeId::Parse("core.prefab").Value(),
-                                                  {state.target},
-                                                  std::make_shared<TemplateStrategy>(std::move(templates), state.settings, state.limits)});
-            if (registered.HasError())
+            if (auto registered =
+                    candidate.Register({"horo.builtin.prefab_template",
+                                        Assets::AssetTypeId::Parse("core.prefab").Value(),
+                                        {state.target},
+                                        std::make_shared<TemplateStrategy>(std::move(templates), state.settings, state.limits)});
+                registered.HasError())
                 return Result<std::shared_ptr<const Assets::CookerCatalogSnapshot>>::Failure(registered.ErrorValue());
             return candidate.Publish();
         }
@@ -168,11 +170,10 @@ namespace Horo::Application::PrefabCookDetail {
         std::ranges::sort(state.roots);
         if (std::ranges::adjacent_find(state.roots) != state.roots.end())
             return Result<std::shared_ptr<const Assets::AssetCookDependentPhase>>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
-        std::string identity = "horo.dynamic-prefab-policy.v1.output-v" + std::to_string(Prefab::CurrentCookedPrefabVersion) + ":" +
-                               FormatSha256(state.settings);
+        std::string identity =
+            std::format("horo.dynamic-prefab-policy.v1.output-v{}:{}", Prefab::CurrentCookedPrefabVersion, FormatSha256(state.settings));
         for (const auto root : state.roots) {
-            const auto *node = state.graph.FindNode(root);
-            if (!node || !node->sourceRevision)
+            if (const auto *node = state.graph.FindNode(root); !node || !node->sourceRevision)
                 return Result<std::shared_ptr<const Assets::AssetCookDependentPhase>>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
             identity += root.ToString();
         }

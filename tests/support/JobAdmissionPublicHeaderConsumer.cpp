@@ -2,6 +2,9 @@
 
 #include <type_traits>
 
+static_assert(std::is_same_v<decltype(&Horo::JobSystem::SubmitResult),
+                             Horo::Result<Horo::JobHandle> (Horo::JobSystem::*)(const Horo::JobDescriptor &, Horo::JobFunction) const>);
+
 static_assert(std::is_same_v<decltype(&Horo::JobSystem::SubmitContext), Horo::Result<Horo::JobHandle> (Horo::JobSystem::*)(
                                                                             const Horo::JobDescriptor &, Horo::ContextJobFunction) const>);
 

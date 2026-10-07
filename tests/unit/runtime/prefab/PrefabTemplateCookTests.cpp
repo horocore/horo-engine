@@ -4,10 +4,11 @@
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <format>
 
 namespace Horo::Prefab {
     namespace {
-        PrefabLimitProfile Profile(PrefabProjectPolicy policy = {}) {
+        PrefabLimitProfile Profile(const PrefabProjectPolicy &policy = {}) {
             return PrefabLimitProfile::Create(policy).Value();
         }
 
@@ -20,7 +21,7 @@ namespace Horo::Prefab {
         }
 
         Assets::AssetRecord Record(std::uint16_t id, std::string_view type) {
-            const auto path = "assets/item" + std::to_string(id) + (type == "core.prefab" ? ".prefab" : ".obj");
+            const auto path = std::format("assets/item{}{}", id, type == "core.prefab" ? ".prefab" : ".obj");
             return {Test::Asset(id), Type(type), ProjectPath::Parse(path).Value(), ProjectPath::Parse(path + ".horo").Value()};
         }
 
@@ -72,10 +73,10 @@ namespace Horo::Prefab {
                 return std::move(snapshot).Value();
             }
 
-            Result<CookedPrefab> Cook(PrefabProjectPolicy policy = {}, const CancellationToken &cancellation = {}) const {
+            Result<CookedPrefab> Cook(const PrefabProjectPolicy &policy = {}, const CancellationToken &cancellation = {}) const {
                 const PrefabTemplateCookResource dependency{Test::Asset(3), resource};
                 return CookPrefabTemplate(sources, registry.Snapshot(), Test::Asset(), std::span{&dependency, 1}, Target(), Profile(policy),
-                                          cancellation);
+                                          {cancellation});
             }
         };
     }  // namespace
@@ -111,12 +112,14 @@ namespace Horo::Prefab {
     TEST_CASE("Template cook rejects incomplete foreign and duplicate resource closure", "[prefab][template-cook]") {
         Fixture fixture;
         std::vector<PrefabTemplateCookResource> resources;
-        SECTION("missing") {}
+        SECTION("missing") {
+            // Leave the captured resource closure empty to verify missing-resource rejection.
+        }
         SECTION("foreign") {
-            resources.push_back({Test::Asset(2), fixture.resource});
+            resources.emplace_back(Test::Asset(2), fixture.resource);
         }
         SECTION("duplicate") {
-            resources.push_back({Test::Asset(3), fixture.resource});
+            resources.emplace_back(Test::Asset(3), fixture.resource);
             resources.push_back(resources.front());
         }
         auto result = CookPrefabTemplate(fixture.sources, fixture.registry.Snapshot(), Test::Asset(), resources, Target(), Profile());
@@ -126,7 +129,7 @@ namespace Horo::Prefab {
     TEST_CASE("Template cook verifies actual resource envelopes before recording dependencies", "[prefab][template-cook]") {
         Fixture fixture;
         SECTION("digest corruption") {
-            fixture.resource.back() ^= 1U;
+            std::as_writable_bytes(std::span{fixture.resource}).back() ^= std::byte{1};
         }
         SECTION("truncation") {
             fixture.resource.resize(7);
@@ -179,7 +182,7 @@ namespace Horo::Prefab {
         CancellationSource cancelled;
         cancelled.RequestCancellation();
         CHECK(fixture.Cook({}, cancelled.Token()).HasError());
-        fixture.resource.back() ^= 1U;
+        std::as_writable_bytes(std::span{fixture.resource}).back() ^= std::byte{1};
         CHECK(fixture.Cook().HasError());
         CHECK(std::ranges::equal(saved, original.Value().Bytes()));
     }
@@ -279,11 +282,11 @@ namespace Horo::Prefab {
         resourceLimits.maximumArtifactBytes = fixture.resource.size();
         const PrefabTemplateCookResource dependency{Test::Asset(3), fixture.resource};
         CHECK(CookPrefabTemplate(fixture.sources, fixture.registry.Snapshot(), Test::Asset(), std::span{&dependency, 1}, Target(),
-                                 Profile(policy), {}, resourceLimits)
+                                 Profile(policy), {{}, resourceLimits})
                   .HasValue());
         --resourceLimits.maximumArtifactBytes;
         CHECK(CookPrefabTemplate(fixture.sources, fixture.registry.Snapshot(), Test::Asset(), std::span{&dependency, 1}, Target(),
-                                 Profile(policy), {}, resourceLimits)
+                                 Profile(policy), {{}, resourceLimits})
                   .HasError());
     }
 }  // namespace Horo::Prefab

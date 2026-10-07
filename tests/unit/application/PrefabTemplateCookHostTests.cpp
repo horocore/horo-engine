@@ -273,7 +273,7 @@ TEST_CASE("Dynamic cache admission rejects corrupt and valid but different HPFB 
     REQUIRE(original.HasValue());
     auto poisoned = std::move(original).Value();
     SECTION("HPFB integrity differs despite a valid outer envelope") {
-        poisoned.payload.back() ^= 1U;
+        std::as_writable_bytes(std::span{poisoned.payload}).back() ^= std::byte{1};
     }
     SECTION("another valid template is not the expected output") {
         ReplaceTemplatePayload(poisoned);

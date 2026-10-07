@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -52,6 +53,12 @@ namespace Horo::Assets {
     [[nodiscard]] Result<std::vector<std::uint8_t>> BuildAssetArchive(const AssetChunkPlan &plan, const AssetCookGeneration &generation,
                                                                       const AssetArchiveLimits &limits = {});
 
+    /** @brief Owned identity and type validated from one visible archived cooked envelope. */
+    struct AssetArchiveMember final {
+        AssetId id;
+        AssetTypeId type;
+    };
+
     /** @brief Immutable archive-backed runtime provider with no filesystem fallback. */
     class AssetArchiveProvider final : public IAssetProvider {
     public:
@@ -80,6 +87,31 @@ namespace Horo::Assets {
             std::span<const std::uint8_t> bytes, const AssetCookTargetId &expectedTarget, const AssetChunkPlan &expectedPlan,
             std::span<const AssetChunkId> selected, const Sha256Digest &baseManifest, const AssetArchiveLimits &limits = {});
 
+        /** @brief Returns a visible cooked envelope's exact stored size without copying it.
+         * @param id Stable asset identity.
+         * @return Verified byte length, or empty when the asset is not mounted.
+         */
+        [[nodiscard]] std::optional<std::size_t> StoredByteLength(AssetId id) const noexcept;
+        /** @brief Returns only verified mounted chunk definitions, including selected dependency closure.
+         * @return Immutable mount evidence valid for this provider's lifetime; never an unmounted release inventory.
+         */
+        [[nodiscard]] std::span<const AssetChunkDefinition> MountedChunks() const noexcept;
+        /** @brief Returns the digest of the complete verified archive bytes. @return Immutable package identity. */
+        [[nodiscard]] const Sha256Digest &ArchiveDigest() const noexcept;
+        /**
+         * @brief Inspect immutable visible members without reading or copying their payloads.
+         * @return AssetId-sorted metadata for exactly the assets exposed by this provider.
+         * @note The borrowed span is valid until this provider is moved, assigned or destroyed.
+         * OpenSelected omits unmounted members. Metadata proves archive integrity, not package authentication.
+         */
+        [[nodiscard]] std::span<const AssetArchiveMember> Members() const noexcept;
+
+        /**
+         * @brief Return the target validated against every visible envelope during archive admission.
+         * @return Provider-owned target; valid until this provider is moved, assigned or destroyed.
+         */
+        [[nodiscard]] const AssetCookTargetId &Target() const noexcept;
+
         [[nodiscard]] Result<bool> Exists(AssetId id, const CancellationToken &cancellation) const override;
         [[nodiscard]] Result<std::vector<std::uint8_t>> Load(AssetId id, const CancellationToken &cancellation) const override;
 
@@ -90,7 +122,8 @@ namespace Horo::Assets {
             std::size_t size{};
         };
 
-        AssetArchiveProvider(std::vector<std::uint8_t> bytes, std::vector<Entry> entries, std::vector<AssetChunkDefinition> chunks);
+        AssetArchiveProvider(std::vector<std::uint8_t> bytes, std::vector<Entry> entries, std::vector<AssetChunkDefinition> chunks,
+                             std::vector<AssetArchiveMember> members, AssetCookTargetId target);
         /** @brief Parses the complete archive and retains its internal graph for selected admission. */
         [[nodiscard]] static Result<AssetArchiveProvider> OpenParsed(std::span<const std::uint8_t> bytes,
                                                                      const AssetCookTargetId &expectedTarget,
@@ -99,5 +132,8 @@ namespace Horo::Assets {
         std::vector<std::uint8_t> bytes_;
         std::vector<Entry> entries_;
         std::vector<AssetChunkDefinition> chunks_;
+        std::vector<AssetArchiveMember> members_;
+        AssetCookTargetId target_;
+        Sha256Digest archiveDigest_;
     };
 }  // namespace Horo::Assets

@@ -72,10 +72,11 @@ namespace Horo::Assets {
     Result<AssetCookInputSnapshot> AssetCookInputSnapshot::Capture(const std::filesystem::path &sourceRoot, AssetRegistrySnapshot registry,
                                                                    const AssetCookLimits &limits, const std::uint64_t maximumCapturedBytes,
                                                                    const CancellationToken &cancellation) {
-        std::error_code error;
-        if (!sourceRoot.is_absolute() || std::filesystem::is_symlink(sourceRoot, error) || error ||
-            !std::filesystem::is_directory(sourceRoot, error) || error || limits.maximumSourceBytes == 0 || limits.maximumAssets == 0 ||
-            maximumCapturedBytes == 0 || registry.Records().size() > limits.maximumAssets)
+        if (std::error_code error; !sourceRoot.is_absolute() || std::filesystem::is_symlink(sourceRoot, error) || error)
+            return Result<AssetCookInputSnapshot>::Failure(MakeError(CookErrors::SourceReadFailed));
+        if (std::error_code error; !std::filesystem::is_directory(sourceRoot, error) || error || limits.maximumSourceBytes == 0 ||
+                                   limits.maximumAssets == 0 || maximumCapturedBytes == 0 ||
+                                   registry.Records().size() > limits.maximumAssets)
             return Result<AssetCookInputSnapshot>::Failure(MakeError(CookErrors::SourceReadFailed));
         auto state = std::make_shared<State>();
         state->root = sourceRoot;
@@ -103,7 +104,7 @@ namespace Horo::Assets {
                 return Result<AssetCookInputSnapshot>::Failure(MakeError(CookErrors::MalformedArtifact));
             const auto digest = ComputeSha256(std::as_bytes(std::span{bytes.Value()}));
             state->sidecarDigests.push_back(ComputeSha256(std::as_bytes(std::span{sidecar.Value()})));
-            state->sources.push_back({record, std::move(bytes).Value(), digest, MetadataDigest(record)});
+            state->sources.emplace_back(record, std::move(bytes).Value(), digest, MetadataDigest(record));
         }
         AssetCookInputSnapshot snapshot{std::move(state)};
         if (auto unchanged = snapshot.VerifyUnchanged(cancellation); unchanged.HasError())
@@ -130,9 +131,9 @@ namespace Horo::Assets {
             canonical += source.record.id.ToString() + "\n" + std::string{source.record.type.Value()} + "\n";
             for (const auto &digest : {source.sourceDigest, source.metadataDigest}) {
                 constexpr std::string_view hex = "0123456789abcdef";
-                for (const auto byte : digest.bytes) {
-                    canonical += hex[byte >> 4];
-                    canonical += hex[byte & 15];
+                for (const std::byte byte : std::as_bytes(std::span{digest.bytes})) {
+                    canonical += hex[std::to_integer<std::size_t>(byte >> 4)];
+                    canonical += hex[std::to_integer<std::size_t>(byte & std::byte{15})];
                 }
                 canonical += '\n';
             }
@@ -150,7 +151,7 @@ namespace Horo::Assets {
         const auto found = std::ranges::lower_bound(state_->sources, id, {}, [](const auto &source) {
             return source.record.id;
         });
-        return found == state_->sources.end() || found->record.id != id ? nullptr : &*found;
+        return found == state_->sources.end() || found->record.id != id ? nullptr : std::to_address(found);
     }
 
     /** @copydoc AssetCookInputSnapshot::VerifyUnchanged */

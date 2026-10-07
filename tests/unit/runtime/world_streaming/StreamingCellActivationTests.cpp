@@ -4,6 +4,7 @@
 #include "WorldStreamingTestUtils.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <limits>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -44,6 +45,12 @@ namespace Horo::WorldStreaming {
                 rolledBack_ = true;
             }
 
+            std::uint64_t MaximumPublicationNanoseconds() const noexcept override {
+                return cost;
+            }
+
+            std::uint64_t cost{10};
+
         private:
             StreamingCellActivationRequirement requirement_;
             StreamingCellOperationHandle operation_;
@@ -74,7 +81,8 @@ namespace Horo::WorldStreaming {
             return {.activation = IdentityFrom<StreamingCellActivationId>(9),
                     .operation = std::move(operation),
                     .maximumReceipts = maximumReceipts,
-                    .lifecycle = lifecycle};
+                    .lifecycle = lifecycle,
+                    .scheduler = IdentityFrom<StreamingSchedulerLedgerId>(1)};
         }
 
         [[nodiscard]] std::vector<std::unique_ptr<IStreamingCellActivationReceipt>> Receipts(
@@ -89,6 +97,10 @@ namespace Horo::WorldStreaming {
 
         TEST_CASE("Cell activation publishes the complete set once in canonical order at the Scene safe point",
                   "[unit][world_streaming][activation]") {
+            [[maybe_unused]] auto frameBudget =
+                StreamingOwnerFrameBudget::Create({IdentityFrom<StreamingSchedulerLedgerId>(1), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                                   IdentityFrom<StreamingOwnerFrameId>(1), 10000, 1000})
+                    .Value();
             const auto operation = Activating();
             const std::vector required{Requirement(30), Requirement(10), Requirement(20)};
             ReceiptLog log;
@@ -100,18 +112,22 @@ namespace Horo::WorldStreaming {
             REQUIRE(transaction.Requirements()[0].participant == Requirement(10).participant);
             REQUIRE(transaction
                         .Commit(operation, StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges,
-                                StreamingCellActivationLifecycle::Active)
+                                StreamingCellActivationLifecycle::Active, frameBudget, 0)
                         .HasValue());
             REQUIRE(transaction.State() == StreamingCellActivationState::Published);
             REQUIRE(log.published == std::vector<std::uint64_t>{10, 20, 30});
             REQUIRE(log.rolledBack.empty());
             RequireError(transaction.Commit(operation, StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges,
-                                            StreamingCellActivationLifecycle::Active),
+                                            StreamingCellActivationLifecycle::Active, frameBudget, 0),
                          WorldStreamingErrors::CellActivationLifecycleUnavailable);
         }
 
         TEST_CASE("Cell activation waits for CommitDeferredLifecycleChanges without losing prepared ownership",
                   "[unit][world_streaming][activation][safe_point]") {
+            [[maybe_unused]] auto frameBudget =
+                StreamingOwnerFrameBudget::Create({IdentityFrom<StreamingSchedulerLedgerId>(1), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                                   IdentityFrom<StreamingOwnerFrameId>(1), 10000, 1000})
+                    .Value();
             const auto operation = Activating();
             const std::vector required{Requirement(10)};
             ReceiptLog log;
@@ -120,7 +136,7 @@ namespace Horo::WorldStreaming {
                     .Value();
 
             RequireError(transaction.Commit(operation, StreamingCellActivationCommitPoint::PreUpdate,
-                                            StreamingCellActivationLifecycle::Active),
+                                            StreamingCellActivationLifecycle::Active, frameBudget, 0),
                          WorldStreamingErrors::CellActivationSafePointUnavailable);
             REQUIRE(transaction.State() == StreamingCellActivationState::Prepared);
             REQUIRE(log.published.empty());
@@ -129,6 +145,10 @@ namespace Horo::WorldStreaming {
 
         TEST_CASE("Stale operation snapshots and shutdown roll back every prepared receipt in reverse order",
                   "[unit][world_streaming][activation][rollback]") {
+            [[maybe_unused]] auto frameBudget =
+                StreamingOwnerFrameBudget::Create({IdentityFrom<StreamingSchedulerLedgerId>(1), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                                   IdentityFrom<StreamingOwnerFrameId>(1), 10000, 1000})
+                    .Value();
             const auto operation = Activating();
             const std::vector required{Requirement(10), Requirement(20), Requirement(30)};
             ReceiptLog staleLog;
@@ -139,7 +159,7 @@ namespace Horo::WorldStreaming {
             replacement.operation = IdentityFrom<StreamingCellOperationId>(10);
             replacement.fence.generation = IdentityFrom<StreamingGeneration>(2);
             RequireError(stale.Commit(Activating(replacement), StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges,
-                                      StreamingCellActivationLifecycle::Active),
+                                      StreamingCellActivationLifecycle::Active, frameBudget, 0),
                          WorldStreamingErrors::CellActivationStale);
             REQUIRE(stale.State() == StreamingCellActivationState::RolledBack);
             REQUIRE(staleLog.published.empty());
@@ -150,7 +170,7 @@ namespace Horo::WorldStreaming {
                                                                         Receipts(required, operation.Handle(), shutdownLog))
                                 .Value();
             RequireError(shutdown.Commit(operation, StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges,
-                                         StreamingCellActivationLifecycle::Closed),
+                                         StreamingCellActivationLifecycle::Closed, frameBudget, 0),
                          WorldStreamingErrors::CellActivationLifecycleUnavailable);
             REQUIRE(shutdownLog.rolledBack == std::vector<std::uint64_t>{30, 20, 10});
 
@@ -161,7 +181,7 @@ namespace Horo::WorldStreaming {
             const auto retiring = Advance(operation, StreamingCellOperationTransition::Cancel);
             REQUIRE(retiring.Handle() == operation.Handle());
             RequireError(cancelled.Commit(retiring, StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges,
-                                          StreamingCellActivationLifecycle::Active),
+                                          StreamingCellActivationLifecycle::Active, frameBudget, 0),
                          WorldStreamingErrors::CellActivationStale);
             REQUIRE(cancelled.State() == StreamingCellActivationState::RolledBack);
             REQUIRE(cancelledLog.published.empty());
@@ -170,6 +190,10 @@ namespace Horo::WorldStreaming {
 
         TEST_CASE("Activation preparation rejects incomplete duplicate over-capacity and stale receipt sets transactionally",
                   "[unit][world_streaming][activation][failure]") {
+            [[maybe_unused]] auto frameBudget =
+                StreamingOwnerFrameBudget::Create({IdentityFrom<StreamingSchedulerLedgerId>(1), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                                   IdentityFrom<StreamingOwnerFrameId>(1), 10000, 1000})
+                    .Value();
             const auto operation = Activating();
             const std::vector required{Requirement(10), Requirement(20)};
 
@@ -219,6 +243,10 @@ namespace Horo::WorldStreaming {
 
         TEST_CASE("Cancellation closed admission and invalid operation phase release all acquired receipts",
                   "[unit][world_streaming][activation][lifecycle]") {
+            [[maybe_unused]] auto frameBudget =
+                StreamingOwnerFrameBudget::Create({IdentityFrom<StreamingSchedulerLedgerId>(1), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                                   IdentityFrom<StreamingOwnerFrameId>(1), 10000, 1000})
+                    .Value();
             const auto operation = Activating();
             const std::vector required{Requirement(10)};
             ReceiptLog cancellationLog;
@@ -240,6 +268,10 @@ namespace Horo::WorldStreaming {
 
         TEST_CASE("Move ownership and destruction roll back a prepared set exactly once",
                   "[unit][world_streaming][activation][ownership]") {
+            [[maybe_unused]] auto frameBudget =
+                StreamingOwnerFrameBudget::Create({IdentityFrom<StreamingSchedulerLedgerId>(1), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                                   IdentityFrom<StreamingOwnerFrameId>(1), 10000, 1000})
+                    .Value();
             const auto operation = Activating();
             const std::vector required{Requirement(10), Requirement(20)};
             ReceiptLog log;
@@ -253,6 +285,79 @@ namespace Horo::WorldStreaming {
             }
             REQUIRE(log.rolledBack == std::vector<std::uint64_t>{20, 10});
             REQUIRE(log.published.empty());
+        }
+
+        TEST_CASE("Prepared cell publication defers atomically and resumes in the next shared frame",
+                  "[unit][world_streaming][activation][frame_budget]") {
+            const auto operation = Activating();
+            const std::vector required{Requirement(10), Requirement(20)};
+            ReceiptLog log;
+            auto transaction =
+                StreamingCellActivationTransaction::Prepare(Context(operation), required, Receipts(required, operation.Handle(), log))
+                    .Value();
+            auto frame =
+                StreamingOwnerFrameBudget::Create({IdentityFrom<StreamingSchedulerLedgerId>(1), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                                   IdentityFrom<StreamingOwnerFrameId>(1), 20, 1})
+                    .Value();
+            REQUIRE(frame.TryConsume(frame.Limits().owner, 1, 0).Value());
+            RequireError(transaction.Commit(operation, StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges,
+                                            StreamingCellActivationLifecycle::Active, frame, 0),
+                         WorldStreamingErrors::OwnerFrameDeferred);
+            REQUIRE(transaction.State() == StreamingCellActivationState::Prepared);
+            REQUIRE(log.published.empty());
+            REQUIRE(log.rolledBack.empty());
+            auto limits = frame.Limits();
+            limits.frame = IdentityFrom<StreamingOwnerFrameId>(2);
+            auto nextFrame = StreamingOwnerFrameBudget::Create(limits).Value();
+            REQUIRE(transaction
+                        .Commit(operation, StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges,
+                                StreamingCellActivationLifecycle::Active, nextFrame, 0)
+                        .HasValue());
+            REQUIRE(log.published == std::vector<std::uint64_t>{10, 20});
+            REQUIRE(nextFrame.ConsumedUnits() == 1);
+            REQUIRE(nextFrame.ChargedNanoseconds() == 20);
+        }
+
+        TEST_CASE("An oversized atomic publication never partially publishes and cancellation still revokes it",
+                  "[unit][world_streaming][activation][frame_budget][failure]") {
+            const auto operation = Activating();
+            const std::vector required{Requirement(10), Requirement(20)};
+            ReceiptLog log;
+            auto transaction =
+                StreamingCellActivationTransaction::Prepare(Context(operation), required, Receipts(required, operation.Handle(), log))
+                    .Value();
+            auto frame =
+                StreamingOwnerFrameBudget::Create({IdentityFrom<StreamingSchedulerLedgerId>(1), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                                   IdentityFrom<StreamingOwnerFrameId>(1), 19, 1})
+                    .Value();
+            RequireError(transaction.Commit(operation, StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges,
+                                            StreamingCellActivationLifecycle::Active, frame, 0),
+                         WorldStreamingErrors::OwnerFrameCapacityExceeded);
+            REQUIRE(log.published.empty());
+            REQUIRE(frame.ConsumedUnits() == 0);
+            const auto cancelled = Advance(operation, StreamingCellOperationTransition::Cancel);
+            RequireError(transaction.Commit(cancelled, StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges,
+                                            StreamingCellActivationLifecycle::Active, frame, 0),
+                         WorldStreamingErrors::CellActivationStale);
+            REQUIRE(log.rolledBack == std::vector<std::uint64_t>{20, 10});
+        }
+
+        TEST_CASE("Malformed publication cost fails preparation and transfers every receipt to rollback",
+                  "[unit][world_streaming][activation][frame_budget][failure]") {
+            const auto operation = Activating();
+            const std::vector required{Requirement(10), Requirement(20)};
+            for (const auto cost : {std::uint64_t{0}, std::numeric_limits<std::uint64_t>::max()}) {
+                ReceiptLog log;
+                std::vector<std::unique_ptr<IStreamingCellActivationReceipt>> receipts;
+                auto first = std::make_unique<TestReceipt>(required[0], operation.Handle(), log);
+                first->cost = cost;
+                receipts.push_back(std::move(first));
+                receipts.push_back(std::make_unique<TestReceipt>(required[1], operation.Handle(), log));
+                RequireError(StreamingCellActivationTransaction::Prepare(Context(operation), required, std::move(receipts)),
+                             WorldStreamingErrors::OwnerFrameInvalid);
+                REQUIRE(log.published.empty());
+                REQUIRE(log.rolledBack == std::vector<std::uint64_t>{20, 10});
+            }
         }
     }  // namespace
 }  // namespace Horo::WorldStreaming

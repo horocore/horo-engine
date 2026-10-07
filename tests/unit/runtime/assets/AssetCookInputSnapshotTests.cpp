@@ -89,6 +89,8 @@ TEST_CASE("Cook input capture retains actual bytes and canonical identity metada
     REQUIRE(source != nullptr);
     REQUIRE(source->bytes == std::vector<std::uint8_t>{1, 2, 3, 4, 5});
     REQUIRE(source->sourceDigest == ComputeSha256(std::as_bytes(std::span{source->bytes})));
+    // Preserve the schema-v1 cache identity for the fixed source/metadata fixture.
+    REQUIRE(FormatSha256(copy.ClosureDigest()) == "sha256:8e99de71f9a56dacc1dbd4354f408777ec19876220adfc6d4b399459a04c2cc6");
     REQUIRE(copy.VerifyUnchanged().HasValue());
 
     WriteFile(project.sourceFile, std::vector<std::uint8_t>{9});

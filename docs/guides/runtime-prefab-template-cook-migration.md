@@ -74,3 +74,13 @@ The independent six-target Release/headless validation passed 48/48 focused
 CTest cases at `6cb60f6a`, before integration of the published scene-cook parent.
 That result does not validate the later host integration; final merged-input
 build, test and quality evidence must accompany the PR.
+
+## Template Cook Options
+
+`CookPrefabTemplate` groups host cancellation and generic resource-envelope limits
+into `PrefabTemplateCookOptions`. This keeps the public transformation signature
+focused while preserving the separate prefab payload and resource envelope
+ceilings. Six-argument callers retain default behavior; callers with cancellation
+pass `{cancellation}`, and callers with custom resource limits pass
+`{cancellation, resourceLimits}` as the seventh argument. The host catalog adapter,
+resource-limit tests and public-header consumer cover the migrated signature.

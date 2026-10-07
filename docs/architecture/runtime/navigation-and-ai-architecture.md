@@ -635,6 +635,131 @@ inactive prior generation. Dynamic carving derives a new runtime topology genera
 without mutating the published artifact; a persistent change edits authored intent
 and requires recook.
 
+### Target Cook and Packaged Navigation Provenance
+
+NAV-003.8 uses HNS2 to persist the compatibility evidence supplied to the actual
+`NavigationBakeService` request: provider, schema and settings SHA-256 digests,
+plus the optional construction-validated owned `NavigationProjectProfile`.
+The codec derives the complete surface/agent-profile partition table from the
+immutable HNT1 tiles and rejects a decoded table that disagrees with those tiles.
+The captured project profile is the existing capacity/query/capability authority,
+not a new policy registry. Its identity, revision, fingerprint and all effective
+facts participate in request joining. Its revision must match the input snapshot.
+A bake fingerprint is never a live query-provider capability revision.
+
+HNS2 changes only the aggregate definition payload. HNT1 bytes, dependency keys,
+tile-cache identity, standard envelope version and canonical definition AssetIds
+remain unchanged. The existing aggregate envelope/cache identity hashes the full
+canonical payload, so identical tiles under different project policies can share
+tile allocations but cannot alias aggregate policy/provenance. Old two-field
+`NavigationCookedTileSet` source aggregates remain explicit HNS1 encoders. HNS1
+is decoded without invented evidence for non-release callers; it is not upgraded
+in place. Unknown aggregate versions return `UnsupportedCookedVersion`.
+
+The dedicated application target `HoroNavigationContentIntegration` composes
+Assets, existing Release application contracts and navigation Scene integration;
+Assets and NavigationApi acquire no reverse dependency on Release. Its explicit
+preparation reads only a pinned promoted generation, verifies actual envelopes
+and HNS2 policy, and constructs the existing validated chunk archive. It never
+opens authoring geometry, calls a builder, resolves mutable `current.json`, repairs
+an artifact or selects a backend. Required release preparation rejects HNS1,
+missing project policy, malformed closure or target mismatch before archive/output
+publication. GameRuntime uses existing Base roles; GameDedicatedServer explicitly
+requires a DedicatedServer chunk. Existing `RequireAsset` and chunk-plan identities
+remain the sole dependency authorities.
+
+The inert release extension `horo.navigation.content`, version 1, records the
+explicit product/target, actual archive hash and canonical AssetId/envelope hash,
+provider/schema/settings hashes and project identity/revision/fingerprint for
+every packaged NavMesh. The pinned envelope contains the full validated profile
+facts and derived partition closure; the extension does not duplicate capacity
+policy or generate asset identities. Its canonical bytes obey the generic
+16,384-byte extension ceiling. Checked count and actual decimal-width accounting
+reject expansion before JSON/archive construction; unknown fields, duplicate IDs,
+unknown versions and mismatched claims fail closed. Canonical JSON or digest
+matching alone grants no package trust.
+
+`NavigationReleaseContentSmokeProbe` implements the existing RuntimeAssets smoke
+seam. It validates a detached private candidate and returns only success/failure;
+it cannot expose a runtime provider. The generic release verifier checks inventory,
+its declared signing policy and required smoke probes before issuing the existing
+construction-guarded `VerifiedReleaseCandidate`. Runtime admission binds that
+proof to the exact manifest digest and candidate, then checks the declared archive
+path, role, size, hash and navigation extension before exposing an immutable archive
+provider and owned per-AssetId expectations. A policy-permitted unsigned candidate
+is policy-admitted, not authenticated signed content. Signature implementations,
+trust roots and application verification policy stay with their existing owners.
+
+The provider-loading overload of `LoadNavMeshAsset` takes one borrowed
+`NavMeshAssetSource { registry, provider }` instead of separate registry/provider
+parameters. Both owners must outlive its synchronous invocation; the source view
+is never stored or scheduled, and the returned preparation owns copied metadata
+and tile leases. Existing callers migrate
+`LoadNavMeshAsset(registry, provider, id, ...)` to
+`LoadNavMeshAsset({registry, provider}, id, ...)` and rebuild against the changed
+C++ signature. There is one provider-loading signature; no compatibility overload
+creates another admission authority. Lookup, provider cancellation and canonical
+decode retain their original order. The encoded-metadata overload is unchanged.
+The release smoke probe now borrows constructor limits by const reference only
+while copying them into its owned policy; source callers are unchanged and binary
+consumers rebuild.
+
+`LoadNavMeshAsset` accepts an optional exact release expectation. Presence requires
+matching complete HNS2 policy and actual envelope bytes before any tile-cache
+admission; a warm cache cannot satisfy stale or changed evidence. Scene activation
+owns the expected records, requires a record for every enabled definition, retains
+the decoded policy, and admits it against the actual detached backend capability
+snapshot before publication. Missing providers, missing required surfaces and
+unsupported capabilities preserve the prior Scene/world. Strict packaged composition
+may publish an empty or disabled-only navigation Scene without a provider, but an
+enabled agent or explicitly required NavMesh definition must have an eligible declared
+surface/profile. That qualification never treats an empty surface projection as proof
+that enabled authored navigation is unnecessary. Non-release missing-factory diagnostics
+keep the existing `CapabilityUnavailable` result, after shutdown/bounds validation.
+No fallback provider,
+runtime source geometry or hash-derived live capability revision is allowed.
+
+The packaging adapter intersects the archive's asset-count and per-asset byte
+ceilings with the legal cook-generation ceilings from `AssetCookLimits` (the
+reader's current admitted maxima), rather than forwarding the larger archive
+count into cook admission. A stricter archive policy remains effective; neither
+policy raises the other owner's ceiling. The requested aggregate archive byte
+limit is passed unchanged to generation admission and archive construction, so
+an unsupported generation budget still fails with the owning typed error.
+
+Navigation content smoke compares the full required evidence set with the owning
+archive provider's parser-validated visible member IDs/types and target. Every
+`core.navmesh` member must have exactly one expectation; omissions, duplicates,
+unknown required extension versions and unsupported navigation payload versions
+fail before the genuine generic verifier issues candidate evidence. Other asset
+types remain visible and do not acquire navigation policy. Scene preactivation
+independently rejects required assets absent from its admitted expectation snapshot.
+No caller-supplied inventory or duplicate archive parser can stand in for these facts.
+
+Native qualification runs the actual BakeService/Recast producer and records its
+promoted HNS2 envelope as a fixed text byte-array corpus. Portable qualification
+checks the independently recorded envelope SHA-256 and source fingerprint before
+publication, then exercises the same pinned generation, mixed Audio/NavMesh chunk
+plans, client/server ZIP producer, generic verifier, archive provider and Scene
+owners with Recast disabled. It does not cook navigation or claim native query
+success: the omitted builder reports its existing `OperationUnsupported`, while
+an enabled packaged Scene without an explicit provider reports
+`CapabilityUnavailable` and preserves the actual last-good empty Scene. Repeated
+packaging consumes immutable bytes; only native qualification measures builder
+calls to prove no recook. Unsigned fixture admission follows the existing explicit
+verification policy and does not establish authentication or shipping-host support.
+
+This source/API migration requires rebuilding consumers (including the additive
+`AssetArchiveProvider::Members()`/`Target()` contract and changed provider layout): `NavigationBakeRequest`,
+`NavigationCookedTileSet` and `LoadedNavMeshAsset` gain owned tail fields;
+loader/Scene composition gains explicit optional expectation arguments. Existing
+source calls keep the documented non-release path through defaults. Release hosts
+must supply the captured project policy when baking and use the prepared extension,
+generic verification proof and exact runtime expectations. The public ownership
+registry and dedicated consumer target qualify the new header boundary. This
+contract does not claim a shipping application host or a production portable
+builder where that capability is not composed.
+
 ### Canonical NavMesh Runtime Asset Loading
 
 NAV-002.9 implements the runtime consumer in `HoroNavigationAssetSceneIntegration`.
@@ -667,7 +792,7 @@ second asset registry or a runtime dependency manifest.
 
 The canonical producer is `NavigationBakeService`, using existing AssetCookCache
 and `PublishCookArtifactReplacement`. Its `core.navmesh` payload is
-`EncodeNavigationCookedTileSet` / `DecodeNavigationCookedTileSet` (HNS1), containing
+`EncodeNavigationCookedTileSet` / `DecodeNavigationCookedTileSet` (HNS2), containing
 strictly ordered HNT1 `NavigationCookedTile` artifacts, including empty tiles.
 Each tile encodes surface/profile/grid identity, bounds, metric grid size,
 resolved build geometry and border, dependency key, neutral topology and source

@@ -11,8 +11,25 @@
 #include <catch2/catch_test_macros.hpp>
 
 namespace Horo::Application::PrefabCookTestSupport {
-    using namespace Horo::Assets;
-    using namespace Horo::Assets::ServiceTestSupport;
+    using Assets::AssetCookGeneration;
+    using Assets::AssetCookReport;
+    using Assets::AssetId;
+    using Assets::AssetRecord;
+    using Assets::AssetRegistry;
+    using Assets::AssetRegistryBuildStatus;
+    using Assets::CookerCatalog;
+    using Assets::ReadCookGenerationContents;
+    using Assets::ResolveCurrentCookGeneration;
+    namespace CookPublicationTestSupport = Assets::CookPublicationTestSupport;
+    using Assets::ServiceTestSupport::Id;
+    using Assets::ServiceTestSupport::SettingsCooker;
+    using Assets::ServiceTestSupport::SidecarJson;
+    using Assets::ServiceTestSupport::Target;
+    using Assets::ServiceTestSupport::TempDir;
+    using Assets::ServiceTestSupport::TestMeshRecord;
+    using Assets::ServiceTestSupport::TestProject;
+    using Assets::ServiceTestSupport::Type;
+    using Assets::ServiceTestSupport::WriteFile;
 
     /** @brief Injects an action at real staged-selector write, or fails its native replacement before commit. */
     class HostPublicationFiles final : public Horo::TestSupport::NativePublicationFiles {

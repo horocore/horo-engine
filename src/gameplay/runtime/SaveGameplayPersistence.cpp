@@ -152,11 +152,29 @@ namespace Horo::Runtime {
                 }();
             }
 
-            [[nodiscard]] Result<void> FixupReferences(const ICanonicalRestoreDependencyLookup &) override {
+            [[nodiscard]] Result<void> FixupReferences(const ICanonicalRestoreDependencyLookup &dependencies) override {
+                return FixupReferences(dependencies, {});
+            }
+
+            [[nodiscard]] Result<void> FixupReferences(const ICanonicalRestoreDependencyLookup &,
+                                                       const SaveRestoreReferenceView &references) override {
                 if (!candidate_)
                     return Result<void>::Failure(MakeError(SaveErrors::RestoreAdapterContractInvalid));
-                ready_ = true;
-                return Result<void>::Success();
+                static_assert(std::is_nothrow_move_constructible_v<Result<void>>);
+                // Owned fallback construction may throw before project code; fault translation itself never allocates.
+                return [this, &references, allocationFailure = Result<void>::Failure(MakeError(SaveErrors::RestoreAllocationFailed)),
+                        callbackFailure = Result<void>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed))]() mutable noexcept {
+                    try {
+                        if (auto fixed = candidate_->FixupRuntimeReferences(references); fixed.HasError())
+                            return fixed;
+                        ready_ = true;
+                        return Result<void>::Success();
+                    } catch (const std::bad_alloc &) {
+                        return std::move(allocationFailure);
+                    } catch (...) {
+                        return std::move(callbackFailure);
+                    }
+                }();
             }
 
             void PublishPrepared() noexcept override {

@@ -7,7 +7,7 @@ static_assert(
                    Horo::Result<Horo::Prefab::CookedPrefab> (*)(
                        const Horo::Prefab::PrefabSourceResolverSnapshot &, const Horo::Assets::AssetRegistrySnapshot &,
                        Horo::Assets::AssetId, std::span<const Horo::Prefab::PrefabTemplateCookResource>, const Horo::AssetCookTargetId &,
-                       const Horo::Prefab::PrefabLimitProfile &, const Horo::CancellationToken &, const Horo::Assets::AssetCookLimits &)>);
+                       const Horo::Prefab::PrefabLimitProfile &, const Horo::Prefab::PrefabTemplateCookOptions &)>);
 
 int main() {
     return 0;

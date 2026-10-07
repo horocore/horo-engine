@@ -58,7 +58,7 @@ namespace Horo::Assets::Detail {
 
         /** @brief Binds the selected strategy to exact source/metadata and, when pinned, the full candidate closure/resource envelopes. */
         Result<AssetCookCacheKey> PrepareCacheKey(const AssetCookRequest &request, const AssetRecord &record,
-                                                  const CookerContribution &contribution, const Sha256Digest sourceDigest,
+                                                  const CookerContribution &contribution, const Sha256Digest &sourceDigest,
                                                   const AssetCookPinnedSource *pinned,
                                                   const std::span<const AssetCookDependencyIdentity> dependencies) {
             const auto identity = contribution.strategy->CacheIdentity();

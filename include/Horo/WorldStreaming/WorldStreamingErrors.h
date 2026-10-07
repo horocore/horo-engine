@@ -8,6 +8,15 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::WorldStreaming::WorldStreamingErrors {
+    /** @brief Owner-frame facts or unit cost are malformed. */
+    extern const ErrorCodeDescriptor OwnerFrameInvalid;
+    /** @brief Owner-frame admission names another scheduler or a backwards clock sample. */
+    extern const ErrorCodeDescriptor OwnerFrameStale;
+    /** @brief One indivisible unit exceeds the complete frame target. */
+    extern const ErrorCodeDescriptor OwnerFrameCapacityExceeded;
+    /** @brief Publication is prepared but the shared owner frame cannot admit its complete unit yet. */
+    extern const ErrorCodeDescriptor OwnerFrameDeferred;
+
     /** @brief Package assignment or complete availability facts are malformed. */
     extern const ErrorCodeDescriptor PackageChunkInvalid;
     /** @brief A package-content lifecycle or availability state is unsupported. */

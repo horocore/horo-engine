@@ -23,7 +23,9 @@ namespace {
         HostReleaseStages(HostFixture &fixture, const Release::ReleaseExecutionPlan &plan, Release::IReleasePreflightFactsProvider &facts)
             : fixture_(fixture), host_(fixture.MakeHost()), plan_(plan), facts_(facts) {}
 
-        bool packagedPinnedGeneration{};
+        bool PackagedPinnedGeneration() const noexcept {
+            return packagedPinnedGeneration_;
+        }
 
         Result<void> Validate(const Release::ReleaseStageContext &) override {
             return Result<void>::Success();
@@ -51,7 +53,7 @@ namespace {
             const auto inventory = ReadCookGenerationContents(active.Value(), 1024U * 1024U);
             if (inventory.HasError())
                 return Result<Release::ReleaseStagedPayload>::Failure(inventory.ErrorValue());
-            packagedPinnedGeneration =
+            packagedPinnedGeneration_ =
                 inventory.Value().entries.size() == 2 + fixture_.request.runtimePrefabRoots.size() && cooked.root != fixture_.cache.path;
             return Result<Release::ReleaseStagedPayload>::Success({cooked.root, cooked.bytesDigest});
         }
@@ -71,7 +73,7 @@ namespace {
         }
 
         Result<void> FinalVerify(const Release::ReleaseStageContext &, const Release::ReleaseFinalizedCandidate &) override {
-            return packagedPinnedGeneration ? Result<void>::Success() : Result<void>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
+            return packagedPinnedGeneration_ ? Result<void>::Success() : Result<void>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
         }
 
         Result<void> Publish(const Release::ReleaseStageContext &, const Release::ReleaseFinalVerifiedCandidate &) override {
@@ -83,6 +85,7 @@ namespace {
             return ReleaseTestFixtures::Digest("test.host.release-stage");
         }
 
+        bool packagedPinnedGeneration_{};
         HostFixture &fixture_;
         PrefabSceneCookHost host_;
         const Release::ReleaseExecutionPlan &plan_;
@@ -259,7 +262,9 @@ TEST_CASE("Release executor packages the concrete static prefab cook generation"
     SECTION("explicit dynamic template shares the release handoff") {
         fixture.request.runtimePrefabRoots = {fixture.prefabId};
     }
-    SECTION("static only retains the existing inventory") {}
+    SECTION("static only retains the existing inventory") {
+        // Keep the default empty runtime-root selection to exercise static-only publication.
+    }
     const auto release = PrepareHostRelease(fixture);
     const auto &preflight = release.preflight;
     ReleaseTestFixtures::FixedReleaseFacts current{release.facts};
@@ -267,7 +272,7 @@ TEST_CASE("Release executor packages the concrete static prefab cook generation"
     Release::ReleaseJobTracker tracker{{1}, {2}, 3, {false, false}};
     const auto result = Release::ReleasePipelineExecutor{}.Execute(tracker, {7}, *preflight.plan, current, stages, {});
     CHECK(result.state == Release::ReleaseJobState::Succeeded);
-    CHECK(stages.packagedPinnedGeneration);
+    CHECK(stages.PackagedPinnedGeneration());
     REQUIRE(result.candidate.has_value());
     CHECK(result.candidate->state == Release::ReleaseCandidateState::FinalVerified);
 }

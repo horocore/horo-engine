@@ -16,6 +16,7 @@
 #include <format>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
 #include <type_traits>
 
 #if defined(_WIN32)
@@ -159,6 +160,18 @@ namespace {
             return condition_.wait_for(lock, std::chrono::seconds{2}, [this] {
                 return entered_;
             });
+        }
+
+        /** @brief Retries permitted contention drops before requiring the dispatcher to enter the blocking sink. */
+        bool Start(const std::string_view event) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+            do {
+                // EmitEvent is nonblocking: even an empty queue may reject a record while its writer owns the queue lock.
+                if (Telemetry::Runtime::EmitEvent("runtime.save", event, Log::Level::Info, "Safe blocking fixture"))
+                    return WaitUntilEntered();
+                std::this_thread::yield();
+            } while (std::chrono::steady_clock::now() < deadline);
+            return false;
         }
 
         void Release() {
@@ -433,14 +446,7 @@ TEST_CASE("Save failed stages retain safe emergency evidence when the bounded no
     auto sink = std::make_shared<BlockingSink>();
     REQUIRE(Telemetry::Runtime::Initialize({.queueCapacity = 1, .metricCollectionLevel = Telemetry::MetricCollectionLevel::Off}, sink));
     REQUIRE(session.Register());
-    bool accepted{};
-    for (std::size_t attempt = 0; attempt < 64; ++attempt) {
-        accepted = Telemetry::Runtime::EmitEvent("runtime.save", "test.queue.block", Log::Level::Info, "Safe queue fixture");
-        if (accepted)
-            break;
-    }
-    REQUIRE(accepted);
-    REQUIRE(sink->WaitUntilEntered());
+    REQUIRE(sink->Start("test.queue.block"));
     REQUIRE(Telemetry::Runtime::EmitEvent("runtime.save", "test.queue.fill", Log::Level::Info, "Safe queue fixture"));
     EmergencyCapture capture{session.directory / "emergency.txt"};
     const auto before = Log::Logger::Statistics().emergencyRecords;
@@ -496,8 +502,7 @@ TEST_CASE("Save observation allocation failures report bounded safe evidence", "
     auto sink = std::make_shared<BlockingSink>();
     REQUIRE(Telemetry::Runtime::Initialize({.queueCapacity = 4, .metricCollectionLevel = Telemetry::MetricCollectionLevel::Off}, sink));
     REQUIRE(session.Register());
-    REQUIRE(Telemetry::Runtime::EmitEvent("runtime.save", "test.block", Log::Level::Info, "Safe allocation fixture"));
-    REQUIRE(sink->WaitUntilEntered());
+    REQUIRE(sink->Start("test.block"));
     EmergencyCapture capture{session.directory / "allocation-emergency.txt"};
     Log::LogContext ambient{"account.id", "private-allocation-account"};
     const auto before = Log::Logger::Statistics().emergencyRecords;

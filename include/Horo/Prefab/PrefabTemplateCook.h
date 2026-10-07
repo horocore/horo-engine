@@ -15,6 +15,12 @@ namespace Horo::Prefab {
         std::span<const std::uint8_t> artifact; /**< Borrowed for the invocation; complete AssetCook bytes, not HPFB payload. */
     };
 
+    /** @brief Host operation cancellation and independent generic resource-envelope ceilings for one template cook. */
+    struct PrefabTemplateCookOptions final {
+        CancellationToken cancellation;         /**< Cooperative cancellation ancestry retained for the invocation. */
+        Assets::AssetCookLimits resourceLimits; /**< Resource-envelope ceilings, independent of prefab payload limits. */
+    };
+
     /**
      * @brief Resolves and encodes a complete runtime template without interpreting authoring composition twice.
      * @param sources Shared validated resolver snapshot used by authored scene conversion.
@@ -23,8 +29,7 @@ namespace Horo::Prefab {
      * @param resources Complete resource closure with canonical envelopes from one pinned generation, in any order.
      * @param target Exact target required for every resource envelope.
      * @param limits Captured immutable prefab ceilings, checked again before encoding.
-     * @param cancellation Owning host operation's cooperative cancellation ancestry.
-     * @param resourceLimits Generic resource-envelope limits, independent of the prefab template payload ceiling.
+     * @param options Owning host operation cancellation ancestry and independent resource-envelope limits.
      * @return Verified immutable HPFB template or original typed resolution, dependency, integrity or limit failure.
      * @throws std::bad_alloc on bounded owned-storage allocation failure; no artifact is published.
      * @details Tooling/background transformation only: no I/O, source migration, catalog registration, publication,
@@ -36,6 +41,5 @@ namespace Horo::Prefab {
                                                           const Assets::AssetRegistrySnapshot &registry, Assets::AssetId root,
                                                           std::span<const PrefabTemplateCookResource> resources,
                                                           const AssetCookTargetId &target, const PrefabLimitProfile &limits,
-                                                          const CancellationToken &cancellation = {},
-                                                          const Assets::AssetCookLimits &resourceLimits = {});
+                                                          const PrefabTemplateCookOptions &options = {});
 }  // namespace Horo::Prefab

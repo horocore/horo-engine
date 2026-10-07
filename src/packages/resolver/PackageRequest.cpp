@@ -95,7 +95,7 @@ namespace Horo::Packages {
                 result.push_back(token.get<std::string>());
             }
             std::ranges::sort(result);
-            if (std::adjacent_find(result.begin(), result.end()) != result.end())
+            if (std::ranges::adjacent_find(result) != result.end())
                 return Result<std::vector<std::string>>::Failure(MakeError(Invalid));
             return Result<std::vector<std::string>>::Success(std::move(result));
         }

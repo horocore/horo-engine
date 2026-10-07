@@ -4,6 +4,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 namespace {
+    template <typename Context>
+    concept CanBypassSchemaCapture = requires { Context({}, Horo::Gameplay::ComponentRegistry{}, {}, Horo::Sha256Digest{}); };
+    static_assert(!CanBypassSchemaCapture<Horo::Application::PrefabCookSchemaContext>);
+
     using namespace Horo;
     using namespace Horo::Application;
     using namespace Horo::Gameplay;

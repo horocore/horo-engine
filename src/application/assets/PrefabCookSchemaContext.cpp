@@ -10,8 +10,7 @@ namespace Horo::Application {
 
         /** @brief Canonicalizes every supported behavior default without layout, addresses or implementation callbacks. */
         Json Default(const Gameplay::BehaviorFieldValue &value) {
-            return std::visit([](const auto &field) -> Json {
-                using T = std::decay_t<decltype(field)>;
+            return std::visit([]<typename T>(const T &field) -> Json {
                 if constexpr (std::is_same_v<T, std::monostate>)
                     return nullptr;
                 else if constexpr (std::is_same_v<T, Math::Vec2>)
@@ -57,12 +56,11 @@ namespace Horo::Application {
                 if (phase.nodeId.size() > 160 || phase.access.reads.size() > 256 || phase.access.writes.size() > 256 ||
                     phase.after.size() > 256 || phase.before.size() > 256)
                     return Result<Json>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
-                const auto bounded = [](const std::vector<std::string> &names) {
-                    return std::ranges::all_of(names, [](const std::string &name) {
+                if (const auto bounded = [](const std::vector<std::string> &names) {
+                    return std::ranges::all_of(names, [](const std::string_view name) {
                         return name.size() <= 160;
                     });
-                };
-                if (!bounded(phase.access.reads) || !bounded(phase.access.writes) || !bounded(phase.after) || !bounded(phase.before))
+                }; !bounded(phase.access.reads) || !bounded(phase.access.writes) || !bounded(phase.after) || !bounded(phase.before))
                     return Result<Json>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
                 phases.push_back(
                     {static_cast<unsigned>(phase.phase), phase.nodeId, phase.access.reads, phase.access.writes, phase.after, phase.before});
@@ -102,14 +100,15 @@ namespace Horo::Application {
         if (bytes.size() > 16U * 1024U * 1024U)
             return Result<std::shared_ptr<const PrefabCookSchemaContext>>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
         const auto digest = ComputeSha256(std::as_bytes(std::span{bytes}));
-        return Result<std::shared_ptr<const PrefabCookSchemaContext>>::Success(std::shared_ptr<const PrefabCookSchemaContext>{
-            new PrefabCookSchemaContext{components, {behaviors.begin(), behaviors.end()}, digest}});
+        return Result<std::shared_ptr<const PrefabCookSchemaContext>>::Success(
+            std::make_shared<const PrefabCookSchemaContext>(ConstructionKey{}, components, behaviors, digest));
     }
 
     /** @copydoc PrefabCookSchemaContext::PrefabCookSchemaContext */
-    PrefabCookSchemaContext::PrefabCookSchemaContext(Gameplay::ComponentRegistry components,
-                                                     std::vector<Gameplay::BehaviorDescriptor> behaviors, const Sha256Digest digest)
-        : components_(std::move(components)), behaviors_(std::move(behaviors)), digest_(digest) {}
+    PrefabCookSchemaContext::PrefabCookSchemaContext(ConstructionKey, const Gameplay::ComponentRegistry &components,
+                                                     const std::span<const Gameplay::BehaviorDescriptor> behaviors,
+                                                     const Sha256Digest &digest)
+        : components_(components), behaviors_(behaviors.begin(), behaviors.end()), digest_(digest) {}
 
     /** @copydoc PrefabCookSchemaContext::Digest */
     const Sha256Digest &PrefabCookSchemaContext::Digest() const noexcept {

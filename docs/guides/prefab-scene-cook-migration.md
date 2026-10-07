@@ -104,3 +104,22 @@ extension selects roots and installs its own phase explicitly.
 These changes do not by themselves prove the complete host operation. Full
 integration regressions, affected public consumers, local preflight and exact-head
 hosted checks are required before claiming #1067 complete.
+
+## Validation-preserving quality refinements
+
+Frozen schema contexts use a private capture capability with `make_shared`.
+Only Capture can issue that capability after admitting bounded inert metadata;
+component and behavior descriptors are copied into owned storage and retain no
+caller borrow. Consumers rebuild for the internal factory-constructor refinement.
+The existing Capture and Validate call signatures are unchanged.
+
+Project mutation authority moves into the private admitted-cook operation and is
+retained through all joined work, host freshness checks and selector publication,
+including cancellation, failures and unwinding. Scoping the acquisition result
+must never release that authority immediately after the error check.
+
+Source-root symlink and directory probes use separate error-code scopes so each
+filesystem error is checked before another probe can clear it. The source closure
+still uses the exact schema-v1 raw lowercase hex digest recipe; byte-oriented
+formatting does not add a digest prefix or invalidate compatible cache identities.
+A fixed-fixture golden digest regression protects this compatibility.
