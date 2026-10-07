@@ -88,6 +88,35 @@ namespace Horo::Runtime::Ui {
             return Result<void>::Success();
         }
 
+        /** @brief Arranges the projected surface inputs and correlates paint rectangles with the private layout candidate. */
+        [[nodiscard]] Result<UiLayoutSnapshot> ArrangeSurfaces(const UiElementTree &tree, const UiThemeUpdateRequest &request) {
+            auto evaluator = UiDeclarativeLayoutEvaluator::Create(layoutInputs, request.intrinsic);
+            if (evaluator.HasError())
+                return Result<UiLayoutSnapshot>::Failure(evaluator.ErrorValue());
+            // Track the last inputs submitted to the private layout cache, including failed outer transactions.
+            // Paint-only theme changes reuse their logical boxes; the public snapshot still advances as one unit.
+            if (layoutInputs != previousLayoutInputs) {
+                const auto next = layoutRevision.Next();
+                if (next.HasError())
+                    return Result<UiLayoutSnapshot>::Failure(next.ErrorValue());
+                layoutRevision = next.Value();
+                previousLayoutInputs = layoutInputs;
+            }
+            auto layoutRequest = request.layout;
+            layoutRequest.sources.style = layoutRevision;
+            layoutRequest.evaluator = &evaluator.Value();
+            auto arranged = layouts.Update(tree, layoutRequest);
+            if (arranged.HasError())
+                return Result<UiLayoutSnapshot>::Failure(arranged.ErrorValue());
+            for (auto &paint : paints) {
+                const auto record = arranged.Value().Get(paint.element);
+                if (record.HasError())
+                    return Result<UiLayoutSnapshot>::Failure(record.ErrorValue());
+                paint.rect = record.Value().arrangement.borderBox;
+            }
+            return arranged;
+        }
+
         [[nodiscard]] Result<UiThemeSnapshot> Build(const UiElementTree &tree, const UiThemeUpdateRequest &request,
                                                     const RuntimeStyleRegistry &registry, const RuntimeStyleAssetId selection,
                                                     const std::uint32_t fallbacks) {
@@ -111,30 +140,9 @@ namespace Horo::Runtime::Ui {
                 return Result<UiThemeSnapshot>::Failure(computed.ErrorValue());
             if (const auto projected = Project(computed.Value(), request.surfaces); projected.HasError())
                 return Result<UiThemeSnapshot>::Failure(projected.ErrorValue());
-            auto evaluator = UiDeclarativeLayoutEvaluator::Create(layoutInputs, request.intrinsic);
-            if (evaluator.HasError())
-                return Result<UiThemeSnapshot>::Failure(evaluator.ErrorValue());
-            // Track the last inputs submitted to the private layout cache, including failed outer transactions.
-            // Paint-only theme changes reuse their logical boxes; the public snapshot still advances as one unit.
-            if (layoutInputs != previousLayoutInputs) {
-                const auto next = layoutRevision.Next();
-                if (next.HasError())
-                    return Result<UiThemeSnapshot>::Failure(next.ErrorValue());
-                layoutRevision = next.Value();
-                previousLayoutInputs = layoutInputs;
-            }
-            auto layoutRequest = request.layout;
-            layoutRequest.sources.style = layoutRevision;
-            layoutRequest.evaluator = &evaluator.Value();
-            auto arranged = layouts.Update(tree, layoutRequest);
+            auto arranged = ArrangeSurfaces(tree, request);
             if (arranged.HasError())
                 return Result<UiThemeSnapshot>::Failure(arranged.ErrorValue());
-            for (auto &paint : paints) {
-                const auto record = arranged.Value().Get(paint.element);
-                if (record.HasError())
-                    return Result<UiThemeSnapshot>::Failure(record.ErrorValue());
-                paint.rect = record.Value().arrangement.borderBox;
-            }
             if (current && current->theme == selection && current->fallbackTokens == fallbacks &&
                 current->style.Descriptor().publication == computed.Value().Descriptor().publication &&
                 current->layout.Descriptor().interaction == arranged.Value().Descriptor().interaction &&
