@@ -1451,6 +1451,7 @@ target_link_libraries(HoroNavigationContentIntegration PUBLIC HoroEngine::Applic
         PRIVATE nlohmann_json::nlohmann_json)
 
 add_library(HoroXRRuntime STATIC
+        runtime/xr/runtime/XRProjectSettings.cpp
         runtime/xr/runtime/XRFeatureNegotiation.cpp
         runtime/xr/runtime/XRFrameLifecycle.cpp
         runtime/xr/runtime/XRSessionErrors.cpp
