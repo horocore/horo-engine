@@ -58,6 +58,7 @@ namespace Horo::Physics {
         std::optional<CollisionLayerId> requiredLayer;
         std::optional<CollisionProfileId> requiredProfile;
         std::optional<BodyHandle> excludedBody;
+        bool blockingOnly{}; /**< Excludes overlap responses before bounded collection, for physical movement probes. */
     };
 
     /** @brief Finite ray in the world's current origin frame; direction must be unit length. */
@@ -81,6 +82,22 @@ namespace Horo::Physics {
         PhysicsPose pose;
     };
 
+    /** @brief Inline analytic capsule sweep; no resident query shape or allocation is required. */
+    struct PhysicsCapsuleSweepQuery final {
+        PhysicsCapsuleShape capsule;
+        Math::Vec3 position;
+        Math::Vec3 up{0, 1, 0};
+        Math::Vec3 direction{0, 0, -1};
+        float maximumDistanceMeters{1};
+    };
+
+    /** @brief Inline analytic capsule overlap in the current origin frame. */
+    struct PhysicsCapsuleOverlapQuery final {
+        PhysicsCapsuleShape capsule;
+        Math::Vec3 position;
+        Math::Vec3 up{0, 1, 0};
+    };
+
     /** @brief Point test in the world's current origin frame. */
     struct PhysicsPointQuery final {
         Math::Vec3 point;
@@ -93,7 +110,8 @@ namespace Horo::Physics {
         Block,
     };
 
-    using PhysicsQueryGeometry = std::variant<PhysicsRayQuery, PhysicsSweepQuery, PhysicsOverlapQuery, PhysicsPointQuery>;
+    using PhysicsQueryGeometry = std::variant<PhysicsRayQuery, PhysicsSweepQuery, PhysicsOverlapQuery, PhysicsPointQuery,
+                                              PhysicsCapsuleSweepQuery, PhysicsCapsuleOverlapQuery>;
 
     /**
      * @brief Owned inert query request targeting one exact world and scene generation.
@@ -194,6 +212,7 @@ namespace Horo::Physics {
         Math::Vec3 position;
         std::optional<Math::Vec3> normal;
         float distanceMeters{};
+        float penetrationDepthMeters{}; /**< Nonnegative copied overlap depth; zero for separated hits. */
     };
 
     /** @brief Metadata for caller-owned bounded hit storage. */

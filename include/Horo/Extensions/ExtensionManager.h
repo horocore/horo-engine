@@ -21,6 +21,7 @@ namespace Horo::Assets {
 
 namespace Horo::Extensions {
     struct ExtensionModuleLifetime;
+    class EditorActivityHost;
 
     /** @brief Represents a loaded extension instance. */
     struct LoadedExtension {
@@ -51,12 +52,14 @@ namespace Horo::Extensions {
          * load.
          * @param libraryLoader Explicit native loader boundary; empty uses the platform loader after security verification.
          * @param platformProviderCommit Optional host-owned commit for one staged provider-only extension.
+         * @param editorActivityHost Explicit editor surface authority; omitted hosts reject ABI editor publication.
          */
         explicit ExtensionManager(Assets::AssetImporterCatalog *importerCatalog = nullptr,
                                   ExtensionHostProfile hostProfile = ExtensionHostProfile::Interactive,
                                   std::vector<std::string> hostCapabilities = {},
                                   std::shared_ptr<const Security::NativeArtifactGate> artifactGate = {},
-                                  NativeLibraryLoader libraryLoader = {}, ExtensionPlatformProviderCommit platformProviderCommit = {});
+                                  NativeLibraryLoader libraryLoader = {}, ExtensionPlatformProviderCommit platformProviderCommit = {},
+                                  std::shared_ptr<EditorActivityHost> editorActivityHost = {});
         /** @brief Withdraws publications on the owner lane; busy native closures require process restart. */
         ~ExtensionManager();
         ExtensionManager(const ExtensionManager &) = delete;
@@ -120,6 +123,7 @@ namespace Horo::Extensions {
         std::shared_ptr<const Security::NativeArtifactGate> m_artifactGate;
         NativeLibraryLoader m_libraryLoader;
         ExtensionPlatformProviderCommit m_platformProviderCommit;
+        std::shared_ptr<EditorActivityHost> m_editorActivityHost;
         TransparentStringMap<std::unique_ptr<LoadedExtension>> m_loadedExtensions;
         std::vector<std::string> m_activationOrder;
         /** @brief Reports owner-lane activation capacity; retained records count against the same per-manager bound. */

@@ -104,7 +104,7 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Enumerates one bounded global/layer extension publication without truncation. */
         [[nodiscard]] Result<void> CollectExtensions(const char *layer,
                                                      std::array<XrExtensionProperties, MaximumNativeExtensions> &available,
-                                                     std::uint32_t &availableCount);
+                                                     std::uint32_t &availableCount) const;
         [[nodiscard]] Result<void> CreateInstance(const NativeSessionRequest &request);
         [[nodiscard]] Result<void> ResolveInstance();
         [[nodiscard]] Result<void> SelectSystem();
@@ -117,14 +117,19 @@ namespace Horo::XR::OpenXRInternal {
         std::shared_ptr<const Platform::DynamicLibrary> loader_;
         IOpenXRGraphicsBinding *graphics_;
         const IOpenXRCompositionFence *fence_;
-        PFN_xrGetInstanceProcAddr getProc_{};
-        PFN_xrEnumerateApiLayerProperties enumerateLayers_{};
-        PFN_xrEnumerateInstanceExtensionProperties enumerateExtensions_{};
-        PFN_xrCreateInstance createInstance_{};
-        PFN_xrDestroyInstance destroyInstance_{};
-        PFN_xrGetSystem getSystem_{};
-        PFN_xrCreateSession createSession_{};
-        PFN_xrDestroySession destroySession_{};
+
+        /** @brief Official loader/candidate dispatch, valid only while loader_ and native owners survive. */
+        struct NativeDispatch final {
+            PFN_xrGetInstanceProcAddr getProc{};
+            PFN_xrEnumerateApiLayerProperties enumerateLayers{};
+            PFN_xrEnumerateInstanceExtensionProperties enumerateExtensions{};
+            PFN_xrCreateInstance createInstance{};
+            PFN_xrDestroyInstance destroyInstance{};
+            PFN_xrGetSystem getSystem{};
+            PFN_xrCreateSession createSession{};
+            PFN_xrDestroySession destroySession{};
+        } dispatch_;
+
         XrInstance instance_{XR_NULL_HANDLE};
         XrSystemId system_{XR_NULL_SYSTEM_ID};
         XrSession session_{XR_NULL_HANDLE};
@@ -134,12 +139,17 @@ namespace Horo::XR::OpenXRInternal {
         std::optional<XRFeaturePlan> retainedPlan_;
         std::uint64_t lastRuntime_{};
         std::uint32_t lastSessionGeneration_{};
-        std::array<std::array<char, XR_MAX_EXTENSION_NAME_SIZE>, MaximumEnabledExtensions> extensionNames_{};
-        std::array<const char *, MaximumEnabledExtensions> extensions_{};
-        std::array<std::array<char, XR_MAX_API_LAYER_NAME_SIZE>, MaximumNativeLayers> layerNames_{};
-        std::array<const char *, MaximumNativeLayers> layers_{};
-        std::uint32_t extensionCount_{};
-        std::uint32_t layerCount_{};
+
+        /** @brief Bounded negotiated names and stable ABI borrows into this immovable owner. */
+        struct NegotiatedNames final {
+            std::array<std::array<char, XR_MAX_EXTENSION_NAME_SIZE>, MaximumEnabledExtensions> extensionNames{};
+            std::array<const char *, MaximumEnabledExtensions> extensions{};
+            std::array<std::array<char, XR_MAX_API_LAYER_NAME_SIZE>, MaximumNativeLayers> layerNames{};
+            std::array<const char *, MaximumNativeLayers> layers{};
+            std::uint32_t extensionCount{};
+            std::uint32_t layerCount{};
+        } names_;
+
         bool graphicsPrepared_{};
     };
 }  // namespace Horo::XR::OpenXRInternal

@@ -50,7 +50,17 @@ It then prepares the instance, candidate-scoped dispatch, system, graphics
 binding and session. Only a completely prepared, freshly fenced transaction
 publishes its Horo session identity. Every failed boundary rolls back acquired
 candidate resources in reverse order. Native errors preserve the operation and
-numeric native result, without copying device names or paths.
+numeric native result, without copying device names or paths. Official native
+function pointers are recovered with equal-size representation copies, checked
+by `std::bit_cast`; the supported loader ABI must use matching object/function
+pointer representations. Dispatch and negotiated name storage have separate
+private owners, retained by the same immovable session.
+
+Host preparation runs inside a no-throw invocation boundary that returns only a
+fixed exception category. Typed error allocation and reverse-order retirement
+remain outside that boundary. Standard and non-standard host exceptions retain
+the existing failure messages and rollback behavior; this does not mark the
+allocating `Create` API itself `noexcept`.
 
 `Borrow` returns a private non-owning native tuple only after exact Horo
 identity and current composition/device admission. It cannot escape the
