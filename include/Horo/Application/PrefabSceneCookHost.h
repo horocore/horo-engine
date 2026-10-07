@@ -13,6 +13,8 @@
 #include "Horo/Release/ReleasePipelineExecutor.h"
 #include "Horo/Scene/CookedSceneDefinition.h"
 
+#include <vector>
+
 namespace Horo::Application {
     namespace PrefabSceneCookErrors {
         /** @brief Host compatibility, required package evidence or source cook composition is invalid. */
@@ -70,13 +72,16 @@ namespace Horo::Application {
         std::shared_ptr<const Packages::PackageRestoreGraph> restoredPackages; /**< Required when the project has a lockfile;
                                                                              archive evidence is verified against actual lock bytes.
                                                                              Trust/activation remains the package host's authority. */
+        std::vector<Assets::AssetId> runtimePrefabRoots; /**< Explicit unique runtime-spawnable roots; empty preserves static-only
+                                                        cooking. Source-only nested/variant prefabs are never published as templates. */
     };
 
     /**
-     * @brief Synchronous host-owned static scene cook operation, never an inert module-descriptor side effect.
+     * @brief Synchronous host-owned scene and explicitly selected runtime-template cook operation.
      * @details This separate host target may compose Editor's existing migration/mutation owner. Assets and Scene runtime
      * do not acquire reverse dependencies. Source migration completes before invocation; static-only prefab sources
-     * participate in cache identity but are excluded from the published runtime inventory. Dynamic spawn cooking is separate.
+     * participate in cache identity but are excluded from the published runtime inventory. Selected dynamic roots use the same
+     * capture and transaction: verified non-prefab envelopes stage first, then templates; one generation publishes both.
      */
     class PrefabSceneCookHost final {
     public:

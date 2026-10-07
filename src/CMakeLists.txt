@@ -709,6 +709,9 @@ add_library(HoroNetworkRuntime STATIC
         runtime/networking/ReplicationStateCapture.cpp
         runtime/networking/ReplicationCapturePreparation.cpp
         runtime/networking/ReplicationCaptureWriter.cpp
+        runtime/networking/ReplicationStateCodec.cpp
+        runtime/networking/ReplicationStateEncode.cpp
+        runtime/networking/ReplicationStateDecode.cpp
         runtime/networking/SceneReplicationCommitSource.cpp
         runtime/networking/RpcGameplayDispatch.cpp
         runtime/networking/RpcGameplayDispatchReceive.cpp
@@ -987,6 +990,13 @@ add_library(HoroAudioMixer STATIC
 add_library(HoroEngine::AudioMixer ALIAS HoroAudioMixer)
 target_compile_features(HoroAudioMixer PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioMixer PUBLIC HoroEngine::AudioDsp HoroEngine::AudioCommands)
+
+add_library(HoroAudioVoiceRender STATIC
+        audio/playback/AudioVoiceRenderRuntime.cpp
+        audio/playback/AudioVoiceRenderState.h)
+add_library(HoroEngine::AudioVoiceRender ALIAS HoroAudioVoiceRender)
+target_compile_features(HoroAudioVoiceRender PUBLIC cxx_std_20)
+target_link_libraries(HoroAudioVoiceRender PUBLIC HoroEngine::AudioPlayback HoroEngine::AudioMixer)
 
 add_library(HoroAudioMetrics STATIC
         audio/metrics/AudioMetricExtraction.cpp
@@ -1453,6 +1463,7 @@ target_link_libraries(HoroNavigationContentIntegration PUBLIC HoroEngine::Applic
 add_library(HoroXRRuntime STATIC
         runtime/xr/runtime/XRProjectSettings.cpp
         runtime/xr/runtime/XRFeatureNegotiation.cpp
+        runtime/xr/runtime/XRFakeRuntime.cpp
         runtime/xr/runtime/XRFrameLifecycle.cpp
         runtime/xr/runtime/XRSessionErrors.cpp
         runtime/xr/runtime/XRSessionLifecycle.cpp
@@ -1499,6 +1510,15 @@ add_library(HoroEngine::TerrainImport ALIAS HoroTerrainImport)
 target_compile_features(HoroTerrainImport PUBLIC cxx_std_20)
 target_include_directories(HoroTerrainImport PRIVATE ${PROJECT_SOURCE_DIR}/vendor/stb)
 target_link_libraries(HoroTerrainImport PUBLIC HoroEngine::TerrainApi HoroEngine::Assets)
+# Editor-owned terrain authoring remains usable from GUI, CLI and MCP hosts without presentation dependencies.
+add_library(HoroTerrainAuthoring STATIC
+        editor/terrain/TerrainAuthoringDocument.cpp
+        editor/terrain/TerrainAuthoringDocumentState.cpp
+)
+add_library(HoroEngine::TerrainAuthoring ALIAS HoroTerrainAuthoring)
+target_compile_features(HoroTerrainAuthoring PUBLIC cxx_std_20)
+target_link_libraries(HoroTerrainAuthoring PUBLIC HoroEngine::TerrainImport)
+
 add_library(HoroTerrainCook STATIC
         runtime/terrain/cook/FoliageClusterCook.cpp
         runtime/terrain/cook/FoliageClusterCookOwner.cpp
@@ -1625,6 +1645,8 @@ add_library(HoroWorldStreaming STATIC
         runtime/world_streaming/StreamingDesiredState.cpp
         runtime/world_streaming/StreamingDesiredStateReduction.cpp
         runtime/world_streaming/StreamingPriorityPolicy.cpp
+        runtime/world_streaming/StreamingEvictionPolicy.cpp
+        runtime/world_streaming/StreamingEvictionPolicyErrors.cpp
         runtime/world_streaming/StreamingFairQueue.cpp
         runtime/world_streaming/StreamingFairQueueErrors.cpp
         runtime/world_streaming/StreamingSourceDescriptor.cpp
@@ -1696,6 +1718,7 @@ add_library(HoroPrefabAuthoring STATIC
         runtime/prefab/PrefabDocumentSerialization.cpp
         runtime/prefab/PrefabSceneIdentityRemap.cpp
         runtime/prefab/PrefabSourceResolver.cpp
+        runtime/prefab/PrefabTemplateCook.cpp
 )
 add_library(HoroEngine::PrefabAuthoring ALIAS HoroPrefabAuthoring)
 target_compile_features(HoroPrefabAuthoring PUBLIC cxx_std_20)
@@ -2510,6 +2533,7 @@ add_library(HoroPrefabCookHost STATIC
         application/assets/PrefabSceneCookHost.cpp
         application/assets/PrefabSceneCookCapture.cpp
         application/assets/PrefabSceneCookCatalog.cpp
+        application/assets/PrefabTemplateCookCatalog.cpp
         application/assets/PrefabSceneCookState.h)
 add_library(HoroEngine::PrefabCookHost ALIAS HoroPrefabCookHost)
 target_compile_features(HoroPrefabCookHost PUBLIC cxx_std_20)

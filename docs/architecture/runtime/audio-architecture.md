@@ -1015,6 +1015,31 @@ a project needs broadcast-style auto-ducking.
 
 ## Voice Model
 
+### AUD-003.8 immutable callback voice state
+
+`HoroEngine::AudioVoiceRender` owns the host-composed `AudioVoiceRenderRuntime`
+boundary over AudioPlayback and AudioMixer. Control captures source/listener
+values and resolves the bus against an immutable mixer generation; the callback
+retains only numeric targets, identities, prepared processing storage and owned
+PCM/stream access. Neither lane discovers a scene, asset provider or backend.
+
+Two bounded slots retain one current and at most one pending state. The ordinary
+FIFO carries `AudioPublishVoiceStateCommand`; complete route/state generations
+never coalesce. Existing adjacent unpublished gain commands remain coalescible,
+without crossing voice controls, unload/reset or resource-lifetime barriers.
+The callback returns an exact graph-generation mixer input. Control may reclaim
+replaced state only after its publication decision and completed-block evidence
+following the mixer's last sample access, not after command consumption.
+
+Resident playback copies its PCM before publication. Streaming owns a sole
+retirement-pinned render port and retains the service; attempted retirement while
+pinned rejects without freeing its ring. Conversion keeps unconsumed PCM and
+renders bounded silence on starvation. Port release, processing destruction and
+worker cancellation remain on detached control after native callback stop/join.
+Shared pins do not permit concurrent mutation of the canonical voice registry.
+See [the adoption guide](../../guides/audio-voice-render-state-migration.md) for
+host dispatcher ordering, explicit budgets and affected public consumers.
+
 ### AUD-003.3 resident playback controls
 
 `HoroEngine::AudioPlayback` owns `AudioVoicePlayback`, the resident PCM execution

@@ -1,12 +1,15 @@
 #include "PrefabSceneCookState.h"
 
+#include <algorithm>
+
 namespace Horo::Application {
     namespace {
-        /** @brief Excludes authoring-only prefab sources without changing the captured source closure or revision authority. */
-        Result<Assets::AssetRegistrySnapshot> SelectStaticRuntimeRecords(const Assets::AssetCookInputSnapshot &inputs) {
+        /** @brief Selects resources and explicit template roots without changing captured source closure or revision authority. */
+        Result<Assets::AssetRegistrySnapshot> SelectRuntimeRecords(const Assets::AssetCookInputSnapshot &inputs,
+                                                                   const std::span<const Assets::AssetId> runtimeRoots) {
             std::vector<Assets::AssetRecord> runtimeRecords;
             for (const auto &record : inputs.Registry().Records()) {
-                if (record.type.Value() != "core.prefab")
+                if (record.type.Value() != "core.prefab" || std::ranges::find(runtimeRoots, record.id) != runtimeRoots.end())
                     runtimeRecords.push_back(record);
             }
             Assets::AssetRegistry selected;
@@ -50,7 +53,8 @@ namespace Horo::Application {
                                                                   const Release::ReleaseExecutionPlan *releasePlan) {
         if (cancellation.IsCancellationRequested())
             return Result<Assets::AssetCookReport>::Failure(MakeError(PrefabSceneCookErrors::Cancelled));
-        if (!catalog_ || !request.assets.publicationFiles || !request.assets.newPublicationOperationId)
+        if (!catalog_ || !request.assets.publicationFiles || !request.assets.newPublicationOperationId ||
+            request.runtimePrefabRoots.size() > request.assets.limits.maximumAssets)
             return Result<Assets::AssetCookReport>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
         auto limits = Prefab::PrefabLimitProfile::Create(request.prefabPolicy);
         if (limits.HasError())
@@ -87,19 +91,18 @@ namespace Horo::Application {
         auto composed = PrefabCookDetail::PrepareCatalog(request, host.Value(), *inputs, limits, *catalog_, cancellation);
         if (composed.HasError())
             return Result<Assets::AssetCookReport>::Failure(composed.ErrorValue());
-        auto selected = SelectStaticRuntimeRecords(*inputs);
+        auto selected = SelectRuntimeRecords(*inputs, request.runtimePrefabRoots);
         if (selected.HasError())
             return Result<Assets::AssetCookReport>::Failure(selected.ErrorValue());
         Assets::AssetCookRequest cook = request.assets;
         cook.registry = std::move(selected).Value();
         cook.pinnedInputs = inputs;
-        // This static host owns its composition. The dynamic host explicitly supplies a dependent phase in HORO-1068.
-        cook.dependentPhase.reset();
+        cook.dependentPhase = composed.Value().templates;
         // Capture references are synchronous: AssetCook joins all accepted work before returning, and the owned project lease outlives it.
         cook.validateHostInputs = [this, &request, &host, &cancellation, releasePlan, capturedRevision] {
             return ValidateCurrentHost(request, registry_, compatibility_, host.Value(), cancellation, releasePlan, capturedRevision);
         };
-        Assets::AssetCookService operation{jobs_, composed.Value()};
+        Assets::AssetCookService operation{jobs_, composed.Value().catalog};
         return operation.Cook(cook, cancellation);
     }
 

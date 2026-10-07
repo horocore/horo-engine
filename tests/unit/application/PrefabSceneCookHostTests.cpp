@@ -3,9 +3,10 @@
 #include "Horo/Packages/PackageRequest.h"
 #include "Horo/Prefab/PrefabDocument.h"
 #include "Horo/Scene/SceneSource.h"
+#include "PrefabSceneCookHostFixture.h"
 #include "ReleaseTestFixtures.h"
-#include "assets/AssetCookServiceFixture.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 
@@ -14,145 +15,7 @@ namespace {
     using namespace Horo::Application;
     using namespace Horo::Assets;
     using namespace Horo::Assets::ServiceTestSupport;
-
-    /** @brief Injects an action at real staged-selector write, or fails its native replacement before commit. */
-    class HostPublicationFiles final : public Horo::TestSupport::NativePublicationFiles {
-    public:
-        std::function<void()> staged;
-        bool failReplacement{};
-        bool observed{};
-
-        Result<void> WriteDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes) override {
-            auto written = NativePublicationFiles::WriteDurable(path, bytes);
-            if (written.HasValue() && path.filename() == "current.json" && !observed) {
-                observed = true;
-                if (staged)
-                    staged();
-            }
-            return written;
-        }
-
-        Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
-                                          AtomicFileReplacementReceipt &receipt) override {
-            if (failReplacement && destination.filename() == "current.json")
-                return Result<void>::Failure(Error{ErrorCode{"test.host.publication_failed"}});
-            return native.AtomicReplaceTracked(prepared, destination, receipt);
-        }
-    };
-
-    /** @brief Owns real project transactions, sources, source registry and native generation publication. */
-    struct HostFixture final {
-        TestProject project;
-        TempDir cache;
-        TempDir cooked;
-        NativeDurableFileSystem files;
-        SystemWallClock clock;
-        JobSystem jobs{JobSystemConfig{.workerCount = 2, .maxQueuedJobs = 8}};
-        AssetRegistry registry;
-        const HoroVersion version = ParseHoroVersion("0.0.1").Value();
-        RejectingCompatibilityProofVerifier verifier;
-        ReleaseCompatibilityRegistry compatibility = Compatibility();
-        ProjectCompatibilityInspector inspector{compatibility, {version}, verifier};
-        Editor::ProjectMutationCoordinator mutations{files};
-        Editor::ProjectMigrationTransactionService migrations{files, clock, mutations, jobs};
-        PrefabSceneCookRequest request;
-        const AssetId prefabId = Id("00000000-0000-0000-0000-0000000000b1");
-        const AssetId sceneId = Id("00000000-0000-0000-0000-0000000000c1");
-
-        HostFixture() {
-            std::filesystem::create_directories(project.dir.path / ".horo/local");
-            WriteText(
-                ".horo/project.json",
-                R"({"horoVersion":"0.0.1","persistentContract":"sha256:0101010101010101010101010101010101010101010101010101010101010101","projectId":"p1","name":"Test","projectVersion":"0.1.0","createdAt":"2026-07-18T00:00:00Z","settings":{"renderBackend":"opengl"}})");
-            WritePrefab();
-            const std::vector<SceneSource::SceneObjectSnapshot> objects{{.id = {900}, .name = "Authoring name"}};
-            const std::vector<SceneSource::ScenePrefabInstance> placements{
-                {.instanceId = Prefab::PrefabInstanceId::Create(7).Value(),
-                 .sourcePrefab = Prefab::PrefabAssetReference::Create(prefabId).Value(),
-                 .parent = SceneSource::SceneObjectId{900}}};
-            WriteText("assets/level.scene", SceneSource::EncodeSceneSource({objects, placements}));
-            WriteText("assets/hierarchy.prefab.horo", SidecarJson(prefabId.ToString(), "core.prefab"));
-            WriteText("assets/level.scene.horo", SidecarJson(sceneId.ToString(), "core.scene"));
-            PublishRegistry();
-            request.assets.sourceRoot = project.dir.path;
-            request.assets.cacheRoot = cache.path;
-            request.assets.cookedRoot = cooked.path;
-            request.assets.target = Target("headless-null");
-            CookPublicationTestSupport::ConfigureNativeCookPublication(request.assets);
-        }
-
-        void WriteText(const std::string_view relative, const std::string_view text) const {
-            WriteFile(project.dir.path / relative, {reinterpret_cast<const std::uint8_t *>(text.data()), text.size()});
-        }
-
-        void WritePrefab(const float offset = 4) const {
-            const auto limits = Prefab::PrefabLimitProfile::Create({});
-            REQUIRE(limits.HasValue());
-            auto document = Prefab::PrefabDocument::Create({.projectVersion = version,
-                                                            .assetId = prefabId,
-                                                            .objects = {{.localId = {0}, .name = "Prefab root"},
-                                                                        {.localId = {3},
-                                                                         .parentLocalId = Prefab::LocalObjectId{0},
-                                                                         .localTransform = {.translation = {0, offset, 0}}}}},
-                                                           limits.Value());
-            REQUIRE(document.HasValue());
-            auto canonical = document.Value().SerializeCanonical();
-            REQUIRE(canonical.HasValue());
-            WriteText("assets/hierarchy.prefab", canonical.Value());
-        }
-
-        void PublishRegistry() {
-            REQUIRE(registry
-                        .Publish({TestMeshRecord(), Record(prefabId, "core.prefab", "assets/hierarchy.prefab"),
-                                  Record(sceneId, "core.scene", "assets/level.scene")})
-                        .status == AssetRegistryBuildStatus::Complete);
-        }
-
-        PrefabSceneCookHost MakeHost() {
-            CookerCatalog catalog;
-            REQUIRE(catalog
-                        .Register({.contributionId = "test.mesh",
-                                   .assetType = Type("core.mesh"),
-                                   .targets = {request.assets.target},
-                                   .strategy = std::make_shared<const SettingsCooker>(1)})
-                        .HasValue());
-            auto sealed = catalog.Publish();
-            REQUIRE(sealed.HasValue());
-            return PrefabSceneCookHost{jobs, sealed.Value(), registry, inspector, mutations, migrations};
-        }
-
-        Result<AssetCookReport> Cook(const CancellationToken &token = {}) {
-            return MakeHost().Cook(request, token);
-        }
-
-        void AssertRetained(const AssetCookGeneration &previous) const {
-            const auto active = ResolveCurrentCookGeneration(cooked.path);
-            REQUIRE(active.HasValue());
-            CHECK(active.Value().manifestDigest == previous.manifestDigest);
-            CHECK(active.Value().generationRoot == previous.generationRoot);
-            CHECK(ReadCookGenerationContents(previous, 1024U * 1024U).HasValue());
-        }
-
-    private:
-        ReleaseCompatibilityRegistry Compatibility() const {
-            PersistentContractHash contract;
-            contract.bytes.fill(1);
-            CompatibilityDecisionHash decision;
-            decision.bytes.fill(1);
-            const std::array decisions{
-                ReleaseCompatibilityDecision{{version}, {version}, contract, decision, CompatibilityDecisionKind::EstablishBaseline}};
-            auto result = ReleaseCompatibilityRegistry::Create(decisions);
-            REQUIRE(result.HasValue());
-            return std::move(result).Value();
-        }
-
-        static AssetRecord Record(const AssetId id, const std::string_view type, const std::string_view path) {
-            return {.id = id,
-                    .type = Type(type),
-                    .sourcePath = ProjectPath::Parse(path).Value(),
-                    .metadataPath = ProjectPath::Parse(std::string(path) + ".horo").Value()};
-        }
-    };
+    using namespace Horo::Application::PrefabCookTestSupport;
 
     /** @brief Real release-executor composition whose Cook stage uses the concrete host and whose Package pins that output. */
     class HostReleaseStages final : public Release::IReleasePipelineStages {
@@ -160,7 +23,9 @@ namespace {
         HostReleaseStages(HostFixture &fixture, const Release::ReleaseExecutionPlan &plan, Release::IReleasePreflightFactsProvider &facts)
             : fixture_(fixture), host_(fixture.MakeHost()), plan_(plan), facts_(facts) {}
 
-        bool packagedPinnedGeneration{};
+        bool PackagedPinnedGeneration() const noexcept {
+            return packagedPinnedGeneration_;
+        }
 
         Result<void> Validate(const Release::ReleaseStageContext &) override {
             return Result<void>::Success();
@@ -188,7 +53,8 @@ namespace {
             const auto inventory = ReadCookGenerationContents(active.Value(), 1024U * 1024U);
             if (inventory.HasError())
                 return Result<Release::ReleaseStagedPayload>::Failure(inventory.ErrorValue());
-            packagedPinnedGeneration = inventory.Value().entries.size() == 2 && cooked.root != fixture_.cache.path;
+            packagedPinnedGeneration_ =
+                inventory.Value().entries.size() == 2 + fixture_.request.runtimePrefabRoots.size() && cooked.root != fixture_.cache.path;
             return Result<Release::ReleaseStagedPayload>::Success({cooked.root, cooked.bytesDigest});
         }
 
@@ -207,7 +73,7 @@ namespace {
         }
 
         Result<void> FinalVerify(const Release::ReleaseStageContext &, const Release::ReleaseFinalizedCandidate &) override {
-            return packagedPinnedGeneration ? Result<void>::Success() : Result<void>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
+            return packagedPinnedGeneration_ ? Result<void>::Success() : Result<void>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
         }
 
         Result<void> Publish(const Release::ReleaseStageContext &, const Release::ReleaseFinalVerifiedCandidate &) override {
@@ -219,11 +85,13 @@ namespace {
             return ReleaseTestFixtures::Digest("test.host.release-stage");
         }
 
+        bool packagedPinnedGeneration_{};
         HostFixture &fixture_;
         PrefabSceneCookHost host_;
         const Release::ReleaseExecutionPlan &plan_;
         Release::IReleasePreflightFactsProvider &facts_;
     };
+
 }  // namespace
 
 TEST_CASE("Host prefab scene cook publishes expanded source-free scenes and validates cache reuse", "[native][prefab-cook][host]") {
@@ -340,6 +208,7 @@ TEST_CASE("Host retains project mutation authority and checks final selector fai
     REQUIRE(fixture.Cook(cancellation.Token()).HasError());
     CHECK(competingMutationRejected);
     CHECK(files->observed);
+    CHECK(files->selectorWrites == 1);
     fixture.AssertRetained(first.Value().generation);
 }
 
@@ -390,6 +259,12 @@ TEST_CASE("Release cook handoff pins the actual generation and rejects changed f
 
 TEST_CASE("Release executor packages the concrete static prefab cook generation", "[native][prefab-cook][host][release]") {
     HostFixture fixture;
+    SECTION("explicit dynamic template shares the release handoff") {
+        fixture.request.runtimePrefabRoots = {fixture.prefabId};
+    }
+    SECTION("static only retains the existing inventory") {
+        // Keep the default empty runtime-root selection to exercise static-only publication.
+    }
     const auto release = PrepareHostRelease(fixture);
     const auto &preflight = release.preflight;
     ReleaseTestFixtures::FixedReleaseFacts current{release.facts};
@@ -397,7 +272,7 @@ TEST_CASE("Release executor packages the concrete static prefab cook generation"
     Release::ReleaseJobTracker tracker{{1}, {2}, 3, {false, false}};
     const auto result = Release::ReleasePipelineExecutor{}.Execute(tracker, {7}, *preflight.plan, current, stages, {});
     CHECK(result.state == Release::ReleaseJobState::Succeeded);
-    CHECK(stages.packagedPinnedGeneration);
+    CHECK(stages.PackagedPinnedGeneration());
     REQUIRE(result.candidate.has_value());
     CHECK(result.candidate->state == Release::ReleaseCandidateState::FinalVerified);
 }

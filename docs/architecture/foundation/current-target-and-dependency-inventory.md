@@ -123,6 +123,7 @@ consumer. Existing callers require no migration; new built-in node consumers lin
 
 | Real target (alias) | Availability | Owner and public/private boundary | Direct first-party dependencies |
 |---|---|---|---|
+| `HoroTerrainAuthoring` (`HoroEngine::TerrainAuthoring`) | Always | Owns `Editor/TerrainAuthoringDocument.h`: owner-thread bounded exact canonical source/placement transactions, monotonic source revision fences, semantic undo/redo and content-state dirty tracking. Tools have immutable queries; no runtime/native/GUI dependency or full-dataset history copy. New adapters link the target explicitly; see the terrain-authoring edit migration guide. | TerrainImport (public) |
 | `HoroEditorModel` (`HoroEngine::EditorModel`) | Always | Owns scene-document, selection, and viewport model code. Its intended contract spans selected `Editor/**` headers and internal `src/editor/**` headers; all of `src/` is currently exported to consumers. | Foundation, SceneModel, RuntimeScene (public) |
 | `HoroEditorViewportScene` (`HoroEngine::EditorViewportScene`) | Always | Owns backend-neutral editor viewport scene/camera/light visualization geometry. It has no isolated installed public surface and exports `src/`. | EditorModel (public) |
 | `HoroEditorRenderExtraction` (`HoroEngine::EditorRenderExtraction`) | Always | Owns editor-to-render snapshot extraction, mesh cache, picking, and asset drop conversion. It has no isolated installed public surface and exports `src/`. | EditorModel, EditorViewportScene (public) |

@@ -1,11 +1,13 @@
 #include "Horo/Assets/AssetCook.h"
 #include "Horo/Prefab/PrefabErrors.h"
+#include "Horo/Prefab/PrefabTemplateCook.h"
 #include "Horo/Prefab/PrefabTemplateProvider.h"
 #include "PrefabTestUtils.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <condition_variable>
+#include <format>
 #include <mutex>
 #include <thread>
 
@@ -38,7 +40,9 @@ namespace Horo::Prefab {
         /** @brief Worker gate deliberately ignores cancellation until released, proving provider teardown never joins it. */
         class GatedProvider final : public Assets::IAssetProvider {
         public:
-            Assets::MemoryAssetProvider memory;
+            Assets::MemoryAssetProvider &Memory() noexcept {
+                return memory_;
+            }
 
             void Block() {
                 std::scoped_lock lock{mutex_};
@@ -58,21 +62,22 @@ namespace Horo::Prefab {
             }
 
             Result<bool> Exists(Assets::AssetId id, const CancellationToken &token) const override {
-                return memory.Exists(id, token);
+                return memory_.Exists(id, token);
             }
 
             Result<std::vector<std::uint8_t>> Load(Assets::AssetId id, const CancellationToken &token) const override {
                 {
                     std::unique_lock lock{mutex_};
                     entered_ = true;
-                    wake_.wait(lock, [&] {
+                    wake_.wait(lock, [this] {
                         return !blocked_;
                     });
                 }
-                return memory.Load(id, token);
+                return memory_.Load(id, token);
             }
 
         private:
+            Assets::MemoryAssetProvider memory_;
             mutable std::mutex mutex_;
             mutable std::condition_variable wake_;
             mutable bool entered_{};
@@ -91,25 +96,27 @@ namespace Horo::Prefab {
             std::vector<std::uint8_t> dependency;
             CancellationSource cancellation;
 
-            explicit Fixture(PrefabTemplateProviderLimits limits = {},
+            explicit Fixture(const PrefabTemplateProviderLimits &limits = {},
                              std::unique_ptr<Runtime::SceneStructuralParticipant> participant = {})
                 : provider(registry, loads, scenes, Profile(), limits) {
                 for (std::uint16_t id = 1; id <= 3; ++id) {
-                    const auto name = "assets/asset" + std::to_string(id) + (id == 2 ? ".obj" : ".prefab");
-                    records.push_back({Test::Asset(id), Type(id == 2 ? "core.mesh" : "core.prefab"), ProjectPath::Parse(name).Value(),
-                                       ProjectPath::Parse(name + ".horo").Value()});
+                    const auto name = std::format("assets/asset{}{}", id, id == 2 ? ".obj" : ".prefab");
+                    records.emplace_back(Test::Asset(id), Type(id == 2 ? "core.mesh" : "core.prefab"), ProjectPath::Parse(name).Value(),
+                                         ProjectPath::Parse(name + ".horo").Value());
                 }
                 const auto publication = registry.Publish(records);
                 REQUIRE(publication.status == Assets::AssetRegistryBuildStatus::Complete);
                 REQUIRE(publication.registeredAssets == records.size());
                 REQUIRE(publication.publishedRevision.value != 0);
                 dependency = Envelope(Test::Asset(2), "core.mesh", {1, 2, 3});
-                bytes.memory.Insert(Test::Asset(2), dependency);
+                bytes.Memory().Insert(Test::Asset(2), dependency);
                 root = Root(Test::Asset());
-                bytes.memory.Insert(Test::Asset(), root);
-                bytes.memory.Insert(Test::Asset(3), Root(Test::Asset(3)));
-                if (participant)
-                    REQUIRE(scenes.AddStructuralParticipant(std::move(participant)).HasValue());
+                bytes.Memory().Insert(Test::Asset(), root);
+                bytes.Memory().Insert(Test::Asset(3), Root(Test::Asset(3)));
+                if (participant) {
+                    const auto added = scenes.AddStructuralParticipant(std::move(participant));
+                    REQUIRE(added.HasValue());
+                }
                 REQUIRE(scenes.Startup(cancellation.Token()).HasValue());
                 Activate();
                 REQUIRE(provider.Startup(cancellation.Token()).HasValue());
@@ -141,7 +148,7 @@ namespace Horo::Prefab {
                 return Envelope(id, "core.prefab", std::move(encoded));
             }
 
-            Runtime::FrameContext Context() {
+            Runtime::FrameContext Context() const {
                 return {1, {}, 0.0, 0, {}, false, cancellation.Token()};
             }
 
@@ -178,7 +185,7 @@ namespace Horo::Prefab {
 
             PrefabTemplateLease Ready() {
                 auto handle = Load();
-                PumpUntil([&] {
+                PumpUntil([&handle] {
                     return handle.State() != PrefabTemplateLoadState::Loading;
                 });
                 auto lease = provider.TakeResult(handle);
@@ -197,7 +204,7 @@ namespace Horo::Prefab {
         /** @brief Contract fault injector; real subsystem adapters are validated separately. */
         class TransactionParticipant final : public Runtime::SceneStructuralParticipant {
         public:
-            TransactionParticipant(TransactionEvidence &evidence, CancellationSource *cancel = nullptr)
+            explicit TransactionParticipant(TransactionEvidence &evidence, CancellationSource *cancel = nullptr)
                 : evidence_(evidence), cancel_(cancel) {}
 
             Runtime::SceneStructuralOwner Owner() const noexcept override {
@@ -220,6 +227,9 @@ namespace Horo::Prefab {
             class Candidate final : public Runtime::SceneStructuralCandidate {
             public:
                 explicit Candidate(TransactionEvidence &evidence) : evidence_(evidence) {}
+
+                Candidate(const Candidate &) = delete;
+                Candidate &operator=(const Candidate &) = delete;
 
                 ~Candidate() override {
                     if (!published_)
@@ -288,20 +298,20 @@ namespace Horo::Prefab {
     TEST_CASE("Malformed or wrong-generation canonical bytes never become a template lease", "[prefab][provider]") {
         Fixture fixture;
         auto corrupt = fixture.root;
-        corrupt.back() ^= 1;
-        fixture.bytes.memory.Insert(Test::Asset(), corrupt);
+        std::as_writable_bytes(std::span{corrupt}).back() ^= std::byte{1};
+        fixture.bytes.Memory().Insert(Test::Asset(), corrupt);
         auto handle = fixture.Load();
-        fixture.PumpUntil([&] {
+        fixture.PumpUntil([&handle] {
             return handle.State() != PrefabTemplateLoadState::Loading;
         });
         CHECK(fixture.provider.TakeResult(handle).HasError());
         CHECK(fixture.provider.PayloadSnapshot().retainedPayloadBytes == 0);
         auto mistyped = Envelope(Test::Asset(), "core.mesh", {1});
-        fixture.bytes.memory.Insert(Test::Asset(), mistyped);
+        fixture.bytes.Memory().Insert(Test::Asset(), mistyped);
         auto wrong = fixture.provider.LoadAsync({Test::Asset(), Digest(mistyped), Target()});
         REQUIRE(wrong.HasValue());
         auto wrongHandle = std::move(wrong).Value();
-        fixture.PumpUntil([&] {
+        fixture.PumpUntil([&wrongHandle] {
             return wrongHandle.State() != PrefabTemplateLoadState::Loading;
         });
         CHECK(fixture.provider.TakeResult(wrongHandle).HasError());
@@ -312,14 +322,14 @@ namespace Horo::Prefab {
         fixture.bytes.Block();
         {
             auto abandoned = fixture.Load();
-            fixture.PumpUntil([&] {
+            fixture.PumpUntil([&fixture] {
                 return fixture.bytes.Entered();
             });
         }
         REQUIRE(fixture.provider.Advance().HasValue());
         CHECK(fixture.provider.LoadAsync({Test::Asset(), Digest(fixture.root), Target()}).HasError());
         fixture.bytes.Release();
-        fixture.PumpUntil([&] {
+        fixture.PumpUntil([&fixture] {
             return fixture.provider.LoadAsync({Test::Asset(), Digest(fixture.root), Target()}).HasValue();
         });
     }
@@ -329,13 +339,13 @@ namespace Horo::Prefab {
         auto lease = fixture.Ready();
         fixture.provider.Evict(Test::Asset());
         auto different = fixture.Load(Test::Asset(3));
-        fixture.PumpUntil([&] {
+        fixture.PumpUntil([&different] {
             return different.State() != PrefabTemplateLoadState::Loading;
         });
         CHECK(fixture.provider.TakeResult(different).HasError());
         lease = {};
         auto retry = fixture.Load(Test::Asset(3));
-        fixture.PumpUntil([&] {
+        fixture.PumpUntil([&retry] {
             return retry.State() != PrefabTemplateLoadState::Loading;
         });
         CHECK(fixture.provider.TakeResult(retry).HasValue());
@@ -345,7 +355,7 @@ namespace Horo::Prefab {
         Fixture fixture;
         fixture.bytes.Block();
         auto pending = fixture.Load();
-        fixture.PumpUntil([&] {
+        fixture.PumpUntil([&fixture] {
             return fixture.bytes.Entered();
         });
         fixture.provider.Shutdown();
@@ -359,14 +369,14 @@ namespace Horo::Prefab {
         fixture.bytes.Block();
         auto replaced = fixture.Load();
         auto retained = fixture.Load(Test::Asset(3));
-        fixture.PumpUntil([&] {
+        fixture.PumpUntil([&fixture] {
             return fixture.bytes.Entered();
         });
         replaced = std::move(retained);
         REQUIRE(fixture.provider.Advance().HasValue());
         CHECK(fixture.provider.LoadAsync({Test::Asset(), Digest(fixture.root), Target()}).HasError());
         fixture.bytes.Release();
-        fixture.PumpUntil([&] {
+        fixture.PumpUntil([&replaced] {
             return replaced.State() != PrefabTemplateLoadState::Loading;
         });
         auto result = fixture.provider.TakeResult(replaced);
@@ -397,7 +407,8 @@ namespace Horo::Prefab {
         Runtime::SceneCommandBuffer destruction;
         destruction.Destroy(second);
         destruction.Destroy(first);
-        REQUIRE(fixture.scenes.QueueStructuralCommands(std::move(destruction)).HasValue());
+        const auto destroyed = fixture.scenes.QueueStructuralCommands(std::move(destruction));
+        REQUIRE(destroyed.HasValue());
         fixture.Commit();
         CHECK(fixture.provider.PayloadSnapshot().retainedPayloadBytes == 0);
     }
@@ -433,5 +444,41 @@ namespace Horo::Prefab {
         fixture.Commit();
         CHECK(fixture.scenes.ActiveScene()->SlotCount() == 0);
         CHECK(fixture.scenes.TakeOperationError().has_value());
+    }
+
+    TEST_CASE("Source cooked template prepares through the existing immutable provider", "[prefab][provider][template-cook]") {
+        Fixture fixture;
+        PrefabDocumentData source;
+        source.projectVersion = Application::ParseHoroVersion("1.2.3").Value();
+        source.assetId = Test::Asset();
+        source.objects = {{.localId = {0}, .name = "Root"}, {.localId = {7}, .parentLocalId = LocalObjectId{0}, .name = "Child"}};
+        source.objects[1].localTransform.translation = {4, 5, 6};
+        source.referencedAssets = {Test::Asset(2)};
+        auto document = PrefabDocument::Create(std::move(source), Profile());
+        REQUIRE(document.HasValue());
+        const auto canonical = document.Value().SerializeCanonical().Value();
+        const PrefabSourceRevision revision{document.Value().Data().projectVersion,
+                                            ComputeSha256(std::as_bytes(std::span(canonical.data(), canonical.size())))};
+        auto sources = BuildPrefabSourceResolverSnapshot(fixture.registry.Snapshot(), {{std::move(document).Value(), revision}}, Profile());
+        REQUIRE(sources.HasValue());
+        const PrefabTemplateCookResource resource{Test::Asset(2), fixture.dependency};
+        auto cooked =
+            CookPrefabTemplate(sources.Value(), fixture.registry.Snapshot(), Test::Asset(), std::span{&resource, 1}, Target(), Profile());
+        REQUIRE(cooked.HasValue());
+        std::vector<std::uint8_t> payload;
+        for (const auto byte : cooked.Value().Bytes())
+            payload.push_back(std::to_integer<std::uint8_t>(byte));
+        fixture.root = Envelope(Test::Asset(), "core.prefab", std::move(payload));
+        fixture.bytes.Memory().Insert(Test::Asset(), fixture.root);
+        auto lease = fixture.Ready();
+        REQUIRE(lease.Template() != nullptr);
+        CHECK(lease.Template()->Data() == cooked.Value().Data());
+        REQUIRE(lease.Dependencies().size() == 1);
+        CHECK(lease.Dependencies()[0].metadata.id == Test::Asset(2));
+        REQUIRE(fixture.provider.QueuePreparedGroup(lease, std::vector<Runtime::RuntimeComponentSet>(2)).HasValue());
+        fixture.Commit();
+        CHECK(fixture.scenes.ActiveScene()->SlotCount() == 2);
+        fixture.provider.Shutdown();
+        CHECK(lease.Template()->Data() == cooked.Value().Data());
     }
 }  // namespace Horo::Prefab
