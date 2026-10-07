@@ -284,27 +284,27 @@ namespace Horo::Application::PrefabCookDetail {
     }  // namespace
 
     /** @copydoc PrepareCatalog */
-    Result<std::shared_ptr<const Assets::CookerCatalogSnapshot>> PrepareCatalog(
-        const PrefabSceneCookRequest &request, const HostCapture &host, const Assets::AssetCookInputSnapshot &inputs,
-        const Prefab::PrefabLimitProfile &limits, const Assets::CookerCatalogSnapshot &catalog, const CancellationToken &cancellation) {
+    Result<PreparedCatalog> PrepareCatalog(const PrefabSceneCookRequest &request, const HostCapture &host,
+                                           const Assets::AssetCookInputSnapshot &inputs, const Prefab::PrefabLimitProfile &limits,
+                                           const Assets::CookerCatalogSnapshot &catalog, const CancellationToken &cancellation) {
         auto sources = PrefabSources(inputs, host, limits, cancellation, request.schemas);
         if (sources.HasError())
-            return Result<std::shared_ptr<const Assets::CookerCatalogSnapshot>>::Failure(sources.ErrorValue());
+            return Result<PreparedCatalog>::Failure(sources.ErrorValue());
         auto graph = Prefab::BuildPrefabDependencyGraph(inputs.Registry(), sources.Value(), limits);
         if (graph.HasError())
-            return Result<std::shared_ptr<const Assets::CookerCatalogSnapshot>>::Failure(graph.ErrorValue());
+            return Result<PreparedCatalog>::Failure(graph.ErrorValue());
         if (cancellation.IsCancellationRequested())
-            return Result<std::shared_ptr<const Assets::CookerCatalogSnapshot>>::Failure(MakeError(PrefabSceneCookErrors::Cancelled));
+            return Result<PreparedCatalog>::Failure(MakeError(PrefabSceneCookErrors::Cancelled));
         auto resolver = Prefab::BuildPrefabSourceResolverSnapshot(inputs.Registry(), std::move(sources).Value(), limits);
         if (resolver.HasError())
-            return Result<std::shared_ptr<const Assets::CookerCatalogSnapshot>>::Failure(resolver.ErrorValue());
+            return Result<PreparedCatalog>::Failure(resolver.ErrorValue());
         auto resources = PrepareResourceCatalogInputs(request, host, inputs, catalog, cancellation);
         if (resources.HasError())
-            return Result<std::shared_ptr<const Assets::CookerCatalogSnapshot>>::Failure(resources.ErrorValue());
+            return Result<PreparedCatalog>::Failure(resources.ErrorValue());
         const auto settings = resources.Value().settings;
         auto scenes = PrepareScenes(request, inputs, resolver.Value(), graph.Value(), limits, settings, cancellation);
         if (scenes.HasError())
-            return Result<std::shared_ptr<const Assets::CookerCatalogSnapshot>>::Failure(scenes.ErrorValue());
+            return Result<PreparedCatalog>::Failure(scenes.ErrorValue());
         auto contributions = std::move(resources).Value().contributions;
         if (!scenes.Value().empty())
             contributions.push_back({"horo.builtin.scene_prefab_inline",
@@ -314,8 +314,20 @@ namespace Horo::Application::PrefabCookDetail {
         Assets::CookerCatalog candidate;
         for (auto &contribution : contributions) {
             if (auto registered = candidate.Register(std::move(contribution)); registered.HasError())
-                return Result<std::shared_ptr<const Assets::CookerCatalogSnapshot>>::Failure(registered.ErrorValue());
+                return Result<PreparedCatalog>::Failure(registered.ErrorValue());
         }
-        return candidate.Publish();
+        auto published = candidate.Publish();
+        if (published.HasError())
+            return Result<PreparedCatalog>::Failure(published.ErrorValue());
+        PreparedCatalog prepared{published.Value(), {}};
+        if (!request.runtimePrefabRoots.empty()) {
+            auto phase = PrepareTemplatePhase({std::move(resolver).Value(), std::move(graph).Value(), inputs.Registry(),
+                                               request.runtimePrefabRoots, request.assets.target, limits, request.assets.limits, settings,
+                                               request.schemas, request.maximumCapturedBytes});
+            if (phase.HasError())
+                return Result<PreparedCatalog>::Failure(phase.ErrorValue());
+            prepared.templates = std::move(phase).Value();
+        }
+        return Result<PreparedCatalog>::Success(std::move(prepared));
     }
 }  // namespace Horo::Application::PrefabCookDetail

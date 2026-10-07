@@ -1213,20 +1213,41 @@ target_compile_features(HoroPrefabSceneExpansionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPrefabSceneExpansionTests PRIVATE HoroEngine::PrefabSceneExpansion)
 horo_register_catch_test(HoroPrefabSceneExpansionTests LABELS "unit;prefab;headless")
 
+add_executable(HoroPrefabTemplateCookTests unit/runtime/prefab/PrefabTemplateCookTests.cpp)
+target_compile_features(HoroPrefabTemplateCookTests PRIVATE cxx_std_20)
+target_link_libraries(HoroPrefabTemplateCookTests PRIVATE HoroEngine::PrefabSceneExpansion)
+horo_register_catch_test(HoroPrefabTemplateCookTests LABELS "unit;prefab;headless")
+
+add_executable(HoroPrefabTemplateCookGenerationTests unit/runtime/prefab/PrefabTemplateCookGenerationTests.cpp)
+target_compile_features(HoroPrefabTemplateCookGenerationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroPrefabTemplateCookGenerationTests PRIVATE HoroEngine::PrefabAuthoring HoroEngine::PrefabRuntime HoroEngine::Platform)
+target_include_directories(HoroPrefabTemplateCookGenerationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+horo_register_catch_test(HoroPrefabTemplateCookGenerationTests LABELS "unit;prefab;headless")
+
+add_executable(HoroPrefabTemplateCookPublicHeaderConsumer support/PrefabTemplateCookPublicHeaderConsumer.cpp)
+target_compile_features(HoroPrefabTemplateCookPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPrefabTemplateCookPublicHeaderConsumer PRIVATE HoroEngine::PrefabAuthoring)
+add_test(NAME HoroPrefabTemplateCookPublicHeaderConsumer COMMAND HoroPrefabTemplateCookPublicHeaderConsumer)
+set_tests_properties(HoroPrefabTemplateCookPublicHeaderConsumer PROPERTIES LABELS "unit;prefab;headless")
+
 add_executable(HoroSceneRuntimeConversionTests unit/scene/SceneRuntimeConversionTests.cpp unit/scene/CookedSceneDefinitionTests.cpp)
 target_compile_features(HoroSceneRuntimeConversionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSceneRuntimeConversionTests PRIVATE HoroEngine::SceneRuntimeConversion HoroEngine::SceneCook)
 horo_register_catch_test(HoroSceneRuntimeConversionTests LABELS "unit;scene;prefab;headless")
 
 add_executable(HoroPrefabCookPublicHeaderConsumer support/PrefabCookPublicHeaderConsumer.cpp)
-add_executable(HoroPrefabSceneCookHostTests unit/application/PrefabSceneCookHostTests.cpp unit/application/PrefabCookSchemaContextTests.cpp)
+add_executable(HoroPrefabSceneCookHostTests
+        unit/application/PrefabSceneCookHostTests.cpp
+        unit/application/PrefabTemplateCookHostTests.cpp
+        unit/application/PrefabCookSchemaContextTests.cpp
+        unit/application/PrefabSceneCookHostFixture.h)
 target_compile_features(HoroPrefabSceneCookHostTests PRIVATE cxx_std_20)
 # Shared AssetCook test fixtures compile their builtin registration helper even
 # when the host test selects SettingsCooker. Keep that test-only boundary narrow.
 target_include_directories(HoroPrefabSceneCookHostTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/support
         ${PROJECT_SOURCE_DIR}/src/runtime/assets/cooker/builtin)
-target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE HoroEngine::PrefabCookHost HoroEngine::SceneSource nlohmann_json::nlohmann_json miniz)
+target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE HoroEngine::PrefabCookHost HoroEngine::PrefabRuntime HoroEngine::SceneSource nlohmann_json::nlohmann_json miniz)
 horo_register_catch_test(HoroPrefabSceneCookHostTests LABELS "unit;prefab;headless;host")
 target_compile_features(HoroPrefabCookPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroPrefabCookPublicHeaderConsumer PRIVATE HoroEngine::SceneRuntimeConversion HoroEngine::SceneCook HoroEngine::Assets HoroEngine::PrefabCookHost)
@@ -1240,7 +1261,7 @@ horo_register_catch_test(HoroCookedPrefabTests LABELS "unit;prefab;headless")
 
 add_executable(HoroPrefabTemplateProviderTests unit/runtime/prefab/PrefabTemplateProviderTests.cpp)
 target_compile_features(HoroPrefabTemplateProviderTests PRIVATE cxx_std_20)
-target_link_libraries(HoroPrefabTemplateProviderTests PRIVATE HoroEngine::PrefabRuntime)
+target_link_libraries(HoroPrefabTemplateProviderTests PRIVATE HoroEngine::PrefabRuntime HoroEngine::PrefabAuthoring)
 horo_register_catch_test(HoroPrefabTemplateProviderTests LABELS "unit;prefab;headless")
 
 add_executable(HoroPrefabTemplateProviderPublicHeaderConsumer support/PrefabTemplateProviderPublicHeaderConsumer.cpp)
