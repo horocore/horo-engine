@@ -19,8 +19,7 @@ namespace Horo::Editor {
         std::size_t PatchBytes(const FractureSourcePatch &patch) {
             std::size_t bytes = sizeof(patch) + patch.operations.size() * sizeof(FractureSourceOperation);
             for (const auto &operation : patch.operations) {
-                bytes += std::visit([](const auto &value) -> std::size_t {
-                    using T = std::decay_t<decltype(value)>;
+                bytes += std::visit([]<typename T>(const T &value) -> std::size_t {
                     if constexpr (std::is_same_v<T, SetFractureSettings>)
                         return value.value.sites.size() * sizeof(FractureSourceSite);
                     else if constexpr (std::is_same_v<T, ReplaceFractureSource>)
@@ -108,8 +107,7 @@ namespace Horo::Editor {
 
         /** @brief Dispatches typed intent only to detached storage, preserving inverse values in operation order. */
         void ApplyOperation(FractureAssetSource &source, const FractureSourceOperation &operation, FractureSourcePatch &inverse) {
-            std::visit([&](const auto &value) {
-                using T = std::decay_t<decltype(value)>;
+            std::visit([&source, &inverse]<typename T>(const T &value) {
                 if constexpr (std::is_same_v<T, SetFractureSettings>) {
                     inverse.operations.emplace_back(SetFractureSettings{source.settings});
                     source.settings = value.value;
@@ -142,8 +140,7 @@ namespace Horo::Editor {
                 if (const auto *replacement = std::get_if<ReplaceFractureSource>(&operation)) {
                     if (!replacement->value || replacement->value->asset != asset)
                         return Result<FractureSourcePatch>::Failure(MakeError(FractureDocumentErrors::WrongDocument));
-                    const auto valid = ValidateFractureAssetSource(*replacement->value);
-                    if (valid.HasError())
+                    if (const auto valid = ValidateFractureAssetSource(*replacement->value); valid.HasError())
                         return Result<FractureSourcePatch>::Failure(valid.ErrorValue());
                 }
             }
@@ -170,8 +167,7 @@ namespace Horo::Editor {
                     return Result<std::shared_ptr<const FractureAssetSource>>::Failure(MakeError(FractureDocumentErrors::Cancelled));
                 ApplyOperation(*candidate, operation, inverse);
             }
-            const auto valid = ValidateFractureAssetSource(*candidate);
-            if (valid.HasError())
+            if (const auto valid = ValidateFractureAssetSource(*candidate); valid.HasError())
                 return Result<std::shared_ptr<const FractureAssetSource>>::Failure(valid.ErrorValue());
             std::ranges::reverse(inverse.operations);
             return Result<std::shared_ptr<const FractureAssetSource>>::Success(std::move(candidate));
@@ -184,8 +180,7 @@ namespace Horo::Editor {
         if (!session.IsValid() || !sourceRevision.IsValid() || limits.maximumEntries == 0 || limits.maximumEntries > 128 ||
             limits.maximumBytes == 0 || limits.maximumBytes > 16 * MaximumFractureSourceBytes)
             return Result<FractureAssetDocument>::Failure(MakeError(FractureDocumentErrors::LimitExceeded));
-        const auto valid = ValidateFractureAssetSource(source);
-        if (valid.HasError())
+        if (const auto valid = ValidateFractureAssetSource(source); valid.HasError())
             return Result<FractureAssetDocument>::Failure(valid.ErrorValue());
         try {
             FractureAssetDocument document;
@@ -225,8 +220,7 @@ namespace Horo::Editor {
     /** @copydoc FractureAssetDocument::Apply */
     Result<FractureDocumentChange> FractureAssetDocument::Apply(const FractureSourcePatch &patch,
                                                                 const FractureDocumentEditContext &context) {
-        const auto admitted = Admit(context);
-        if (admitted.HasError())
+        if (const auto admitted = Admit(context); admitted.HasError())
             return Result<FractureDocumentChange>::Failure(admitted.ErrorValue());
         try {
             auto copied = CopyPatch(patch, source_->asset, limits_.maximumBytes);
@@ -252,7 +246,7 @@ namespace Horo::Editor {
             std::vector<HistoryEntry> history(history_.begin() + static_cast<std::ptrdiff_t>(first),
                                               history_.begin() + static_cast<std::ptrdiff_t>(cursor_));
             const auto nextState = FractureDocumentStateId::Create(nextState_).Value();
-            history.push_back({std::move(inverse), std::move(copied).Value(), state_, nextState, cost});
+            history.emplace_back(std::move(inverse), std::move(copied).Value(), state_, nextState, cost);
             if (context.cancellation.IsCancellationRequested())
                 return Result<FractureDocumentChange>::Failure(MakeError(FractureDocumentErrors::Cancelled));
             source_ = std::move(candidate).Value();
@@ -269,8 +263,7 @@ namespace Horo::Editor {
 
     /** @copydoc FractureAssetDocument::Replay */
     Result<FractureDocumentChange> FractureAssetDocument::Replay(const bool redo, const FractureDocumentEditContext &context) {
-        const auto admitted = Admit(context);
-        if (admitted.HasError())
+        if (const auto admitted = Admit(context); admitted.HasError())
             return Result<FractureDocumentChange>::Failure(admitted.ErrorValue());
         if ((redo && cursor_ == history_.size()) || (!redo && cursor_ == 0))
             return Result<FractureDocumentChange>::Success(FractureDocumentChange::Unchanged);

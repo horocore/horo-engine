@@ -1,5 +1,6 @@
 #include "Horo/Editor/FractureAssetDocument.h"
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <new>
@@ -47,11 +48,9 @@ namespace Horo::Editor {
             template <typename T, typename Transfer>
             bool Elements(const std::vector<T> &items, std::uint32_t, std::size_t, Transfer transfer) {
                 Value(static_cast<std::uint32_t>(items.size()));
-                for (const auto &item : items) {
-                    if (!transfer(*this, item))
-                        return false;
-                }
-                return true;
+                return std::ranges::all_of(items, [this, &transfer](const T &item) {
+                    return transfer(*this, item);
+                });
             }
 
             std::vector<std::byte> bytes;
@@ -207,8 +206,7 @@ namespace Horo::Editor {
 
     /** @copydoc EncodeFractureAssetSource */
     Result<std::vector<std::byte>> EncodeFractureAssetSource(const FractureAssetSource &source) {
-        const auto valid = ValidateFractureAssetSource(source);
-        if (valid.HasError())
+        if (const auto valid = ValidateFractureAssetSource(source); valid.HasError())
             return Result<std::vector<std::byte>>::Failure(valid.ErrorValue());
         try {
             Writer writer;
@@ -228,7 +226,8 @@ namespace Horo::Editor {
             return Result<FractureAssetSource>::Failure(MakeError(FractureDocumentErrors::LimitExceeded));
         try {
             Reader reader{bytes};
-            std::uint32_t magic{}, version{};
+            std::uint32_t magic{};
+            std::uint32_t version{};
             if (!reader.Value(magic) || magic != SourceMagic || !reader.Value(version))
                 return Result<FractureAssetSource>::Failure(MakeError(FractureDocumentErrors::InvalidSource));
             if (version != FractureSourceSchemaVersion)
@@ -236,8 +235,7 @@ namespace Horo::Editor {
             FractureAssetSource source;
             if (!SourceFields(reader, source) || reader.Remaining() != 0)
                 return Result<FractureAssetSource>::Failure(MakeError(FractureDocumentErrors::InvalidSource));
-            const auto valid = ValidateFractureAssetSource(source);
-            if (valid.HasError())
+            if (const auto valid = ValidateFractureAssetSource(source); valid.HasError())
                 return Result<FractureAssetSource>::Failure(valid.ErrorValue());
             return Result<FractureAssetSource>::Success(std::move(source));
         } catch (const std::bad_alloc &) {

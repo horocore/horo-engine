@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <new>
 #include <ranges>
 
@@ -17,7 +18,7 @@ namespace Horo::Editor {
         /** @brief Finds a stable chunk in a validated canonical table. */
         const FractureSourceChunk *FindChunk(const FractureAssetSource &source, Destruction::DestructionChunkId id) {
             const auto found = std::ranges::lower_bound(source.chunks, id, {}, &FractureSourceChunk::id);
-            return found != source.chunks.end() && found->id == id ? &*found : nullptr;
+            return found != source.chunks.end() && found->id == id ? std::to_address(found) : nullptr;
         }
 
         /** @brief Validates the hierarchy with bounded parent traversal and exact material references. */
@@ -32,7 +33,10 @@ namespace Horo::Editor {
                 std::uint32_t depth = 1;
                 while (current->parent.IsValid()) {
                     current = FindChunk(source, current->parent);
-                    if (!current || ++depth > maximumDepth)
+                    if (!current)
+                        return false;
+                    ++depth;
+                    if (depth > maximumDepth)
                         return false;
                 }
             }
@@ -63,8 +67,10 @@ namespace Horo::Editor {
                     queue[count++] = index;
                 }
             }
-            for (std::size_t next = 0; next < count; ++next) {
+            std::size_t next{};
+            while (next < count) {
                 const auto id = source.chunks[queue[next]].id;
+                ++next;
                 for (const auto &contact : source.contacts) {
                     if (contact.low != id && contact.high != id)
                         continue;
@@ -142,17 +148,17 @@ namespace Horo::Editor {
             FractureArtifactContentIdentity::Create(source.asset, FractureContentRevision::Create(1).Value(), settings.sourceDigest);
         if (content.HasError())
             return Result<void>::Failure(content.ErrorValue());
-        const auto descriptor =
-            DestructibleDescriptor::Create({.destructible = DestructibleId::Create(1).Value(),
-                                            .content = content.Value(),
-                                            .configurationRevision = DestructionConfigurationRevision::Create(1).Value(),
-                                            .tier = settings.tier,
-                                            .features = {.required = settings.requiredFeatures},
-                                            .limits = profile.Value().limits,
-                                            .health = source.damage.health,
-                                            .behavior = source.damage.behavior,
-                                            .cleanup = source.damage.cleanup});
-        if (descriptor.HasError())
+        if (const auto descriptor =
+                DestructibleDescriptor::Create({.destructible = DestructibleId::Create(1).Value(),
+                                                .content = content.Value(),
+                                                .configurationRevision = DestructionConfigurationRevision::Create(1).Value(),
+                                                .tier = settings.tier,
+                                                .features = {.required = settings.requiredFeatures},
+                                                .limits = profile.Value().limits,
+                                                .health = source.damage.health,
+                                                .behavior = source.damage.behavior,
+                                                .cleanup = source.damage.cleanup});
+            descriptor.HasError())
             return Result<void>::Failure(descriptor.ErrorValue());
         if (!ValidMaterials(source) || !ValidChunks(source, profile.Value().limits.maximumHierarchyDepth) || !ValidContacts(source) ||
             !ValidRequiredSupport(source) || !ValidSites(source))
