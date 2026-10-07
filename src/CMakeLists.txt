@@ -1351,6 +1351,7 @@ add_library(HoroNavigationApi STATIC
         runtime/navigation/api/NavigationTileDependencies.cpp
         runtime/navigation/api/NavigationTileArtifact.cpp
         runtime/navigation/api/NavigationTileSetCodec.cpp
+        runtime/navigation/api/NavigationTileSetProfileCodec.cpp
 )
 add_library(HoroEngine::NavigationApi ALIAS HoroNavigationApi)
 target_compile_features(HoroNavigationApi PUBLIC cxx_std_20)
@@ -1418,6 +1419,16 @@ add_library(HoroNavigationAssetSceneIntegration STATIC
 add_library(HoroEngine::NavigationAssetSceneIntegration ALIAS HoroNavigationAssetSceneIntegration)
 target_compile_features(HoroNavigationAssetSceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroNavigationAssetSceneIntegration PUBLIC HoroEngine::NavigationSceneIntegration HoroEngine::Assets)
+
+add_library(HoroNavigationContentIntegration STATIC
+        application/navigation/NavigationContentIntegration.cpp
+        application/navigation/NavigationContentAdmission.cpp
+        application/navigation/NavigationContentSmoke.cpp
+)
+add_library(HoroEngine::NavigationContentIntegration ALIAS HoroNavigationContentIntegration)
+target_compile_features(HoroNavigationContentIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroNavigationContentIntegration PUBLIC HoroEngine::Application HoroEngine::NavigationAssetSceneIntegration
+        PRIVATE nlohmann_json::nlohmann_json)
 
 add_library(HoroXRRuntime STATIC
         runtime/xr/runtime/XRFeatureNegotiation.cpp
@@ -2060,6 +2071,8 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_METAL)
 endif ()
 
 add_library(HoroEditorServices STATIC
+        editor/audio/MixerAssetDocument.cpp
+        editor/audio/MixerDocumentCommands.cpp
         editor/CinematicPropertyBindings.cpp
         editor/EditorServiceErrors.cpp
         editor/data_bus/EditorEngineEventBridge.cpp
@@ -2120,6 +2133,7 @@ target_include_directories(HoroEditorServices
 
 target_link_libraries(HoroEditorServices
         PUBLIC
+        HoroEngine::AudioApi
         HoroEngine::Foundation
         HoroEngine::HostErrors
         HoroEngine::CinematicRuntime

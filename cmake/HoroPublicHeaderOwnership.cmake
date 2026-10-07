@@ -738,6 +738,9 @@ horo_configure_target_header_boundary(HoroNavigationAssetSceneIntegration PUBLIC
     Horo/Navigation/NavMeshAssetLoading.h
     Horo/Navigation/NavigationAssetSceneActivation.h
 )
+horo_configure_target_header_boundary(HoroNavigationContentIntegration PUBLIC_HEADERS
+    Horo/Application/NavigationContentIntegration.h
+)
 horo_configure_target_header_boundary(HoroXRApi PUBLIC_HEADERS
     Horo/XR/XRCapabilities.h
     Horo/XR/XRContract.h
@@ -954,6 +957,7 @@ horo_configure_target_header_boundary(HoroModelProviderAdapters PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
+    Horo/Editor/MixerAssetDocument.h
     Horo/Editor/CinematicPropertyBindings.h
     Horo/Editor/ActivityBarLayout.h
     Horo/Editor/EditorConfiguration.h
