@@ -1,7 +1,5 @@
 #include "ReplicationStateCodecInternal.h"
 
-#include <new>
-
 namespace Horo::Network {
     using namespace StateCodecDetail;
 
@@ -72,36 +70,43 @@ namespace Horo::Network {
         const ReplicationAcknowledgedBaseline acknowledged = baseline;  // Pins callback lifetime independently of the caller's borrow.
         OperationGuard guard{operating_};
         const bool delta = UsableBaseline(source, acknowledged);
-        try {
-            std::vector<std::byte> wire;
-            wire.reserve(wireCapacity_);
-            AppendHeader(wire, source, delta ? &acknowledged : nullptr);
-            std::uint32_t count{};
-            for (const auto field : projection_) {
-                const auto encoded = EncodeField(field, source, delta ? &acknowledged : nullptr, cancellation);
-                if (encoded.HasError())
-                    return Result<std::vector<std::byte>>::Failure(encoded.ErrorValue());
-                if (!encoded.Value())
-                    continue;
-                const auto &bytes = encoded.Value()->canonicalBytes;
-                if (const auto remaining = limits_.maximumWireBytes - wire.size();
-                    remaining < FieldHeaderBytes || bytes.size() > remaining - FieldHeaderBytes)
-                    return Fail<std::vector<std::byte>>(ReplicationStateErrors::Capacity);
-                Append(wire, field.Value(), 4);
-                Append(wire, encoded.Value()->valueType.Value(), 4);
-                Append(wire, encoded.Value()->codec.Value(), 4);
-                Append(wire, bytes.size(), 4);
-                wire.insert(wire.end(), bytes.begin(), bytes.end());
-                ++count;
-            }
-            for (std::size_t index{}; index < 4; ++index)
-                wire[HeaderBytes - 4 + index] = static_cast<std::byte>((count >> (index * 8)) & 0xff);
-            return Result<std::vector<std::byte>>::Success(std::move(wire));
-        } catch (const std::bad_alloc &) {
-            return Fail<std::vector<std::byte>>(ReplicationStateErrors::Capacity);
-        } catch (...) {
-            // Module codecs may throw non-standard values; no exception can escape the session owner boundary.
-            return Fail<std::vector<std::byte>>(ReplicationStateErrors::CallbackFault);
+        std::optional<Result<std::vector<std::byte>>> result;
+        const auto fault = ContainCodecFault([&] {
+            result.emplace(EncodeState(source, delta ? &acknowledged : nullptr, cancellation));
+        });
+        if (fault == CodecFault::None)
+            return std::move(*result);
+        return Fail<std::vector<std::byte>>(fault == CodecFault::Capacity ? ReplicationStateErrors::Capacity
+                                                                          : ReplicationStateErrors::CallbackFault);
+    }
+
+    /** @copydoc ReplicationStateCodec::EncodeState */
+    Result<std::vector<std::byte>> ReplicationStateCodec::EncodeState(const ReplicationCapturedStatePin &source,
+                                                                      const ReplicationAcknowledgedBaseline *baseline,
+                                                                      const CancellationToken &cancellation) const {
+        std::vector<std::byte> wire;
+        wire.reserve(wireCapacity_);
+        AppendHeader(wire, source, baseline);
+        std::uint32_t count{};
+        for (const auto field : projection_) {
+            const auto encoded = EncodeField(field, source, baseline, cancellation);
+            if (encoded.HasError())
+                return Result<std::vector<std::byte>>::Failure(encoded.ErrorValue());
+            if (!encoded.Value())
+                continue;
+            const auto &bytes = encoded.Value()->canonicalBytes;
+            if (const auto remaining = limits_.maximumWireBytes - wire.size();
+                remaining < FieldHeaderBytes || bytes.size() > remaining - FieldHeaderBytes)
+                return Fail<std::vector<std::byte>>(ReplicationStateErrors::Capacity);
+            Append(wire, field.Value(), 4);
+            Append(wire, encoded.Value()->valueType.Value(), 4);
+            Append(wire, encoded.Value()->codec.Value(), 4);
+            Append(wire, bytes.size(), 4);
+            wire.insert(wire.end(), bytes.begin(), bytes.end());
+            ++count;
         }
+        for (std::size_t index{}; index < 4; ++index)
+            wire[HeaderBytes - 4 + index] = static_cast<std::byte>((count >> (index * 8)) & 0xff);
+        return Result<std::vector<std::byte>>::Success(std::move(wire));
     }
 }  // namespace Horo::Network

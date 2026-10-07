@@ -4,12 +4,35 @@
 
 #include <algorithm>
 #include <array>
+#include <new>
 #include <utility>
 
 namespace Horo::Network::StateCodecDetail {
     inline constexpr std::size_t HeaderBytes = 172;
     inline constexpr std::size_t FieldHeaderBytes = 16;
     inline constexpr std::uint64_t Magic = 0x31535248;
+
+    /** @brief Allocation-free outcome of a contained foreign-codec transaction. */
+    enum class CodecFault {
+        None,
+        Capacity,
+        Callback
+    };
+
+    /** @brief Contains all transaction exceptions without allocating diagnostic state.
+     * @param operation Synchronous transaction retaining its result in caller-owned storage.
+     * @return Fault category; the caller creates typed errors outside this noexcept boundary.
+     */
+    template <typename Operation> CodecFault ContainCodecFault(Operation operation) noexcept {
+        try {
+            operation();
+            return CodecFault::None;
+        } catch (const std::bad_alloc &) {
+            return CodecFault::Capacity;
+        } catch (...) {
+            return CodecFault::Callback;
+        }
+    }
 
     /** @brief Emits a fixed-width little-endian integer; callers have charged complete bounded storage. */
     inline void Append(std::vector<std::byte> &output, std::uint64_t value, const std::size_t width) {

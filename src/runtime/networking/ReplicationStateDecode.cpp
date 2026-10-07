@@ -1,7 +1,5 @@
 #include "ReplicationStateCodecInternal.h"
 
-#include <new>
-
 namespace Horo::Network {
     using namespace StateCodecDetail;
 
@@ -177,19 +175,21 @@ namespace Horo::Network {
                                                                          const ReplicationDecodedState *baseline,
                                                                          const CancellationToken &cancellation) {
         OperationGuard guard{operating_};
-        try {
-            // Foreign callbacks cannot invalidate the already-validated suffix by mutating the caller's borrowed record.
-            const std::vector<std::byte> fieldBytes{fields.begin(), fields.end()};
-            auto reconstructed = Reconstruct(fieldBytes, count, baseline, cancellation);
-            if (reconstructed.HasError())
-                return Result<ReplicationDecodedState>::Failure(reconstructed.ErrorValue());
-            state.fields_ = std::move(reconstructed).Value();
-            return Result<ReplicationDecodedState>::Success(std::move(state));
-        } catch (const std::bad_alloc &) {
-            return Fail<ReplicationDecodedState>(ReplicationStateErrors::Capacity);
-        } catch (...) {
-            // Foreign module faults cannot publish a partial reconstructed baseline or mutate its prior pin.
-            return Fail<ReplicationDecodedState>(ReplicationStateErrors::CallbackFault);
-        }
+        std::optional<Result<ReplicationDecodedState>> result;
+        const auto fault = ContainCodecFault([&] {
+            result.emplace([&]() -> Result<ReplicationDecodedState> {
+                // Foreign callbacks cannot invalidate the already-validated suffix by mutating the caller's borrowed record.
+                const std::vector<std::byte> fieldBytes{fields.begin(), fields.end()};
+                auto reconstructed = Reconstruct(fieldBytes, count, baseline, cancellation);
+                if (reconstructed.HasError())
+                    return Result<ReplicationDecodedState>::Failure(reconstructed.ErrorValue());
+                state.fields_ = std::move(reconstructed).Value();
+                return Result<ReplicationDecodedState>::Success(std::move(state));
+            }());
+        });
+        if (fault == CodecFault::None)
+            return std::move(*result);
+        return Fail<ReplicationDecodedState>(fault == CodecFault::Capacity ? ReplicationStateErrors::Capacity
+                                                                           : ReplicationStateErrors::CallbackFault);
     }
 }  // namespace Horo::Network

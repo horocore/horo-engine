@@ -177,6 +177,10 @@ namespace Horo::Network {
         /** @brief Appends exact versioned framing for a full record or acknowledged delta. */
         void AppendHeader(std::vector<std::byte> &wire, const ReplicationCapturedStatePin &source,
                           const ReplicationAcknowledgedBaseline *baseline) const;
+        /** @brief Builds a complete wire candidate inside the caller's foreign-codec containment boundary. */
+        [[nodiscard]] Result<std::vector<std::byte>> EncodeState(const ReplicationCapturedStatePin &source,
+                                                                 const ReplicationAcknowledgedBaseline *baseline,
+                                                                 const CancellationToken &cancellation) const;
         /** @brief Owns validated field bytes and contains faults until a complete immutable candidate is ready. */
         [[nodiscard]] Result<ReplicationDecodedState> CompleteState(ReplicationDecodedState state, std::span<const std::byte> fields,
                                                                     std::uint64_t count, const ReplicationDecodedState *baseline,

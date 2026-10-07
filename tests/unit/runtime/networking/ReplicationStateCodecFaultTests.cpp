@@ -1,6 +1,7 @@
 #include "ReplicationStateCodecTestSupport.h"
 
 #include <functional>
+#include <stdexcept>
 
 namespace Horo::Network {
     using namespace StateCodecTestSupport;
@@ -95,6 +96,46 @@ namespace Horo::Network {
         }
         REQUIRE(fixture.codec->Decode(wire, Object()).HasError());
         REQUIRE(fixture.Pin()->IsCurrent());
+    }
+
+    TEST_CASE("Codec exception containment preserves fault categories and permits retry", "[network][state-codec]") {
+        FaultFixture fixture;
+        const auto pin = fixture.Pin();
+        const auto wire = fixture.codec->Encode(pin).Value();
+        const auto previous = fixture.codec->Decode(wire, Object()).Value();
+        const ErrorCodeDescriptor *expected = &ReplicationStateErrors::CallbackFault;
+        std::function<void()> callback;
+        SECTION("non-standard exception") {
+            callback = [] {
+                throw ForeignCallbackFault{};
+            };
+        }
+        SECTION("standard exception") {
+            callback = [] {
+                throw std::runtime_error{"codec fault"};
+            };
+        }
+        SECTION("allocation failure") {
+            expected = &NetworkErrors::ReplicationSerializerCapacityExceeded;
+            callback = [] {
+                throw std::bad_alloc{};
+            };
+        }
+        fixture.serializer->onEncode = callback;
+        const auto encoded = fixture.codec->Encode(pin);
+        REQUIRE(encoded.HasError());
+        REQUIRE(encoded.ErrorValue().code.Value() == expected->code.Value());
+        fixture.serializer->onEncode = {};
+        fixture.serializer->onDecode = callback;
+        const auto decoded = fixture.codec->Decode(wire, Object());
+        REQUIRE(decoded.HasError());
+        REQUIRE(decoded.ErrorValue().code.Value() == expected->code.Value());
+        REQUIRE(previous.IsCurrent());
+        REQUIRE(std::get<double>(previous.Fields()[0].value) == 0.0);
+        REQUIRE(pin->IsCurrent());
+        fixture.serializer->onDecode = {};
+        REQUIRE(fixture.codec->Encode(pin).Value() == wire);
+        REQUIRE(fixture.codec->Decode(wire, Object()).HasValue());
     }
 
     TEST_CASE("Decode fences cancellation and shutdown after both decoder and canonical encoder", "[network][state-codec]") {

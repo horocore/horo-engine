@@ -395,6 +395,11 @@ reconstructs a complete typed network value. Re-encoding each decoded field prov
 canonical bytes. Errors, callback faults, cancellation or shutdown publish no partial
 candidate and preserve prior decoded state. This operation has no Scene mutation
 authority: NET-004.6 still owns admission, staging and atomic owner-safe-point apply.
+Foreign codec transactions execute inside an allocation-free `noexcept` exception
+boundary. It classifies allocation failures separately from other callback faults;
+typed diagnostic construction remains outside that boundary so allocation during
+error reporting cannot terminate the host. The operation guard releases admission
+on all failure paths, allowing a later valid transaction to retry.
 NET-004.5 owns per-connection acknowledgement windows, retention and overflow policy;
 this codec contains no hidden history or retry state.
 
