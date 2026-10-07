@@ -11,9 +11,15 @@
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <condition_variable>
 #include <fstream>
 #include <iterator>
+#include <memory>
+#include <mutex>
 #include <nlohmann/json.hpp>
+#include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -25,21 +31,100 @@ namespace {
     constexpr auto ProductionDefinitionId = "core.project_settings.compression_defaults";
     constexpr auto AuthoringDefinitionId = "core.authoring.navigation_network";
 
-    class MigrationLogCapture final {
+    /** @brief Parks the writer outside the dispatch queue lock while the test admits its complete migration log. */
+    class MigrationLogGate final : public Telemetry::ISink {
     public:
-        explicit MigrationLogCapture(const std::filesystem::path &root) : path_(root / "migration-integration-test.jsonl") {
-            Log::Logger::Shutdown();
-            Log::Logger::Init(root.string(), "migration-integration-test");
-            Log::Logger::SetLevel(Log::Level::Debug);
+        /** @brief Signals the sink boundary and waits outside the queue lock until the capture owner releases it. */
+        void Export(const Telemetry::Record &, const Telemetry::InstrumentDescriptor *) override {
+            std::unique_lock lock(mutex_);
+            entered_ = true;
+            changed_.notify_all();
+            changed_.wait(lock, [this] {
+                return released_;
+            });
         }
 
-        ~MigrationLogCapture() {
-            static_cast<void>(Log::Logger::Flush());
+        /** @brief Keeps the fixture sink stateless; the real JSONL sink owns persistence. */
+        void Flush() override {}
+
+        /** @brief Bounds the startup handshake so failed logger setup cannot hang the test. */
+        [[nodiscard]] bool WaitUntilEntered() {
+            std::unique_lock lock(mutex_);
+            return changed_.wait_for(lock, std::chrono::seconds{5}, [this] {
+                return entered_;
+            });
+        }
+
+        /** @brief Idempotently permits draining before persistence checks or exceptional shutdown. */
+        void Release() {
+            std::lock_guard lock(mutex_);
+            released_ = true;
+            changed_.notify_all();
+        }
+
+    private:
+        // Only Export runs on the writer; the owner thread waits/releases. The lifetime guard releases before shutdown.
+        std::mutex mutex_;
+        std::condition_variable changed_;
+        bool entered_{};
+        bool released_{};
+    };
+
+    /** @brief Releases the parked sink and shuts down logging even if capture construction or an assertion fails. */
+    class MigrationLogShutdown final {
+    public:
+        explicit MigrationLogShutdown(std::shared_ptr<MigrationLogGate> gate) : gate_(std::move(gate)) {}
+
+        ~MigrationLogShutdown() {
+            gate_->Release();
             Log::Logger::Shutdown();
+        }
+
+        MigrationLogShutdown(const MigrationLogShutdown &) = delete;
+        MigrationLogShutdown &operator=(const MigrationLogShutdown &) = delete;
+
+    private:
+        std::shared_ptr<MigrationLogGate> gate_;
+    };
+
+    /** @brief Uses an explicitly admitted fixture marker to establish the parked writer, without replaying migration records. */
+    [[nodiscard]] bool ParkMigrationLogWriter(MigrationLogGate &gate) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        do {
+            if (Telemetry::Runtime::EmitRecord({.subsystem = "tests.migration.capture",
+                                                .payload = Telemetry::LogRecord{.severity = Log::Level::Info,
+                                                                                .category = "tests.migration.capture",
+                                                                                .message = "Migration log capture started"}}))
+                return gate.WaitUntilEntered();
+            std::this_thread::yield();
+        } while (std::chrono::steady_clock::now() < deadline);
+        return false;
+    }
+
+    /** @brief Captures actual asynchronous migration records with controlled writer admission and checked persistence. */
+    class MigrationLogCapture final {
+    public:
+        explicit MigrationLogCapture(const std::filesystem::path &root)
+            : path_(root / "migration-integration-test.jsonl"), gate_(std::make_shared<MigrationLogGate>()), shutdown_(gate_) {
+            Log::Logger::Shutdown();
+            REQUIRE(Log::Logger::Init({.logDirectory = root,
+                                       .baseName = "migration-integration-test",
+                                       .metricCollectionLevel = Telemetry::MetricCollectionLevel::Off,
+                                       .additionalSinks = {gate_}}));
+            Log::Logger::SetLevel(Log::Level::Debug);
+            REQUIRE(ParkMigrationLogWriter(*gate_));
+            initialHealth_ = Telemetry::Runtime::GetStatistics();
         }
 
         [[nodiscard]] std::vector<nlohmann::json> Records() const {
-            static_cast<void>(Log::Logger::Flush());
+            gate_->Release();
+            REQUIRE(Log::Logger::Flush());
+            const auto health = Telemetry::Runtime::GetStatistics();
+            CAPTURE(health.contentionDrops, health.queueFullDrops, health.sinkFailures, health.flushTimeouts);
+            REQUIRE(health.acceptedRecords > initialHealth_.acceptedRecords);
+            REQUIRE(health.droppedRecords == initialHealth_.droppedRecords);
+            REQUIRE(health.sinkFailures == initialHealth_.sinkFailures);
+            REQUIRE(health.flushTimeouts == initialHealth_.flushTimeouts);
             std::ifstream input(path_, std::ios::binary);
             REQUIRE((input.good()));
             std::vector<nlohmann::json> records;
@@ -51,6 +136,9 @@ namespace {
 
     private:
         std::filesystem::path path_;
+        std::shared_ptr<MigrationLogGate> gate_;
+        MigrationLogShutdown shutdown_;
+        Telemetry::Statistics initialHealth_;
     };
 
     [[nodiscard]] bool HasLogCategory(const std::vector<nlohmann::json> &records, const std::string_view category) {
