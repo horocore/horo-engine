@@ -57,7 +57,8 @@ namespace Horo::Network {
         ++wrong.descriptorGeneration;
         REQUIRE(fixture.codec->Encode(source, wrong).Value() == full);
         wrong = Ack(fixture.first, *fixture.codec);
-        wrong.projectionFingerprint.bytes[0] ^= 1;
+        wrong.projectionFingerprint.bytes[0] =
+            std::to_integer<std::uint8_t>(std::byte{wrong.projectionFingerprint.bytes[0]} ^ std::byte{1});
         REQUIRE(fixture.codec->Encode(source, wrong).Value() == full);
         wrong = Ack(source, *fixture.codec);
         REQUIRE(fixture.codec->Encode(fixture.first, wrong).Value() == fixture.full);
@@ -104,7 +105,8 @@ namespace Horo::Network {
         auto codec = MakeCodec(fixture.registry, {1, WireHeaderBytes, 1});
         REQUIRE(codec->Encode(fixture.Pin()).HasError());
         auto normal = MakeCodec(fixture.registry);
-        const auto full = normal->Encode(fixture.Pin()).Value();
+        const auto encoded = normal->Encode(fixture.Pin());
+        const auto &full = encoded.Value();
         REQUIRE(codec->Decode(full, Object()).HasError());
         REQUIRE(std::get<double>(fixture.Pin()->Fields()[0].value) == 3.0);
         REQUIRE(ReplicationStateCodec::Create(fixture.registry, Recipient(), ReplicationRecordKind::Update, 0).HasError());
@@ -123,7 +125,7 @@ namespace Horo::Network {
         recipient = Recipient();
         recipient.schemaVersion = {1, 1};
         REQUIRE(ReplicationStateCodec::Create(fixture.registry, recipient, ReplicationRecordKind::Update, 1).HasError());
-        for (const auto limits :
+        for (const auto &limits :
              {ReplicationStateCodecLimits{4097, 172, 1}, {1, 171, 1}, {1, 172, 0}, {1, 17 * 1024 * 1024, 1}, {1, 172, 17 * 1024 * 1024}})
             REQUIRE(ReplicationStateCodec::Create(fixture.registry, Recipient(), ReplicationRecordKind::Update, 1, {}, limits).HasError());
     }

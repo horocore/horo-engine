@@ -24,13 +24,14 @@ namespace Horo::Network::StateCodecDetail {
      * @return Fault category; the caller creates typed errors outside this noexcept boundary.
      */
     template <typename Operation> CodecFault ContainCodecFault(Operation operation) noexcept {
+        using enum CodecFault;
         try {
             operation();
-            return CodecFault::None;
+            return None;
         } catch (const std::bad_alloc &) {
-            return CodecFault::Capacity;
+            return Capacity;
         } catch (...) {
-            return CodecFault::Callback;
+            return Callback;
         }
     }
 

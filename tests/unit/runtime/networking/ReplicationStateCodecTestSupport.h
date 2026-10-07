@@ -4,7 +4,22 @@
 #include "ReplicationCaptureTestSupport.h"
 
 namespace Horo::Network::StateCodecTestSupport {
-    using namespace CaptureTestSupport;
+    using CaptureTestSupport::Codec;
+    using CaptureTestSupport::CountingCodec;
+    using CaptureTestSupport::Field;
+    using CaptureTestSupport::FieldIdValue;
+    using CaptureTestSupport::Fixture;
+    using CaptureTestSupport::ForeignCallbackFault;
+    using CaptureTestSupport::Lifecycle;
+    using CaptureTestSupport::Limits;
+    using CaptureTestSupport::Object;
+    using CaptureTestSupport::Owner;
+    using CaptureTestSupport::Read;
+    using CaptureTestSupport::Registry;
+    using CaptureTestSupport::Schema;
+    using CaptureTestSupport::SchemaId;
+    using CaptureTestSupport::ValueType;
+    using CaptureTestSupport::World;
     inline constexpr std::size_t WireHeaderBytes = 172;
 
     inline ReplicationRoleBinding Recipient() {
@@ -40,9 +55,9 @@ namespace Horo::Network::StateCodecTestSupport {
         std::unique_ptr<ReplicationStateCodec> codec{MakeCodec(capture.registry)};
         ReplicationCapturedStatePin first;
         std::vector<std::byte> full;
-        ReplicationDecodedState decoded;
+        ReplicationDecodedState decoded{Initial()};
 
-        CodecFixture() : decoded(Initial()) {}
+        CodecFixture() = default;
 
         ReplicationDecodedState Initial() {
             capture.Capture(1, 1.0);

@@ -40,25 +40,22 @@ namespace Horo::Network {
         fixture.capture.Capture(2, 2.0);
         CancellationSource cancellation;
         SECTION("cancel") {
-            fixture.capture.codec->context = &cancellation;
-            fixture.capture.codec->onCompare = [](void *context) {
-                static_cast<CancellationSource *>(context)->RequestCancellation();
+            fixture.capture.codec->onCompare = [&cancellation] {
+                cancellation.RequestCancellation();
             };
         }
         SECTION("close capture") {
-            fixture.capture.codec->context = fixture.capture.capture.get();
-            fixture.capture.codec->onCompare = [](void *context) {
-                static_cast<ReplicationStateCapture *>(context)->Shutdown();
+            fixture.capture.codec->onCompare = [&fixture] {
+                fixture.capture.capture->Shutdown();
             };
         }
         SECTION("close codec") {
-            fixture.capture.codec->context = fixture.codec.get();
-            fixture.capture.codec->onCompare = [](void *context) {
-                static_cast<ReplicationStateCodec *>(context)->Shutdown();
+            fixture.capture.codec->onCompare = [&fixture] {
+                fixture.codec->Shutdown();
             };
         }
         SECTION("foreign exception") {
-            fixture.capture.codec->onCompare = [](void *) {
+            fixture.capture.codec->onCompare = [] {
                 throw ForeignCallbackFault{};
             };
         }
@@ -73,17 +70,17 @@ namespace Horo::Network {
         struct Reentry final {
             CodecFixture *fixture;
             bool rejected{};
-        } reentry{&fixture};
+        };
 
-        fixture.capture.codec->context = &reentry;
-        fixture.capture.codec->onCompare = [](void *context) {
-            auto &state = *static_cast<Reentry *>(context);
-            state.rejected = state.fixture->codec->Decode(state.fixture->full, Object()).HasError();
+        Reentry reentry{&fixture};
+
+        fixture.capture.codec->onCompare = [&reentry] {
+            reentry.rejected = reentry.fixture->codec->Decode(reentry.fixture->full, Object()).HasError();
         };
         REQUIRE(fixture.codec->Encode(fixture.capture.Pin(), Ack(fixture.first, *fixture.codec)).HasValue());
         REQUIRE(reentry.rejected);
         bool rejected{};
-        std::thread worker{[&] {
+        std::jthread worker{[&rejected, &fixture] {
             rejected = fixture.codec->Decode(fixture.full, Object()).HasError();
         }};
         worker.join();
@@ -101,11 +98,9 @@ namespace Horo::Network {
         CodecFixture fixture;
         fixture.capture.Capture(2, 2.0);
         auto acknowledged = Ack(fixture.first, *fixture.codec);
-        fixture.capture.codec->context = &acknowledged;
-        fixture.capture.codec->onCompare = [](void *context) {
-            auto &callerEvidence = *static_cast<ReplicationAcknowledgedBaseline *>(context);
-            callerEvidence.state.reset();
-            ++callerEvidence.descriptorGeneration;
+        fixture.capture.codec->onCompare = [&acknowledged] {
+            acknowledged.state.reset();
+            ++acknowledged.descriptorGeneration;
         };
         const auto result = fixture.codec->Encode(fixture.capture.Pin(), acknowledged);
         REQUIRE(result.HasValue());

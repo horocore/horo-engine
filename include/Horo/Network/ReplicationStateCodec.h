@@ -82,7 +82,8 @@ namespace Horo::Network {
         NetworkObjectMappingEntry mapping_;
         ReplicationSchemaId schema_;
         ReplicationSchemaVersion version_;
-        std::uint64_t tick_{}, revision_{};
+        std::uint64_t tick_{};
+        std::uint64_t revision_{};
         std::shared_ptr<const ReplicationSerializerRegistry> serializers_;
         std::shared_ptr<const std::atomic_bool> admission_;
         std::vector<ReplicationCapturedField> fields_;

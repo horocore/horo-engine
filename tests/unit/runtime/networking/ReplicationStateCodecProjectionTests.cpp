@@ -8,7 +8,8 @@ namespace Horo::Network {
                                                                                const std::shared_ptr<CountingCodec> &codec) {
             auto field = Field();
             field.condition = condition;
-            if (condition == ReplicationCondition::Custom)
+            using enum ReplicationCondition;
+            if (condition == Custom)
                 field.customCondition = ReplicationConditionId::Create(9).Value();
             const std::array schemas{Schema(10, {field})};
             const auto descriptors = BuildReplicationDescriptorSnapshot(schemas, Limits).Value();
@@ -19,8 +20,8 @@ namespace Horo::Network {
     }  // namespace
 
     TEST_CASE("Full fallback carries only the exact recipient visibility projection", "[network][state-codec]") {
-        for (const auto condition : {ReplicationCondition::Always, ReplicationCondition::InitialOnly, ReplicationCondition::OwnerOnly,
-                                     ReplicationCondition::SkipOwner, ReplicationCondition::SimulatedOnly}) {
+        using enum ReplicationCondition;
+        for (const auto condition : {Always, InitialOnly, OwnerOnly, SkipOwner, SimulatedOnly}) {
             auto owner = std::make_shared<Owner>();
             auto lifecycle = Lifecycle();
             auto codec = std::make_shared<CountingCodec>();
@@ -32,10 +33,8 @@ namespace Horo::Network {
             for (const auto kind : {ReplicationRecordKind::Spawn, ReplicationRecordKind::Update}) {
                 for (const bool autonomous : {false, true}) {
                     auto recipient = Recipient();
-                    if (autonomous) {
-                        recipient.role = ReplicationExecutionRole::AutonomousClient;
-                        recipient.autonomousOwner = recipient.localPeer;
-                    }
+                    recipient.role = autonomous ? ReplicationExecutionRole::AutonomousClient : ReplicationExecutionRole::SimulatedClient;
+                    recipient.autonomousOwner = autonomous ? recipient.localPeer : std::nullopt;
                     auto stateCodec = ReplicationStateCodec::Create(registry, recipient, kind, 1).Value();
                     const auto full = stateCodec->Encode(capture->Latest(Object().object).Value()).Value();
                     const auto decoded = stateCodec->Decode(full, Object());

@@ -71,7 +71,7 @@ namespace Horo::Network {
         OperationGuard guard{operating_};
         const bool delta = UsableBaseline(source, acknowledged);
         std::optional<Result<std::vector<std::byte>>> result;
-        const auto fault = ContainCodecFault([&] {
+        const auto fault = ContainCodecFault([this, &result, &source, delta, &acknowledged, &cancellation] {
             result.emplace(EncodeState(source, delta ? &acknowledged : nullptr, cancellation));
         });
         if (fault == CodecFault::None)

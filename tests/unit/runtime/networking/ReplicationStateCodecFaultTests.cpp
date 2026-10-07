@@ -7,6 +7,11 @@ namespace Horo::Network {
     using namespace StateCodecTestSupport;
 
     namespace {
+        class CodecCallbackError final : public std::runtime_error {
+        public:
+            CodecCallbackError() : std::runtime_error("codec fault") {}
+        };
+
         class CallbackCodec final : public IReplicationFieldSerializer {
         public:
             const ReplicationSerializerDescriptor &Descriptor() const noexcept override {
@@ -41,8 +46,12 @@ namespace Horo::Network {
                 CanonicalScalarReplicationSerializer::Create(
                     {ValueType(1), Codec(1), {.value = "game.replication"}, ReplicationValueKind::FloatingPoint, {}, 8, 1})
                     .Value()};
-            std::function<void()> onEncode, onDecode;
-            bool rejectEncode{}, rejectDecode{}, rejectCompare{}, noncanonical{};
+            std::function<void()> onEncode;
+            std::function<void()> onDecode;
+            bool rejectEncode{};
+            bool rejectDecode{};
+            bool rejectCompare{};
+            bool noncanonical{};
         };
 
         struct FaultFixture final {
@@ -66,7 +75,7 @@ namespace Horo::Network {
                 codec = MakeCodec(registry);
             }
 
-            ReplicationCapturedStatePin Pin() {
+            ReplicationCapturedStatePin Pin() const {
                 return capture->Latest(Object().object).Value();
             }
         };
@@ -112,7 +121,7 @@ namespace Horo::Network {
         }
         SECTION("standard exception") {
             callback = [] {
-                throw std::runtime_error{"codec fault"};
+                throw CodecCallbackError{};
             };
         }
         SECTION("allocation failure") {
@@ -143,22 +152,22 @@ namespace Horo::Network {
         const auto wire = fixture.codec->Encode(fixture.Pin()).Value();
         CancellationSource cancellation;
         SECTION("decoder cancels") {
-            fixture.serializer->onDecode = [&] {
+            fixture.serializer->onDecode = [&cancellation] {
                 cancellation.RequestCancellation();
             };
         }
         SECTION("encoder cancels") {
-            fixture.serializer->onEncode = [&] {
+            fixture.serializer->onEncode = [&cancellation] {
                 cancellation.RequestCancellation();
             };
         }
         SECTION("decoder closes") {
-            fixture.serializer->onDecode = [&] {
+            fixture.serializer->onDecode = [&fixture] {
                 fixture.codec->Shutdown();
             };
         }
         SECTION("encoder closes") {
-            fixture.serializer->onEncode = [&] {
+            fixture.serializer->onEncode = [&fixture] {
                 fixture.codec->Shutdown();
             };
         }
@@ -182,12 +191,12 @@ namespace Horo::Network {
             };
         }
         SECTION("cancel") {
-            fixture.serializer->onEncode = [&] {
+            fixture.serializer->onEncode = [&cancellation] {
                 cancellation.RequestCancellation();
             };
         }
         SECTION("capture retire") {
-            fixture.serializer->onEncode = [&] {
+            fixture.serializer->onEncode = [&fixture] {
                 fixture.capture->Shutdown();
             };
         }

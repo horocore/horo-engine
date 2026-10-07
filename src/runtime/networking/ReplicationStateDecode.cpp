@@ -176,8 +176,8 @@ namespace Horo::Network {
                                                                          const CancellationToken &cancellation) {
         OperationGuard guard{operating_};
         std::optional<Result<ReplicationDecodedState>> result;
-        const auto fault = ContainCodecFault([&] {
-            result.emplace([&]() -> Result<ReplicationDecodedState> {
+        const auto fault = ContainCodecFault([this, &result, &state, fields, count, baseline, &cancellation] {
+            result.emplace([this, &state, fields, count, baseline, &cancellation] {
                 // Foreign callbacks cannot invalidate the already-validated suffix by mutating the caller's borrowed record.
                 const std::vector<std::byte> fieldBytes{fields.begin(), fields.end()};
                 auto reconstructed = Reconstruct(fieldBytes, count, baseline, cancellation);
