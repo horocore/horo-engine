@@ -16,6 +16,10 @@ namespace Horo::Mcp {
 }  // namespace Horo::Mcp
 
 namespace Horo::Mcp::McpErrors {
+    /** @brief Authentication, principal scope, expiry or project trust failed. */
+    extern const ErrorCodeDescriptor AuthorizationDenied;
+    /** @brief Exact, live, single-use local approval is absent. */
+    extern const ErrorCodeDescriptor ApprovalRequired;
     /** @brief The controller or a declared session limit is invalid. */
     extern const ErrorCodeDescriptor ConfigurationInvalid;
     /** @brief An explicitly admitted local or embedded caller has invalid identity or authority. */

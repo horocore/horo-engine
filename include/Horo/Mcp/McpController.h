@@ -45,9 +45,11 @@ namespace Horo::Mcp {
 
     public:
         /** @brief Constructs a controller over one host registry. @param registry Registry lease. @param limits Finite budgets.
+         * @param authorization Shared host credential/trust policy, also composed into the session manager.
          * @return Controller or typed configuration failure. */
         [[nodiscard]] static Result<std::shared_ptr<McpController>> Create(std::shared_ptr<McpToolRegistry> registry,
-                                                                           McpControllerLimits limits = {});
+                                                                           McpControllerLimits limits = {},
+                                                                           std::shared_ptr<McpAuthorization> authorization = {});
 
         /** @brief Construction seam restricted by the private key to Create. */
         explicit McpController(ConstructionKey, std::shared_ptr<State> state) noexcept;
@@ -78,7 +80,7 @@ namespace Horo::Mcp {
         McpController &operator=(const McpController &) = delete;
 
     private:
-        /** @brief Lists capability-visible tools from the session's registry generation. */
+        /** @brief Lists authenticated, trusted, capability-visible tools from the session's registry generation. */
         [[nodiscard]] Result<nlohmann::json> DispatchList(const McpRequestContext &context) const;
         /** @brief Queries or cancels one operation owned by the session generation. */
         [[nodiscard]] Result<nlohmann::json> DispatchOperation(const McpRequest &request, const McpRequestContext &context) const;

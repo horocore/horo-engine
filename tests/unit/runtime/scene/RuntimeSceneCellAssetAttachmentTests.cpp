@@ -174,6 +174,11 @@ namespace Horo::Runtime {
         fixture.pin = {};
         fixture.cache->Evict(fixture.digest);
         REQUIRE(fixture.cache->Snapshot().retainedPayloadBytes > 0);
+        const auto stale = QueueRuntimeSceneCellDetachment(fixture.service, fixture.first.Identity(), fixture.firstRequest,
+                                                           Owner(fixture.first, fixture.firstRequest, fixture.counts));
+        REQUIRE(stale.HasError());
+        CHECK(stale.ErrorValue().code.Value() == "scene.asset.registry_stale");
+        fixture.firstRequest.registry = fixture.registry.Snapshot().Revision();
         REQUIRE(QueueRuntimeSceneCellDetachment(fixture.service, fixture.first.Identity(), fixture.firstRequest,
                                                 Owner(fixture.first, fixture.firstRequest, fixture.counts))
                     .HasValue());

@@ -428,8 +428,15 @@ namespace Horo::Runtime {
         RuntimeEntityDefinition entity{.object = {10}};
         entity.components.rigidBody =
             RigidBodyComponent{.id = {10}, .body = {100}, .motion = AuthoredPhysicsMotionType::Static, .mass = AuthoredPhysicsNoMass{}};
+        // A valid authored body needs an explicit collider before owner admission can be exercised.
+        entity.components.colliders.push_back({.id = {11},
+                                               .collider = {1},
+                                               .body = {{10}, {100}},
+                                               .collisionProfile = Physics::CollisionProfileId::FromBytes({1}),
+                                               .materials = {{Physics::PhysicsMaterialSlotId::FromValue(1), Asset(1)}}});
         const std::array entities{entity};
         auto cooked = CookRuntimeSceneCellPayload(manifest.Descriptor(), {identity, entities}, identity, {8, 8, 1024 * 1024});
+        INFO((cooked.HasError() ? cooked.ErrorValue().message : ""));
         REQUIRE(cooked.HasValue());
         const auto payload = std::move(cooked).Value();
         const auto request = Request(service, payload);

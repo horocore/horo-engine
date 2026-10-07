@@ -38,6 +38,13 @@ if(CMAKE_GENERATOR_TOOLSET)
     list(APPEND configure_command -T "${CMAKE_GENERATOR_TOOLSET}")
 endif()
 
+# The isolated C consumer must use the exact configured host toolchain, including macOS SDK selection.
+foreach(toolchain_option IN ITEMS CMAKE_C_COMPILER CMAKE_LINKER CMAKE_OSX_SYSROOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    if(DEFINED ${toolchain_option} AND NOT "${${toolchain_option}}" STREQUAL "")
+        list(APPEND configure_command "-D${toolchain_option}=${${toolchain_option}}")
+    endif()
+endforeach()
+
 execute_process(COMMAND ${configure_command} RESULT_VARIABLE configure_result)
 if(NOT configure_result EQUAL 0)
     message(FATAL_ERROR "External extension SDK consumer configure failed")

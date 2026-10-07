@@ -70,6 +70,32 @@ namespace Horo::Physics {
         }
     }  // namespace
 
+    TEST_CASE("Inline capsule queries reject malformed axes dimensions depth and selector evidence", "[physics][query][capsule]") {
+        auto descriptor = RayDescriptor();
+        descriptor.geometry = PhysicsCapsuleSweepQuery{{0.25F, 0.5F}, {}, {0, 1, 0}, {1, 0, 0}, 1};
+        REQUIRE(ValidatePhysicsQueryDescriptor(descriptor, World(), 9).HasValue());
+        auto &sweep = std::get<PhysicsCapsuleSweepQuery>(descriptor.geometry);
+        sweep.up = {0, 0, 0};
+        REQUIRE(ValidatePhysicsQueryDescriptor(descriptor, World(), 9).HasError());
+        sweep.up = {0, 1, 0};
+        sweep.maximumDistanceMeters = 0;
+        REQUIRE(ValidatePhysicsQueryDescriptor(descriptor, World(), 9).HasError());
+        descriptor.geometry = PhysicsCapsuleOverlapQuery{{-0.25F, 0.5F}, {}, {0, 1, 0}};
+        REQUIRE(ValidatePhysicsQueryDescriptor(descriptor, World(), 9).HasError());
+        descriptor.geometry = PhysicsCapsuleOverlapQuery{{0.25F, 0.5F}, {}, {0, -1, 0}};
+        REQUIRE(ValidatePhysicsQueryDescriptor(descriptor, World(), 9).HasValue());
+        auto hit = Hit(0);
+        hit.penetrationDepthMeters = -1;
+        REQUIRE(ValidatePhysicsQueryHit(hit, descriptor).HasError());
+        hit.penetrationDepthMeters = 0;
+        descriptor.filter.blockingOnly = true;
+        hit.response = PhysicsQueryResponse::Overlap;
+        REQUIRE(ValidatePhysicsQueryHit(hit, descriptor).HasError());
+        hit.response = PhysicsQueryResponse::Block;
+        descriptor.filter.excludedBody = hit.body;
+        REQUIRE(ValidatePhysicsQueryHit(hit, descriptor).HasError());
+    }
+
     TEST_CASE("Physics filter IDs preserve canonical UUIDs and remain non-interchangeable", "[physics][query][identity]") {
         const auto channel = PhysicsQueryChannelId::Parse("03000000-0000-0000-0000-000000000003");
         REQUIRE(channel.HasValue());

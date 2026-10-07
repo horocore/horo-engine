@@ -74,6 +74,10 @@ namespace Horo::Runtime::SceneErrors {
     const ErrorCodeDescriptor StructuralCommitFailed{kDomain, ErrorCode{"scene.structural.commit_failed"}, kError,
                                                      "The structural command batch could not be committed.",
                                                      "Correct the command batch and retry."};
+    const ErrorCodeDescriptor SaveBootstrapDatasetUnsupported{kDomain, ErrorCode{"scene.save_bootstrap.dataset_unsupported"}, kError,
+                                                              "The prepared owner has no qualified persistent dataset projection."};
+    const ErrorCodeDescriptor SaveBootstrapDecoderUnavailable{kDomain, ErrorCode{"scene.save_bootstrap.decoder_unavailable"}, kError,
+                                                              "The host has no decoder for the installed cooked scene format."};
     const ErrorCodeDescriptor SaveBootstrapInvalid{kDomain, ErrorCode{"scene.save_bootstrap.invalid"}, kError,
                                                    "The saved-scene bootstrap requirements are invalid.",
                                                    "Provide complete typed world, scene, content, spawn, and transition evidence."};

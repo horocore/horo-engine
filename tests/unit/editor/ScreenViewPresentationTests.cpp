@@ -7,6 +7,7 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <memory>
 #include <string>
 #include <utility>
@@ -57,12 +58,14 @@ namespace {
             drawList->AddRect(position, {position.x + size.x, position.y + size.y}, color);
         }
 
-        void DrawPanel(const ImVec2 &, const ImVec2 &, const Horo::Editor::EditorWorkspaceViewModel &,
+        void DrawPanel(const ImVec2 &, const ImVec2 &size, const Horo::Editor::EditorWorkspaceViewModel &,
                        Horo::Editor::EditorWorkspaceViewCommandData &, const Horo::Editor::EditorGuiContext &) override {
             ++drawCount;
+            lastSize = size;
         }
 
         int drawCount{};
+        ImVec2 lastSize{};
 
     private:
         std::string id_;
@@ -211,4 +214,38 @@ TEST_CASE("Workspace presentation routes registered panels through every dock ar
     REQUIRE(right->drawCount == 1);
     REQUIRE(bottom->drawCount == 1);
     REQUIRE(document->drawCount == 1);
+}
+
+TEST_CASE("Workspace presentation clamps oversized docks at narrow bounds", "[unit][editor][gui][workspace]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    Tests::EditorGuiContextFixture fixture;
+    WorkspacePanelRegistry panels;
+    const auto left = std::make_shared<RecordingWorkspacePanel>("test.left", WorkspaceDockArea::Left);
+    const auto right = std::make_shared<RecordingWorkspacePanel>("test.right", WorkspaceDockArea::Right);
+    const auto bottom = std::make_shared<RecordingWorkspacePanel>("test.bottom", WorkspaceDockArea::Bottom);
+    panels.RegisterPanel(left);
+    panels.RegisterPanel(right);
+    panels.RegisterPanel(bottom);
+    auto input = fixture.input.PushContext(Input::InputContextId{"editor.workspace"}, Input::InputContextKind::EditorWorkspace);
+    EditorWorkspaceView view{fixture.context, panels, 0, fixture.input, input};
+    EditorWorkspaceViewModel model;
+    model.activeLeftPanelId = model.activeLeftTopPanelId = model.activeLeftBottomPanelId = left->GetId();
+    model.activeRightPanelId = model.activeRightTopPanelId = model.activeRightBottomPanelId = right->GetId();
+    model.activeBottomPanelId = model.activeBottomLeftPanelId = model.activeBottomRightPanelId = bottom->GetId();
+    model.leftPanelWidth = model.rightPanelWidth = model.bottomPanelHeight = 10000.0F;
+    model.leftDockMode = model.rightDockMode = GENERATE(SideDockMode::Full, SideDockMode::Split);
+    model.bottomDockMode = GENERATE(BottomDockMode::Full, BottomDockMode::Split);
+    const float width = GENERATE(1280.0F, 320.0F, 80.0F);
+    EditorWorkspaceViewCommandData command;
+    fixture.imgui.BeginFrame();
+    view.Draw(model, command, GuiContentRegion{0, 0, width, 480});
+    fixture.imgui.EndFrame();
+    CHECK(command.command == EditorWorkspaceViewCommand::None);
+    for (const auto &panel : {left, right, bottom}) {
+        CHECK(panel->lastSize.x >= 0.0F);
+        CHECK(panel->lastSize.x <= width);
+        CHECK(panel->lastSize.y >= 0.0F);
+        CHECK(panel->lastSize.y <= 480.0F);
+    }
 }

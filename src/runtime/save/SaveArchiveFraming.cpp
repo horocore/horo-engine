@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Save/SaveArchiveFraming.h"
 
 #include "Horo/Runtime/Save/SaveErrors.h"
+#include "SaveArchiveReaderInternal.h"
 #include "SaveChunkCompressionInternal.h"
 
 #include <algorithm>
@@ -86,10 +87,10 @@ namespace Horo::Runtime {
             return nullptr;
         }
 
-        /** @brief Validates one entry's identity, codec, and alignment fields. */
+        /** @brief Validates one entry's identity and alignment fields after codec admission. */
         [[nodiscard]] bool HasValidEntryIdentity(const SaveChunkDirectoryEntry &entry, const SaveChunkDirectoryLimits &limits) noexcept {
             return entry.record.IsValid() && entry.owner.IsValid() && entry.alignment != 0 && entry.alignment <= limits.maximumAlignment &&
-                   std::has_single_bit(entry.alignment) && SaveChunkCompressionDetail::Supports(entry.codec);
+                   std::has_single_bit(entry.alignment);
         }
 
         /** @brief Validates one entry's length fields and checked end offset. */
@@ -167,6 +168,20 @@ namespace Horo::Runtime {
     /** @copydoc ValidateSaveChunkDirectory */
     Result<ValidatedSaveChunkDirectory> ValidateSaveChunkDirectory(SaveChunkDirectory directory, const SaveGameManifest &manifest,
                                                                    const SaveChunkDirectoryLimits &limits) {
+        return SaveArchiveReaderDetail::DirectoryAdmission::Validate(std::move(directory), manifest, limits,
+                                                                     SaveArchiveReaderDetail::DirectoryCodecAdmission::SupportedOnly, 1);
+    }
+
+    /** @copydoc SaveArchiveReaderDetail::DirectoryAdmission::Validate */
+    Result<ValidatedSaveChunkDirectory> SaveArchiveReaderDetail::DirectoryAdmission::Validate(SaveChunkDirectory directory,
+                                                                                              const SaveGameManifest &manifest,
+                                                                                              const SaveChunkDirectoryLimits &limits,
+                                                                                              const DirectoryCodecAdmission admission,
+                                                                                              const std::uint32_t archiveVersion) {
+        if (admission != DirectoryCodecAdmission::SupportedOnly && admission != DirectoryCodecAdmission::OptionalOpaque)
+            return Result<ValidatedSaveChunkDirectory>::Failure(MakeError(SaveErrors::ArchiveCodecUnsupported));
+        if (admission == DirectoryCodecAdmission::OptionalOpaque && (archiveVersion != 2 || manifest.saveSchemaVersion.Value() != 2))
+            return Result<ValidatedSaveChunkDirectory>::Failure(MakeError(SaveErrors::ArchiveCodecUnsupported));
         if (!IsSupported(directory.integrityAlgorithm))
             return Result<ValidatedSaveChunkDirectory>::Failure(MakeError(SaveErrors::ArchiveIntegrityAlgorithmUnsupported));
         if (!HasValidLimits(limits) || directory.payloadByteLength > limits.maximumPayloadBytes ||
@@ -177,8 +192,11 @@ namespace Horo::Runtime {
 
         if (directory.entries.size() != CountManifestChunks(manifest))
             return Result<ValidatedSaveChunkDirectory>::Failure(MakeError(SaveErrors::ArchiveDirectoryInvalid));
-        if (std::ranges::any_of(directory.entries, [](const SaveChunkDirectoryEntry &entry) {
-            return !SaveChunkCompressionDetail::Supports(entry.codec);
+        if (std::ranges::any_of(directory.entries, [&](const SaveChunkDirectoryEntry &entry) {
+            if (SaveChunkCompressionDetail::Supports(entry.codec))
+                return false;
+            const auto owner = std::ranges::find(manifest.participants, entry.owner, &SaveManifestParticipant::participant);
+            return admission != DirectoryCodecAdmission::OptionalOpaque || owner == manifest.participants.end() || owner->required;
         }))
             return Result<ValidatedSaveChunkDirectory>::Failure(MakeError(SaveErrors::ArchiveCodecUnsupported));
         if (std::ranges::any_of(directory.entries, [&limits](const SaveChunkDirectoryEntry &entry) {

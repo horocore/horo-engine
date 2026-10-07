@@ -16,6 +16,10 @@
 #include <vector>
 
 namespace Horo::Runtime {
+    namespace SaveArchiveReaderDetail {
+        class DirectoryAdmission;
+    }  // namespace SaveArchiveReaderDetail
+
     inline constexpr std::size_t SaveArchivePreambleByteLength = 32;
     inline constexpr std::uint32_t SaveArchiveUnsignedTrailerByteLength = 52;
     inline constexpr std::uint32_t SaveArchiveSignedTrailerByteLength = 116;
@@ -142,6 +146,7 @@ namespace Horo::Runtime {
         SaveChunkDirectory directory_;
         SaveChunkDirectoryLimits limits_;
 
+        friend class SaveArchiveReaderDetail::DirectoryAdmission;
         friend Result<ValidatedSaveChunkDirectory> ValidateSaveChunkDirectory(SaveChunkDirectory, const SaveGameManifest &,
                                                                               const SaveChunkDirectoryLimits &);
     };
@@ -152,6 +157,8 @@ namespace Horo::Runtime {
      * @param manifest Already validated canonical save manifest.
      * @param limits Trusted admission limits.
      * @return Owned validated directory token, or a stable framing error.
+     * @details This public entry point accepts installed codecs only. Reader-owned v2/schema2 admission may retain
+     *          bounded unknown optional codec storage; that internal path never grants a payload decoder.
      */
     [[nodiscard]] Result<ValidatedSaveChunkDirectory> ValidateSaveChunkDirectory(SaveChunkDirectory directory,
                                                                                  const SaveGameManifest &manifest,
