@@ -43,8 +43,8 @@ namespace Horo::Application {
                 std::error_code error;
                 const auto directory = root / ".horo";
                 const auto path = directory / name;
-                const auto directoryStatus = std::filesystem::symlink_status(directory, error);
-                if (error || !std::filesystem::is_directory(directoryStatus) || std::filesystem::is_symlink(directoryStatus))
+                if (const auto directoryStatus = std::filesystem::symlink_status(directory, error);
+                    error || !std::filesystem::is_directory(directoryStatus) || std::filesystem::is_symlink(directoryStatus))
                     return Result<std::optional<std::string>>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
                 const auto status = std::filesystem::symlink_status(path, error);
                 if (!required && error == std::errc::no_such_file_or_directory)
@@ -57,9 +57,9 @@ namespace Horo::Application {
                 if (error || bytes > maximumBytes || bytes > static_cast<std::uintmax_t>(std::numeric_limits<std::streamsize>::max()))
                     return Result<std::optional<std::string>>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
                 std::string contents(static_cast<std::size_t>(bytes), '\0');
-                std::ifstream stream{path, std::ios::binary};
-                if (!stream || !stream.read(contents.data(), static_cast<std::streamsize>(bytes)) ||
-                    stream.peek() != std::char_traits<char>::eof())
+                if (std::ifstream stream{path, std::ios::binary}; !stream ||
+                                                                  !stream.read(contents.data(), static_cast<std::streamsize>(bytes)) ||
+                                                                  stream.peek() != std::char_traits<char>::eof())
                     return Result<std::optional<std::string>>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
                 return Result<std::optional<std::string>>::Success(std::move(contents));
             }
@@ -177,9 +177,9 @@ namespace Horo::Application {
             Append(semantic, PolicyIdentity(request));
             Append(semantic, request.schemas ? FormatSha256(request.schemas->Digest()) : "no-project-schema-context");
             if (releasePlan) {
-                const auto actualLockDigest = rawPackages.Value() ? ComputeSha256(std::as_bytes(std::span{*rawPackages.Value()}))
-                                                                  : ComputeSha256(std::span<const std::byte>{});
-                if (actualLockDigest != releasePlan->Identities().dependencyLock)
+                if (const auto actualLockDigest = rawPackages.Value() ? ComputeSha256(std::as_bytes(std::span{*rawPackages.Value()}))
+                                                                      : ComputeSha256(std::span<const std::byte>{});
+                    actualLockDigest != releasePlan->Identities().dependencyLock)
                     return Result<HostCapture>::Failure(MakeError(PrefabSceneCookErrors::Stale));
                 Append(semantic, FormatSha256(releasePlan->Identities().profile));
                 Append(semantic, FormatSha256(releasePlan->Identities().policy));

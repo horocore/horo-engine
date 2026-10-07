@@ -407,11 +407,11 @@ namespace Horo::Assets {
                 return Result<DependentRecordGroups>::Failure(MakeError(CookErrors::MalformedArtifact));
             auto ids = phase.resourceIds;
             std::ranges::sort(ids);
-            if (std::adjacent_find(ids.begin(), ids.end()) != ids.end())
+            if (std::ranges::adjacent_find(ids) != ids.end())
                 return Result<DependentRecordGroups>::Failure(MakeError(CookErrors::MalformedArtifact));
             DependentRecordGroups groups;
             for (const auto &record : records) {
-                if (std::binary_search(ids.begin(), ids.end(), record.id))
+                if (std::ranges::binary_search(ids, record.id))
                     groups.resources.push_back(record);
                 else
                     groups.remaining.push_back(record);
@@ -435,8 +435,8 @@ namespace Horo::Assets {
             std::vector<AssetCookDependencyIdentity> dependencies;
             std::vector<AssetCookCandidateArtifactView> views;
             for (const auto &slot : first.Value()) {
-                dependencies.push_back({slot.record.id, slot.record.type, ComputeSha256(std::as_bytes(std::span{slot.cookedArtifact}))});
-                views.push_back({dependencies.back(), slot.cookedArtifact});
+                dependencies.emplace_back(slot.record.id, slot.record.type, ComputeSha256(std::as_bytes(std::span{slot.cookedArtifact})));
+                views.emplace_back(dependencies.back(), slot.cookedArtifact);
             }
             auto dependentCatalog = request.dependentPhase->makeCatalog(views, cancellation);
             if (dependentCatalog.HasError())

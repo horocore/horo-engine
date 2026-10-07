@@ -25,7 +25,21 @@ namespace Horo::Application {
 
     /** @brief Owned inert schema authority copied from explicitly selected host registries, with no factories or discovery. */
     class PrefabCookSchemaContext final {
+        /** @brief Capture-only capability preventing validation bypass. */
+        class ConstructionKey final {
+            friend class PrefabCookSchemaContext;
+            ConstructionKey() = default;
+        };
+
     public:
+        /** @brief Copies complete admitted inert metadata through the shared allocation factory.
+         * @param key Private capability issued only by Capture.
+         * @param components Frozen component registry copied into owned storage.
+         * @param behaviors Admitted behavior descriptors copied into owned storage.
+         * @param digest Complete deterministic semantic identity.
+         */
+        PrefabCookSchemaContext(ConstructionKey key, const Gameplay::ComponentRegistry &components,
+                                std::span<const Gameplay::BehaviorDescriptor> behaviors, const Sha256Digest &digest);
         /** @brief Captures bounded frozen component metadata and inert behavior descriptors without activation.
          * @param components Frozen host-selected component registry. @param behaviors Host-selected inert descriptors.
          * @return Immutable context or typed invalid/bounds diagnostic. At most 1024 types per family are captured. */
@@ -40,9 +54,6 @@ namespace Horo::Application {
         [[nodiscard]] const Sha256Digest &Digest() const noexcept;
 
     private:
-        /** @brief Owns admitted descriptor metadata and its deterministic semantic identity. */
-        PrefabCookSchemaContext(Gameplay::ComponentRegistry components, std::vector<Gameplay::BehaviorDescriptor> behaviors,
-                                Sha256Digest digest);
         Gameplay::ComponentRegistry components_;
         std::vector<Gameplay::BehaviorDescriptor> behaviors_;
         Sha256Digest digest_;
@@ -104,6 +115,19 @@ namespace Horo::Application {
         /** @brief Runs one operation with optional validated release semantics included in its immutable cache identity. */
         [[nodiscard]] Result<Assets::AssetCookReport> CookImpl(const PrefabSceneCookRequest &request, const CancellationToken &cancellation,
                                                                const Release::ReleaseExecutionPlan *releasePlan);
+        /** @brief Captures and cooks while retaining exclusive project mutation ownership through joined publication.
+         * @param request Complete host inputs.
+         * @param limits Validated prefab bounds.
+         * @param cancellation Cooperative stop token.
+         * @param releasePlan Optional frozen release identity.
+         * @param projectLease Owned mutation authority; released only after cook completion or unwinding.
+         * @return Committed report or typed failure preserving prior authority.
+         */
+        [[nodiscard]] Result<Assets::AssetCookReport> CookWithProjectLease(const PrefabSceneCookRequest &request,
+                                                                           const Prefab::PrefabLimitProfile &limits,
+                                                                           const CancellationToken &cancellation,
+                                                                           const Release::ReleaseExecutionPlan *releasePlan,
+                                                                           Editor::ProjectMutationLease projectLease);
         JobSystem &jobs_;
         std::shared_ptr<const Assets::CookerCatalogSnapshot> catalog_;
         const Assets::AssetRegistry &registry_;

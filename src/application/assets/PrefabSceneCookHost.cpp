@@ -58,12 +58,22 @@ namespace Horo::Application {
         auto attempt = request.assets.newPublicationOperationId();
         if (attempt.HasError())
             return Result<Assets::AssetCookReport>::Failure(attempt.ErrorValue());
-        auto projectLease =
-            mutations_.TryAcquire({request.assets.sourceRoot, Editor::ProjectMutationOwner::Asset, attempt.Value().ToString()});
-        if (projectLease.HasError())
+        if (auto projectLease =
+                mutations_.TryAcquire({request.assets.sourceRoot, Editor::ProjectMutationOwner::Asset, attempt.Value().ToString()});
+            projectLease.HasError())
             return Result<Assets::AssetCookReport>::Failure(projectLease.ErrorValue());
-        const auto recovery = migrations_.InspectPendingRecovery(request.assets.sourceRoot);
-        if (recovery.action != Editor::MigrationRecoveryAction::None)
+        else
+            return CookWithProjectLease(request, limits.Value(), cancellation, releasePlan, std::move(projectLease).Value());
+    }
+
+    /** @copydoc PrefabSceneCookHost::CookWithProjectLease */
+    Result<Assets::AssetCookReport> PrefabSceneCookHost::CookWithProjectLease(const PrefabSceneCookRequest &request,
+                                                                              const Prefab::PrefabLimitProfile &limits,
+                                                                              const CancellationToken &cancellation,
+                                                                              const Release::ReleaseExecutionPlan *releasePlan,
+                                                                              Editor::ProjectMutationLease) {
+        if (const auto recovery = migrations_.InspectPendingRecovery(request.assets.sourceRoot);
+            recovery.action != Editor::MigrationRecoveryAction::None)
             return Result<Assets::AssetCookReport>::Failure(recovery.diagnostic.value_or(MakeError(PrefabSceneCookErrors::Invalid)));
         auto host = PrefabCookDetail::CaptureHost(request, compatibility_, releasePlan);
         if (host.HasError())
@@ -74,7 +84,7 @@ namespace Horo::Application {
             return Result<Assets::AssetCookReport>::Failure(captured.ErrorValue());
         auto inputs = std::make_shared<const Assets::AssetCookInputSnapshot>(std::move(captured).Value());
         const auto capturedRevision = inputs->Registry().Revision();
-        auto composed = PrefabCookDetail::PrepareCatalog(request, host.Value(), *inputs, limits.Value(), *catalog_, cancellation);
+        auto composed = PrefabCookDetail::PrepareCatalog(request, host.Value(), *inputs, limits, *catalog_, cancellation);
         if (composed.HasError())
             return Result<Assets::AssetCookReport>::Failure(composed.ErrorValue());
         auto selected = SelectStaticRuntimeRecords(*inputs);
@@ -85,7 +95,7 @@ namespace Horo::Application {
         cook.pinnedInputs = inputs;
         // This static host owns its composition. The dynamic host explicitly supplies a dependent phase in HORO-1068.
         cook.dependentPhase.reset();
-        // Capture references are synchronous: AssetCook joins all accepted work before returning, and projectLease outlives it.
+        // Capture references are synchronous: AssetCook joins all accepted work before returning, and the owned project lease outlives it.
         cook.validateHostInputs = [this, &request, &host, &cancellation, releasePlan, capturedRevision] {
             return ValidateCurrentHost(request, registry_, compatibility_, host.Value(), cancellation, releasePlan, capturedRevision);
         };

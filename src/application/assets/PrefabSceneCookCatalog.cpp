@@ -68,7 +68,7 @@ namespace Horo::Application::PrefabCookDetail {
         /** @brief Pure strategy over exact prepared outputs; Assets owns envelope construction and publication. */
         class SceneStrategy final : public Assets::ICookerStrategy {
         public:
-            SceneStrategy(std::vector<PreparedScene> scenes, const Sha256Digest settings, const SceneCook::CookedSceneLimits limits)
+            SceneStrategy(std::vector<PreparedScene> scenes, const Sha256Digest &settings, const SceneCook::CookedSceneLimits limits)
                 : scenes_(std::move(scenes)), settings_(settings), limits_(limits) {}
 
             Assets::CookerCacheIdentity CacheIdentity() const noexcept override {
@@ -90,8 +90,8 @@ namespace Horo::Application::PrefabCookDetail {
                 const auto *scene = Find(source);
                 if (!scene)
                     return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Stale));
-                auto decoded = SceneCook::DecodeCookedSceneDefinition(payload, scene->id, scene->revision, limits_);
-                if (decoded.HasError())
+                if (const auto decoded = SceneCook::DecodeCookedSceneDefinition(payload, scene->id, scene->revision, limits_);
+                    decoded.HasError())
                     return Result<void>::Failure(decoded.ErrorValue());
                 // A valid but different payload under the requested full key is not a usable cache hit.
                 if (!std::ranges::equal(payload, scene->payload))
@@ -103,7 +103,7 @@ namespace Horo::Application::PrefabCookDetail {
             /** @brief Requires exact admitted source identity for both fresh output and cached domain validation. */
             const PreparedScene *Find(const Assets::CookSourceView &source) const {
                 const auto found = std::ranges::find(scenes_, source.id, &PreparedScene::asset);
-                return found != scenes_.end() && found->sourceDigest == source.sourceDigest ? &*found : nullptr;
+                return found != scenes_.end() && found->sourceDigest == source.sourceDigest ? std::to_address(found) : nullptr;
             }
 
             const std::vector<PreparedScene> scenes_;
@@ -114,7 +114,7 @@ namespace Horo::Application::PrefabCookDetail {
         /** @brief Preserves registered resource strategies while adding actual host semantics to every derived cache key. */
         class HostKeyStrategy final : public Assets::ICookerStrategy {
         public:
-            HostKeyStrategy(std::shared_ptr<const Assets::ICookerStrategy> strategy, const Sha256Digest host)
+            HostKeyStrategy(std::shared_ptr<const Assets::ICookerStrategy> strategy, const Sha256Digest &host)
                 : strategy_(std::move(strategy)), identity_(strategy_->CacheIdentity()) {
                 std::string preimage{"horo.host.cooker-input.v1"};
                 Append(preimage, FormatSha256(host));
@@ -161,8 +161,9 @@ namespace Horo::Application::PrefabCookDetail {
         Result<PreparedScene> PrepareScene(const Assets::AssetCookPinnedSource &input, const Assets::AssetRegistrySnapshot &registry,
                                            const Prefab::PrefabSourceResolverSnapshot &resolver,
                                            const Prefab::PrefabDependencyGraphSnapshot &graph, const Prefab::PrefabLimitProfile &limits,
-                                           const SceneCook::CookedSceneLimits &sceneLimits, const Sha256Digest settings,
-                                           const std::shared_ptr<const PrefabCookSchemaContext> &schemas) {
+                                           const PrefabSceneCookRequest &request, const Sha256Digest &settings) {
+            const auto &sceneLimits = request.sceneLimits;
+            const auto &schemas = request.schemas;
             const std::string_view bytes{reinterpret_cast<const char *>(input.bytes.data()), input.bytes.size()};
             auto parsed = SceneSource::DecodeSceneSource(bytes);
             if (parsed.HasError())
@@ -252,7 +253,7 @@ namespace Horo::Application::PrefabCookDetail {
                                                          const Assets::AssetCookInputSnapshot &inputs,
                                                          const Prefab::PrefabSourceResolverSnapshot &resolver,
                                                          const Prefab::PrefabDependencyGraphSnapshot &graph,
-                                                         const Prefab::PrefabLimitProfile &limits, const Sha256Digest settings,
+                                                         const Prefab::PrefabLimitProfile &limits, const Sha256Digest &settings,
                                                          const CancellationToken &cancellation) {
             std::vector<PreparedScene> scenes;
             std::uint64_t totalPayloadBytes{};
@@ -261,8 +262,7 @@ namespace Horo::Application::PrefabCookDetail {
                     return Result<std::vector<PreparedScene>>::Failure(MakeError(PrefabSceneCookErrors::Cancelled));
                 if (input.record.type.Value() != "core.scene")
                     continue;
-                auto scene =
-                    PrepareScene(input, inputs.Registry(), resolver, graph, limits, request.sceneLimits, settings, request.schemas);
+                auto scene = PrepareScene(input, inputs.Registry(), resolver, graph, limits, request, settings);
                 if (scene.HasError())
                     return Result<std::vector<PreparedScene>>::Failure(scene.ErrorValue());
                 if (scene.Value().payload.size() > request.maximumCapturedBytes - totalPayloadBytes ||
