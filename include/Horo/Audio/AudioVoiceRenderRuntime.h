@@ -55,7 +55,21 @@ namespace Horo::Audio {
      * No callback operation allocates, frees, queries scene/assets, waits, formats errors or selects a backend.
      */
     class AudioVoiceRenderRuntime final {
+        struct State;
+
+        /** @brief Factory-only construction capability; callers cannot bypass preparation. */
+        class ConstructionKey final {
+            friend class AudioVoiceRenderRuntime;
+            ConstructionKey() = default;
+        };
+
     public:
+        /** @brief Adopt complete factory-prepared storage through std::make_unique.
+         * @param key Private capability issued only by the validated factories.
+         * @param state Complete preparation-time owner, never null.
+         * @pre Only CreateResident/CreateStream may issue the construction capability.
+         */
+        explicit AudioVoiceRenderRuntime(ConstructionKey key, std::unique_ptr<State> state) noexcept;
         /** @brief Copy resident PCM and prepare fixed output before transferring processing ownership.
          * @param registry Retained canonical registry, exclusively accessible during preparation/detached control.
          * @param source Borrowed PCM copied by AudioVoicePlayback before return.
@@ -126,9 +140,6 @@ namespace Horo::Audio {
         [[nodiscard]] bool CompleteShutdown(bool callbackDetached) noexcept;
 
     private:
-        struct State;
-        /** @brief Adopt complete preparation-time storage without publishing callback work. */
-        explicit AudioVoiceRenderRuntime(std::unique_ptr<State> state) noexcept;
         std::unique_ptr<State> state_;
     };
 }  // namespace Horo::Audio

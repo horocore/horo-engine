@@ -6,6 +6,12 @@ AudioPlayback, AudioMixer and the existing AudioCommands staging. It owns
 discovery is linked into it. Existing standalone playback/mixer callers retain
 their contracts.
 
+The implementation separates control publication/mailboxes, callback processing
+state and fixed aligned scratch without adding callback allocation or changing
+reclamation ordering. Factory allocation uses `std::make_unique` with a private
+construction capability; hosts continue to use `CreateResident`/`CreateStream`.
+The capability preserves factory-only admission and requires no caller migration.
+
 ## Preparation and ownership
 
 Prepare the registry, command staging, source and mixer on control. Resident

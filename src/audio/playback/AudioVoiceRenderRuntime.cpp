@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cmath>
 #include <limits>
+#include <type_traits>
 
 namespace Horo::Audio {
     /** @brief Complete retained slot; metadata is immutable between publication and completed-block acknowledgement.
@@ -39,35 +40,47 @@ namespace Horo::Audio {
         AudioResamplerDescriptor conversion;
         std::optional<AudioResamplerPlan> residentPlan;
         std::uint64_t coefficientBytes{};
-        std::array<VoiceRenderSlot, 2> slots;
-        std::array<std::uint64_t, 2> generations{};
-        std::int32_t retainedSlot{-1};
-        std::int32_t pendingSlot{-1};
-        std::atomic<VoiceRenderSlot *> candidate{};
-        std::atomic<std::uint64_t> completed{};
-        std::atomic<bool> applied{};
-        std::atomic<std::uint64_t> resolvedPublication{};
-        std::atomic<bool> closed{};
-        VoiceRenderSlot *active{};
-        std::uint64_t callbackSequence{};
-        float gain{1.0F};
-        std::array<float, 4> residentMatrix{};
-        std::uint32_t residentRamp{};
-        AudioVoiceState streamState{AudioVoiceState::Ready};
-        std::uint32_t buffered{};
-        bool sourceEnded{};
+
+        /** @brief Control-owned slots and SC mailboxes shared with the callback lane. */
+        struct PublicationState final {
+            std::array<VoiceRenderSlot, 2> slots;
+            std::array<std::uint64_t, 2> generations{};
+            std::int32_t retainedSlot{-1};
+            std::int32_t pendingSlot{-1};
+            std::atomic<VoiceRenderSlot *> candidate{};
+            std::atomic<std::uint64_t> completed{};
+            std::atomic<bool> applied{};
+            std::atomic<std::uint64_t> resolvedPublication{};
+            std::atomic<bool> closed{};
+        } publications;
+
+        /** @brief Mutable processing state accessed only by the callback, or detached control. */
+        struct CallbackState final {
+            VoiceRenderSlot *active{};
+            std::uint64_t callbackSequence{};
+            float gain{1.0F};
+            std::array<float, 4> residentMatrix{};
+            std::uint32_t residentRamp{};
+            AudioVoiceState streamState{AudioVoiceState::Ready};
+            std::uint32_t buffered{};
+            bool sourceEnded{};
+        } callback;
+
         bool released{};
         bool streamVoice{};
         AudioChannelLayout layout{MakeAudioSpeakerLayout(AudioSpeakerPreset::Stereo)};
 
-        struct alignas(64) Plane final {
-            std::array<float, 4096> samples{};
-        };
+        /** @brief Fixed aligned callback scratch; output pointers borrow this immovable owner. */
+        struct RenderScratch final {
+            struct alignas(64) Plane final {
+                std::array<float, 4096> samples{};
+            };
 
-        std::array<Plane, 2> raw;
-        std::array<Plane, 2> output;
-        std::array<Plane, 2> converted;  // Aligned per-chunk destination; advancing final-output spans would violate DSP alignment.
-        std::array<AudioSample *, 2> outputPointers{output[0].samples.data(), output[1].samples.data()};
+            std::array<Plane, 2> raw;
+            std::array<Plane, 2> output;
+            std::array<Plane, 2> converted;  // Per-chunk DSP destination must stay aligned.
+            std::array<AudioSample *, 2> outputPointers{output[0].samples.data(), output[1].samples.data()};
+        } scratch;
 
         /** @brief Validate fixed composition and charge both worst-case prepared pitch banks without overflow. */
         static bool Valid(const AudioVoiceRenderDescriptor &descriptor, const AudioResamplerDescriptor &conversion,
@@ -136,7 +149,7 @@ namespace Horo::Audio {
             state->residentPlan = playback.plan;
             state->coefficientBytes = playback.maximumCoefficientBytes;
             return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Success(
-                std::unique_ptr<AudioVoiceRenderRuntime>(new AudioVoiceRenderRuntime(std::move(state))));
+                std::make_unique<AudioVoiceRenderRuntime>(ConstructionKey{}, std::move(state)));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(MakeError(AudioErrors::MemoryAllocationFailed));
         }
@@ -185,14 +198,14 @@ namespace Horo::Audio {
                 return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(port.ErrorValue());
             state->stream.emplace(std::move(port).Value());
             return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Success(
-                std::unique_ptr<AudioVoiceRenderRuntime>(new AudioVoiceRenderRuntime(std::move(state))));
+                std::make_unique<AudioVoiceRenderRuntime>(ConstructionKey{}, std::move(state)));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(MakeError(AudioErrors::MemoryAllocationFailed));
         }
     }
 
     /** @copydoc AudioVoiceRenderRuntime::AudioVoiceRenderRuntime */
-    AudioVoiceRenderRuntime::AudioVoiceRenderRuntime(std::unique_ptr<State> state) noexcept : state_(std::move(state)) {}
+    AudioVoiceRenderRuntime::AudioVoiceRenderRuntime(ConstructionKey, std::unique_ptr<State> state) noexcept : state_(std::move(state)) {}
 
     /** @copydoc AudioVoiceRenderRuntime::~AudioVoiceRenderRuntime */
     AudioVoiceRenderRuntime::~AudioVoiceRenderRuntime() = default;
@@ -207,9 +220,9 @@ namespace Horo::Audio {
                                                                    AudioCommandStaging &staging) {
         State &s = *state_;
         using enum AudioCommandStagingStatus;
-        if (s.closed.load())
+        if (s.publications.closed.load())
             return Result<AudioCommandAdmission>::Success({Closed});
-        if (s.pendingSlot != -1)
+        if (s.publications.pendingSlot != -1)
             return Result<AudioCommandAdmission>::Success({Busy});
         const auto bus = graph.ResolveBus(request.bus);
         const bool threeD = request.source.playback.spatialMode == AudioSpatialMode::ThreeD;
@@ -219,13 +232,13 @@ namespace Horo::Audio {
             PrepareAudioStereoSpatialTarget(request.source, threeD ? &*request.listener : nullptr, request.spatial, s.conversion.channels);
         if (target.HasError())
             return Result<AudioCommandAdmission>::Failure(target.ErrorValue());
-        const std::int32_t index = s.retainedSlot == 0 ? 1 : 0;
-        if (s.generations[index] == std::numeric_limits<std::uint64_t>::max())
+        const std::int32_t index = s.publications.retainedSlot == 0 ? 1 : 0;
+        if (s.publications.generations[index] == std::numeric_limits<std::uint64_t>::max())
             return Result<AudioCommandAdmission>::Success({SequenceExhausted});
         auto prepared = s.PrepareSlot(request, graph, target.Value(), *bus, index);
         if (prepared.HasError())
             return Result<AudioCommandAdmission>::Failure(prepared.ErrorValue());
-        auto &slot = s.slots[index];
+        auto &slot = s.publications.slots[index];
         slot = std::move(prepared).Value();
         const auto admitted = staging.Submit({s.descriptor.scope, AudioPublishVoiceStateCommand{s.voice, slot.handle}});
         if (admitted.status != Ok) {
@@ -233,10 +246,10 @@ namespace Horo::Audio {
             return Result<AudioCommandAdmission>::Success(admitted);
         }
         slot.sequence = admitted.sequence;
-        s.pendingSlot = index;
-        ++s.generations[index];
+        s.publications.pendingSlot = index;
+        ++s.publications.generations[index];
         // Same control owner performs Pump only after all metadata and processing banks are published.
-        s.candidate.store(&slot);
+        s.publications.candidate.store(&slot);
         return Result<AudioCommandAdmission>::Success(admitted);
     }
 
@@ -269,10 +282,11 @@ namespace Horo::Audio {
         prepared.listenerRevision = threeD ? request.listener->motion.discontinuityRevision : 0;
         prepared.smoothingFrames = request.spatial.smoothingFrames;
         prepared.handle = {descriptor.scope.owner, descriptor.storageIdentity, static_cast<std::uint32_t>(index + 1),
-                           generations[index] + 1};
-        const bool changedPitch =
-            retainedSlot == -1 ? prepared.target.pitch != 1.0 : prepared.target.pitch != slots[retainedSlot].target.pitch;
-        if (resident && changedPitch) {
+                           publications.generations[index] + 1};
+        if (const bool changedPitch = publications.retainedSlot == -1
+                                          ? prepared.target.pitch != 1.0
+                                          : prepared.target.pitch != publications.slots[publications.retainedSlot].target.pitch;
+            resident && changedPitch) {
             auto pitchedConversion = conversion;
             pitchedConversion.pitch = prepared.target.pitch;
             auto plan = AudioResamplerPlan::Prepare(pitchedConversion, residentPlan->Requirements());
@@ -295,45 +309,46 @@ namespace Horo::Audio {
         if (resident)
             return resident->Apply(request);
         using enum AudioVoiceControl;
+        using enum AudioVoiceState;
         AudioVoiceState next;
         switch (request.control) {
             case Start:
-                if (streamState != AudioVoiceState::Ready)
+                if (callback.streamState != Ready)
                     return &AudioErrors::VoiceInvalidTransition;
-                if (const auto *error = registry->TryTransition(voice, AudioVoiceState::Scheduled))
+                if (const auto *error = registry->TryTransition(voice, Scheduled))
                     return error;
-                next = AudioVoiceState::Playing;
+                next = Playing;
                 break;
             case Pause:
-                if (streamState != AudioVoiceState::Playing)
+                if (callback.streamState != Playing)
                     return &AudioErrors::VoiceInvalidTransition;
-                next = AudioVoiceState::Paused;
+                next = Paused;
                 break;
             case Resume:
-                if (streamState != AudioVoiceState::Paused)
+                if (callback.streamState != Paused)
                     return &AudioErrors::VoiceInvalidTransition;
-                next = AudioVoiceState::Playing;
+                next = Playing;
                 break;
             case Stop:
-                if (streamState == AudioVoiceState::Ready) {
-                    if (const auto *error = registry->TryTransition(voice, AudioVoiceState::Scheduled))
+                if (callback.streamState == Ready) {
+                    if (const auto *error = registry->TryTransition(voice, Scheduled))
                         return error;
                 }
-                if (const auto *error = registry->TryTransition(voice, AudioVoiceState::Stopping))
+                if (const auto *error = registry->TryTransition(voice, Stopping))
                     return error;
-                next = AudioVoiceState::Stopped;
+                next = Stopped;
                 break;
             case Cancel:
                 if (const auto *error = registry->TryCancel(voice))
                     return error;
-                streamState = AudioVoiceState::Cancelled;
+                callback.streamState = Cancelled;
                 return nullptr;
             default:
                 return &AudioErrors::OperationUnsupported;
         }
         if (const auto *error = registry->TryTransition(voice, next))
             return error;
-        streamState = next;
+        callback.streamState = next;
         return nullptr;
     }
 
@@ -342,7 +357,7 @@ namespace Horo::Audio {
         State &s = *state_;
         if (s.released)
             return &AudioErrors::RuntimeInactive;
-        if (record.sequence == 0 || record.sequence <= s.callbackSequence)
+        if (record.sequence == 0 || record.sequence <= s.callback.callbackSequence)
             return &AudioErrors::CommandBufferInvalid;
         const bool reset = std::holds_alternative<AudioResetCommand>(record.command.payload);
         if (reset ? (record.command.scope.owner != s.descriptor.scope.owner || record.command.scope.epoch != s.descriptor.scope.epoch ||
@@ -351,7 +366,7 @@ namespace Horo::Audio {
             return &AudioErrors::HandleOwnerMismatch;
         if (reset || std::holds_alternative<AudioSceneUnloadCommand>(record.command.payload)) {
             const auto *error = s.Control({s.voice, AudioVoiceControl::Cancel});
-            s.callbackSequence = record.sequence;
+            s.callback.callbackSequence = record.sequence;
             return error;
         }
         if (const auto *publication = std::get_if<AudioPublishVoiceStateCommand>(&record.command.payload)) {
@@ -361,120 +376,128 @@ namespace Horo::Audio {
             if (parameter->voice != s.voice || parameter->parameter != s.descriptor.gainParameter || !std::isfinite(parameter->value) ||
                 parameter->value < 0.0F || parameter->value > 16.0F)
                 return &AudioErrors::PlaybackRequestInvalid;
-            s.gain = parameter->value;
-            s.callbackSequence = record.sequence;
+            s.callback.gain = parameter->value;
+            s.callback.callbackSequence = record.sequence;
             return nullptr;
         }
-        AudioVoiceControlRequest control;
-        if (const auto *request = std::get_if<AudioVoiceControlRequest>(&record.command.payload))
-            control = *request;
-        else if (const auto *start = std::get_if<AudioStartVoiceCommand>(&record.command.payload))
-            control = {start->voice, AudioVoiceControl::Start};
-        else if (const auto *stop = std::get_if<AudioStopVoiceCommand>(&record.command.payload))
-            control = {stop->voice, AudioVoiceControl::Stop};
-        else
-            return &AudioErrors::OperationUnsupported;
-        const auto *error = s.Control(control);
+        const auto *error = std::visit([&s](const auto &command) noexcept -> const ErrorCodeDescriptor * {
+            using Command = std::decay_t<decltype(command)>;
+            if constexpr (std::is_same_v<Command, AudioVoiceControlRequest>)
+                return s.Control(command);
+            else if constexpr (std::is_same_v<Command, AudioStartVoiceCommand>)
+                return s.Control({command.voice, AudioVoiceControl::Start});
+            else if constexpr (std::is_same_v<Command, AudioStopVoiceCommand>)
+                return s.Control({command.voice, AudioVoiceControl::Stop});
+            else
+                return &AudioErrors::OperationUnsupported;
+        }, record.command.payload);
         if (!error)
-            s.callbackSequence = record.sequence;
+            s.callback.callbackSequence = record.sequence;
         return error;
     }
 
     /** @copydoc AudioVoiceRenderRuntime::State::ApplyPublication */
     const ErrorCodeDescriptor *AudioVoiceRenderRuntime::State::ApplyPublication(const AudioPublishVoiceStateCommand &publication,
                                                                                 const std::uint64_t sequence) noexcept {
-        auto *const pending = candidate.load();
+        auto *const pending = publications.candidate.load();
         if (!pending || publication.voice != voice || publication.storage != pending->handle || sequence != pending->sequence)
             return &AudioErrors::HandleStale;
         AudioVoiceState state;
         const auto *error = registry->CheckState(voice, state);
         if (!error && IsTerminalAudioVoiceState(state))
             error = &AudioErrors::VoiceInvalidTransition;
-        if (!error && closed.load())
+        if (!error && publications.closed.load())
             error = &AudioErrors::VoiceAdmissionClosed;
         if (!error && resident && pending->pitchBank)
             error = resident->SwapPitch(voice, *pending->pitchBank);
         if (!error && spatial) {
-            const bool resetHistory = !active || pending->source != active->source || pending->listener != active->listener ||
-                                      pending->sourceRevision != active->sourceRevision ||
-                                      pending->listenerRevision != active->listenerRevision;
+            const bool resetHistory = !callback.active || pending->source != callback.active->source ||
+                                      pending->listener != callback.active->listener ||
+                                      pending->sourceRevision != callback.active->sourceRevision ||
+                                      pending->listenerRevision != callback.active->listenerRevision;
             if (!spatial->ApplyPreparedTarget(pending->target, pending->smoothingFrames, resetHistory))
                 error = &AudioErrors::ResamplerInvalid;
         }
         if (!error) {
             if (resident) {
-                residentRamp = active ? pending->smoothingFrames : 0;
-                if (residentRamp == 0)
-                    residentMatrix = pending->target.matrix;
+                callback.residentRamp = callback.active ? pending->smoothingFrames : 0;
+                if (callback.residentRamp == 0)
+                    callback.residentMatrix = pending->target.matrix;
             }
-            active = pending;
-            gain = 1.0F;
+            callback.active = pending;
+            callback.gain = 1.0F;
         }
-        applied.store(error == nullptr);
-        resolvedPublication.store(sequence);
-        callbackSequence = sequence;
+        publications.applied.store(error == nullptr);
+        publications.resolvedPublication.store(sequence);
+        callback.callbackSequence = sequence;
         return error;
     }
 
     /** @copydoc AudioVoiceRenderRuntime::State::RenderResident */
     AudioVoiceMixRenderResult AudioVoiceRenderRuntime::State::RenderResident(const std::uint32_t frames) noexcept {
-        std::array<std::span<float>, 2> planes{std::span{raw[0].samples}.first(frames), std::span{raw[1].samples}.first(frames)};
+        std::array<std::span<float>, 2> planes{std::span{scratch.raw[0].samples}.first(frames),
+                                               std::span{scratch.raw[1].samples}.first(frames)};
         const auto rendered = resident->Render({{planes.data(), conversion.channels}, frames});
         if (rendered.error)
             return {.error = rendered.error};
         for (std::uint32_t frame = 0; frame < frames; ++frame) {
-            if (residentRamp != 0) {
-                for (std::size_t coefficient = 0; coefficient < residentMatrix.size(); ++coefficient)
-                    residentMatrix[coefficient] +=
-                        (active->target.matrix[coefficient] - residentMatrix[coefficient]) / static_cast<float>(residentRamp);
-                --residentRamp;
+            if (callback.residentRamp != 0) {
+                for (std::size_t coefficient = 0; coefficient < callback.residentMatrix.size(); ++coefficient)
+                    callback.residentMatrix[coefficient] +=
+                        (callback.active->target.matrix[coefficient] - callback.residentMatrix[coefficient]) /
+                        static_cast<float>(callback.residentRamp);
+                --callback.residentRamp;
             }
-            const float left = raw[0].samples[frame];
-            const float right = conversion.channels == 2 ? raw[1].samples[frame] : 0.0F;
-            output[0].samples[frame] = left * residentMatrix[0] + right * residentMatrix[1];
-            output[1].samples[frame] = left * residentMatrix[2] + right * residentMatrix[3];
+            const float left = scratch.raw[0].samples[frame];
+            const float right = conversion.channels == 2 ? scratch.raw[1].samples[frame] : 0.0F;
+            scratch.output[0].samples[frame] = left * callback.residentMatrix[0] + right * callback.residentMatrix[1];
+            scratch.output[1].samples[frame] = left * callback.residentMatrix[2] + right * callback.residentMatrix[3];
         }
         return {.terminal = rendered.terminal};
     }
 
     /** @copydoc AudioVoiceRenderRuntime::State::RenderStream */
     AudioVoiceMixRenderResult AudioVoiceRenderRuntime::State::RenderStream(const std::uint32_t frames) noexcept {
-        if (streamState != AudioVoiceState::Playing)
+        if (callback.streamState != AudioVoiceState::Playing)
             return {};
-        std::array<AudioSample *, 2> rawPointers{raw[0].samples.data(), raw[1].samples.data()};
+        std::array<AudioSample *, 2> rawPointers{scratch.raw[0].samples.data(), scratch.raw[1].samples.data()};
         std::uint32_t produced{};
         // Linear conversion admits at most 64 input frames per output frame. Each full chunk covers
         // maximumFrames >= frames; 64 chunks plus two history/end-marker visits bound even high-ratio
         // conversion without the short-block truncation of a frames+1 visit budget.
-        for (std::uint32_t visit = 0; visit < 66 && produced < frames; ++visit) {
-            if (buffered == 0 && !sourceEnded) {
+        for (std::uint32_t visit = 0; visit < 66; ++visit) {
+            if (produced >= frames)
+                break;
+            if (callback.buffered == 0 && !callback.sourceEnded) {
                 const auto read = stream->Render({rawPointers.data(), conversion.channels}, descriptor.maximumFrames);
-                buffered = read.availableFrames;
-                sourceEnded = read.ended || read.stopped;
+                callback.buffered = read.availableFrames;
+                callback.sourceEnded = read.ended || read.stopped;
                 if (read.stopped) {
                     (void)registry->TryCancel(voice);
-                    streamState = AudioVoiceState::Cancelled;
+                    callback.streamState = AudioVoiceState::Cancelled;
                     return {.terminal = true};
                 }
             }
-            std::array<std::span<const float>, 2> inputs{std::span<const float>{raw[0].samples}.first(buffered),
-                                                         std::span<const float>{raw[1].samples}.first(buffered)};
-            std::array<std::span<float>, 2> outputs{std::span{converted[0].samples}.first(frames - produced),
-                                                    std::span{converted[1].samples}.first(frames - produced)};
-            const auto progress =
-                spatial->Process({{inputs.data(), conversion.channels}, buffered, sourceEnded}, {outputs, frames - produced});
+            std::array<std::span<const float>, 2> inputs{std::span<const float>{scratch.raw[0].samples}.first(callback.buffered),
+                                                         std::span<const float>{scratch.raw[1].samples}.first(callback.buffered)};
+            std::array<std::span<float>, 2> outputs{std::span{scratch.converted[0].samples}.first(frames - produced),
+                                                    std::span{scratch.converted[1].samples}.first(frames - produced)};
+            const auto progress = spatial->Process({{inputs.data(), conversion.channels}, callback.buffered, callback.sourceEnded},
+                                                   {outputs, frames - produced});
             if (progress.status == AudioResamplerStatus::InvalidBuffer || progress.status == AudioResamplerStatus::InvalidState)
                 return {.error = &AudioErrors::ResamplerInvalid};
             for (std::uint32_t channel = 0; channel < 2; ++channel)
-                std::copy_n(converted[channel].samples.begin(), progress.produced, output[channel].samples.begin() + produced);
+                std::copy_n(scratch.converted[channel].samples.begin(), progress.produced,
+                            scratch.output[channel].samples.begin() + produced);
             produced += progress.produced;
-            buffered -= progress.consumed;
+            callback.buffered -= progress.consumed;
             for (std::uint32_t channel = 0; channel < conversion.channels; ++channel)
-                std::move(raw[channel].samples.begin() + progress.consumed, raw[channel].samples.begin() + progress.consumed + buffered,
-                          raw[channel].samples.begin());
+                std::move(scratch.raw[channel].samples.begin() + progress.consumed,
+                          scratch.raw[channel].samples.begin() + progress.consumed + callback.buffered,
+                          scratch.raw[channel].samples.begin());
             if (progress.status == AudioResamplerStatus::Complete) {
                 (void)registry->TryTransition(voice, AudioVoiceState::Finished);
-                streamState = AudioVoiceState::Finished;
+                callback.streamState = AudioVoiceState::Finished;
                 return {.terminal = true};
             }
             if (progress.produced == 0 && progress.consumed == 0)
@@ -488,68 +511,71 @@ namespace Horo::Audio {
         State &s = *state_;
         if (frames == 0 || frames > s.descriptor.maximumFrames)
             return {.error = &AudioErrors::ResamplerInvalid};
-        for (auto &plane : s.output)
+        for (auto &plane : s.scratch.output)
             std::fill_n(plane.samples.begin(), frames, 0.0F);
-        if (!s.active)
+        if (!s.callback.active)
             return {};
-        auto result = s.closed.load() ? AudioVoiceMixRenderResult{} : (s.resident ? s.RenderResident(frames) : s.RenderStream(frames));
-        for (auto &plane : s.output)
+        AudioVoiceMixRenderResult result;
+        if (!s.publications.closed.load())
+            result = s.resident ? s.RenderResident(frames) : s.RenderStream(frames);
+        for (auto &plane : s.scratch.output)
             for (std::uint32_t frame = 0; frame < frames; ++frame) {
-                const float value = plane.samples[frame] * s.gain;
+                const float value = plane.samples[frame] * s.callback.gain;
                 plane.samples[frame] = std::isfinite(value) && std::fpclassify(value) != FP_SUBNORMAL ? value : 0.0F;
             }
         if (result.error)
-            for (auto &plane : s.output)
+            for (auto &plane : s.scratch.output)
                 std::fill_n(plane.samples.begin(), frames, 0.0F);
         result.input = {s.voice,
-                        s.active->graph.generation,
-                        s.active->busIndex,
-                        {ViewAudioChannelLayout(s.layout), s.conversion.outputRate, s.outputPointers, frames, s.descriptor.maximumFrames}};
+                        s.callback.active->graph.generation,
+                        s.callback.active->busIndex,
+                        {ViewAudioChannelLayout(s.layout), s.conversion.outputRate, s.scratch.outputPointers, frames,
+                         s.descriptor.maximumFrames}};
         return result;
     }
 
     /** @copydoc AudioVoiceRenderRuntime::EndBlock */
     void AudioVoiceRenderRuntime::EndBlock() noexcept {
-        state_->completed.store(state_->callbackSequence);
+        state_->publications.completed.store(state_->callback.callbackSequence);
     }
 
     /** @copydoc AudioVoiceRenderRuntime::Reconcile */
     AudioVoiceStateAcknowledgement AudioVoiceRenderRuntime::Reconcile() noexcept {
         State &s = *state_;
-        const auto completed = s.completed.load();
-        if (s.pendingSlot == -1 || completed < s.slots[s.pendingSlot].sequence ||
-            s.resolvedPublication.load() != s.slots[s.pendingSlot].sequence)
-            return {completed, s.applied.load()};
-        const bool accepted = s.applied.load();
-        const auto sequence = s.slots[s.pendingSlot].sequence;
+        if (const auto completedSequence = s.publications.completed.load();
+            s.publications.pendingSlot == -1 || completedSequence < s.publications.slots[s.publications.pendingSlot].sequence ||
+            s.publications.resolvedPublication.load() != s.publications.slots[s.publications.pendingSlot].sequence)
+            return {completedSequence, s.publications.applied.load()};
+        const bool accepted = s.publications.applied.load();
+        const auto sequence = s.publications.slots[s.publications.pendingSlot].sequence;
         if (accepted) {
-            if (s.retainedSlot != -1)
-                s.slots[s.retainedSlot] = {};
-            s.retainedSlot = s.pendingSlot;
+            if (s.publications.retainedSlot != -1)
+                s.publications.slots[s.publications.retainedSlot] = {};
+            s.publications.retainedSlot = s.publications.pendingSlot;
             // SwapPitch left the previous processing bank here; its last callback use precedes EndBlock.
-            s.slots[s.retainedSlot].pitchBank.reset();
+            s.publications.slots[s.publications.retainedSlot].pitchBank.reset();
         } else {
-            s.slots[s.pendingSlot] = {};
+            s.publications.slots[s.publications.pendingSlot] = {};
         }
-        s.candidate.store(nullptr);
-        s.pendingSlot = -1;
+        s.publications.candidate.store(nullptr);
+        s.publications.pendingSlot = -1;
         return {sequence, accepted};
     }
 
     /** @copydoc AudioVoiceRenderRuntime::Close */
     void AudioVoiceRenderRuntime::Close() noexcept {
-        state_->closed.store(true);
+        state_->publications.closed.store(true);
     }
 
     /** @copydoc AudioVoiceRenderRuntime::CompleteShutdown */
     bool AudioVoiceRenderRuntime::CompleteShutdown(const bool callbackDetached) noexcept {
         State &s = *state_;
-        if (!s.closed.load() || !callbackDetached)
+        if (!s.publications.closed.load() || !callbackDetached)
             return false;
         if (s.released)
             return true;
-        s.candidate.store(nullptr);
-        s.active = nullptr;
+        s.publications.candidate.store(nullptr);
+        s.callback.active = nullptr;
         s.stream.reset();  // Releases the retirement pin on control, before the retained service can be destroyed.
         s.spatial.reset();
         s.resident.reset();
@@ -558,9 +584,9 @@ namespace Horo::Audio {
             (void)s.registry->Release(s.voice);
             s.streamVoice = false;
         }
-        s.slots = {};
-        s.pendingSlot = -1;
-        s.retainedSlot = -1;
+        s.publications.slots = {};
+        s.publications.pendingSlot = -1;
+        s.publications.retainedSlot = -1;
         s.released = true;
         return true;
     }

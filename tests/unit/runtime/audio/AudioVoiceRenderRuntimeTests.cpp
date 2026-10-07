@@ -84,6 +84,30 @@ namespace Horo::Tests::VoiceRenderFixture {
         rig.voice->EndBlock();
     }
 
+    TEST_CASE("Unsupported voice payloads preserve sequence and callback storage", "[audio][voice_render]") {
+        Rig rig;
+        rig.BeginAcknowledged();
+        const std::array<AudioCommandPayload, 6> unsupported{AudioCreateVoiceCommand{},      AudioAutomateParameterCommand{},
+                                                             AudioCancelAutomationCommand{}, AudioSwapGraphCommand{},
+                                                             AudioReleaseResourceCommand{},  AudioScheduledBatchCommand{}};
+        std::array<const ErrorCodeDescriptor *, unsupported.size()> errors{};
+        const auto allocations = AllocationProbe::Count();
+        const auto frees = AllocationProbe::FreeCount();
+        for (std::size_t index = 0; index < unsupported.size(); ++index)
+            errors[index] = rig.voice->Apply({100, {Scope, unsupported[index]}});
+        const auto allocationEnd = AllocationProbe::Count();
+        const auto freeEnd = AllocationProbe::FreeCount();
+        for (const auto *error : errors)
+            CHECK(error == &AudioErrors::OperationUnsupported);
+        CHECK(allocationEnd == allocations);
+        CHECK(freeEnd == frees);
+        const AudioCommandRecord stop{100, {Scope, AudioStopVoiceCommand{rig.voice->Voice()}}};
+        REQUIRE(rig.voice->Apply(stop) == nullptr);
+        CHECK(rig.voice->Apply(stop) == &AudioErrors::CommandBufferInvalid);
+        CHECK(rig.voice->Render(16).terminal);
+        rig.voice->EndBlock();
+    }
+
     TEST_CASE("Rejected voice state queue admission and malformed routes preserve retry ownership", "[audio][voice_render]") {
         Rig rig;
         for (std::uint32_t index = 0; index < 3; ++index)
