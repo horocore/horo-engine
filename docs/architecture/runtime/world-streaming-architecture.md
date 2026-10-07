@@ -1444,6 +1444,51 @@ These are required implementation tests, not runtime changes delivered by this A
 - Multiplayer delayed/missing content, stale relevance commands and local budget
   rejection do not grant gameplay authority. Authoring pages survive runtime eviction.
 
+## Incremental Scene Cell Baseline Cook
+
+`HoroEngine::SceneCellPayload` owns `IncrementalSceneCellCook`, a synchronous,
+owner-thread tooling/load-time cache over the existing `CookRuntimeSceneCellPayload`
+pipeline. The host supplies the complete desired cell set after offline expansion,
+exact expected source identities, current partition descriptor, mandatory ceilings,
+and an immutable captured catalog of already verified dependency artifacts. Assets
+retains dependency cooking and artifact verification authority; this Scene cache
+never loads sources, discovers providers, or schedules dependency cookers.
+
+A separate `Horo.SceneCellCook.Key.v1` SHA-256 stream covers durable partition/cell/
+scene/revision identity, every typed entity field in authored order, unordered
+requirements and supported gameplay schemas in canonical order, host-captured
+byte-affecting settings digest, and the canonical transitive dependency closure.
+Each dependency contributes stable AssetId, positive publication revision, verified
+content digest and canonical direct edges. A changed dependency invalidates exactly
+cells that reach it; changes to unreferenced artifacts do not invalidate cells.
+Missing nodes, duplicate nodes/edges and cycles fail before publication. This key
+neither extends Assets `CacheKeyV1` nor changes the HOROCELL wire format.
+
+Scalars use fixed eight-byte little-endian words (signed integers modulo 2^64),
+floating-point values contribute exact IEEE bits, strings/sequences have length
+prefixes, optionals have presence tags and variants have alternative indices. UUID
+bytes retain their persistent order. No padding, pointers, paths or runtime handles
+enter the stream. Per-cell key bytes and captured schema counts are explicitly
+bounded independently of logical native storage charges. Schema or byte-affecting
+cooker changes require a new key version; settings include target/profile and
+all effective host cook settings.
+
+A hit leases the exact immutable validated baseline and rechecks current topology,
+source fence and per-cell ceilings. A miss invokes the real Scene cook and preserves
+its typed errors. Reports distinguish actual cooks from reuse and order cells by
+manifest cell order. The host can pass either output through the existing
+`QueueRuntimeSceneCellPayload` deferred publication authority.
+
+One complete successful batch atomically replaces the retained set and advances a
+non-wrapping revision. Stale expected cache revisions, invalid input, later-cell
+failure, cancellation and allocation failure leave the prior set and revision
+unchanged. Omitted cells retire from cache ownership. Shutdown closes admission
+and releases retained entries; immutable caller leases survive replacement and
+shutdown. Candidate and prior sets may coexist during transactional preparation;
+aggregate retained-payload ceilings bound each set, while caller-held leases remain
+charged to their owning callers. There is no frame-hot work, disk cache, ambient
+state or background job to drain.
+
 ## Cooked World Index Format (`world.index`)
 
 The World Index manifest is the authoritative spatial directory for a streamed

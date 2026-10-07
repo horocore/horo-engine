@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Scene/IncrementalSceneCellCook.h"
 #include "Horo/Runtime/Scene/RuntimeSceneCellPayload.h"
 #include "Horo/Runtime/Scene/SceneCellAttachments.h"
 
@@ -5,6 +6,7 @@
 static_assert(!std::is_copy_assignable_v<Horo::Runtime::RuntimeSceneCellPayload>);
 static_assert(!std::is_move_assignable_v<Horo::Runtime::RuntimeSceneCellPayload>);
 
+static_assert(!std::is_copy_constructible_v<Horo::Runtime::IncrementalSceneCellCook>);
 static_assert(std::is_base_of_v<Horo::Runtime::SceneActivationParticipant, Horo::Runtime::SceneCellAttachmentParticipant>);
 
 namespace {

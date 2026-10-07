@@ -2926,8 +2926,11 @@ target_sources(HoroRuntimeScenePublicHeaderConsumer PRIVATE support/AudioScenePu
 target_compile_features(HoroRuntimeSceneTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSceneTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroRuntimeSceneTests PRIVATE HoroEngine::NavigationSceneIntegration HoroEngine::RuntimeScene)
-add_executable(HoroRuntimeSceneCellPayloadTests unit/runtime/scene/RuntimeSceneCellPayloadTests.cpp)
+add_executable(HoroRuntimeSceneCellPayloadTests unit/runtime/scene/RuntimeSceneCellPayloadTests.cpp
+    unit/runtime/scene/IncrementalSceneCellCookTests.cpp
+    unit/runtime/scene/SceneCellContentHasherTests.cpp)
 target_compile_features(HoroRuntimeSceneCellPayloadTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeSceneCellPayloadTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/scene)
 target_link_libraries(HoroRuntimeSceneCellPayloadTests PRIVATE HoroEngine::SceneCellPayload)
 horo_register_catch_test(HoroRuntimeSceneCellPayloadTests LABELS "unit;scene;world_streaming;headless")
 target_sources(HoroSceneCellPayloadPublicHeaderConsumer PRIVATE support/SceneCellPayloadPublicHeaderConsumer.cpp)
