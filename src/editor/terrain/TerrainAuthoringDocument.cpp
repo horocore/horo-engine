@@ -6,6 +6,7 @@
 #include <limits>
 #include <new>
 #include <set>
+#include <utility>
 
 namespace Horo::Editor {
     namespace TerrainEditErrors {
@@ -223,7 +224,187 @@ namespace Horo::Editor {
                 current.erase(change.id);
             current.merge(staged);
         }
+
+        /** @brief Immutable owner-thread admission facts; retained only for synchronous preparation. */
+        struct EditContext final {
+            const Terrain::TerrainCanonicalSource &source;
+            const TerrainEditLimits &limits;
+            TerrainDocumentStateId state;
+            std::uint64_t nextState;
+            std::uint32_t tileCells;
+            const CancellationToken &cancellation;
+        };
+
+        using PlacementMap = std::map<Terrain::FoliageInstanceId, TerrainAuthoredPlacement>;
+
+        /** @brief Detached exact semantic record plus preallocated placement publication nodes. */
+        struct PreparedEdit final {
+            TerrainEditRecord record;
+            PlacementMap staged;
+        };
+
+        /** @brief Admits complete channel shapes, overlap and byte/work bounds before source capture. */
+        Result<std::size_t> AdmitOperation(const TerrainEditOperation &operation, const EditContext &context) {
+            const auto ceiling = std::min(context.limits.maximumTransactionBytes, context.limits.maximumHistoryBytes);
+            std::size_t bytes = sizeof(TerrainEditRecord), samples = 0;
+            if (bytes > ceiling)
+                return Failed<std::size_t>(TerrainEditErrors::LimitExceeded);
+            // Charge payloads and duplicate snapshot metadata before capturing any source values.
+            for (std::size_t i = 0; i < operation.patches.size(); ++i) {
+                const auto &patch = operation.patches[i];
+                const std::uint64_t count = static_cast<std::uint64_t>(patch.rect.width) * patch.rect.height;
+                if (count > context.limits.maximumSamples - samples)
+                    return Failed<std::size_t>(TerrainEditErrors::LimitExceeded);
+                samples += static_cast<std::size_t>(count);
+                const std::uint64_t payload = static_cast<std::uint64_t>(patch.heightsMeters.size()) * sizeof(float) +
+                                              static_cast<std::uint64_t>(patch.weights.size()) * sizeof(std::uint16_t) + patch.holes.size();
+                if (payload > ceiling / 2 ||
+                    !Charge(bytes, 2 * sizeof(TerrainRasterPatch) + 2 * static_cast<std::size_t>(payload), ceiling))
+                    return Failed<std::size_t>(TerrainEditErrors::LimitExceeded);
+                if (!ValidPatch(patch, context.source))
+                    return Failed<std::size_t>(TerrainEditErrors::Invalid);
+                for (std::size_t j = 0; j < i; ++j)
+                    if (Conflicts(patch, operation.patches[j]))
+                        return Failed<std::size_t>(TerrainEditErrors::Invalid);
+                if (context.cancellation.IsCancellationRequested())
+                    return Failed<std::size_t>(TerrainEditErrors::Cancelled);
+            }
+            if (operation.placements.size() > (ceiling - bytes) / sizeof(TerrainPlacementSnapshot))
+                return Failed<std::size_t>(TerrainEditErrors::LimitExceeded);
+            bytes += operation.placements.size() * sizeof(TerrainPlacementSnapshot);
+            return Result<std::size_t>::Success(bytes);
+        }
+
+        /** @brief Captures canonically ordered exact before/after regions and dependency closure. */
+        Result<void> PrepareRasterSnapshots(const TerrainEditOperation &operation, const EditContext &context, TerrainEditRecord &record,
+                                            std::set<Terrain::TerrainTileId> &dirtyTiles) {
+            std::vector<const TerrainRasterPatch *> ordered;
+            ordered.reserve(operation.patches.size());
+            for (const auto &patch : operation.patches)
+                ordered.push_back(&patch);
+            std::ranges::sort(ordered, [](const auto *a, const auto *b) {
+                if (a->rect != b->rect)
+                    return a->rect < b->rect;
+                const auto channels = [](const auto &patch) {
+                    return (!patch.heightsMeters.empty() ? 1 : 0) + (!patch.weights.empty() ? 2 : 0) + (!patch.holes.empty() ? 4 : 0);
+                };
+                return channels(*a) < channels(*b);
+            });
+            for (const auto *input : ordered) {
+                const auto &patch = *input;
+                auto before = Capture(patch, context.source);
+                if (Equal(before, patch))
+                    continue;
+                if (!AddDirtyTiles(dirtyTiles, patch.rect, context.source, context.tileCells, context.limits.maximumDirtyTiles))
+                    return Failed<void>(TerrainEditErrors::LimitExceeded);
+                record.invalidation.visual = true;
+                record.invalidation.collision |= !patch.heightsMeters.empty() || !patch.holes.empty();
+                record.invalidation.navigation |= !patch.heightsMeters.empty() || !patch.holes.empty();
+                record.invalidation.foliage = true;
+                record.before.push_back(std::move(before));
+                record.after.push_back(patch);
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Captures stable placement deltas, validates capacity and allocates publication nodes. */
+        Result<PlacementMap> PreparePlacementSnapshots(const TerrainEditOperation &operation, const EditContext &context,
+                                                       const PlacementMap &current, TerrainEditRecord &record,
+                                                       std::set<Terrain::TerrainTileId> &dirtyTiles) {
+            std::set<Terrain::FoliageInstanceId> placementIds;
+            std::map<Terrain::FoliageInstanceId, TerrainAuthoredPlacement> staged;
+            std::size_t placementCount = current.size();
+            for (const auto &change : operation.placements) {
+                if (!change.id.IsValid() || !placementIds.insert(change.id).second ||
+                    (change.value && (change.value->id != change.id || !ValidPlacement(*change.value, context.source))))
+                    return Failed<PlacementMap>(TerrainEditErrors::Invalid);
+                const auto found = current.find(change.id);
+                const std::optional<TerrainAuthoredPlacement> before = found == current.end() ? std::nullopt : std::optional{found->second};
+                if (!before && !change.value)
+                    return Failed<PlacementMap>(TerrainEditErrors::Invalid);
+                if (before == change.value)
+                    continue;
+                if (!before)
+                    ++placementCount;
+                if (!change.value)
+                    --placementCount;
+                for (const auto &value : {before, change.value})
+                    if (value && !AddDirtyTiles(dirtyTiles, {value->sampleX, value->sampleZ, 1, 1}, context.source, context.tileCells,
+                                                context.limits.maximumDirtyTiles))
+                        return Failed<PlacementMap>(TerrainEditErrors::LimitExceeded);
+                if (change.value)
+                    staged.emplace(change.id, *change.value);
+                record.placements.push_back({change.id, before, change.value});
+                record.invalidation.foliage = true;
+            }
+            std::ranges::sort(record.placements, {}, &TerrainPlacementSnapshot::id);
+            if (placementCount > context.limits.maximumPlacements)
+                return Failed<PlacementMap>(TerrainEditErrors::LimitExceeded);
+            return Result<PlacementMap>::Success(std::move(staged));
+        }
+
+        /** @brief Freezes one admitted semantic record without mutating canonical storage or history. */
+        Result<PreparedEdit> PrepareEdit(const TerrainEditOperation &operation, const EditContext &context, const PlacementMap &current) {
+            auto admission = AdmitOperation(operation, context);
+            if (admission.HasError())
+                return Result<PreparedEdit>::Failure(admission.ErrorValue());
+            PreparedEdit prepared;
+            auto &record = prepared.record;
+            record.operation = operation.operation;
+            record.baseRevision = context.source.revision;
+            record.beforeState = context.state;
+            record.before.reserve(operation.patches.size());
+            record.after.reserve(operation.patches.size());
+            record.placements.reserve(operation.placements.size());
+            std::set<Terrain::TerrainTileId> dirtyTiles;
+            auto raster = PrepareRasterSnapshots(operation, context, record, dirtyTiles);
+            if (raster.HasError())
+                return Result<PreparedEdit>::Failure(raster.ErrorValue());
+            auto placements = PreparePlacementSnapshots(operation, context, current, record, dirtyTiles);
+            if (placements.HasError())
+                return Result<PreparedEdit>::Failure(placements.ErrorValue());
+            prepared.staged = std::move(placements).Value();
+            if (record.after.empty() && record.placements.empty())
+                return Result<PreparedEdit>::Success(std::move(prepared));
+            auto bytes = admission.Value();
+            if (!Charge(bytes, dirtyTiles.size() * sizeof(Terrain::TerrainTileId),
+                        std::min(context.limits.maximumTransactionBytes, context.limits.maximumHistoryBytes)))
+                return Failed<PreparedEdit>(TerrainEditErrors::LimitExceeded);
+            auto revision = Terrain::AdvanceTerrainRevision(context.source.revision);
+            if (revision.HasError() || context.nextState == std::numeric_limits<std::uint64_t>::max())
+                return Failed<PreparedEdit>(TerrainEditErrors::Exhausted);
+            record.afterState = TerrainDocumentStateId::Create(context.nextState).Value();
+            record.committedRevision = revision.Value();
+            record.dirtyTiles.assign(dirtyTiles.begin(), dirtyTiles.end());
+            record.bytes = bytes;
+            return Result<PreparedEdit>::Success(std::move(prepared));
+        }
     }  // namespace
+
+    /** @copydoc TerrainAuthoringDocument::TerrainAuthoringDocument */
+    TerrainAuthoringDocument::TerrainAuthoringDocument(TerrainAuthoringDocument &&other) noexcept : TerrainAuthoringDocument() {
+        *this = std::move(other);
+    }
+
+    /** @copydoc TerrainAuthoringDocument::operator= */
+    TerrainAuthoringDocument &TerrainAuthoringDocument::operator=(TerrainAuthoringDocument &&other) noexcept {
+        if (this == &other)
+            return *this;
+        session_ = other.session_;
+        source_ = std::move(other.source_);
+        placements_ = std::move(other.placements_);
+        capability_ = other.capability_;
+        limits_ = other.limits_;
+        tileCells_ = other.tileCells_;
+        state_ = other.state_;
+        savedState_ = other.savedState_;
+        nextState_ = other.nextState_;
+        undo_ = std::move(other.undo_);
+        redo_ = std::move(other.redo_);
+        historyBytes_ = std::exchange(other.historyBytes_, 0);
+        closed_ = std::exchange(other.closed_, true);
+        return *this;
+    }
 
     /** @copydoc TerrainAuthoringDocument::Open */
     Result<TerrainAuthoringDocument> TerrainAuthoringDocument::Open(TerrainDocumentSessionId session,
@@ -264,7 +445,7 @@ namespace Horo::Editor {
         return {session_, source_.dataset, source_.revision, source_.capability};
     }
 
-    /** @brief Validates owner-thread lifecycle and exact identity/revision/permission before staging. */
+    /** @copydoc TerrainAuthoringDocument::Admit */
     Result<void> TerrainAuthoringDocument::Admit(const TerrainEditFence &fence, const CancellationToken &cancellation) const {
         if (closed_)
             return Failed<void>(TerrainEditErrors::Closed);
@@ -279,7 +460,7 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
-    /** @brief Copies admitted exact primitive values; no fallible work remains at publication. */
+    /** @copydoc TerrainAuthoringDocument::Apply */
     void TerrainAuthoringDocument::Apply(const std::vector<TerrainRasterPatch> &patches) noexcept {
         for (const auto &patch : patches) {
             std::size_t pixel = 0;
@@ -307,143 +488,56 @@ namespace Horo::Editor {
         if (operation.patches.size() > limits_.maximumPatches || operation.placements.size() > limits_.maximumPlacementEdits)
             return Failed<TerrainEditChange>(TerrainEditErrors::LimitExceeded);
         try {
-            const auto ceiling = std::min(limits_.maximumTransactionBytes, limits_.maximumHistoryBytes);
-            std::size_t bytes = sizeof(TerrainEditRecord), samples = 0;
-            if (bytes > ceiling)
-                return Failed<TerrainEditChange>(TerrainEditErrors::LimitExceeded);
-            // Charge payloads and duplicate snapshot metadata before capturing any source values.
-            for (std::size_t i = 0; i < operation.patches.size(); ++i) {
-                const auto &patch = operation.patches[i];
-                const std::uint64_t count = static_cast<std::uint64_t>(patch.rect.width) * patch.rect.height;
-                if (count > limits_.maximumSamples - samples)
-                    return Failed<TerrainEditChange>(TerrainEditErrors::LimitExceeded);
-                samples += static_cast<std::size_t>(count);
-                const std::uint64_t payload = static_cast<std::uint64_t>(patch.heightsMeters.size()) * sizeof(float) +
-                                              static_cast<std::uint64_t>(patch.weights.size()) * sizeof(std::uint16_t) + patch.holes.size();
-                if (payload > ceiling / 2 ||
-                    !Charge(bytes, 2 * sizeof(TerrainRasterPatch) + 2 * static_cast<std::size_t>(payload), ceiling))
-                    return Failed<TerrainEditChange>(TerrainEditErrors::LimitExceeded);
-                if (!ValidPatch(patch, source_))
-                    return Failed<TerrainEditChange>(TerrainEditErrors::Invalid);
-                for (std::size_t j = 0; j < i; ++j)
-                    if (Conflicts(patch, operation.patches[j]))
-                        return Failed<TerrainEditChange>(TerrainEditErrors::Invalid);
-                if (cancellation.IsCancellationRequested())
-                    return Failed<TerrainEditChange>(TerrainEditErrors::Cancelled);
-            }
-            if (operation.placements.size() > (ceiling - bytes) / sizeof(TerrainPlacementSnapshot))
-                return Failed<TerrainEditChange>(TerrainEditErrors::LimitExceeded);
-            bytes += operation.placements.size() * sizeof(TerrainPlacementSnapshot);
-            TerrainEditRecord record{.operation = operation.operation, .baseRevision = source_.revision, .beforeState = state_};
-            record.before.reserve(operation.patches.size());
-            record.after.reserve(operation.patches.size());
-            record.placements.reserve(operation.placements.size());
-            std::vector<const TerrainRasterPatch *> ordered;
-            ordered.reserve(operation.patches.size());
-            for (const auto &patch : operation.patches)
-                ordered.push_back(&patch);
-            std::ranges::sort(ordered, [](const auto *a, const auto *b) {
-                if (a->rect != b->rect)
-                    return a->rect < b->rect;
-                const auto channels = [](const auto &patch) {
-                    return (!patch.heightsMeters.empty() ? 1 : 0) + (!patch.weights.empty() ? 2 : 0) + (!patch.holes.empty() ? 4 : 0);
-                };
-                return channels(*a) < channels(*b);
-            });
-            std::set<Terrain::TerrainTileId> dirtyTiles;
-            for (const auto *input : ordered) {
-                const auto &patch = *input;
-                auto before = Capture(patch, source_);
-                if (Equal(before, patch))
-                    continue;
-                if (!AddDirtyTiles(dirtyTiles, patch.rect, source_, tileCells_, limits_.maximumDirtyTiles))
-                    return Failed<TerrainEditChange>(TerrainEditErrors::LimitExceeded);
-                record.invalidation.visual = true;
-                record.invalidation.collision |= !patch.heightsMeters.empty() || !patch.holes.empty();
-                record.invalidation.navigation |= !patch.heightsMeters.empty() || !patch.holes.empty();
-                record.invalidation.foliage = true;
-                record.before.push_back(std::move(before));
-                record.after.push_back(patch);
-            }
-            std::set<Terrain::FoliageInstanceId> placementIds;
-            std::map<Terrain::FoliageInstanceId, TerrainAuthoredPlacement> staged;
-            std::size_t placementCount = placements_.size();
-            for (const auto &change : operation.placements) {
-                if (!change.id.IsValid() || !placementIds.insert(change.id).second ||
-                    (change.value && (change.value->id != change.id || !ValidPlacement(*change.value, source_))))
-                    return Failed<TerrainEditChange>(TerrainEditErrors::Invalid);
-                const auto found = placements_.find(change.id);
-                const std::optional<TerrainAuthoredPlacement> before =
-                    found == placements_.end() ? std::nullopt : std::optional{found->second};
-                if (!before && !change.value)
-                    return Failed<TerrainEditChange>(TerrainEditErrors::Invalid);
-                if (before == change.value)
-                    continue;
-                if (!before)
-                    ++placementCount;
-                if (!change.value)
-                    --placementCount;
-                for (const auto &value : {before, change.value})
-                    if (value &&
-                        !AddDirtyTiles(dirtyTiles, {value->sampleX, value->sampleZ, 1, 1}, source_, tileCells_, limits_.maximumDirtyTiles))
-                        return Failed<TerrainEditChange>(TerrainEditErrors::LimitExceeded);
-                if (change.value)
-                    staged.emplace(change.id, *change.value);
-                record.placements.push_back({change.id, before, change.value});
-                record.invalidation.foliage = true;
-            }
-            std::ranges::sort(record.placements, {}, &TerrainPlacementSnapshot::id);
-            if (placementCount > limits_.maximumPlacements)
-                return Failed<TerrainEditChange>(TerrainEditErrors::LimitExceeded);
-            if (record.after.empty() && record.placements.empty())
+            auto result = PrepareEdit(operation, {source_, limits_, state_, nextState_, tileCells_, cancellation}, placements_);
+            if (result.HasError())
+                return Result<TerrainEditChange>::Failure(result.ErrorValue());
+            auto prepared = std::move(result).Value();
+            if (prepared.record.after.empty() && prepared.record.placements.empty())
                 return Result<TerrainEditChange>::Success({operation.operation, source_.revision, state_, {}, {}, false, IsDirty()});
-            if (!Charge(bytes, dirtyTiles.size() * sizeof(Terrain::TerrainTileId), ceiling))
-                return Failed<TerrainEditChange>(TerrainEditErrors::LimitExceeded);
-            const auto nextRevision = Terrain::AdvanceTerrainRevision(source_.revision);
-            if (nextRevision.HasError() || nextState_ == std::numeric_limits<std::uint64_t>::max())
-                return Failed<TerrainEditChange>(TerrainEditErrors::Exhausted);
-            record.afterState = TerrainDocumentStateId::Create(nextState_).Value();
-            record.committedRevision = nextRevision.Value();
-            record.dirtyTiles.assign(dirtyTiles.begin(), dirtyTiles.end());
-            record.bytes = bytes;
-            TerrainEditChange receipt{record.operation,
-                                      record.committedRevision,
-                                      record.afterState,
-                                      record.dirtyTiles,
-                                      record.invalidation,
-                                      true,
-                                      record.afterState != savedState_};
-            if (cancellation.IsCancellationRequested())
-                return Failed<TerrainEditChange>(TerrainEditErrors::Cancelled);
-            // Stage history allocation last. Everything after push is allocation-free owner publication.
-            undo_.push_back(std::move(record));
-            const auto &committed = undo_.back();
-            Apply(committed.after);
-            PublishPlacements(placements_, staged, committed.placements);
-            source_.revision = committed.committedRevision;
-            state_ = committed.afterState;
-            ++nextState_;
-            for (const auto &entry : redo_)
-                historyBytes_ -= entry.bytes;
-            redo_.clear();
-            historyBytes_ += committed.bytes;
-            while (undo_.size() > limits_.maximumHistoryItems || historyBytes_ > limits_.maximumHistoryBytes) {
-                historyBytes_ -= undo_.front().bytes;
-                undo_.erase(undo_.begin());
-            }
-            return Result<TerrainEditChange>::Success(std::move(receipt));
+            return Publish(std::move(prepared.record), std::move(prepared.staged), cancellation);
         } catch (const std::bad_alloc &) {
             return Failed<TerrainEditChange>(TerrainEditErrors::LimitExceeded);
         }
     }
 
-    /** @brief Stages placement/history allocations then replays an exact record at one owner publication boundary. */
+    /** @copydoc TerrainAuthoringDocument::Publish */
+    Result<TerrainEditChange> TerrainAuthoringDocument::Publish(TerrainEditRecord record,
+                                                                std::map<Terrain::FoliageInstanceId, TerrainAuthoredPlacement> staged,
+                                                                const CancellationToken &cancellation) {
+        TerrainEditChange receipt{record.operation,
+                                  record.committedRevision,
+                                  record.afterState,
+                                  record.dirtyTiles,
+                                  record.invalidation,
+                                  true,
+                                  record.afterState != savedState_};
+        undo_.reserve(undo_.size() + 1);
+        if (cancellation.IsCancellationRequested())
+            return Failed<TerrainEditChange>(TerrainEditErrors::Cancelled);
+        undo_.push_back(std::move(record));
+        const auto &committed = undo_.back();
+        Apply(committed.after);
+        PublishPlacements(placements_, staged, committed.placements);
+        source_.revision = committed.committedRevision;
+        state_ = committed.afterState;
+        ++nextState_;
+        for (const auto &entry : redo_)
+            historyBytes_ -= entry.bytes;
+        redo_.clear();
+        historyBytes_ += committed.bytes;
+        while (undo_.size() > limits_.maximumHistoryItems || historyBytes_ > limits_.maximumHistoryBytes) {
+            historyBytes_ -= undo_.front().bytes;
+            undo_.erase(undo_.begin());
+        }
+        return Result<TerrainEditChange>::Success(std::move(receipt));
+    }
+
+    /** @copydoc TerrainAuthoringDocument::Replay */
     Result<TerrainEditChange> TerrainAuthoringDocument::Replay(const TerrainEditFence &fence, const CancellationToken &cancellation,
                                                                bool redo) {
         if (auto admitted = Admit(fence, cancellation); admitted.HasError())
             return Result<TerrainEditChange>::Failure(admitted.ErrorValue());
         auto &from = redo ? redo_ : undo_;
-        auto &to = redo ? undo_ : redo_;
         if (from.empty())
             return Failed<TerrainEditChange>(TerrainEditErrors::HistoryEmpty);
         const auto revision = Terrain::AdvanceTerrainRevision(source_.revision);
@@ -460,6 +554,8 @@ namespace Horo::Editor {
             const auto state = redo ? record.afterState : record.beforeState;
             TerrainEditChange receipt{record.operation,    revision.Value(), state, record.dirtyTiles, record.invalidation, true,
                                       state != savedState_};
+            auto &to = redo ? undo_ : redo_;
+            to.reserve(to.size() + 1);
             if (cancellation.IsCancellationRequested())
                 return Failed<TerrainEditChange>(TerrainEditErrors::Cancelled);
             to.push_back(std::move(from.back()));

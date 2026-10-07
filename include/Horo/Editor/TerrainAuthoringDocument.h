@@ -133,7 +133,7 @@ namespace Horo::Editor {
      * All methods execute on one host owner thread. No worker, callback or runtime ownership is
      * retained. Execute stages only affected regions; every fallible step precedes publication.
      * Replacement closes the old object and opens a fresh host-issued session. Borrowed query
-     * views expire on the next mutation/close or object destruction. Save/cook remains external.
+     * views expire on any edit/history attempt (including failure), close/move or destruction. Save/cook remains external.
      */
     class TerrainAuthoringDocument final {
     public:
@@ -150,8 +150,15 @@ namespace Horo::Editor {
                                                                    std::uint32_t tileCells, TerrainAuthoringCapability capability,
                                                                    TerrainEditLimits limits = {},
                                                                    std::vector<TerrainAuthoredPlacement> placements = {});
-        TerrainAuthoringDocument(TerrainAuthoringDocument &&) noexcept = default;
-        TerrainAuthoringDocument &operator=(TerrainAuthoringDocument &&) noexcept = default;
+        /** @brief Transfers sole ownership and closes donor admission.
+         * @param other Owner being retired by transfer.
+         */
+        TerrainAuthoringDocument(TerrainAuthoringDocument &&other) noexcept;
+        /** @brief Replaces this owner and retires donor admission; self-transfer preserves the owner.
+         * @param other Owner being retired by transfer.
+         * @return This owner after transfer.
+         */
+        TerrainAuthoringDocument &operator=(TerrainAuthoringDocument &&other) noexcept;
         TerrainAuthoringDocument(const TerrainAuthoringDocument &) = delete;
         TerrainAuthoringDocument &operator=(const TerrainAuthoringDocument &) = delete;
         ~TerrainAuthoringDocument() = default;
@@ -236,9 +243,33 @@ namespace Horo::Editor {
 
     private:
         TerrainAuthoringDocument() = default;
+        /** @brief Validates owner-thread lifecycle and exact identity/revision/permission before staging.
+         * @param fence Captured source admission fence.
+         * @param cancellation Captured cooperative cancellation state.
+         * @return Success or a typed admission error without mutation.
+         */
         [[nodiscard]] Result<void> Admit(const TerrainEditFence &fence, const CancellationToken &cancellation) const;
+        /** @brief Stages placement/history allocations then replays one exact committed record.
+         * @param fence Captured source admission fence.
+         * @param cancellation Cancellation before publication.
+         * @param redo Selects the exact after values rather than before values.
+         * @return New revision receipt or typed failure without partial mutation.
+         */
         [[nodiscard]] Result<TerrainEditChange> Replay(const TerrainEditFence &fence, const CancellationToken &cancellation, bool redo);
+        /** @brief Copies admitted exact primitive values at allocation-free publication.
+         * @param patches Validated canonical regions whose dimensions and payloads match the source.
+         */
         void Apply(const std::vector<TerrainRasterPatch> &patches) noexcept;
+        /** @brief Reserves the receipt/history slot then publishes one allocation-free transaction.
+         * @param record Complete detached exact semantic history record.
+         * @param staged Preallocated replacement placement nodes.
+         * @param cancellation Cancellation checked after history reservation and immediately before publication.
+         * @return Atomic committed receipt or cancellation without mutation.
+         * @throws std::bad_alloc Before publication only; Execute translates allocation failure.
+         */
+        [[nodiscard]] Result<TerrainEditChange> Publish(TerrainEditRecord record,
+                                                        std::map<Terrain::FoliageInstanceId, TerrainAuthoredPlacement> staged,
+                                                        const CancellationToken &cancellation);
         TerrainDocumentSessionId session_;
         Terrain::TerrainCanonicalSource source_;
         std::map<Terrain::FoliageInstanceId, TerrainAuthoredPlacement> placements_;

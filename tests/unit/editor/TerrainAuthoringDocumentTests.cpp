@@ -413,3 +413,30 @@ TEST_CASE("Terrain snapshots are canonically ordered independent of adapter payl
     REQUIRE(document.LastUndo()->before.front().rect == document.LastUndo()->after.front().rect);
     REQUIRE(document.LastUndo()->placements.front().id == first.id);
 }
+
+TEST_CASE("Terrain ownership moves retire donor admission and preserve exact history", "[terrain][editor][lifecycle]") {
+    auto donor = Document();
+    const auto pending = Edit(donor);
+    REQUIRE(donor.Execute(pending).HasValue());
+    const auto state = donor.State();
+    TerrainAuthoringDocument owner(std::move(donor));
+    REQUIRE(donor.IsClosed());
+    ErrorIs(donor.Execute(pending), TerrainEditErrors::Closed);
+    ErrorIs(donor.Undo(donor.Fence()), TerrainEditErrors::Closed);
+    ErrorIs(donor.AcceptSavedState(donor.Fence().session, state), TerrainEditErrors::Closed);
+    REQUIRE(owner.Source().heightsMeters[40] == 7);
+    REQUIRE(owner.State() == state);
+    REQUIRE(owner.Undo(owner.Fence()).HasValue());
+    REQUIRE_FALSE(owner.IsDirty());
+    auto replacement = Document({}, 2);
+    replacement = std::move(owner);
+    REQUIRE(owner.IsClosed());
+    ErrorIs(owner.Redo(owner.Fence()), TerrainEditErrors::Closed);
+    REQUIRE(replacement.Redo(replacement.Fence()).HasValue());
+    REQUIRE(replacement.Source().heightsMeters[40] == 7);
+    REQUIRE(replacement.State() == state);
+    auto *same = &replacement;
+    replacement = std::move(*same);
+    REQUIRE_FALSE(replacement.IsClosed());
+    REQUIRE(replacement.Source().heightsMeters[40] == 7);
+}
