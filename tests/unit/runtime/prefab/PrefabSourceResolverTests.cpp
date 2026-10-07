@@ -54,7 +54,8 @@ namespace Horo::Prefab {
         }
 
         void PublishResolverRegistry(Assets::AssetRegistry &registry, std::vector<Assets::AssetRecord> records) {
-            REQUIRE(registry.Publish(std::move(records)).status == Assets::AssetRegistryBuildStatus::Complete);
+            const auto publication = registry.Publish(std::move(records));
+            REQUIRE(publication.status == Assets::AssetRegistryBuildStatus::Complete);
         }
 
         /** @brief Builds the shared two-source nested resolver fixture with a caller-selected placement and inner hierarchy. */
@@ -254,7 +255,7 @@ namespace Horo::Prefab {
             malformed = candidate.Revision();
             malformed.registry.value += 1;
             CHECK(snapshot.ValidateRevisionPublication(root, malformed, {}, ResolverLimits()).HasError());
-            const std::vector<Assets::AssetId> excessive(ResolverLimits().MaximumExpansionWorkItems() + 1, resource);
+            const std::vector excessive(ResolverLimits().MaximumExpansionWorkItems() + 1, resource);
             CHECK(snapshot.ValidateRevisionPublication(root, candidate.Revision(), excessive, ResolverLimits()).ErrorValue().code.Value() ==
                   PrefabErrors::WorkBudgetExceeded.code.Value());
         }

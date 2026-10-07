@@ -258,13 +258,26 @@ namespace {
         REQUIRE(replaced.Value().Entities().front().object == oldIdentity);
         CHECK(previous.Value().Entities().size() == 2);
         CHECK(document.prefabInstances[0].sourcePrefab == PrefabAsset(21));
-        auto changedPlacement = document;
-        changedPlacement.prefabInstances[0].rootTransform.translation.x = 7;
-        CHECK(
-            ConvertScenePrefabProjectionToRuntime(changedPlacement, Runtime::SceneDefinitionId{1}, refreshed, current, ScenePrefabLimits())
-                .HasError());
-        refreshed.instances.pop_back();
-        CHECK(ConvertScenePrefabProjectionToRuntime(document, Runtime::SceneDefinitionId{1}, refreshed, current, ScenePrefabLimits())
+    }
+
+    TEST_CASE("Retained prefab conversion rejects altered placements and incomplete instance coverage", "[unit][editor][prefab][runtime]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        const auto resolver = ScenePrefabResolver(PrefabAsset(21).Asset(), {{.localId = {}, .name = "Root"}});
+        SceneDocumentSnapshot document{.state = DocumentStateId{1},
+                                       .prefabInstances =
+                                           {{Prefab::PrefabInstanceId::Create(1).Value(), PrefabAsset(21), std::nullopt, {}},
+                                            {Prefab::PrefabInstanceId::Create(2).Value(), PrefabAsset(21), std::nullopt, {}}}};
+        auto projection = BuildScenePrefabProjection(document, resolver, ScenePrefabLimits()).Value();
+        REQUIRE(ConvertScenePrefabProjectionToRuntime(document, Runtime::SceneDefinitionId{1}, projection, resolver, ScenePrefabLimits())
+                    .HasValue());
+        SECTION("Changed placement invalidates retained projection") {
+            document.prefabInstances[0].rootTransform.translation.x = 7;
+        }
+        SECTION("Missing instance rejects incomplete coverage") {
+            projection.instances.pop_back();
+        }
+        CHECK(ConvertScenePrefabProjectionToRuntime(document, Runtime::SceneDefinitionId{1}, projection, resolver, ScenePrefabLimits())
                   .HasError());
     }
 

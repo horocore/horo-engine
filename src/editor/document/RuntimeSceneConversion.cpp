@@ -155,6 +155,13 @@ namespace Horo::Editor {
                                         projection.authored.sourcePrefab.Asset().ToString(), error.message);
         }
 
+        /** @brief Preserves the typed failure and identifies the required prefab instance at the runtime boundary. */
+        [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> InstanceFailure(Error error,
+                                                                              const ScenePrefabInstanceProjection &projection) {
+            AddInstanceContext(error, projection);
+            return Result<Runtime::RuntimeSceneDefinition>::Failure(std::move(error));
+        }
+
         [[nodiscard]] Result<Runtime::NavigationAgentComponent> ParsePrefabNavigationAgent(const Prefab::RawComponentPayload &payload) {
             if (payload.component.typeId.Value() != NavigationAgentPrefabComponentType ||
                 payload.component.encoding != Gameplay::ComponentPayloadEncoding::CanonicalJson || payload.component.schemaVersion != 1)
@@ -455,15 +462,15 @@ namespace Horo::Editor {
             const auto &candidate = *entry.expanded;
             if (auto valid = resolver.ValidateRevisionPublication(candidate.RootAsset(), candidate.Revision(), {}, limits);
                 valid.HasError())
-                return Result<Runtime::RuntimeSceneDefinition>::Failure(valid.ErrorValue());
+                return InstanceFailure(valid.ErrorValue(), entry);
             auto remapped = Prefab::RemapPrefabCandidateToScene(candidate, occupied, {}, limits);
             if (remapped.HasError())
-                return Result<Runtime::RuntimeSceneDefinition>::Failure(remapped.ErrorValue());
+                return InstanceFailure(remapped.ErrorValue(), entry);
             const auto &identityMap = remapped.Value();
             for (const auto &mapping : identityMap.Mappings())
                 occupied.push_back(mapping.scene);
             if (const auto added = AddPrefabCandidate(entry.authored, candidate, identityMap, builder, limits); added.HasError())
-                return Result<Runtime::RuntimeSceneDefinition>::Failure(added.ErrorValue());
+                return InstanceFailure(added.ErrorValue(), entry);
         }
         return std::move(builder).Build();
     }

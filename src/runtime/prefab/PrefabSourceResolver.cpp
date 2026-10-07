@@ -242,7 +242,7 @@ namespace Horo::Prefab {
         auto closure = graph_.DependencyClosure(std::span{&rootAsset, 1});
         if (closure.HasError())
             return Result<PrefabResolutionRevision>::Failure(closure.ErrorValue());
-        auto &assets = closure.Value();
+        auto assets = std::move(closure).Value();
         assets.insert(std::ranges::lower_bound(assets, rootAsset), rootAsset);
         PrefabResolutionRevision revision{graph_.RegistryRevision(), *root->sourceRevision};
         revision.dependencies.reserve(assets.size());
@@ -267,9 +267,8 @@ namespace Horo::Prefab {
         auto current = CaptureRevision(rootAsset, budget);
         if (current.HasError())
             return Result<void>::Failure(current.ErrorValue());
-        const auto &captured = current.Value();
-        if (revision.rootSource != captured.rootSource || revision.dependencies != captured.dependencies ||
-            revision.edges != captured.edges)
+        if (const auto &captured = current.Value(); revision.rootSource != captured.rootSource ||
+                                                    revision.dependencies != captured.dependencies || revision.edges != captured.edges)
             return Result<void>::Failure(MakeError(PrefabErrors::ResolutionStale));
         for (const auto asset : changedAssets) {
             if (!asset.IsValid())

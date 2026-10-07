@@ -9,7 +9,7 @@
 
 namespace Horo::Prefab {
     namespace {
-        PrefabLimitProfile ExpansionLimits(PrefabProjectPolicy policy = {}) {
+        PrefabLimitProfile ExpansionLimits(const PrefabProjectPolicy &policy = {}) {
             return PrefabLimitProfile::Create(policy).Value();
         }
 
@@ -59,7 +59,7 @@ namespace Horo::Prefab {
         }
 
         Gameplay::SerializedComponent ExpansionComponent(const std::size_t padding = 0) {
-            std::string text = "{\"value\":\"" + std::string(padding, 'x') + "\"}";
+            std::string text = R"({"value":")" + std::string(padding, 'x') + R"("})";
             std::vector<std::byte> bytes;
             for (const char value : text)
                 bytes.push_back(static_cast<std::byte>(value));
@@ -239,7 +239,7 @@ namespace Horo::Prefab {
 
         TEST_CASE("Prefab runtime expansion rejects finite work exhaustion and overlong behavior projections",
                   "[unit][prefab][expansion][boundary]") {
-            std::vector<PrefabObjectNode> objects{ExpansionObject(0)};
+            std::vector objects{ExpansionObject(0)};
             for (std::uint32_t id = 1; id < 10; ++id)
                 objects.push_back(ExpansionObject(id, LocalObjectId{0}));
             const auto candidate = ExpansionCandidate(std::move(objects));
