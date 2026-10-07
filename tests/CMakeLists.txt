@@ -2834,6 +2834,7 @@ target_link_libraries(HoroRuntimeSceneTests PRIVATE HoroEngine::NavigationSceneI
 add_executable(HoroRuntimeSceneCellPayloadTests
         unit/runtime/scene/RuntimeSceneCellPayloadTests.cpp
         unit/runtime/scene/RuntimeSceneCellAttachmentTests.cpp
+        unit/runtime/scene/RuntimeSceneCellAssetAttachmentTests.cpp
 )
 target_compile_features(HoroRuntimeSceneCellPayloadTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSceneCellPayloadTests PRIVATE HoroEngine::SceneCellPayload)

@@ -89,9 +89,9 @@ namespace Horo::Runtime {
         if (resources.size() > request.limits.maximumResources)
             return Result<void>::Failure(MakeError(SceneCellPayloadErrors::CapacityExceeded));
         SceneCommandBuffer commands;
+        // Keep cancellation in the cell publication check so deferred commits retain the cell-specific error code.
         auto queued =
-            commands.AttachBaseline(payload.Definition(), std::move(resources),
-                                    {request.runtime, request.registry, request.cancellation, request.ownerCancellation}, request.limits,
+            commands.AttachBaseline(payload.Definition(), std::move(resources), {request.runtime, request.registry, {}, {}}, request.limits,
                                     request.expectedRevision,
                                     std::make_shared<AttachmentPublicationCheck>(payload.Identity(), request, std::move(authority)),
                                     std::make_shared<AttachmentOwnership>(payload.Identity(), request.fence));
@@ -107,8 +107,8 @@ namespace Horo::Runtime {
         if (const auto valid = ValidateRequest(service, identity, request, authority); valid.HasError())
             return valid;
         SceneCommandBuffer commands;
-        auto queued = commands.DetachBaseline(identity.scene, identity.revision,
-                                              {request.runtime, request.registry, request.cancellation, request.ownerCancellation},
+        // The publication check owns both cancellation tokens and reports their cell-specific outcome.
+        auto queued = commands.DetachBaseline(identity.scene, identity.revision, {request.runtime, request.registry, {}, {}},
                                               std::make_shared<AttachmentPublicationCheck>(identity, request, std::move(authority)),
                                               std::make_shared<AttachmentOwnership>(identity, request.fence));
         if (queued.HasError())

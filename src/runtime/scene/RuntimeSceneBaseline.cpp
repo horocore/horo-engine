@@ -4,6 +4,24 @@
 #include <algorithm>
 
 namespace Horo::Runtime {
+    namespace {
+        Result<void> ValidateBaselineCapacity(const RuntimeSceneStorage &storage, const RuntimeSceneDefinition &definition,
+                                              const std::size_t resourceCount, const SceneBaselineAttachmentLimits limits) {
+            if (storage.baselines.size() >= limits.maximumAttachments)
+                return Result<void>::Failure(MakeError(SceneErrors::BaselineCapacityExceeded));
+            std::size_t entities = definition.Entities().size();
+            std::size_t resources = resourceCount;
+            for (const auto &baseline : storage.baselines) {
+                if (baseline.entities.size() > limits.maximumEntities - entities ||
+                    baseline.resources->size() > limits.maximumResources - resources)
+                    return Result<void>::Failure(MakeError(SceneErrors::BaselineCapacityExceeded));
+                entities += baseline.entities.size();
+                resources += baseline.resources->size();
+            }
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     /** @copydoc RuntimeScene::RemoveBaseline */
     Result<void> RuntimeScene::RemoveBaseline(RuntimeSceneStorage &storage, const SceneDefinitionId id,
                                               const SceneDefinitionRevision revision, const SceneBaselineOwnership &ownership) const {
@@ -42,17 +60,8 @@ namespace Horo::Runtime {
                 return removed;
         }
         const auto limits = command.limits;
-        if (storage.baselines.size() >= limits.maximumAttachments)
-            return Result<void>::Failure(MakeError(SceneErrors::BaselineCapacityExceeded));
-        std::size_t entities = definition.Entities().size();
-        std::size_t resources = command.resources.size();
-        for (const auto &baseline : storage.baselines) {
-            if (baseline.entities.size() > limits.maximumEntities - entities ||
-                baseline.resources->size() > limits.maximumResources - resources)
-                return Result<void>::Failure(MakeError(SceneErrors::BaselineCapacityExceeded));
-            entities += baseline.entities.size();
-            resources += baseline.resources->size();
-        }
+        if (const auto capacity = ValidateBaselineCapacity(storage, definition, command.resources.size(), limits); capacity.HasError())
+            return capacity;
         BaselineAttachment baseline{definition.Id(),
                                     definition.Revision(),
                                     {},

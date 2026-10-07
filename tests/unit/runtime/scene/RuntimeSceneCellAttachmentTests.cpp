@@ -389,84 +389,6 @@ namespace Horo::Runtime {
         REQUIRE(QueueRuntimeSceneCellAttachment(service, payload, nextRequest, {}, Owner(payload, nextRequest, counts)).HasError());
     }
 
-    TEST_CASE("Cells share exact asset allocations and release the last pin once", "[scene][cell_attachment][assets]") {
-        Counts counts;
-        Assets::AssetRegistry registry;
-        Assets::MemoryAssetProvider provider;
-        JobSystem jobs{{1, 4}};
-        Assets::AssetLoadService loads{jobs, provider};
-        RuntimeSceneService service{registry, loads};
-        const SceneAssetDependency dependency{Asset(1), Assets::AssetTypeId::Parse("core.mesh").Value()};
-        const std::vector records{Assets::AssetRecord{dependency.id, dependency.expectedType, ProjectPath::Parse("assets/mesh.bin").Value(),
-                                                      ProjectPath::Parse("assets/mesh.bin.horo").Value()}};
-        REQUIRE(registry.Publish(records).status == Assets::AssetRegistryBuildStatus::Complete);
-        Activate(service);
-        Assets::AssetCookArtifact artifact;
-        artifact.id = dependency.id;
-        artifact.type = dependency.expectedType;
-        artifact.target = AssetCookTargetId::Parse("test-host").Value();
-        artifact.payload = {1, 2, 3};
-        artifact.payloadDigest = ComputeSha256(std::as_bytes(std::span{artifact.payload}));
-        auto encoded = Assets::EncodeCookedArtifact(artifact);
-        REQUIRE(encoded.HasValue());
-        auto cache = Assets::AssetPayloadCache::Create(4, 1024 * 1024).Value();
-        auto pin = cache->Admit(std::as_bytes(std::span{encoded.Value()})).Value();
-        const auto digest = pin.Digest();
-        const std::array dependencies{dependency};
-        const auto first = Payload(0, 1, dependencies);
-        const auto second = Payload(1, 1, dependencies);
-        auto firstRequest = Request(service, first);
-        auto secondRequest = Request(service, second);
-        firstRequest.registry = registry.Snapshot().Revision();
-        secondRequest.registry = firstRequest.registry;
-        const auto emptyView = *service.ActiveScene();
-        REQUIRE(QueueRuntimeSceneCellAttachment(service, first, firstRequest, {}, Owner(first, firstRequest, counts)).HasError());
-        REQUIRE(QueueRuntimeSceneCellAttachment(service, first, firstRequest, {{{Asset(2), dependency.expectedType}, pin}},
-                                                Owner(first, firstRequest, counts))
-                    .HasError());
-        const std::array corrupt{std::byte{1}};
-        auto malformed = cache->Admit(corrupt).Value();
-        REQUIRE(QueueRuntimeSceneCellAttachment(service, first, firstRequest, {{dependency, malformed}}, Owner(first, firstRequest, counts))
-                    .HasError());
-        const auto malformedDigest = malformed.Digest();
-        malformed = {};
-        cache->Evict(malformedDigest);
-        REQUIRE(emptyView.IsCurrent());
-        REQUIRE(QueueRuntimeSceneCellAttachment(service, first, firstRequest, {{dependency, pin}}, Owner(first, firstRequest, counts))
-                    .HasValue());
-        Commit(service);
-        REQUIRE_FALSE(service.TakeOperationError().has_value());
-        REQUIRE(QueueRuntimeSceneCellAttachment(service, second, secondRequest, {{dependency, pin}}, Owner(second, secondRequest, counts))
-                    .HasValue());
-        const auto residentView = *service.ActiveScene();
-        REQUIRE(registry.Publish(records).status == Assets::AssetRegistryBuildStatus::Complete);
-        Commit(service);
-        REQUIRE(service.TakeOperationError()->code.Value() == "scene.asset.registry_stale");
-        REQUIRE(residentView.IsCurrent());
-        REQUIRE(service.ActiveScene()->BaselineCount() == 1);
-        secondRequest.registry = registry.Snapshot().Revision();
-        firstRequest.registry = secondRequest.registry;
-        REQUIRE(QueueRuntimeSceneCellAttachment(service, second, secondRequest, {{dependency, pin}}, Owner(second, secondRequest, counts))
-                    .HasValue());
-        Commit(service);
-        REQUIRE_FALSE(service.TakeOperationError().has_value());
-        REQUIRE(service.ActiveScene()
-                    ->FindBaseline(first.Identity().scene)
-                    ->resources[0]
-                    .artifact.SharesAllocationWith(service.ActiveScene()->FindBaseline(second.Identity().scene)->resources[0].artifact));
-        pin = {};
-        cache->Evict(digest);
-        REQUIRE(cache->Snapshot().retainedPayloadBytes > 0);
-        REQUIRE(QueueRuntimeSceneCellDetachment(service, first.Identity(), firstRequest, Owner(first, firstRequest, counts)).HasValue());
-        Commit(service);
-        REQUIRE_FALSE(service.TakeOperationError().has_value());
-        REQUIRE(cache->Snapshot().retainedPayloadBytes > 0);
-        service.Shutdown();
-        REQUIRE(cache->Snapshot().retainedPayloadBytes == 0);
-        service.Shutdown();
-        REQUIRE(cache->Snapshot().retainedPayloadBytes == 0);
-    }
-
     TEST_CASE("Cell invalid runtime identity limits and duplicate attachment preserve residents", "[scene][cell_attachment][invalid]") {
         Counts counts;
         RuntimeSceneService service;
@@ -504,7 +426,8 @@ namespace Horo::Runtime {
         const auto manifest = W::CandidateTestSupport::Manifest();
         const SceneCellPayloadIdentity identity{World(), Cell(), {77}, {1}};
         RuntimeEntityDefinition entity{.object = {10}};
-        entity.components.rigidBody = RigidBodyComponent{.id = {1}, .body = {1}};
+        entity.components.rigidBody =
+            RigidBodyComponent{.id = {10}, .body = {100}, .motion = AuthoredPhysicsMotionType::Static, .mass = AuthoredPhysicsNoMass{}};
         const std::array entities{entity};
         auto cooked = CookRuntimeSceneCellPayload(manifest.Descriptor(), {identity, entities}, identity, {8, 8, 1024 * 1024});
         REQUIRE(cooked.HasValue());
