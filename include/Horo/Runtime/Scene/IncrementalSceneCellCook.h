@@ -54,7 +54,7 @@ namespace Horo::Runtime {
     class IncrementalSceneCellCook final {
     public:
         /** @brief Captures mandatory owner ceilings. @param limits Positive ceilings validated by Cook before allocation. */
-        explicit IncrementalSceneCellCook(SceneCellCookCacheLimits limits) noexcept;
+        explicit IncrementalSceneCellCook(const SceneCellCookCacheLimits &limits) noexcept;
         IncrementalSceneCellCook(const IncrementalSceneCellCook &) = delete;
         IncrementalSceneCellCook &operator=(const IncrementalSceneCellCook &) = delete;
         /**

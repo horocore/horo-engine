@@ -59,7 +59,7 @@ namespace Horo::Runtime {
 
         /** @brief Validates bounded complete dependency capture and rejects missing,
          * repeated and cyclic edges. */
-        Result<DependencyGraph> BuildGraph(std::span<const SceneCellCookDependency> dependencies, SceneCellCookCacheLimits limits,
+        Result<DependencyGraph> BuildGraph(std::span<const SceneCellCookDependency> dependencies, const SceneCellCookCacheLimits &limits,
                                            const CancellationToken &cancellation) {
             if (dependencies.size() > limits.maximumDependencies)
                 return Failure<DependencyGraph>(SceneCellPayloadErrors::CapacityExceeded);
@@ -95,10 +95,22 @@ namespace Horo::Runtime {
                 if (std::ranges::adjacent_find(graph.edges[i]) != graph.edges[i].end())
                     return Failure<DependencyGraph>(SceneCellPayloadErrors::Invalid);
             }
-            auto acyclic = ValidateAcyclic(graph, cancellation);
-            if (acyclic.HasError())
+            if (const auto acyclic = ValidateAcyclic(graph, cancellation); acyclic.HasError())
                 return Result<DependencyGraph>::Failure(acyclic.ErrorValue());
             return Result<DependencyGraph>::Success(std::move(graph));
+        }
+
+        /** @brief Queues one captured dependency exactly once; missing roots reject the cell. */
+        bool QueueDependency(const Assets::AssetId &id, const DependencyGraph &graph, std::vector<bool> &visited,
+                             std::vector<std::size_t> &stack) {
+            const auto index = graph.Find(id);
+            if (index == graph.nodes.size())
+                return false;
+            if (!visited[index]) {
+                visited[index] = true;
+                stack.push_back(index);
+            }
+            return true;
         }
 
         /** @brief Hashes only the canonical transitive closure used by this cell,
@@ -107,22 +119,12 @@ namespace Horo::Runtime {
                                       const DependencyGraph &graph, const CancellationToken &cancellation) {
             std::vector<std::size_t> stack;
             std::vector<bool> visited(graph.nodes.size());
-            const auto add = [&](const Assets::AssetId &id) {
-                const auto index = graph.Find(id);
-                if (index == graph.nodes.size())
-                    return false;
-                if (!visited[index]) {
-                    visited[index] = true;
-                    stack.push_back(index);
-                }
-                return true;
-            };
             for (const auto &dependency : source.dependencies)
-                if (!add(dependency.id))
+                if (!QueueDependency(dependency.id, graph, visited, stack))
                     return Failure<void>(SceneCellPayloadErrors::Invalid);
             for (const auto &entity : source.entities) {
                 const auto &surface = entity.components.navigationSurface;
-                if (surface && surface->enabled && !add(surface->definition))
+                if (surface && surface->enabled && !QueueDependency(surface->definition, graph, visited, stack))
                     return Failure<void>(SceneCellPayloadErrors::Invalid);
             }
             while (!stack.empty()) {
@@ -180,8 +182,7 @@ namespace Horo::Runtime {
             HashSorted(hash, source.behaviorSchemas, [](const auto &s) {
                 return std::pair{s.type, s.version};
             });
-            auto dependencies = HashDependencies(hash, source, graph, cancellation);
-            if (dependencies.HasError())
+            if (const auto dependencies = HashDependencies(hash, source, graph, cancellation); dependencies.HasError())
                 return Result<Sha256Digest>::Failure(dependencies.ErrorValue());
             return hash.Finish();
         }
@@ -213,8 +214,7 @@ namespace Horo::Runtime {
                                                                       SceneCellPayloadLimits payloadLimits, std::size_t maximumSchemas) {
             std::vector<const SceneCellCookInput *> sorted;
             for (const auto &input : inputs) {
-                auto valid = ValidateInput(partition, input, payloadLimits, maximumSchemas);
-                if (valid.HasError())
+                if (const auto valid = ValidateInput(partition, input, payloadLimits, maximumSchemas); valid.HasError())
                     return Result<std::vector<const SceneCellCookInput *>>::Failure(valid.ErrorValue());
                 sorted.push_back(&input);
             }
@@ -234,22 +234,29 @@ namespace Horo::Runtime {
             bool reused{};
         };
 
+        /** @brief Captured per-cell preparation ceilings from one immutable cook attempt. */
+        struct CellPreparationLimits final {
+            SceneCellPayloadLimits payload;
+            std::size_t maximumKeyBytes;
+        };
+
         /** @brief Prepares an exact hit or real Scene cook without modifying retained
          * owner state. */
         Result<CellCookCandidate> PrepareCell(const WorldStreaming::WorldPartitionDescriptor &partition, const SceneCellCookInput &input,
                                               const DependencyGraph &graph, const Sha256Digest &settings,
-                                              SceneCellPayloadLimits payloadLimits, std::size_t maximumKeyBytes,
-                                              std::span<const SceneCellCookEntry> entries, const CancellationToken &cancellation) {
-            auto key = Key(input.source, graph, settings, maximumKeyBytes, cancellation);
+                                              const CellPreparationLimits &limits, std::span<const SceneCellCookEntry> entries,
+                                              const CancellationToken &cancellation) {
+            auto key = Key(input.source, graph, settings, limits.maximumKeyBytes, cancellation);
             if (key.HasError())
                 return Result<CellCookCandidate>::Failure(key.ErrorValue());
-            const auto found = std::ranges::lower_bound(entries, input.source.identity.cell, WorldStreaming::StreamingCellCanonicalLess{},
-                                                        [](const auto &entry) {
+            if (const auto found =
+                    std::ranges::lower_bound(entries, input.source.identity.cell, WorldStreaming::StreamingCellCanonicalLess{},
+                                             [](const auto &entry) {
                 return entry.payload->Identity().cell;
             });
-            if (found != entries.end() && found->key == key.Value())
+                found != entries.end() && found->key == key.Value())
                 return Result<CellCookCandidate>::Success({{key.Value(), found->payload}, true});
-            auto cooked = CookRuntimeSceneCellPayload(partition, input.source, input.expected, payloadLimits, cancellation);
+            auto cooked = CookRuntimeSceneCellPayload(partition, input.source, input.expected, limits.payload, cancellation);
             if (cooked.HasError())
                 return Result<CellCookCandidate>::Failure(cooked.ErrorValue());
             auto payload = std::make_shared<const RuntimeSceneCellPayload>(std::move(cooked).Value());
@@ -258,7 +265,7 @@ namespace Horo::Runtime {
     }  // namespace
 
     /** @copydoc IncrementalSceneCellCook::IncrementalSceneCellCook */
-    IncrementalSceneCellCook::IncrementalSceneCellCook(SceneCellCookCacheLimits limits) noexcept : limits_(limits) {}
+    IncrementalSceneCellCook::IncrementalSceneCellCook(const SceneCellCookCacheLimits &limits) noexcept : limits_(limits) {}
 
     /** @copydoc IncrementalSceneCellCook::Revision */
     std::uint64_t IncrementalSceneCellCook::Revision() const noexcept {
@@ -299,7 +306,7 @@ namespace Horo::Runtime {
         for (const auto *captured : sorted.Value()) {
             const auto &input = *captured;
             auto candidate =
-                PrepareCell(partition, input, graph.Value(), settings, payloadLimits, limits_.maximumKeyBytes, entries_, cancellation);
+                PrepareCell(partition, input, graph.Value(), settings, {payloadLimits, limits_.maximumKeyBytes}, entries_, cancellation);
             if (candidate.HasError())
                 return Result<SceneCellCookReport>::Failure(candidate.ErrorValue());
             auto prepared = std::move(candidate).Value();

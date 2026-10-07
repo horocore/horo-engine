@@ -27,6 +27,12 @@ complete desired set; omission evicts cache ownership. Stop admission with
 callers remain responsible for live Scene publication/eviction and their leased
 memory. Cache state is disposable and process-local; clean cooking is authoritative.
 
+The cache constructor takes its limits by const reference and copies them into
+the owner. Existing source call sites remain valid, including temporary limit
+values; rebuild consumers for the updated constructor signature. Internal field
+projections and byte encoding are separate, preserving key version 1 and its
+existing portable SHA-256 fixture.
+
 `HoroRuntimeSceneCellPayloadTests` covers selective source/transitive dependency
 invalidation, clean baseline/key equivalence, stale/invalid/capacity/unsupported
 failure, cancellation, replacement, leased shutdown and production deferred Scene
