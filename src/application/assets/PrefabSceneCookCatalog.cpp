@@ -157,6 +157,14 @@ namespace Horo::Application::PrefabCookDetail {
             return Result<void>::Success();
         }
 
+        /** @brief Selects the authored prefab roots whose transitive assets belong in a cooked scene. */
+        std::vector<Assets::AssetId> PrefabRoots(const SceneSource::SceneSourceView &source) {
+            std::vector<Assets::AssetId> roots;
+            for (const auto &placement : source.prefabInstances)
+                roots.push_back(placement.sourcePrefab.Asset());
+            return roots;
+        }
+
         /** @brief Builds one complete runtime scene and its source-free prefab/resource dependency closure. */
         Result<PreparedScene> PrepareScene(const Assets::AssetCookPinnedSource &input, const Assets::AssetRegistrySnapshot &registry,
                                            const Prefab::PrefabSourceResolverSnapshot &resolver,
@@ -182,9 +190,7 @@ namespace Horo::Application::PrefabCookDetail {
                 return Result<PreparedScene>::Failure(definition.ErrorValue());
             if (definition.Value().Entities().size() > sceneLimits.maximumEntities)
                 return Result<PreparedScene>::Failure(MakeError(SceneCook::SceneCookErrors::TooLarge));
-            std::vector<Assets::AssetId> roots;
-            for (const auto &placement : source.prefabInstances)
-                roots.push_back(placement.sourcePrefab.Asset());
+            auto roots = PrefabRoots(view);
             std::vector<Prefab::PrefabAssetDependency> existing;
             for (const auto &dependency : definition.Value().AssetDependencies())
                 existing.push_back({dependency.id, dependency.expectedType, {}});
