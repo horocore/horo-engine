@@ -24,7 +24,7 @@ namespace Horo::Network {
             }
 
             Result<ReplicationCaptureReport> Tick(const std::uint64_t tick) {
-                for (auto &owner : owners)
+                for (const auto &owner : owners)
                     owner->Commit(tick, static_cast<double>(tick));
                 const auto read =
                     lifecycle.AcquireCaptureRead({World().scene, World().session, Runtime::RuntimePhase::NetworkFlush, tick, {}});
@@ -97,9 +97,9 @@ namespace Horo::Network {
         fixture.Capture(1, 4.0);
         const auto baseline = fixture.Pin();
         std::uint64_t tick{2};
-        for (auto mode : {CallbackThrow::Allocation, CallbackThrow::Unexpected, CallbackThrow::Foreign}) {
-            const auto &expected =
-                mode == CallbackThrow::Allocation ? ReplicationCaptureErrors::Capacity : ReplicationCaptureErrors::CallbackFault;
+        using enum CallbackThrow;
+        for (const auto mode : {Allocation, Unexpected, Foreign}) {
+            const auto &expected = mode == Allocation ? ReplicationCaptureErrors::Capacity : ReplicationCaptureErrors::CallbackFault;
             fixture.owner->throwBegin = mode;
             const auto beginFailure = fixture.Capture(tick++);
             REQUIRE(beginFailure.firstError->code.Value() == expected.code.Value());
@@ -108,13 +108,12 @@ namespace Horo::Network {
             const auto captureFailure = fixture.Capture(tick++);
             REQUIRE(captureFailure.firstError->code.Value() == expected.code.Value());
             fixture.owner->throwCapture = CallbackThrow::None;
-            fixture.codec->context = &mode;
-            fixture.codec->onCompare = [](void *context) {
-                ThrowCallback(*static_cast<CallbackThrow *>(context));
+            fixture.codec->onCompare = [mode] {
+                ThrowCallback(mode);
             };
             const auto codecFailure = fixture.Capture(tick++);
-            const auto &codecExpected = mode == CallbackThrow::Allocation ? NetworkErrors::ReplicationSerializerCapacityExceeded
-                                                                          : ReplicationCaptureErrors::CallbackFault;
+            const auto &codecExpected =
+                mode == Allocation ? NetworkErrors::ReplicationSerializerCapacityExceeded : ReplicationCaptureErrors::CallbackFault;
             REQUIRE(codecFailure.firstError->code.Value() == codecExpected.code.Value());
             fixture.codec->onCompare = nullptr;
             REQUIRE(fixture.Pin() == baseline);

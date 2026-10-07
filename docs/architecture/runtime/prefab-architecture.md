@@ -264,7 +264,7 @@ resource content publication must supply these IDs because Asset Registry record
 do not carry resource digests. Missing notification history is not evidence of
 synchronization: the owner must re-resolve rather than reuse that preview.
 
-Editor projection invalidation preserves authored instances and their old expanded
+Shared SceneSource projection invalidation preserves authored instances and their old expanded
 content for repair/display while marking affected entries stale with typed errors.
 Staleness remains sticky until a fresh complete resolution replaces the entry.
 Runtime conversion of retained projections checks authored placement equality,
@@ -278,6 +278,9 @@ worker completion fence. Its callers must retain complete resolver-generated
 revision evidence; manually assembled two-field revisions cannot establish selective
 preview synchronization. Header ownership and target dependencies are unchanged;
 the PrefabSceneExpansion public consumer exercises the extended contract.
+SceneSource owns retained projection state and validation; Editor adapters pass
+committed snapshot values to the same headless conversion. The additive retained
+conversion API rejects stale evidence for cook and editor callers alike.
 
 #### Asset Dependency Closure And Conflict Policy
 

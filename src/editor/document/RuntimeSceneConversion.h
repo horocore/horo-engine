@@ -7,6 +7,7 @@
 
 #include "Horo/Prefab/PrefabSourceResolver.h"
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
+#include "Horo/Scene/SceneRuntimeConversion.h"
 #include "editor/document/SceneDocument.h"
 
 #include <optional>
@@ -24,30 +25,10 @@ namespace Horo::Editor {
                                                                                         Runtime::SceneDefinitionId sceneId);
 
     /** @brief One immutable editor projection of an authored prefab placement. */
-    struct ScenePrefabInstanceProjection final {
-        ScenePrefabInstance authored;
-        std::optional<Prefab::EffectivePrefabCandidate> expanded;
-        std::optional<Error> failure;
-        bool stale{false}; /**< Retained expansion requires explicit re-resolution before publication. */
-
-        /** @brief Reports whether a completed placement is synchronized with its inspected publication. */
-        [[nodiscard]] bool IsSynchronized() const noexcept {
-            return expanded.has_value() && !failure && !stale;
-        }
-
-        /** @brief Reports whether this placement is retained for repair but not runtime-valid. */
-        [[nodiscard]] bool IsBroken() const noexcept {
-            return failure.has_value();
-        }
-    };
+    using ScenePrefabInstanceProjection = SceneSource::ScenePrefabInstanceProjection;
 
     /** @brief Complete detached prefab projection for one scene-document snapshot. */
-    struct ScenePrefabProjection final {
-        std::vector<ScenePrefabInstanceProjection> instances;
-
-        /** @brief Reports whether any authored placement failed required expansion. */
-        [[nodiscard]] bool HasBrokenInstances() const noexcept;
-    };
+    using ScenePrefabProjection = SceneSource::ScenePrefabProjection;
 
     /**
      * @brief Resolves every authored placement into a repairable immutable editor projection.
@@ -69,8 +50,7 @@ namespace Horo::Editor {
      * @note Staleness is sticky until BuildScenePrefabProjection produces a fresh complete candidate. Failed inspection
      * never reports synchronization. Authored state, document history and cached immutable evidence are unchanged.
      */
-    void InvalidateScenePrefabProjection(ScenePrefabProjection &projection, const Prefab::PrefabSourceResolverSnapshot &current,
-                                         std::span<const Assets::AssetId> changedAssets, const Prefab::PrefabLimitProfile &limits);
+    using SceneSource::InvalidateScenePrefabProjection;
 
     /**
      * @brief Converts a retained editor preview only after checking its authoring and source evidence.

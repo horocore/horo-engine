@@ -23,16 +23,17 @@ namespace Horo::Network {
                 REQUIRE(created.HasValue());
                 scene = std::shared_ptr<Runtime::RuntimeScene>{std::move(created).Value()};
                 entity = *scene->View().Find(Runtime::SceneObjectId{1});
-                const std::array fields{SceneReplicationFieldBinding{FieldIdValue(1), SceneReplicationProperty::TranslationX},
-                                        SceneReplicationFieldBinding{FieldIdValue(2), SceneReplicationProperty::TranslationY},
-                                        SceneReplicationFieldBinding{FieldIdValue(3), SceneReplicationProperty::TranslationZ}};
+                using enum SceneReplicationProperty;
+                const std::array fields{SceneReplicationFieldBinding{FieldIdValue(1), TranslationX},
+                                        SceneReplicationFieldBinding{FieldIdValue(2), TranslationY},
+                                        SceneReplicationFieldBinding{FieldIdValue(3), TranslationZ}};
                 source = SceneReplicationCommitSource::Create(scene, fields).Value();
                 REQUIRE(lifecycle.RegisterObject(World().scene, World().session, Object()).HasValue());
                 const std::array targets{ReplicationCaptureTarget{Object(), source}};
                 capture = std::move(ReplicationStateCapture::Prepare(Read(lifecycle), registry, targets)).Value();
             }
 
-            void Commit(const std::uint64_t tick, const Math::Vec3 translation) {
+            void Commit(const std::uint64_t tick, const Math::Vec3 translation) const {
                 Runtime::SceneCommandBuffer commands;
                 Math::Transform transform;
                 transform.translation = translation;
@@ -44,7 +45,7 @@ namespace Horo::Network {
                 return source->CaptureAfterCommit(lifecycle, *capture, phase);
             }
 
-            ReplicationCapturedStatePin Pin() {
+            ReplicationCapturedStatePin Pin() const {
                 return capture->Latest(Object().object).Value();
             }
         };
@@ -108,14 +109,12 @@ namespace Horo::Network {
     TEST_CASE("A real Scene mutation inside a codec callback discards the entire copied candidate", "[network][capture][scene]") {
         SceneFixture fixture;
         fixture.Commit(1, {1, 2, 3});
-        fixture.codec->context = &fixture;
-        fixture.codec->onCompare = [](void *context) {
-            auto &state = *static_cast<SceneFixture *>(context);
+        fixture.codec->onCompare = [&fixture] {
             Runtime::SceneCommandBuffer changed;
             Math::Transform transform;
             transform.translation = {99, 99, 99};
-            changed.SetLocalTransform(state.entity, transform);
-            static_cast<void>(state.scene->Commit(changed));
+            changed.SetLocalTransform(fixture.entity, transform);
+            static_cast<void>(fixture.scene->Commit(changed));
         };
         const auto result = fixture.Capture();
         REQUIRE(result.HasValue());

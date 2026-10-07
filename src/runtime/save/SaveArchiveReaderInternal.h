@@ -94,10 +94,33 @@ namespace Horo::Runtime::SaveArchiveReaderDetail {
         SaveGameManifest manifest;
     };
 
+    /** @brief Closed target-private codec admission; ordinary validation stays installed-only. */
+    enum class DirectoryCodecAdmission : std::uint8_t {
+        SupportedOnly,
+        OptionalOpaque
+    };
+
+    /** @brief Reader-owned directory construction after actual container/manifest decode. Not an installed API. */
+    class DirectoryAdmission final {
+    public:
+        /**
+         * @brief Validates storage using codec authority derived from the actual archive metadata.
+         * @param directory Untrusted storage directory.
+         * @param manifest Parsed canonical manifest that owns every chunk.
+         * @param limits Finite directory bounds.
+         * @param admission Closed reader-only capability; ordinary callers use SupportedOnly.
+         * @param archiveVersion Actual admitted container version.
+         * @return Immutable directory proof or a typed framing/codec failure.
+         */
+        [[nodiscard]] static Result<ValidatedSaveChunkDirectory> Validate(SaveChunkDirectory directory, const SaveGameManifest &manifest,
+                                                                          const SaveChunkDirectoryLimits &limits,
+                                                                          DirectoryCodecAdmission admission, std::uint32_t archiveVersion);
+    };
+
     [[nodiscard]] Result<SaveParticipantId> DecodeOwner(const RawEntry &entry);
     [[nodiscard]] Result<DecodedMetadata> DecodeMetadata(std::span<const std::byte> payload, const std::vector<RawEntry> &entries,
                                                          const SaveArchiveMetadataLimits &limits);
     [[nodiscard]] Result<ValidatedSaveChunkDirectory> BuildDirectory(std::span<const std::byte> payload,
                                                                      const std::vector<RawEntry> &entries, const SaveGameManifest &manifest,
-                                                                     const SaveArchiveReaderLimits &limits);
+                                                                     const SaveArchiveReaderLimits &limits, std::uint32_t archiveVersion);
 }  // namespace Horo::Runtime::SaveArchiveReaderDetail

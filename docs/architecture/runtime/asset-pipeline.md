@@ -1461,6 +1461,23 @@ longer needed. This enables level streaming and memory budgeting.
 See [Release Architecture](../release/release.md) for packaging, signing, and verification
 details.
 
+The implemented `AssetArchiveProvider` retains member IDs and types from its sole
+bounded archive parser and validates one owned cook target against every envelope.
+`Members()` exposes an immutable AssetId-sorted span for exactly the visible assets;
+`Target()` borrows that owned target. Neither accessor reparses bytes, loads payloads,
+selects a backend or authenticates a package. Borrowed metadata expires when the
+provider is moved, assigned or destroyed. `OpenSelected` filters both loading and
+inspection through the same dependency-closed visible membership, so unmounted
+assets cannot appear in inspection. Application package admission may use these
+facts to prove domain-specific manifest closure without reversing Assets dependencies.
+
+This is an additive source contract in the existing `HoroAssets` header
+ownership, with a provider layout change requiring consumer rebuilds. Archive wire
+format v1, stable AssetIds, cooked envelopes and mount policies are unchanged.
+The metadata allocation is admission-time and bounded by `maximumAssets`; the
+validated target is stored once rather than copied into every member.
+
+
 ## Runtime Loading
 
 Runtime code requests assets through the `IAssetProvider` interface. Two loading
