@@ -114,6 +114,9 @@ namespace {
         Check(created.HasValue());
         std::unique_ptr<RuntimeScene> scene = std::move(created).Value();
         const RuntimeSceneView initial = scene->View();
+        const auto initialRevision = initial.StructuralRevision();
+        Check(initialRevision != 0);
+        Check(RuntimeSceneView{}.StructuralRevision() == 0);
         const EntityRef root = *initial.Find(SceneObjectId{1});
         Check(initial.Get(root).HasValue());
         Check(initial.Get(EntityRef{SceneRuntimeId{11}, root.entity}).HasError());
@@ -133,6 +136,8 @@ namespace {
         auto childDestroyed = scene->Commit(std::move(destroyChild));
         Check(childDestroyed.HasValue());
         Check(!initial.IsCurrent());
+        Check(initial.StructuralRevision() == 0);
+        Check(scene->View().StructuralRevision() > initialRevision);
         Check(initial.Get(root).HasError());
         Check(initial.Get(root).ErrorValue().code.Value() == "scene.view.stale");
         Check(scene->View().Get(root).HasValue());

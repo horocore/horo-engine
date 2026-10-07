@@ -41,6 +41,10 @@ namespace Horo::Mcp {
 }  // namespace Horo::Mcp
 
 namespace Horo::Mcp::McpErrors {
+    const ErrorCodeDescriptor AuthorizationDenied{ErrorDomainId{"horo.mcp"}, ErrorCode{"authorization_denied"}, ErrorSeverity::Warning,
+                                                  "MCP authority is unavailable.", "Authenticate under current host project policy."};
+    const ErrorCodeDescriptor ApprovalRequired{ErrorDomainId{"horo.mcp"}, ErrorCode{"approval_required"}, ErrorSeverity::Warning,
+                                               "MCP requires an exact local approval.", "Review this request in the approving host."};
     const ErrorCodeDescriptor ConfigurationInvalid{ErrorDomainId{"horo.mcp"}, ErrorCode{"configuration_invalid"}, ErrorSeverity::Error,
                                                    "MCP session configuration is invalid.",
                                                    "Declare finite nonzero limits and a controller."};

@@ -79,6 +79,17 @@ namespace Horo::Editor {
         return {};
     }
 
+    /** @copydoc ActivityBarLayout::Remove */
+    ActivityBarLayoutOperationResult ActivityBarLayout::Remove(const std::string_view panelId) {
+        const auto slot = FindSlot(panelId);
+        if (!slot.has_value()) {
+            return {ActivityBarLayoutOperationCode::UnknownItem};
+        }
+        ActivityBarGroup *group = GetGroup(*slot);
+        group->items.erase(group->items.begin() + static_cast<std::ptrdiff_t>(slot->itemIndex));
+        return {};
+    }
+
     std::optional<ActivityBarSlot> ActivityBarLayout::FindSlot(const std::string_view panelId) const {
         for (std::size_t railIndex = 0; railIndex < m_groups.size(); ++railIndex) {
             for (std::size_t groupIndex = 0; groupIndex < m_groups[railIndex].size(); ++groupIndex) {

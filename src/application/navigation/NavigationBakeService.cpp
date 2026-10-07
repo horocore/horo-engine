@@ -33,6 +33,8 @@ namespace Horo::Application {
                 !std::ranges::is_sorted(request.tiles, {}, &NavigationBakeTile::key) ||
                 std::ranges::adjacent_find(request.tiles, {}, &NavigationBakeTile::key) != request.tiles.end())
                 return Result<void>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+            if (request.projectProfile && request.projectProfile->Revision() != request.input->Revisions().projectProfile)
+                return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
             if (request.cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
             if (request.diagnosticSources.size() > NavigationSourceGeometryLimits::MaximumContributions ||
@@ -50,12 +52,22 @@ namespace Horo::Application {
                                                       request.sources);
         }
 
+        /** @brief Compares captured project authority without substituting preview settings or defaults. */
+        [[nodiscard]] bool SameProjectProfile(const std::optional<Navigation::NavigationProjectProfile> &left,
+                                              const std::optional<Navigation::NavigationProjectProfile> &right) {
+            if (left.has_value() != right.has_value())
+                return false;
+            return !left || left->MatchesAuthority(*right);
+        }
+
         /** @brief Joins only identical uncancelled captures with the same complete layout and source observations. */
         [[nodiscard]] bool IdenticalRequest(const std::shared_ptr<Attempt> &existing, const NavigationBakeRequest &request) {
             if (!existing || existing->cancellation->Token().IsCancellationRequested() ||
                 existing->request.input->Fingerprint() != request.input->Fingerprint() ||
-                existing->request.compatibility != request.compatibility || existing->request.sources != request.sources ||
-                existing->request.diagnosticSources != request.diagnosticSources || existing->request.tiles.size() != request.tiles.size())
+                existing->request.compatibility != request.compatibility ||
+                !SameProjectProfile(existing->request.projectProfile, request.projectProfile) ||
+                existing->request.sources != request.sources || existing->request.diagnosticSources != request.diagnosticSources ||
+                existing->request.tiles.size() != request.tiles.size())
                 return false;
             return std::ranges::equal(existing->request.tiles, request.tiles, [](const auto &a, const auto &b) {
                 return a.key == b.key && a.bounds.minimum == b.bounds.minimum && a.bounds.maximum == b.bounds.maximum &&

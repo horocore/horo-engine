@@ -120,6 +120,15 @@ namespace Horo::Navigation {
         return fingerprint_;
     }
 
+    /** @copydoc NavigationProjectProfile::MatchesAuthority */
+    bool NavigationProjectProfile::MatchesAuthority(const NavigationProjectProfile &expected) const noexcept {
+        return input_.id == expected.input_.id && input_.revision == expected.input_.revision && fingerprint_ == expected.fingerprint_ &&
+               input_.capacities == expected.input_.capacities && input_.capabilities == expected.input_.capabilities &&
+               input_.maximumQuery.query == expected.input_.maximumQuery.query &&
+               input_.maximumQuery.quality == expected.input_.maximumQuery.quality &&
+               input_.maximumQuery.limits == expected.input_.maximumQuery.limits;
+    }
+
     /** @copydoc NavigationProjectProfile::Capacities */
     const NavigationCapacityLimits &NavigationProjectProfile::Capacities() const noexcept {
         return input_.capacities;
