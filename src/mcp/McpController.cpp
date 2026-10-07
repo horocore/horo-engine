@@ -319,10 +319,9 @@ namespace Horo::Mcp {
 
     /** @copydoc McpController::DispatchCall */
     Result<nlohmann::json> McpController::DispatchCall(const McpRequest &request, const McpRequestContext &context) const {
-        if (request.method != "tools/call" || !request.params.is_object() || request.params.size() != 2 ||
-            !request.params.contains("name") || !request.params["name"].is_string() || !request.params.contains("arguments") ||
-            !request.params["arguments"].is_object())
-            return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestInvalid));
+        const auto validated = McpAuthorization::ValidateCallRequest(request);
+        if (validated.HasError())
+            return Result<nlohmann::json>::Failure(validated.ErrorValue());
 
         const McpToolId tool{request.params["name"].get<std::string>()};
         if (tool.value.empty() || tool.value.size() > 128)

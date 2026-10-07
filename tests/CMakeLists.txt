@@ -2012,6 +2012,7 @@ horo_register_catch_test(HoroCliCommandRegistryTests LABELS "unit;cli;headless")
 add_executable(HoroMcpSessionTests
         unit/mcp/McpSessionTests.cpp
         unit/mcp/McpLocalTransportTests.cpp
+        support/AllocationProbe.cpp
 )
 target_compile_features(HoroMcpSessionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroMcpSessionTests PRIVATE HoroEngine::McpSession Threads::Threads)

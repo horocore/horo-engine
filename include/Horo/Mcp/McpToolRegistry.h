@@ -142,6 +142,11 @@ namespace Horo::Mcp {
 
     private:
         friend class McpToolRegistry;
+        /** @brief Resolves one immutable registration and checks grants without invoking its adapter. */
+        [[nodiscard]] Result<const McpToolRegistration *> FindGranted(const McpToolId &id, std::span<const std::string> capabilities) const;
+        /** @brief Checks issuer, grants and input before consuming the exact execution approval. */
+        [[nodiscard]] Result<const McpToolRegistration *> PrepareInvocation(const McpToolId &id, const nlohmann::json &arguments,
+                                                                            const McpRequestContext &context) const;
         std::uint64_t generation_{};
         std::vector<McpToolRegistration> entries_;
         std::shared_ptr<McpAuthorization> authorization_;

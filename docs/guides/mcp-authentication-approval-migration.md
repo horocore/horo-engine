@@ -78,5 +78,14 @@ the existing generated `HoroMcpSessionPublicHeaderConsumer`,
 then run the three MCP test suites serially. These consumers are OBJECT
 compilation evidence, not executed tests. Security regressions
 use deterministic test-only entropy; production hosts must use OS entropy.
-Local builds, runtime cases and quality preflight are not yet executed for this
-draft. Hosted gates cannot be claimed before analysis of the published exact head.
+The pull request validation summary records the commands actually executed,
+frozen inputs, test counts and incomplete quality checks. Hosted gates cannot be
+claimed before analysis of the published exact head.
+
+The allocation-failure regression sweeps MCP admission and a controlled allocating
+callback, proving retry identity and shutdown bookkeeping remain usable after
+propagated or translated failures. It does not promise recovery from all
+third-party nested-JSON allocation failures: the pinned JSON implementation can
+allocate during non-throwing nested-value destruction and terminate on failure
+outside the host's exception boundary. Ordinary nested-JSON behavior is covered
+separately without fault injection.

@@ -14,10 +14,15 @@ namespace Horo::Mcp {
     namespace {
         using Clock = std::chrono::steady_clock;
 
+        /** @brief Classifies ASCII letters and digits without locale-dependent authority interpretation. */
+        bool Alphanumeric(const unsigned char c) {
+            return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+        }
+
         /** @brief Restricts authority identities to bounded opaque tokens, never paths or free text. */
         bool Identity(const std::string &value) {
             return !value.empty() && value.size() <= 256 && std::ranges::all_of(value, [](const unsigned char c) {
-                return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+                return Alphanumeric(c) || c == '.' || c == '_' || c == '-';
             });
         }
 
@@ -45,16 +50,25 @@ namespace Horo::Mcp {
                    a.authorizationRevision == b.authorizationRevision && a.registryRevision == b.registryRevision;
         }
 
+        /** @brief Checks call fields only after structural budgets and field presence have been established. */
+        bool CallFields(const McpRequest &request) {
+            return request.params["name"].is_string() && Identity(request.params["name"].get<std::string>()) &&
+                   request.params["arguments"].is_object() && (request.id.is_string() || request.id.is_number_integer());
+        }
+
+        /** @brief Requires exactly the tool identity and argument object, not caller-supplied policy fields. */
+        bool CallShape(const McpRequest &request) {
+            if (request.method != "tools/call" || !request.params.is_object() || request.params.size() != 2 ||
+                !request.params.contains("name") || !request.params.contains("arguments"))
+                return false;
+            return CallFields(request);
+        }
+
         /** @brief Hashes exact canonical decoded input without retaining request payloads. */
         Result<Sha256Digest> Fingerprint(const McpRequest &request) {
-            const McpSessionLimits limits;
-            if (!ValidRequestId(request.id, limits) || !JsonWithinBounds(request.params, limits, limits.maximumInputBytes))
-                return Result<Sha256Digest>::Failure(MakeError(McpErrors::InputCapacityExceeded));
-            if (request.method != "tools/call" || !request.params.is_object() || request.params.size() != 2 ||
-                !request.params.contains("name") || !request.params["name"].is_string() ||
-                !Identity(request.params["name"].get<std::string>()) || !request.params.contains("arguments") ||
-                !request.params["arguments"].is_object() || (!request.id.is_string() && !request.id.is_number_integer()))
-                return Result<Sha256Digest>::Failure(MakeError(McpErrors::RequestInvalid));
+            const auto validated = McpAuthorization::ValidateCallRequest(request);
+            if (validated.HasError())
+                return Result<Sha256Digest>::Failure(validated.ErrorValue());
             const auto bytes = nlohmann::json{{"id", request.id}, {"method", request.method}, {"params", request.params}}.dump();
             if (bytes.size() > (256U << 10U))
                 return Result<Sha256Digest>::Failure(MakeError(McpErrors::InputCapacityExceeded));
@@ -123,6 +137,23 @@ namespace Horo::Mcp {
                    context.registryRevision == admission.registryRevision;
         }
 
+        /** @brief Invalidates every principal, invitation and approval in a replaced project scope under the policy lock. */
+        void RevokeProject(const std::optional<std::string> &project) {
+            for (const auto &weak : principals) {
+                if (const auto record = weak.lock(); record && record->admission.projectIdentity == project) {
+                    record->revoked = true;
+                    record->cancellation.RequestCancellation();
+                }
+            }
+            std::erase_if(invitations, [&project](const auto &entry) {
+                return entry.second.admission.projectIdentity == project;
+            });
+            std::erase_if(approvals, [&project](const auto &entry) {
+                const auto authority = entry.second.authority.lock();
+                return !authority || authority->record_->admission.projectIdentity == project;
+            });
+        }
+
         /** @brief Reclaims expired metadata without weakening replay denial or authority revisions. */
         void Prune() {
             const auto now = Clock::now();
@@ -179,19 +210,7 @@ namespace Horo::Mcp {
             (found == state_->trust.end() && state_->trust.size() >= 64))
             return Result<void>::Failure(MakeError(McpErrors::AuthorizationDenied));
         state_->trust.insert_or_assign(project, State::Trust{revision, trusted});
-        for (const auto &weak : state_->principals) {
-            if (const auto record = weak.lock(); record && record->admission.projectIdentity == project) {
-                record->revoked = true;
-                record->cancellation.RequestCancellation();
-            }
-        }
-        std::erase_if(state_->invitations, [&project](const auto &entry) {
-            return entry.second.admission.projectIdentity == project;
-        });
-        std::erase_if(state_->approvals, [&project](const auto &entry) {
-            const auto authority = entry.second.authority.lock();
-            return !authority || authority->record_->admission.projectIdentity == project;
-        });
+        state_->RevokeProject(project);
         return Result<void>::Success();
     }
 
@@ -244,6 +263,22 @@ namespace Horo::Mcp {
     Result<void> McpAuthorization::Validate(const McpRequestContext &context) const {
         std::lock_guard lock{state_->mutex};
         return state_->Current(context) ? Result<void>::Success() : Result<void>::Failure(MakeError(McpErrors::AuthorizationDenied));
+    }
+
+    /** @copydoc McpAuthorization::ValidateActive */
+    Result<void> McpAuthorization::ValidateActive(const McpRequestContext &context) const {
+        const auto current = Validate(context);
+        if (current.HasError())
+            return current;
+        return context.IsStopRequested() ? Result<void>::Failure(MakeError(McpErrors::RequestCancelled)) : Result<void>::Success();
+    }
+
+    /** @copydoc McpAuthorization::ValidateCallRequest */
+    Result<void> McpAuthorization::ValidateCallRequest(const McpRequest &request) {
+        const McpSessionLimits limits;
+        if (!ValidRequestId(request.id, limits) || !JsonWithinBounds(request.params, limits, limits.maximumInputBytes))
+            return Result<void>::Failure(MakeError(McpErrors::InputCapacityExceeded));
+        return CallShape(request) ? Result<void>::Success() : Result<void>::Failure(MakeError(McpErrors::RequestInvalid));
     }
 
     /** @copydoc McpAuthorization::Challenge */

@@ -297,6 +297,40 @@ namespace Horo::Mcp {
                 return std::ranges::find(capabilities, required) != capabilities.end();
             });
         }
+
+        /** @brief Revalidates live authority before exposing a bounded, schema-checked adapter outcome. */
+        Result<nlohmann::json> CheckedOutcome(const McpToolDescriptor &descriptor, const McpRequestContext &context,
+                                              Result<nlohmann::json> outcome) {
+            const auto current = context.authorization->ValidateActive(context);
+            if (current.HasError())
+                return Result<nlohmann::json>::Failure(current.ErrorValue());
+            if (outcome.HasValue() && (!BoundedValue(outcome.Value(), descriptor.bounds.maximumResultBytes, descriptor.bounds) ||
+                                       !MatchesSchema(descriptor.outputSchema, outcome.Value())))
+                return Result<nlohmann::json>::Failure(MakeError(McpErrors::ToolOutputInvalid));
+            return outcome;
+        }
+
+        /** @brief Gives both adapter paths the same expiry bound and authority-checked numeric-only progress. */
+        McpRequestContext InvocationContext(const McpRequestContext &context) {
+            auto invocation = context;
+            invocation.deadline = std::min(invocation.deadline, invocation.authority->ExpiresAt());
+            invocation.reportProgress = [context](const double fraction, std::string) {
+                if (std::isfinite(fraction) && fraction >= 0.0 && fraction <= 1.0 &&
+                    context.authorization->ValidateActive(context).HasValue() && context.reportProgress)
+                    context.reportProgress(fraction, {});
+            };
+            return invocation;
+        }
+
+        /** @brief Retains one atomic terminal claim and one immutable descriptor across deferred adapter callbacks. */
+        std::function<void(Result<nlohmann::json>)> CheckedCompletion(const McpToolDescriptor &descriptor, const McpRequestContext &context,
+                                                                      std::function<void(Result<nlohmann::json>)> complete) {
+            return [descriptor, context, completed = std::make_shared<std::atomic_bool>(false),
+                    complete = std::move(complete)](Result<nlohmann::json> outcome) {
+                if (!completed->exchange(true))
+                    complete(CheckedOutcome(descriptor, context, std::move(outcome)));
+            };
+        }
     }  // namespace
 
     /** @copydoc McpToolSnapshot::McpToolSnapshot */
@@ -319,73 +353,69 @@ namespace Horo::Mcp {
         return visible;
     }
 
-    /** @copydoc McpToolSnapshot::Owner */
-    Result<McpOwnerContext> McpToolSnapshot::Owner(const McpToolId &id, const std::span<const std::string> capabilities) const {
+    /** @copydoc McpToolSnapshot::FindGranted */
+    Result<const McpToolRegistration *> McpToolSnapshot::FindGranted(const McpToolId &id,
+                                                                     const std::span<const std::string> capabilities) const {
         const auto found = std::ranges::lower_bound(entries_, id.value, {}, [](const McpToolRegistration &entry) -> const std::string & {
             return entry.descriptor.id.value;
         });
         if (found == entries_.end() || found->descriptor.id != id)
-            return Result<McpOwnerContext>::Failure(MakeError(McpErrors::ToolUnavailable));
+            return Result<const McpToolRegistration *>::Failure(MakeError(McpErrors::ToolUnavailable));
         if (!Granted(found->descriptor, capabilities))
-            return Result<McpOwnerContext>::Failure(MakeError(McpErrors::ToolCapabilityUnavailable));
-        return Result<McpOwnerContext>::Success(found->owner);
+            return Result<const McpToolRegistration *>::Failure(MakeError(McpErrors::ToolCapabilityUnavailable));
+        return Result<const McpToolRegistration *>::Success(&*found);
+    }
+
+    /** @copydoc McpToolSnapshot::Owner */
+    Result<McpOwnerContext> McpToolSnapshot::Owner(const McpToolId &id, const std::span<const std::string> capabilities) const {
+        const auto found = FindGranted(id, capabilities);
+        return found.HasError() ? Result<McpOwnerContext>::Failure(found.ErrorValue())
+                                : Result<McpOwnerContext>::Success(found.Value()->owner);
     }
 
     /** @copydoc McpToolSnapshot::Effect */
     Result<McpToolEffect> McpToolSnapshot::Effect(const McpToolId &id, const std::span<const std::string> capabilities) const {
-        const auto found = std::ranges::lower_bound(entries_, id.value, {}, [](const McpToolRegistration &entry) -> const std::string & {
-            return entry.descriptor.id.value;
-        });
-        if (found == entries_.end() || found->descriptor.id != id)
-            return Result<McpToolEffect>::Failure(MakeError(McpErrors::ToolUnavailable));
-        if (!Granted(found->descriptor, capabilities))
-            return Result<McpToolEffect>::Failure(MakeError(McpErrors::ToolCapabilityUnavailable));
-        return Result<McpToolEffect>::Success(found->descriptor.effect);
+        const auto found = FindGranted(id, capabilities);
+        return found.HasError() ? Result<McpToolEffect>::Failure(found.ErrorValue())
+                                : Result<McpToolEffect>::Success(found.Value()->descriptor.effect);
+    }
+
+    /** @copydoc McpToolSnapshot::PrepareInvocation */
+    Result<const McpToolRegistration *> McpToolSnapshot::PrepareInvocation(const McpToolId &id, const nlohmann::json &arguments,
+                                                                           const McpRequestContext &context) const {
+        if (!authorization_ || context.authorization != authorization_)
+            return Result<const McpToolRegistration *>::Failure(MakeError(McpErrors::AuthorizationDenied));
+        const auto admission = authorization_->Validate(context);
+        if (admission.HasError())
+            return Result<const McpToolRegistration *>::Failure(admission.ErrorValue());
+        const auto found = FindGranted(id, context.capabilities);
+        if (found.HasError())
+            return found;
+        const auto &descriptor = found.Value()->descriptor;
+        if (!BoundedValue(arguments, descriptor.bounds.maximumInputBytes, descriptor.bounds) ||
+            !MatchesSchema(descriptor.inputSchema, arguments))
+            return Result<const McpToolRegistration *>::Failure(MakeError(McpErrors::ToolInputInvalid));
+        const McpRequest request{.id = context.requestIdentity,
+                                 .method = "tools/call",
+                                 .params = {{"name", id.value}, {"arguments", arguments}}};
+        const auto authorized = authorization_->Authorize(context, request, descriptor.effect != McpToolEffect::Query, true);
+        if (authorized.HasError())
+            return Result<const McpToolRegistration *>::Failure(authorized.ErrorValue());
+        if (context.IsStopRequested())
+            return Result<const McpToolRegistration *>::Failure(MakeError(McpErrors::RequestCancelled));
+        return found;
     }
 
     /** @copydoc McpToolSnapshot::Invoke */
     Result<nlohmann::json> McpToolSnapshot::Invoke(const McpToolId &id, const nlohmann::json &arguments,
                                                    const McpRequestContext &context) const {
-        if (!authorization_ || context.authorization != authorization_)
-            return Result<nlohmann::json>::Failure(MakeError(McpErrors::AuthorizationDenied));
-        const auto admission = authorization_->Validate(context);
-        if (admission.HasError())
-            return Result<nlohmann::json>::Failure(admission.ErrorValue());
-        const auto found = std::ranges::lower_bound(entries_, id.value, {}, [](const McpToolRegistration &entry) -> const std::string & {
-            return entry.descriptor.id.value;
-        });
-        if (found == entries_.end() || found->descriptor.id != id)
-            return Result<nlohmann::json>::Failure(MakeError(McpErrors::ToolUnavailable));
-        if (!Granted(found->descriptor, context.capabilities))
-            return Result<nlohmann::json>::Failure(MakeError(McpErrors::ToolCapabilityUnavailable));
-        if (!BoundedValue(arguments, found->descriptor.bounds.maximumInputBytes, found->descriptor.bounds) ||
-            !MatchesSchema(found->descriptor.inputSchema, arguments))
-            return Result<nlohmann::json>::Failure(MakeError(McpErrors::ToolInputInvalid));
+        const auto prepared = PrepareInvocation(id, arguments, context);
+        if (prepared.HasError())
+            return Result<nlohmann::json>::Failure(prepared.ErrorValue());
+        const auto &entry = *prepared.Value();
         try {
-            if (!context.authorization)
-                return Result<nlohmann::json>::Failure(MakeError(McpErrors::AuthorizationDenied));
-            const McpRequest request{.id = context.requestIdentity,
-                                     .method = "tools/call",
-                                     .params = {{"name", id.value}, {"arguments", arguments}}};
-            const auto authorized =
-                context.authorization->Authorize(context, request, found->descriptor.effect != McpToolEffect::Query, true);
-            if (authorized.HasError())
-                return Result<nlohmann::json>::Failure(authorized.ErrorValue());
-            if (context.IsStopRequested())
-                return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestCancelled));
-            auto invocation = context;
-            invocation.deadline = std::min(invocation.deadline, invocation.authority->ExpiresAt());
-            auto outcome = found->adapter->Invoke(arguments, invocation);
-            const auto current = authorization_->Validate(context);
-            if (current.HasError())
-                return Result<nlohmann::json>::Failure(current.ErrorValue());
-            if (context.IsStopRequested())
-                return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestCancelled));
-            if (outcome.HasValue() &&
-                (!BoundedValue(outcome.Value(), found->descriptor.bounds.maximumResultBytes, found->descriptor.bounds) ||
-                 !MatchesSchema(found->descriptor.outputSchema, outcome.Value())))
-                return Result<nlohmann::json>::Failure(MakeError(McpErrors::ToolOutputInvalid));
-            return outcome;
+            auto outcome = entry.adapter->Invoke(arguments, InvocationContext(context));
+            return CheckedOutcome(entry.descriptor, context, std::move(outcome));
         } catch (...) {  // NOSONAR: injected adapters may throw non-standard exceptions; preserve the typed failure boundary.
             return Result<nlohmann::json>::Failure(MakeError(McpErrors::ControllerFailed));
         }
@@ -394,76 +424,19 @@ namespace Horo::Mcp {
     /** @copydoc McpToolSnapshot::InvokeAsync */
     void McpToolSnapshot::InvokeAsync(const McpToolId &id, const nlohmann::json &arguments, const McpRequestContext &context,
                                       std::function<void(Result<nlohmann::json>)> complete) const {
-        if (!authorization_ || context.authorization != authorization_) {
-            complete(Result<nlohmann::json>::Failure(MakeError(McpErrors::AuthorizationDenied)));
+        const auto prepared = PrepareInvocation(id, arguments, context);
+        if (prepared.HasError()) {
+            complete(Result<nlohmann::json>::Failure(prepared.ErrorValue()));
             return;
         }
-        const auto admission = authorization_->Validate(context);
-        if (admission.HasError()) {
-            complete(Result<nlohmann::json>::Failure(admission.ErrorValue()));
-            return;
-        }
-        const auto found = std::ranges::lower_bound(entries_, id.value, {}, [](const McpToolRegistration &entry) -> const std::string & {
-            return entry.descriptor.id.value;
-        });
-        if (found == entries_.end() || found->descriptor.id != id) {
-            complete(Result<nlohmann::json>::Failure(MakeError(McpErrors::ToolUnavailable)));
-            return;
-        }
-        if (!Granted(found->descriptor, context.capabilities)) {
-            complete(Result<nlohmann::json>::Failure(MakeError(McpErrors::ToolCapabilityUnavailable)));
-            return;
-        }
-        if (!BoundedValue(arguments, found->descriptor.bounds.maximumInputBytes, found->descriptor.bounds) ||
-            !MatchesSchema(found->descriptor.inputSchema, arguments)) {
-            complete(Result<nlohmann::json>::Failure(MakeError(McpErrors::ToolInputInvalid)));
-            return;
-        }
-        if (!context.authorization) {
-            complete(Result<nlohmann::json>::Failure(MakeError(McpErrors::AuthorizationDenied)));
-            return;
-        }
-        const McpRequest request{.id = context.requestIdentity,
-                                 .method = "tools/call",
-                                 .params = {{"name", id.value}, {"arguments", arguments}}};
-        const auto authorized = context.authorization->Authorize(context, request, found->descriptor.effect != McpToolEffect::Query, true);
-        if (authorized.HasError()) {
-            complete(Result<nlohmann::json>::Failure(authorized.ErrorValue()));
-            return;
-        }
-        const auto completed = std::make_shared<std::atomic_bool>(false);
-        auto checked = [descriptor = found->descriptor, context, completed,
-                        complete = std::move(complete)](Result<nlohmann::json> outcome) {
-            if (completed->exchange(true))
-                return;
-            const auto current = context.authorization->Validate(context);
-            if (current.HasError()) {
-                complete(Result<nlohmann::json>::Failure(current.ErrorValue()));
-                return;
-            }
-            if (context.IsStopRequested()) {
-                complete(Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestCancelled)));
-                return;
-            }
-            if (outcome.HasValue() && (!BoundedValue(outcome.Value(), descriptor.bounds.maximumResultBytes, descriptor.bounds) ||
-                                       !MatchesSchema(descriptor.outputSchema, outcome.Value())))
-                complete(Result<nlohmann::json>::Failure(MakeError(McpErrors::ToolOutputInvalid)));
-            else
-                complete(std::move(outcome));
-        };
+        const auto &entry = *prepared.Value();
+        auto checked = CheckedCompletion(entry.descriptor, context, std::move(complete));
         try {
             if (context.IsStopRequested()) {
                 checked(Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestCancelled)));
                 return;
             }
-            auto invocation = context;
-            invocation.deadline = std::min(invocation.deadline, invocation.authority->ExpiresAt());
-            invocation.reportProgress = [context](const double fraction, std::string) {
-                if (std::isfinite(fraction) && fraction >= 0.0 && fraction <= 1.0 && !context.IsStopRequested() &&
-                    context.authorization->Validate(context).HasValue() && context.reportProgress)
-                    context.reportProgress(fraction, {});
-            };
-            found->adapter->InvokeAsync(arguments, invocation, checked);
+            entry.adapter->InvokeAsync(arguments, InvocationContext(context), checked);
         } catch (...) {  // NOSONAR: untrusted adapter boundaries can throw non-standard exceptions.
             checked(Result<nlohmann::json>::Failure(MakeError(McpErrors::ControllerFailed)));
         }

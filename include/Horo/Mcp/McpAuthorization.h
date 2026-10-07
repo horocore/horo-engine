@@ -75,6 +75,19 @@ namespace Horo::Mcp {
          * @param context Immutable request authority. @return Typed outcome. */
         [[nodiscard]] Result<void> Validate(const McpRequestContext &context) const;
 
+        /** @brief Checks live authority and the complete cooperative stop view at an execution boundary.
+         * @details Shared by session dispatch and registry invocation, which are separate owning targets.
+         * Authority denial takes precedence over deadline/cancellation; no approval is consumed and no adapter is invoked.
+         * @param context Retained operation context. @return Authority denial or request cancellation, otherwise success.
+         * @note A deadline is reported as RequestCancelled here; session/controller boundaries own timeout presentation. */
+        [[nodiscard]] Result<void> ValidateActive(const McpRequestContext &context) const;
+
+        /** @brief Validates the bounded exact tools/call envelope shared by admission and approval hashing.
+         * @details Used by the controller target and session-owned approval fingerprinting. Requires a bounded request ID,
+         * exactly name/arguments, an opaque tool identity and object arguments. This structural check grants no authority.
+         * @param request Immutable request. @return Typed malformed-input or capacity failure, otherwise success. */
+        [[nodiscard]] static Result<void> ValidateCallRequest(const McpRequest &request);
+
         /** @brief Creates a content-free challenge bound to exact arguments, ID and registry revision.
          * @param context Current authenticated authority. @param request Exact tools/call envelope.
          * @param lifetime Positive lifetime, at most 24 hours. @return Host-local challenge identity. */

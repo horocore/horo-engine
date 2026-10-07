@@ -13,6 +13,34 @@ using namespace Horo;
 using namespace Horo::Mcp;
 
 namespace {
+    void RequireAuthorizationDenied(const Result<nlohmann::json> &outcome) {
+        REQUIRE(outcome.HasError());
+        CHECK(outcome.ErrorValue().code.Value() == McpErrors::AuthorizationDenied.code.Value());
+        CHECK(SafeErrorData(outcome.ErrorValue()).dump().find("private-proof") == std::string::npos);
+    }
+
+    /** @brief Observes numeric-only progress and redacted terminal denial across revocation and expiry. */
+    struct AsyncObservation final {
+        unsigned progressUpdates{};
+        unsigned completions{};
+
+        McpRequestContext Context(McpRequestContext context) {
+            context.reportProgress = [this](const double fraction, const std::string &phase) {
+                ++progressUpdates;
+                CHECK(fraction == 0.5);
+                CHECK(phase.empty());
+            };
+            return context;
+        }
+
+        std::function<void(Result<nlohmann::json>)> Completion() {
+            return [this](const Result<nlohmann::json> &outcome) {
+                ++completions;
+                RequireAuthorizationDenied(outcome);
+            };
+        }
+    };
+
     class Application final : public IMcpToolAdapter {
     public:
         unsigned calls{};
@@ -97,6 +125,12 @@ namespace {
         void Pump() const {
             REQUIRE(controller->BindOwner(McpOwnerContext::Editor).HasValue());
             REQUIRE(controller->Pump(McpOwnerContext::Editor).HasValue());
+        }
+
+        void StartDeferred(AsyncObservation &observed) const {
+            registry->Read()->InvokeAsync({"project.tool"}, nlohmann::json::object(), observed.Context(Context()), observed.Completion());
+            REQUIRE(app->calls == 1);
+            REQUIRE(observed.completions == 0);
         }
     };
 }  // namespace
@@ -355,8 +389,7 @@ TEST_CASE("MCP retained snapshot rejects foreign approved policy before sync or 
     unsigned completions{};
     snapshot->InvokeAsync({"project.tool"}, nlohmann::json::object(), context, [&](Result<nlohmann::json> outcome) {
         ++completions;
-        REQUIRE(outcome.HasError());
-        CHECK(outcome.ErrorValue().code.Value() == McpErrors::AuthorizationDenied.code.Value());
+        RequireAuthorizationDenied(outcome);
     });
     CHECK(completions == 1);
     CHECK(owner.app->calls == 0);
@@ -368,67 +401,43 @@ TEST_CASE("MCP direct async admission redacts progress and rejects revoked late 
     Fixture f;
     f.app->deferred = true;
     f.Approve(f.Call());
-    auto context = f.Context();
-    unsigned progressUpdates{};
-    context.reportProgress = [&](double fraction, std::string phase) {
-        ++progressUpdates;
-        CHECK(fraction == 0.5);
-        CHECK(phase.empty());
-    };
-    unsigned completions{};
-    f.registry->Read()->InvokeAsync({"project.tool"}, nlohmann::json::object(), context, [&](Result<nlohmann::json> outcome) {
-        ++completions;
-        REQUIRE(outcome.HasError());
-        CHECK(outcome.ErrorValue().code.Value() == McpErrors::AuthorizationDenied.code.Value());
-        CHECK(SafeErrorData(outcome.ErrorValue()).dump().find("private-proof") == std::string::npos);
-    });
-    REQUIRE(f.app->calls == 1);
-    REQUIRE(completions == 0);
+    AsyncObservation observed;
+    f.StartDeferred(observed);
     f.app->saved.ReportProgress(0.5, "private-proof");
-    CHECK(progressUpdates == 1);
+    CHECK(observed.progressUpdates == 1);
     f.policy->Revoke(f.admission.authority);
     CHECK(f.app->saved.IsStopRequested());
     f.app->saved.ReportProgress(0.5, "private-proof");
-    CHECK(progressUpdates == 1);
+    CHECK(observed.progressUpdates == 1);
     f.app->completion(Result<nlohmann::json>::Failure(MakeError(McpErrors::ControllerFailed, "private-proof")));
     f.app->completion(Result<nlohmann::json>::Success({{"private-proof", true}}));
-    CHECK(completions == 1);
+    CHECK(observed.completions == 1);
 }
 
 TEST_CASE("MCP deferred application work observes credential expiry without a token timer", "[mcp][security]") {
     Fixture f{McpToolEffect::Query};
     f.app->deferred = true;
-    auto credential = f.policy->IssueCredential(f.admission, std::chrono::milliseconds{100});
+    auto admission = f.admission;
+    admission.authority.reset();
+    auto credential = f.policy->IssueCredential(admission, std::chrono::milliseconds{100});
     REQUIRE(credential.HasValue());
-    auto principal = f.policy->Authenticate(f.admission, std::move(credential).Value());
+    auto principal = f.policy->Authenticate(admission, std::move(credential).Value());
     REQUIRE(principal.HasValue());
     f.admission.authority = std::move(principal).Value();
     const auto token = f.admission.authority->Cancellation();
-    auto context = f.Context();
-    unsigned progressUpdates{};
-    context.reportProgress = [&](double, std::string) {
-        ++progressUpdates;
-    };
-    unsigned completions{};
-    f.registry->Read()->InvokeAsync({"project.tool"}, nlohmann::json::object(), context, [&](Result<nlohmann::json> outcome) {
-        ++completions;
-        REQUIRE(outcome.HasError());
-        CHECK(outcome.ErrorValue().code.Value() == McpErrors::AuthorizationDenied.code.Value());
-        CHECK(SafeErrorData(outcome.ErrorValue()).dump().find("private-proof") == std::string::npos);
-    });
-    REQUIRE(f.app->calls == 1);
-    REQUIRE(completions == 0);
+    AsyncObservation observed;
+    f.StartDeferred(observed);
     CHECK(f.app->saved.deadline == f.admission.authority->ExpiresAt());
     f.app->saved.ReportProgress(0.5, "private-proof");
-    CHECK(progressUpdates == 1);
+    CHECK(observed.progressUpdates == 1);
 
     std::this_thread::sleep_until(f.admission.authority->ExpiresAt());
     CHECK_FALSE(token.IsCancellationRequested());
     CHECK(f.app->saved.IsStopRequested());
     CHECK(f.policy->Validate(f.app->saved).HasError());
     f.app->saved.ReportProgress(0.5, "private-proof");
-    CHECK(progressUpdates == 1);
+    CHECK(observed.progressUpdates == 1);
     f.app->completion(Result<nlohmann::json>::Success({{"private-proof", true}}));
     f.app->completion(Result<nlohmann::json>::Failure(MakeError(McpErrors::ControllerFailed, "private-proof")));
-    CHECK(completions == 1);
+    CHECK(observed.completions == 1);
 }

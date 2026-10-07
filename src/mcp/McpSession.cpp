@@ -11,6 +11,7 @@
 #include <map>
 #include <mutex>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -76,6 +77,25 @@ namespace Horo::Mcp {
             std::map<std::pair<std::uint64_t, std::string>, CancellationSource> inFlight;
         };
 
+        /** @brief Owns the record, exact active-request identity and immutable context across an unlocked callback. */
+        struct AcceptedRequest {
+            std::shared_ptr<SessionRecord> record;
+            McpRequestContext context;
+            std::pair<std::uint64_t, std::string> key;
+        };
+
+        static_assert(std::is_nothrow_move_constructible_v<Result<AcceptedRequest>>);
+
+        /** @brief Checks the session envelope before active-request bookkeeping or controller execution. */
+        Result<void> ValidateRequest(const McpRequest &request, const McpSessionLimits &limits) {
+            if (!ValidRequestId(request.id, limits) || !ValidMethod(request.method, limits))
+                return Result<void>::Failure(MakeError(McpErrors::RequestInvalid));
+            if (!JsonWithinBounds(request.params, limits, limits.maximumInputBytes))
+                return Result<void>::Failure(MakeError(McpErrors::InputCapacityExceeded));
+            return request.params.is_object() || request.params.is_array() ? Result<void>::Success()
+                                                                           : Result<void>::Failure(MakeError(McpErrors::RequestInvalid));
+        }
+
         /** @brief Isolates controller execution, bounded result validation, and exception translation. */
         [[nodiscard]] Result<nlohmann::json> InvokeController(IMcpRequestController &controller, const McpRequest &request,
                                                               const McpRequestContext &context, const McpSessionLimits &limits) {
@@ -103,6 +123,80 @@ namespace Horo::Mcp {
         std::uint64_t nextSessionId{1};
         std::size_t activeCallbacks{};
         bool stopping{};
+
+        /** @brief Admits and records one callback atomically; no callback executes while this lock is held. */
+        Result<AcceptedRequest> BeginRequest(const McpSessionHandle session, const McpRequest &request) {
+            std::lock_guard lock{mutex};
+            if (stopping)
+                return Result<AcceptedRequest>::Failure(MakeError(McpErrors::ShuttingDown));
+            const auto found = sessions.find(session.id);
+            if (found == sessions.end() || found->second->handle != session)
+                return Result<AcceptedRequest>::Failure(MakeError(McpErrors::SessionUnavailable));
+            const auto &record = found->second;
+            if (!record->admission.authority)
+                return Result<AcceptedRequest>::Failure(MakeError(McpErrors::AuthorizationDenied));
+            if (record->inFlight.size() >= limits.maximumInFlightPerSession)
+                return Result<AcceptedRequest>::Failure(MakeError(McpErrors::RequestCapacityExceeded));
+            const auto key = std::pair{session.generation, request.id.dump()};
+            if (record->inFlight.contains(key))
+                return Result<AcceptedRequest>::Failure(MakeError(McpErrors::RequestInvalid));
+            CancellationSource cancellation{record->cancellation.Token()};
+            // Prepare every owned copy and the result before publishing callback bookkeeping.
+            auto accepted = Result<AcceptedRequest>::Success({record, RequestContext(*record, request, cancellation.Token()), key});
+            record->inFlight.try_emplace(key, std::move(cancellation));
+            ++activeCallbacks;
+            // NRVO or the statically checked nonthrowing result move follows publication; no copy is required.
+            return accepted;
+        }
+
+        /** @brief Derives a request cancellation chain and expiry-bounded context under the admission lock. */
+        McpRequestContext RequestContext(const SessionRecord &record, const McpRequest &request, const CancellationToken &cancellation) {
+            const auto &admission = record.admission;
+            return {.session = record.handle,
+                    .clientIdentity = admission.clientIdentity,
+                    .capabilities = admission.capabilities,
+                    .projectIdentity = admission.projectIdentity,
+                    .authorizationRevision = admission.authorizationRevision,
+                    .registryRevision = admission.registryRevision,
+                    .cancellation = cancellation,
+                    .deadline = std::min(std::chrono::steady_clock::now() + limits.requestTimeout, admission.authority->ExpiresAt()),
+                    .authority = admission.authority,
+                    .authorization = authorization,
+                    .requestIdentity = request.id};
+        }
+
+        /** @brief Releases the exact accepted callback and wakes shutdown after controller execution. */
+        void CompleteRequest(const AcceptedRequest &accepted) {
+            std::lock_guard lock{mutex};
+            accepted.record->inFlight.erase(accepted.key);
+            --activeCallbacks;
+            drained.notify_all();
+        }
+
+        /** @brief Releases accepted bookkeeping exactly once on normal completion or stack unwinding. */
+        struct Completion final {
+            State &state;
+            const AcceptedRequest &accepted;
+            bool active{true};
+
+            ~Completion() {
+                Release();
+            }
+
+            void Release() {
+                if (active) {
+                    active = false;
+                    state.CompleteRequest(accepted);
+                }
+            }
+
+            Completion(const Completion &) = delete;
+            Completion &operator=(const Completion &) = delete;
+            Completion(Completion &&) = delete;
+            Completion &operator=(Completion &&) = delete;
+
+            Completion(State &owner, const AcceptedRequest &request) noexcept : state(owner), accepted(request) {}
+        };
     };
 
     /** @copydoc McpSessionManager::Create */
@@ -149,66 +243,31 @@ namespace Horo::Mcp {
 
     /** @copydoc McpSessionManager::Dispatch */
     Result<nlohmann::json> McpSessionManager::Dispatch(const McpSessionHandle session, const McpRequest &request) {
-        if (!ValidRequestId(request.id, state_->limits) || !ValidMethod(request.method, state_->limits))
-            return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestInvalid));
-        if (!JsonWithinBounds(request.params, state_->limits, state_->limits.maximumInputBytes))
-            return Result<nlohmann::json>::Failure(MakeError(McpErrors::InputCapacityExceeded));
-        if (!request.params.is_object() && !request.params.is_array())
-            return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestInvalid));
-
-        const std::string requestKey = request.id.dump();
-        std::shared_ptr<SessionRecord> record;
-        McpRequestContext context;
-        const auto key = std::pair{session.generation, requestKey};
-        {
-            std::lock_guard lock{state_->mutex};
-            if (state_->stopping)
-                return Result<nlohmann::json>::Failure(MakeError(McpErrors::ShuttingDown));
-            const auto found = state_->sessions.find(session.id);
-            if (found == state_->sessions.end() || found->second->handle != session)
-                return Result<nlohmann::json>::Failure(MakeError(McpErrors::SessionUnavailable));
-            record = found->second;
-            if (record->inFlight.size() >= state_->limits.maximumInFlightPerSession)
-                return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestCapacityExceeded));
-            if (record->inFlight.contains(key))
-                return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestInvalid));
-
-            context = {.session = session,
-                       .clientIdentity = record->admission.clientIdentity,
-                       .capabilities = record->admission.capabilities,
-                       .projectIdentity = record->admission.projectIdentity,
-                       .authorizationRevision = record->admission.authorizationRevision,
-                       .registryRevision = record->admission.registryRevision};
-            auto [entry, inserted] = record->inFlight.try_emplace(key, CancellationSource{record->cancellation.Token()});
-            static_cast<void>(inserted);
-            ++state_->activeCallbacks;
-            context.cancellation = entry->second.Token();
-            context.deadline =
-                std::min(std::chrono::steady_clock::now() + state_->limits.requestTimeout, record->admission.authority->ExpiresAt());
-            context.authority = record->admission.authority;
-            context.authorization = state_->authorization;
-            context.requestIdentity = request.id;
-        }
-
-        const auto controller = state_->controller;
-        const auto authorized = state_->authorization->Validate(context);
-        const auto outcome = authorized.HasValue() ? InvokeController(*controller, request, context, state_->limits)
+        const auto validated = ValidateRequest(request, state_->limits);
+        if (validated.HasError())
+            return Result<nlohmann::json>::Failure(validated.ErrorValue());
+        const auto state = state_;
+        const auto admitted = state->BeginRequest(session, request);
+        if (admitted.HasError())
+            return Result<nlohmann::json>::Failure(admitted.ErrorValue());
+        const auto &accepted = admitted.Value();
+        State::Completion completion{*state, accepted};
+        const auto &context = accepted.context;
+        const auto controller = state->controller;
+        const auto authorized = state->authorization->Validate(context);
+        const auto outcome = authorized.HasValue() ? InvokeController(*controller, request, context, state->limits)
                                                    : Result<nlohmann::json>::Failure(authorized.ErrorValue());
 
-        {
-            std::lock_guard lock{state_->mutex};
-            record->inFlight.erase(key);
-            --state_->activeCallbacks;
-            state_->drained.notify_all();
-        }
+        completion.Release();
         // A synchronous adapter may finish after close, project replacement or revocation.
         // Never publish its stale result to a caller whose authority has already ended.
-        const auto current = state_->authorization->Validate(context);
-        if (current.HasError())
+        const auto current = state->authorization->ValidateActive(context);
+        if (current.HasError()) {
+            if (current.ErrorValue().code.Value() == McpErrors::RequestCancelled.code.Value() &&
+                std::chrono::steady_clock::now() >= context.deadline)
+                return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestTimedOut));
             return Result<nlohmann::json>::Failure(current.ErrorValue());
-        if (context.IsStopRequested())
-            return Result<nlohmann::json>::Failure(
-                MakeError(std::chrono::steady_clock::now() >= context.deadline ? McpErrors::RequestTimedOut : McpErrors::RequestCancelled));
+        }
         return outcome;
     }
 

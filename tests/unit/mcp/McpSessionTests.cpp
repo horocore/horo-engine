@@ -1,3 +1,4 @@
+#include "../../support/AllocationProbe.h"
 #include "Horo/Mcp/McpErrors.h"
 #include "Horo/Mcp/McpInProcessAdapter.h"
 #include "Horo/Mcp/McpLocalTransport.h"
@@ -10,6 +11,8 @@
 #include <functional>
 #include <limits>
 #include <mutex>
+#include <new>
+#include <optional>
 #include <thread>
 
 namespace Horo::Mcp {
@@ -141,6 +144,54 @@ namespace Horo::Mcp {
         const auto failed = manager->Dispatch(opened.Value(), {.id = 1, .method = "tools/call"});
         REQUIRE(failed.HasError());
         RequireCode(failed.ErrorValue(), McpErrors::ControllerFailed);
+        controller->action = {};
+        REQUIRE(manager->Dispatch(opened.Value(), {.id = 1, .method = "tools/call"}).HasValue());
+        REQUIRE(manager->Shutdown().HasValue());
+    }
+
+    TEST_CASE("MCP allocation failures never orphan request identity or shutdown bookkeeping", "[mcp][session][security]") {
+        auto controller = std::make_shared<Controller>();
+        // Keep callback allocation throwable: nested JSON destruction itself allocates in a noexcept destructor.
+        controller->action = [](const McpRequest &, const McpRequestContext &context) {
+            const std::string response = context.clientIdentity + "-allocation-checked-controller-response";
+            return Result<nlohmann::json>::Success(response.size());
+        };
+        McpSessionLimits limits;
+        limits.maximumInFlightPerSession = 1;
+        limits.shutdownDrainTimeout = std::chrono::milliseconds{100};
+        auto manager = Manager(controller, limits);
+        const auto opened = manager->Open(Admission());
+        REQUIRE(opened.HasValue());
+        const McpRequest request{.id = "allocation-checked-request", .method = "tools/call", .params = {{"argument", "private-proof"}}};
+        std::size_t allocations{};
+        bool succeeded{};
+        {
+            Tests::AllocationProbe::ScopedMeasurement measurement;
+            const auto outcome = manager->Dispatch(opened.Value(), request);
+            allocations = measurement.Snapshot().requests;
+            succeeded = outcome.HasValue();
+        }
+        REQUIRE(succeeded);
+        REQUIRE(allocations > 0);
+        unsigned propagated{}, translated{};
+        for (std::size_t offset = 0; offset < allocations; ++offset) {
+            std::optional<Result<nlohmann::json>> outcome;
+            {
+                Tests::AllocationProbe::ScopedFailure failure{offset};
+                try {
+                    outcome.emplace(manager->Dispatch(opened.Value(), request));
+                } catch (const std::bad_alloc &) {
+                    ++propagated;
+                }
+            }
+            if (outcome && outcome->HasError()) {
+                ++translated;
+                RequireCode(outcome->ErrorValue(), McpErrors::ControllerFailed);
+            }
+            REQUIRE(manager->Dispatch(opened.Value(), request).HasValue());
+        }
+        CHECK(propagated > 0);
+        CHECK(translated > 0);
         REQUIRE(manager->Shutdown().HasValue());
     }
 
