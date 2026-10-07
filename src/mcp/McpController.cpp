@@ -155,8 +155,7 @@ namespace Horo::Mcp {
         bool StopIfRequested(const std::shared_ptr<Operation> &operation) {
             if (Terminal(operation->state))
                 return true;
-            const auto authority = authorization->Validate(operation->context);
-            if (authority.HasError()) {
+            if (const auto authority = authorization->Validate(operation->context); authority.HasError()) {
                 operation->cancellation.RequestCancellation();
                 Finish(operation, OperationState::Failed, authority.ErrorValue());
                 return true;
@@ -270,8 +269,7 @@ namespace Horo::Mcp {
     Result<nlohmann::json> McpController::Dispatch(const McpRequest &request, const McpRequestContext &context) {
         if (!context.session.IsValid() || context.authorization != state_->authorization)
             return Result<nlohmann::json>::Failure(MakeError(McpErrors::AuthorizationDenied));
-        const auto authorized = state_->authorization->Validate(context);
-        if (authorized.HasError())
+        if (const auto authorized = state_->authorization->Validate(context); authorized.HasError())
             return Result<nlohmann::json>::Failure(authorized.ErrorValue());
         if (request.method == "tools/list")
             return DispatchList(context);
@@ -319,8 +317,7 @@ namespace Horo::Mcp {
 
     /** @copydoc McpController::DispatchCall */
     Result<nlohmann::json> McpController::DispatchCall(const McpRequest &request, const McpRequestContext &context) const {
-        const auto validated = McpAuthorization::ValidateCallRequest(request);
-        if (validated.HasError())
+        if (const auto validated = McpAuthorization::ValidateCallRequest(request); validated.HasError())
             return Result<nlohmann::json>::Failure(validated.ErrorValue());
 
         const McpToolId tool{request.params["name"].get<std::string>()};
@@ -342,8 +339,8 @@ namespace Horo::Mcp {
         const auto effect = snapshot->Effect(tool, context.capabilities);
         if (effect.HasError())
             return Result<nlohmann::json>::Failure(effect.ErrorValue());
-        const auto approval = state_->authorization->Authorize(context, request, effect.Value() != McpToolEffect::Query, false);
-        if (approval.HasError())
+        if (const auto approval = state_->authorization->Authorize(context, request, effect.Value() != McpToolEffect::Query, false);
+            approval.HasError())
             return Result<nlohmann::json>::Failure(approval.ErrorValue());
         return state_->QueueCall(request, context, tool, owner.Value(), snapshot);
     }

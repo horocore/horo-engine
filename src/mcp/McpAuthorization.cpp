@@ -66,8 +66,7 @@ namespace Horo::Mcp {
 
         /** @brief Hashes exact canonical decoded input without retaining request payloads. */
         Result<Sha256Digest> Fingerprint(const McpRequest &request) {
-            const auto validated = McpAuthorization::ValidateCallRequest(request);
-            if (validated.HasError())
+            if (const auto validated = McpAuthorization::ValidateCallRequest(request); validated.HasError())
                 return Result<Sha256Digest>::Failure(validated.ErrorValue());
             const auto bytes = nlohmann::json{{"id", request.id}, {"method", request.method}, {"params", request.params}}.dump();
             if (bytes.size() > (256U << 10U))
@@ -78,6 +77,12 @@ namespace Horo::Mcp {
         /** @brief Clears temporary entropy on success, failure and stack unwinding. */
         struct SecretScratch final {
             std::array<std::byte, 32> bytes{};
+
+            SecretScratch() = default;
+            SecretScratch(const SecretScratch &) = delete;
+            SecretScratch &operator=(const SecretScratch &) = delete;
+            SecretScratch(SecretScratch &&) = delete;
+            SecretScratch &operator=(SecretScratch &&) = delete;
 
             ~SecretScratch() {
                 Security::SecureZero(bytes);
@@ -169,7 +174,7 @@ namespace Horo::Mcp {
         }
     };
 
-    McpAuthority::McpAuthority(std::shared_ptr<Record> record) : record_(std::move(record)) {}
+    McpAuthority::McpAuthority(ConstructionKey, std::shared_ptr<Record> record) : record_(std::move(record)) {}
 
     McpAuthority::~McpAuthority() = default;
 
@@ -201,13 +206,12 @@ namespace Horo::Mcp {
     }
 
     /** @copydoc McpAuthorization::SetTrust */
-    Result<void> McpAuthorization::SetTrust(std::optional<std::string> project, const std::uint64_t revision, const bool trusted) {
+    Result<void> McpAuthorization::SetTrust(std::optional<std::string> project, const std::uint64_t revision, const bool trusted) const {
         if ((project && !Identity(*project)) || revision == 0)
             return Result<void>::Failure(MakeError(McpErrors::AuthorizationDenied));
         std::lock_guard lock{state_->mutex};
-        const auto found = state_->trust.find(project);
-        if ((found != state_->trust.end() && revision <= found->second.revision) ||
-            (found == state_->trust.end() && state_->trust.size() >= 64))
+        if (const auto found = state_->trust.find(project); (found != state_->trust.end() && revision <= found->second.revision) ||
+                                                            (found == state_->trust.end() && state_->trust.size() >= 64))
             return Result<void>::Failure(MakeError(McpErrors::AuthorizationDenied));
         state_->trust.insert_or_assign(project, State::Trust{revision, trusted});
         state_->RevokeProject(project);
@@ -216,7 +220,7 @@ namespace Horo::Mcp {
 
     /** @copydoc McpAuthorization::IssueCredential */
     Result<Security::SecureBytes> McpAuthorization::IssueCredential(const McpSessionAdmission &admission,
-                                                                    const std::chrono::milliseconds lifetime) {
+                                                                    const std::chrono::milliseconds lifetime) const {
         if (!Admission(admission) || !Lifetime(lifetime) || admission.authority)
             return Result<Security::SecureBytes>::Failure(MakeError(McpErrors::AuthorizationDenied));
         std::lock_guard lock{state_->mutex};
@@ -224,18 +228,17 @@ namespace Horo::Mcp {
         if (!state_->random || !state_->Trusted(admission) || state_->invitations.size() >= 64)
             return Result<Security::SecureBytes>::Failure(MakeError(McpErrors::AuthorizationDenied));
         SecretScratch scratch;
-        const auto entropy = state_->random->Fill(scratch.bytes);
-        if (entropy.HasError())
+        if (const auto entropy = state_->random->Fill(scratch.bytes); entropy.HasError())
             return Result<Security::SecureBytes>::Failure(entropy.ErrorValue());
-        const auto digest = ComputeSha256(scratch.bytes);
-        if (!state_->invitations.try_emplace(digest, State::Invitation{admission, Clock::now() + lifetime}).second)
+        if (const auto digest = ComputeSha256(scratch.bytes);
+            !state_->invitations.try_emplace(digest, admission, Clock::now() + lifetime).second)
             return Result<Security::SecureBytes>::Failure(MakeError(McpErrors::AuthorizationDenied));
         return Result<Security::SecureBytes>::Success(Security::SecureBytes{scratch.bytes});
     }
 
     /** @copydoc McpAuthorization::Authenticate */
     Result<std::shared_ptr<const McpAuthority>> McpAuthorization::Authenticate(const McpSessionAdmission &admission,
-                                                                               Security::SecureBytes credential) {
+                                                                               Security::SecureBytes credential) const {
         if (credential.View().size() != 32 || !Admission(admission) || admission.authority)
             return Result<std::shared_ptr<const McpAuthority>>::Failure(MakeError(McpErrors::AuthorizationDenied));
         const auto digest = ComputeSha256(credential.View());
@@ -256,7 +259,7 @@ namespace Horo::Mcp {
         record->expires = invitation.expires;
         state_->principals.push_back(record);
         return Result<std::shared_ptr<const McpAuthority>>::Success(
-            std::shared_ptr<const McpAuthority>{new McpAuthority{std::move(record)}});
+            std::make_shared<const McpAuthority>(McpAuthority::ConstructionKey{}, std::move(record)));
     }
 
     /** @copydoc McpAuthorization::Validate */
@@ -267,23 +270,22 @@ namespace Horo::Mcp {
 
     /** @copydoc McpAuthorization::ValidateActive */
     Result<void> McpAuthorization::ValidateActive(const McpRequestContext &context) const {
-        const auto current = Validate(context);
-        if (current.HasError())
+        if (const auto current = Validate(context); current.HasError())
             return current;
         return context.IsStopRequested() ? Result<void>::Failure(MakeError(McpErrors::RequestCancelled)) : Result<void>::Success();
     }
 
     /** @copydoc McpAuthorization::ValidateCallRequest */
     Result<void> McpAuthorization::ValidateCallRequest(const McpRequest &request) {
-        const McpSessionLimits limits;
-        if (!ValidRequestId(request.id, limits) || !JsonWithinBounds(request.params, limits, limits.maximumInputBytes))
+        if (const McpSessionLimits limits;
+            !ValidRequestId(request.id, limits) || !JsonWithinBounds(request.params, limits, limits.maximumInputBytes))
             return Result<void>::Failure(MakeError(McpErrors::InputCapacityExceeded));
         return CallShape(request) ? Result<void>::Success() : Result<void>::Failure(MakeError(McpErrors::RequestInvalid));
     }
 
     /** @copydoc McpAuthorization::Challenge */
     Result<std::uint64_t> McpAuthorization::Challenge(const McpRequestContext &context, const McpRequest &request,
-                                                      const std::chrono::milliseconds lifetime) {
+                                                      const std::chrono::milliseconds lifetime) const {
         if (!Lifetime(lifetime))
             return Result<std::uint64_t>::Failure(MakeError(McpErrors::AuthorizationDenied));
         if (const auto authorized = Validate(context); authorized.HasError())
@@ -297,12 +299,12 @@ namespace Horo::Mcp {
             state_->nextChallenge == std::numeric_limits<std::uint64_t>::max())
             return Result<std::uint64_t>::Failure(MakeError(McpErrors::AuthorizationDenied));
         const auto id = state_->nextChallenge++;
-        state_->approvals.emplace(id, State::Approval{context.authority, fingerprint.Value(), Clock::now() + lifetime});
+        state_->approvals.try_emplace(id, context.authority, fingerprint.Value(), Clock::now() + lifetime, false);
         return Result<std::uint64_t>::Success(id);
     }
 
     /** @copydoc McpAuthorization::Decide */
-    Result<void> McpAuthorization::Decide(const std::uint64_t challenge, const bool approved) {
+    Result<void> McpAuthorization::Decide(const std::uint64_t challenge, const bool approved) const {
         std::lock_guard lock{state_->mutex};
         state_->Prune();
         const auto found = state_->approvals.find(challenge);
@@ -317,7 +319,7 @@ namespace Horo::Mcp {
 
     /** @copydoc McpAuthorization::Authorize */
     Result<void> McpAuthorization::Authorize(const McpRequestContext &context, const McpRequest &request, const bool requiresApproval,
-                                             const bool consume) {
+                                             const bool consume) const {
         std::lock_guard lock{state_->mutex};
         state_->Prune();
         if (!state_->Current(context))
@@ -327,7 +329,7 @@ namespace Horo::Mcp {
         const auto fingerprint = Fingerprint(request);
         if (fingerprint.HasError())
             return Result<void>::Failure(fingerprint.ErrorValue());
-        const auto found = std::find_if(state_->approvals.begin(), state_->approvals.end(), [&](const auto &entry) {
+        const auto found = std::ranges::find_if(state_->approvals, [&](const auto &entry) {
             return entry.second.approved && entry.second.authority.lock() == context.authority &&
                    entry.second.fingerprint == fingerprint.Value();
         });
@@ -339,7 +341,7 @@ namespace Horo::Mcp {
     }
 
     /** @copydoc McpAuthorization::Revoke */
-    void McpAuthorization::Revoke(const std::shared_ptr<const McpAuthority> &authority) {
+    void McpAuthorization::Revoke(const std::shared_ptr<const McpAuthority> &authority) const {
         if (!authority)
             return;
         std::lock_guard lock{state_->mutex};

@@ -89,3 +89,21 @@ third-party nested-JSON allocation failures: the pinned JSON implementation can
 allocate during non-throwing nested-value destruction and terminate on failure
 outside the host's exception boundary. Ordinary nested-JSON behavior is covered
 separately without fault injection.
+
+### Signature refinement and allocation qualification
+
+Policy operations now have const-qualified member signatures: they retain the
+same shared mutex-protected policy state and still require host authorization.
+Ordinary calls remain unchanged; rebuild MCP consumers and update stored member
+function pointers. Principal construction uses a private authentication key with
+`make_shared`; direct construction cannot bypass credential consumption.
+
+The complete global allocation-failure sweep runs in Windows Release CI. MSVC
+Debug iterator proxies can allocate inside noexcept container moves, so an
+arbitrary injected failure there terminates inside the standard library rather
+than reaching the host boundary. Windows Debug still executes the controlled
+callback bad_alloc regression, including same-ID retry and shutdown, and every
+other session/authorization case. Windows Release additionally executes the full
+session suite, including the unchanged admission/callback allocation offset sweep.
+The Release qualification is required, with missing tests treated as a failure,
+and its JUnit report is uploaded alongside the other platform reports.

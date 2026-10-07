@@ -149,6 +149,31 @@ namespace Horo::Mcp {
         REQUIRE(manager->Shutdown().HasValue());
     }
 
+    TEST_CASE("MCP callback allocation failure releases request identity and shutdown bookkeeping", "[mcp][session][security]") {
+        auto controller = std::make_shared<Controller>();
+        controller->action = [](const McpRequest &, const McpRequestContext &) -> Result<nlohmann::json> {
+            throw std::bad_alloc{};
+        };
+        McpSessionLimits limits;
+        limits.maximumInFlightPerSession = 1;
+        limits.shutdownDrainTimeout = std::chrono::milliseconds{100};
+        auto manager = Manager(controller, limits);
+        const auto opened = manager->Open(Admission());
+        REQUIRE(opened.HasValue());
+        const McpRequest request{.id = "allocation-checked-request", .method = "tools/call"};
+        const auto failed = manager->Dispatch(opened.Value(), request);
+        REQUIRE(failed.HasError());
+        RequireCode(failed.ErrorValue(), McpErrors::ControllerFailed);
+        controller->action = [](const McpRequest &, const McpRequestContext &) {
+            return Result<nlohmann::json>::Success(1);
+        };
+        REQUIRE(manager->Dispatch(opened.Value(), request).HasValue());
+        REQUIRE(manager->Shutdown().HasValue());
+    }
+
+    // MSVC debug iterator proxies allocate in noexcept container moves. The complete global
+    // allocation sweep is qualified in Windows Release CI; the controlled failure above runs in Debug too.
+#if !defined(_MSC_VER) || _ITERATOR_DEBUG_LEVEL == 0
     TEST_CASE("MCP allocation failures never orphan request identity or shutdown bookkeeping", "[mcp][session][security]") {
         auto controller = std::make_shared<Controller>();
         // Keep callback allocation throwable: nested JSON destruction itself allocates in a noexcept destructor.
@@ -194,6 +219,8 @@ namespace Horo::Mcp {
         CHECK(translated > 0);
         REQUIRE(manager->Shutdown().HasValue());
     }
+
+#endif
 
     TEST_CASE("MCP cancellation, project switch and disconnect revoke old work", "[mcp][session]") {
         auto gate = std::make_shared<Gate>();

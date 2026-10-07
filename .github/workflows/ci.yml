@@ -146,6 +146,13 @@ jobs:
         id: release_build
         run: cmake --build --preset ci-audio-release
 
+      # MSVC Debug container moves may allocate iterator proxies inside noexcept.
+      # Keep the complete admission/callback allocation sweep mandatory in Release.
+      - name: Build Windows Release MCP allocation qualification
+        id: mcp_release_build
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.release_build.outcome == 'success' }}
+        run: cmake --build --preset ci-audio-release --target HoroMcpSessionTests
+
       - name: Configure navigation without Recast Detour
         if: runner.os == 'Linux'
         run: cmake --preset ci-navigation-null
@@ -214,6 +221,13 @@ jobs:
         if: ${{ !cancelled() && steps.release_build.outcome == 'success' }}
         run: ctest --preset ci-audio-release
 
+      - name: Test Windows Release MCP allocation qualification
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
+        run: >-
+          ctest --test-dir build/ci-audio-release --parallel 1 --output-on-failure
+          --no-tests=error --timeout 120 -R '^HoroMcpSessionTests::'
+          --output-junit build/ci-audio-release/mcp-ctest.xml
+
       - name: Test navigation without Recast Detour
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.navigation_build.outcome == 'success' }}
         run: ctest --preset ci-navigation-null
@@ -231,6 +245,8 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: test-results-${{ runner.os }}
-          path: build/ci*/ctest.xml
+          path: |
+            build/ci*/ctest.xml
+            build/ci-audio-release/mcp-ctest.xml
           if-no-files-found: warn
           retention-days: 14

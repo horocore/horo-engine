@@ -13,6 +13,10 @@ using namespace Horo;
 using namespace Horo::Mcp;
 
 namespace {
+    template <typename Authority>
+    concept CanForgeAuthority = requires { Authority({}, nullptr); };
+    static_assert(!CanForgeAuthority<McpAuthority>);
+
     void RequireAuthorizationDenied(const Result<nlohmann::json> &outcome) {
         REQUIRE(outcome.HasError());
         CHECK(outcome.ErrorValue().code.Value() == McpErrors::AuthorizationDenied.code.Value());

@@ -150,7 +150,8 @@ namespace Horo::Mcp {
         }
 
         /** @brief Derives a request cancellation chain and expiry-bounded context under the admission lock. */
-        McpRequestContext RequestContext(const SessionRecord &record, const McpRequest &request, const CancellationToken &cancellation) {
+        McpRequestContext RequestContext(const SessionRecord &record, const McpRequest &request,
+                                         const CancellationToken &cancellation) const {
             const auto &admission = record.admission;
             return {.session = record.handle,
                     .clientIdentity = admission.clientIdentity,
@@ -221,8 +222,7 @@ namespace Horo::Mcp {
                                                  .authorizationRevision = admission.authorizationRevision,
                                                  .registryRevision = admission.registryRevision,
                                                  .authority = admission.authority};
-        const auto authorized = state_->authorization->Validate(authorityContext);
-        if (authorized.HasError())
+        if (const auto authorized = state_->authorization->Validate(authorityContext); authorized.HasError())
             return Result<McpSessionHandle>::Failure(authorized.ErrorValue());
         std::lock_guard lock{state_->mutex};
         if (state_->stopping)
@@ -243,8 +243,7 @@ namespace Horo::Mcp {
 
     /** @copydoc McpSessionManager::Dispatch */
     Result<nlohmann::json> McpSessionManager::Dispatch(const McpSessionHandle session, const McpRequest &request) {
-        const auto validated = ValidateRequest(request, state_->limits);
-        if (validated.HasError())
+        if (const auto validated = ValidateRequest(request, state_->limits); validated.HasError())
             return Result<nlohmann::json>::Failure(validated.ErrorValue());
         const auto state = state_;
         const auto admitted = state->BeginRequest(session, request);
@@ -261,8 +260,7 @@ namespace Horo::Mcp {
         completion.Release();
         // A synchronous adapter may finish after close, project replacement or revocation.
         // Never publish its stale result to a caller whose authority has already ended.
-        const auto current = state->authorization->ValidateActive(context);
-        if (current.HasError()) {
+        if (const auto current = state->authorization->ValidateActive(context); current.HasError()) {
             if (current.ErrorValue().code.Value() == McpErrors::RequestCancelled.code.Value() &&
                 std::chrono::steady_clock::now() >= context.deadline)
                 return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestTimedOut));

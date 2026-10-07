@@ -301,8 +301,7 @@ namespace Horo::Mcp {
         /** @brief Revalidates live authority before exposing a bounded, schema-checked adapter outcome. */
         Result<nlohmann::json> CheckedOutcome(const McpToolDescriptor &descriptor, const McpRequestContext &context,
                                               Result<nlohmann::json> outcome) {
-            const auto current = context.authorization->ValidateActive(context);
-            if (current.HasError())
+            if (const auto current = context.authorization->ValidateActive(context); current.HasError())
                 return Result<nlohmann::json>::Failure(current.ErrorValue());
             if (outcome.HasValue() && (!BoundedValue(outcome.Value(), descriptor.bounds.maximumResultBytes, descriptor.bounds) ||
                                        !MatchesSchema(descriptor.outputSchema, outcome.Value())))
@@ -314,7 +313,7 @@ namespace Horo::Mcp {
         McpRequestContext InvocationContext(const McpRequestContext &context) {
             auto invocation = context;
             invocation.deadline = std::min(invocation.deadline, invocation.authority->ExpiresAt());
-            invocation.reportProgress = [context](const double fraction, std::string) {
+            invocation.reportProgress = [context](const double fraction, const std::string &) {
                 if (std::isfinite(fraction) && fraction >= 0.0 && fraction <= 1.0 &&
                     context.authorization->ValidateActive(context).HasValue() && context.reportProgress)
                     context.reportProgress(fraction, {});
@@ -363,7 +362,7 @@ namespace Horo::Mcp {
             return Result<const McpToolRegistration *>::Failure(MakeError(McpErrors::ToolUnavailable));
         if (!Granted(found->descriptor, capabilities))
             return Result<const McpToolRegistration *>::Failure(MakeError(McpErrors::ToolCapabilityUnavailable));
-        return Result<const McpToolRegistration *>::Success(&*found);
+        return Result<const McpToolRegistration *>::Success(std::to_address(found));
     }
 
     /** @copydoc McpToolSnapshot::Owner */
@@ -385,8 +384,7 @@ namespace Horo::Mcp {
                                                                            const McpRequestContext &context) const {
         if (!authorization_ || context.authorization != authorization_)
             return Result<const McpToolRegistration *>::Failure(MakeError(McpErrors::AuthorizationDenied));
-        const auto admission = authorization_->Validate(context);
-        if (admission.HasError())
+        if (const auto admission = authorization_->Validate(context); admission.HasError())
             return Result<const McpToolRegistration *>::Failure(admission.ErrorValue());
         const auto found = FindGranted(id, context.capabilities);
         if (found.HasError())
@@ -398,8 +396,8 @@ namespace Horo::Mcp {
         const McpRequest request{.id = context.requestIdentity,
                                  .method = "tools/call",
                                  .params = {{"name", id.value}, {"arguments", arguments}}};
-        const auto authorized = authorization_->Authorize(context, request, descriptor.effect != McpToolEffect::Query, true);
-        if (authorized.HasError())
+        if (const auto authorized = authorization_->Authorize(context, request, descriptor.effect != McpToolEffect::Query, true);
+            authorized.HasError())
             return Result<const McpToolRegistration *>::Failure(authorized.ErrorValue());
         if (context.IsStopRequested())
             return Result<const McpToolRegistration *>::Failure(MakeError(McpErrors::RequestCancelled));
