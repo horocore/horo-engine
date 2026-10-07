@@ -1125,6 +1125,18 @@ target_compile_features(HoroPrefabTemplateProviderTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPrefabTemplateProviderTests PRIVATE HoroEngine::PrefabRuntime)
 horo_register_catch_test(HoroPrefabTemplateProviderTests LABELS "unit;prefab;headless")
 
+add_executable(HoroPrefabSpawnServiceTests unit/runtime/prefab/PrefabSpawnServiceTests.cpp
+    unit/runtime/prefab/PrefabSpawnLifecycleTests.cpp)
+target_compile_features(HoroPrefabSpawnServiceTests PRIVATE cxx_std_20)
+target_link_libraries(HoroPrefabSpawnServiceTests PRIVATE HoroEngine::PrefabRuntime HoroEngine::GameplayRuntime)
+horo_register_catch_test(HoroPrefabSpawnServiceTests LABELS "unit;prefab;gameplay;headless")
+
+add_executable(HoroPrefabSpawnPublicHeaderConsumer support/PrefabSpawnPublicHeaderConsumer.cpp)
+target_compile_features(HoroPrefabSpawnPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPrefabSpawnPublicHeaderConsumer PRIVATE HoroEngine::PrefabRuntime HoroEngine::GameplayRuntime)
+add_test(NAME HoroPrefabSpawnPublicHeaderConsumer COMMAND HoroPrefabSpawnPublicHeaderConsumer)
+set_tests_properties(HoroPrefabSpawnPublicHeaderConsumer PROPERTIES LABELS "unit;prefab;gameplay;headless")
+
 add_executable(HoroPrefabTemplateProviderPublicHeaderConsumer support/PrefabTemplateProviderPublicHeaderConsumer.cpp)
 target_compile_features(HoroPrefabTemplateProviderPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroPrefabTemplateProviderPublicHeaderConsumer PRIVATE HoroEngine::PrefabRuntime)
@@ -1191,7 +1203,7 @@ horo_add_gameplay_module(HoroTestGameModule
 )
 target_include_directories(HoroTestGameModule PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
 target_compile_definitions(HoroTestGameModule PRIVATE HORO_TEST_GAMEPLAY_PHYSICS=1)
-target_link_libraries(HoroTestGameModule PRIVATE HoroEngine::GameplayPhysicsIntegration)
+target_link_libraries(HoroTestGameModule PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::PrefabRuntime)
 get_property(HORO_TEST_GAME_MODULE_REVISION_FILE TARGET HoroTestGameModule PROPERTY HORO_GAMEPLAY_DESCRIPTOR_REVISION_FILE)
 target_include_directories(HoroCinematicRuntimeTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
 target_compile_definitions(HoroCinematicRuntimeTests PRIVATE
@@ -1212,6 +1224,7 @@ target_link_libraries(HoroGameModuleHostTests PRIVATE HoroEngine::GameplayModule
 add_dependencies(HoroGameModuleHostTests HoroTestGameModule)
 add_executable(HoroGameplayPhysicsTests unit/gameplay/GameplayPhysicsContextTests.cpp
     integration/gameplay/GameplayPhysicsHostTests.cpp
+    integration/gameplay/PrefabGameplayHostTests.cpp
     integration/gameplay/LuaPhysicsLifecycleTests.cpp)
 target_compile_features(HoroGameplayPhysicsTests PRIVATE cxx_std_20)
 target_include_directories(HoroGameplayPhysicsTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers" "${PROJECT_SOURCE_DIR}/tests/unit/runtime/physics")

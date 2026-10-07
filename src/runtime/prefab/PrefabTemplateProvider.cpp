@@ -163,17 +163,33 @@ namespace Horo::Prefab {
         return state_->CheckAdmission(lease.allocation_->registry, lease.scene_);
     }
 
+    /** @copydoc PrefabTemplateProvider::UsesSceneService */
+    bool PrefabTemplateProvider::UsesSceneService(const Runtime::RuntimeSceneService &scenes) const noexcept {
+        return &state_->scenes == &scenes;
+    }
+
     /** @copydoc PrefabTemplateProvider::QueuePreparedGroup */
     Result<std::vector<Runtime::DeferredEntity>> PrefabTemplateProvider::QueuePreparedGroup(
         const PrefabTemplateLease &lease, std::vector<Runtime::RuntimeComponentSet> components, const CancellationToken &cancellation,
-        std::vector<std::vector<Runtime::GroupPhysicsBodyReference>> physicsReferences) {
+        std::vector<std::vector<Runtime::GroupPhysicsBodyReference>> physicsReferences, std::optional<Math::Transform> rootPlacement,
+        std::optional<Runtime::EntityRef> parent, std::shared_ptr<const Runtime::SceneStructuralReceipt> *receipt,
+        const CancellationToken &scopeCancellation, std::vector<std::vector<Runtime::RuntimeGroupMemberIdentity>> members,
+        std::vector<std::vector<Runtime::RuntimeGroupReference>> references, std::vector<Assets::AssetId> spawnLineage) {
         using Tokens = std::vector<Runtime::DeferredEntity>;
         if (auto admission = ValidateAdmission(lease); admission.HasError())
             return Result<Tokens>::Failure(admission.ErrorValue());
-        if (cancellation.IsCancellationRequested())
+        if (cancellation.IsCancellationRequested() || scopeCancellation.IsCancellationRequested())
             return Result<Tokens>::Failure(MakeError(PrefabErrors::Cancelled));
         const auto &entities = lease.Template()->Data().entities;
-        if (components.size() != entities.size() || (!physicsReferences.empty() && physicsReferences.size() != entities.size()))
+        if (rootPlacement && rootPlacement->TryToMatrix().HasError())
+            return Result<Tokens>::Failure(MakeError(PrefabErrors::InvalidPlacement));
+        if (parent) {
+            const auto active = state_->scenes.ActiveScene();
+            if (!active || active->Get(*parent).HasError())
+                return Result<Tokens>::Failure(MakeError(PrefabErrors::InvalidParent));
+        }
+        if (components.size() != entities.size() || (!physicsReferences.empty() && physicsReferences.size() != entities.size()) ||
+            (!members.empty() && members.size() != entities.size()) || (!references.empty() && references.size() != entities.size()))
             return Result<Tokens>::Failure(MakeError(PrefabErrors::ComponentAllocationFailed));
         std::vector<Runtime::RuntimeEntityGroupEntry> entries;
         entries.reserve(entities.size());
@@ -183,10 +199,18 @@ namespace Horo::Prefab {
             entry.info.components = std::move(components[index]);
             if (!physicsReferences.empty())
                 entry.physicsReferences = std::move(physicsReferences[index]);
+            if (!members.empty())
+                entry.members = std::move(members[index]);
+            if (!references.empty())
+                entry.references = std::move(references[index]);
+            entry.spawnLineage = spawnLineage;
             if (entities[index].parent)
                 entry.parentInGroup = entities[index].parent->value;
             entries.push_back(std::move(entry));
         }
+        if (rootPlacement)
+            entries.front().info.localTransform = *rootPlacement;
+        entries.front().info.parent = parent;
         std::vector<Runtime::RuntimeGroupAssetLease> resources;
         resources.reserve(lease.Dependencies().size() + 1);
         resources.emplace_back(Assets::AssetDependency{lease.Template()->Data().assetId, Assets::AssetTypeId::Parse("core.prefab").Value()},
@@ -194,11 +218,17 @@ namespace Horo::Prefab {
         for (const auto &dependency : lease.Dependencies())
             resources.emplace_back(dependency.metadata, dependency.artifact);
         Runtime::SceneCommandBuffer commands;
-        auto tokens = commands.CreateGroup(std::move(entries), std::move(resources),
-                                           {lease.Scene(), lease.RegistryRevision(), cancellation, state_->retirement.Token()});
+        auto tokens =
+            commands.CreateGroup(std::move(entries), std::move(resources),
+                                 {lease.Scene(), lease.RegistryRevision(), cancellation, state_->retirement.Token(), scopeCancellation});
         if (tokens.HasError())
             return tokens;
-        if (auto queued = state_->scenes.QueueStructuralCommands(std::move(commands)); queued.HasError())
+        if (receipt) {
+            auto queued = state_->scenes.QueueTrackedStructuralCommands(std::move(commands));
+            if (queued.HasError())
+                return Result<Tokens>::Failure(queued.ErrorValue());
+            *receipt = std::move(queued).Value();
+        } else if (auto queued = state_->scenes.QueueStructuralCommands(std::move(commands)); queued.HasError())
             return Result<Tokens>::Failure(queued.ErrorValue());
         return tokens;
     }

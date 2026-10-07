@@ -58,7 +58,11 @@ namespace Horo::Runtime {
                                      ? std::span<const ResolvedGroupPhysicsBodyReference>{*value.groupPhysicsReferences}
                                      : std::span<const ResolvedGroupPhysicsBodyReference>{},
                                  value.groupResources ? std::span<const RuntimeGroupAssetLease>{*value.groupResources}
-                                                      : std::span<const RuntimeGroupAssetLease>{}};
+                                                      : std::span<const RuntimeGroupAssetLease>{},
+                                 value.groupReferences ? std::span<const RuntimeResolvedGroupReference>{*value.groupReferences}
+                                                       : std::span<const RuntimeResolvedGroupReference>{},
+                                 value.groupSpawnLineage ? std::span<const Assets::AssetId>{*value.groupSpawnLineage}
+                                                         : std::span<const Assets::AssetId>{}};
     }
 
     /** @copydoc RuntimeSceneView::Find */

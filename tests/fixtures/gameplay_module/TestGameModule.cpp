@@ -8,6 +8,7 @@
 #include "Horo/Gameplay/PersistenceRegistration.h"
 #include "Horo/Gameplay/ReplicationRegistration.h"
 #include "Horo/Gameplay/SystemRegistry.h"
+#include "Horo/Prefab/PrefabSpawnService.h"
 #include "gameplay/GameAssetTestSupport.h"
 #if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
@@ -15,6 +16,7 @@
 
 #include <algorithm>
 #include <format>
+#include <stdexcept>
 
 using namespace Horo;
 using namespace Horo::Gameplay;
@@ -42,6 +44,56 @@ public:
 };
 
 HORO_BEHAVIOR(MoveBehavior, "game.tests.dynamic_mover")
+
+/** @brief Real module consumer of the host-admitted typed prefab capability, with no Scene storage or source access. */
+class PrefabSpawnerBehavior final : public IBehaviorInstance {
+public:
+    static BehaviorDescriptor DescribeBehavior() {
+        BehaviorDescriptor descriptor;
+        descriptor.displayName = "Prefab Spawner";
+        descriptor.fields = {{"asset", std::string{}}, {"digest", std::string{}}};
+        descriptor.phases.push_back({BehaviorPhase::Gameplay, "game.tests.prefab_spawner", {}, {}, {}});
+        return descriptor;
+    }
+
+    void OnFixedUpdate(BehaviorContext &context, FixedDeltaTime) override {
+        ++tick_;
+        const auto capability = context.PrefabContext();
+        if (!capability)
+            return;
+        if (!requested_) {
+            Prefab::PrefabSpawnRequest request;
+            for (const auto &field : context.Fields()) {
+                if (field.name == "asset")
+                    request.source.asset = Assets::AssetId::Parse(std::get<std::string>(field.value)).Value();
+                if (field.name == "digest")
+                    request.source.artifactDigest = ParseSha256(std::get<std::string>(field.value)).Value();
+            }
+            request.source.target = AssetCookTargetId::Parse("linux-x64").Value();
+            request.notBeforeTick = tick_;
+            auto operation = capability->Spawn(std::move(request));
+            if (operation.HasError())
+                throw std::runtime_error("Typed prefab spawn admission failed.");
+            operation_ = std::move(operation).Value();
+            requested_ = true;
+        } else if (!retired_ && operation_.State() == Prefab::PrefabSpawnState::Committed) {
+            auto operation = capability->Despawn(operation_.Spawned().Value(), tick_);
+            if (operation.HasError())
+                throw std::runtime_error("Typed prefab despawn admission failed.");
+            retirement_ = std::move(operation).Value();
+            retired_ = true;
+        }
+    }
+
+private:
+    Prefab::PrefabOperation operation_;
+    Prefab::PrefabOperation retirement_;
+    std::uint64_t tick_{};
+    bool requested_{};
+    bool retired_{};
+};
+
+HORO_BEHAVIOR(PrefabSpawnerBehavior, "game.tests.prefab_spawner")
 
 namespace {
     class DurableCandidate final : public IPreparedPersistenceState {

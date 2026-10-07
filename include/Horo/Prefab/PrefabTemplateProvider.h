@@ -144,11 +144,23 @@ namespace Horo::Prefab {
          * @return Success or typed stale, foreign-provider or scene/shutdown failure. No scene mutation occurs.
          */
         [[nodiscard]] Result<void> ValidateAdmission(const PrefabTemplateLease &lease) const;
+        /** @brief Checks exact host composition authority, including distinct services with equal numeric scene IDs.
+         * @param scenes Host-selected Scene service.
+         * @return Whether this provider borrows that exact service.
+         */
+        [[nodiscard]] bool UsesSceneService(const Runtime::RuntimeSceneService &scenes) const noexcept;
         /** @brief Hands a complete projected group to Scene's bounded all-or-nothing structural transaction.
          * @param lease Exact verified template/resource closure from this provider.
          * @param components Complete schema-projected runtime component sets, one per dense template entity.
          * @param cancellation Owning spawn operation's cooperative cancellation ancestry.
          * @param physicsReferences Typed body-reference fixups in dense entity order, resolved by Scene after reservation.
+         * @param rootPlacement Optional exact replacement for the root local transform; descendants retain cooked values.
+         * @param parent Optional existing generation-qualified root parent, validated again at commit.
+         * @param receipt Optional output for dedicated Scene completion evidence; written only after successful submission.
+         * @param scopeCancellation Module/capability revocation sampled by Scene at publication.
+         * @param members Complete cooked occurrence metadata, empty only when reference interfaces are unused.
+         * @param references Complete typed reference interfaces, one vector per entity when present.
+         * @param spawnLineage Immutable inherited creation lineage, at most 16 unique assets.
          * @return Deferred Scene tokens or rejection without queued work. Scene repeats generation/catalog/cancellation
          * checks at commit and retains real artifact allocations until the last group entity is destroyed.
          * @details The caller owns component schema projection and typed reference/binding initialization. This method
@@ -157,8 +169,11 @@ namespace Horo::Prefab {
          */
         [[nodiscard]] Result<std::vector<Runtime::DeferredEntity>> QueuePreparedGroup(
             const PrefabTemplateLease &lease, std::vector<Runtime::RuntimeComponentSet> components,
-            const CancellationToken &cancellation = {},
-            std::vector<std::vector<Runtime::GroupPhysicsBodyReference>> physicsReferences = {});
+            const CancellationToken &cancellation = {}, std::vector<std::vector<Runtime::GroupPhysicsBodyReference>> physicsReferences = {},
+            std::optional<Math::Transform> rootPlacement = {}, std::optional<Runtime::EntityRef> parent = {},
+            std::shared_ptr<const Runtime::SceneStructuralReceipt> *receipt = nullptr, const CancellationToken &scopeCancellation = {},
+            std::vector<std::vector<Runtime::RuntimeGroupMemberIdentity>> members = {},
+            std::vector<std::vector<Runtime::RuntimeGroupReference>> references = {}, std::vector<Assets::AssetId> spawnLineage = {});
         /** @brief Drops resident lookup pins for one asset; existing leases keep their immutable storage. @param asset Exact asset. */
         void Evict(Assets::AssetId asset) noexcept;
         /** @brief Reports canonical byte ownership, including evicted externally held allocations. @return Accounting snapshot. */

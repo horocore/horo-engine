@@ -841,6 +841,7 @@ horo_configure_target_header_boundary(HoroPrefab PUBLIC_HEADERS
 
 horo_configure_target_header_boundary(HoroPrefabRuntime PUBLIC_HEADERS
     Horo/Prefab/PrefabTemplateProvider.h
+    Horo/Prefab/PrefabSpawnService.h
 )
 
 horo_configure_target_header_boundary(HoroPrefabAuthoring PUBLIC_HEADERS

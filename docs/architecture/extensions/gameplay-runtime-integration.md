@@ -1,5 +1,24 @@
 # Gameplay Runtime Integration
 
+## Cooked prefab creation and retirement
+
+The explicitly selected production `GameplayWorldComposition` may grant
+`GameplayPrefabContext` independently from Physics. Its service-backed factory
+binds the real `RuntimeSceneService`, immutable `PrefabTemplateProvider` and frozen
+Gameplay registry. `BehaviorRuntime` queues callback mutations through that same
+Scene service, and its structural participant runs creation/retirement hooks only
+after aggregate publication. Native fixed callbacks receive retained revocable
+clients with Scene-owned inherited creation lineage. No mutable Scene storage,
+source parser, direct allocator or authoring override is exposed. Source-free
+typed initialization, references, exact grant/lifetime requirements and HPFB v2
+migration are defined in the [prefab capability guide](../../guides/gameplay-prefab-spawn-migration.md).
+
+`HoroNetworkProductHost` owns this application composition in `apps/common` and
+links `HoroPrefabRuntime` explicitly to construct and retain the spawn service.
+This host edge grants no Prefab dependency to Network runtime or Physics
+integration. Module descriptors remain inert; the host supplies the provider,
+Scene service and independent permission before activating gameplay.
+
 ## Purpose
 
 This document defines how project-owned gameplay modules integrate with runtime systems: game-owned assets, input actions, scheduled systems, scene/play lifecycle, game-owned component persistence, and deferred runtime extension points.

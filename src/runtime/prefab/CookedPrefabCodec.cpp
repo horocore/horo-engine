@@ -401,6 +401,17 @@ namespace Horo::Prefab::Detail {
         writer.Count(data.references.size());
         for (const auto &reference : data.references)
             WriteReference(writer, reference);
+        writer.Count(data.initialization.size());
+        for (const auto &declaration : data.initialization) {
+            writer.Integer(declaration.id.value);
+            writer.Integer(declaration.owner.entity.value);
+            writer.Integer(declaration.owner.member);
+            writer.Integer(declaration.field);
+            writer.Integer(static_cast<std::uint8_t>(declaration.kind));
+            writer.Integer(static_cast<std::uint8_t>(declaration.required));
+            writer.Integer(std::bit_cast<std::uint64_t>(declaration.minimum));
+            writer.Integer(std::bit_cast<std::uint64_t>(declaration.maximum));
+        }
         return std::move(writer).Finish();
     }
 
@@ -435,6 +446,19 @@ namespace Horo::Prefab::Detail {
         const auto references = reader.Count(policy.maximumBindingUses, 21);
         for (std::uint32_t index = 0; index < references; ++index)
             data.references.push_back(ReadReference(reader));
+        const auto initialization = reader.Count(MaximumPrefabInitializationValues, 38);
+        for (std::uint32_t index = 0; index < initialization; ++index) {
+            CookedPrefabInitialization declaration;
+            declaration.id.value = reader.Integer<std::uint64_t>();
+            declaration.owner.entity.value = reader.Integer<std::uint32_t>();
+            declaration.owner.member = reader.Integer<std::uint32_t>();
+            declaration.field = reader.Integer<std::uint32_t>();
+            declaration.kind = static_cast<PrefabInitializationKind>(reader.Integer<std::uint8_t>());
+            declaration.required = reader.Boolean();
+            declaration.minimum = std::bit_cast<double>(reader.Integer<std::uint64_t>());
+            declaration.maximum = std::bit_cast<double>(reader.Integer<std::uint64_t>());
+            data.initialization.push_back(declaration);
+        }
         if (!reader.Complete())
             return Result<CookedPrefabData>::Failure(MakeError(PrefabErrors::CorruptedPayload));
         return Result<CookedPrefabData>::Success(std::move(data));

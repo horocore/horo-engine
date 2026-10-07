@@ -7,6 +7,7 @@
 #include <format>
 #include <limits>
 #include <new>
+#include <ranges>
 #include <string>
 #include <utility>
 
@@ -33,6 +34,7 @@ namespace Horo::Runtime {
             return Result<std::vector<DeferredEntity>>::Failure(
                 MakeError(SceneErrors::StructuralCommitFailed, "Invalid structural group bounds."));
         std::size_t referenceCount{};
+        std::size_t interfaceCount{};
         for (std::size_t index = 0; index < entries.size(); ++index) {
             if (entries[index].parentInGroup.has_value() && (*entries[index].parentInGroup >= index || entries[index].info.parent))
                 return Result<std::vector<DeferredEntity>>::Failure(
@@ -40,6 +42,20 @@ namespace Horo::Runtime {
             if (entries[index].physicsReferences.size() > 4096 - referenceCount)
                 return Result<std::vector<DeferredEntity>>::Failure(MakeError(SceneErrors::InvalidEntity));
             referenceCount += entries[index].physicsReferences.size();
+            if (entries[index].members.size() > 64 || entries[index].references.size() > 256 - interfaceCount)
+                return Result<std::vector<DeferredEntity>>::Failure(MakeError(SceneErrors::InvalidEntity));
+            interfaceCount += entries[index].references.size();
+            if (entries[index].spawnLineage.size() > 16)
+                return Result<std::vector<DeferredEntity>>::Failure(MakeError(SceneErrors::InvalidEntity));
+            if (entries[index].spawnLineage != entries.front().spawnLineage)
+                return Result<std::vector<DeferredEntity>>::Failure(MakeError(SceneErrors::InvalidEntity));
+            for (std::size_t lineage = 0; lineage < entries[index].spawnLineage.size(); ++lineage) {
+                const auto &asset = entries[index].spawnLineage[lineage];
+                if (!asset.IsValid() || std::find(entries[index].spawnLineage.begin(),
+                                                  entries[index].spawnLineage.begin() + static_cast<std::ptrdiff_t>(lineage),
+                                                  asset) != entries[index].spawnLineage.begin() + static_cast<std::ptrdiff_t>(lineage))
+                    return Result<std::vector<DeferredEntity>>::Failure(MakeError(SceneErrors::InvalidEntity));
+            }
         }
         if (std::ranges::any_of(resources, [](const auto &pin) {
             return pin.artifact.Bytes().empty() || !pin.metadata.id.IsValid() || pin.metadata.expectedType.Value().empty();
@@ -58,15 +74,35 @@ namespace Horo::Runtime {
     /** @copydoc SceneCommandBuffer::ValidateAdmission */
     Result<void> SceneCommandBuffer::ValidateAdmission(SceneRuntimeId scene, Assets::AssetRegistryRevision registry) const {
         for (const auto &command : commands_) {
-            if (const auto *group = std::get_if<CreateGroupCommand>(&command)) {
-                if (group->admission.cancellation.IsCancellationRequested() || group->admission.ownerCancellation.IsCancellationRequested())
+            const SceneStructuralAdmission *admission = nullptr;
+            if (const auto *group = std::get_if<CreateGroupCommand>(&command))
+                admission = &group->admission;
+            if (const auto *group = std::get_if<DestroyGroupCommand>(&command))
+                admission = &group->admission;
+            if (admission) {
+                if (admission->cancellation.IsCancellationRequested() || admission->ownerCancellation.IsCancellationRequested() ||
+                    admission->scopeCancellation.IsCancellationRequested())
                     return JobCancelled();
-                if (group->admission.scene != scene)
+                if (admission->scene != scene)
                     return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
-                if (group->admission.registry != registry)
+                if (std::holds_alternative<CreateGroupCommand>(command) && admission->registry != registry)
                     return Result<void>::Failure(MakeError(SceneErrors::AssetRevisionStale));
             }
         }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc SceneCommandBuffer::DestroyGroup */
+    Result<void> SceneCommandBuffer::DestroyGroup(std::vector<EntityRef> entities, const SceneStructuralAdmission &admission) {
+        if (entities.empty() || entities.size() > 256 || !admission.scene.IsValid())
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+        for (std::size_t index = 0; index < entities.size(); ++index) {
+            if (!entities[index].IsValid() || entities[index].runtime != admission.scene ||
+                std::find(entities.begin(), entities.begin() + static_cast<std::ptrdiff_t>(index), entities[index]) !=
+                    entities.begin() + static_cast<std::ptrdiff_t>(index))
+                return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+        }
+        commands_.emplace_back(DestroyGroupCommand{std::move(entities), admission});
         return Result<void>::Success();
     }
 
@@ -216,6 +252,8 @@ namespace Horo::Runtime {
         slot.primitiveMesh.reset();
         slot.components = {};
         slot.groupResources.reset();
+        slot.groupReferences.reset();
+        slot.groupSpawnLineage.reset();
         slot.groupPhysicsReferences.reset();
         if (slot.generation == config_.maximumGeneration)
             slot.retired = true;
@@ -251,11 +289,36 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
+        Result<void> operator()(const SceneCommandBuffer::DestroyGroupCommand &group) const {
+            const auto root = group.entities.front();
+            if (!scene.IsValid(candidate, root))
+                return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
+            const auto resources = candidate.slots[root.entity.index].groupResources;
+            if (!resources)
+                return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+            const auto count = std::ranges::count_if(candidate.slots, [&resources](const auto &slot) {
+                return slot.active && slot.groupResources == resources;
+            });
+            if (static_cast<std::size_t>(count) != group.entities.size())
+                return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+            for (const auto entity : group.entities) {
+                if (!scene.IsValid(candidate, entity) || candidate.slots[entity.entity.index].groupResources != resources)
+                    return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
+            }
+            for (const auto entity : group.entities | std::views::reverse) {
+                if (auto destroyed = scene.DestroyEntity(candidate, entity); destroyed.HasError())
+                    return destroyed;
+                ++result.destroyed;
+            }
+            return Result<void>::Success();
+        }
+
         Result<void> operator()(const SceneCommandBuffer::CreateGroupCommand &group) const {
             if (group.admission.scene != scene.runtimeId_ || group.admission.cancellation.IsCancellationRequested() ||
                 group.admission.ownerCancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
             auto resources = std::make_shared<const std::vector<RuntimeGroupAssetLease>>(group.resources);
+            auto lineage = std::make_shared<const std::vector<Assets::AssetId>>(group.entries.front().spawnLineage);
             std::vector<EntityRef> entities;
             entities.reserve(group.entries.size());
             for (std::size_t index = 0; index < group.entries.size(); ++index) {
@@ -267,9 +330,92 @@ namespace Horo::Runtime {
                     return Result<void>::Failure(created.ErrorValue());
                 entities.push_back(created.Value());
                 candidate.slots[created.Value().entity.index].groupResources = resources;
+                candidate.slots[created.Value().entity.index].groupSpawnLineage = lineage;
                 result.created.emplace_back(group.deferred[index], created.Value());
             }
+            if (auto resolved = ResolveInterfaces(group, entities); resolved.HasError())
+                return resolved;
             return ResolveGroupReferences(group, entities);
+        }
+
+        /** @brief Validates typed external relationships against the candidate without keeping targets alive. */
+        [[nodiscard]] bool HasExternal(const RuntimeGroupExternalReference &target) const {
+            if (!scene.IsValid(candidate, target.entity))
+                return false;
+            if (!target.component)
+                return true;
+            return std::ranges::any_of(candidate.slots[target.entity.entity.index].components.gameplayComponents,
+                                       [&target](const auto &component) {
+                return component.typeId == *target.component;
+            });
+        }
+
+        /** @brief Resolves portable template interfaces only after complete reservation, before any owner preparation. */
+        Result<void> ResolveInterfaces(const SceneCommandBuffer::CreateGroupCommand &group,
+                                       const std::span<const EntityRef> entities) const {
+            for (std::size_t index = 0; index < group.entries.size(); ++index) {
+                const auto &entry = group.entries[index];
+                if (!entry.members.empty() &&
+                    entry.members.size() != entry.info.components.behaviors.size() + entry.info.components.gameplayComponents.size())
+                    return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+                for (std::size_t member = 0; member < entry.members.size(); ++member) {
+                    const auto &identity = entry.members[member];
+                    const bool exists = identity.instance != 0 && std::visit([&]<typename Type>(const Type &type) {
+                        if constexpr (std::is_same_v<Type, Gameplay::BehaviorTypeId>)
+                            return std::ranges::any_of(entry.info.components.behaviors, [&](const auto &component) {
+                                return component.typeId == type && component.instanceId.value == identity.instance;
+                            });
+                        else
+                            return std::ranges::any_of(entry.info.components.gameplayComponents, [&](const auto &component) {
+                                return component.typeId == type;
+                            });
+                    }, identity.type);
+                    if (!exists || std::find(entry.members.begin(), entry.members.begin() + static_cast<std::ptrdiff_t>(member),
+                                             identity) != entry.members.begin() + static_cast<std::ptrdiff_t>(member))
+                        return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+                }
+                std::vector<RuntimeResolvedGroupReference> resolved;
+                resolved.reserve(entry.references.size());
+                for (const auto &reference : entry.references) {
+                    if (reference.ownerMember >= entry.members.size() || reference.property == 0 ||
+                        std::ranges::any_of(resolved, [&](const auto &prior) {
+                        return prior.owner == entry.members[reference.ownerMember] && prior.property == reference.property;
+                    }))
+                        return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+                    RuntimeResolvedGroupReference output{entry.members[reference.ownerMember], reference.property, {}};
+                    const auto valid = std::visit([&]<typename Target>(const Target &target) {
+                        if constexpr (std::is_same_v<Target, RuntimeGroupEntitySlot>) {
+                            if (target.index >= entities.size())
+                                return false;
+                            output.target = entities[target.index];
+                        } else if constexpr (std::is_same_v<Target, RuntimeGroupMemberSlot>) {
+                            if (target.entity.index >= entities.size() ||
+                                target.member >= group.entries[target.entity.index].members.size())
+                                return false;
+                            output.target = RuntimeGroupMemberReference{entities[target.entity.index],
+                                                                        group.entries[target.entity.index].members[target.member]};
+                        } else if constexpr (std::is_same_v<Target, Assets::AssetDependency>) {
+                            if (!std::ranges::any_of(group.resources, [&target](const auto &resource) {
+                                return resource.metadata.id == target.id && resource.metadata.expectedType == target.expectedType;
+                            }))
+                                return false;
+                            output.target = target;
+                        } else if constexpr (std::is_same_v<Target, RuntimeGroupExternalReference>) {
+                            if (!scene.IsValid(scene.storage_, target.entity) || !HasExternal(target))
+                                return false;
+                            output.target = target;
+                        }
+                        return true;
+                    }, reference.target);
+                    if (!valid)
+                        return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
+                    resolved.push_back(std::move(output));
+                }
+                if (!resolved.empty())
+                    candidate.slots[entities[index].entity.index].groupReferences =
+                        std::make_shared<const std::vector<RuntimeResolvedGroupReference>>(std::move(resolved));
+            }
+            return Result<void>::Success();
         }
 
         /** @brief Validates one producer/target pair against candidate and resident Scene lifetimes. */
@@ -347,6 +493,16 @@ namespace Horo::Runtime {
 
         /** @brief Validates final group body references before any native owner is prepared. */
         Result<void> ValidateGroupReferences() const {
+            for (const auto &created : result.created) {
+                const auto &slot = candidate.slots[created.entity.entity.index];
+                if (!slot.active || !slot.groupReferences)
+                    continue;
+                for (const auto &reference : *slot.groupReferences) {
+                    if (const auto *external = std::get_if<RuntimeGroupExternalReference>(&reference.target);
+                        external && !HasExternal(*external))
+                        return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
+                }
+            }
             // A later command may retire a body after a group's fixups were resolved. Validate the
             // final candidate before preparing any native owner; inactive source entities need no bindings.
             for (const auto &slot : candidate.slots) {
@@ -382,7 +538,11 @@ namespace Horo::Runtime {
                                      slot.groupPhysicsReferences
                                          ? std::span<const ResolvedGroupPhysicsBodyReference>{*slot.groupPhysicsReferences}
                                          : std::span<const ResolvedGroupPhysicsBodyReference>{},
-                                     std::span<const RuntimeGroupAssetLease>{*slot.groupResources});
+                                     std::span<const RuntimeGroupAssetLease>{*slot.groupResources},
+                                     slot.groupReferences ? std::span<const RuntimeResolvedGroupReference>{*slot.groupReferences}
+                                                          : std::span<const RuntimeResolvedGroupReference>{},
+                                     slot.groupSpawnLineage ? std::span<const Assets::AssetId>{*slot.groupSpawnLineage}
+                                                            : std::span<const Assets::AssetId>{});
             }
             for (std::size_t index = 0; index < scene.storage_.slots.size(); ++index) {
                 const auto &old = scene.storage_.slots[index];

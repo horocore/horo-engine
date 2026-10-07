@@ -72,8 +72,15 @@ namespace Horo::Runtime {
             structuralCommands_.reset();
             if (committed.HasError())
                 operationError_ = committed.ErrorValue();
-            else
+            else if (!structuralReceipt_)
                 structuralResult_ = std::move(committed).Value();
+            if (structuralReceipt_) {
+                if (committed.HasError())
+                    structuralReceipt_->error_ = committed.ErrorValue();
+                else
+                    structuralReceipt_->result_ = std::move(committed).Value();
+                structuralReceipt_.reset();
+            }
         }
         if (transition_ == Activate) {
             const auto prepared = PreparePendingPublication();

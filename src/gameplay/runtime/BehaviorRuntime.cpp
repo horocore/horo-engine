@@ -3,6 +3,8 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
+#include "Horo/Prefab/PrefabErrors.h"
+#include "Horo/Prefab/PrefabSpawnService.h"
 
 #include <algorithm>
 #include <unordered_map>
@@ -16,6 +18,20 @@ namespace Horo::Gameplay {
 
         [[nodiscard]] Runtime::EntityRef ToRuntime(const GameplayEntityRef entity) noexcept {
             return {Runtime::SceneRuntimeId{entity.scene}, Runtime::EntityId{entity.index, entity.generation}};
+        }
+
+        /** @brief Validates supplied runtime fields against the frozen provider schema before group publication. */
+        [[nodiscard]] Result<void> ValidateSpawnSchema(const BehaviorComponent &component, const BehaviorDescriptor &descriptor) {
+            if (component.schemaVersion != descriptor.schemaVersion)
+                return Result<void>::Failure(
+                    MakeError(GameplayErrors::InvalidBehaviorComponent, "Spawned behavior schema version mismatch."));
+            for (const auto &field : component.fields) {
+                const auto expected = std::ranges::find(descriptor.fields, field.name, &BehaviorFieldDescriptor::name);
+                if (expected == descriptor.fields.end() || expected->defaultValue.index() != field.value.index())
+                    return Result<void>::Failure(
+                        MakeError(GameplayErrors::InvalidBehaviorComponent, "Spawned behavior field schema mismatch."));
+            }
+            return Result<void>::Success();
         }
 
         struct EventQueue {
@@ -51,6 +67,7 @@ namespace Horo::Gameplay {
             bool enabledCallbackActive{};
             bool started{};
             bool destroyed{};
+            std::shared_ptr<const GameplayPrefabContext> prefabs;
         };
 
         struct ContextBackend final : Detail::IBehaviorContextBackend {
@@ -82,7 +99,7 @@ namespace Horo::Gameplay {
             }
 
             [[nodiscard]] Result<Math::Transform> LocalTransform() const override {
-                const Result<Runtime::RuntimeEntityView> view = runtime.scene.View().Get(instance.entity);
+                const Result<Runtime::RuntimeEntityView> view = runtime.SceneView().Get(instance.entity);
                 if (view.HasError())
                     return Result<Math::Transform>::Failure(view.ErrorValue());
                 return Result<Math::Transform>::Success(*view.Value().localTransform);
@@ -108,12 +125,38 @@ namespace Horo::Gameplay {
                     return {};
                 return runtime.physics;
             }
+
+            [[nodiscard]] std::shared_ptr<const GameplayPrefabContext> PrefabContext() const noexcept override {
+                if (!allowSimulationMutation)
+                    return {};
+                return instance.prefabs;
+            }
         };
 
         Impl(Runtime::RuntimeScene &scene, const BehaviorRegistry &registry, const BehaviorRuntimeLimits limits,
              std::shared_ptr<void> generationLease)
-            : scene(scene), registry(registry), limits(limits), events(limits.maximumQueuedEvents),
-              generationLease(std::move(generationLease)) {}
+            : scene(&scene), registry(registry), limits(limits), events(limits.maximumQueuedEvents),
+              generationLease(std::move(generationLease)), sceneIdentity(scene.View().RuntimeId()) {}
+
+        Impl(Runtime::RuntimeSceneService &scenes, const BehaviorRegistry &registry, const BehaviorRuntimeLimits limits,
+             std::shared_ptr<void> generationLease)
+            : scenes(&scenes), registry(registry), limits(limits), events(limits.maximumQueuedEvents),
+              generationLease(std::move(generationLease)), sceneIdentity(scenes.ActiveScene()->RuntimeId()) {}
+
+        /** @brief Borrows the exact current service incarnation; retirement never dereferences an old Scene. */
+        [[nodiscard]] Runtime::RuntimeSceneView SceneView() const noexcept {
+            return scenes ? scenes->ActiveScene().value_or(Runtime::RuntimeSceneView{}) : scene->View();
+        }
+
+        /** @brief Routes simulation changes through the selected Scene owner. */
+        [[nodiscard]] Result<void> CommitCommands(Runtime::SceneCommandBuffer commands) const {
+            if (commands.Empty())
+                return Result<void>::Success();
+            if (scenes)
+                return scenes->QueueStructuralCommands(std::move(commands));
+            auto committed = scene->Commit(commands);
+            return committed.HasError() ? Result<void>::Failure(committed.ErrorValue()) : Result<void>::Success();
+        }
 
         [[nodiscard]] Result<void> InstantiateEntityBehaviors(const Runtime::RuntimeEntityView &entity,
                                                               std::unordered_map<std::string_view, std::size_t> &multiplicity) {
@@ -133,7 +176,20 @@ namespace Horo::Gameplay {
                     return Result<void>::Failure(
                         MakeError(GameplayErrors::InvalidBehaviorComponent, "Behavior factory returned no instance."));
                 instances.emplace_back(entity.entity, component, registration->factory, implementation);
+                if (auto admitted = InitializePrefabContext(instances.back()); admitted.HasError())
+                    return admitted;
             }
+            return Result<void>::Success();
+        }
+
+        /** @brief Derives a callback capability once per attachment, preserving inherited immutable lineage. */
+        [[nodiscard]] Result<void> InitializePrefabContext(Instance &instance) const {
+            if (!prefabs || !instance.component.typeId.Value().starts_with(prefabs->Binding().moduleId + "."))
+                return Result<void>::Success();
+            auto context = prefabs->ForEntity(instance.entity);
+            if (context.HasError())
+                return Result<void>::Failure(context.ErrorValue());
+            instance.prefabs = std::move(context).Value();
             return Result<void>::Success();
         }
 
@@ -142,7 +198,7 @@ namespace Horo::Gameplay {
                 return Result<void>::Failure(
                     MakeError(GameplayErrors::RegistryFrozen, "Behavior registry must be frozen before scene activation."));
 
-            const Runtime::RuntimeSceneView sceneView = scene.View();
+            const Runtime::RuntimeSceneView sceneView = SceneView();
             for (std::size_t slot = 0; slot < sceneView.SlotCount(); ++slot) {
                 const std::optional<Runtime::RuntimeEntityView> entity = sceneView.EntityAt(slot);
                 if (!entity)
@@ -193,7 +249,7 @@ namespace Horo::Gameplay {
             if (shutdownRequested)
                 return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent));
             if (!commands.Empty()) {
-                Result<Runtime::StructuralCommitResult> committed = scene.Commit(commands);
+                Result<void> committed = CommitCommands(std::move(commands));
                 if (committed.HasError())
                     return Result<void>::Failure(committed.ErrorValue());
             }
@@ -203,7 +259,7 @@ namespace Horo::Gameplay {
         /** @brief Detached metadata; its lifetime excludes concurrent owner-lane runner mutation. */
         struct StructuralCandidate final : Runtime::SceneStructuralCandidate {
             explicit StructuralCandidate(std::shared_ptr<Impl> lifetime)
-                : lifetime(std::move(lifetime)), owner(*this->lifetime), scene(owner.scene.View()) {}
+                : lifetime(std::move(lifetime)), owner(*this->lifetime), scene(owner.SceneView()) {}
 
             StructuralCandidate(const StructuralCandidate &) = delete;
             StructuralCandidate &operator=(const StructuralCandidate &) = delete;
@@ -241,6 +297,10 @@ namespace Horo::Gameplay {
                 for (Instance &instance : additions) {
                     if (owner.shutdownRequested)
                         return FailAdditions(first, "Gameplay shutdown requested during structural notifications.");
+                    if (auto admitted = owner.InitializePrefabContext(instance); admitted.HasError()) {
+                        RollbackAdditions(first);
+                        return admitted;
+                    }
                     if (!TryCreateInstance(instance))
                         return FailAdditions(first, "Spawned behavior factory threw an exception.");
                     if (instance.implementation == nullptr)
@@ -309,7 +369,7 @@ namespace Horo::Gameplay {
                 const Runtime::RuntimeSceneView active, const std::span<const Runtime::RuntimeEntityView> created,
                 const std::span<const Runtime::EntityRef> destroyed) override {
                 if (owner.shutdown || owner.shutdownRequested || owner.structuralPending || !active.IsCurrent() ||
-                    active.RuntimeId() != owner.scene.View().RuntimeId())
+                    active.RuntimeId() != owner.sceneIdentity || active.RuntimeId() != owner.SceneView().RuntimeId())
                     return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
                         MakeError(GameplayErrors::InvalidBehaviorComponent, "Gameplay runner cannot admit this Scene transaction."));
                 auto candidate = std::make_unique<StructuralCandidate>(lifetime);
@@ -339,6 +399,8 @@ namespace Horo::Gameplay {
                     const BehaviorRegistration *registration = owner.registry.Find(component.typeId);
                     if (registration == nullptr)
                         return Result<void>::Failure(MakeError(GameplayErrors::BehaviorNotRegistered));
+                    if (auto schema = ValidateSpawnSchema(component, registration->descriptor); schema.HasError())
+                        return schema;
                     if (const auto sameIdentity = [&component, destroyed](const Instance &existing) {
                         return existing.component.instanceId == component.instanceId &&
                                std::ranges::find(destroyed, existing.entity) == destroyed.end();
@@ -391,6 +453,8 @@ namespace Horo::Gameplay {
             shutdown = true;
             if (physics)
                 physics->Revoke();
+            if (prefabs)
+                prefabs->Revoke();
             for (auto iterator = instances.rbegin(); iterator != instances.rend(); ++iterator) {
                 (void)RollbackInstance(*iterator);
             }
@@ -399,12 +463,15 @@ namespace Horo::Gameplay {
             events.next.clear();
         }
 
-        Runtime::RuntimeScene &scene;
+        Runtime::RuntimeScene *scene{};
+        Runtime::RuntimeSceneService *scenes{};
         const BehaviorRegistry &registry;
         BehaviorRuntimeLimits limits;
         EventQueue events;
         std::shared_ptr<void> generationLease;
+        Runtime::SceneRuntimeId sceneIdentity;
         std::shared_ptr<const GameplayPhysicsContext> physics;
+        std::shared_ptr<const GameplayPrefabContext> prefabs;
         std::vector<Instance> instances;
         bool shutdown{};
         bool structuralPending{};
@@ -431,9 +498,34 @@ namespace Horo::Gameplay {
             return Result<std::unique_ptr<BehaviorRuntime>>::Failure(generationLease.ErrorValue());
         auto impl = std::make_shared<Impl>(scene, registry, limits, std::move(generationLease).Value());
         impl->physics = std::move(physics);
+        return ActivateImpl(std::move(impl));
+    }
+
+    /** @copydoc BehaviorRuntime::Create */
+    Result<std::unique_ptr<BehaviorRuntime>> BehaviorRuntime::Create(Runtime::RuntimeSceneService &scenes, const BehaviorRegistry &registry,
+                                                                     const BehaviorRuntimeLimits limits,
+                                                                     std::shared_ptr<const GameplayPhysicsContext> physics,
+                                                                     std::shared_ptr<const GameplayPrefabContext> prefabs) {
+        const auto active = scenes.ActiveScene();
+        if (!active || (prefabs && prefabs->Binding().scene != active->RuntimeId()) ||
+            (physics && physics->Binding().scene != active->RuntimeId().value))
+            return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Prefab::PrefabErrors::SceneUnavailable));
+        auto generationLease = registry.AcquireGenerationLease();
+        if (generationLease.HasError())
+            return Result<std::unique_ptr<BehaviorRuntime>>::Failure(generationLease.ErrorValue());
+        auto impl = std::make_shared<Impl>(scenes, registry, limits, std::move(generationLease).Value());
+        impl->physics = std::move(physics);
+        impl->prefabs = std::move(prefabs);
+        return ActivateImpl(std::move(impl));
+    }
+
+    /** @copydoc BehaviorRuntime::ActivateImpl */
+    Result<std::unique_ptr<BehaviorRuntime>> BehaviorRuntime::ActivateImpl(std::shared_ptr<Impl> impl) {
         if (Result<void> built = impl->BuildInstances(); built.HasError()) {
             if (impl->physics)
                 impl->physics->Revoke();
+            if (impl->prefabs)
+                impl->prefabs->Revoke();
             bool rollbackComplete = true;
             for (auto iterator = impl->instances.rbegin(); iterator != impl->instances.rend(); ++iterator) {
                 rollbackComplete = impl->RollbackInstance(*iterator) && rollbackComplete;
@@ -453,6 +545,10 @@ namespace Horo::Gameplay {
 
     /** @copydoc BehaviorRuntime::FixedUpdate */
     Result<void> BehaviorRuntime::FixedUpdate(const std::span<const GameplayInputAction> input, const FixedDeltaTime delta) const {
+        if (impl_->SceneView().RuntimeId() != impl_->sceneIdentity) {
+            impl_->ShutdownNow();
+            return Result<void>::Failure(MakeError(Prefab::PrefabErrors::SceneUnavailable));
+        }
         if (impl_->shutdown || impl_->structuralPending)
             return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent, "Behavior runtime is shut down."));
         impl_->events.BeginTick();
@@ -477,7 +573,7 @@ namespace Horo::Gameplay {
             instance.implementation->OnFixedUpdate(context, delta);
         }
         if (!commands.Empty()) {
-            Result<Runtime::StructuralCommitResult> committed = impl_->scene.Commit(commands);
+            Result<void> committed = impl_->CommitCommands(std::move(commands));
             if (committed.HasError())
                 return Result<void>::Failure(committed.ErrorValue());
         }
@@ -486,6 +582,10 @@ namespace Horo::Gameplay {
 
     /** @copydoc BehaviorRuntime::PresentationUpdate */
     void BehaviorRuntime::PresentationUpdate(const FrameDeltaTime delta) const {
+        if (impl_->SceneView().RuntimeId() != impl_->sceneIdentity) {
+            impl_->ShutdownNow();
+            return;
+        }
         if (impl_->shutdown || impl_->structuralPending)
             return;
         Runtime::SceneCommandBuffer rejectedCommands;
