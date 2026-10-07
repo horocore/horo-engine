@@ -209,6 +209,10 @@ namespace Horo::Editor {
         auto opened = MixerAssetDocument::Open(Identity(), Audio::MakeDefaultMixerAsset(), limits);
         REQUIRE(opened.HasValue());
         auto bounded = std::move(opened).Value();
+        // Open owns its policy even when the caller later changes the borrowed input.
+        limits.maximumBuses = Audio::MaximumMixerAssetBuses;
+        limits.maximumRoutes = Audio::MaximumMixerAssetRoutes;
+        limits.maximumEffects = Audio::MaximumMixerAssetEffects;
         ErrorIs(Execute(bounded, Bus(100)), MixerDocumentErrors::InvalidCommand);
         ErrorIs(Execute(bounded, SetMixerRoute{Route(100, 2, 1)}), MixerDocumentErrors::InvalidCommand);
         REQUIRE(Execute(bounded, InsertMixerEffect{Stable<Audio::AudioBusId>(2), Gain(200), 0}).HasValue());

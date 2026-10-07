@@ -430,6 +430,21 @@ The service host resolves the immutable exact provider identity, then owns the
 session/completion sink and request leases through native drain. Product routing
 policy beyond this narrow composition belongs to the later profile work.
 
+ABI 1.4 appends the restricted `editor.activity_item` registration/session
+transport without changing the earlier table prefixes. Its canonical required
+host capability is `editor.activity` (`HORO_EDITOR_ACTIVITY_HOST_CAPABILITY`),
+which denotes availability of the registration/session transport in an explicit
+interactive GUI composition. It is distinct from the `editor.activity_item`
+and `editor.panel` contribution-point claims; it grants neither arbitrary GUI
+access nor additional permissions. Headless and uncomposed hosts do not advertise
+it. Manifest capability grammar remains unchanged. The explicit editor host
+copies declared activity/panel pairs, bounded standard forms, package messages
+and static SVG resources before transactional publication. Its version-1 node
+mask admits text, label, action, stack and group only; unsupported form controls
+are rejected rather than silently interpreted. Host scheduling owns action
+cancellation and native-code leases; packages receive no native GUI types or
+renderer handles. See [activity/drawer migration](../../guides/activity-drawer-contribution-migration.md).
+
 The catalog is intentionally typed. A package cannot draw arbitrary UI, mutate
 scene state, or open sockets merely because it is installed. It must contribute
 to the matching extension point and receive the matching approved permissions.

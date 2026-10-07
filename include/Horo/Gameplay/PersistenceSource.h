@@ -6,6 +6,8 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Runtime/Save/SaveErrors.h"
+#include "Horo/Runtime/Save/SaveRestoreReferenceContext.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -20,6 +22,17 @@ namespace Horo::Gameplay {
         virtual ~IPreparedPersistenceState() = default;
         /** @brief Publishes prepared state without allocation, waiting, callbacks or failure. */
         virtual void Publish() noexcept = 0;
+
+        /** @brief Resolves declared references into this inactive candidate after aggregate identity allocation.
+         * @param references Exact schema-owned stable results borrowed only for this call.
+         * @return Success after consuming every required result, or a typed pre-publication failure.
+         * @details Legacy candidates accept only a schema declaring no references. Reference-bearing owners
+         *          override this hook and retain stable values, never the borrowed view or runtime handles.
+         */
+        [[nodiscard]] virtual Result<void> FixupRuntimeReferences(const Runtime::SaveRestoreReferenceView &references) {
+            return references.references.empty() ? Result<void>::Success()
+                                                 : Result<void>::Failure(MakeError(Runtime::SaveErrors::RestoreAdapterContractInvalid));
+        }
     };
 
     /**

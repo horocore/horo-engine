@@ -73,6 +73,9 @@ namespace Horo::Character {
                 !IsFiniteNonNegative(descriptor.minimumMoveDistanceMeters) || !IsFiniteNonNegative(descriptor.maximumStepHeightMeters) ||
                 !IsFiniteNonNegative(descriptor.maximumSlopeDegrees) || descriptor.maximumSlopeDegrees > 90)
                 return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
+            if (descriptor.steepSlopePolicy != CharacterSteepSlopePolicy::Stop &&
+                descriptor.steepSlopePolicy != CharacterSteepSlopePolicy::Slide)
+                return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
             if (descriptor.maximumContacts == 0 || descriptor.maximumContacts > MaximumCharacterContacts)
                 return Result<void>::Failure(MakeError(CharacterErrors::CapacityExceeded));
             return Result<void>::Success();
@@ -126,8 +129,9 @@ namespace Horo::Character {
         /** @brief Checks movement metadata before flags, capacities and surface evidence. */
         [[nodiscard]] Result<void> ValidateResultMetadata(const CharacterMovementResult &result) {
             if (result.tick == 0 || result.sequence == 0 || !Math::IsFinite(result.finalPosition) || !IsUnit(result.finalHeading) ||
-                !Math::IsFinite(result.achievedVelocityMetersPerSecond) || !IsUnit(result.up) ||
-                !std::isfinite(result.groundSlopeDegrees) || result.groundSlopeDegrees < 0 || result.groundSlopeDegrees > 180)
+                !Math::IsFinite(result.achievedVelocityMetersPerSecond) || !Math::IsFinite(result.gravityVelocityMetersPerSecond) ||
+                !IsUnit(result.up) || !std::isfinite(result.groundSlopeDegrees) || result.groundSlopeDegrees < 0 ||
+                result.groundSlopeDegrees > 180)
                 return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid, "Movement result metadata is invalid."));
             if (result.shapeChange.has_value()) {
                 using enum CharacterShapeChangeStatus;
@@ -278,6 +282,8 @@ namespace Horo::Character {
                 !Math::IsFinite(request.position) || !IsUnit(request.up) || !IsUnit(request.direction) ||
                 !std::isfinite(request.maximumDistanceMeters) || request.maximumDistanceMeters <= 0.0F)
                 return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid, "Character sweep request is malformed."));
+            if (const auto filter = ValidateCharacterCollisionSelectors(request.selectors, request.physicsWorld); filter.HasError())
+                return filter;
             if (const auto capsule = Physics::ValidatePhysicsShapeDescriptor(Physics::PhysicsShapeDescriptor{request.capsule});
                 capsule.HasError())
                 return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid, "Character sweep capsule is invalid."));
@@ -301,6 +307,10 @@ namespace Horo::Character {
                     return Result<void>::Failure(
                         MakeError(CharacterErrors::DescriptorInvalid, "Character sweep hit body does not belong to the request world."));
             }
+            if ((hit.layer && !hit.layer->IsValid()) || (hit.profile && !hit.profile->IsValid()) ||
+                (request.selectors.requiredLayer && !hit.layer) || (request.selectors.requiredProfile && !hit.profile))
+                return Result<void>::Failure(
+                    MakeError(CharacterErrors::DescriptorInvalid, "Character sweep hit lacks valid selector evidence."));
             if (!IsSweepGeometryValid(hit, request.maximumDistanceMeters))
                 return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid, "Character sweep hit evidence is malformed."));
             if ((hit.subshape.has_value() && !hit.subshape->IsValid()) || (hit.material.has_value() && !IsMaterialValid(*hit.material)))
@@ -309,6 +319,16 @@ namespace Horo::Character {
             return Result<void>::Success();
         }
     }  // namespace
+
+    /** @copydoc ValidateCharacterCollisionSelectors */
+    Result<void> ValidateCharacterCollisionSelectors(const CharacterCollisionSelectors &selectors, const Physics::PhysicsWorldId world) {
+        if (!world.IsValid() || (selectors.requiredLayer && !selectors.requiredLayer->IsValid()) ||
+            (selectors.requiredProfile && !selectors.requiredProfile->IsValid()))
+            return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid, "Character collision selectors are malformed."));
+        if (selectors.excludedBody)
+            return Physics::ValidatePhysicsHandleOwner(*selectors.excludedBody, world);
+        return Result<void>::Success();
+    }
 
     /** @copydoc CharacterWorldId::Create */
     Result<CharacterWorldId> CharacterWorldId::Create(const std::uint64_t value) {
@@ -343,6 +363,8 @@ namespace Horo::Character {
     Result<void> ValidateCharacterControllerDescriptor(const CharacterControllerDescriptor &descriptor) {
         if (const auto worlds = ValidateDescriptorWorlds(descriptor); worlds.HasError())
             return worlds;
+        if (const auto filter = ValidateCharacterCollisionSelectors(descriptor.selectors, descriptor.physicsWorld); filter.HasError())
+            return filter;
         if (const auto geometry = ValidateDescriptorGeometry(descriptor); geometry.HasError())
             return geometry;
         if (const auto bindings = ValidateDescriptorBindings(descriptor); bindings.HasError())
@@ -475,6 +497,8 @@ namespace Horo::Character {
                 ValidateCharacterControllerHandleOwner(snapshot.controller, descriptor.sceneGeneration, descriptor.characterWorld);
             owner.HasError())
             return owner;
+        if (const auto filter = ValidateCharacterCollisionSelectors(snapshot.selectors, descriptor.physicsWorld); filter.HasError())
+            return filter;
         if (!IsShapeStateValid(snapshot.capsule, snapshot.stance))
             return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
         if (snapshot.movement.shapeChange.has_value()) {

@@ -146,7 +146,7 @@ namespace Horo::Tests {
     }  // namespace
 
     struct FullEditorUiTestHost::State {
-        State(IEditorUiTestSurface &testSurface, std::string locale, std::optional<std::string> recentProjectName)
+        State(IEditorUiTestSurface &testSurface, const std::string &locale, std::optional<std::string> recentProjectName)
             : root(MakeIsolatedRoot()), home(root / "home"), projectsRoot(root / "projects"), scopedHome(home),
               jobs(JobSystemConfig{2, 256}), creation(jobs, engineEvents), localization(Editor::LocaleTag{"en-US"}),
               configuration(Editor::CreateEditorConfigurationService(Editor::DefaultEditorSettings())),
@@ -172,8 +172,17 @@ namespace Horo::Tests {
             Editor::RegisterEditorWorkspaceScreen(screens);
             Editor::WorkspacePanelRegistry panels;
             Editor::RegisterDefaultWorkspacePanels(panels);
-            screenHost = std::make_unique<Editor::GuiScreenHost>(gui, modals, settings, localization, engineEvents, creation, jobs, input,
-                                                                 rendererAvailability, std::move(screens), std::move(panels));
+            screenHost =
+                std::make_unique<Editor::GuiScreenHost>(gui, Editor::GuiScreenHostComposition{.modalHost = modals,
+                                                                                              .settingsService = settings,
+                                                                                              .localization = localization,
+                                                                                              .engineEvents = engineEvents,
+                                                                                              .creationService = creation,
+                                                                                              .jobs = jobs,
+                                                                                              .inputRouter = input,
+                                                                                              .rendererAvailability = rendererAvailability,
+                                                                                              .screenRegistry = std::move(screens),
+                                                                                              .workspacePanelRegistry = std::move(panels)});
             screenHost->Services().Register<Editor::IEditorViewportRenderer>(viewportRenderer);
             screenHost->Services().Register<Editor::EditorViewportSceneState>(viewportScene);
             screenHost->Services().Register<Runtime::RuntimeSceneService>(runtimeScene);
@@ -321,6 +330,10 @@ namespace Horo::Tests {
                 result += record.stage + ": " + record.message + "\n";
         }
         return result;
+    }
+
+    bool FullEditorUiTestHost::IsGameplayBuildUpToDate(const std::filesystem::path &projectRoot) const {
+        return state_->gameplayBuilds.IsUpToDate({.projectRoot = projectRoot, .environment = state_->gameplayBuildEnvironment});
     }
 
     Editor::GuiRouteKind FullEditorUiTestHost::ActiveRoute() const noexcept {

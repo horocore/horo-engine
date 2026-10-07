@@ -72,11 +72,11 @@ namespace Horo::Navigation {
         provider.Insert(Asset(), cooked);
         auto cache = std::move(Assets::AssetPayloadCache::Create(8, 4096)).Value();
         CancellationSource cancellation;
-        auto first = LoadNavMeshAsset(registry.Snapshot(), provider, Asset(), Target(), *cache, cancellation.Token());
+        auto first = LoadNavMeshAsset({registry.Snapshot(), provider}, Asset(), Target(), *cache, cancellation.Token());
         REQUIRE(first.HasValue());
         const auto envelope = Assets::DecodeCookedArtifact(cooked);
         provider.Insert(Asset(true), Envelope(envelope.Value().payload, Asset(true)));
-        auto second = LoadNavMeshAsset(registry.Snapshot(), provider, Asset(true), Target(), *cache, cancellation.Token());
+        auto second = LoadNavMeshAsset({registry.Snapshot(), provider}, Asset(true), Target(), *cache, cancellation.Token());
         REQUIRE(second.HasValue());
         REQUIRE(first.Value().tileBytes.front().SharesAllocationWith(second.Value().tileBytes.front()));
         REQUIRE(cache->Snapshot().residentEntries == 1);
@@ -86,7 +86,7 @@ namespace Horo::Navigation {
         REQUIRE(first.Value().cacheKeyDigest == envelope.Value().cacheKeyDigest);
         REQUIRE(first.Value().partitions.front().surface == Id<SurfaceId>(101));
         cancellation.RequestCancellation();
-        REQUIRE(LoadNavMeshAsset(registry.Snapshot(), provider, Asset(), Target(), *cache, cancellation.Token()).HasError());
+        REQUIRE(LoadNavMeshAsset({registry.Snapshot(), provider}, Asset(), Target(), *cache, cancellation.Token()).HasError());
     }
 
     TEST_CASE("Scene activation pins real Detour queries through eviction replacement and shutdown",
@@ -100,7 +100,7 @@ namespace Horo::Navigation {
         REQUIRE(harness.participant->ActiveAssetProvenance().front().id == Asset());
         REQUIRE(harness.participant->ActiveAssetProvenance().front().registryRevision == harness.registry.Snapshot().Revision());
         const auto charged = harness.cache->Snapshot().retainedPayloadBytes;
-        const auto digest = std::move(LoadNavMeshAsset(harness.registry.Snapshot(), harness.provider, Asset(), Target(), *harness.cache,
+        const auto digest = std::move(LoadNavMeshAsset({harness.registry.Snapshot(), harness.provider}, Asset(), Target(), *harness.cache,
                                                        harness.cancellation.Token()))
                                 .Value()
                                 .tileBytes.front()
@@ -286,8 +286,8 @@ namespace Horo::Navigation {
         Assets::FilesystemAssetProvider filesystem{project.directory};
         auto cache = std::move(Assets::AssetPayloadCache::Create(8, 4096)).Value();
         CancellationSource cancellation;
-        auto editor = LoadNavMeshAsset(registry.Snapshot(), filesystem, Asset(), Target(), *cache, cancellation.Token());
-        auto packaged = LoadNavMeshAsset(registry.Snapshot(), archive, Asset(), Target(), *cache, cancellation.Token());
+        auto editor = LoadNavMeshAsset({registry.Snapshot(), filesystem}, Asset(), Target(), *cache, cancellation.Token());
+        auto packaged = LoadNavMeshAsset({registry.Snapshot(), archive}, Asset(), Target(), *cache, cancellation.Token());
         REQUIRE(editor.HasValue());
         REQUIRE(packaged.HasValue());
         REQUIRE(editor.Value().id == packaged.Value().id);

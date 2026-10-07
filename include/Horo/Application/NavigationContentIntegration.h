@@ -63,7 +63,7 @@ namespace Horo::Application {
          * @param target Explicit cook target. @param product Game runtime or dedicated-server product.
          * @param limits Finite artifact/archive bounds. */
         NavigationReleaseContentSmokeProbe(std::string archivePath, AssetCookTargetId target, Release::DistributionProductKind product,
-                                           Assets::AssetArchiveLimits limits = {});
+                                           const Assets::AssetArchiveLimits &limits = {});
         /** @copydoc Release::IReleaseCandidateSmokeProbe::Kind */
         [[nodiscard]] Release::ReleaseCandidateSmokeKind Kind() const noexcept override;
         /** @copydoc Release::IReleaseCandidateSmokeProbe::Check */

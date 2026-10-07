@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -86,6 +87,17 @@ namespace Horo::Assets {
             std::span<const std::uint8_t> bytes, const AssetCookTargetId &expectedTarget, const AssetChunkPlan &expectedPlan,
             std::span<const AssetChunkId> selected, const Sha256Digest &baseManifest, const AssetArchiveLimits &limits = {});
 
+        /** @brief Returns a visible cooked envelope's exact stored size without copying it.
+         * @param id Stable asset identity.
+         * @return Verified byte length, or empty when the asset is not mounted.
+         */
+        [[nodiscard]] std::optional<std::size_t> StoredByteLength(AssetId id) const noexcept;
+        /** @brief Returns only verified mounted chunk definitions, including selected dependency closure.
+         * @return Immutable mount evidence valid for this provider's lifetime; never an unmounted release inventory.
+         */
+        [[nodiscard]] std::span<const AssetChunkDefinition> MountedChunks() const noexcept;
+        /** @brief Returns the digest of the complete verified archive bytes. @return Immutable package identity. */
+        [[nodiscard]] const Sha256Digest &ArchiveDigest() const noexcept;
         /**
          * @brief Inspect immutable visible members without reading or copying their payloads.
          * @return AssetId-sorted metadata for exactly the assets exposed by this provider.
@@ -122,5 +134,6 @@ namespace Horo::Assets {
         std::vector<AssetChunkDefinition> chunks_;
         std::vector<AssetArchiveMember> members_;
         AssetCookTargetId target_;
+        Sha256Digest archiveDigest_;
     };
 }  // namespace Horo::Assets

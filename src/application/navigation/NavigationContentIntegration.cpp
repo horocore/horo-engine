@@ -99,7 +99,7 @@ namespace Horo::Application {
                         return Result<std::vector<Assets::AssetArchiveInput>>::Failure(expectation.ErrorValue());
                     result.expectations.push_back(std::move(expectation).Value());
                 }
-                inputs.push_back({entry.assetId, std::move(contents.artifacts[index])});
+                inputs.emplace_back(entry.assetId, std::move(contents.artifacts[index]));
             }
             return Result<std::vector<Assets::AssetArchiveInput>>::Success(std::move(inputs));
         }

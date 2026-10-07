@@ -144,6 +144,19 @@ namespace Horo {
                                             .retryable = true,
                                             .userActionable = false};
 
+        const ErrorCodeDescriptor QueueShed{.domain = JobDomain,
+                                            .code = ErrorCode{"job.queue_shed"},
+                                            .defaultSeverity = ErrorSeverity::Warning,
+                                            .summary = "Optional incoming work was shed at queue capacity.",
+                                            .remediationHint = "Retry only if this optional work is still needed.",
+                                            .retryable = true};
+
+        const ErrorCodeDescriptor InvalidSubmission{.domain = JobDomain,
+                                                    .code = ErrorCode{"job.submission_invalid"},
+                                                    .defaultSeverity = ErrorSeverity::Error,
+                                                    .summary = "Job priority or queue admission policy is invalid.",
+                                                    .remediationHint = "Use a declared priority and a valid bounded queue policy."};
+
         const ErrorCodeDescriptor Shutdown{.domain = JobDomain,
                                            .code = ErrorCode{"job.shutdown"},
                                            .defaultSeverity = ErrorSeverity::Error,

@@ -8,7 +8,7 @@ namespace Horo::Application {
     /** @copydoc NavigationReleaseContentSmokeProbe::NavigationReleaseContentSmokeProbe */
     NavigationReleaseContentSmokeProbe::NavigationReleaseContentSmokeProbe(std::string archivePath, AssetCookTargetId target,
                                                                            const Release::DistributionProductKind product,
-                                                                           const Assets::AssetArchiveLimits limits)
+                                                                           const Assets::AssetArchiveLimits &limits)
         : archivePath_(std::move(archivePath)), target_(std::move(target)), product_(product), limits_(limits) {}
 
     /** @copydoc NavigationReleaseContentSmokeProbe::Kind */
@@ -26,8 +26,10 @@ namespace Horo::Application {
             std::error_code error;
             const auto size = std::filesystem::file_size(path, error);
             if (error || size == 0 || size > limits_.maximumArchiveBytes || size > std::numeric_limits<std::size_t>::max() ||
-                size > static_cast<std::uintmax_t>(std::numeric_limits<std::streamsize>::max()) ||
-                std::filesystem::is_symlink(path, error) || error)
+                size > static_cast<std::uintmax_t>(std::numeric_limits<std::streamsize>::max()))
+                return Result<void>::Failure(MakeError(Navigation::NavigationErrors::NavMeshArtifactCorrupt));
+            // is_symlink updates the same error owner; preserve this second filesystem failure check.
+            if (const bool symlink = std::filesystem::is_symlink(path, error); symlink || error)
                 return Result<void>::Failure(MakeError(Navigation::NavigationErrors::NavMeshArtifactCorrupt));
             std::ifstream file{path, std::ios::binary};
             if (!file)
@@ -36,8 +38,8 @@ namespace Horo::Application {
             file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
             if (!file || file.peek() != std::char_traits<char>::eof())
                 return Result<void>::Failure(MakeError(Navigation::NavigationErrors::NavMeshArtifactCorrupt));
-            const auto validated = NavigationContentDetail::ValidateContent(bytes, manifest, archivePath_, target_, product_, limits_);
-            if (validated.HasError())
+            if (const auto validated = NavigationContentDetail::ValidateContent(bytes, manifest, archivePath_, target_, product_, limits_);
+                validated.HasError())
                 return Result<void>::Failure(validated.ErrorValue());
             return Result<void>::Success();
         } catch (const std::bad_alloc &) {

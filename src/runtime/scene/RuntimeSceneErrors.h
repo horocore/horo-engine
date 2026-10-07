@@ -25,6 +25,8 @@ namespace Horo::Runtime::SceneErrors {
     extern const ErrorCodeDescriptor InvalidCandidate;
     extern const ErrorCodeDescriptor StructuralCommitFailed;
     extern const ErrorCodeDescriptor SaveBootstrapInvalid;
+    extern const ErrorCodeDescriptor SaveBootstrapDecoderUnavailable;
+    extern const ErrorCodeDescriptor SaveBootstrapDatasetUnsupported;
     extern const ErrorCodeDescriptor SaveBootstrapAssetUnavailable;
     extern const ErrorCodeDescriptor SaveBootstrapIncompatible;
     extern const ErrorCodeDescriptor SaveBootstrapSpawnMissing;

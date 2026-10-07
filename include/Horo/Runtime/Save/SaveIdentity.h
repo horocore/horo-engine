@@ -98,6 +98,8 @@ namespace Horo::Runtime {
     struct SlotGenerationIdentityTag;
     struct SaveRecordIdentityTag;
     struct CapturedStateIdentityTag;
+    struct SaveAssetIdentityTag;
+    struct PersistentEntityIdentityTag;
 
     /** @brief Product configuration identity, never derived from executable name or location. */
     using ProductStorageId = PersistentSaveIdentity<ProductStorageIdentityTag>;
@@ -117,6 +119,10 @@ namespace Horo::Runtime {
     using SaveRecordId = PersistentSaveIdentity<SaveRecordIdentityTag>;
     /** @brief Stable identity assigned to one detached captured-state value. */
     using CapturedStateId = PersistentSaveIdentity<CapturedStateIdentityTag>;
+    /** @brief Stable Asset Registry identity shared by save references and gameplay fixups. */
+    using SaveAssetId = PersistentSaveIdentity<SaveAssetIdentityTag>;
+    /** @brief Stable durable entity identity, independent from a runtime Scene domain or ECS slot. */
+    using PersistentEntityId = PersistentSaveIdentity<PersistentEntityIdentityTag>;
 
     /** @brief Maximum canonical participant identity length in bytes. */
     inline constexpr std::size_t MaximumSaveParticipantIdBytes = 96;

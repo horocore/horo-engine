@@ -1,3 +1,4 @@
+#include "../../support/OwnedTestDirectory.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
 
 #include <array>
@@ -8,7 +9,7 @@
 namespace {
     Horo::Editor::LocalizationCatalog Catalog(const char *locale, const char *text) {
         Horo::Editor::LocalizationCatalog catalog{.locale = Horo::Editor::LocaleTag{locale}};
-        catalog.messages.emplace(Horo::Editor::MessageKey{"editor", "settings.title"}, text);
+        catalog.messages.try_emplace(Horo::Editor::MessageKey{"editor", "settings.title"}, text);
         return catalog;
     }
 
@@ -178,7 +179,8 @@ namespace {
     }
 
     TEST_CASE("Catalog File Loader Parses Resource Format", "[unit][editor]") {
-        const auto path = std::filesystem::temp_directory_path() / "horo-localization-test.json";
+        const Horo::Tests::OwnedTestDirectory directory{"localization catalog"};
+        const auto path = directory.Path() / "horo-localization-test.json";
         {
             std::ofstream output(path);
             output
@@ -195,10 +197,11 @@ namespace {
     }
 
     TEST_CASE("Asset Localization Catalogs Contain Required Editor Messages", "[unit][editor]") {
-        const std::filesystem::path enPath = "assets/localization/editor/en-US.json";
-        const std::filesystem::path trPath = "assets/localization/editor/tr-TR.json";
-        if (!std::filesystem::exists(enPath) || !std::filesystem::exists(trPath))
-            return;
+        const std::filesystem::path catalogRoot = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+        const auto enPath = catalogRoot / "en-US.json";
+        const auto trPath = catalogRoot / "tr-TR.json";
+        REQUIRE(std::filesystem::is_regular_file(enPath));
+        REQUIRE(std::filesystem::is_regular_file(trPath));
 
         Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{"en-US"}};
         Horo::Editor::LocalizationError error;
@@ -216,6 +219,9 @@ namespace {
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.localization") == "L10n"));
         REQUIRE((service.Get("editor", "workspace.game_asset.category.missing") == "Missing Gameplay Asset Type"));
         RequireSettingsCatalogKeys(service);
+        for (const auto key : {"workspace.activity.move_left", "workspace.activity.move_right", "workspace.activity.move_bottom",
+                               "workspace.activity.move_earlier", "workspace.activity.move_later"})
+            CHECK(service.Get("editor", key).find("workspace.activity.") == std::string::npos);
 
         REQUIRE((service.Prepare(Horo::Editor::LocaleTag{"tr-TR"}, &error)));
         REQUIRE((service.ActivatePrepared(&error)));
@@ -228,5 +234,8 @@ namespace {
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.localization") == "L10n"));
         REQUIRE((service.Get("editor", "workspace.game_asset.category.missing") == "Eksik Oynanış Asset Türü"));
         RequireSettingsCatalogKeys(service);
+        for (const auto key : {"workspace.activity.move_left", "workspace.activity.move_right", "workspace.activity.move_bottom",
+                               "workspace.activity.move_earlier", "workspace.activity.move_later"})
+            CHECK(service.Get("editor", key).find("workspace.activity.") == std::string::npos);
     }
 }  // namespace
