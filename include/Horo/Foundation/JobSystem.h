@@ -326,11 +326,11 @@ namespace Horo {
         [[nodiscard]] Result<JobHandle> Submit(JobDescriptor descriptor, std::function<void(const CancellationToken &)> work) const;
         /**
          * @brief Queues result-returning work without translating typed failures into exceptions.
-         * @param descriptor Submission metadata including optional parent cancellation.
+         * @param descriptor Submission metadata including optional parent cancellation, copied synchronously before admission.
          * @param work Owned callback executed by one worker.
          * @return Move-only accepted-job handle or a typed admission failure.
          */
-        [[nodiscard]] Result<JobHandle> SubmitResult(JobDescriptor descriptor, JobFunction work) const;
+        [[nodiscard]] Result<JobHandle> SubmitResult(const JobDescriptor &descriptor, JobFunction work) const;
         /**
          * @brief Queues context-aware work after freezing all descriptor and diagnostic context.
          * @param descriptor Explicit cancellation, correlation and configuration inputs, copied synchronously before admission.

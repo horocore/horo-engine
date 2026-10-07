@@ -265,6 +265,49 @@ namespace {
         jobs.Shutdown(Horo::ShutdownPolicy::Drain);
     }
 
+    TEST_CASE("SubmitResult Owns Borrowed Descriptor Before Caller Mutation And Destruction",
+              "[unit][foundation][jobs][configuration][lifetime]") {
+        Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 1}};
+        Horo::CancellationSource parent;
+        Horo::CancellationSource replacementParent;
+        std::optional<Horo::JobHandle> handle;
+        bool executed{};
+        {
+            Horo::JobDescriptor descriptor{.parentCancellation = parent.Token(),
+                                           .operationId = Horo::OperationId{42},
+                                           .configuration = BuildConfiguration(23)};
+            auto submitted = jobs.SubmitResult(descriptor, [&executed](const Horo::CancellationToken &) {
+                executed = true;
+                return Horo::Result<void>::Success();
+            });
+            REQUIRE(submitted.HasValue());
+            REQUIRE(descriptor.configuration->Revision() == 23);
+            handle.emplace(std::move(submitted).Value());
+            descriptor = {.parentCancellation = replacementParent.Token(),
+                          .operationId = Horo::OperationId{99},
+                          .configuration = BuildConfiguration(24)};
+        }
+        SECTION("replacement metadata and cancellation cannot affect accepted work") {
+            replacementParent.RequestCancellation();
+            REQUIRE(handle->Wait({.waitPolicy = Horo::WaitPolicy::MainThreadPumpAllowed, .timeout = Horo::Duration::FromMilliseconds(100)})
+                        .HasValue());
+            CHECK(executed);
+        }
+        SECTION("original cancellation ancestry remains owned after descriptor destruction") {
+            parent.RequestCancellation();
+            const auto waited =
+                handle->Wait({.waitPolicy = Horo::WaitPolicy::MainThreadPumpAllowed, .timeout = Horo::Duration::FromMilliseconds(100)});
+            REQUIRE(waited.HasError());
+            CHECK(Horo::IsJobCancelled(waited.ErrorValue()));
+            CHECK_FALSE(executed);
+        }
+        const auto snapshot = handle->Snapshot();
+        REQUIRE(snapshot.has_value());
+        CHECK(snapshot->configurationRevision == 23);
+        CHECK(snapshot->operationId == Horo::OperationId{42});
+        jobs.Shutdown(Horo::ShutdownPolicy::Drain);
+    }
+
     TEST_CASE("Terminal Result Remains Immutable Under Late Cancellation", "[unit][foundation][jobs][result]") {
         Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 1, .maxRetainedTerminalJobs = 1}};
         Horo::CancellationToken observedToken;

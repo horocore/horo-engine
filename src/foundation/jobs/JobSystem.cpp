@@ -416,14 +416,14 @@ namespace Horo {
     }
 
     Result<JobHandle> JobSystem::Submit(JobDescriptor descriptor, std::function<void(const CancellationToken &)> work) const {
-        return SubmitResult(std::move(descriptor), [work = std::move(work)](const CancellationToken &cancellation) {
+        return SubmitResult(descriptor, [work = std::move(work)](const CancellationToken &cancellation) {
             work(cancellation);
             return Result<void>::Success();
         });
     }
 
-    Result<JobHandle> JobSystem::SubmitResult(JobDescriptor descriptor, JobFunction work) const {
-        return SubmitContext(std::move(descriptor), [work = std::move(work)](const JobExecutionContext &context) {
+    Result<JobHandle> JobSystem::SubmitResult(const JobDescriptor &descriptor, JobFunction work) const {
+        return SubmitContext(descriptor, [work = std::move(work)](const JobExecutionContext &context) {
             return work(context.Cancellation());
         });
     }
@@ -756,8 +756,7 @@ namespace Horo {
         descriptor.parentCancellation = m_state->cancellation.Token();
         descriptor.taskGroupId = m_state->id;
         const std::weak_ptr weakState = m_state;
-        Result<JobHandle> submitted =
-            m_state->jobs.SubmitContext(std::move(descriptor), [weakState, ownedWork](const JobExecutionContext &context) {
+        Result<JobHandle> submitted = m_state->jobs.SubmitContext(descriptor, [weakState, ownedWork](const JobExecutionContext &context) {
             if (context.Cancellation().IsCancellationRequested())
                 return Result<void>::Failure(MakeJobError(JobErrors::Cancelled, "Task group child was cancelled before execution."));
             const auto failFast = [&weakState] {
