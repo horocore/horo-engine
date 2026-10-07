@@ -148,8 +148,8 @@ namespace Horo::Editor {
          */
         [[nodiscard]] static Result<TerrainAuthoringDocument> Open(TerrainDocumentSessionId session, Terrain::TerrainCanonicalSource source,
                                                                    std::uint32_t tileCells, TerrainAuthoringCapability capability,
-                                                                   TerrainEditLimits limits = {},
-                                                                   std::vector<TerrainAuthoredPlacement> placements = {});
+                                                                   const TerrainEditLimits &limits = {},
+                                                                   const std::vector<TerrainAuthoredPlacement> &placements = {});
         /** @brief Transfers sole ownership and closes donor admission.
          * @param other Owner being retired by transfer.
          */

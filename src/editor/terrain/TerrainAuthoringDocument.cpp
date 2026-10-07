@@ -98,8 +98,8 @@ namespace Horo::Editor {
                 source.height > Terrain::TerrainDescriptorHardLimits::SamplesPerAxis ||
                 source.layerCount > Terrain::TerrainDescriptorHardLimits::LayersPerTile)
                 return false;
-            const std::uint64_t count = static_cast<std::uint64_t>(source.width) * source.height;
-            if (count > Terrain::TerrainDescriptorHardLimits::WorkItems / (1U + source.layerCount + (!source.holes.empty() ? 1U : 0U)) ||
+            if (const std::uint64_t count = static_cast<std::uint64_t>(source.width) * source.height;
+                count > Terrain::TerrainDescriptorHardLimits::WorkItems / (1U + source.layerCount + (!source.holes.empty() ? 1U : 0U)) ||
                 source.heightsMeters.size() != count || source.weights.size() != count * source.layerCount ||
                 (!source.holes.empty() && source.holes.size() != count))
                 return false;
@@ -150,6 +150,11 @@ namespace Horo::Editor {
                    std::isfinite(value.offsetMeters) && std::isfinite(value.scale) && value.scale > 0 && std::isfinite(value.yawRadians);
         }
 
+        /** @brief Verifies stable operation identity and optional authored payload together. */
+        bool ValidPlacementChange(const TerrainPlacementEdit &change, const Terrain::TerrainCanonicalSource &source) noexcept {
+            return change.id.IsValid() && (!change.value || (change.value->id == change.id && ValidPlacement(*change.value, source)));
+        }
+
         /** @brief Accumulates checked byte charge without overflow. */
         bool Charge(std::size_t &bytes, std::size_t add, std::size_t ceiling) noexcept {
             if (add > ceiling - bytes)
@@ -197,17 +202,18 @@ namespace Horo::Editor {
             before.heightsMeters.reserve(after.heightsMeters.size());
             before.weights.reserve(after.weights.size());
             before.holes.reserve(after.holes.size());
-            for (std::uint32_t z = 0; z < after.rect.height; ++z)
-                for (std::uint32_t x = 0; x < after.rect.width; ++x) {
-                    const std::size_t index = static_cast<std::size_t>(z + after.rect.z) * source.width + x + after.rect.x;
-                    if (!after.heightsMeters.empty())
-                        before.heightsMeters.push_back(source.heightsMeters[index]);
-                    if (!after.holes.empty())
-                        before.holes.push_back(source.holes[index]);
-                    if (!after.weights.empty())
-                        for (std::size_t layer = 0; layer < source.layerCount; ++layer)
-                            before.weights.push_back(source.weights[index * source.layerCount + layer]);
-                }
+            const std::size_t count = static_cast<std::size_t>(after.rect.width) * after.rect.height;
+            for (std::size_t pixel = 0; pixel < count; ++pixel) {
+                const std::size_t index =
+                    (pixel / after.rect.width + after.rect.z) * source.width + pixel % after.rect.width + after.rect.x;
+                if (!after.heightsMeters.empty())
+                    before.heightsMeters.push_back(source.heightsMeters[index]);
+                if (!after.holes.empty())
+                    before.holes.push_back(source.holes[index]);
+                if (!after.weights.empty())
+                    for (std::size_t layer = 0; layer < source.layerCount; ++layer)
+                        before.weights.push_back(source.weights[index * source.layerCount + layer]);
+            }
             return before;
         }
 
@@ -246,7 +252,8 @@ namespace Horo::Editor {
         /** @brief Admits complete channel shapes, overlap and byte/work bounds before source capture. */
         Result<std::size_t> AdmitOperation(const TerrainEditOperation &operation, const EditContext &context) {
             const auto ceiling = std::min(context.limits.maximumTransactionBytes, context.limits.maximumHistoryBytes);
-            std::size_t bytes = sizeof(TerrainEditRecord), samples = 0;
+            std::size_t bytes = sizeof(TerrainEditRecord);
+            std::size_t samples = 0;
             if (bytes > ceiling)
                 return Failed<std::size_t>(TerrainEditErrors::LimitExceeded);
             // Charge payloads and duplicate snapshot metadata before capturing any source values.
@@ -256,9 +263,10 @@ namespace Horo::Editor {
                 if (count > context.limits.maximumSamples - samples)
                     return Failed<std::size_t>(TerrainEditErrors::LimitExceeded);
                 samples += static_cast<std::size_t>(count);
-                const std::uint64_t payload = static_cast<std::uint64_t>(patch.heightsMeters.size()) * sizeof(float) +
-                                              static_cast<std::uint64_t>(patch.weights.size()) * sizeof(std::uint16_t) + patch.holes.size();
-                if (payload > ceiling / 2 ||
+                if (const std::uint64_t payload = static_cast<std::uint64_t>(patch.heightsMeters.size()) * sizeof(float) +
+                                                  static_cast<std::uint64_t>(patch.weights.size()) * sizeof(std::uint16_t) +
+                                                  patch.holes.size();
+                    payload > ceiling / 2 ||
                     !Charge(bytes, 2 * sizeof(TerrainRasterPatch) + 2 * static_cast<std::size_t>(payload), ceiling))
                     return Failed<std::size_t>(TerrainEditErrors::LimitExceeded);
                 if (!ValidPatch(patch, context.source))
@@ -315,8 +323,7 @@ namespace Horo::Editor {
             std::map<Terrain::FoliageInstanceId, TerrainAuthoredPlacement> staged;
             std::size_t placementCount = current.size();
             for (const auto &change : operation.placements) {
-                if (!change.id.IsValid() || !placementIds.insert(change.id).second ||
-                    (change.value && (change.value->id != change.id || !ValidPlacement(*change.value, context.source))))
+                if (!ValidPlacementChange(change, context.source) || !placementIds.insert(change.id).second)
                     return Failed<PlacementMap>(TerrainEditErrors::Invalid);
                 const auto found = current.find(change.id);
                 const std::optional<TerrainAuthoredPlacement> before = found == current.end() ? std::nullopt : std::optional{found->second};
@@ -333,8 +340,8 @@ namespace Horo::Editor {
                                                 context.limits.maximumDirtyTiles))
                         return Failed<PlacementMap>(TerrainEditErrors::LimitExceeded);
                 if (change.value)
-                    staged.emplace(change.id, *change.value);
-                record.placements.push_back({change.id, before, change.value});
+                    staged.try_emplace(change.id, *change.value);
+                record.placements.emplace_back(change.id, before, change.value);
                 record.invalidation.foliage = true;
             }
             std::ranges::sort(record.placements, {}, &TerrainPlacementSnapshot::id);
@@ -357,8 +364,7 @@ namespace Horo::Editor {
             record.after.reserve(operation.patches.size());
             record.placements.reserve(operation.placements.size());
             std::set<Terrain::TerrainTileId> dirtyTiles;
-            auto raster = PrepareRasterSnapshots(operation, context, record, dirtyTiles);
-            if (raster.HasError())
+            if (auto raster = PrepareRasterSnapshots(operation, context, record, dirtyTiles); raster.HasError())
                 return Result<PreparedEdit>::Failure(raster.ErrorValue());
             auto placements = PreparePlacementSnapshots(operation, context, current, record, dirtyTiles);
             if (placements.HasError())
@@ -384,8 +390,8 @@ namespace Horo::Editor {
     /** @copydoc TerrainAuthoringDocument::Open */
     Result<TerrainAuthoringDocument> TerrainAuthoringDocument::Open(TerrainDocumentSessionId session,
                                                                     Terrain::TerrainCanonicalSource source, std::uint32_t tileCells,
-                                                                    TerrainAuthoringCapability capability, TerrainEditLimits limits,
-                                                                    std::vector<TerrainAuthoredPlacement> placements) {
+                                                                    TerrainAuthoringCapability capability, const TerrainEditLimits &limits,
+                                                                    const std::vector<TerrainAuthoredPlacement> &placements) {
         if (!session.IsValid() || !ValidLimits(limits) || !std::has_single_bit(tileCells) ||
             tileCells > Terrain::TerrainDescriptorHardLimits::TileInteriorQuads ||
             (capability != TerrainAuthoringCapability::ReadOnly && capability != TerrainAuthoringCapability::Edit) ||
@@ -397,7 +403,7 @@ namespace Horo::Editor {
         std::map<Terrain::FoliageInstanceId, TerrainAuthoredPlacement> initialPlacements;
         try {
             for (const auto &placement : placements) {
-                if (!ValidPlacement(placement, source) || !initialPlacements.emplace(placement.id, placement).second)
+                if (!ValidPlacement(placement, source) || !initialPlacements.try_emplace(placement.id, placement).second)
                     return Failed<TerrainAuthoringDocument>(TerrainEditErrors::Invalid);
             }
         } catch (const std::bad_alloc &) {
@@ -418,18 +424,18 @@ namespace Horo::Editor {
     /** @copydoc TerrainAuthoringDocument::Apply */
     void TerrainAuthoringDocument::Apply(const std::vector<TerrainRasterPatch> &patches) noexcept {
         for (const auto &patch : patches) {
-            std::size_t pixel = 0;
-            for (std::uint32_t z = 0; z < patch.rect.height; ++z)
-                for (std::uint32_t x = 0; x < patch.rect.width; ++x, ++pixel) {
-                    const std::size_t index = static_cast<std::size_t>(z + patch.rect.z) * source_.width + x + patch.rect.x;
-                    if (!patch.heightsMeters.empty())
-                        source_.heightsMeters[index] = patch.heightsMeters[pixel];
-                    if (!patch.holes.empty())
-                        source_.holes[index] = patch.holes[pixel];
-                    if (!patch.weights.empty())
-                        for (std::size_t layer = 0; layer < source_.layerCount; ++layer)
-                            source_.weights[index * source_.layerCount + layer] = patch.weights[pixel * source_.layerCount + layer];
-                }
+            const std::size_t count = static_cast<std::size_t>(patch.rect.width) * patch.rect.height;
+            for (std::size_t pixel = 0; pixel < count; ++pixel) {
+                const std::size_t index =
+                    (pixel / patch.rect.width + patch.rect.z) * source_.width + pixel % patch.rect.width + patch.rect.x;
+                if (!patch.heightsMeters.empty())
+                    source_.heightsMeters[index] = patch.heightsMeters[pixel];
+                if (!patch.holes.empty())
+                    source_.holes[index] = patch.holes[pixel];
+                if (!patch.weights.empty())
+                    std::copy_n(patch.weights.begin() + static_cast<std::ptrdiff_t>(pixel * source_.layerCount), source_.layerCount,
+                                source_.weights.begin() + static_cast<std::ptrdiff_t>(index * source_.layerCount));
+            }
         }
     }
 
@@ -504,7 +510,7 @@ namespace Horo::Editor {
             for (const auto &change : record.placements) {
                 const auto &value = redo ? change.after : change.before;
                 if (value)
-                    staged.emplace(change.id, *value);
+                    staged.try_emplace(change.id, *value);
             }
             const auto state = redo ? record.afterState : record.beforeState;
             TerrainEditChange receipt{record.operation,    revision.Value(), state, record.dirtyTiles, record.invalidation, true,
