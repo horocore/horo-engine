@@ -54,7 +54,7 @@ namespace Horo::Runtime {
 
         void ErrorIs(const Result<SceneCellCookReport> &result, const ErrorCodeDescriptor &code) {
             REQUIRE(result.HasError());
-            CHECK(result.ErrorValue().code == code.code);
+            CHECK(result.ErrorValue().code.Value() == code.code.Value());
         }
     }  // namespace
 
