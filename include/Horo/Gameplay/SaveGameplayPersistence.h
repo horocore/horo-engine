@@ -5,6 +5,7 @@
  * @brief Explicit durable gameplay state binding for canonical save capture and staged restore.
  */
 
+#include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Gameplay/PersistenceRegistration.h"
 #include "Horo/Runtime/Save/SaveCaptureSnapshot.h"
 #include "Horo/Runtime/Save/SaveRestoreTransaction.h"
@@ -79,4 +80,5 @@ namespace Horo::Runtime {
         std::shared_ptr<void> moduleLease_;
         std::shared_ptr<IGameplayPersistenceSource> source_;
     };
+
 }  // namespace Horo::Runtime

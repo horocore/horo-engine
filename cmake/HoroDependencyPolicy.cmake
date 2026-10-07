@@ -66,6 +66,7 @@ horo_allow_target_dependencies(TARGET HoroPhysicsSceneIntegration DEPENDENCIES H
 horo_allow_target_dependencies(TARGET HoroGameplayPhysicsIntegration DEPENDENCIES HoroGameplayApi HoroPhysics)
 horo_allow_target_dependencies(TARGET HoroAI DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroAISceneIntegration DEPENDENCIES HoroAI HoroRuntimeScene)
+horo_allow_target_dependencies(TARGET HoroAISightIntegration DEPENDENCIES HoroAISceneIntegration HoroPhysics)
 horo_allow_target_dependencies(TARGET HoroGameplayPerceptionIntegration DEPENDENCIES HoroAISceneIntegration HoroNetworkRuntime)
 horo_allow_target_dependencies(TARGET HoroAnimationApi DEPENDENCIES HoroFoundation HoroAssets)
 horo_allow_target_dependencies(TARGET HoroPCG DEPENDENCIES HoroFoundation)
@@ -88,6 +89,7 @@ horo_allow_target_dependencies(TARGET HoroNavigationRuntime DEPENDENCIES HoroNav
 horo_allow_target_dependencies(TARGET HoroNavigationBakeService DEPENDENCIES HoroNavigationRuntime HoroAssets HoroPlatform HoroRuntime)
 horo_allow_target_dependencies(TARGET HoroNavigationSceneIntegration DEPENDENCIES HoroNavigationRuntime HoroRuntimeScene)
 horo_allow_target_dependencies(TARGET HoroNavigationAssetSceneIntegration DEPENDENCIES HoroNavigationSceneIntegration HoroAssets)
+horo_allow_target_dependencies(TARGET HoroNavigationContentIntegration DEPENDENCIES HoroApplication HoroNavigationAssetSceneIntegration)
 horo_allow_target_dependencies(TARGET HoroXRApi DEPENDENCIES HoroFoundation HoroRenderApi)
 horo_allow_target_dependencies(TARGET HoroXRRuntime DEPENDENCIES HoroXRApi)
 if(HORO_BUILD_XR_OPENXR)
@@ -112,6 +114,7 @@ if(HORO_VERIFY_XR_DISABLED)
     message(STATUS "XR disabled: native targets and SDK population are absent; cached sources may remain")
 endif()
 horo_allow_target_dependencies(TARGET HoroTerrainApi DEPENDENCIES HoroFoundation)
+horo_allow_target_dependencies(TARGET HoroTerrainRender DEPENDENCIES HoroTerrainApi HoroRenderApi)
 horo_allow_target_dependencies(TARGET HoroTerrainImport DEPENDENCIES HoroTerrainApi HoroAssets)
 horo_allow_target_dependencies(TARGET HoroTerrainCook DEPENDENCIES HoroTerrainImport)
 horo_allow_target_dependencies(TARGET HoroTerrainRuntime DEPENDENCIES HoroTerrainApi HoroFoundation)
@@ -161,7 +164,7 @@ horo_allow_target_dependencies(TARGET HoroEditorViewportResources
 horo_allow_target_dependencies(TARGET HoroEditorRenderExtraction
     DEPENDENCIES HoroEditorModel HoroEditorViewportScene)
 horo_allow_target_dependencies(TARGET HoroEditorServices
-    DEPENDENCIES
+    DEPENDENCIES HoroAudioApi
         HoroFoundation HoroHostErrors HoroCinematicRuntime
         HoroNetworkApi
         HoroApplication

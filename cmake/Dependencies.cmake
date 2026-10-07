@@ -102,6 +102,30 @@ if(HORO_BUILD_XR_OPENXR)
     horo_add_openxr_headers_dependency()
 endif()
 
+# Editor extension icons are decoded on activation, never by the render backend.
+# This reviewed source revision vendors PlutoVG 1.3.1 in the same pinned tree.
+set(HORO_LUNASVG_REVISION "83c58df8103dc7dca423dfd824992af94d49bed6") # v3.5.0
+set(LUNASVG_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(PLUTOVG_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(LUNASVG_DISABLE_LOAD_SYSTEM_FONTS ON CACHE BOOL "" FORCE)
+set(PLUTOVG_DISABLE_FONT_FACE_CACHE_LOAD ON CACHE BOOL "" FORCE)
+set(USE_SYSTEM_PLUTOVG OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(horo_lunasvg
+    GIT_REPOSITORY https://github.com/sammycage/lunasvg.git
+    GIT_TAG "${HORO_LUNASVG_REVISION}"
+    GIT_SHALLOW FALSE)
+FetchContent_MakeAvailable(horo_lunasvg)
+file(READ "${horo_lunasvg_SOURCE_DIR}/LICENSE" horo_lunasvg_notice)
+string(REPLACE "\r\n" "\n" horo_lunasvg_notice "${horo_lunasvg_notice}")
+string(SHA256 horo_lunasvg_notice_digest "${horo_lunasvg_notice}")
+if(NOT horo_lunasvg_notice_digest STREQUAL "e008ab9f8b36ec517cc47be20e776e68d69f5ba75f8f774d506ae4696d0e50c4")
+    message(FATAL_ERROR "Pinned LunaSVG notice differs from the reviewed MIT notice")
+endif()
+install(FILES "${horo_lunasvg_SOURCE_DIR}/LICENSE"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/horo-engine/licenses" RENAME "LunaSVG.txt")
+install(FILES "${PROJECT_SOURCE_DIR}/docs/licenses/LunaSVG-third-party-notices.txt"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/horo-engine/licenses")
+
 set(HORO_NLOHMANN_JSON_REVISION "9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03")
 set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
 set(JSON_Install OFF CACHE BOOL "" FORCE)

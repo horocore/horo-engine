@@ -27,6 +27,7 @@ add_library(HoroFoundation STATIC
         foundation/diagnostics/OperationHistory.cpp
         foundation/data_bus/DataBus.cpp
         foundation/jobs/JobSystem.cpp
+        foundation/jobs/JobAdmission.cpp
         foundation/config/Configuration.cpp
         foundation/diagnostics/DiagnosticsEngine.cpp
         foundation/paths/PathUtils.cpp
@@ -403,6 +404,9 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveArchiveFraming.cpp
         runtime/save/SaveChunkCompression.cpp
         runtime/save/SaveArchiveFinalization.cpp
+        runtime/save/SaveArchiveContainerWriter.cpp
+        runtime/save/SaveSceneCanonicalState.cpp
+        runtime/save/SaveSceneCanonicalPreservation.cpp
         runtime/save/SaveArchiveFraming.cpp
         runtime/save/SaveArchiveReader.cpp
         runtime/save/SaveArchiveReaderEnvelope.cpp
@@ -671,6 +675,11 @@ add_library(HoroRuntimeScene STATIC
         runtime/scene/SceneRestoreBundle.cpp
         runtime/scene/RuntimeSceneDefinition.cpp
         runtime/scene/SavedSceneBootstrap.cpp
+        runtime/scene/SaveContentRequirements.cpp
+        runtime/scene/InstalledSaveContent.cpp
+        runtime/scene/SaveContentReconciliation.cpp
+        runtime/scene/SaveContentWorld.cpp
+        runtime/scene/SaveContentSnapshot.cpp
         runtime/scene/RuntimeScene.cpp
         runtime/scene/RuntimeSceneView.cpp
         runtime/scene/RuntimeSceneService.cpp
@@ -917,6 +926,7 @@ endif()
 add_library(HoroAudioDsp STATIC
         audio/api/AudioDSPNode.cpp
         audio/dsp/CoreAudioDSPNode.cpp
+        audio/dsp/CoreStereoSpatialRenderer.cpp
         audio/resampling/AudioResampler.cpp
         audio/resampling/ResamplerSimd.cpp
         audio/resampling/ResamplerSimd.h
@@ -985,6 +995,7 @@ target_link_libraries(HoroAudioMetrics PUBLIC HoroEngine::AudioCommands HoroEngi
 
 add_library(HoroPhysics STATIC
         physics/CharacterControllerContracts.cpp
+        physics/CharacterPhysicsQueryAdapter.cpp
         physics/CharacterDiagnostics.cpp
         physics/CharacterErrors.cpp
         physics/CharacterMetrics.cpp
@@ -1144,6 +1155,11 @@ add_library(HoroAISceneIntegration STATIC
 add_library(HoroEngine::AISceneIntegration ALIAS HoroAISceneIntegration)
 target_compile_features(HoroAISceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroAISceneIntegration PUBLIC HoroEngine::AI HoroEngine::RuntimeScene)
+
+add_library(HoroAISightIntegration STATIC runtime/ai/integration/PerceptionSight.cpp)
+add_library(HoroEngine::AISightIntegration ALIAS HoroAISightIntegration)
+target_compile_features(HoroAISightIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroAISightIntegration PUBLIC HoroEngine::AISceneIntegration HoroEngine::Physics)
 
 add_library(HoroGameplayPerceptionIntegration STATIC gameplay/runtime/PerceptionEventSource.cpp)
 add_library(HoroEngine::GameplayPerceptionIntegration ALIAS HoroGameplayPerceptionIntegration)
@@ -1350,6 +1366,7 @@ add_library(HoroNavigationApi STATIC
         runtime/navigation/api/NavigationTileDependencies.cpp
         runtime/navigation/api/NavigationTileArtifact.cpp
         runtime/navigation/api/NavigationTileSetCodec.cpp
+        runtime/navigation/api/NavigationTileSetProfileCodec.cpp
 )
 add_library(HoroEngine::NavigationApi ALIAS HoroNavigationApi)
 target_compile_features(HoroNavigationApi PUBLIC cxx_std_20)
@@ -1418,6 +1435,16 @@ add_library(HoroEngine::NavigationAssetSceneIntegration ALIAS HoroNavigationAsse
 target_compile_features(HoroNavigationAssetSceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroNavigationAssetSceneIntegration PUBLIC HoroEngine::NavigationSceneIntegration HoroEngine::Assets)
 
+add_library(HoroNavigationContentIntegration STATIC
+        application/navigation/NavigationContentIntegration.cpp
+        application/navigation/NavigationContentAdmission.cpp
+        application/navigation/NavigationContentSmoke.cpp
+)
+add_library(HoroEngine::NavigationContentIntegration ALIAS HoroNavigationContentIntegration)
+target_compile_features(HoroNavigationContentIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroNavigationContentIntegration PUBLIC HoroEngine::Application HoroEngine::NavigationAssetSceneIntegration
+        PRIVATE nlohmann_json::nlohmann_json)
+
 add_library(HoroXRRuntime STATIC
         runtime/xr/runtime/XRFeatureNegotiation.cpp
         runtime/xr/runtime/XRFrameLifecycle.cpp
@@ -1451,6 +1478,7 @@ add_library(HoroTerrainApi STATIC
         runtime/terrain/api/TerrainErrors.cpp
         runtime/terrain/api/TerrainFoliageRegistry.cpp
         runtime/terrain/api/TerrainIdentity.cpp
+        runtime/terrain/api/TerrainMaterial.cpp
 )
 add_library(HoroEngine::TerrainApi ALIAS HoroTerrainApi)
 target_compile_features(HoroTerrainApi PUBLIC cxx_std_20)
@@ -1476,6 +1504,13 @@ add_library(HoroTerrainCook STATIC
 add_library(HoroEngine::TerrainCook ALIAS HoroTerrainCook)
 target_compile_features(HoroTerrainCook PUBLIC cxx_std_20)
 target_link_libraries(HoroTerrainCook PUBLIC HoroEngine::TerrainImport)
+add_library(HoroTerrainRender STATIC
+        runtime/terrain/render/TerrainMaterialBinding.cpp
+)
+add_library(HoroEngine::TerrainRender ALIAS HoroTerrainRender)
+target_compile_features(HoroTerrainRender PUBLIC cxx_std_20)
+target_link_libraries(HoroTerrainRender PUBLIC HoroEngine::TerrainApi HoroEngine::RenderApi)
+
 add_library(HoroTerrainRuntime STATIC
         runtime/terrain/runtime/TerrainAsyncJobs.cpp
 )
@@ -1568,6 +1603,7 @@ add_library(HoroWorldStreaming STATIC
         runtime/world_streaming/StreamingCellAssetRequest.cpp
         runtime/world_streaming/WorldPackageChunkAssignment.cpp
         runtime/world_streaming/WorldPackageChunkErrors.cpp
+        runtime/world_streaming/StreamingOwnerFrameBudget.cpp
         runtime/world_streaming/StreamingCellActivation.cpp
         runtime/world_streaming/StreamingCellDirection.cpp
         runtime/world_streaming/StreamingCellStability.cpp
@@ -2067,6 +2103,8 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_METAL)
 endif ()
 
 add_library(HoroEditorServices STATIC
+        editor/audio/MixerAssetDocument.cpp
+        editor/audio/MixerDocumentCommands.cpp
         editor/CinematicPropertyBindings.cpp
         editor/EditorServiceErrors.cpp
         editor/data_bus/EditorEngineEventBridge.cpp
@@ -2127,6 +2165,7 @@ target_include_directories(HoroEditorServices
 
 target_link_libraries(HoroEditorServices
         PUBLIC
+        HoroEngine::AudioApi
         HoroEngine::Foundation
         HoroEngine::HostErrors
         HoroEngine::CinematicRuntime
@@ -2280,6 +2319,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserAssetOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
+            editor/screens/workspace/ExtensionActivityView.cpp
             editor/screens/workspace/EditorWorkspaceScreen.cpp
             editor/screens/NavigationErrors.cpp
             editor/screens/GuiScreenHost.cpp
@@ -2335,6 +2375,9 @@ add_library(HoroExtensions STATIC
         extensions/host/EditorRegistrationRetirement.cpp
         extensions/host/ExtensionCapabilityAdmission.cpp
         extensions/host/EditorSurfaceContext.cpp
+        extensions/host/EditorActivityAbiConversion.cpp
+        extensions/host/EditorActivitySession.cpp
+        extensions/host/EditorActivityAction.cpp
         extensions/host/EditorSurfaceRegistry.cpp
         extensions/host/EditorSurfaceRegistryOperations.cpp
         extensions/host/EditorSurfaceRegistryPersistence.cpp
@@ -2359,6 +2402,7 @@ add_library(HoroExtensions STATIC
         extensions/manifest/ExtensionManifestParser.cpp
         extensions/manifest/ExtensionManifestJson.cpp
         extensions/manifest/EditorSurfaceDescriptor.cpp
+        extensions/manifest/EditorSvgIcon.cpp
     extensions/manifest/EditorUiForm.cpp
     extensions/manifest/EditorUiFormBuilder.cpp
     extensions/manifest/EditorUiFormRender.cpp
@@ -2407,7 +2451,7 @@ target_include_directories(HoroExtensions
 )
 target_link_libraries(HoroExtensions
         PUBLIC HoroEngine::Foundation HoroEngine::Platform HoroEngine::Assets HoroEngine::Security
-        PRIVATE nlohmann_json::nlohmann_json CURL::libcurl miniz
+        PRIVATE nlohmann_json::nlohmann_json CURL::libcurl miniz lunasvg::lunasvg
 )
 
 # Host-side bridge: sequence model and runtime remain independent of Extensions.
