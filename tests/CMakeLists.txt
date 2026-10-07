@@ -2107,10 +2107,27 @@ target_compile_features(HoroFoundationValidationResultTests PRIVATE cxx_std_20)
 target_link_libraries(HoroFoundationValidationResultTests PRIVATE HoroEngine::Foundation)
 add_executable(HoroFoundationJobSystemTests
         unit/foundation/JobSystemTests.cpp
+        unit/foundation/JobAdmissionTests.cpp
+        unit/foundation/JobAdmissionTelemetryTests.cpp
+        support/AllocationProbe.cpp
 )
 
 target_compile_features(HoroFoundationJobSystemTests PRIVATE cxx_std_20)
 target_link_libraries(HoroFoundationJobSystemTests PRIVATE HoroEngine::Foundation)
+# Explicit diagnostic target: run the same admission regressions through the joining fallback on a jthread-capable host.
+# Excluded from ALL and CTest discovery so ordinary builds do not silently add another test/build stream.
+add_executable(HoroJobAdmissionThreadFallbackTests EXCLUDE_FROM_ALL
+        unit/foundation/JobAdmissionTests.cpp
+        unit/foundation/JobAdmissionTelemetryTests.cpp
+        support/AllocationProbe.cpp)
+target_compile_features(HoroJobAdmissionThreadFallbackTests PRIVATE cxx_std_20)
+target_compile_definitions(HoroJobAdmissionThreadFallbackTests PRIVATE HORO_JOB_TEST_FORCE_THREAD_FALLBACK=1)
+target_link_libraries(HoroJobAdmissionThreadFallbackTests PRIVATE HoroEngine::Foundation Catch2::Catch2WithMain)
+add_executable(HoroJobAdmissionPublicHeaderConsumer support/JobAdmissionPublicHeaderConsumer.cpp)
+target_compile_features(HoroJobAdmissionPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroJobAdmissionPublicHeaderConsumer PRIVATE HoroEngine::Foundation)
+add_test(NAME HoroJobAdmissionPublicHeaderConsumer COMMAND HoroJobAdmissionPublicHeaderConsumer)
+set_tests_properties(HoroJobAdmissionPublicHeaderConsumer PROPERTIES LABELS "unit;foundation;jobs;headless;public_headers")
 add_executable(HoroPlatformTests
         unit/foundation/PlatformTests.cpp
         unit/foundation/PlatformPublicationLockTests.cpp
