@@ -379,7 +379,7 @@ namespace Horo::Assets {
                                                std::vector<AssetChunkDefinition> chunks, std::vector<AssetArchiveMember> members,
                                                AssetCookTargetId target)
         : bytes_(std::move(bytes)), entries_(std::move(entries)), chunks_(std::move(chunks)), members_(std::move(members)),
-          target_(std::move(target)) {}
+          target_(std::move(target)), archiveDigest_(Digest(bytes_)) {}
 
     /** @copydoc AssetArchiveProvider::Open */
     Result<AssetArchiveProvider> AssetArchiveProvider::Open(const std::span<const std::uint8_t> bytes,
@@ -388,7 +388,6 @@ namespace Horo::Assets {
         if (opened.HasError())
             return opened;
         auto provider = std::move(opened).Value();
-        provider.chunks_ = {};
         return Result<AssetArchiveProvider>::Success(std::move(provider));
     }
 
@@ -470,8 +469,22 @@ namespace Horo::Assets {
         std::erase_if(provider.members_, [&visible](const AssetArchiveMember &member) {
             return !std::ranges::binary_search(visible, member.id);
         });
-        provider.chunks_ = {};
+        std::erase_if(provider.chunks_, [&order](const AssetChunkDefinition &chunk) {
+            return std::ranges::find(order.Value(), chunk.id) == order.Value().end();
+        });
         return Result<AssetArchiveProvider>::Success(std::move(provider));
+    }
+
+    /** @copydoc AssetArchiveProvider::StoredByteLength */
+    std::optional<std::size_t> AssetArchiveProvider::StoredByteLength(const AssetId id) const noexcept {
+        if (const auto found = std::ranges::lower_bound(entries_, id, {}, &Entry::id); found != entries_.end() && found->id == id)
+            return found->size;
+        return std::nullopt;
+    }
+
+    /** @copydoc AssetArchiveProvider::MountedChunks */
+    std::span<const AssetChunkDefinition> AssetArchiveProvider::MountedChunks() const noexcept {
+        return chunks_;
     }
 
     /** @copydoc AssetArchiveProvider::Members */
@@ -482,6 +495,11 @@ namespace Horo::Assets {
     /** @copydoc AssetArchiveProvider::Target */
     const AssetCookTargetId &AssetArchiveProvider::Target() const noexcept {
         return target_;
+    }
+
+    /** @copydoc AssetArchiveProvider::ArchiveDigest */
+    const Sha256Digest &AssetArchiveProvider::ArchiveDigest() const noexcept {
+        return archiveDigest_;
     }
 
     Result<bool> AssetArchiveProvider::Exists(const AssetId id, const CancellationToken &cancellation) const {

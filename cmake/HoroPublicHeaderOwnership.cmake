@@ -255,6 +255,8 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/Save/SaveArchiveMetadata.h
     Horo/Runtime/Save/SaveArchiveFraming.h
     Horo/Runtime/Save/SaveArchiveFinalization.h
+    Horo/Runtime/Save/SaveArchiveContainerWriter.h
+    Horo/Runtime/Save/SaveSceneCanonicalState.h
     Horo/Runtime/Save/SaveArchiveReader.h
     Horo/Runtime/Save/SaveArchiveProtection.h
     Horo/Runtime/Save/SaveArchiveAuthenticity.h
@@ -375,6 +377,7 @@ horo_configure_target_header_boundary(HoroGameplayApi PUBLIC_HEADERS
     Horo/Gameplay/Behavior.h
     Horo/Gameplay/PersistenceSource.h
     Horo/Gameplay/PersistenceRegistration.h
+    Horo/Gameplay/PersistenceInstallation.h
     Horo/Gameplay/BehaviorTypes.h
     Horo/Gameplay/Component.h
     Horo/Gameplay/ComponentRegistry.h
@@ -398,6 +401,9 @@ horo_configure_target_header_boundary(HoroRuntimeScene PUBLIC_HEADERS
     Horo/Runtime/Scene/RuntimeScene.h
     Horo/Runtime/Scene/RuntimeSceneDefinition.h
     Horo/Runtime/Scene/SavedSceneBootstrap.h
+    Horo/Runtime/Scene/SaveContentRequirements.h
+    Horo/Runtime/Scene/SaveContentReconciliation.h
+    Horo/Runtime/Scene/SaveContentWorld.h
 )
 horo_configure_target_header_boundary(HoroGameplayRuntime PUBLIC_HEADERS
     Horo/Gameplay/BehaviorRegistry.h

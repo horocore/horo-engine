@@ -97,6 +97,9 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # One translation unit per registered public header verifies that consumers can
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
+target_sources(HoroGameplayApiPublicHeaderConsumer PRIVATE support/PersistenceInstallationPublicHeaderConsumer.cpp)
+target_sources(HoroRuntimePublicHeaderConsumer PRIVATE support/SaveSceneCanonicalPublicHeaderConsumer.cpp)
+target_sources(HoroRuntimeScenePublicHeaderConsumer PRIVATE support/SaveContentWorldPublicHeaderConsumer.cpp)
 target_sources(HoroWorldStreamingPublicHeaderConsumer PRIVATE support/StreamingOwnerFramePublicContract.cpp)
 
 execute_process(
@@ -1266,6 +1269,7 @@ target_compile_definitions(HoroCinematicRuntimeTests PRIVATE
 add_dependencies(HoroCinematicRuntimeTests HoroTestGameModule)
 add_executable(HoroGameModuleHostTests
         unit/gameplay/GameModuleHostTests.cpp
+        unit/gameplay/GameModuleContentPersistenceTests.cpp
 )
 target_include_directories(HoroGameModuleHostTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
 target_compile_features(HoroGameModuleHostTests PRIVATE cxx_std_20)
@@ -2737,6 +2741,7 @@ target_compile_features(HoroRuntimeSaveArchiveFinalizationTests PRIVATE cxx_std_
 target_link_libraries(HoroRuntimeSaveArchiveFinalizationTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveArchiveReaderTests
         unit/runtime/save/SaveArchiveReaderTests.cpp
+        unit/runtime/save/SaveArchiveContainerWriterTests.cpp
         unit/runtime/save/SaveArchiveRecordStagingTests.cpp
 )
 target_compile_features(HoroRuntimeSaveArchiveReaderTests PRIVATE cxx_std_20)
@@ -2754,6 +2759,7 @@ target_compile_features(HoroRuntimeSaveMigrationTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveMigrationTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveCanonicalCodecTests
         unit/runtime/save/SaveCanonicalCodecTests.cpp
+        unit/runtime/save/SaveSceneCanonicalStateTests.cpp
 )
 target_compile_features(HoroRuntimeSaveCanonicalCodecTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveCanonicalCodecTests PRIVATE HoroEngine::Runtime)
@@ -2897,6 +2903,7 @@ add_executable(HoroRuntimeSceneTests
         unit/runtime/scene/PhysicsSceneComponentsTests.cpp
         unit/runtime/scene/RuntimeSceneLifecycleTests.cpp
         unit/runtime/scene/RuntimeSceneTests.cpp
+        unit/runtime/scene/RuntimeScenePublicationReceiptTests.cpp
         unit/runtime/scene/RuntimeSceneGroupReferenceTests.cpp
 )
 target_sources(HoroRuntimeScenePublicHeaderConsumer PRIVATE support/AudioScenePublicContract.cpp)
@@ -2910,8 +2917,13 @@ horo_register_catch_test(HoroRuntimeSceneCellPayloadTests LABELS "unit;scene;wor
 target_sources(HoroSceneCellPayloadPublicHeaderConsumer PRIVATE support/SceneCellPayloadPublicHeaderConsumer.cpp)
 add_executable(HoroRuntimeSavedSceneBootstrapTests
         unit/runtime/scene/SavedSceneBootstrapTests.cpp
+        unit/runtime/scene/SaveContentRequirementsTests.cpp
+        unit/runtime/scene/SaveContentWorldTests.cpp
+        unit/runtime/scene/SaveContentRetentionTests.cpp
+        support/AllocationProbe.cpp
 )
 target_compile_features(HoroRuntimeSavedSceneBootstrapTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeSavedSceneBootstrapTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroRuntimeSavedSceneBootstrapTests PRIVATE HoroEngine::RuntimeScene)
 add_executable(HoroAssetRegistryTests
         unit/runtime/assets/AssetRegistryTests.cpp

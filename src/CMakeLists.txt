@@ -404,6 +404,9 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveArchiveFraming.cpp
         runtime/save/SaveChunkCompression.cpp
         runtime/save/SaveArchiveFinalization.cpp
+        runtime/save/SaveArchiveContainerWriter.cpp
+        runtime/save/SaveSceneCanonicalState.cpp
+        runtime/save/SaveSceneCanonicalPreservation.cpp
         runtime/save/SaveArchiveFraming.cpp
         runtime/save/SaveArchiveReader.cpp
         runtime/save/SaveArchiveReaderEnvelope.cpp
@@ -672,6 +675,11 @@ add_library(HoroRuntimeScene STATIC
         runtime/scene/SceneRestoreBundle.cpp
         runtime/scene/RuntimeSceneDefinition.cpp
         runtime/scene/SavedSceneBootstrap.cpp
+        runtime/scene/SaveContentRequirements.cpp
+        runtime/scene/InstalledSaveContent.cpp
+        runtime/scene/SaveContentReconciliation.cpp
+        runtime/scene/SaveContentWorld.cpp
+        runtime/scene/SaveContentSnapshot.cpp
         runtime/scene/RuntimeScene.cpp
         runtime/scene/RuntimeSceneView.cpp
         runtime/scene/RuntimeSceneService.cpp
