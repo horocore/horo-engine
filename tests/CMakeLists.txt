@@ -348,6 +348,16 @@ target_compile_features(HoroReplicationStateCaptureTests PRIVATE cxx_std_20)
 target_include_directories(HoroReplicationStateCaptureTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroReplicationStateCaptureTests PRIVATE HoroEngine::NetworkRuntime)
 horo_register_catch_test(HoroReplicationStateCaptureTests LABELS "unit;network;headless;replication_capture")
+add_executable(HoroReplicationStateCodecTests
+        unit/runtime/networking/ReplicationStateCodecTests.cpp
+        unit/runtime/networking/ReplicationStateCodecLifecycleTests.cpp
+        unit/runtime/networking/ReplicationStateCodecProjectionTests.cpp
+        unit/runtime/networking/ReplicationStateCodecSceneTests.cpp
+        unit/runtime/networking/ReplicationStateCodecFaultTests.cpp
+)
+target_compile_features(HoroReplicationStateCodecTests PRIVATE cxx_std_20)
+target_link_libraries(HoroReplicationStateCodecTests PRIVATE HoroEngine::NetworkRuntime)
+horo_register_catch_test(HoroReplicationStateCodecTests LABELS "unit;network;headless;replication_codec")
 add_executable(HoroNetworkModePublicHeaderConsumer support/NetworkModePublicHeaderConsumer.cpp)
 target_compile_features(HoroNetworkModePublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkModePublicHeaderConsumer PRIVATE HoroEngine::NetworkRuntime)
