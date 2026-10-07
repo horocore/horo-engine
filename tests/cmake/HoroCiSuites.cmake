@@ -39,6 +39,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroRuntimeUiInputTests
     HoroInputPublicHeaderConsumer
     HoroExtensionManagerTests
+    HoroEditorActivityBoundaryTests
+    HoroExtensionsPublicHeaderConsumer
     HoroMcpSessionTests
     HoroMcpSessionPublicHeaderConsumer
     HoroRuntimeSaveRootResolverTests

@@ -1032,11 +1032,14 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/BackendOperationRegistry.h
     Horo/Extensions/BackendServiceRegistry.h
     Horo/Extensions/ExtensionAbi.h
+    Horo/Extensions/EditorActivityAbi.h
+    Horo/Extensions/EditorActivityHost.h
     Horo/Extensions/ExtensionAbiConformance.h
     Horo/Extensions/ExtensionCapabilityAdmission.h
     Horo/Extensions/ExtensionActivationState.h
     Horo/Extensions/EditorThemeTokens.h
     Horo/Extensions/EditorSurfaceDescriptor.h
+    Horo/Extensions/EditorSvgIcon.h
     Horo/Extensions/EditorSurfaceContext.h
     Horo/Extensions/EditorSurfaceRegistry.h
     Horo/Extensions/EditorCommandRegistry.h

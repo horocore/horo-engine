@@ -11,7 +11,8 @@ namespace Horo::Extensions {
                    requirements.minimumHostMinor <= host.abiMinorVersion && requirements.requiredHostApiSize >= legacyHostSize &&
                    requirements.requiredHostApiSize <= host.structSize && requirements.reserved == 0 &&
                    (requirements.requiredFunctions &
-                    ~uint32_t{HORO_EXTENSION_REQUIRES_ASSET_IMPORTER | HORO_EXTENSION_REQUIRES_PLATFORM_PROVIDER}) == 0;
+                    ~uint32_t{HORO_EXTENSION_REQUIRES_ASSET_IMPORTER | HORO_EXTENSION_REQUIRES_PLATFORM_PROVIDER |
+                              HORO_EXTENSION_REQUIRES_EDITOR_ACTIVITY}) == 0;
         }
     }  // namespace
 
@@ -32,7 +33,13 @@ namespace Horo::Extensions {
         if ((requirements.requiredFunctions & HORO_EXTENSION_REQUIRES_ASSET_IMPORTER) != 0 && host.registerAssetImporter == nullptr)
             return HORO_EXTENSION_ERROR_INVALID_ARGS;
         if ((requirements.requiredFunctions & HORO_EXTENSION_REQUIRES_PLATFORM_PROVIDER) != 0 &&
-            (host.structSize < sizeof(HoroExtensionHostApi) || host.registerPlatformServicesProvider == nullptr))
+            (host.structSize <
+                 offsetof(HoroExtensionHostApi, registerPlatformServicesProvider) + sizeof(host.registerPlatformServicesProvider) ||
+             host.registerPlatformServicesProvider == nullptr))
+            return HORO_EXTENSION_ERROR_INVALID_ARGS;
+        if ((requirements.requiredFunctions & HORO_EXTENSION_REQUIRES_EDITOR_ACTIVITY) != 0 &&
+            (host.structSize < offsetof(HoroExtensionHostApi, registerEditorActivity) + sizeof(host.registerEditorActivity) ||
+             host.registerEditorActivity == nullptr))
             return HORO_EXTENSION_ERROR_INVALID_ARGS;
         return HORO_EXTENSION_SUCCESS;
     }
