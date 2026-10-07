@@ -569,6 +569,7 @@ horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroPhysicsSceneIntegration PUBLIC_HEADERS
+    Horo/Physics/PhysicsCellAttachments.h
     Horo/Physics/PhysicsSceneActivation.h
 )
 horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
@@ -800,6 +801,7 @@ horo_configure_target_header_boundary(HoroNavigationCrowdDetour PUBLIC_HEADERS
     Horo/Navigation/Backends/RecastDetourCrowdProvider.h
 )
 horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
+    Horo/WorldStreaming/CellAttachmentManifest.h
     Horo/WorldStreaming/NetworkStreamingAuthority.h
     Horo/WorldStreaming/OriginFrame.h
     Horo/WorldStreaming/OriginRebaseTransaction.h
@@ -871,6 +873,7 @@ Horo/Prefab/PrefabDependencyGraph.h
 )
 
 horo_configure_target_header_boundary(HoroSceneCellPayload PUBLIC_HEADERS
+    Horo/Runtime/Scene/SceneCellAttachments.h
     Horo/Runtime/Scene/RuntimeSceneCellPayload.h
 )
 

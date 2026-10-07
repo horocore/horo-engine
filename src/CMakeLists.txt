@@ -1100,6 +1100,7 @@ else()
 endif()
 
 add_library(HoroPhysicsSceneIntegration STATIC
+        physics/PhysicsCellAttachments.cpp
         physics/PhysicsSceneActivation.cpp
         physics/PhysicsSceneStructural.cpp
         physics/PhysicsSceneActivationPlan.cpp
@@ -1107,7 +1108,7 @@ add_library(HoroPhysicsSceneIntegration STATIC
         physics/PhysicsSceneActivationLifecycle.cpp)
 add_library(HoroEngine::PhysicsSceneIntegration ALIAS HoroPhysicsSceneIntegration)
 target_compile_features(HoroPhysicsSceneIntegration PUBLIC cxx_std_20)
-target_link_libraries(HoroPhysicsSceneIntegration PUBLIC HoroEngine::Physics HoroEngine::RuntimeScene)
+target_link_libraries(HoroPhysicsSceneIntegration PUBLIC HoroEngine::Physics HoroEngine::RuntimeScene HoroEngine::SceneCellPayload)
 
 add_library(HoroAI STATIC
         runtime/ai/api/AICanonicalErrors.cpp
@@ -1565,6 +1566,8 @@ else()
 endif()
 
 add_library(HoroWorldStreaming STATIC
+        runtime/world_streaming/CellAttachmentManifest.cpp
+        runtime/world_streaming/CellAttachmentErrors.cpp
         runtime/world_streaming/NetworkStreamingAuthority.cpp
         runtime/world_streaming/OriginFrame.cpp
         runtime/world_streaming/OriginRebaseTransaction.cpp
@@ -1633,6 +1636,7 @@ target_link_libraries(HoroWorldStreaming PUBLIC HoroEngine::Foundation HoroEngin
 
 # Scene owns CoreEcs baseline semantics; this host-composed seam leaves streaming policy and ECS targets independent.
 add_library(HoroSceneCellPayload STATIC
+        runtime/scene/SceneCellAttachments.cpp
         runtime/scene/RuntimeSceneCellPayload.cpp
         runtime/scene/RuntimeSceneCellPayloadErrors.cpp
 )
