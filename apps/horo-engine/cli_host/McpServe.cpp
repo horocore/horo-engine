@@ -5,7 +5,6 @@
 #include "Horo/Mcp/McpLocalTransport.h"
 
 #include <array>
-#include <optional>
 
 namespace Horo::Application::Internal {
     namespace {
@@ -33,15 +32,51 @@ namespace Horo::Application::Internal {
                 static_cast<void>(Shutdown());
             }
         };
+
+        Result<void> WriteReplies(const McpServeChannel &channel, const std::vector<std::string> &replies) {
+            for (const auto &reply : replies) {
+                if (const auto written = channel.write(reply); written.HasError())
+                    return written;
+            }
+            return Result<void>::Success();
+        }
+
+        Result<void> PumpOwners(Mcp::McpController &controller) {
+            for (const auto owner : Owners) {
+                if (const auto pumped = controller.Pump(owner); pumped.HasError())
+                    return Result<void>::Failure(pumped.ErrorValue());
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Runs only protocol I/O and owner pumping; the caller owns reverse shutdown on every result. */
+        Result<void> RunChannel(McpLifetime &lifetime, const McpServeChannel &channel) {
+            while (!channel.stopped()) {
+                auto read = channel.read();
+                if (read.HasError())
+                    return Result<void>::Failure(read.ErrorValue());
+                if (read.Value().disconnected)
+                    break;
+                // Feed limits are MCP-owned. A native chunk has at most 64 bytes/newlines.
+                auto replies = lifetime.transport->Feed(read.Value().bytes);
+                if (replies.HasError())
+                    return Result<void>::Failure(replies.ErrorValue());
+                if (const auto written = WriteReplies(channel, replies.Value()); written.HasError())
+                    return written;
+                if (const auto pumped = PumpOwners(*lifetime.controller); pumped.HasError())
+                    return pumped;
+            }
+            return channel.stopped() ? Result<void>::Failure(MakeError(Cli::CliErrors::ExecutionCancelled)) : Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc ServeMcp */
     Result<void> ServeMcp(std::shared_ptr<Mcp::McpToolRegistry> registry, const McpServeChannel &channel,
-                          const std::span<const std::string> capabilities) {
+                          const McpServeAdmission &admission) {
         if (!registry || !channel.read || !channel.write || !channel.stopped)
             return Result<void>::Failure(MakeError(Cli::CliErrors::ExecutionContextInvalid));
         McpLifetime lifetime;
-        auto controller = Mcp::McpController::Create(registry);
+        auto controller = Mcp::McpController::Create(registry, {}, admission.authorization);
         if (controller.HasError())
             return Result<void>::Failure(controller.ErrorValue());
         lifetime.controller = std::move(controller).Value();
@@ -50,55 +85,18 @@ namespace Horo::Application::Internal {
             if (bound.HasError())
                 return bound;
         }
-        auto sessions = Mcp::McpSessionManager::Create(lifetime.controller);
+        auto sessions = Mcp::McpSessionManager::Create(lifetime.controller, {}, admission.authorization);
         if (sessions.HasError())
             return Result<void>::Failure(sessions.ErrorValue());
         lifetime.sessions = std::move(sessions).Value();
-        auto transport = Mcp::McpLocalTransport::Start(lifetime.sessions, {.clientIdentity = "horo.cli.local",
-                                                                           .capabilities = {capabilities.begin(), capabilities.end()},
-                                                                           .registryRevision = registry->Read()->Generation()});
+        auto transport = Mcp::McpLocalTransport::Start(lifetime.sessions, admission.session);
         if (transport.HasError())
             return Result<void>::Failure(transport.ErrorValue());
         lifetime.transport = std::move(transport).Value();
-        std::optional<Error> failure;
-        while (!channel.stopped()) {
-            auto read = channel.read();
-            if (read.HasError()) {
-                failure = read.ErrorValue();
-                break;
-            }
-            if (read.Value().disconnected)
-                break;
-            // Feed limits are MCP-owned. A native chunk has at most 64 bytes/newlines.
-            auto replies = lifetime.transport->Feed(read.Value().bytes);
-            if (replies.HasError()) {
-                failure = replies.ErrorValue();
-                break;
-            }
-            for (const auto &reply : replies.Value()) {
-                const auto written = channel.write(reply);
-                if (written.HasError()) {
-                    failure = written.ErrorValue();
-                    break;
-                }
-            }
-            if (failure)
-                break;
-            for (const auto owner : Owners) {
-                const auto pumped = lifetime.controller->Pump(owner);
-                if (pumped.HasError()) {
-                    failure = pumped.ErrorValue();
-                    break;
-                }
-            }
-            if (failure)
-                break;
-        }
-        if (!failure && channel.stopped())
-            failure = MakeError(Cli::CliErrors::ExecutionCancelled);
+        const auto result = RunChannel(lifetime, channel);
         const auto shutdown = lifetime.Shutdown();
         if (shutdown.HasError())
             return shutdown;
-        return failure ? Result<void>::Failure(std::move(*failure)) : Result<void>::Success();
+        return result;
     }
 }  // namespace Horo::Application::Internal

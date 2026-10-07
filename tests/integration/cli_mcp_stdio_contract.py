@@ -5,7 +5,6 @@ import signal
 import subprocess
 import sys
 import threading
-import time
 
 
 def run(executable):
@@ -22,7 +21,7 @@ def run(executable):
     terminal = subprocess.run([executable, "observability", "smoke", "--output", "json"],
                               capture_output=True, timeout=20, check=False)
     assert terminal.returncode == 0, terminal.stderr
-    expected = json.loads(terminal.stdout)["result"]
+    assert json.loads(terminal.stdout)["result"] == {"completed": True}
     with subprocess.Popen([executable, "mcp", "serve", "--output", "jsonl"], stdin=subprocess.PIPE,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
         watchdog = threading.Timer(25, process.kill)
@@ -35,15 +34,9 @@ def run(executable):
                 reply = json.loads(process.stdout.readline())
                 assert reply["jsonrpc"] == "2.0" and reply["id"] == identity, reply
                 return reply
-            accepted = exchange(1, "tools/call", {"name": "observability.smoke", "arguments": {}})["result"]
-            assert accepted["status"] == "queued", accepted
-            deadline = time.monotonic() + 15
-            while True:
-                result = exchange(2, "operations/get", {"operationId": accepted["operationId"]})["result"]
-                if result["status"] == "succeeded":
-                    assert result["result"] == expected, result
-                    break
-                assert result["status"] in ("queued", "running") and time.monotonic() < deadline, result
+            # A CLI capability and local authentication do not approve a mutating MCP request.
+            denied = exchange(1, "tools/call", {"name": "observability.smoke", "arguments": {}})
+            assert denied["error"]["data"]["code"] == "approval_required", denied
             unavailable = exchange(3, "tools/call", {"name": "renderer.inspect", "arguments": {}})
             assert unavailable["error"]["data"]["code"] == "tool_unavailable", unavailable
             process.stdin.close()

@@ -2,6 +2,7 @@
 #include "Horo/Cli/CliDispatcher.h"
 #include "Horo/Cli/CliErrors.h"
 #include "Horo/Mcp/McpErrors.h"
+#include "Horo/Platform/SecureRandom.h"
 #include "McpServe.h"
 
 #include <array>
@@ -223,6 +224,24 @@ namespace Horo::Application::Internal {
         private:
             std::shared_ptr<HostObservabilitySession> session_;
         };
+
+        /** @brief Authenticates the already admitted CLI invocation entirely within its private host composition. */
+        Result<Mcp::McpSessionAdmission> LocalAdmission(const std::shared_ptr<Mcp::McpAuthorization> &authorization,
+                                                        const std::vector<std::string> &capabilities, const std::uint64_t revision) {
+            if (const auto trusted = authorization->SetTrust({}, 1, true); trusted.HasError())
+                return Result<Mcp::McpSessionAdmission>::Failure(trusted.ErrorValue());
+            Mcp::McpSessionAdmission admission{.clientIdentity = "horo.cli.local",
+                                               .capabilities = capabilities,
+                                               .registryRevision = revision};
+            auto credential = authorization->IssueCredential(admission, std::chrono::hours{24});
+            if (credential.HasError())
+                return Result<Mcp::McpSessionAdmission>::Failure(credential.ErrorValue());
+            auto principal = authorization->Authenticate(admission, std::move(credential).Value());
+            if (principal.HasError())
+                return Result<Mcp::McpSessionAdmission>::Failure(principal.ErrorValue());
+            admission.authority = std::move(principal).Value();
+            return Result<Mcp::McpSessionAdmission>::Success(std::move(admission));
+        }
     }  // namespace
 
     /** @copydoc ServeNativeMcp */
@@ -234,7 +253,8 @@ namespace Horo::Application::Internal {
         if (!session || !context.HasCapability(Cli::CliCapabilityId{"horo.observability.smoke"}))
             return Result<void>::Failure(MakeError(Cli::CliErrors::CommandUnavailable));
         const std::vector<std::string> capabilities{"horo.observability.smoke"};
-        auto registry = std::make_shared<Mcp::McpToolRegistry>();
+        auto authorization = std::make_shared<Mcp::McpAuthorization>(Platform::CreateNativeSecureRandomSource());
+        auto registry = std::make_shared<Mcp::McpToolRegistry>(authorization);
         const auto published =
             registry->Publish({{.descriptor = {.id = {"observability.smoke"},
                                                .description = "Run the application's headless observability smoke operation.",
@@ -250,6 +270,9 @@ namespace Horo::Application::Internal {
                               capabilities);
         if (published.HasError())
             return Result<void>::Failure(published.ErrorValue());
+        auto admission = LocalAdmission(authorization, capabilities, published.Value());
+        if (admission.HasError())
+            return Result<void>::Failure(admission.ErrorValue());
         return ServeMcp(std::move(registry),
                         {.read =
                              [&] {
@@ -263,6 +286,6 @@ namespace Horo::Application::Internal {
                              [&] {
             return stdio.Stopped() || context.IsStopRequested();
         }},
-                        capabilities);
+                        {std::move(authorization), std::move(admission).Value()});
     }
 }  // namespace Horo::Application::Internal

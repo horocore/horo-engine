@@ -99,6 +99,7 @@ namespace Horo::Character::Detail {
                 descriptor.collisionProfile,
                 descriptor.queryChannel,
                 iteration,
+                descriptor.selectors,
             };
             const auto probe = query.overlap(query.context, request);
             if (const auto continuation = ValidatePlacementContinuation(impl, handle); continuation.HasError())
@@ -139,6 +140,7 @@ namespace Horo::Character::Detail {
             descriptor.collisionProfile,
             descriptor.queryChannel,
             0,
+            descriptor.selectors,
         };
         const auto probe = query.overlap(query.context, request);
         if (const auto continuation = ValidatePlacementContinuation(impl, handle); continuation.HasError())

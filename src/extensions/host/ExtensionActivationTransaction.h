@@ -5,6 +5,7 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 #include <memory>
+#include <span>
 #include <vector>
 
 namespace Horo::Extensions {
@@ -44,6 +45,11 @@ namespace Horo::Extensions {
          * @return Module leases in deterministic activation order.
          */
         [[nodiscard]] std::vector<std::shared_ptr<ExtensionModuleLifetime>> ReleaseLifetimes() noexcept;
+
+        /** @brief Borrows staged code owners for final host publication before ownership transfer. */
+        [[nodiscard]] std::span<const std::shared_ptr<ExtensionModuleLifetime>> Lifetimes() const noexcept {
+            return lifetimes_;
+        }
 
     private:
         void DiscardContributions() noexcept;

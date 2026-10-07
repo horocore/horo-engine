@@ -21,6 +21,8 @@ namespace Horo::JobErrors {
     extern const ErrorCodeDescriptor InvalidHandle;
     extern const ErrorCodeDescriptor NotFound;
     extern const ErrorCodeDescriptor QueueFull;
+    extern const ErrorCodeDescriptor QueueShed;
+    extern const ErrorCodeDescriptor InvalidSubmission;
     extern const ErrorCodeDescriptor Shutdown;
     extern const ErrorCodeDescriptor TaskGroupClosed;
     extern const ErrorCodeDescriptor WaitForbidden;

@@ -1,3 +1,4 @@
+#include "../mcp/McpAuthorizationTestSupport.h"
 #include "Horo/Cli/CliErrors.h"
 #include "Horo/Mcp/McpErrors.h"
 #include "McpServe.h"
@@ -24,7 +25,7 @@ namespace {
     };
 
     std::shared_ptr<Mcp::McpToolRegistry> Registry(std::shared_ptr<Adapter> adapter = {}) {
-        auto registry = std::make_shared<Mcp::McpToolRegistry>();
+        auto registry = std::make_shared<Mcp::McpToolRegistry>(Mcp::Test::Authorization());
         std::vector<Mcp::McpToolRegistration> tools;
         if (adapter)
             tools.push_back({.descriptor = {.id = {"host.test"},
@@ -35,6 +36,17 @@ namespace {
                              .owner = Mcp::McpOwnerContext::Runtime});
         REQUIRE(registry->Publish(std::move(tools)).HasValue());
         return registry;
+    }
+
+    Result<void> ServeApprovedMcp(std::shared_ptr<Mcp::McpToolRegistry> registry, const McpServeChannel &channel,
+                                  const std::span<const std::string> capabilities = {}) {
+        auto policy = Mcp::Test::Authorization();
+        Mcp::McpSessionAdmission admission{.clientIdentity = "horo.cli.test",
+                                           .capabilities = {capabilities.begin(), capabilities.end()},
+                                           .registryRevision = registry ? registry->Read()->Generation() : 1};
+        if (admission.registryRevision != 0)
+            admission = Mcp::Test::Authenticate(std::move(admission), policy);
+        return ServeMcp(std::move(registry), channel, {std::move(policy), std::move(admission)});
     }
 
     struct Channel final {
@@ -65,7 +77,7 @@ TEST_CASE("Headless MCP composes real controller discovery and application owner
                                "\n"},
                               {R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"host.test","arguments":{}}})"
                                "\n"}}};
-    const auto result = ServeMcp(Registry(adapter), channel.View());
+    const auto result = ServeApprovedMcp(Registry(adapter), channel.View());
     REQUIRE(result.HasValue());
     REQUIRE(adapter->calls == 1);
     const auto split = channel.output.find('\n');
@@ -76,28 +88,28 @@ TEST_CASE("Headless MCP composes real controller discovery and application owner
 TEST_CASE("Headless MCP discards partial frames and stops without presentation records", "[cli][mcp]") {
     Channel channel;
     channel.reads.push_back({.bytes = "{partial"});
-    REQUIRE(ServeMcp(Registry(), channel.View()).HasValue());
+    REQUIRE(ServeApprovedMcp(Registry(), channel.View()).HasValue());
     REQUIRE(channel.output.empty());
     channel.stop = true;
-    const auto cancelled = ServeMcp(Registry(), channel.View());
+    const auto cancelled = ServeApprovedMcp(Registry(), channel.View());
     REQUIRE(cancelled.HasError());
     REQUIRE(cancelled.ErrorValue().code.Value() == Cli::CliErrors::ExecutionCancelled.code.Value());
 }
 
 TEST_CASE("Headless MCP reports channel and startup failures without fallback", "[cli][mcp]") {
     Channel channel;
-    REQUIRE(ServeMcp(nullptr, channel.View()).HasError());
+    REQUIRE(ServeApprovedMcp(nullptr, channel.View()).HasError());
     auto view = channel.View();
     view.read = [] {
         return Result<McpChannelRead>::Failure(MakeError(Cli::CliErrors::HostFailure));
     };
-    REQUIRE(ServeMcp(Registry(), view).HasError());
+    REQUIRE(ServeApprovedMcp(Registry(), view).HasError());
     channel.reads = {{"not-json\n"}};
     view = channel.View();
     view.write = [](std::string_view) {
         return Result<void>::Failure(MakeError(Cli::CliErrors::ExecutionTimedOut));
     };
-    const auto failure = ServeMcp(Registry(), view);
+    const auto failure = ServeApprovedMcp(Registry(), view);
     REQUIRE(failure.HasError());
     REQUIRE(failure.ErrorValue().code.Value() == Cli::CliErrors::ExecutionTimedOut.code.Value());
 }
@@ -127,7 +139,7 @@ TEST_CASE("Headless MCP disconnect cancels and drains the application callback e
     };
 
     auto adapter = std::make_shared<AsyncAdapter>();
-    auto registry = std::make_shared<Mcp::McpToolRegistry>();
+    auto registry = std::make_shared<Mcp::McpToolRegistry>(Mcp::Test::Authorization());
     REQUIRE(registry
                 ->Publish({{.descriptor = {.id = {"host.test"},
                                            .description = "Owned async application operation",
@@ -139,14 +151,14 @@ TEST_CASE("Headless MCP disconnect cancels and drains the application callback e
     Channel channel;
     channel.reads.push_back({.bytes = R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"host.test","arguments":{}}})"
                                       "\n"});
-    REQUIRE(ServeMcp(registry, channel.View()).HasValue());
+    REQUIRE(ServeApprovedMcp(registry, channel.View()).HasValue());
     REQUIRE(adapter->completions.load() == 1);
     REQUIRE(adapter->observedCancellation.load());
 }
 
 TEST_CASE("Headless MCP optional capability denial executes no application adapter", "[cli][mcp]") {
     auto adapter = std::make_shared<Adapter>();
-    auto registry = std::make_shared<Mcp::McpToolRegistry>();
+    auto registry = std::make_shared<Mcp::McpToolRegistry>(Mcp::Test::Authorization());
     const std::vector<std::string> available{"horo.renderer.inspect"};
     REQUIRE(registry
                 ->Publish({{.descriptor = {.id = {"renderer.inspect"},
@@ -162,7 +174,7 @@ TEST_CASE("Headless MCP optional capability denial executes no application adapt
     channel.reads.push_back({.bytes =
                                  R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"renderer.inspect","arguments":{}}})"
                                  "\n"});
-    REQUIRE(ServeMcp(registry, channel.View()).HasValue());
+    REQUIRE(ServeApprovedMcp(registry, channel.View()).HasValue());
     REQUIRE(adapter->calls == 0);
     const auto reply = nlohmann::json::parse(channel.output);
     REQUIRE(reply["error"]["data"]["code"] == Mcp::McpErrors::ToolCapabilityUnavailable.code.Value());
@@ -176,9 +188,24 @@ TEST_CASE("Headless MCP session admission fails before input and releases partia
         ++reads;
         return Result<McpChannelRead>::Success({.disconnected = true});
     };
-    const auto failed = ServeMcp(std::make_shared<Mcp::McpToolRegistry>(), view);
+    const auto failed = ServeApprovedMcp(std::make_shared<Mcp::McpToolRegistry>(Mcp::Test::Authorization()), view);
     REQUIRE(failed.HasError());
     REQUIRE(failed.ErrorValue().code.Value() == Mcp::McpErrors::AdmissionInvalid.code.Value());
+    REQUIRE(reads == 0);
+    REQUIRE(channel.output.empty());
+}
+
+TEST_CASE("Headless MCP rejects missing host policy before polling input", "[cli][mcp]") {
+    Channel channel;
+    unsigned reads{};
+    auto view = channel.View();
+    view.read = [&] {
+        ++reads;
+        return Result<McpChannelRead>::Success({.disconnected = true});
+    };
+    const auto failed = ServeMcp(Registry(), view, {});
+    REQUIRE(failed.HasError());
+    REQUIRE(failed.ErrorValue().code.Value() == Mcp::McpErrors::ConfigurationInvalid.code.Value());
     REQUIRE(reads == 0);
     REQUIRE(channel.output.empty());
 }

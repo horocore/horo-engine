@@ -42,6 +42,7 @@ target_link_libraries(horo-engine PRIVATE HoroEngine::Application HoroEngine::Ex
     HoroEngine::Runtime
     HoroEngine::CliHost
     HoroEngine::McpController
+    HoroEngine::Platform
 )
 if(HORO_BUILD_NETWORK_GNS)
     target_link_libraries(horo-engine PRIVATE HoroEngine::NetworkTransportGNS)

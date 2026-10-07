@@ -812,6 +812,11 @@ The command reserves stdout exclusively for `McpLocalTransport` response frames.
 CLI syntax failures, startup errors, progress and the final terminal result use
 stderr, including when `--output=json` or `--output=jsonl` selects diagnostic
 presentation. The shared logger already emits human console records to stderr.
+MCP protocol errors retain their existing wire identities. Those short error codes
+are not registered in the CLI translator, whose canonical application codes must
+be namespaced. Unmapped service failures follow the existing fail-closed CLI
+presentation contract; mapped CLI cancellation and syntax errors keep their
+declared exit categories.
 The executable does not implement MCP methods, authorization, schema validation,
 operation identity, cancellation notifications or framing. The application
 composition publishes `observability.smoke` over the same application operation
@@ -819,6 +824,16 @@ called by the terminal smoke command. Its declared capability is explicitly
 granted to this local session, its owner is Build, and its application
 observability lease survives controller drainage. Future tool packs must be
 explicitly admitted and injected through the same MCP registry.
+
+The admitted CLI invocation composes one OS-entropy-backed authorization policy
+for the registry, controller and sessions. It authenticates its exact projectless
+caller, capability set and registry revision using a one-use credential kept
+entirely in host memory. Protocol arguments cannot grant identity or capability.
+The principal expires after 24 hours; restarting the service authenticates a new
+invocation. Authentication does not approve mutation: this noninteractive host
+has no local exact-request approval channel, so `observability.smoke` calls return
+`approval_required`. The explicit terminal `observability smoke` command remains
+available. Query tools and discovery retain the usual authenticated MCP behavior.
 
 The process owns a bounded stdio polling loop and binds Runtime, Background and
 Build owner contexts. Editor context remains unavailable in this composition.

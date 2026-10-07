@@ -1,6 +1,7 @@
 #pragma once
 /** @file McpServe.h @brief Private headless MCP lifecycle and exclusive byte-channel composition. */
 #include "Horo/Foundation/Result.h"
+#include "Horo/Mcp/McpAuthorization.h"
 #include "Horo/Mcp/McpToolRegistry.h"
 
 #include <functional>
@@ -30,14 +31,20 @@ namespace Horo::Application::Internal {
         std::function<bool()> stopped;
     };
 
+    /** @brief Host-authenticated caller and the exact policy shared by registry, controller and sessions. */
+    struct McpServeAdmission final {
+        std::shared_ptr<Mcp::McpAuthorization> authorization;
+        Mcp::McpSessionAdmission session;
+    };
+
     /** @brief Serves one approved local caller through MCP-owned registry/controller/session behavior.
      * @param registry Host-published tools and application-owner leases.
      * @param channel Exclusive bounded protocol channel, borrowed until shutdown completes.
-     * @param capabilities Explicit host-approved application grants for this local caller.
+     * @param admission Explicit host-issued principal and its retained policy.
      * @return Original lifecycle error, cancellation, or success after disconnect and reverse shutdown.
      */
     [[nodiscard]] Result<void> ServeMcp(std::shared_ptr<Mcp::McpToolRegistry> registry, const McpServeChannel &channel,
-                                        std::span<const std::string> capabilities = {});
+                                        const McpServeAdmission &admission);
     /** @brief Serves process stdio with bounded polling and process interrupt handling.
      * @param context Admitted invocation stop and deadline view.
      * @param session Application observability owner retained by tool adapters through drainage.
