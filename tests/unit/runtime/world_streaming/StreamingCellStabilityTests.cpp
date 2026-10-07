@@ -267,5 +267,37 @@ namespace Horo::WorldStreaming {
             REQUIRE(cooling.snapshot == original);
         }
 
+        TEST_CASE("Actual releases retain bounded history until cooldown arms or the window expires",
+                  "[unit][world_streaming][stability][thrash][lifecycle]") {
+            const auto policy = Policy(1, 1, 0, 500, 2);
+            auto state = Decision(policy, Context(0), Observation(100));
+            state = Decision(policy, Context(10, 1), Observation(-201), state.snapshot);
+            REQUIRE(state.snapshot.phase == StreamingCellStabilityPhase::Watching);
+            REQUIRE(state.snapshot.retainedResidency == StreamingDesiredResidency::Unloaded);
+            REQUIRE(state.snapshot.boundaryExitCount == 1);
+            const auto original = state.snapshot;
+            auto closed = Context(11, 1);
+            closed.lifecycle = StreamingCellStabilityLifecycle::Closed;
+            RequireError(EvaluateStreamingCellStability(policy, closed, Observation(100), original),
+                         WorldStreamingErrors::CellStabilityLifecycleUnavailable);
+            auto malformed = original;
+            malformed.retainedResidency = StreamingDesiredResidency::Loaded;
+            RequireError(EvaluateStreamingCellStability(policy, Context(11, 1), Observation(100), malformed),
+                         WorldStreamingErrors::CellStabilityStale);
+            state = Decision(policy, Context(20, 1), Observation(100), state.snapshot);
+            REQUIRE(state.snapshot.phase == StreamingCellStabilityPhase::Resident);
+            state = Decision(policy, Context(30, 1), Observation(-201), state.snapshot);
+            REQUIRE(state.snapshot.phase == StreamingCellStabilityPhase::Cooldown);
+            REQUIRE(state.thrashing);
+            REQUIRE(Decision(policy, Context(31, 1), Observation(100), state.snapshot).cooldownHeld);
+
+            auto waiting = Decision(policy, Context(30'009, 1), Observation(-201, StreamingDesiredResidency::Unloaded), original);
+            REQUIRE(waiting.snapshot.phase == StreamingCellStabilityPhase::Watching);
+            waiting = Decision(policy, Context(30'010, 1), Observation(-201, StreamingDesiredResidency::Unloaded), waiting.snapshot);
+            REQUIRE(waiting.snapshot.phase == StreamingCellStabilityPhase::Unloaded);
+            REQUIRE(waiting.snapshot.boundaryExitCount == 0);
+            REQUIRE_FALSE(waiting.thrashing);
+        }
+
     }  // namespace
 }  // namespace Horo::WorldStreaming

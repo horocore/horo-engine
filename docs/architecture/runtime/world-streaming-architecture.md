@@ -875,14 +875,21 @@ resources. Zero linger explicitly disables retention rather than selecting a hid
 fallback.
 
 `StreamingCellStabilityPolicy` version 2 adds explicit Normal/Elevated/Critical
-memory-pressure evidence, fixed-window boundary-exit counts, and a metadata-only
-Cooldown phase. Elevated pressure caps linger at the configured interval from its
+memory-pressure evidence, fixed-window boundary-exit counts, and metadata-only
+Watching and Cooldown phases. Elevated pressure caps linger at the configured interval from its
 original origin; Critical pressure releases a no-longer-demanded cell immediately.
 Neither mode overrides current demand or pins. Each Resident-to-Lingering exit
 counts once; continuous linger polling does not count as thrash. Counts saturate,
 and the fixed unscaled window resets at its inclusive deadline. Reentry during
 linger preserves this history. At release, reaching the configured exit threshold
 arms the configured cooldown; zero cooldown preserves immediate reload behavior.
+
+A release before the threshold retains only Watching metadata until the fixed
+observation window expires. Eligible demand may reload immediately, preserving the
+exit count; actual unload/reload cycles therefore cannot erase thrash evidence.
+Absent or geometrically ineligible demand preserves Watching until window expiry,
+which returns Unloaded and releases the record. The same tracked-cell ceiling bounds
+Watching and Cooldown records. Zero cooldown disables both metadata-retention phases.
 
 Cooldown holds no residency or byte reservation. Its bounded record remains owned
 by the authority until the delay expires, when eligible demand may reenter at the
@@ -899,7 +906,7 @@ version-2 policy and discard version-1 snapshots at the authority safe point. Th
 only active callers are contract tests; no serialized snapshots or production
 stability authority exist yet. Default Normal pressure and zero cooldown preserve
 existing admission and retention behavior. Consumers must release resources on
-Unloaded or Cooldown, while retaining only the latter's metadata; Unloaded remains
+Unloaded, Watching or Cooldown, retaining metadata for the latter two; Unloaded remains
 the instruction to discard the record. Public-header ownership remains with
 HoroWorldStreaming; no new dependency or header is introduced.
 

@@ -52,6 +52,9 @@ namespace Horo::WorldStreaming {
             if (snapshot.thrashWindowStartedAtServiceMilliseconds > snapshot.observedAtServiceMilliseconds ||
                 snapshot.boundaryExitCount > StreamingCellStabilityPolicyRequest::MaximumTrackedCellCount)
                 return false;
+            if (snapshot.phase == StreamingCellStabilityPhase::Watching)
+                return snapshot.retainedResidency == StreamingDesiredResidency::Unloaded && snapshot.boundaryExitCount != 0 &&
+                       snapshot.lingerStartedAtServiceMilliseconds == 0 && snapshot.cooldownStartedAtServiceMilliseconds == 0;
             if (snapshot.phase == StreamingCellStabilityPhase::Cooldown)
                 return snapshot.retainedResidency == StreamingDesiredResidency::Unloaded &&
                        snapshot.lingerStartedAtServiceMilliseconds == 0 &&
@@ -138,6 +141,8 @@ namespace Horo::WorldStreaming {
                 if (decision.snapshot.boundaryExitCount >= policy.ThrashExitThreshold() && policy.CooldownMilliseconds() != 0) {
                     decision.snapshot.phase = StreamingCellStabilityPhase::Cooldown;
                     decision.snapshot.cooldownStartedAtServiceMilliseconds = context.serviceTimeMilliseconds;
+                } else if (policy.CooldownMilliseconds() != 0) {
+                    decision.snapshot.phase = StreamingCellStabilityPhase::Watching;
                 }
                 return;
             }
@@ -243,7 +248,8 @@ namespace Horo::WorldStreaming {
             decision.cooldownHeld = hasDemand && observation.signedBoundaryDistanceMillimeters >= policy.EnterMarginMillimeters();
             return finish();
         }
-        const bool retained = previous.has_value() && !cooling;
+        const bool watching = previous.has_value() && previous->phase == StreamingCellStabilityPhase::Watching;
+        const bool retained = previous.has_value() && !cooling && !watching;
         const auto threshold = retained ? -policy.ExitMarginMillimeters() : policy.EnterMarginMillimeters();
         if (hasDemand && (pinned || observation.signedBoundaryDistanceMillimeters >= threshold)) {
             if (!previous.has_value() && context.trackedCells >= policy.MaximumTrackedCells())
@@ -253,8 +259,11 @@ namespace Horo::WorldStreaming {
             decision.boundaryHeld = retained && !pinned && observation.signedBoundaryDistanceMillimeters < policy.EnterMarginMillimeters();
             return finish();
         }
-        if (!retained)
+        if (!retained) {
+            if (watching && decision.snapshot.boundaryExitCount != 0)
+                decision.snapshot.phase = StreamingCellStabilityPhase::Watching;
             return finish();
+        }
 
         ApplyLinger(policy, context, *previous, decision);
         return finish();

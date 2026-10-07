@@ -100,6 +100,7 @@ namespace Horo::WorldStreaming {
         Resident,
         Lingering,
         Cooldown,
+        Watching, /**< Released residency with bounded exit history; eligible demand may reload immediately. */
         Count,
     };
 
@@ -142,7 +143,8 @@ namespace Horo::WorldStreaming {
         [[nodiscard]] constexpr auto operator<=>(const StreamingCellStabilitySnapshot &) const noexcept = default;
     };
 
-    /** @brief Typed next-state decision; Cooldown retains metadata only, while Unloaded tells the authority to release its bounded record.
+    /** @brief Typed next-state decision; Cooldown and Watching retain metadata only, while Unloaded tells the authority to release its
+     * bounded record.
      */
     struct StreamingCellStabilityDecision final {
         StreamingCellStabilitySnapshot snapshot{}; /**< Complete immutable next state. */
