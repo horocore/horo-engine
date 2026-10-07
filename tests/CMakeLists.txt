@@ -100,7 +100,7 @@ horo_add_public_header_consumer_targets()
 target_sources(HoroGameplayApiPublicHeaderConsumer PRIVATE support/PersistenceInstallationPublicHeaderConsumer.cpp)
 target_sources(HoroRuntimePublicHeaderConsumer PRIVATE support/SaveSceneCanonicalPublicHeaderConsumer.cpp)
 target_sources(HoroRuntimeScenePublicHeaderConsumer PRIVATE support/SaveContentWorldPublicHeaderConsumer.cpp)
-target_sources(HoroWorldStreamingPublicHeaderConsumer PRIVATE support/StreamingOwnerFramePublicContract.cpp)
+target_sources(HoroWorldStreamingPublicHeaderConsumer PRIVATE support/StreamingOwnerFramePublicContract.cpp support/StreamingEvictionPublicContract.cpp)
 
 execute_process(
         COMMAND "${Python3_EXECUTABLE}" -c "import pytest; print(pytest.__version__)"
@@ -1146,6 +1146,7 @@ add_executable(HoroWorldStreamingTests
         unit/runtime/world_streaming/StreamingDesiredStateTests.cpp
         unit/runtime/world_streaming/StreamingDesiredStateReductionTests.cpp
         unit/runtime/world_streaming/StreamingPriorityPolicyTests.cpp
+        unit/runtime/world_streaming/StreamingEvictionPolicyTests.cpp
         unit/runtime/world_streaming/StreamingFairQueueTests.cpp
         unit/runtime/world_streaming/StreamingSourceDescriptorTests.cpp
         unit/runtime/world_streaming/StreamingSourcePrefetchTests.cpp

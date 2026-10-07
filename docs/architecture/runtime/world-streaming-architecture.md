@@ -835,6 +835,25 @@ while the authority's existing retirement path remains responsible for draining
 resources. Zero linger explicitly disables retention rather than selecting a hidden
 fallback.
 
+`StreamingEvictionPolicy` is the WST-003.11 bounded pure victim-selection contract.
+Host composition publishes one stable policy identity and immutable revision. The
+StreamingAuthorityRole captures current residency, source/gameplay/provider pin
+counts, outstanding resource leases, aggregate retention priority and last-use
+service time atomically under one non-reused snapshot revision. Every change to
+those facts advances that revision and invalidates older proposals. Selection
+rejects duplicate canonical cells, malformed facts and stale owner/epoch/publication
+fences before writing caller output. Only unpinned Resident or Active attempts are
+selected, ordered by lowest retention priority, oldest service use and canonical
+cell tuple. Pins always retain their requested residency; pressure never overrides
+them. Leases are reclamation barriers rather than residency demands: a victim may
+begin logical retirement while its captured leases remain outstanding, but no
+selection result returns budget credit or authorizes destruction. The authority
+revalidates the exact publication and cell generation before beginning the existing
+canonical retirement DAG; physical release still requires every ordinary retirement
+acknowledgement. Cancellation and shutdown close selection while that DAG drains.
+Policy or partition replacement routes old retirement to the original owner without
+resetting retained charges. See the [eviction contract migration guide](../../guides/world-streaming-eviction-policy-migration.md).
+
 CellBudgetExceeded leaves an unadmitted request pending and re-evaluated under queue
 and byte caps; it does not put an unallocated cell into Failed. Preflight reports
 permanently oversized cells distinctly so they do not retry forever.
