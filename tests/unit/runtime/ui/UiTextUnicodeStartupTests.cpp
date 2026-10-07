@@ -38,8 +38,8 @@ static void *HoroUnicodeTestReallocate(const void *context, void *pointer, const
 }
 
 static void HoroUnicodeTestFree(const void *context, void *pointer) noexcept {
-    auto &state = *static_cast<NativeAllocationState *>(const_cast<void *>(context));
     if (pointer != nullptr) {
+        auto &state = *static_cast<NativeAllocationState *>(const_cast<void *>(context));
         --state.live;
         std::free(pointer);
     }
@@ -49,7 +49,13 @@ static void HoroUnicodeTestFree(const void *context, void *pointer) noexcept {
 TEST_CASE("Unicode startup rolls partial native allocation back before releasing registered data", "[runtime_ui][unicode][startup]") {
     std::ifstream input(HORO_UNICODE_DATA_FILE, std::ios::binary);
     REQUIRE(input.good());
-    const std::vector<char> bytes{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    std::vector<char> bytes{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    REQUIRE_FALSE(bytes.empty());
+    REQUIRE(Horo::Runtime::Ui::UiTextUnicodeRuntime::Create({}).HasError());
+    REQUIRE(Horo::Runtime::Ui::UiTextUnicodeRuntime::Create(std::as_bytes(std::span(bytes)).first(bytes.size() - 1)).HasError());
+    bytes.back() ^= 1;
+    REQUIRE(Horo::Runtime::Ui::UiTextUnicodeRuntime::Create(std::as_bytes(std::span(bytes))).HasError());
+    bytes.back() ^= 1;
     NativeAllocationState state;
     UErrorCode status = U_ZERO_ERROR;
     u_setMemoryFunctions(&state, HoroUnicodeTestAllocate, HoroUnicodeTestReallocate, HoroUnicodeTestFree, &status);

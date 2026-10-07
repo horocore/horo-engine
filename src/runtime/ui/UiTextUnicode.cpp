@@ -7,7 +7,6 @@
 #include <array>
 #include <atomic>
 #include <bit>
-#include <cstring>
 #include <mutex>
 #include <new>
 #include <string>
@@ -118,8 +117,12 @@ namespace Horo::Runtime::Ui {
             if (runtimeAdmission != RuntimeAdmission::Uninitialized)
                 return Failure<UiTextUnicodeRuntime>(UiErrors::TextLifecycleUnavailable);
             auto storage = std::make_shared<Storage>();
-            storage->data = std::make_unique<DataBlock[]>((DataBytes + 15) / 16);
-            std::memcpy(storage->data.get(), data.data(), data.size());
+            constexpr auto blockCount = (DataBytes + sizeof(DataBlock) - 1) / sizeof(DataBlock);
+            storage->data = std::make_unique<DataBlock[]>(blockCount);
+            const auto destination = std::as_writable_bytes(std::span(storage->data.get(), blockCount));
+            if (destination.size() < data.size())
+                return Failure<UiTextUnicodeRuntime>(UiErrors::PayloadInvalid);
+            std::ranges::copy(data, destination.first(data.size()).begin());
             // Declared after storage and before registration: every failure/throw
             // unwinds cleanup before copied bytes, then releases the outer lock.
             InitializationRollback rollback;
