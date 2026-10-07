@@ -42,6 +42,7 @@ namespace Horo::Application {
         CancellationToken cancellation;
         std::vector<NavigationDiagnosticSource>
             diagnosticSources; /**< Host-resolved authored ownership for the captured source observations. */
+        std::optional<Navigation::NavigationProjectProfile> projectProfile; /**< Owned release policy; omission remains non-release only. */
     };
 
     /** @brief Last successfully published immutable generation; retained readers survive subsequent submissions. */

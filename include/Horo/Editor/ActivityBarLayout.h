@@ -53,6 +53,13 @@ namespace Horo::Editor {
 
         [[nodiscard]] ActivityBarLayoutOperationResult Insert(std::string_view panelId, ActivityBarSlot slot);
         [[nodiscard]] ActivityBarLayoutOperationResult Move(std::string_view panelId, ActivityBarSlot slot);
+        /**
+         * @brief Withdraws an item from its rail and compacts the remaining group.
+         * @param panelId Stable identity of the item to withdraw.
+         * @return Success when removed, or UnknownItem without mutation when absent.
+         * @note Removes presentation placement only; the host retains provider and drawer ownership.
+         */
+        [[nodiscard]] ActivityBarLayoutOperationResult Remove(std::string_view panelId);
 
         [[nodiscard]] std::optional<ActivityBarSlot> FindSlot(std::string_view panelId) const;
         [[nodiscard]] std::string_view ItemAt(ActivityBarRail rail, std::size_t groupIndex, std::size_t itemIndex) const noexcept;

@@ -30,6 +30,24 @@ namespace Horo::Extensions::Tests {
         }
     }  // namespace
 
+    TEST_CASE("Contribution point grammar admits normative underscore names without changing capability IDs",
+              "[Extensions][Manifest][Activity]") {
+        const auto package = [](const std::string &type) {
+            return R"({"id":"fixture.package","version":"1.0.0","modules":[{"id":"fixture.module","version":"1.0.0","kind":"native"}],"contributions":[{"type":")" +
+                   type + R"(","id":"fixture.activity","module":"fixture.module"}]})";
+        };
+        CHECK(ParseExtensionManifest(package("editor.activity_item")).HasValue());
+        CHECK(ParseExtensionManifest(package("editor.status_item")).HasValue());
+        for (const std::string type : {"", "Editor.activity_item", "editor. activity_item", "editor..activity_item", "editor._activity",
+                                       "editor.activity_", "editor.activity_ ", ".editor.activity", "editor.activity."})
+            CHECK(ParseExtensionManifest(package(type)).HasError());
+        CHECK(ParseExtensionManifest(package(std::string(4096, 'a'))).HasError());
+        RequireError(
+            ParseExtensionManifest(
+                R"({"id":"fixture.package","version":"1.0.0","modules":[{"id":"fixture.module","version":"1.0.0","kind":"native","requiredCapabilities":["editor.activity_item"]}]})"),
+            "$.modules[0].requiredCapabilities[0]", "extension.manifest.invalid_identifier");
+    }
+
     TEST_CASE("Extension manifest accepts bounded canonical and transitional package documents", "[Extensions][Manifest]") {
         SECTION("canonical document owns validated values") {
             auto result = ParseExtensionManifest(R"json({

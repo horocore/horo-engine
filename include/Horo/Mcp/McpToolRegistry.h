@@ -74,7 +74,8 @@ namespace Horo::Mcp {
          * @param complete Exactly-once completion callback, safe to invoke from a host worker.
          * @note Default implementation invokes the synchronous adapter on the owner thread.
          * Async implementations retain complete, a copy of context, and their application-owner lease until work
-         * finishes. They must request/observe context cancellation and invoke complete exactly once, including after
+         * finishes. They must observe context.IsStopRequested() at bounded cooperative checkpoints and before committing
+         * deferred work; the cancellation token alone does not observe credential expiry. Invoke complete exactly once, including after
          * cancellation. A bounded controller drain timeout does not terminate application-owned jobs or processes. */
         virtual void InvokeAsync(const nlohmann::json &arguments, const McpRequestContext &context,
                                  const std::function<void(Result<nlohmann::json>)> &complete);
@@ -109,18 +110,24 @@ namespace Horo::Mcp {
 
     public:
         /** @brief Internal construction seam used only by the registry's atomic publication. */
-        explicit McpToolSnapshot(ConstructionKey, std::uint64_t generation, std::vector<McpToolRegistration> entries);
+        explicit McpToolSnapshot(ConstructionKey, std::uint64_t generation, std::vector<McpToolRegistration> entries,
+                                 std::shared_ptr<McpAuthorization> authorization);
         /** @brief Returns the monotonically increasing publication generation. */
         [[nodiscard]] std::uint64_t Generation() const noexcept;
         /** @brief Lists descriptors in stable ID order, filtered by the host-approved grant set.
          * @param capabilities Immutable session capability identities. @return Owned discovery descriptors. */
         [[nodiscard]] std::vector<McpToolDescriptor> Discover(std::span<const std::string> capabilities) const;
         /** @brief Validates grant, input bounds and schema before invoking the registered adapter.
+         * @details Requires this snapshot's host policy and an authenticated principal from that issuer.
+         * Admission consumes exact approval atomically; subsequent revocation cancels cooperatively and
+         * prevents publication of late results, rather than undoing committed application effects.
          * @param id Stable tool identity. @param arguments Decoded input. @param context Immutable session authority.
          * @return Bounded, output-schema-validated result or typed failure. */
         [[nodiscard]] Result<nlohmann::json> Invoke(const McpToolId &id, const nlohmann::json &arguments,
                                                     const McpRequestContext &context) const;
         /** @brief Validates and starts one adapter on its owner; completion may arrive later.
+         * @details Enforces the same issuer and admission contract as Invoke. Free-text progress is omitted;
+         * terminal results are revalidated against live authority before the exactly-once callback.
          * @param id Tool identity. @param arguments Decoded input. @param context Session authority.
          * @param complete Exactly-once terminal callback. */
         void InvokeAsync(const McpToolId &id, const nlohmann::json &arguments, const McpRequestContext &context,
@@ -129,17 +136,31 @@ namespace Horo::Mcp {
          * @param id Tool identity. @param capabilities Host-approved session grants.
          * @return Owner or typed absence/denial. */
         [[nodiscard]] Result<McpOwnerContext> Owner(const McpToolId &id, std::span<const std::string> capabilities) const;
+        /** @brief Resolves effect only after checking capability grants. @param id Tool identity.
+         * @param capabilities Host-approved grants. @return Exact immutable effect or typed denial. */
+        [[nodiscard]] Result<McpToolEffect> Effect(const McpToolId &id, std::span<const std::string> capabilities) const;
 
     private:
         friend class McpToolRegistry;
+        /** @brief Resolves one immutable registration and checks grants without invoking its adapter. */
+        [[nodiscard]] Result<const McpToolRegistration *> FindGranted(const McpToolId &id, std::span<const std::string> capabilities) const;
+        /** @brief Checks issuer, grants and input before consuming the exact execution approval. */
+        [[nodiscard]] Result<const McpToolRegistration *> PrepareInvocation(const McpToolId &id, const nlohmann::json &arguments,
+                                                                            const McpRequestContext &context) const;
         std::uint64_t generation_{};
         std::vector<McpToolRegistration> entries_;
+        std::shared_ptr<McpAuthorization> authorization_;
     };
 
     /** @brief Explicit host publication point; failed candidates leave the current snapshot unchanged. */
     class McpToolRegistry final {
     public:
-        McpToolRegistry();
+        /** @brief Binds every published snapshot to one immutable host policy identity.
+         * @param authorization Host policy; a metadata-only registry without one cannot invoke adapters. */
+        explicit McpToolRegistry(std::shared_ptr<McpAuthorization> authorization = {});
+        /** @brief Checks composition policy identity without exposing mutable policy access.
+         * @param authorization Proposed controller policy. @return True only for this registry's non-null policy. */
+        [[nodiscard]] bool UsesAuthorization(const std::shared_ptr<McpAuthorization> &authorization) const noexcept;
         /** @brief Validates and atomically publishes a complete replacement table.
          * @param entries Host-owned candidate registrations.
          * @param availableCapabilities Capabilities the host can supply in this composition.
@@ -152,5 +173,6 @@ namespace Horo::Mcp {
     private:
         mutable std::mutex mutex_;
         std::shared_ptr<const McpToolSnapshot> current_;
+        const std::shared_ptr<McpAuthorization> authorization_;
     };
 }  // namespace Horo::Mcp

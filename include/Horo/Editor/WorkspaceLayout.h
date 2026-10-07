@@ -106,9 +106,38 @@ namespace Horo::Editor {
         LayoutNode &operator=(LayoutNode &&) noexcept = default;
     };
 
+    /** @brief Renderer-neutral persisted activity destination. */
+    enum class WorkspaceActivitySide : std::uint8_t {
+        Left,
+        Right,
+        Bottom
+    };
+
+    /** @brief User placement override; provider declarations remain immutable. */
+    struct WorkspaceActivityPlacement final {
+        WorkspaceActivitySide side{WorkspaceActivitySide::Left};
+        std::uint8_t group{};
+        std::uint32_t order{};
+        bool operator==(const WorkspaceActivityPlacement &) const noexcept = default;
+    };
+
+    /** @brief Serialized extension surface user intent; the composition boundary maps it to the live surface authority. */
+    struct WorkspaceSurfaceState final {
+        std::string id;
+        std::string extensionId;
+        std::string moduleId;
+        bool open{};
+        bool focused{};
+        bool visible{true};
+        std::vector<std::uint8_t> state;
+        std::optional<WorkspaceActivityPlacement> activityPlacement;
+        bool operator==(const WorkspaceSurfaceState &) const noexcept = default;
+    };
+
     struct WorkspaceLayout {
         std::uint32_t schemaVersion = 1;
         LayoutNode root;
+        std::vector<WorkspaceSurfaceState> surfaces;          /**< Bounded copied workspace intent, never activation or trust evidence. */
         std::vector<SerializedDocumentOpenKey> openDocuments; /**< Persistent document keys restored into the workspace host. */
 
         WorkspaceLayout() = default;
