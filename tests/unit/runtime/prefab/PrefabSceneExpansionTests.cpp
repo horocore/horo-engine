@@ -107,6 +107,22 @@ namespace Horo::Prefab {
             CHECK(scene.Value().Entities().size() == 5);
         }
 
+        TEST_CASE("Expanded runtime preview retains immutable revision evidence across replacement",
+                  "[unit][prefab][expansion][lifecycle]") {
+            const auto original = ExpansionResolver({ExpansionObject(0)});
+            const auto candidate = original.Resolve(Test::Asset(), PrefabInstanceId::Create(7).Value(), ExpansionLimits()).Value();
+            const auto identities = ExpansionIdentities(candidate);
+            const auto subtree =
+                ExpandPrefabSceneSubtree(candidate, identities, ExpansionProjections(candidate), {}, ExpansionLimits()).Value();
+            REQUIRE(subtree.ValidatePublication(Test::Asset(), original, {}, ExpansionLimits()).HasValue());
+            const auto replacement = ExpansionResolver({ExpansionObject(0), ExpansionObject(1, LocalObjectId{0})}, 2);
+            CHECK(subtree.ValidatePublication(Test::Asset(), replacement, {}, ExpansionLimits()).ErrorValue().code.Value() ==
+                  PrefabErrors::ResolutionStale.code.Value());
+            CHECK(subtree.Entities().size() == 1);
+            CHECK(subtree.Revision().rootSource == ExpansionRevision(1));
+            CHECK(subtree.Entities().front().object.value == identities.Find(candidate.Objects().front().key)->value);
+        }
+
         TEST_CASE("Prefab runtime expansion rechecks lower object depth and component policies atomically",
                   "[unit][prefab][expansion][boundary]") {
             const auto candidate =

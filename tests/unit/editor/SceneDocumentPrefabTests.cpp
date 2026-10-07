@@ -211,6 +211,63 @@ namespace {
         REQUIRE(document.Snapshot().prefabInstances == before.prefabInstances);
     }
 
+    TEST_CASE("Retained prefab previews reject stale conversion and recover only through fresh resolution",
+              "[unit][editor][prefab][runtime][lifecycle]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        const auto first = PrefabAsset(21).Asset();
+        const auto second = PrefabAsset(22).Asset();
+        Assets::AssetRegistry registry;
+        REQUIRE(registry.Publish({ScenePrefabRecord(first, "first"), ScenePrefabRecord(second, "second")}).status ==
+                Assets::AssetRegistryBuildStatus::Complete);
+        std::vector<Prefab::PrefabDependencySource> sources{{ScenePrefabDocument(first, {{.localId = {}, .name = "First"}}),
+                                                             ScenePrefabRevision(1)},
+                                                            {ScenePrefabDocument(second, {{.localId = {}, .name = "Second"}}),
+                                                             ScenePrefabRevision(2)}};
+        auto resolver = Prefab::BuildPrefabSourceResolverSnapshot(registry.Snapshot(), sources, ScenePrefabLimits()).Value();
+        const SceneDocumentSnapshot document{.state = DocumentStateId{1},
+                                             .prefabInstances =
+                                                 {{Prefab::PrefabInstanceId::Create(1).Value(), PrefabAsset(21), std::nullopt, {}},
+                                                  {Prefab::PrefabInstanceId::Create(2).Value(), PrefabAsset(22), std::nullopt, {}}}};
+        auto projection = BuildScenePrefabProjection(document, resolver, ScenePrefabLimits()).Value();
+        const auto previous =
+            ConvertScenePrefabProjectionToRuntime(document, Runtime::SceneDefinitionId{1}, projection, resolver, ScenePrefabLimits());
+        REQUIRE(previous.HasValue());
+        REQUIRE(previous.Value().Entities().size() == 2);
+        const auto oldIdentity = previous.Value().Entities().front().object;
+        sources.front().document = ScenePrefabDocument(first, {{.localId = {}, .name = "Edited"}});
+        sources.front().sourceRevision = ScenePrefabRevision(9);
+        auto current = Prefab::BuildPrefabSourceResolverSnapshot(registry.Snapshot(), sources, ScenePrefabLimits()).Value();
+        REQUIRE(ConvertScenePrefabProjectionToRuntime(document, Runtime::SceneDefinitionId{1}, projection, current, ScenePrefabLimits())
+                    .HasError());
+        InvalidateScenePrefabProjection(projection, current, std::array{first}, ScenePrefabLimits());
+        REQUIRE(projection.instances[0].stale);
+        REQUIRE_FALSE(projection.instances[0].IsSynchronized());
+        REQUIRE(projection.instances[1].IsSynchronized());
+        REQUIRE(projection.instances[0].expanded->Objects().front().object.name == "First");
+        REQUIRE(ConvertScenePrefabProjectionToRuntime(document, Runtime::SceneDefinitionId{1}, projection, current, ScenePrefabLimits())
+                    .HasError());
+        // Returning to an old snapshot does not resurrect a previously invalidated preview.
+        InvalidateScenePrefabProjection(projection, resolver, {}, ScenePrefabLimits());
+        REQUIRE(projection.instances[0].stale);
+        auto refreshed = BuildScenePrefabProjection(document, current, ScenePrefabLimits()).Value();
+        REQUIRE(refreshed.instances[0].IsSynchronized());
+        const auto replaced =
+            ConvertScenePrefabProjectionToRuntime(document, Runtime::SceneDefinitionId{1}, refreshed, current, ScenePrefabLimits());
+        REQUIRE(replaced.HasValue());
+        REQUIRE(replaced.Value().Entities().front().object == oldIdentity);
+        CHECK(previous.Value().Entities().size() == 2);
+        CHECK(document.prefabInstances[0].sourcePrefab == PrefabAsset(21));
+        auto changedPlacement = document;
+        changedPlacement.prefabInstances[0].rootTransform.translation.x = 7;
+        CHECK(
+            ConvertScenePrefabProjectionToRuntime(changedPlacement, Runtime::SceneDefinitionId{1}, refreshed, current, ScenePrefabLimits())
+                .HasError());
+        refreshed.instances.pop_back();
+        CHECK(ConvertScenePrefabProjectionToRuntime(document, Runtime::SceneDefinitionId{1}, refreshed, current, ScenePrefabLimits())
+                  .HasError());
+    }
+
     TEST_CASE("Runtime conversion expands prefab instances from one immutable snapshot transactionally",
               "[unit][editor][prefab][runtime]") {
         using namespace Horo;

@@ -1,6 +1,7 @@
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabSourceResolver.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
@@ -164,6 +165,98 @@ namespace Horo::Prefab {
             auto result = snapshot.Resolve(first, PrefabInstanceId::Create(1).Value(), ResolverLimits());
             REQUIRE(result.HasError());
             REQUIRE(result.ErrorValue().code.Value() == PrefabErrors::DependencyGraphInvalid.code.Value());
+        }
+
+        TEST_CASE("Prefab captured graph revisions invalidate only reachable publications", "[unit][prefab][resolver][lifecycle]") {
+            const auto root = ResolverAsset(1);
+            const auto resource = ResolverAsset(2);
+            const auto unrelated = ResolverAsset(3);
+            Assets::AssetRegistry registry;
+            PublishResolverRegistry(registry,
+                                    {ResolverRecord(root, "assets/root.prefab"), ResolverRecord(resource, "assets/resource.prefab"),
+                                     ResolverRecord(unrelated, "assets/other.prefab")});
+            auto snapshot = BuildPrefabSourceResolverSnapshot(registry.Snapshot(),
+                                                              {{ResolverDocument(root, {ResolverObject(0)}, std::nullopt, {resource}),
+                                                                ResolverRevision(1)},
+                                                               {ResolverDocument(resource, {ResolverObject(0)}), ResolverRevision(2)},
+                                                               {ResolverDocument(unrelated, {ResolverObject(0)}), ResolverRevision(3)}},
+                                                              ResolverLimits())
+                                .Value();
+            const auto candidate = snapshot.Resolve(root, PrefabInstanceId::Create(1).Value(), ResolverLimits()).Value();
+            REQUIRE(candidate.Revision().dependencies.size() == 2);
+            CHECK(candidate.Revision().dependencies[0].assetId == root);
+            CHECK(candidate.Revision().dependencies[1].sourceRevision == ResolverRevision(2));
+            const auto oldObjects = std::vector(candidate.Objects().begin(), candidate.Objects().end());
+            PublishResolverRegistry(registry,
+                                    {ResolverRecord(root, "assets/moved.prefab"), ResolverRecord(resource, "assets/resource.prefab"),
+                                     ResolverRecord(unrelated, "assets/other.prefab")});
+            auto sources = std::vector(snapshot.Sources().begin(), snapshot.Sources().end());
+            sources.back().sourceRevision = ResolverRevision(9);
+            auto current = BuildPrefabSourceResolverSnapshot(registry.Snapshot(), sources, ResolverLimits()).Value();
+            REQUIRE(current.ValidateRevisionPublication(root, candidate.Revision(), std::array{unrelated}, ResolverLimits()).HasValue());
+            sources[1].sourceRevision = ResolverRevision(8);
+            current = BuildPrefabSourceResolverSnapshot(registry.Snapshot(), sources, ResolverLimits()).Value();
+            CHECK(current.ValidateRevisionPublication(root, candidate.Revision(), {}, ResolverLimits()).ErrorValue().code.Value() ==
+                  PrefabErrors::ResolutionStale.code.Value());
+            CHECK(std::ranges::equal(candidate.Objects(), oldObjects));
+            CHECK(candidate.Revision().dependencies[1].sourceRevision == ResolverRevision(2));
+        }
+
+        TEST_CASE("Prefab nested dependency edits are detected without relying on the outer revision",
+                  "[unit][prefab][resolver][lifecycle]") {
+            Assets::AssetRegistry registry;
+            const auto root = ResolverAsset(1);
+            const auto nested = ResolverAsset(2);
+            const auto snapshot = BuildNestedResolverSnapshot(registry, LocalObjectId{7}, {ResolverObject(0)}).Value();
+            const auto candidate = snapshot.Resolve(root, PrefabInstanceId::Create(1).Value(), ResolverLimits()).Value();
+            const auto newRevision = ResolverRevision(8);
+            PrefabComposition composition{.nestedPlacements = {{.placementLocalId = {7},
+                                                                .sourcePrefab = PrefabAssetReference::Create(nested).Value(),
+                                                                .authoredAgainst = newRevision}}};
+            const auto current =
+                BuildPrefabSourceResolverSnapshot(registry.Snapshot(),
+                                                  {{ResolverDocument(root, {ResolverObject(0)}, composition, {nested}),
+                                                    ResolverRevision(1)},
+                                                   {ResolverDocument(nested, {ResolverObject(0), ResolverObject(4, LocalObjectId{0})}),
+                                                    newRevision}},
+                                                  ResolverLimits())
+                    .Value();
+            REQUIRE(candidate.Revision().rootSource == ResolverRevision(1));
+            CHECK(current.ValidateRevisionPublication(root, candidate.Revision(), {}, ResolverLimits()).HasError());
+            CHECK(candidate.Objects().size() == 2);
+            CHECK(current.Resolve(root, PrefabInstanceId::Create(1).Value(), ResolverLimits()).Value().Objects().size() == 3);
+        }
+
+        TEST_CASE("Prefab revision fencing covers ordinary resource publications and malformed evidence",
+                  "[unit][prefab][resolver][malformed]") {
+            const auto root = ResolverAsset(1);
+            const auto resource = ResolverAsset(2);
+            Assets::AssetRegistry registry;
+            auto record = ResolverRecord(resource, "assets/material.bin");
+            record.type = Assets::AssetTypeId::Parse("core.material").Value();
+            PublishResolverRegistry(registry, {ResolverRecord(root, "assets/root.prefab"), record});
+            auto snapshot = BuildPrefabSourceResolverSnapshot(registry.Snapshot(),
+                                                              {{ResolverDocument(root, {ResolverObject(0)}, std::nullopt, {resource}),
+                                                                ResolverRevision(1)}},
+                                                              ResolverLimits())
+                                .Value();
+            const auto candidate = snapshot.Resolve(root, PrefabInstanceId::Create(1).Value(), ResolverLimits()).Value();
+            REQUIRE(snapshot.ValidateRevisionPublication(root, candidate.Revision(), {}, ResolverLimits()).HasValue());
+            CHECK(snapshot.ValidateRevisionPublication(root, candidate.Revision(), std::array{resource}, ResolverLimits()).HasError());
+            CHECK(snapshot.ValidateRevisionPublication(root, candidate.Revision(), std::array{Assets::AssetId{}}, ResolverLimits())
+                      .HasError());
+            auto malformed = candidate.Revision();
+            malformed.dependencies.clear();
+            CHECK(snapshot.ValidateRevisionPublication(root, malformed, {}, ResolverLimits()).HasError());
+            malformed = candidate.Revision();
+            malformed.dependencies.push_back(malformed.dependencies.front());
+            CHECK(snapshot.ValidateRevisionPublication(root, malformed, {}, ResolverLimits()).HasError());
+            malformed = candidate.Revision();
+            malformed.registry.value += 1;
+            CHECK(snapshot.ValidateRevisionPublication(root, malformed, {}, ResolverLimits()).HasError());
+            const std::vector<Assets::AssetId> excessive(ResolverLimits().MaximumExpansionWorkItems() + 1, resource);
+            CHECK(snapshot.ValidateRevisionPublication(root, candidate.Revision(), excessive, ResolverLimits()).ErrorValue().code.Value() ==
+                  PrefabErrors::WorkBudgetExceeded.code.Value());
         }
 
         TEST_CASE("Prefab publication gate rejects stale registry and document completions", "[unit][prefab][resolver][lifecycle]") {
