@@ -1498,6 +1498,7 @@ target_link_libraries(HoroTerrainImport PUBLIC HoroEngine::TerrainApi HoroEngine
 # Editor-owned terrain authoring remains usable from GUI, CLI and MCP hosts without presentation dependencies.
 add_library(HoroTerrainAuthoring STATIC
         editor/terrain/TerrainAuthoringDocument.cpp
+        editor/terrain/TerrainAuthoringDocumentState.cpp
 )
 add_library(HoroEngine::TerrainAuthoring ALIAS HoroTerrainAuthoring)
 target_compile_features(HoroTerrainAuthoring PUBLIC cxx_std_20)
