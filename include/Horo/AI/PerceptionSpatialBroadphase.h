@@ -92,6 +92,12 @@ namespace Horo::AI {
         /** @brief Returns the admitted listener count. @return At most Listeners. */
         [[nodiscard]] std::size_t ListenerCount() const noexcept;
         /**
+         * @brief Reads the frozen position used by candidate gathering and detailed sensing.
+         * @param listener Exact listener incarnation in this publication.
+         * @return Captured global position or a typed invalid/missing-listener failure.
+         */
+        [[nodiscard]] Result<Math::WorldCoordinate64> ListenerPosition(Runtime::EntityRef listener) const;
+        /**
          * @brief Queries the frozen spatial index with no allocation or mutable scene access.
          * @param query Valid exact listener, sense, range and filters.
          * @return Identity-ordered bounded candidates, or typed invalid/missing-listener failure.

@@ -590,6 +590,9 @@ horo_configure_target_header_boundary(HoroAISceneIntegration PUBLIC_HEADERS
     Horo/AI/PerceptionSpatialBroadphase.h
     Horo/AI/EnvironmentQueryContexts.h
 )
+horo_configure_target_header_boundary(HoroAISightIntegration PUBLIC_HEADERS
+    Horo/AI/PerceptionSight.h
+)
 horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
     Horo/Animation/AnimationCompression.h
     Horo/Animation/AnimationClip.h

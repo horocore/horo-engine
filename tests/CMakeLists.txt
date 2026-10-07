@@ -686,6 +686,17 @@ target_link_libraries(HoroAITests PRIVATE HoroEngine::AI HoroEngine::AISceneInte
 horo_register_catch_test(HoroAITests LABELS "unit;ai;headless")
 target_include_directories(HoroAITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 
+add_executable(HoroAISightTests
+        support/AllocationProbe.cpp
+        unit/runtime/ai/PerceptionSightTests.cpp
+        unit/runtime/ai/PerceptionSightBatchTests.cpp
+        unit/runtime/ai/PerceptionSightTestSupport.h)
+target_compile_features(HoroAISightTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAISightTests PRIVATE HoroEngine::AISightIntegration)
+target_include_directories(HoroAISightTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_compile_definitions(HoroAISightTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
+horo_register_catch_test(HoroAISightTests LABELS "unit;ai;sight;headless")
+
 add_executable(HoroAnimationApiTests
         unit/runtime/animation/AnimationCompressionTests.cpp
         unit/runtime/animation/AnimationClipTests.cpp
