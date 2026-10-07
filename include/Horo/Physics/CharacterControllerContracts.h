@@ -138,6 +138,12 @@ namespace Horo::Character {
     [[nodiscard]] Result<void> ValidateCharacterCollisionSelectors(const CharacterCollisionSelectors &selectors,
                                                                    Physics::PhysicsWorldId world);
 
+    /** @brief Deliberate response to a non-walkable upward-facing surface. */
+    enum class CharacterSteepSlopePolicy : std::uint8_t {
+        Stop,  /**< Blocks uphill intent and applies no automatic surface drift. */
+        Slide, /**< Integrates committed Character gravity velocity along the steep surface. */
+    };
+
     /**
      * @brief Owned inert controller creation policy for one exact scene/Character/Physics generation.
      *
@@ -160,6 +166,8 @@ namespace Horo::Character {
         float minimumMoveDistanceMeters{0.001F};
         float maximumStepHeightMeters{0.3F};
         float maximumSlopeDegrees{45.0F};
+        bool preserveHorizontalSpeedOnSlopes{true}; /**< Preserves requested displacement in the plane perpendicular to up. */
+        CharacterSteepSlopePolicy steepSlopePolicy{CharacterSteepSlopePolicy::Stop};
         std::uint32_t maximumContacts{16};
         CharacterCollisionSelectors selectors;                       /**< Initial movement, placement and clearance filter. */
         std::optional<Physics::PhysicsCapsuleShape> crouchedCapsule; /**< Same radius and lower cylindrical height than standing. */
@@ -469,7 +477,8 @@ namespace Horo::Character {
         bool groundingRevalidationRequired{};
         std::optional<Physics::PhysicsShapeSubresourceId> groundSubshape;             /**< Selected support's authored child identity. */
         CharacterMaterialSource groundMaterialSource{CharacterMaterialSource::Query}; /**< Origin of the effective physical material. */
-        Math::Vec3 groundPoint{};                              /**< Selected support point; independent of retained contact capacity. */
+        Math::Vec3 groundPoint{};                    /**< Selected support point; independent of retained contact capacity. */
+        Math::Vec3 gravityVelocityMetersPerSecond{}; /**< Character-owned continuation; separate from achieved and gameplay velocity. */
         std::optional<CharacterShapeChangeResult> shapeChange; /**< Character-owned clearance outcome, never adapter authority. */
     };
 
