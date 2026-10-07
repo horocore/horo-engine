@@ -6,6 +6,12 @@ horo_configure_target_header_boundary(HoroSceneSourceModel PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroSceneSource PUBLIC_HEADERS
     Horo/Scene/SceneSource.h
 )
+horo_configure_target_header_boundary(HoroSceneRuntimeConversion PUBLIC_HEADERS
+    Horo/Scene/SceneRuntimeConversion.h
+)
+horo_configure_target_header_boundary(HoroSceneCook PUBLIC_HEADERS
+    Horo/Scene/CookedSceneDefinition.h
+)
 
 # Public header ownership is intentionally explicit. Adding a header under
 # include/Horo requires assigning it to exactly one production target here.
@@ -220,6 +226,7 @@ horo_configure_target_header_boundary(HoroReleaseService PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroPackages PUBLIC_HEADERS
     Horo/Packages/PackageDependencyResolver.h
     Horo/Packages/PackageLockfile.h
+    Horo/Packages/PackageRequest.h
     Horo/Packages/PackagePath.h
     Horo/Packages/PackageArchive.h
     Horo/Packages/PackageCache.h
@@ -439,6 +446,7 @@ horo_configure_target_header_boundary(HoroAssets PUBLIC_HEADERS
     Horo/Assets/NavMeshAssetType.h
     Horo/Assets/AssetCookOutput.h
     Horo/Assets/AssetCookService.h
+    Horo/Assets/AssetCookInputSnapshot.h
     Horo/Assets/AssetCookTransaction.h
     Horo/Assets/AssetId.h
     Horo/Assets/AssetImportMetadata.h
@@ -881,6 +889,9 @@ horo_configure_target_header_boundary(HoroSceneCellPayload PUBLIC_HEADERS
 
 horo_configure_target_header_boundary(HoroPrefabSceneExpansion PUBLIC_HEADERS
     Horo/Prefab/PrefabSceneExpansion.h
+)
+horo_configure_target_header_boundary(HoroPrefabCookHost PUBLIC_HEADERS
+    Horo/Application/PrefabSceneCookHost.h
 )
 
 horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
