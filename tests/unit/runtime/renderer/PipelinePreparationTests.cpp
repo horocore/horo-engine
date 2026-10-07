@@ -20,8 +20,8 @@ namespace {
     }
 
     PipelinePreparation Plan(std::vector<PipelineUsage> usages, const PipelineCompilationMode mode = PipelineCompilationMode::Packaged,
-                             const PipelinePreparationBudget budget = {}) {
-        auto plan = PipelinePreparation::Prepare({17, std::move(usages)}, mode, budget);
+                             const PipelinePreparationBudget budget = {}, Horo::CancellationToken cancellation = {}) {
+        auto plan = PipelinePreparation::Prepare({17, std::move(usages)}, mode, budget, std::move(cancellation));
         REQUIRE(plan.HasValue());
         return std::move(plan).Value();
     }
@@ -31,7 +31,7 @@ TEST_CASE("Release activation waits for exact cooked native pipelines", "[render
     auto plan = Plan({Usage(1), Usage(2)});
     RequireError(plan.CheckReady(), PreparationErrors::Pending);
     RequireError(plan.Bind(0), PreparationErrors::Pending);
-    const auto batch = plan.Dispatch({});
+    const auto batch = plan.Dispatch();
     REQUIRE(batch.HasValue());
     REQUIRE(batch.Value().size() == 2);
     CHECK(batch.Value()[0].action == PipelinePreparationAction::RealizeCooked);
@@ -43,20 +43,20 @@ TEST_CASE("Release activation waits for exact cooked native pipelines", "[render
     REQUIRE(binding.HasValue());
     CHECK(binding.Value().key == Usage(1).key);
     CHECK_FALSE(binding.Value().usedFallback);
-    CHECK(plan.Dispatch({}).Value().empty());
+    CHECK(plan.Dispatch().Value().empty());
 }
 
 TEST_CASE("Source permission and native residency are separate preparation stages", "[renderer][pipeline-preparation]") {
     RequireError(PipelinePreparation::Prepare({1, {Usage(1, false)}}, PipelineCompilationMode::Packaged),
                  PreparationErrors::MissingCookedArtifact);
     auto plan = Plan({Usage(1, false)}, PipelineCompilationMode::Development);
-    const auto source = plan.Dispatch({});
+    const auto source = plan.Dispatch();
     REQUIRE(source.HasValue());
     REQUIRE(source.Value().size() == 1);
     CHECK(source.Value()[0].action == PipelinePreparationAction::CompileSource);
     REQUIRE(plan.Complete(source.Value()[0], Horo::Result<void>::Success(), 2500).HasValue());
     RequireError(plan.CheckReady(), PreparationErrors::Pending);
-    const auto native = plan.Dispatch({});
+    const auto native = plan.Dispatch();
     REQUIRE(native.HasValue());
     REQUIRE(native.Value().size() == 1);
     CHECK(native.Value()[0].action == PipelinePreparationAction::RealizeCooked);
@@ -75,15 +75,15 @@ TEST_CASE("Dispatch obeys concurrency count and estimated time budgets", "[rende
     budget.maximumDispatchesPerBatch = 3;
     budget.maximumBatchMicroseconds = 1000;
     auto plan = Plan({Usage(1), Usage(2), Usage(3)}, PipelineCompilationMode::Packaged, budget);
-    const auto first = plan.Dispatch({});
-    const auto second = plan.Dispatch({});
+    const auto first = plan.Dispatch();
+    const auto second = plan.Dispatch();
     REQUIRE(first.HasValue());
     REQUIRE(second.HasValue());
     REQUIRE(first.Value().size() == 1);
     REQUIRE(second.Value().size() == 1);
-    CHECK(plan.Dispatch({}).Value().empty());
+    CHECK(plan.Dispatch().Value().empty());
     REQUIRE(plan.Complete(first.Value()[0], Horo::Result<void>::Success(), 1000).HasValue());
-    const auto third = plan.Dispatch({});
+    const auto third = plan.Dispatch();
     REQUIRE(third.HasValue());
     REQUIRE(third.Value().size() == 1);
     CHECK(third.Value()[0].index == 2);
@@ -94,7 +94,7 @@ TEST_CASE("Optional fallback is cooked explicit resident and observable", "[rend
     auto optional = Usage(1, true, false);
     optional.fallback = 1;
     auto plan = Plan({optional, Usage(2)});
-    const auto batch = plan.Dispatch({});
+    const auto batch = plan.Dispatch();
     REQUIRE(batch.HasValue());
     REQUIRE(batch.Value().size() == 2);
     RequireError(plan.Bind(0), PreparationErrors::Pending);
@@ -111,7 +111,7 @@ TEST_CASE("Optional fallback is cooked explicit resident and observable", "[rend
 
 TEST_CASE("Preparation preserves required failure diagnostics and rejects stale work", "[renderer][pipeline-preparation]") {
     auto plan = Plan({Usage(1)});
-    const auto batch = plan.Dispatch({});
+    const auto batch = plan.Dispatch();
     REQUIRE(batch.HasValue());
     REQUIRE(batch.Value().size() == 1);
     auto stale = batch.Value()[0];
@@ -132,25 +132,30 @@ TEST_CASE("Preparation preserves required failure diagnostics and rejects stale 
     RequireError(plan.CheckReady(), PipelineCacheErrors::IncompatibleBlob);
     RequireError(plan.Bind(0), PipelineCacheErrors::IncompatibleBlob);
     CHECK(plan.Bind(0).ErrorValue().message == failure.message);
-    CHECK(plan.Dispatch({}).Value().empty());
+    CHECK(plan.Dispatch().Value().empty());
     RequireError(plan.Complete(batch.Value()[0], Horo::Result<void>::Success(), 0), PreparationErrors::StaleCompletion);
 }
 
 TEST_CASE("Cancellation and shutdown reject late completions and new admission", "[renderer][pipeline-preparation]") {
-    auto plan = Plan({Usage(1)});
-    const auto batch = plan.Dispatch({});
-    REQUIRE(batch.HasValue());
     Horo::CancellationSource source;
+    auto plan = Plan({Usage(1)}, PipelineCompilationMode::Packaged, {}, source.Token());
+    const auto batch = plan.Dispatch();
+    REQUIRE(batch.HasValue());
     source.RequestCancellation();
-    RequireError(plan.Dispatch(source.Token()), PreparationErrors::Cancelled);
-    RequireError(plan.Dispatch({}), PreparationErrors::Cancelled);
+    // Observe cancellation before another dispatch; late completion must never publish readiness.
+    RequireError(plan.Complete(batch.Value()[0], Horo::Result<void>::Success(), 100), PreparationErrors::Cancelled);
+    RequireError(plan.Bind(0), PreparationErrors::Cancelled);
+    RequireError(plan.CheckReady(), PreparationErrors::Cancelled);
+    RequireError(plan.Dispatch(), PreparationErrors::Cancelled);
     RequireError(plan.Complete(batch.Value()[0], Horo::Result<void>::Success(), 100), PreparationErrors::Cancelled);
     RequireError(plan.CheckReady(), PreparationErrors::Cancelled);
     RequireError(plan.Bind(0), PreparationErrors::Cancelled);
+    RequireError(PipelinePreparation::Prepare({18, {Usage(1)}}, PipelineCompilationMode::Packaged, {}, source.Token()),
+                 PreparationErrors::Cancelled);
     auto closed = Plan({Usage(2)});
     closed.Close();
     closed.Close();
-    RequireError(closed.Dispatch({}), PreparationErrors::Closed);
+    RequireError(closed.Dispatch(), PreparationErrors::Closed);
     RequireError(closed.Bind(0), PreparationErrors::Closed);
     RequireError(closed.CheckReady(), PreparationErrors::Closed);
 }
@@ -199,7 +204,7 @@ TEST_CASE("Preparation validates hard limits and saturates measured time", "[ren
     budget.maximumBatchMicroseconds = 999;
     RequireError(PipelinePreparation::Prepare({1, {}}, PipelineCompilationMode::Packaged, budget), PreparationErrors::InvalidBudget);
     auto plan = Plan({Usage(1), Usage(2)});
-    const auto batch = plan.Dispatch({});
+    const auto batch = plan.Dispatch();
     REQUIRE(batch.HasValue());
     REQUIRE(batch.Value().size() == 2);
     REQUIRE(plan.Complete(batch.Value()[0], Horo::Result<void>::Success(), std::numeric_limits<std::uint64_t>::max()).HasValue());
@@ -209,11 +214,11 @@ TEST_CASE("Preparation validates hard limits and saturates measured time", "[ren
 
 TEST_CASE("Failed development source work never admits native realization", "[renderer][pipeline-preparation]") {
     auto plan = Plan({Usage(1, false)}, PipelineCompilationMode::Development);
-    const auto batch = plan.Dispatch({});
+    const auto batch = plan.Dispatch();
     REQUIRE(batch.HasValue());
     REQUIRE(batch.Value().size() == 1);
     REQUIRE(plan.Complete(batch.Value()[0], Horo::Result<void>::Failure(Horo::MakeError(PipelineCacheErrors::CorruptBlob)), 1).HasValue());
     RequireError(plan.CheckReady(), PipelineCacheErrors::CorruptBlob);
     RequireError(plan.Bind(0), PipelineCacheErrors::CorruptBlob);
-    CHECK(plan.Dispatch({}).Value().empty());
+    CHECK(plan.Dispatch().Value().empty());
 }

@@ -42,8 +42,9 @@ namespace Horo::Render {
     }  // namespace
 
     /** @copydoc PipelinePreparation::PipelinePreparation */
-    PipelinePreparation::PipelinePreparation(PipelineUsageManifest manifest, PipelinePreparationBudget budget)
-        : manifest_(std::move(manifest)), budget_(budget), entries_(manifest_.pipelines.size()) {
+    PipelinePreparation::PipelinePreparation(PipelineUsageManifest manifest, PipelinePreparationBudget budget,
+                                             CancellationToken cancellation)
+        : manifest_(std::move(manifest)), budget_(budget), entries_(manifest_.pipelines.size()), cancellation_(std::move(cancellation)) {
         for (std::size_t index = 0; index < entries_.size(); ++index) {
             if (!manifest_.pipelines[index].cookedArtifactAvailable)
                 entries_[index].state = State::SourcePending;
@@ -52,7 +53,9 @@ namespace Horo::Render {
 
     /** @copydoc PipelinePreparation::Prepare */
     Result<PipelinePreparation> PipelinePreparation::Prepare(PipelineUsageManifest manifest, const PipelineCompilationMode mode,
-                                                             PipelinePreparationBudget budget) {
+                                                             PipelinePreparationBudget budget, CancellationToken cancellation) {
+        if (cancellation.IsCancellationRequested())
+            return Result<PipelinePreparation>::Failure(MakeError(PipelinePreparationErrors::Cancelled));
         if (!ValidBudget(budget))
             return Result<PipelinePreparation>::Failure(MakeError(PipelinePreparationErrors::InvalidBudget));
         if (manifest.generation == 0 || manifest.pipelines.size() > budget.maximumPipelines ||
@@ -65,21 +68,19 @@ namespace Horo::Render {
                 return Result<PipelinePreparation>::Failure(MakeError(PipelinePreparationErrors::MissingCookedArtifact));
         }
         try {
-            return Result<PipelinePreparation>::Success(PipelinePreparation(std::move(manifest), budget));
+            return Result<PipelinePreparation>::Success(PipelinePreparation(std::move(manifest), budget, std::move(cancellation)));
         } catch (const std::bad_alloc &) {
             return Result<PipelinePreparation>::Failure(MakeError(PipelinePreparationErrors::AllocationFailed));
         }
     }
 
     /** @copydoc PipelinePreparation::Dispatch */
-    Result<std::vector<PipelinePreparationWork>> PipelinePreparation::Dispatch(const CancellationToken &cancellation) {
-        if (cancellation.IsCancellationRequested()) {
-            cancelled_ = true;
+    Result<std::vector<PipelinePreparationWork>> PipelinePreparation::Dispatch() {
+        if (cancellation_.IsCancellationRequested())
             Close();
-        }
-        if (closed_)
-            return Result<std::vector<PipelinePreparationWork>>::Failure(
-                MakeError(cancelled_ ? PipelinePreparationErrors::Cancelled : PipelinePreparationErrors::Closed));
+        if (closed_ || cancellation_.IsCancellationRequested())
+            return Result<std::vector<PipelinePreparationWork>>::Failure(MakeError(
+                cancellation_.IsCancellationRequested() ? PipelinePreparationErrors::Cancelled : PipelinePreparationErrors::Closed));
         const auto count =
             std::min({budget_.maximumDispatchesPerBatch, budget_.maximumInFlight - inFlight_,
                       static_cast<std::size_t>(std::min<std::uint64_t>(budget_.maximumPipelines, budget_.maximumBatchMicroseconds /
@@ -108,8 +109,9 @@ namespace Horo::Render {
     /** @copydoc PipelinePreparation::Complete */
     Result<void> PipelinePreparation::Complete(const PipelinePreparationWork &work, Result<void> outcome,
                                                const std::uint64_t durationMicroseconds) {
-        if (closed_)
-            return Result<void>::Failure(MakeError(cancelled_ ? PipelinePreparationErrors::Cancelled : PipelinePreparationErrors::Closed));
+        if (closed_ || cancellation_.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(cancellation_.IsCancellationRequested() ? PipelinePreparationErrors::Cancelled
+                                                                                           : PipelinePreparationErrors::Closed));
         if (work.generation != manifest_.generation || work.index >= entries_.size() || work.key != manifest_.pipelines[work.index].key ||
             (work.action != PipelinePreparationAction::CompileSource && work.action != PipelinePreparationAction::RealizeCooked))
             return Result<void>::Failure(MakeError(PipelinePreparationErrors::StaleCompletion));
@@ -135,9 +137,9 @@ namespace Horo::Render {
 
     /** @copydoc PipelinePreparation::Bind */
     Result<PipelineBindingSelection> PipelinePreparation::Bind(const std::size_t index) {
-        if (closed_)
-            return Result<PipelineBindingSelection>::Failure(
-                MakeError(cancelled_ ? PipelinePreparationErrors::Cancelled : PipelinePreparationErrors::Closed));
+        if (closed_ || cancellation_.IsCancellationRequested())
+            return Result<PipelineBindingSelection>::Failure(MakeError(
+                cancellation_.IsCancellationRequested() ? PipelinePreparationErrors::Cancelled : PipelinePreparationErrors::Closed));
         if (index >= entries_.size())
             return Result<PipelineBindingSelection>::Failure(MakeError(PipelinePreparationErrors::InvalidManifest));
         if (entries_[index].state == State::Ready)
@@ -154,8 +156,9 @@ namespace Horo::Render {
 
     /** @copydoc PipelinePreparation::CheckReady */
     Result<void> PipelinePreparation::CheckReady() const {
-        if (closed_)
-            return Result<void>::Failure(MakeError(cancelled_ ? PipelinePreparationErrors::Cancelled : PipelinePreparationErrors::Closed));
+        if (closed_ || cancellation_.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(cancellation_.IsCancellationRequested() ? PipelinePreparationErrors::Cancelled
+                                                                                           : PipelinePreparationErrors::Closed));
         for (std::size_t index = 0; index < entries_.size(); ++index) {
             if (!manifest_.pipelines[index].required)
                 continue;

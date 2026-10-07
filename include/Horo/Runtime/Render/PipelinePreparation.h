@@ -93,16 +93,17 @@ namespace Horo::Render {
          * @param manifest Exact admitted entries and host operation generation.
          * @param mode Explicit packaged or development source-compilation policy.
          * @param budget Finite storage, concurrency and estimated dispatch-time envelope.
+         * @param cancellation Immutable host operation token observed by admission, completion and binding.
          * @return Owned coordinator or typed manifest/policy/allocation failure.
          */
         [[nodiscard]] static Result<PipelinePreparation> Prepare(PipelineUsageManifest manifest, PipelineCompilationMode mode,
-                                                                 PipelinePreparationBudget budget = {});
+                                                                 PipelinePreparationBudget budget = {},
+                                                                 CancellationToken cancellation = {});
         /**
          * @brief Admits a bounded batch; an empty batch means no eligible work or full concurrency capacity.
-         * @param cancellation Host operation token; cancellation closes this operation permanently.
          * @return Owned work messages or typed closed/cancelled/allocation failure.
          */
-        [[nodiscard]] Result<std::vector<PipelinePreparationWork>> Dispatch(const CancellationToken &cancellation);
+        [[nodiscard]] Result<std::vector<PipelinePreparationWork>> Dispatch();
         /**
          * @brief Accepts an exact in-flight completion without replacing any resident last-good pipeline.
          * @param work Original dispatch message; generation, index, key and stage must match.
@@ -140,13 +141,13 @@ namespace Horo::Render {
         };
 
         /** @brief Initializes validated load-time storage and the initial source/native stages. */
-        PipelinePreparation(PipelineUsageManifest manifest, PipelinePreparationBudget budget);
+        PipelinePreparation(PipelineUsageManifest manifest, PipelinePreparationBudget budget, CancellationToken cancellation);
         PipelineUsageManifest manifest_;
         PipelinePreparationBudget budget_;
         std::vector<Entry> entries_;
         std::size_t inFlight_{0};
         bool closed_{false};
-        bool cancelled_{false};
+        CancellationToken cancellation_;
         PipelinePreparationMetrics metrics_;
     };
 }  // namespace Horo::Render
