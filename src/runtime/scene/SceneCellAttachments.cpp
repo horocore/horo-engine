@@ -29,19 +29,18 @@ namespace Horo::Runtime {
         /** @brief Returns the explicitly selected exact feature implementation. */
         const SceneCellAttachmentProvider *Provider(const Detail::SceneCellAttachmentState &state, W::StreamingCellProvider provider) {
             const auto found = std::ranges::find(state.providers, provider, &SceneCellAttachmentProvider::provider);
-            return found == state.providers.end() ? nullptr : &*found;
+            return found == state.providers.end() ? nullptr : std::to_address(found);
         }
 
         /** @brief Resolves one immutable artifact; never falls back to another revision or path. */
         const SceneCellAttachmentBytes *Artifact(const Detail::SceneCellAttachmentState &state, const Assets::AssetId &asset) {
             const auto found = std::ranges::find(state.artifacts, asset, &SceneCellAttachmentBytes::asset);
-            return found == state.artifacts.end() ? nullptr : &*found;
+            return found == state.artifacts.end() ? nullptr : std::to_address(found);
         }
 
         /** @brief Validates exact provider schema and full artifact integrity before preparation. */
         Result<void> ReferenceReady(const Detail::SceneCellAttachmentState &state, const W::CellAttachmentReference &reference) {
-            const auto *provider = Provider(state, reference.provider);
-            if (!provider || provider->version != reference.version)
+            if (const auto *provider = Provider(state, reference.provider); !provider || provider->version != reference.version)
                 return Result<void>::Failure(MakeError(W::CellAttachmentErrors::Unsupported));
             const auto *artifact = Artifact(state, reference.asset);
             if (!artifact)
@@ -93,13 +92,14 @@ namespace Horo::Runtime {
         }
 
         /** @brief Builds complete replacement evidence off to the side before changing any live owner. */
-        Result<std::shared_ptr<Detail::SceneCellAttachmentState>> MakeState(SceneCellAttachmentContext context,
+        Result<std::shared_ptr<Detail::SceneCellAttachmentState>> MakeState(const SceneCellAttachmentContext &context,
                                                                             W::CellAttachmentManifest manifest,
                                                                             std::vector<SceneCellAttachmentProvider> providers,
                                                                             std::vector<SceneCellAttachmentBytes> artifacts) {
-            auto state = std::make_shared<Detail::SceneCellAttachmentState>(
-                Detail::SceneCellAttachmentState{context, std::move(manifest), std::move(providers), std::move(artifacts),
-                                                 std::make_shared<Detail::SceneCellAttachmentPublication>(), false});
+            auto state =
+                std::make_shared<Detail::SceneCellAttachmentState>(context, std::move(manifest), std::move(providers), std::move(artifacts),
+                                                                   std::make_shared<Detail::SceneCellAttachmentPublication>(), false,
+                                                                   false);
             if (const auto valid = ValidateContext(*state); valid.HasError())
                 return Result<std::shared_ptr<Detail::SceneCellAttachmentState>>::Failure(valid.ErrorValue());
             if (const auto valid = ValidateBindings(*state); valid.HasError())
@@ -111,6 +111,12 @@ namespace Horo::Runtime {
         class Attachments final : public SceneActivationCandidate {
         public:
             explicit Attachments(std::shared_ptr<Detail::SceneCellAttachmentState> state) : state_(std::move(state)) {}
+
+            // Publication identity is this candidate's address and cannot be copied or transferred.
+            Attachments(const Attachments &) = delete;
+            Attachments &operator=(const Attachments &) = delete;
+            Attachments(Attachments &&) = delete;
+            Attachments &operator=(Attachments &&) = delete;
 
             ~Attachments() override {
                 Shutdown();
@@ -167,11 +173,10 @@ namespace Horo::Runtime {
                 candidates_.reserve(state_->manifest.References().size());
                 status_.reserve(state_->manifest.References().size());
                 for (const auto &reference : state_->manifest.References()) {
-                    const auto ready = ReferenceReady(*state_, reference);
-                    if (ready.HasError()) {
+                    if (const auto ready = ReferenceReady(*state_, reference); ready.HasError()) {
                         if (reference.requirement == W::StreamingCellPayloadRequirement::Required)
                             return ready;
-                        status_.push_back({reference, false, ready.ErrorValue()});
+                        status_.emplace_back(reference, false, ready.ErrorValue());
                         continue;
                     }
                     auto candidate = Provider(*state_, reference.provider)
@@ -187,11 +192,11 @@ namespace Horo::Runtime {
                     if (candidate.HasError()) {
                         if (reference.requirement == W::StreamingCellPayloadRequirement::Required)
                             return Result<void>::Failure(candidate.ErrorValue());
-                        status_.push_back({reference, false, candidate.ErrorValue()});
+                        status_.emplace_back(reference, false, candidate.ErrorValue());
                         continue;
                     }
-                    status_.push_back({reference, true, {}});
-                    candidates_.push_back({std::move(candidate).Value(), status_.size() - 1});
+                    status_.emplace_back(reference, true, std::nullopt);
+                    candidates_.emplace_back(std::move(candidate).Value(), status_.size() - 1);
                 }
                 return ValidatePublication();
             }
@@ -212,7 +217,8 @@ namespace Horo::Runtime {
     }  // namespace
 
     /** @copydoc SceneCellAttachmentParticipant::SceneCellAttachmentParticipant */
-    SceneCellAttachmentParticipant::SceneCellAttachmentParticipant(std::shared_ptr<Detail::SceneCellAttachmentState> state) noexcept
+    SceneCellAttachmentParticipant::SceneCellAttachmentParticipant(ConstructionKey,
+                                                                   std::shared_ptr<Detail::SceneCellAttachmentState> state) noexcept
         : state_(std::move(state)) {}
 
     /** @copydoc SceneCellAttachmentParticipant::~SceneCellAttachmentParticipant */
@@ -222,17 +228,17 @@ namespace Horo::Runtime {
 
     /** @copydoc SceneCellAttachmentParticipant::Create */
     Result<std::unique_ptr<SceneCellAttachmentParticipant>> SceneCellAttachmentParticipant::Create(
-        SceneCellAttachmentContext context, W::CellAttachmentManifest manifest, std::vector<SceneCellAttachmentProvider> providers,
+        const SceneCellAttachmentContext &context, W::CellAttachmentManifest manifest, std::vector<SceneCellAttachmentProvider> providers,
         std::vector<SceneCellAttachmentBytes> artifacts) {
         auto state = MakeState(context, std::move(manifest), std::move(providers), std::move(artifacts));
         if (state.HasError())
             return Result<std::unique_ptr<SceneCellAttachmentParticipant>>::Failure(state.ErrorValue());
         return Result<std::unique_ptr<SceneCellAttachmentParticipant>>::Success(
-            std::unique_ptr<SceneCellAttachmentParticipant>{new SceneCellAttachmentParticipant{std::move(state).Value()}});
+            std::make_unique<SceneCellAttachmentParticipant>(ConstructionKey{}, std::move(state).Value()));
     }
 
     /** @copydoc SceneCellAttachmentParticipant::Replace */
-    Result<void> SceneCellAttachmentParticipant::Replace(SceneCellAttachmentContext context, W::CellAttachmentManifest manifest,
+    Result<void> SceneCellAttachmentParticipant::Replace(const SceneCellAttachmentContext &context, W::CellAttachmentManifest manifest,
                                                          std::vector<SceneCellAttachmentProvider> providers,
                                                          std::vector<SceneCellAttachmentBytes> artifacts) {
         if (state_->closed)
@@ -265,12 +271,12 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc SceneCellAttachmentParticipant::RequestCancellation */
-    void SceneCellAttachmentParticipant::RequestCancellation() noexcept {
+    void SceneCellAttachmentParticipant::RequestCancellation() const noexcept {
         state_->closed = true;
     }
 
     /** @copydoc SceneCellAttachmentParticipant::Shutdown */
-    void SceneCellAttachmentParticipant::Shutdown() noexcept {
+    void SceneCellAttachmentParticipant::Shutdown() const noexcept {
         state_->closed = true;
         state_->publication->active.clear();
     }

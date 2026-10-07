@@ -1,6 +1,8 @@
 #include "Horo/Physics/PhysicsCellAttachments.h"
 
 #include <algorithm>
+#include <bit>
+#include <type_traits>
 #include <utility>
 
 namespace Horo::Physics {
@@ -40,6 +42,33 @@ namespace Horo::Physics {
             std::unique_ptr<Runtime::SceneActivationCandidate> native_;
         };
 
+        /** @brief Acquires the exact cooked lease and stages real native ownership without changing the active Scene.
+         * @details The cache and participant are host-owned and outlive preparation and every returned candidate.
+         */
+        Result<std::unique_ptr<Runtime::SceneActivationCandidate>> PrepareAttachment(
+            const PhysicsCookedShapeCache &cache, PhysicsSceneActivationParticipant &participant,
+            const std::span<const PhysicsCellAttachment> attachments, const W::CellAttachmentReference &reference,
+            const Assets::AssetPayloadLease &bytes, const Runtime::RuntimeSceneDefinition &definition,
+            const Runtime::RuntimeSceneView scene) {
+            const auto found = std::ranges::find(attachments, reference, &PhysicsCellAttachment::reference);
+            if (found == attachments.end())
+                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(W::CellAttachmentErrors::Stale));
+            if (bytes.Bytes().size() != reference.bytes || bytes.Digest() != reference.digest)
+                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(W::CellAttachmentErrors::Stale));
+            const std::span<const std::byte> payload = bytes.Bytes();
+            static_assert(std::is_same_v<std::uint8_t, unsigned char>);
+            // The existing cooked-cache API requires integer octets. Preserve this lease-pinned representation
+            // only at that call boundary; unsigned char legally aliases its bytes on the supported targets.
+            auto shape = cache.Acquire(found->shape, {std::bit_cast<const std::uint8_t *>(payload.data()), payload.size()});
+            if (shape.HasError())
+                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(shape.ErrorValue());
+            auto native = participant.Prepare(definition, scene);
+            if (native.HasError())
+                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(native.ErrorValue());
+            return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Success(
+                std::make_unique<PhysicsAttachment>(std::move(shape).Value(), std::move(native).Value()));
+        }
+
         /** @brief Validates exact semantic address and cooked integrity evidence before constructing the factory. */
         bool Valid(const PhysicsCellAttachment &attachment, const std::uint32_t version) noexcept {
             const auto &reference = attachment.reference;
@@ -55,7 +84,7 @@ namespace Horo::Physics {
     /** @copydoc MakePhysicsCellAttachmentProvider */
     Result<Runtime::SceneCellAttachmentProvider> MakePhysicsCellAttachmentProvider(
         W::StreamingRuntimeServiceId identity, W::StreamingRuntimeServiceRevision revision, const std::uint32_t version,
-        PhysicsCookedShapeCache &cache, PhysicsSceneActivationParticipant &participant,
+        const PhysicsCookedShapeCache &cache, PhysicsSceneActivationParticipant &participant,
         const std::span<const PhysicsCellAttachment> attachments, const std::size_t maximumAttachments) {
         if (!identity.IsValid() || !revision.IsValid() || version == 0 || maximumAttachments == 0 || attachments.empty())
             return Result<Runtime::SceneCellAttachmentProvider>::Failure(MakeError(W::CellAttachmentErrors::Invalid));
@@ -75,22 +104,8 @@ namespace Horo::Physics {
                                                         attachments.end()}](const W::CellAttachmentReference &reference,
                                                                             Assets::AssetPayloadLease bytes,
                                                                             const Runtime::RuntimeSceneDefinition &definition,
-                                                                            Runtime::RuntimeSceneView scene)
-            -> Result<std::unique_ptr<Runtime::SceneActivationCandidate>> {
-            const auto found = std::ranges::find(owned, reference, &PhysicsCellAttachment::reference);
-            if (found == owned.end())
-                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(W::CellAttachmentErrors::Stale));
-            if (bytes.Bytes().size() != reference.bytes || bytes.Digest() != reference.digest)
-                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(W::CellAttachmentErrors::Stale));
-            const auto payload = bytes.Bytes();
-            auto shape = cache.Acquire(found->shape, {reinterpret_cast<const std::uint8_t *>(payload.data()), payload.size()});
-            if (shape.HasError())
-                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(shape.ErrorValue());
-            auto native = participant.Prepare(definition, scene);
-            if (native.HasError())
-                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(native.ErrorValue());
-            return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Success(
-                std::make_unique<PhysicsAttachment>(std::move(shape).Value(), std::move(native).Value()));
+                                                                            Runtime::RuntimeSceneView scene) {
+            return PrepareAttachment(cache, participant, owned, reference, bytes, definition, scene);
         };
         return Result<Runtime::SceneCellAttachmentProvider>::Success(
             {W::StreamingCellProvider::PhysicsMesh, identity, revision, version, std::move(factory)});

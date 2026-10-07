@@ -29,6 +29,6 @@ namespace Horo::Physics {
      */
     [[nodiscard]] Result<Runtime::SceneCellAttachmentProvider> MakePhysicsCellAttachmentProvider(
         WorldStreaming::StreamingRuntimeServiceId identity, WorldStreaming::StreamingRuntimeServiceRevision revision, std::uint32_t version,
-        PhysicsCookedShapeCache &cache, PhysicsSceneActivationParticipant &participant, std::span<const PhysicsCellAttachment> attachments,
-        std::size_t maximumAttachments);
+        const PhysicsCookedShapeCache &cache, PhysicsSceneActivationParticipant &participant,
+        std::span<const PhysicsCellAttachment> attachments, std::size_t maximumAttachments);
 }  // namespace Horo::Physics

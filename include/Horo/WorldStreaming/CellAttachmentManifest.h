@@ -76,7 +76,7 @@ namespace Horo::WorldStreaming {
         [[nodiscard]] std::span<const CellAttachmentReference> References() const noexcept;
 
     private:
-        CellAttachmentManifest(StreamingCellOperationHandle operation, Sha256Digest digest, CellAttachmentRevision revision,
+        CellAttachmentManifest(const StreamingCellOperationHandle &operation, const Sha256Digest &digest, CellAttachmentRevision revision,
                                std::vector<CellAttachmentReference> references) noexcept;
         StreamingCellOperationHandle operation_;
         Sha256Digest digest_;

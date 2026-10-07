@@ -38,3 +38,23 @@ remain typed capability failures; this change does not recook or claim native re
 for unsupported data. Terrain, Foliage, Navigation and Audio own their schemas and
 native preparation behind the shared factory contract. A required provider absent from
 host composition is rejected before any factory starts work.
+
+## Admission signature refinement
+
+Rebuild consumers of RuntimeScene, PhysicsSceneIntegration and WorldStreaming
+with this change. `Create`/`Replace` borrow the large attachment context as a
+const reference and still copy its complete values before return. The Physics
+factory accepts a const cooked-shape cache because acquisition is already a
+const cache operation. Direct call syntax remains unchanged; stored function
+or member-function pointers must use the updated const-reference signatures.
+`RequestCancellation`/`Shutdown` are const handle operations on retained shared
+admission state, with the same owner-thread and resource-retirement rules.
+
+Factory allocation uses `std::make_unique` and a private construction capability
+that cannot bypass admission. Detached candidates explicitly prohibit copy and
+move because their address identifies publication ownership. Byte payloads stay
+`std::byte` spans; only the pre-existing cooked-cache integer-octet API borrows
+the same lease-pinned storage with checked pointer representation and unsigned
+character aliasing. No extra payload copy, allocation or global cache API change
+is introduced. Public consumer compilation verifies factory-only construction
+and lifecycle signatures alongside the existing real Physics/Scene regressions.

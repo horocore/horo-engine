@@ -50,12 +50,13 @@ namespace Horo::WorldStreaming {
 
     /** @copydoc IsCellAttachmentProvider */
     bool IsCellAttachmentProvider(const StreamingCellProvider provider) noexcept {
+        using enum StreamingCellProvider;
         switch (provider) {
-            case StreamingCellProvider::Terrain:
-            case StreamingCellProvider::Foliage:
-            case StreamingCellProvider::NavigationMesh:
-            case StreamingCellProvider::PhysicsMesh:
-            case StreamingCellProvider::Audio:
+            case Terrain:
+            case Foliage:
+            case NavigationMesh:
+            case PhysicsMesh:
+            case Audio:
                 return true;
             default:
                 return false;
@@ -97,7 +98,7 @@ namespace Horo::WorldStreaming {
     }
 
     /** @copydoc CellAttachmentManifest::CellAttachmentManifest */
-    CellAttachmentManifest::CellAttachmentManifest(StreamingCellOperationHandle operation, Sha256Digest digest,
+    CellAttachmentManifest::CellAttachmentManifest(const StreamingCellOperationHandle &operation, const Sha256Digest &digest,
                                                    CellAttachmentRevision revision,
                                                    std::vector<CellAttachmentReference> references) noexcept
         : operation_(operation), digest_(digest), revision_(revision), references_(std::move(references)) {}

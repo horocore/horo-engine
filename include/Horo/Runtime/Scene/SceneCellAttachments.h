@@ -64,7 +64,19 @@ namespace Horo::Runtime {
      * Services captured by factories must outlive all prepared/active candidates; adapters never discover backends or services.
      */
     class SceneCellAttachmentParticipant final : public SceneActivationParticipant {
+        /** @brief Factory-only capability preserving complete admission before owner construction. */
+        class ConstructionKey final {
+            friend class SceneCellAttachmentParticipant;
+            ConstructionKey() = default;
+        };
+
     public:
+        /** @brief Adopt complete factory-validated state through std::make_unique.
+         * @param key Private capability issued only by Create.
+         * @param state Complete non-null admission owner.
+         * @pre Only Create may issue the capability after validating all required bindings.
+         */
+        explicit SceneCellAttachmentParticipant(ConstructionKey key, std::shared_ptr<Detail::SceneCellAttachmentState> state) noexcept;
         /** @brief Closes pending publication; prepared candidates retain their resource ownership. */
         ~SceneCellAttachmentParticipant() override;
         SceneCellAttachmentParticipant(const SceneCellAttachmentParticipant &) = delete;
@@ -76,29 +88,28 @@ namespace Horo::Runtime {
          * @param artifacts Immutable verified Assets leases; required missing/corrupt artifacts reject before any provider work.
          * @return Unique participant or typed invalid, stale, capacity or unsupported failure. */
         [[nodiscard]] static Result<std::unique_ptr<SceneCellAttachmentParticipant>> Create(
-            SceneCellAttachmentContext context, WorldStreaming::CellAttachmentManifest manifest,
+            const SceneCellAttachmentContext &context, WorldStreaming::CellAttachmentManifest manifest,
             std::vector<SceneCellAttachmentProvider> providers, std::vector<SceneCellAttachmentBytes> artifacts);
         /** @brief Replaces complete evidence with a strictly greater immutable manifest revision.
          * @param context New exact Scene/attempt evidence; same partition and epoch, strictly newer manifest revision.
          * @param manifest Complete validated replacement membership.
          * @param providers Complete new explicitly composed providers. @param artifacts Complete immutable byte leases.
          * @return Success or typed rejection without changing the old owner. Pending old candidates become stale on success. */
-        [[nodiscard]] Result<void> Replace(SceneCellAttachmentContext context, WorldStreaming::CellAttachmentManifest manifest,
+        [[nodiscard]] Result<void> Replace(const SceneCellAttachmentContext &context, WorldStreaming::CellAttachmentManifest manifest,
                                            std::vector<SceneCellAttachmentProvider> providers,
                                            std::vector<SceneCellAttachmentBytes> artifacts);
         /** @copydoc SceneActivationParticipant::Prepare */
         [[nodiscard]] Result<std::unique_ptr<SceneActivationCandidate>> Prepare(const RuntimeSceneDefinition &definition,
                                                                                 RuntimeSceneView scene) override;
         /** @brief Closes admission and pending publication for cancellation; prepared/native candidates retain their cleanup ownership. */
-        void RequestCancellation() noexcept;
+        void RequestCancellation() const noexcept;
         /** @brief Permanently closes admission and pending publication; idempotent, with no wait or fabricated retirement. */
-        void Shutdown() noexcept;
+        void Shutdown() const noexcept;
         /** @brief Returns optional capability status of the currently published candidate. @return Owner-thread immutable borrow,
          * valid until next publication, replacement or shutdown. */
         [[nodiscard]] std::span<const SceneCellAttachmentStatus> ActiveStatus() const noexcept;
 
     private:
-        explicit SceneCellAttachmentParticipant(std::shared_ptr<Detail::SceneCellAttachmentState> state) noexcept;
         std::shared_ptr<Detail::SceneCellAttachmentState> state_;
     };
 }  // namespace Horo::Runtime
