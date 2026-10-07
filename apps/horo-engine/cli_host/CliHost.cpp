@@ -7,6 +7,7 @@
 #include "Horo/Extensions/ExtensionErrors.h"
 #include "Horo/Extensions/HeadlessExtensionHost.h"
 #include "Horo/Foundation/Utf8.h"
+#include "Horo/Mcp/McpErrors.h"
 #include "Horo/Runtime/Save/SaveTelemetry.h"
 #include "HostModuleComposition.h"
 
@@ -76,13 +77,44 @@ namespace Horo::Application::Internal {
             }
         };
 
+        /** @brief Registers original MCP lifecycle identities for CLI diagnostic translation only. */
+        ModuleErrorDomainDescriptor McpErrorDomain() {
+            return {.id = Mcp::McpErrors::ConfigurationInvalid.domain,
+                    .descriptors = {&Mcp::McpErrors::ConfigurationInvalid,
+                                    &Mcp::McpErrors::AdmissionInvalid,
+                                    &Mcp::McpErrors::SessionCapacityExceeded,
+                                    &Mcp::McpErrors::SessionUnavailable,
+                                    &Mcp::McpErrors::ShuttingDown,
+                                    &Mcp::McpErrors::RequestInvalid,
+                                    &Mcp::McpErrors::RequestCapacityExceeded,
+                                    &Mcp::McpErrors::InputCapacityExceeded,
+                                    &Mcp::McpErrors::ResultCapacityExceeded,
+                                    &Mcp::McpErrors::RequestCancelled,
+                                    &Mcp::McpErrors::RequestTimedOut,
+                                    &Mcp::McpErrors::ControllerFailed,
+                                    &Mcp::McpErrors::DrainTimedOut,
+                                    &Mcp::McpErrors::ToolDescriptorInvalid,
+                                    &Mcp::McpErrors::ToolDuplicate,
+                                    &Mcp::McpErrors::ToolIncompatible,
+                                    &Mcp::McpErrors::ToolUnavailable,
+                                    &Mcp::McpErrors::ToolCapabilityUnavailable,
+                                    &Mcp::McpErrors::ToolInputInvalid,
+                                    &Mcp::McpErrors::ToolOutputInvalid,
+                                    &Mcp::McpErrors::OwnerUnavailable,
+                                    &Mcp::McpErrors::OperationCapacityExceeded,
+                                    &Mcp::McpErrors::OperationUnavailable,
+                                    &Mcp::McpErrors::RegistryRevisionStale}};
+        }
+
         /** @brief Exact CLI mappings composed with the original application-domain identities. */
         std::optional<Hosts::ErrorTranslator> Translator() {
             using enum Hosts::ExitCategory;
             const auto cliErrors = CliErrors::ErrorDomain();
             const auto bundleErrors = Diagnostics::DiagnosticBundleErrorDomain();
+            const auto mcpErrors = McpErrorDomain();
             const std::vector<ModuleDescriptor> modules{{.id = {"horo.cli"}, .version = {1, 0, 0}, .errorDomains = {cliErrors}},
-                                                        {.id = {"horo.foundation"}, .version = {1, 0, 0}, .errorDomains = {bundleErrors}}};
+                                                        {.id = {"horo.foundation"}, .version = {1, 0, 0}, .errorDomains = {bundleErrors}},
+                                                        {.id = {"horo.mcp"}, .version = {1, 0, 0}, .errorDomains = {mcpErrors}}};
             auto registry = BuildErrorCodeRegistry(modules);
             if (registry.HasError())
                 return std::nullopt;
@@ -113,6 +145,9 @@ namespace Horo::Application::Internal {
             std::vector<Hosts::ErrorMapping> mappings;
             for (const auto &[descriptor, category] : scope)
                 mappings.emplace_back(descriptor->domain, descriptor->code, category);
+            for (const auto *descriptor : mcpErrors.descriptors)
+                mappings.emplace_back(descriptor->domain, descriptor->code,
+                                      descriptor == &Mcp::McpErrors::DrainTimedOut ? Timeout : Operation);
             mappings.emplace_back(bundleErrors.id, ErrorCode{"observability.bundle.invalid_request"}, Validation);
             mappings.emplace_back(bundleErrors.id, ErrorCode{"observability.bundle.read_failed"}, Operation);
             mappings.emplace_back(bundleErrors.id, ErrorCode{"observability.bundle.write_failed"}, Operation);
@@ -132,7 +167,7 @@ namespace Horo::Application::Internal {
         /** @brief Reverse shutdown on every terminal path; borrowed adapters are destroyed first. */
         struct HostSession final {
             std::unique_ptr<ModuleHost> modules;
-            std::unique_ptr<HostObservabilitySession> observability;
+            std::shared_ptr<HostObservabilitySession> observability;
             std::unique_ptr<Runtime::SaveTelemetryRegistration> saveTelemetry;
             std::unique_ptr<Extensions::HeadlessExtensionHost> extensions;
 
@@ -205,9 +240,10 @@ namespace Horo::Application::Internal {
             auto configuration = Configuration();
             if (configuration.HasError())
                 return CompleteError(presenter, configuration.ErrorValue());
-            auto admitted =
-                CliDispatcher::Create(std::move(registry), HostCommandAdapters(descriptors, *session.observability, {}),
-                                      {.activeHost = CliHostKind::HoroEngine, .maximumSideEffects = CliSideEffectPolicy::WritesFiles});
+            auto admitted = CliDispatcher::Create(std::move(registry), HostCommandAdapters(descriptors, session.observability, {}),
+                                                  {.activeHost = CliHostKind::HoroEngine,
+                                                   .maximumSideEffects = CliSideEffectPolicy::WritesFiles,
+                                                   .grantedCapabilities = {{"horo.mcp.serve"}, {"horo.observability.smoke"}}});
             if (admitted.HasError())
                 return CompleteError(presenter, admitted.ErrorValue());
             CliDispatcher dispatcher = std::move(admitted).Value();
@@ -230,7 +266,9 @@ namespace Horo::Application::Internal {
         const auto normalized = NormalizeArguments(arguments);
         NativePathNormalizer paths;
         auto registry =
-            CliCommandRegistry::Create(descriptors, {.activeHost = CliHostKind::HoroEngine, .supportedContractVersion = {1, 0, 0}});
+            CliCommandRegistry::Create(descriptors, {.activeHost = CliHostKind::HoroEngine,
+                                                     .supportedContractVersion = {1, 0, 0},
+                                                     .grantedCapabilities = {{"horo.mcp.serve"}, {"horo.observability.smoke"}}});
         const CliCommandDescriptor *selected = nullptr;
         auto parsed = [&]() {
             if (admissionFailure)
@@ -241,8 +279,10 @@ namespace Horo::Application::Internal {
         }();
         if (parsed.HasValue())
             selected = registry.Value().Find(parsed.Value().command);
-        CliOutputPresenter presenter(selected == nullptr ? InvocationDescriptor() : *selected, {1}, std::move(*translator), output,
-                                     diagnostics, RequestedMode(arguments), terminal);
+        const bool protocol = normalized.size() >= 2 && normalized[0] == "mcp" && normalized[1] == "serve";
+        // Even syntax/startup failures use stderr once stdio protocol ownership is requested.
+        CliOutputPresenter presenter(selected == nullptr ? InvocationDescriptor() : *selected, {1}, std::move(*translator),
+                                     protocol ? diagnostics : output, diagnostics, RequestedMode(arguments), terminal);
         if (parsed.HasError())
             return presenter.Complete(CliTerminalResult::Failure({.invocation = {1}}, parsed.ErrorValue())).exitCode;
         if (parsed.Value().command.segments == std::vector<std::string>{"host", "help"})
