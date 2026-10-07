@@ -100,7 +100,7 @@ horo_add_public_header_consumer_targets()
 target_sources(HoroGameplayApiPublicHeaderConsumer PRIVATE support/PersistenceInstallationPublicHeaderConsumer.cpp)
 target_sources(HoroRuntimePublicHeaderConsumer PRIVATE support/SaveSceneCanonicalPublicHeaderConsumer.cpp)
 target_sources(HoroRuntimeScenePublicHeaderConsumer PRIVATE support/SaveContentWorldPublicHeaderConsumer.cpp)
-target_sources(HoroWorldStreamingPublicHeaderConsumer PRIVATE support/StreamingOwnerFramePublicContract.cpp)
+target_sources(HoroWorldStreamingPublicHeaderConsumer PRIVATE support/StreamingOwnerFramePublicContract.cpp support/StreamingEvictionPublicContract.cpp)
 
 execute_process(
         COMMAND "${Python3_EXECUTABLE}" -c "import pytest; print(pytest.__version__)"
@@ -1054,6 +1054,7 @@ horo_register_catch_test(HoroXRApiTests LABELS "unit;xr;headless")
 add_executable(HoroXRRuntimeTests
         support/AllocationProbe.cpp
         unit/runtime/xr/XRFeatureNegotiationTests.cpp
+        unit/runtime/xr/XRFakeRuntimeTests.cpp
         unit/runtime/xr/XRFrameLifecycleTests.cpp
         unit/runtime/xr/XRSessionLifecycleTests.cpp
 )
@@ -1169,6 +1170,7 @@ add_executable(HoroWorldStreamingTests
         unit/runtime/world_streaming/StreamingDesiredStateTests.cpp
         unit/runtime/world_streaming/StreamingDesiredStateReductionTests.cpp
         unit/runtime/world_streaming/StreamingPriorityPolicyTests.cpp
+        unit/runtime/world_streaming/StreamingEvictionPolicyTests.cpp
         unit/runtime/world_streaming/StreamingFairQueueTests.cpp
         unit/runtime/world_streaming/StreamingSourceDescriptorTests.cpp
         unit/runtime/world_streaming/StreamingSourcePrefetchTests.cpp
@@ -3855,3 +3857,9 @@ target_link_libraries(HoroMixerDocumentTests PRIVATE HoroEngine::EditorServices)
 horo_register_catch_test(HoroMixerDocumentTests LABELS "unit;editor;audio;headless")
 
 horo_finalize_ci_suites()
+
+add_executable(HoroXRFakeRuntimePublicHeaderConsumer public_headers/XRFakeRuntimeConsumer.cpp)
+target_compile_features(HoroXRFakeRuntimePublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroXRFakeRuntimePublicHeaderConsumer PRIVATE HoroEngine::XRRuntime)
+add_test(NAME HoroXRFakeRuntimePublicHeaderConsumer COMMAND HoroXRFakeRuntimePublicHeaderConsumer)
+set_tests_properties(HoroXRFakeRuntimePublicHeaderConsumer PROPERTIES LABELS "unit;xr;headless")
