@@ -129,24 +129,25 @@ namespace Horo::WorldStreaming {
         /** @brief Applies one no-demand retention or release transition without resetting the linger origin. */
         void ApplyLinger(const StreamingCellStabilityPolicy &policy, const StreamingCellStabilityContext &context,
                          const StreamingCellStabilitySnapshot &prior, StreamingCellStabilityDecision &decision) {
-            const bool continuingLinger = prior.phase == StreamingCellStabilityPhase::Lingering;
+            using enum StreamingCellStabilityPhase;
+            const bool continuingLinger = prior.phase == Lingering;
             const auto lingerStarted = continuingLinger ? prior.lingerStartedAtServiceMilliseconds : context.serviceTimeMilliseconds;
             if (!continuingLinger)
                 decision.snapshot.boundaryExitCount =
                     std::min(decision.snapshot.boundaryExitCount + 1, StreamingCellStabilityPolicyRequest::MaximumTrackedCellCount);
-            const auto elapsed = context.serviceTimeMilliseconds - lingerStarted;
-            if (elapsed >= EffectiveLinger(policy, context.pressure)) {
+            if (const auto elapsed = context.serviceTimeMilliseconds - lingerStarted;
+                elapsed >= EffectiveLinger(policy, context.pressure)) {
                 decision.lingerExpired = true;
                 decision.pressureReleased = elapsed < policy.LingerMilliseconds();
                 if (decision.snapshot.boundaryExitCount >= policy.ThrashExitThreshold() && policy.CooldownMilliseconds() != 0) {
-                    decision.snapshot.phase = StreamingCellStabilityPhase::Cooldown;
+                    decision.snapshot.phase = Cooldown;
                     decision.snapshot.cooldownStartedAtServiceMilliseconds = context.serviceTimeMilliseconds;
                 } else if (policy.CooldownMilliseconds() != 0 && decision.snapshot.boundaryExitCount != 0) {
-                    decision.snapshot.phase = StreamingCellStabilityPhase::Watching;
+                    decision.snapshot.phase = Watching;
                 }
                 return;
             }
-            decision.snapshot.phase = StreamingCellStabilityPhase::Lingering;
+            decision.snapshot.phase = Lingering;
             decision.snapshot.retainedResidency = prior.retainedResidency;
             decision.snapshot.lingerStartedAtServiceMilliseconds = lingerStarted;
         }
@@ -250,8 +251,8 @@ namespace Horo::WorldStreaming {
         }
         const bool watching = previous.has_value() && previous->phase == StreamingCellStabilityPhase::Watching;
         const bool retained = previous.has_value() && !cooling && !watching;
-        const auto threshold = retained ? -policy.ExitMarginMillimeters() : policy.EnterMarginMillimeters();
-        if (hasDemand && (pinned || observation.signedBoundaryDistanceMillimeters >= threshold)) {
+        if (const auto threshold = retained ? -policy.ExitMarginMillimeters() : policy.EnterMarginMillimeters();
+            hasDemand && (pinned || observation.signedBoundaryDistanceMillimeters >= threshold)) {
             if (!previous.has_value() && context.trackedCells >= policy.MaximumTrackedCells())
                 return DecisionFailure(WorldStreamingErrors::CellStabilityCapacityExceeded);
             decision.snapshot.phase = StreamingCellStabilityPhase::Resident;
