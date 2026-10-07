@@ -505,9 +505,11 @@ target_include_directories(HoroAudioPlaybackTests PRIVATE ${PROJECT_SOURCE_DIR}/
 target_compile_features(HoroAudioPlaybackTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioPlaybackTests PRIVATE HoroEngine::AudioPlayback HoroEngine::AudioCommands HoroEngine::AudioNull)
 horo_register_catch_test(HoroAudioPlaybackTests LABELS "unit;audio;headless")
+target_sources(HoroAudioDspPublicHeaderConsumer PRIVATE support/CoreStereoSpatialPublicContract.cpp)
 add_executable(HoroCoreAudioDspTests
     support/AllocationProbe.cpp
     unit/runtime/audio/CoreAudioDSPNodeTests.cpp
+    unit/runtime/audio/CoreStereoSpatialRendererTests.cpp
 )
 target_include_directories(HoroCoreAudioDspTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_compile_features(HoroCoreAudioDspTests PRIVATE cxx_std_20)

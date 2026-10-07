@@ -918,6 +918,7 @@ endif()
 add_library(HoroAudioDsp STATIC
         audio/api/AudioDSPNode.cpp
         audio/dsp/CoreAudioDSPNode.cpp
+        audio/dsp/CoreStereoSpatialRenderer.cpp
         audio/resampling/AudioResampler.cpp
         audio/resampling/ResamplerSimd.cpp
         audio/resampling/ResamplerSimd.h

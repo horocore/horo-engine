@@ -1180,6 +1180,56 @@ acoustic-material contribution, zones and environment sends are the AUD-006 M5 â
 1.0 environmental baseline; rooms/portals, diffraction, baked/geometric
 propagation and advanced reflections are AUD-014 Post-1.0.
 
+### Core stereo processing
+
+`CoreStereoSpatialRenderer.h` belongs exclusively to `HoroAudioDsp`; it consumes
+`HoroAudioApi`'s copied spatial snapshots without reversing the RuntimeScene
+extraction dependency. Hosts prepare one processor per source/selected-listener
+pair and transfer updates at an exclusive quiescent boundary. Listener weighting,
+voice lifecycle, loop feeding, provider/profile resolution and bus accumulation
+remain host responsibilities. The processor provides real streaming mono/stereo
+PCM-to-stereo output; it does not select or register a backend/provider.
+
+Control-side `PrepareAudioStereoSpatialTarget` computes an inspectable matrix and
+pitch. Distances are metres; linear, inverse and inverse-square curves normalize
+to unity at the positive minimum and zero at the greater maximum, with clamping
+outside. Source cones use negative-Z forward and full apex angles, interpolating
+linearly between inner unity gain and outer gain. Coincident sources center and
+ignore cone/Doppler direction. Panning projects the normalized listener-to-source
+vector onto listener-local +X and uses equal-power mono gains. Stereo width
+positions left/right sub-sources on either side of that pan; width zero folds to
+mono with half-amplitude channel contributions, width one preserves centered
+stereo. Spread reduces both sub-source directions toward center. Listener weights
+are applied by the owning output mix, not twice inside each source processor.
+
+Doppler uses `(c + listenerRadialVelocity)/(c + sourceRadialVelocity)`. Scaled radial
+velocities clamp to +/-90 percent of speed of sound, and authored pitch times
+Doppler clamps to [0.125,8]. Discontinuous motion, changed teleport revisions or
+new complete source/listener identities suppress Doppler. Teleports immediately
+restore authored pitch; gains/panning retain the admitted output-sample ramp.
+Changed identities reset stream history and initialize gains immediately. Ordinary
+updates preserve phase/history and ramp pitch and matrix by produced samples;
+starvation and zero-capacity calls do not advance smoothing.
+
+The explicit baseline uses `AudioResamplerQuality::Linear`, including source-to-mix
+rate conversion exactly once. `AudioResampler::SetLinearPitch` changes only Linear
+ClipToMix plans, preserves fractional history, rejects invalid rate/pitch products
+transactionally and resets to the admitted descriptor pitch on Reset. This mode
+is unfiltered and makes no anti-aliasing promise. Sinc plans retain their existing
+prepared-coefficient pitch contract; device converters cannot apply voice pitch.
+Processing performs bounded work with prepared storage, copies no caller spans,
+reports exact consumed/produced counts and retains the existing bounded EOF tail.
+
+Migration is additive: existing spatial frames, scene/sound schemas, playback
+owners and Sinc callers retain their contracts. Hosts opting into core stereo
+provide explicit distance/cone/spread/width policy, reserve coefficients at Create,
+retain unconsumed input/end markers, route output to their normal stereo bus and
+stop applying pitch/rate conversion a second time. No persisted defaults are
+silently changed. The new header is covered by the DSP public consumer target.
+Reference scenes verify attenuation, listener rotation, cone transitions, rendered
+spread/width, actual Doppler PCM, teleport limits, block partition invariance,
+malformed-input rejection, bounded EOF and callback allocation/free counts.
+
 ### Spatial scene extraction and listener policy
 
 `AudioSpatialModel.h` belongs to `HoroAudioApi`. `AudioSceneExtraction.h` belongs
