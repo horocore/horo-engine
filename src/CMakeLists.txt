@@ -78,6 +78,7 @@ target_link_libraries(HoroCliHost
 )
 
 add_library(HoroMcpSession STATIC
+        mcp/McpAuthorization.cpp
         mcp/McpErrors.cpp
         mcp/McpJsonBounds.cpp
         mcp/McpSession.cpp
@@ -86,7 +87,7 @@ add_library(HoroMcpSession STATIC
 )
 add_library(HoroEngine::McpSession ALIAS HoroMcpSession)
 target_compile_features(HoroMcpSession PUBLIC cxx_std_20)
-target_link_libraries(HoroMcpSession PUBLIC HoroEngine::Foundation nlohmann_json::nlohmann_json)
+target_link_libraries(HoroMcpSession PUBLIC HoroEngine::Foundation HoroEngine::Security nlohmann_json::nlohmann_json)
 
 add_library(HoroMcpRegistry STATIC mcp/McpToolRegistry.cpp)
 add_library(HoroEngine::McpRegistry ALIAS HoroMcpRegistry)
