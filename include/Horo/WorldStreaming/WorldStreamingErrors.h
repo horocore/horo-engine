@@ -537,4 +537,16 @@ namespace Horo::WorldStreaming::WorldStreamingErrors {
     extern const ErrorCodeDescriptor FairQueueIdentityConflict;
     /** @brief Pending admission is closed by shutdown. */
     extern const ErrorCodeDescriptor FairQueueLifecycleUnavailable;
+    /** @brief Eviction policy, authority or candidate facts are malformed. */
+    extern const ErrorCodeDescriptor EvictionPolicyInvalid;
+    /** @brief Eviction contract version or enum is unsupported. */
+    extern const ErrorCodeDescriptor EvictionPolicyUnsupported;
+    /** @brief Eviction facts name a replaced owner, policy or authority snapshot. */
+    extern const ErrorCodeDescriptor EvictionPolicyStale;
+    /** @brief Eviction snapshot exceeds policy or output capacity. */
+    extern const ErrorCodeDescriptor EvictionPolicyCapacityExceeded;
+    /** @brief Eviction snapshot repeats a canonical cell identity. */
+    extern const ErrorCodeDescriptor EvictionPolicyIdentityConflict;
+    /** @brief Eviction selection admission is cancelling or closed. */
+    extern const ErrorCodeDescriptor EvictionPolicyLifecycleUnavailable;
 }  // namespace Horo::WorldStreaming::WorldStreamingErrors

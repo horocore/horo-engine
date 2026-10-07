@@ -373,6 +373,7 @@ horo_configure_target_header_boundary(HoroNetworkRuntime PUBLIC_HEADERS
     Horo/Network/PeerSessionLifecycle.h
     Horo/Network/ReplicationWorldLifecycle.h
     Horo/Network/ReplicationStateCapture.h
+    Horo/Network/ReplicationStateCodec.h
     Horo/Network/SceneReplicationCommitSource.h
     Horo/Network/RpcGameplayDispatch.h
 )
@@ -772,6 +773,7 @@ horo_configure_target_header_boundary(HoroXRApi PUBLIC_HEADERS
     Horo/XR/XRViewRenderPlan.h
 )
 horo_configure_target_header_boundary(HoroXRRuntime PUBLIC_HEADERS
+    Horo/XR/XRFakeRuntime.h
     Horo/XR/XRFeatureNegotiation.h
     Horo/XR/XRFrameLifecycle.h
     Horo/XR/XRSessionErrors.h
@@ -791,6 +793,9 @@ horo_configure_target_header_boundary(HoroTerrainRender PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroTerrainImport PUBLIC_HEADERS
     Horo/Terrain/TerrainSourceImport.h
+)
+horo_configure_target_header_boundary(HoroTerrainAuthoring PUBLIC_HEADERS
+    Horo/Editor/TerrainAuthoringDocument.h
 )
 horo_configure_target_header_boundary(HoroTerrainCook PUBLIC_HEADERS
     Horo/Terrain/FoliageClusterCook.h
@@ -838,6 +843,7 @@ horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
     Horo/WorldStreaming/StreamingDesiredState.h
     Horo/WorldStreaming/StreamingDesiredStateReduction.h
     Horo/WorldStreaming/StreamingPriorityPolicy.h
+    Horo/WorldStreaming/StreamingEvictionPolicy.h
     Horo/WorldStreaming/StreamingFairQueue.h
     Horo/WorldStreaming/StreamingSourceDescriptor.h
     Horo/WorldStreaming/StreamingSourcePrefetch.h
@@ -879,6 +885,7 @@ Horo/Prefab/PrefabDependencyGraph.h
     Horo/Prefab/PrefabDocument.h
     Horo/Prefab/PrefabSceneIdentityRemap.h
     Horo/Prefab/PrefabSourceResolver.h
+    Horo/Prefab/PrefabTemplateCook.h
 )
 
 horo_configure_target_header_boundary(HoroSceneCellPayload PUBLIC_HEADERS
