@@ -103,6 +103,20 @@ namespace Horo::WorldStreaming {
         CHECK(result.Value() == 0);
     }
 
+    TEST_CASE("Eviction validates policy bounds without modifying caller output", "[unit][world_streaming][eviction]") {
+        const std::array candidates{Candidate(1)};
+        std::array<StreamingEvictionVictim, 1> output{{{Candidate(99)}}};
+        auto policy = Policy();
+        SECTION("zero ceiling") {
+            policy.maximumCandidates = 0;
+        }
+        SECTION("implementation ceiling") {
+            policy.maximumCandidates = StreamingEvictionPolicy::MaximumCandidateCount + 1;
+        }
+        RequireError(SelectStreamingEvictionVictims(policy, Context(), candidates, output), WorldStreamingErrors::EvictionPolicyInvalid);
+        CHECK(output[0].candidate == Candidate(99));
+    }
+
     TEST_CASE("Eviction failures preserve the whole caller output", "[unit][world_streaming][eviction]") {
         std::array candidates{Candidate(1), Candidate(2)};
         std::array<StreamingEvictionVictim, 2> output{{{Candidate(90)}, {Candidate(91)}}};
@@ -113,14 +127,6 @@ namespace Horo::WorldStreaming {
             policy.contractVersion = 2;
             RequireError(SelectStreamingEvictionVictims(policy, context, candidates, output),
                          WorldStreamingErrors::EvictionPolicyUnsupported);
-        }
-        SECTION("invalid policy ceiling") {
-            policy.maximumCandidates = 0;
-            RequireError(SelectStreamingEvictionVictims(policy, context, candidates, output), WorldStreamingErrors::EvictionPolicyInvalid);
-        }
-        SECTION("implementation ceiling") {
-            policy.maximumCandidates = StreamingEvictionPolicy::MaximumCandidateCount + 1;
-            RequireError(SelectStreamingEvictionVictims(policy, context, candidates, output), WorldStreamingErrors::EvictionPolicyInvalid);
         }
         SECTION("invalid authority") {
             context.owner.owner = {};
