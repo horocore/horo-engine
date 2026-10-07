@@ -208,6 +208,10 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> RunFixedSteps(RuntimeLifecycle &lifecycle, const CancellationToken &cancellation,
                                                  Duration &droppedSimulationTime);
 
+        /** @brief Runs variable update and rendering in canonical order, recording only successful variable publication. */
+        [[nodiscard]] Result<void> RunVariablePhases(RuntimeLifecycle &lifecycle, const CancellationToken &cancellation,
+                                                     FrameContext &context);
+
         /** @brief Dispatch reservation revoked exactly once on every callback exit. */
         struct DispatchGuard final {
             explicit DispatchGuard(RuntimeDispatchSource &source) noexcept : source(source) {}

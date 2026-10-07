@@ -146,10 +146,11 @@ namespace Horo::Runtime::Ui::ReloadTests {
             canvas.captures.emplace(std::move(UiPointerCaptureStore::Create({Owner(), 8})).Value());
         }
 
-        void Geometry(UiReloadCanvas &canvas, std::uint64_t version) {
-            canvas.layoutEngine.emplace(std::move(UiLayoutEngine::Create({Instance(), canvas.tree.Canvas(), canvas.tree.SourceDocument(), 8,
-                                                                          8, 3, Revision<UiInteractionRevision>(version)}))
-                                            .Value());
+        void Geometry(UiReloadCanvas &canvas, std::uint64_t version, std::uint32_t concurrentSnapshots) {
+            canvas.layoutEngine.emplace(
+                std::move(UiLayoutEngine::Create({Instance(), canvas.tree.Canvas(), canvas.tree.SourceDocument(), 8, 8, concurrentSnapshots,
+                                                  Revision<UiInteractionRevision>(version)}))
+                    .Value());
             Evaluator evaluator{version == 1 ? 300 : 150};
             const UiLayoutSourceRevisions sources{canvas.tree.SourceDocumentRevision(),   canvas.tree.Revision(),
                                                   Revision<UiLayoutContentRevision>(1),   Revision<UiLayoutStyleRevision>(1),
@@ -158,9 +159,9 @@ namespace Horo::Runtime::Ui::ReloadTests {
             canvas.layout.emplace(
                 std::move(canvas.layoutEngine->Update(canvas.tree, {sources, {{0, 0}, {100, 100}}, {{0, 0}, {100, 100}}, &evaluator}))
                     .Value());
-            canvas.clipping.emplace(
-                std::move(UiLayoutClipEngine::Create({Instance(), canvas.tree.Canvas(), canvas.tree.SourceDocument(), 8, 8, 8, 3}))
-                    .Value());
+            canvas.clipping.emplace(std::move(UiLayoutClipEngine::Create({Instance(), canvas.tree.Canvas(), canvas.tree.SourceDocument(), 8,
+                                                                          8, 8, concurrentSnapshots}))
+                                        .Value());
             const auto root = canvas.tree.Root().Value().handle;
             for (const auto &record : canvas.layout->Records())
                 canvas.clipPolicies.push_back(
@@ -171,13 +172,13 @@ namespace Horo::Runtime::Ui::ReloadTests {
     }  // namespace
 
     UiReloadGeneration Generation(UiElementSlotAllocator &allocator, std::uint64_t version, std::uint16_t textLimit, bool secondCanvas,
-                                  std::uint32_t modalHighWater, std::uint32_t routeHighWater) {
+                                  std::uint32_t modalHighWater, std::uint32_t routeHighWater, std::uint32_t concurrentSnapshots) {
         auto loaded = Load(version, secondCanvas);
         std::vector<UiReloadCanvas> canvases;
         for (std::size_t i = 0; i < loaded.document.Canvases().size(); ++i) {
             auto canvas = MakeCanvas(allocator, loaded.document, i, version);
             InputOwners(canvas, loaded.document, i, version, textLimit, modalHighWater, routeHighWater);
-            Geometry(canvas, version);
+            Geometry(canvas, version, concurrentSnapshots);
             canvases.push_back(std::move(canvas));
         }
         auto generation = UiReloadGeneration::Create(std::move(loaded), Instance(), std::move(canvases));

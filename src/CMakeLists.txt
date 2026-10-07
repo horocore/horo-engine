@@ -636,6 +636,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiStyleRegistry.cpp
         runtime/ui/UiStyleResolution.cpp
         runtime/ui/UiStyleResolver.cpp
+        runtime/ui/UiStyleResolverState.h
         runtime/ui/UiStyleSnapshot.cpp
         runtime/ui/UiStyleValidation.cpp
         runtime/ui/UiHitTesting.cpp

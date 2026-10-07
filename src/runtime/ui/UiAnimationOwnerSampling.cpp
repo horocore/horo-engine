@@ -5,28 +5,11 @@
 #include <algorithm>
 
 namespace Horo::Runtime::Ui {
-    /** @copydoc UiAnimationOwner::PrepareTimeline */
-    Result<void> UiAnimationOwner::PrepareTimeline(Storage &storage, const std::uint32_t index) {
-        const auto &current = storage.timelines[index];
+    /** @copydoc UiAnimationOwner::EvaluateTimelineCursor */
+    Result<void> UiAnimationOwner::EvaluateTimelineCursor(Storage &storage, const std::uint32_t index) {
         auto &timeline = storage.candidate.timelines[index];
-        timeline = current;
-        if (timeline.required && storage.candidate.routeCancellation != UiAnimationCancellation::None)
-            timeline.cancellation = storage.candidate.routeCancellation;
-        if (!timeline.occupied || (timeline.waiting && timeline.cancellation == UiAnimationCancellation::None))
-            return Result<void>::Success();
-        auto &frame = *storage.frames[storage.candidate.frameSlot];
         const auto &definition = storage.definition.animations[timeline.definition];
-        const auto &clock = frame.clocks.domains[static_cast<std::size_t>(definition.time.domain)];
-        if (timeline.required && timeline.terminalIssued) {
-            auto sample = timeline.cursor.sample;
-            sample.newTerminalOutcome = false;
-            sample.crossedIterations = 0;
-            const UiAnimationTimelineId id{storage.source.ownership,
-                                           storage.range.FirstSlot() + static_cast<std::uint32_t>(UiTimeDomainCount) + 1 + index,
-                                           timeline.generation};
-            frame.timelines.push_back({id, definition.id, sample});
-            return Result<void>::Success();
-        }
+        const auto &clock = storage.frames[storage.candidate.frameSlot]->clocks.domains[static_cast<std::size_t>(definition.time.domain)];
         if (!clock.available && timeline.cancellation == UiAnimationCancellation::None)
             return Result<void>::Failure(MakeError(UiErrors::ClockUnavailable));
         UiDuration delta = timeline.pendingStart ? UiDuration{} : clock.delta;
@@ -57,6 +40,34 @@ namespace Horo::Runtime::Ui {
         timeline.cursor.sample.newTerminalOutcome = timeline.cursor.sample.newTerminalOutcome && !timeline.terminalIssued;
         timeline.terminalIssued = timeline.terminalIssued || timeline.cursor.sample.newTerminalOutcome;
         timeline.clock = clock.clock;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiAnimationOwner::PrepareTimeline */
+    Result<void> UiAnimationOwner::PrepareTimeline(Storage &storage, const std::uint32_t index) {
+        const auto &current = storage.timelines[index];
+        auto &timeline = storage.candidate.timelines[index];
+        timeline = current;
+        if (timeline.required && storage.candidate.routeCancellation != UiAnimationCancellation::None)
+            timeline.cancellation = storage.candidate.routeCancellation;
+        if (!timeline.occupied || (timeline.waiting && timeline.cancellation == UiAnimationCancellation::None))
+            return Result<void>::Success();
+        auto &frame = *storage.frames[storage.candidate.frameSlot];
+        const auto &definition = storage.definition.animations[timeline.definition];
+        const auto &clock = frame.clocks.domains[static_cast<std::size_t>(definition.time.domain)];
+        if (timeline.required && timeline.terminalIssued) {
+            auto sample = timeline.cursor.sample;
+            sample.newTerminalOutcome = false;
+            sample.crossedIterations = 0;
+            const UiAnimationTimelineId id{storage.source.ownership,
+                                           storage.range.FirstSlot() + static_cast<std::uint32_t>(UiTimeDomainCount) + 1 + index,
+                                           timeline.generation};
+            frame.timelines.push_back({id, definition.id, sample});
+            return Result<void>::Success();
+        }
+        if (auto evaluated = EvaluateTimelineCursor(storage, index); evaluated.HasError())
+            return evaluated;
+        const bool seek = clock.continuity == UiClockContinuity::ExplicitSeek;
         const UiAnimationTimelineId id{storage.source.ownership,
                                        storage.range.FirstSlot() + static_cast<std::uint32_t>(UiTimeDomainCount) + 1 + index,
                                        timeline.generation};

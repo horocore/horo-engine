@@ -8,6 +8,7 @@ using Horo::Runtime::RuntimeDispatchStatus;
 using Horo::Runtime::UiAnimationClockController;
 using Horo::Runtime::UiAnimationRuntimeComposition;
 using Horo::Runtime::UiAnimationRuntimeParticipant;
+using Horo::Runtime::UiAnimationRuntimeReload;
 
 static_assert(!std::is_copy_constructible_v<UiAnimationRuntimeComposition>);
 static_assert(std::is_move_constructible_v<UiAnimationRuntimeComposition>);

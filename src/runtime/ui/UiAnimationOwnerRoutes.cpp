@@ -46,6 +46,27 @@ namespace Horo::Runtime::Ui {
         return Result<void>::Success();
     }
 
+    /** @copydoc UiAnimationOwner::RetireRouteTimelines */
+    void UiAnimationOwner::RetireRouteTimelines(Storage &storage) noexcept {
+        for (auto &timeline : storage.timelines) {
+            if (timeline.required) {
+                timeline.occupied = false;
+                continue;
+            }
+            if (!timeline.occupied || !timeline.terminalIssued)
+                continue;
+            const auto &prior = storage.definition.animations[timeline.definition];
+            for (const auto &stage : storage.route.stages) {
+                for (const auto &track : storage.definition.animations[stage.definition].tracks) {
+                    if (std::ranges::any_of(prior.tracks, [&](const auto &value) {
+                        return value.target == track.target && value.property == track.property;
+                    }))
+                        timeline.occupied = false;
+                }
+            }
+        }
+    }
+
     /** @copydoc UiAnimationOwner::ReserveRouteStages */
     Result<void> UiAnimationOwner::ReserveRouteStages(Storage &storage) {
         if (storage.route.stages.size() > std::numeric_limits<std::uint32_t>::max() - storage.issuedRouteClockGeneration)
@@ -70,23 +91,7 @@ namespace Horo::Runtime::Ui {
         if (!clocks)
             return Result<void>::Failure(MakeError(UiErrors::ClockOverflow));
         // Every capacity/conflict check completed before any reserved incarnation becomes active.
-        for (auto &timeline : storage.timelines) {
-            if (timeline.required) {
-                timeline.occupied = false;
-                continue;
-            }
-            if (!timeline.occupied || !timeline.terminalIssued)
-                continue;
-            const auto &prior = storage.definition.animations[timeline.definition];
-            for (const auto &stage : storage.route.stages) {
-                for (const auto &track : storage.definition.animations[stage.definition].tracks) {
-                    if (std::ranges::any_of(prior.tracks, [&](const auto &value) {
-                        return value.target == track.target && value.property == track.property;
-                    }))
-                        timeline.occupied = false;
-                }
-            }
-        }
+        RetireRouteTimelines(storage);
         for (auto &stage : storage.route.stages) {
             stage.clock = {storage.source.ownership,
                            storage.range.FirstSlot() + static_cast<std::uint32_t>(UiTimeDomain::ScreenTransition) + 1,

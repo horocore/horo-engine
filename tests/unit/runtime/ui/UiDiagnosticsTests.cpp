@@ -25,22 +25,8 @@ namespace Horo::Runtime::Ui {
             REQUIRE((result.HasError() && result.ErrorValue().code.Value() == expected.code.Value()));
         }
 
-        TEST_CASE("Runtime UI diagnostic categories expose stable derived names", "[runtime_ui][diagnostics]") {
-            REQUIRE(UiDiagnosticCategoryName(UiDiagnosticCategory::Document) == "runtime_ui.document");
-            REQUIRE(UiDiagnosticCategoryName(UiDiagnosticCategory::Layout) == "runtime_ui.layout");
-            REQUIRE(UiDiagnosticCategoryName(UiDiagnosticCategory::Text) == "runtime_ui.text");
-            REQUIRE(UiDiagnosticCategoryName(UiDiagnosticCategory::Input) == "runtime_ui.input");
-            REQUIRE(UiDiagnosticCategoryName(UiDiagnosticCategory::Focus) == "runtime_ui.focus");
-            REQUIRE(UiDiagnosticCategoryName(UiDiagnosticCategory::Binding) == "runtime_ui.binding");
-            REQUIRE(UiDiagnosticCategoryName(UiDiagnosticCategory::Render) == "runtime_ui.render");
-            REQUIRE(UiDiagnosticCategoryName(UiDiagnosticCategory::Accessibility) == "runtime_ui.accessibility");
-            REQUIRE(UiDiagnosticCategoryName(UiDiagnosticCategory::Lifecycle) == "runtime_ui.lifecycle");
-            REQUIRE(UiDiagnosticCategoryName(static_cast<UiDiagnosticCategory>(255)).empty());
-        }
-
-        TEST_CASE("Runtime UI diagnostic records map every canonical error and reject invented sources", "[runtime_ui][diagnostics]") {
-            const auto descriptors = UiDiagnosticErrorDescriptors();
-            REQUIRE(descriptors.size() == 206);
+        /** @brief Requires the complete typed cooked-asset, clock and animation error surface to stay in the registry. */
+        void RequireRegisteredErrors(const std::span<const ErrorCodeDescriptor *const> descriptors) {
             const std::array newlyRegistered{
                 &UiErrors::CookedFormatUnsupported,
                 &UiErrors::CookedPayloadMalformed,
@@ -73,6 +59,25 @@ namespace Horo::Runtime::Ui {
             };
             for (const ErrorCodeDescriptor *expected : newlyRegistered)
                 REQUIRE(std::ranges::find(descriptors, expected) != descriptors.end());
+        }
+
+        TEST_CASE("Runtime UI diagnostic categories expose stable derived names", "[runtime_ui][diagnostics]") {
+            REQUIRE(UiDiagnosticCategoryName(UiDiagnosticCategory::Document) == "runtime_ui.document");
+            REQUIRE(UiDiagnosticCategoryName(UiDiagnosticCategory::Layout) == "runtime_ui.layout");
+            REQUIRE(UiDiagnosticCategoryName(UiDiagnosticCategory::Text) == "runtime_ui.text");
+            REQUIRE(UiDiagnosticCategoryName(UiDiagnosticCategory::Input) == "runtime_ui.input");
+            REQUIRE(UiDiagnosticCategoryName(UiDiagnosticCategory::Focus) == "runtime_ui.focus");
+            REQUIRE(UiDiagnosticCategoryName(UiDiagnosticCategory::Binding) == "runtime_ui.binding");
+            REQUIRE(UiDiagnosticCategoryName(UiDiagnosticCategory::Render) == "runtime_ui.render");
+            REQUIRE(UiDiagnosticCategoryName(UiDiagnosticCategory::Accessibility) == "runtime_ui.accessibility");
+            REQUIRE(UiDiagnosticCategoryName(UiDiagnosticCategory::Lifecycle) == "runtime_ui.lifecycle");
+            REQUIRE(UiDiagnosticCategoryName(static_cast<UiDiagnosticCategory>(255)).empty());
+        }
+
+        TEST_CASE("Runtime UI diagnostic records map every canonical error and reject invented sources", "[runtime_ui][diagnostics]") {
+            const auto descriptors = UiDiagnosticErrorDescriptors();
+            REQUIRE(descriptors.size() == 206);
+            RequireRegisteredErrors(descriptors);
             for (std::size_t index = 0; index < descriptors.size(); ++index) {
                 const ErrorCodeDescriptor *descriptor = descriptors[index];
                 REQUIRE(descriptor != nullptr);

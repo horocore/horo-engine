@@ -2353,6 +2353,7 @@ add_executable(HoroRuntimeLifecycleTests
         support/AllocationProbe.cpp
         unit/runtime/lifecycle/RuntimeDispatchEvidenceTests.cpp
         unit/runtime/lifecycle/RuntimeLifecycleTests.cpp
+        unit/runtime/lifecycle/RuntimeLifecycleTestFixture.h
         unit/runtime/lifecycle/UiAnimationCommittedTicksTests.cpp
         unit/runtime/lifecycle/UiPresentationEvidenceTests.cpp
         unit/runtime/lifecycle/RuntimeSimulationTimingTests.cpp
@@ -2585,12 +2586,16 @@ target_include_directories(HoroRuntimeUiAnimationTests PRIVATE ${PROJECT_SOURCE_
 target_link_libraries(HoroRuntimeUiAnimationTests PRIVATE HoroEngine::RuntimeUi HoroRationalDurationInternal)
 add_executable(HoroRuntimeUiAnimationIntegrationTests
         unit/runtime/ui/UiAnimationOwnerIntegrationTests.cpp
+        unit/runtime/ui/UiAnimationOwnerIntegrationFixture.h
+        unit/runtime/ui/UiAnimationRouteIntegrationTests.cpp
+        unit/runtime/ui/UiAnimationReloadIntegrationTests.cpp
         unit/runtime/ui/UiBindingWriteTestFixture.cpp
         unit/runtime/ui/UiBindingWriteTestAuthority.cpp
         support/AllocationProbe.cpp
         unit/runtime/ui/UiHotReloadTestFixture.cpp)
 target_compile_features(HoroRuntimeUiAnimationIntegrationTests PRIVATE cxx_std_20)
-target_link_libraries(HoroRuntimeUiAnimationIntegrationTests PRIVATE HoroEngine::UiAnimationRuntimeIntegration)
+target_include_directories(HoroRuntimeUiAnimationIntegrationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+target_link_libraries(HoroRuntimeUiAnimationIntegrationTests PRIVATE HoroEngine::UiAnimationRuntimeIntegration HoroEngine::Platform)
 add_executable(HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer
         support/RuntimeUiAnimationIntegrationPublicHeaderConsumer.cpp)
 target_compile_features(HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer PRIVATE cxx_std_20)

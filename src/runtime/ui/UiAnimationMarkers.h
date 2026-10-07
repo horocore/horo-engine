@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/Runtime/Ui/UiAnimationTracks.h"
 #include "UiAnimationPlayback.h"
 
 #include <algorithm>

@@ -584,6 +584,8 @@ namespace Horo::Runtime::Ui {
             return Failure(UiErrors::RouteOperationStale);
         if (Actions(route) != nullptr)
             return Failure(UiErrors::RouteOperationReentrant);
+        if (auto reserved = router.ReserveInteractionReplacement(); reserved.HasError())
+            return reserved;
         storage_->actions.emplace_back(route, std::move(router));
         return Result<void>::Success();
     }

@@ -201,6 +201,12 @@ namespace Horo::Runtime {
         frameContext.interpolationAlpha = static_cast<double>(accumulator_.ToNanoseconds() % config_.fixedStep.ToNanoseconds()) /
                                           static_cast<double>(config_.fixedStep.ToNanoseconds());
 
+        return RunVariablePhases(lifecycle, cancellation, frameContext);
+    }
+
+    /** @copydoc FrameScheduler::RunVariablePhases */
+    Result<void> FrameScheduler::RunVariablePhases(RuntimeLifecycle &lifecycle, const CancellationToken &cancellation,
+                                                   FrameContext &frameContext) {
         if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, frameContext, RuntimePhase::VariableUpdate);
             result.HasError())
             return result;

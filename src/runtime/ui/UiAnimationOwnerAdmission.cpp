@@ -33,24 +33,31 @@ namespace Horo::Runtime::Ui {
         }
     }
 
+    /** @copydoc UiAnimationOwner::ReserveInteractionSources */
+    Result<void> UiAnimationOwner::ReserveInteractionSources(UiReloadCanvas &canvas) {
+        for (auto &element : canvas.controls) {
+            if (auto reserved = element.control.ReserveInteractionReplacement(); reserved.HasError())
+                return reserved;
+        }
+        if (canvas.actions) {
+            if (auto reserved = canvas.actions->ReserveInteractionReplacement(); reserved.HasError())
+                return reserved;
+        }
+        if (canvas.routes) {
+            if (auto reserved = canvas.routes->ReserveActionInteractionReplacements(); reserved.HasError())
+                return reserved;
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc UiAnimationOwner::InitializeBindings */
     Result<void> UiAnimationOwner::InitializeBindings(Storage &storage, UiReloadGeneration &generation) {
         auto *canvas = generation.Canvas(storage.definition.canvas);
         if (const auto valid = AnimationInternal::ValidateDefinitions(storage.definition, *canvas, storage.registry, storage.limits);
             valid.HasError())
             return valid;
-        for (auto &element : canvas->controls) {
-            if (auto reserved = element.control.ReserveInteractionReplacement(); reserved.HasError())
-                return reserved;
-        }
-        if (canvas->actions) {
-            if (auto reserved = canvas->actions->ReserveInteractionReplacement(); reserved.HasError())
-                return reserved;
-        }
-        if (canvas->routes) {
-            if (auto reserved = canvas->routes->ReserveActionInteractionReplacements(); reserved.HasError())
-                return reserved;
-        }
+        if (auto reserved = ReserveInteractionSources(*canvas); reserved.HasError())
+            return reserved;
         const auto &tree = canvas->tree;
         storage.source = {tree.Instance().ownership, storage.range.FirstSlot(), 1};
         for (std::size_t index = 0; index < UiTimeDomainCount; ++index) {

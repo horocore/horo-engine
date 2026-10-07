@@ -350,7 +350,8 @@ namespace Horo::Runtime::Ui {
          * @brief Transfers one active router into the exact live route's lifetime.
          * @param route Exact committed route incarnation.
          * @param router Same-owner router, moved only on success; its source revisions stay immutable.
-         * @return Success or typed stale/duplicate/lifecycle failure. Preparation failure leaves both owners unchanged.
+         * @return Success or typed stale/duplicate/lifecycle/capacity failure. Preparation failure preserves both active owners.
+         * @details Attachment reserves replacement action storage before transfer; call it outside frame publication work.
          * @details Pop/back/clear cancel with OwnerRetired, replacement cancels with Superseded, stack shutdown
          * cancels with Shutdown. Failed/cancelled route transactions preserve pending operations.
          */

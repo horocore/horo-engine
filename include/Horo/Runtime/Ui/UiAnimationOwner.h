@@ -334,6 +334,8 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] static Result<void> CheckRouteConflicts(const Storage &storage, const UiAnimationDefinition &definition);
         /** @brief Reserves preallocated timeline slots and burned child identities before navigation admission. */
         [[nodiscard]] static Result<void> ReserveRouteStages(Storage &storage);
+        /** @brief Retires prior required and overlapping terminal slots only after every new route reservation is qualified. */
+        static void RetireRouteTimelines(Storage &storage) noexcept;
         /** @brief Projects only the actual current gate's child time from admitted unscaled presentation evidence. */
         [[nodiscard]] static Result<void> PrepareRouteClock(Storage &storage);
         /** @brief Qualifies candidate terminal/stage/cancellation outcomes before preparing all presentation owners. */
@@ -354,6 +356,8 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] static Result<void> PrepareTimelines(Storage &storage);
         /** @brief Advances one inactive incarnation from its bound domain without consuming the published cursor. */
         [[nodiscard]] static Result<void> PrepareTimeline(Storage &storage, std::uint32_t index);
+        /** @brief Evaluates one active candidate cursor, preserving initial-sample, seek, deadline and terminal fences. */
+        [[nodiscard]] static Result<void> EvaluateTimelineCursor(Storage &storage, std::uint32_t index);
         /** @brief Copies clipped and scroll-translated focus geometry into preallocated scratch. @return Projection admission. */
         [[nodiscard]] static Result<void> PrepareFocusGeometry(Storage &storage);
         /** @brief Prepares actual style, layout, clipping and focus owners without publishing any generation. */
@@ -373,6 +377,8 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] static Result<void> CanPublish(const Storage &storage);
         /** @brief Binds immutable authored data and validates the actual style owner without publishing an initial frame. */
         [[nodiscard]] static Result<void> InitializeBindings(Storage &storage, UiReloadGeneration &generation);
+        /** @brief Preallocates all actual control and action replacement owners before frame work. */
+        [[nodiscard]] static Result<void> ReserveInteractionSources(UiReloadCanvas &canvas);
         explicit UiAnimationOwner(std::shared_ptr<Storage> storage) noexcept;
 
         /** @brief Const-propagating sole owner; only mutable commands may retain a candidate publisher pin. */
