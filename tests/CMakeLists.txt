@@ -1051,6 +1051,16 @@ target_include_directories(HoroXRRuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 target_link_libraries(HoroXRRuntimeTests PRIVATE HoroEngine::XRRuntime)
 horo_register_catch_test(HoroXRRuntimeTests LABELS "unit;xr;headless;lifecycle")
 
+if(HORO_BUILD_XR_OPENXR)
+    add_executable(HoroXROpenXRTests unit/runtime/xr/OpenXRNativeSessionTests.cpp)
+    target_include_directories(HoroXROpenXRTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(HoroXROpenXRTests PRIVATE HoroEngine::XROpenXR HoroXROpenXRHostInterface)
+    horo_register_catch_test(HoroXROpenXRTests LABELS "unit;xr;headless;native;lifecycle")
+
+    add_library(HoroXROpenXRHostInterfaceConsumer OBJECT public_headers/OpenXRHostInterfaceConsumer.cpp)
+    target_link_libraries(HoroXROpenXRHostInterfaceConsumer PRIVATE HoroXROpenXRHostInterface)
+endif()
+
 add_executable(HoroTerrainApiTests
         unit/runtime/terrain/FoliageDefinitionTests.cpp
         unit/runtime/terrain/TerrainCompositionTests.cpp

@@ -97,6 +97,11 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     horo_add_navigation_runtime_dependency()
 endif()
 
+if(HORO_BUILD_XR_OPENXR)
+    include(HoroOpenXRDependency)
+    horo_add_openxr_headers_dependency()
+endif()
+
 # Editor extension icons are decoded on activation, never by the render backend.
 # This reviewed source revision vendors PlutoVG 1.3.1 in the same pinned tree.
 set(HORO_LUNASVG_REVISION "83c58df8103dc7dca423dfd824992af94d49bed6") # v3.5.0
