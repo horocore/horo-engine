@@ -104,8 +104,7 @@ namespace Horo::Runtime {
 
         /** @brief Adds exact declared identity and a safe remedy at the content admission boundary. */
         Error MissingContentError(const SaveContentRequirement &requirement) {
-            const auto identity = std::visit([](const auto &content) {
-                using Content = std::remove_cvref_t<decltype(content)>;
+            const auto identity = std::visit([]<typename Content>(const Content &content) {
                 if constexpr (std::is_same_v<Content, SaveAssetContentRequirement>)
                     return std::format("asset={}; type={}", content.asset.ToString(), content.type.Value());
                 else if constexpr (std::is_same_v<Content, SaveChunkContentRequirement>)

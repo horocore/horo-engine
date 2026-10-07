@@ -94,6 +94,30 @@ TEST_CASE("Retired or replaced live world cannot admit another callback while ac
 
 namespace {
     thread_local std::size_t captureFailureAllocationCount{};
+
+    /** @brief Rejects the missing declared owner before callbacks and reconciles the terminal barrier request. */
+    void RequireMissingCurrentOwner(WorldFixture &fixture) {
+        CanonicalStateParticipantRegistry incomplete;
+        const auto *declaration = fixture.participants.Find(SaveContentRequirementsParticipant());
+        REQUIRE(declaration);
+        REQUIRE(incomplete.Register(declaration->Descriptor(), declaration->Adapter()).HasValue());
+        auto snapshot = incomplete.Snapshot();
+        REQUIRE(snapshot.HasValue());
+        auto generation = fixture.generation;
+        generation.registry = snapshot.Value().Generation();
+        REQUIRE(fixture.barrier->Request(91, generation).HasValue());
+        auto rejected = fixture.world->CaptureAtSafePoint(*fixture.barrier,
+                                                          SaveContentCaptureRequest{.phase = RuntimePhase::CommitDeferredLifecycleChanges,
+                                                                                    .generation = generation,
+                                                                                    .capturedState = SceneTest::Id<CapturedStateId>(33),
+                                                                                    .epoch = {.value = 41}},
+                                                          std::move(snapshot).Value(), SaveDegradedWorldPolicy::Reject);
+        CHECK(rejected.HasError());
+        CHECK(fixture.adapter->calls == 0);
+        REQUIRE(fixture.barrier->Cancel(91).HasValue());
+        REQUIRE(fixture.barrier->Acknowledge(91).HasValue());
+    }
+
 }  // namespace
 
 namespace {
@@ -182,25 +206,7 @@ TEST_CASE("Declared current owner cannot disappear from a recaptured manifest an
     WorldFixture fixture{{}, {}, written.Value().Archive(), policy};
     const auto scene = fixture.service->ActiveScene()->RuntimeId();
     SECTION("required current owner absent from registry") {
-        CanonicalStateParticipantRegistry incomplete;
-        const auto *declaration = fixture.participants.Find(SaveContentRequirementsParticipant());
-        REQUIRE(declaration);
-        REQUIRE(incomplete.Register(declaration->Descriptor(), declaration->Adapter()).HasValue());
-        auto snapshot = incomplete.Snapshot();
-        REQUIRE(snapshot.HasValue());
-        auto generation = fixture.generation;
-        generation.registry = snapshot.Value().Generation();
-        REQUIRE(fixture.barrier->Request(91, generation).HasValue());
-        auto rejected = fixture.world->CaptureAtSafePoint(*fixture.barrier,
-                                                          SaveContentCaptureRequest{.phase = RuntimePhase::CommitDeferredLifecycleChanges,
-                                                                                    .generation = generation,
-                                                                                    .capturedState = SceneTest::Id<CapturedStateId>(33),
-                                                                                    .epoch = {.value = 41}},
-                                                          std::move(snapshot).Value(), SaveDegradedWorldPolicy::Reject);
-        CHECK(rejected.HasError());
-        CHECK(fixture.adapter->calls == 0);
-        REQUIRE(fixture.barrier->Cancel(91).HasValue());
-        REQUIRE(fixture.barrier->Acknowledge(91).HasValue());
+        RequireMissingCurrentOwner(fixture);
     }
     SECTION("required owner callback skips its state") {
         fixture.adapter->skip = true;

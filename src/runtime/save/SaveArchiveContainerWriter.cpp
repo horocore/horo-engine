@@ -130,8 +130,8 @@ namespace Horo::Runtime {
             if (headerBytes > limits.metadata.maximumHeaderBytes || padding.Value() > limits.metadata.maximumHeaderBytes - headerBytes ||
                 !admit(padding.Value()))
                 return Result<AdmittedLayout>::Failure(MakeError(SaveErrors::ArchiveFramingLimitExceeded));
-            constexpr auto overhead = SaveArchivePreambleByteLength + SaveArchiveUnsignedTrailerByteLength;
-            if (limits.maximumArchiveBytes < overhead || length > limits.maximumArchiveBytes - overhead)
+            if (constexpr auto overhead = SaveArchivePreambleByteLength + SaveArchiveUnsignedTrailerByteLength;
+                limits.maximumArchiveBytes < overhead || length > limits.maximumArchiveBytes - overhead)
                 return Result<AdmittedLayout>::Failure(MakeError(SaveErrors::ArchiveFramingLimitExceeded));
             return Result<AdmittedLayout>::Success({dataOffset, length, padding.Value()});
         }
@@ -140,6 +140,7 @@ namespace Horo::Runtime {
         std::vector<std::byte> BuildPayload(std::string ownedHeader, const std::string &manifest,
                                             const std::span<const PreservedSaveChunk> chunks, const ArchiveFormatVersion version,
                                             const AdmittedLayout &layout) {
+            using enum SaveArchiveEntryKind;
             ownedHeader.append(layout.padding, ' ');
             std::vector<std::byte> payload(layout.dataOffset);
             payload.reserve(static_cast<std::size_t>(layout.length));
@@ -149,10 +150,10 @@ namespace Horo::Runtime {
             Put(payload, 8, version.Value());
             Put(payload, 16, static_cast<std::uint64_t>(chunks.size() + 2));
             Put(payload, 24, static_cast<std::uint32_t>(SaveArchiveContainerEntryByteLength));
-            Metadata(payload, 0, SaveArchiveEntryKind::Header, ownedHeader, layout.dataOffset);
-            Metadata(payload, 1, SaveArchiveEntryKind::Manifest, manifest, layout.dataOffset);
+            Metadata(payload, 0, Header, ownedHeader, layout.dataOffset);
+            Metadata(payload, 1, Manifest, manifest, layout.dataOffset);
             for (std::size_t index = 0; index < chunks.size(); ++index) {
-                Entry(payload, index + 2, SaveArchiveEntryKind::Chunk, chunks[index].entry, payload.size() - layout.dataOffset);
+                Entry(payload, index + 2, Chunk, chunks[index].entry, payload.size() - layout.dataOffset);
                 payload.insert(payload.end(), chunks[index].storedBytes.begin(), chunks[index].storedBytes.end());
             }
             return payload;

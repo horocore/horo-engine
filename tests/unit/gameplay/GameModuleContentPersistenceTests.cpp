@@ -28,6 +28,28 @@ namespace {
         CHECK(fixture.source.decoder.calls == decoderCalls);
     }
 
+    /** @brief Proves captured native declarations can re-enter the same content boundary and reject version drift. */
+    SaveContentProjectPolicy RequireNativeReAdmission(const ImmutableSaveArchive &output, SceneContentWorldTest::WorldFixture &fixture,
+                                                      const SaveParticipantId &participant) {
+        auto policy = fixture.source.policy;
+        policy.compatibility.saveSchemaVersions.direct = {SceneContentTest::V<SaveSchemaVersion>(2),
+                                                          SceneContentTest::V<SaveSchemaVersion>(2)};
+        const auto schema = SceneContentTest::V<ParticipantSchemaVersion>();
+        policy.compatibility.participants = {{participant, {{schema, schema}, {}}, false, {}},
+                                             {SaveParticipantId::Parse("project.state").Value(), {{schema, schema}, {}}, false, {}}};
+        std::ranges::sort(policy.compatibility.participants, {}, &SaveParticipantCompatibility::participant);
+        auto readmitted = ReconciledSaveContent::Prepare(*fixture.source.installed, output, policy, fixture.source.cancellation.Token());
+        REQUIRE(readmitted.HasValue());
+        CHECK(std::ranges::any_of(readmitted.Value().Diagnostics(), [participant](const SaveContentDiagnostic &entry) {
+            return entry.requirement.owner == participant;
+        }));
+        auto next = PrepareSavedSceneBootstrap(fixture.source.descriptor, SceneContentTest::SceneType(), std::move(readmitted).Value(),
+                                               &fixture.source.decoder);
+        REQUIRE(next.HasValue());
+        RequireVersionRejection(output, fixture, policy, participant);
+        return policy;
+    }
+
     template <typename T>
     concept FabricablePersistenceInstallation = requires { T{{}, {}, {}}; };
     static_assert(!FabricablePersistenceInstallation<Horo::Runtime::GameplayPersistenceInstallation>);
@@ -59,21 +81,7 @@ TEST_CASE("actual installed SlotPlayer capture survives native retirement and re
     }
     REQUIRE(encoded.HasValue());
     const auto output = encoded.Value().Archive();
-    auto policy = fixture.source.policy;
-    policy.compatibility.saveSchemaVersions.direct = {SceneContentTest::V<SaveSchemaVersion>(2), SceneContentTest::V<SaveSchemaVersion>(2)};
-    const auto schema = SceneContentTest::V<ParticipantSchemaVersion>();
-    policy.compatibility.participants = {{participant, {{schema, schema}, {}}, false, {}},
-                                         {SaveParticipantId::Parse("project.state").Value(), {{schema, schema}, {}}, false, {}}};
-    std::ranges::sort(policy.compatibility.participants, {}, &SaveParticipantCompatibility::participant);
-    auto readmitted = ReconciledSaveContent::Prepare(*fixture.source.installed, output, policy, fixture.source.cancellation.Token());
-    REQUIRE(readmitted.HasValue());
-    CHECK(std::ranges::any_of(readmitted.Value().Diagnostics(), [participant](const SaveContentDiagnostic &entry) {
-        return entry.requirement.owner == participant;
-    }));
-    auto next = PrepareSavedSceneBootstrap(fixture.source.descriptor, SceneContentTest::SceneType(), std::move(readmitted).Value(),
-                                           &fixture.source.decoder);
-    REQUIRE(next.HasValue());
-    RequireVersionRejection(output, fixture, policy, participant);
+    auto policy = RequireNativeReAdmission(output, fixture, participant);
     fixture.service->Shutdown();
     RequireRestartRequired(loaded->PrepareReload());
     CHECK(ReconciledSaveContent::Prepare(*fixture.source.installed, output, policy, fixture.source.cancellation.Token()).HasError());

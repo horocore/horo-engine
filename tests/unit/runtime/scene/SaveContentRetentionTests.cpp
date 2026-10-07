@@ -139,6 +139,21 @@ namespace {
         CHECK(nextDecision->remedy == SaveContentRemedy::PreserveOpaqueData);
         return nextDecision->disposition;
     }
+
+    /** @brief Proves explicit reject policy prevents capture callbacks and leaves the barrier reusable. */
+    void RequireDegradedCaptureRejection(WorldFixture &fixture) {
+        REQUIRE(fixture.barrier->Request(91, fixture.generation).HasValue());
+        auto denied = fixture.world->CaptureAtSafePoint(*fixture.barrier,
+                                                        SaveContentCaptureRequest{.phase = RuntimePhase::CommitDeferredLifecycleChanges,
+                                                                                  .generation = fixture.generation,
+                                                                                  .capturedState = SceneTest::Id<CapturedStateId>(35),
+                                                                                  .epoch = {.value = 41}},
+                                                        fixture.participants, SaveDegradedWorldPolicy::Reject);
+        CHECK(denied.HasError());
+        CHECK(fixture.adapter->calls == 0);
+        REQUIRE(fixture.barrier->Cancel(91).HasValue());
+        REQUIRE(fixture.barrier->Acknowledge(91).HasValue());
+    }
 }  // namespace
 
 TEST_CASE("Missing optional DLC has explicit preserve or quarantine disposition and retains bytes across real capture and next admission",
@@ -164,17 +179,7 @@ TEST_CASE("Missing optional DLC has explicit preserve or quarantine disposition 
     WorldFixture fixture{{}, {}, retained.archive, retained.policy};
     REQUIRE(fixture.world->Diagnostics().size() == 2);
     CHECK(decision->remedy == SaveContentRemedy::PreserveOpaqueData);
-    REQUIRE(fixture.barrier->Request(91, fixture.generation).HasValue());
-    auto denied = fixture.world->CaptureAtSafePoint(*fixture.barrier,
-                                                    SaveContentCaptureRequest{.phase = RuntimePhase::CommitDeferredLifecycleChanges,
-                                                                              .generation = fixture.generation,
-                                                                              .capturedState = SceneTest::Id<CapturedStateId>(35),
-                                                                              .epoch = {.value = 41}},
-                                                    fixture.participants, SaveDegradedWorldPolicy::Reject);
-    CHECK(denied.HasError());
-    CHECK(fixture.adapter->calls == 0);
-    REQUIRE(fixture.barrier->Cancel(91).HasValue());
-    REQUIRE(fixture.barrier->Acknowledge(91).HasValue());
+    RequireDegradedCaptureRejection(fixture);
     auto capture = fixture.Capture(35, SaveDegradedWorldPolicy::PreserveOpaque);
     const auto header = fixture.Header();
     fixture.service->Shutdown();

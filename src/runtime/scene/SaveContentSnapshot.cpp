@@ -319,7 +319,7 @@ namespace Horo::Runtime {
             return Result<FinalizedSaveArchive>::Failure(MakeError(SaveErrors::RestoreContextInvalid));
         const auto &source = *seal_;
         try {
-            auto header = metadata;
+            const auto &header = metadata;
             ReSaveAssembly assembly{{SaveSchemaVersion::Create(SaveSceneCanonicalSchemaVersion).Value(), {}, {}},
                                     {},
                                     {},
@@ -327,8 +327,8 @@ namespace Horo::Runtime {
                                     std::min<std::uint64_t>(64ULL << 20U, limits.maximumDecodedBytes),
                                     limits.maximumReadWorkBytes,
                                     std::min<std::uint64_t>(64ULL << 20U, limits.maximumReadWorkBytes / ReSaveAssembly::WorkPasses)};
-            if (auto metadata = assembly.AdmitMetadata(header, capture_, source, limits); metadata.HasError())
-                return Result<FinalizedSaveArchive>::Failure(metadata.ErrorValue());
+            if (auto admittedMetadata = assembly.AdmitMetadata(header, capture_, source, limits); admittedMetadata.HasError())
+                return Result<FinalizedSaveArchive>::Failure(admittedMetadata.ErrorValue());
             if (auto captured = assembly.AddCapture(capture_); captured.HasError())
                 return Result<FinalizedSaveArchive>::Failure(captured.ErrorValue());
             if (auto retained = assembly.AddRetained(source); retained.HasError())

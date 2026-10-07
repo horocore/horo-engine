@@ -6,6 +6,7 @@
 #include "SaveContentInternal.h"
 
 #include <algorithm>
+#include <memory>
 #include <new>
 #include <type_traits>
 #include <utility>
@@ -43,7 +44,7 @@ namespace Horo::Runtime {
             // A substitution is admitted only by the sealed project mapping; the original durable digest remains in the descriptor.
             if (resolved->installed == baseline && resolved->envelopeDigest != descriptor.contentDigest)
                 return Failure<const SaveContentDetail::ResolvedAsset *>(SceneErrors::SaveBootstrapIncompatible);
-            return Result<const SaveContentDetail::ResolvedAsset *>::Success(&*resolved);
+            return Result<const SaveContentDetail::ResolvedAsset *>::Success(std::to_address(resolved));
         }
 
         [[nodiscard]] bool HasDigestEvidence(const Sha256Digest &digest) noexcept {

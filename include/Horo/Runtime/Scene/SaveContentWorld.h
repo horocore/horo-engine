@@ -34,7 +34,8 @@ namespace Horo::Runtime {
          */
         [[nodiscard]] std::span<const SaveContentDiagnostic> Diagnostics() const noexcept;
         /** @brief Builds a reader-admitted archive, preserving every approved unknown chunk byte, codec and digest.
-         * @param header Publication metadata; world and base scene must match the bound world.
+         * @param header Immutable publication metadata borrowed only until this synchronous call returns; world and base scene must match
+         * the bound world.
          * @param version Trusted supported container version.
          * @param limits Finite writer/reader admission bounds.
          * @return Privately finalized publishable bytes only after production readback and unknown-data roundtrip verification.

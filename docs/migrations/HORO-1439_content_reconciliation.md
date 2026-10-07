@@ -183,8 +183,9 @@ admit work or certify a source: the same private published receipt, installation
 validate it before callbacks. All real fixture callers and the owning public-header consumer migrate together;
 stale/revoked generation, omitted owner, allocation failure and valid retry coverage stays intact.
 
-`SaveContentSnapshot::ReSave` borrows publication metadata by const reference and copies its owned working header only
-inside the existing protected allocation boundary. `InstalledSaveContent::Replace` and `Close` are const handle
+`SaveContentSnapshot::ReSave` borrows immutable publication metadata by const reference for the synchronous call.
+Its encoder never modifies that header or retains the reference; all materialization remains inside the existing
+protected allocation boundary. Worker callers retain their own metadata value until the call returns. `InstalledSaveContent::Replace` and `Close` are const handle
 operations on the same shared owner authority; owner-thread serialization and generation revocation rules are unchanged.
 
 The actual foreign baseline decoder invocation has a nonthrowing boundary with owned failure storage prepared before

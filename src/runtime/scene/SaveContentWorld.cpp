@@ -215,7 +215,7 @@ namespace Horo::Runtime {
                                                                  .ownedRecords = {SaveContentRequirementsRecord()}};
             auto registered = registry.Register(descriptor, adapter);
             if (registered.HasValue())
-                state_->declarationAdapter = std::move(adapter);
+                state_->declarationAdapter = adapter;
             return registered;
         } catch (const std::bad_alloc &) {
             return Result<SaveParticipantRegistration>::Failure(MakeError(SaveErrors::CanonicalCodecAllocationFailed));
