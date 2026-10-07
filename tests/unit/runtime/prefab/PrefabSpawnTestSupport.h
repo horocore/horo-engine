@@ -7,6 +7,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <format>
 #include <functional>
 #include <thread>
 
@@ -22,7 +23,7 @@ namespace Horo::Prefab::SpawnTest {
     inline std::vector<Gameplay::BehaviorField> Fields(const std::size_t count = 2) {
         std::vector<Gameplay::BehaviorField> fields;
         for (std::size_t index = 0; index < count; ++index)
-            fields.push_back({"value_" + std::to_string(index), 2.0});
+            fields.push_back({std::format("value_{}", index), 2.0});
         return fields;
     }
 
@@ -121,7 +122,8 @@ namespace Horo::Prefab::SpawnTest {
             }, [](void *, Gameplay::IBehaviorInstance *instance) noexcept {
                 delete instance;
             }};
-            REQUIRE(behaviors.Register({std::move(descriptor), factory}).HasValue());
+            const auto registered = behaviors.Register({std::move(descriptor), factory});
+            REQUIRE(registered.HasValue());
             REQUIRE(behaviors.Freeze().HasValue());
             Runtime::SceneDefinitionBuilder builder{{7}, {1}};
             Runtime::RuntimeEntityDefinition initial;

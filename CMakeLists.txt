@@ -126,6 +126,15 @@ foreach(target IN LISTS HORO_GAMEPLAY_PHYSICS_SDK_TARGETS)
         set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
     endif()
 endforeach()
+# Native prefab gameplay fixtures link the Scene runtime closure into a module.
+# Keep this host-only link closure independent from the exported Physics SDK.
+foreach(target HoroPrefabRuntime HoroPrefab HoroRuntimeScene HoroSceneModel
+        HoroRuntimeUi HoroAudioApi HoroAI HoroNavigationApi HoroRenderApi harfbuzz)
+    get_target_property(target_type ${target} TYPE)
+    if(target_type STREQUAL "STATIC_LIBRARY")
+        set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+endforeach()
 export(TARGETS ${HORO_GAMEPLAY_PHYSICS_SDK_TARGETS}
        NAMESPACE HoroEngine::
        FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayPhysicsTargets.cmake")

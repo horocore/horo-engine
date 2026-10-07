@@ -65,7 +65,9 @@ namespace Horo::Runtime {
 
         /** @brief Installs fully validated state after every aggregate participant has passed validation.
          * @details Implementations must not fail, allocate, or perform provider work in this call. */
-        virtual void Publish() noexcept {}
+        virtual void Publish() noexcept {
+            // Validation-only participants own no state to install at the aggregate publication boundary.
+        }
 
         /** @brief Closes subsystem admission and releases fully prepared state; safe before or after publication. */
         virtual void Shutdown() noexcept = 0;

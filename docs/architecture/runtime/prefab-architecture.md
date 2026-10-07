@@ -157,6 +157,11 @@ own those delivery decisions:
   publish through Scene-owned transactions. `Despawn` accepts only an opaque
   committed group under the same service/module scope. See the
   [implementation and migration contract](../../guides/gameplay-prefab-spawn-migration.md).
+- **Prepared group publication**: `PrefabTemplateProvider::QueuePreparedGroup`
+  consumes the projected components with one `PrefabPreparedGroupOptions` value
+  for fixups, placement, scope cancellation, occurrence metadata, references and
+  lineage. The optional receipt output is borrowed only for synchronous submission
+  and written after success; Scene retains the actual queued publication evidence.
 - **Initialization**: HPFB v2 owns at most 64 stable, distinct runtime initialization
   declarations, mapped by cook to existing typed behavior field occurrences. Exact
   kinds, required/optional coverage, finite bounds and uniqueness validate before

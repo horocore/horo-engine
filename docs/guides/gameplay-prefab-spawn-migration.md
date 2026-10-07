@@ -118,3 +118,32 @@ header contract; the native test module is a real capability consumer.
 These checks require execution; source presence is not a passing result. Required
 qualification also includes the existing cooked/provider, Scene transaction,
 Gameplay lifecycle, prefab Physics/AI and affected public-header consumers.
+
+## Prepared group publication options
+
+`PrefabTemplateProvider::QueuePreparedGroup` now takes `PrefabPreparedGroupOptions`
+as its fourth argument instead of positional fixup, placement, receipt and
+reference arguments. This keeps the owned publication metadata together and avoids
+an eleven-argument call that can silently swap values. The lease, components and
+operation cancellation arguments retain their order. Existing two- and three-argument
+calls remain valid through the default options value.
+
+The spawn service supplies placement, parent, receipt output, scope cancellation,
+members, references and lineage with named aggregate fields. Its caller is migrated
+in the same change; there is no positional compatibility overload. Receipt storage
+is borrowed only for the synchronous submission call and written after successful
+queueing. Component/metadata ownership and Scene commit fences remain unchanged.
+The public-header consumer checks the new exact member-function signature.
+
+`PrefabSpawnService::Acquire` and `Advance` now preserve const service routing
+identity while operating on the explicitly shared Scene-owner state, just as a
+const gameplay capability can queue a request. Const does not imply thread safety
+or immutable runtime state. Ordinary callers are unchanged; member-function
+pointers must include the const qualifier. The public consumer checks both forms.
+
+Capability allocation uses `make_shared` with a private construction key. Neither
+module code nor external callers can construct a grant or reset derived lineage;
+only the admitted service and the existing derived-client factory can create the
+key. Scope IDs advance after successful allocation, preserving allocation-failure
+admission behavior. The consumer also verifies that the former unkeyed constructor
+arguments cannot create a capability.

@@ -672,6 +672,7 @@ add_library(HoroRuntimeScene STATIC
         runtime/scene/RuntimeSceneDefinition.cpp
         runtime/scene/SavedSceneBootstrap.cpp
         runtime/scene/RuntimeScene.cpp
+        runtime/scene/RuntimeSceneCommandApplier.h
         runtime/scene/RuntimeSceneView.cpp
         runtime/scene/RuntimeSceneService.cpp
         runtime/scene/RuntimeSceneServicePublication.cpp
@@ -711,6 +712,7 @@ target_link_libraries(HoroNetworkRuntime PUBLIC HoroEngine::NetworkApi HoroEngin
 add_library(HoroGameplayRuntime STATIC
         gameplay/runtime/BehaviorRegistry.cpp
         gameplay/runtime/BehaviorRuntime.cpp
+        gameplay/runtime/BehaviorRuntimeState.h
         gameplay/runtime/SaveGameplayPersistence.cpp
         gameplay/runtime/GameplayRegistrationRuntimeDetail.h
         gameplay/runtime/GameplayRuntimeInvocation.h
@@ -1621,6 +1623,7 @@ add_library(HoroPrefabRuntime STATIC
         runtime/prefab/PrefabTemplateProvider.cpp
         runtime/prefab/PrefabTemplateLoading.cpp
         runtime/prefab/PrefabSpawnService.cpp
+        runtime/prefab/PrefabSpawnState.h
 )
 add_library(HoroEngine::PrefabRuntime ALIAS HoroPrefabRuntime)
 target_compile_features(HoroPrefabRuntime PUBLIC cxx_std_20)

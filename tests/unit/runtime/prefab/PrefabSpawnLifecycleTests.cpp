@@ -30,8 +30,7 @@ namespace Horo::Prefab {
         }
         fixture.Commit();
         // A closed provider may report its owner failure while the exact Scene receipt is still terminal.
-        const auto advanced = fixture.service->Advance(fixture.tick);
-        if (advanced.HasError())
+        if (const auto advanced = fixture.service->Advance(fixture.tick); advanced.HasError())
             fixture.service->Shutdown();
         CHECK(operation.Value().State() != PrefabSpawnState::Committed);
         CHECK(operation.Value().Spawned().HasError());
@@ -79,7 +78,7 @@ namespace Horo::Prefab {
         fixture.Warm();
         auto operation = fixture.context->Spawn(fixture.Request());
         REQUIRE(operation.HasValue());
-        fixture.trace.onCreate = [&](Gameplay::BehaviorContext &) {
+        fixture.trace.onCreate = [&fixture](Gameplay::BehaviorContext &) {
             fixture.service->Shutdown();
         };
         fixture.Advance();
@@ -95,7 +94,7 @@ namespace Horo::Prefab {
         REQUIRE(operation.HasValue());
         fixture.Drain(operation.Value());
         bool rejected{};
-        fixture.trace.onTick = [&](Gameplay::BehaviorContext &context) {
+        fixture.trace.onTick = [&fixture, &operation, &rejected](const Gameplay::BehaviorContext &context) {
             if (context.Entity().index == operation.Value().Spawned().Value().Root().entity.index) {
                 const auto repeated = context.PrefabContext()->Spawn(fixture.Request());
                 REQUIRE(repeated.HasError());
@@ -158,7 +157,7 @@ namespace Horo::Prefab {
         REQUIRE(other.HasValue());
         CHECK(other.Value()->Despawn(operation.Value().Spawned().Value(), 1).HasError());
         bool rejected{};
-        std::thread worker{[&] {
+        std::jthread worker{[&fixture, &rejected] {
             rejected = fixture.context->Spawn(fixture.Request()).HasError();
         }};
         worker.join();
@@ -207,8 +206,8 @@ namespace Horo::Prefab {
         fixture.Put(std::move(data));
         const auto original = fixture.scenes.ActiveScene()->Find({1}).value();
         auto request = fixture.Request();
-        request.bindings.push_back({Property(21), original});
-        auto operation = fixture.context->Spawn(std::move(request));
+        request.bindings.emplace_back(Property(21), original);
+        auto operation = fixture.context->Spawn(request);
         REQUIRE(operation.HasValue());
         fixture.Drain(operation.Value());
         REQUIRE(operation.Value().State() == PrefabSpawnState::Committed);
@@ -229,7 +228,8 @@ namespace Horo::Prefab {
         CHECK(std::holds_alternative<std::monostate>(optional.Value().target));
         Runtime::SceneCommandBuffer retire;
         retire.Destroy(original);
-        REQUIRE(fixture.scenes.QueueStructuralCommands(std::move(retire)).HasValue());
+        const auto queued = fixture.scenes.QueueStructuralCommands(std::move(retire));
+        REQUIRE(queued.HasValue());
         fixture.Commit();
         CHECK(fixture.context->Reference(instance.Root(), owner, Property(3)).HasError());
         CHECK(fixture.context->Reference(instance.Root(), owner, Property(1)).HasValue());
@@ -242,11 +242,13 @@ namespace Horo::Prefab {
         data.references = {{{{0}, 0}, Property(1), CookedPrefabBindingSlot{0}}};
         fixture.Put(std::move(data));
         auto request = fixture.Request();
-        SECTION("missing required") {}
-        SECTION("undeclared optional input") {
-            request.bindings.push_back({Property(23), fixture.scenes.ActiveScene()->Find({1}).value()});
+        SECTION("missing required") {
+            // Keep all required binding inputs absent.
         }
-        auto operation = fixture.context->Spawn(std::move(request));
+        SECTION("undeclared optional input") {
+            request.bindings.emplace_back(Property(23), fixture.scenes.ActiveScene()->Find({1}).value());
+        }
+        auto operation = fixture.context->Spawn(request);
         REQUIRE(operation.HasValue());
         fixture.Drain(operation.Value());
         CHECK(operation.Value().State() == PrefabSpawnState::Failed);

@@ -92,7 +92,25 @@ namespace Horo::Gameplay {
      * pending Scene transactions observe it. Destruction revokes the module scope before owner teardown.
      */
     class GameplayPrefabContext final {
+        /** @brief Construction authority retained only by the admitted service and derived-client factory. */
+        class ConstructionKey final {
+            friend class GameplayPrefabContext;
+            friend class Prefab::PrefabSpawnService;
+            ConstructionKey() = default;
+        };
+
     public:
+        /** @brief Constructs an authorized client through shared allocation without exposing construction authority.
+         * @param key Private authority created only by the service or derived-client factory.
+         * @param state Retained service identity and revocable owner-lane state.
+         * @param binding Trusted host policy, already admitted against this state.
+         * @param scope Unique module scope identity.
+         * @param parent Revocation ancestry for a derived client.
+         * @param lineage Immutable Scene-owned inherited creation lineage.
+         */
+        GameplayPrefabContext(ConstructionKey key, std::shared_ptr<Prefab::Detail::PrefabSpawnState> state,
+                              Prefab::GameplayPrefabBinding binding, std::uint64_t scope, CancellationToken parent = {},
+                              std::vector<Assets::AssetId> lineage = {});
         ~GameplayPrefabContext();
         GameplayPrefabContext(const GameplayPrefabContext &) = delete;
         GameplayPrefabContext &operator=(const GameplayPrefabContext &) = delete;
@@ -128,8 +146,6 @@ namespace Horo::Gameplay {
     private:
         friend class Prefab::PrefabSpawnService;
         friend class BehaviorRuntime;
-        GameplayPrefabContext(std::shared_ptr<Prefab::Detail::PrefabSpawnState> state, Prefab::GameplayPrefabBinding binding,
-                              std::uint64_t scope, CancellationToken parent = {}, std::vector<Assets::AssetId> lineage = {});
         /** @brief Derives an instance client once at creation, preserving immutable Scene-owned spawn lineage.
          * @param entity Exact committed attachment owner.
          * @return Child client or typed stale/lineage failure; neither module code nor callbacks may reset lineage.
@@ -164,13 +180,15 @@ namespace Horo::Prefab {
         /** @brief Admits an explicitly permitted module to this exact active Scene.
          * @param binding Trusted host policy and routing; never inferred from a service locator.
          * @return Revocable module capability or typed admission failure.
+         * @details Const preserves service routing identity; admission mutates shared owner-lane state and is not thread-safe.
          */
-        [[nodiscard]] Result<std::shared_ptr<Gameplay::GameplayPrefabContext>> Acquire(GameplayPrefabBinding binding);
+        [[nodiscard]] Result<std::shared_ptr<Gameplay::GameplayPrefabContext>> Acquire(GameplayPrefabBinding binding) const;
         /** @brief Advances bounded load/completion work and at most one eligible Scene transaction.
          * @param tick Monotonic committed fixed tick; zero is allowed only before the first simulation tick.
          * @return Owner-lane/tick failure; individual operations preserve their own typed failure.
+         * @details Const preserves service routing identity; the shared runtime state and Scene queue may change.
          */
-        [[nodiscard]] Result<void> Advance(std::uint64_t tick);
+        [[nodiscard]] Result<void> Advance(std::uint64_t tick) const;
         /** @copydoc Runtime::RuntimeLifecycleParticipant::Startup */
         [[nodiscard]] Result<void> Startup(const CancellationToken &cancellation) override;
         /** @copydoc Runtime::RuntimeLifecycleParticipant::OnPhase */

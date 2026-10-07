@@ -15,7 +15,7 @@ namespace Horo::Prefab {
         request.parent = original;
         std::optional<PrefabOperation> operation;
         bool submitted{};
-        fixture.trace.onTick = [&](Gameplay::BehaviorContext &context) {
+        fixture.trace.onTick = [&submitted, &operation, &request](const Gameplay::BehaviorContext &context) {
             if (submitted)
                 return;
             submitted = true;
@@ -53,11 +53,22 @@ namespace Horo::Prefab {
         CHECK(fixture.runner->InstanceCount() == 1);
         CHECK(fixture.trace.destroys == 2);
         CHECK(fixture.scenes.ActiveScene()->Get(instance.Value().Root()).HasError());
-        // Generation reuse cannot revive an old group identity.
+    }
+
+    TEST_CASE("Despawn rejects retained prefab identities after entity generation reuse", "[prefab][spawn][lifecycle]") {
+        Fixture fixture;
+        auto first = fixture.context->Spawn(fixture.Request());
+        REQUIRE(first.HasValue());
+        fixture.Drain(first.Value());
+        const auto original = first.Value().Spawned().Value();
+        auto retired = fixture.context->Despawn(original, fixture.tick);
+        REQUIRE(retired.HasValue());
+        fixture.Drain(retired.Value());
+        REQUIRE(retired.Value().State() == PrefabSpawnState::Committed);
         auto second = fixture.context->Spawn(fixture.Request());
         REQUIRE(second.HasValue());
         fixture.Drain(second.Value());
-        auto repeated = fixture.context->Despawn(instance.Value(), fixture.tick);
+        auto repeated = fixture.context->Despawn(original, fixture.tick);
         REQUIRE(repeated.HasValue());
         fixture.Drain(repeated.Value());
         CHECK(repeated.Value().State() == PrefabSpawnState::Failed);
@@ -85,7 +96,7 @@ namespace Horo::Prefab {
         SECTION("nonfinite") {
             request.initialization.front().value = std::numeric_limits<double>::infinity();
         }
-        auto operation = fixture.context->Spawn(std::move(request));
+        auto operation = fixture.context->Spawn(request);
         REQUIRE(operation.HasValue());
         fixture.Drain(operation.Value());
         CHECK(operation.Value().State() == PrefabSpawnState::Failed);
@@ -127,7 +138,7 @@ namespace Horo::Prefab {
         SECTION("tick overflow") {
             request.notBeforeTick = std::numeric_limits<std::uint64_t>::max();
         }
-        auto operation = fixture.context->Spawn(std::move(request));
+        auto operation = fixture.context->Spawn(request);
         CHECK(operation.HasError());
         CHECK(fixture.Count() == 1);
     }
@@ -163,7 +174,7 @@ namespace Horo::Prefab {
         }
         fixture.Put(std::move(data));
         request.source.artifactDigest = fixture.digest;
-        auto operation = fixture.context->Spawn(std::move(request));
+        auto operation = fixture.context->Spawn(request);
         REQUIRE(operation.HasValue());
         fixture.Drain(operation.Value());
         REQUIRE(operation.Value().State() == PrefabSpawnState::Committed);
@@ -204,7 +215,8 @@ namespace Horo::Prefab {
             alias.id = {3};
             data.initialization.push_back(alias);
         }
-        CHECK(CookedPrefab::Create(std::move(data), PrefabLimitProfile::Create({}).Value()).HasError());
+        const auto rejected = CookedPrefab::Create(std::move(data), PrefabLimitProfile::Create({}).Value());
+        CHECK(rejected.HasError());
     }
 
     TEST_CASE("Cooked v2 initialization roundtrips and rejects v1 without reinterpretation", "[prefab][cooked][initialization]") {
@@ -223,21 +235,22 @@ namespace Horo::Prefab {
     }
 
     TEST_CASE("Initialization closed value kinds enforce string finite and quaternion boundaries", "[prefab][initialization][bounds]") {
+        using enum PrefabInitializationKind;
         CookedPrefabInitialization declaration;
         declaration.id = {1};
-        declaration.kind = PrefabInitializationKind::String;
+        declaration.kind = String;
         CHECK(ValidatePrefabInitializationValue(declaration, std::string(256, 'x')).HasValue());
         CHECK(ValidatePrefabInitializationValue(declaration, std::string(257, 'x')).HasError());
-        declaration.kind = PrefabInitializationKind::Integer;
+        declaration.kind = Integer;
         declaration.minimum = -5;
         declaration.maximum = 5;
         CHECK(ValidatePrefabInitializationValue(declaration, std::int64_t{-5}).HasValue());
         CHECK(ValidatePrefabInitializationValue(declaration, std::int64_t{5}).HasValue());
         CHECK(ValidatePrefabInitializationValue(declaration, std::numeric_limits<std::int64_t>::max()).HasError());
-        declaration.kind = PrefabInitializationKind::Vec3;
+        declaration.kind = Vec3;
         CHECK(ValidatePrefabInitializationValue(declaration, Math::Vec3{}).HasValue());
         CHECK(ValidatePrefabInitializationValue(declaration, Math::Vec3{std::numeric_limits<float>::quiet_NaN(), 0, 0}).HasError());
-        declaration.kind = PrefabInitializationKind::Quaternion;
+        declaration.kind = Quaternion;
         CHECK(ValidatePrefabInitializationValue(declaration, Math::Quaternion{}).HasValue());
         CHECK(ValidatePrefabInitializationValue(declaration, Math::Quaternion{0, 0, 0, 0}).HasError());
     }

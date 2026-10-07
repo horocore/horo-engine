@@ -10,13 +10,13 @@ namespace Horo::Prefab {
     /** @copydoc ValidatePrefabInitializationValue */
     Result<void> ValidatePrefabInitializationValue(const CookedPrefabInitialization &declaration,
                                                    const Gameplay::BehaviorFieldValue &value) {
-        const auto kind = static_cast<std::size_t>(declaration.kind);
-        if (declaration.id.value == 0 || kind == 0 || kind > 7 || value.index() != kind || !std::isfinite(declaration.minimum) ||
+        if (const auto kind = static_cast<std::size_t>(declaration.kind);
+            declaration.id.value == 0 || kind == 0 || kind > 7 || value.index() != kind || !std::isfinite(declaration.minimum) ||
             !std::isfinite(declaration.maximum) || declaration.minimum > declaration.maximum)
             return Result<void>::Failure(MakeError(PrefabErrors::AdmissionRejected, "Invalid typed initialization interface."));
         const bool valid = std::visit([&declaration]<typename Value>(const Value &input) {
             if constexpr (std::is_same_v<Value, double> || std::is_same_v<Value, std::int64_t>) {
-                const long double number = static_cast<long double>(input);
+                const auto number = static_cast<long double>(input);
                 return std::isfinite(number) && number >= declaration.minimum && number <= declaration.maximum;
             } else if constexpr (std::is_same_v<Value, std::string>)
                 return input.size() <= 256;

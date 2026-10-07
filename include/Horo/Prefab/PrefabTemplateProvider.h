@@ -101,6 +101,20 @@ namespace Horo::Prefab {
         std::shared_ptr<Detail::PrefabTemplateRequest> request_;
     };
 
+    /** @brief Owned prepared-group metadata and publication options, consumed synchronously on the Scene owner lane. */
+    struct PrefabPreparedGroupOptions final {
+        std::vector<std::vector<Runtime::GroupPhysicsBodyReference>>
+            physicsReferences;                        /**< Dense body fixups resolved after reservation. */
+        std::optional<Math::Transform> rootPlacement; /**< Replaces only the root local transform. */
+        std::optional<Runtime::EntityRef> parent;     /**< Existing generation-qualified parent, revalidated at commit. */
+        std::shared_ptr<const Runtime::SceneStructuralReceipt>
+            *receipt{};                      /**< Optional borrowed output, written only on successful submission. */
+        CancellationToken scopeCancellation; /**< Module revocation sampled again at publication. */
+        std::vector<std::vector<Runtime::RuntimeGroupMemberIdentity>> members; /**< Complete occurrence metadata in dense entity order. */
+        std::vector<std::vector<Runtime::RuntimeGroupReference>> references;   /**< Typed reference interfaces per entity. */
+        std::vector<Assets::AssetId> spawnLineage; /**< Inherited creation lineage, bounded to 16 unique assets. */
+    };
+
     /**
      * @brief Owner-lane runtime prefab preparation over host-composed Assets and Scene services.
      * @details The borrowed services outlive this provider. Loads capture one registry snapshot and active scene.
@@ -153,27 +167,17 @@ namespace Horo::Prefab {
          * @param lease Exact verified template/resource closure from this provider.
          * @param components Complete schema-projected runtime component sets, one per dense template entity.
          * @param cancellation Owning spawn operation's cooperative cancellation ancestry.
-         * @param physicsReferences Typed body-reference fixups in dense entity order, resolved by Scene after reservation.
-         * @param rootPlacement Optional exact replacement for the root local transform; descendants retain cooked values.
-         * @param parent Optional existing generation-qualified root parent, validated again at commit.
-         * @param receipt Optional output for dedicated Scene completion evidence; written only after successful submission.
-         * @param scopeCancellation Module/capability revocation sampled by Scene at publication.
-         * @param members Complete cooked occurrence metadata, empty only when reference interfaces are unused.
-         * @param references Complete typed reference interfaces, one vector per entity when present.
-         * @param spawnLineage Immutable inherited creation lineage, at most 16 unique assets.
+         * @param options Owned fixups, placement, cancellation scope and synchronous receipt output.
          * @return Deferred Scene tokens or rejection without queued work. Scene repeats generation/catalog/cancellation
          * checks at commit and retains real artifact allocations until the last group entity is destroyed.
          * @details The caller owns component schema projection and typed reference/binding initialization. This method
          * preserves cooked topology/transforms and never fabricates a missing projection or runs behavior hooks.
          * Public gameplay requests/placement/initialization parameter validation remain owned by PFB-004.3.
          */
-        [[nodiscard]] Result<std::vector<Runtime::DeferredEntity>> QueuePreparedGroup(
-            const PrefabTemplateLease &lease, std::vector<Runtime::RuntimeComponentSet> components,
-            const CancellationToken &cancellation = {}, std::vector<std::vector<Runtime::GroupPhysicsBodyReference>> physicsReferences = {},
-            std::optional<Math::Transform> rootPlacement = {}, std::optional<Runtime::EntityRef> parent = {},
-            std::shared_ptr<const Runtime::SceneStructuralReceipt> *receipt = nullptr, const CancellationToken &scopeCancellation = {},
-            std::vector<std::vector<Runtime::RuntimeGroupMemberIdentity>> members = {},
-            std::vector<std::vector<Runtime::RuntimeGroupReference>> references = {}, std::vector<Assets::AssetId> spawnLineage = {});
+        [[nodiscard]] Result<std::vector<Runtime::DeferredEntity>> QueuePreparedGroup(const PrefabTemplateLease &lease,
+                                                                                      std::vector<Runtime::RuntimeComponentSet> components,
+                                                                                      const CancellationToken &cancellation = {},
+                                                                                      PrefabPreparedGroupOptions options = {});
         /** @brief Drops resident lookup pins for one asset; existing leases keep their immutable storage. @param asset Exact asset. */
         void Evict(Assets::AssetId asset) noexcept;
         /** @brief Reports canonical byte ownership, including evicted externally held allocations. @return Accounting snapshot. */
