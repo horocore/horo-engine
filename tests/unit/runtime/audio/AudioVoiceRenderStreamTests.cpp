@@ -145,7 +145,7 @@ namespace Horo::Tests::VoiceRenderFixture {
         control(AudioVoiceControl::Start);
         bool terminal{};
         std::uint32_t actualFrames{};
-        for (std::uint32_t block = 0; block < 16 && !terminal; ++block) {
+        for (std::uint32_t block = 0; block < 16; ++block) {
             REQUIRE(Audio::StreamingTests::Until([&rig] {
                 rig.service->Pump();
                 const auto snapshot = rig.service->Snapshot(rig.stream);
@@ -153,8 +153,7 @@ namespace Horo::Tests::VoiceRenderFixture {
             }));
             const auto rendered = runtime->Render(1);
             REQUIRE(rendered.error == nullptr);
-            const float sample = rendered.input.samples.planes[0][0];
-            if (sample != 0.0F) {
+            if (const float sample = rendered.input.samples.planes[0][0]; sample != 0.0F) {
                 ++actualFrames;
                 CHECK(sample == static_cast<float>(actualFrames));
                 CHECK(rendered.input.samples.planes[1][0] == sample);
@@ -170,6 +169,8 @@ namespace Horo::Tests::VoiceRenderFixture {
                 CHECK(paused.input.samples.planes[1][0] == 0.0F);
                 control(AudioVoiceControl::Resume);
             }
+            if (terminal)
+                break;
         }
         CHECK(actualFrames == 8);
         CHECK(terminal);

@@ -6,7 +6,9 @@ namespace Horo::Tests::VoiceRenderFixture {
         auto request = Request();
         float expectedLeft = std::sqrt(0.5F);
         float expectedRight = expectedLeft;
-        SECTION("copied 2D source") {}
+        SECTION("copied 2D source") {
+            // Keep the fixture's default 2D source and equal-power stereo expectations.
+        }
         SECTION("copied 3D source and listener") {
             request.source.playback.spatialMode = AudioSpatialMode::ThreeD;
             request.source.motion.current.position = {1.0F, 0.0F, 0.0F};

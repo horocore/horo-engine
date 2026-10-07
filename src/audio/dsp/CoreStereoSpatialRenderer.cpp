@@ -298,7 +298,7 @@ namespace Horo::Audio {
     /** @copydoc CoreStereoSpatialRenderer::EmitStereo */
     void CoreStereoSpatialRenderer::EmitStereo(const AudioResamplerOutput output, AudioResamplerProgress &progress) noexcept {
         if (remaining_ != 0) {
-            const float remaining = static_cast<float>(remaining_);
+            const auto remaining = static_cast<float>(remaining_);
             for (std::size_t coefficient = 0; coefficient < matrix_.size(); ++coefficient)
                 matrix_[coefficient] += (target_.matrix[coefficient] - matrix_[coefficient]) / remaining;
             --remaining_;

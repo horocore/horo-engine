@@ -5,7 +5,18 @@
 #include "MixerTestFixture.h"
 
 namespace Horo::Tests::VoiceRenderFixture {
-    using namespace MixerFixture;
+    using MixerFixture::Asset;
+    using MixerFixture::Block;
+    using MixerFixture::ConsumePublished;
+    using MixerFixture::Identity;
+    using MixerFixture::IdOf;
+    using MixerFixture::Owner;
+    using MixerFixture::Plan;
+    using MixerFixture::Publish;
+    using MixerFixture::Runtime;
+    using MixerFixture::Scope;
+    using MixerFixture::ShutDown;
+    using MixerFixture::Staging;
 
     // Linear preparation retains 1,025 rows of two binary32 coefficients (8,200 bytes).
     inline constexpr std::uint64_t CoefficientBytes = 16U * 1024U;
