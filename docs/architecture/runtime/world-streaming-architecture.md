@@ -292,6 +292,45 @@ is replaced by this one contract, not a second provider hierarchy. Notifications
 such as OnCellActive, if offered to observers, occur after commit and are never
 entity-creation hooks or readiness acknowledgements.
 
+`CellAttachmentManifest` binds Terrain, Foliage, NavigationMesh, PhysicsMesh and Audio
+TOC rows to exact feature-owned artifact `AssetId`, semantic subresource, immutable
+content revision, schema, byte size and SHA-256. Construction copies canonical complete
+membership under explicit count and byte ceilings. Required TOC data cannot be weakened;
+optional data may be promoted by the cell profile. CoreEcs remains Scene-owned. This
+load/cook handoff adds no binary schema or independent cell topology.
+
+`SceneCellAttachmentParticipant` is the production Scene aggregate adapter. The host
+supplies an exact Scene definition revision, complete streaming operation fence,
+manifest revision, provider identities/revisions and immutable Assets byte leases.
+Complete required reference/binding/integrity admission precedes any provider factory
+call. Feature factories decode and stage their own resources, returning existing
+`SceneActivationCandidate` ownership. Byte presence alone never establishes readiness.
+All required native candidates must validate before common Scene publication; native
+errors preserve their original typed cause and leave the active aggregate unchanged.
+Unsupported/absent/failed optional references publish explicit unavailable status.
+Optional native invalidation before commit suppresses only that capability and retires
+its prepared resources; it cannot downgrade a required reference.
+
+The participant retains byte pins and native candidates through deferred publication.
+A strictly newer complete replacement validates before closing the old publication
+gate; cancellation/shutdown close pending admission and publication without claiming
+native retirement. Scene aggregate shutdown/unload retires candidates in reverse order;
+domain implementations retain outstanding readers/jobs/device resources until their own
+real acknowledgement. The host must close or replace this owner when canonical attempt
+fencing changes. Late optional attachment after Active remains a separately admitted
+transaction; this initial aggregate seam does not fabricate late readiness.
+
+`MakePhysicsCellAttachmentProvider` is a concrete feature-owned bridge in
+`HoroPhysicsSceneIntegration`: it matches the exact cooked descriptor, acquires a real
+`PhysicsCookedShapeLease`, and invokes existing Physics/Character aggregate preparation.
+It preserves solver/capability failures, including currently unsupported native cooked
+shape realization; a verified byte/shape lease cannot turn that failure into readiness.
+Shared immutable shape cache retention is separately owned from cell native candidates.
+Other feature owners use the same exact-reference factory boundary with their existing
+schemas and qualified native preparation paths; missing implementations fail required
+admission explicitly. Host composition selects them without streaming discovering a
+backend or importing a feature-private header.
+
 Host-composed inert provider descriptors declare stable provider/payload IDs,
 supported versions, native execution role, resource cost bounds, dependency DAG,
 activation policy, finite positive stage/prepare/retirement deadlines and teardown

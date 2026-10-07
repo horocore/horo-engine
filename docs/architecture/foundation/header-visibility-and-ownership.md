@@ -1517,3 +1517,14 @@ CLI result presentation consumes inert diagnostic-bundle error metadata defined 
 to the original Foundation-owned error identities. Registration remains explicit
 at the application root. Generated command help is a target-private presentation
 translation unit in `HoroCliHost`, sharing the admitted registry metadata.
+
+## Cell attachment manifest adapters
+
+`CellAttachmentManifest.h` is owned by `HoroWorldStreaming` and uses its existing
+Assets dependency for stable cooked references. `SceneCellAttachments.h` belongs to
+`HoroSceneCellPayload` and joins those values to the existing Scene aggregate contract.
+`PhysicsCellAttachments.h` is owned by `HoroPhysicsSceneIntegration`, whose explicit
+public dependency now includes SceneCellPayload. This adapter dependency does not
+expose Physics-private/native types or add streaming dependencies to Physics kernels.
+Consumer coverage includes the SceneCellPayload and PhysicsSceneIntegration staged
+header surfaces. Migration is recorded in the cell attachment manifest guide.

@@ -573,6 +573,7 @@ add_test(NAME HoroCharacterSurfacePublicHeaderConsumer COMMAND HoroCharacterSurf
 set_tests_properties(HoroCharacterSurfacePublicHeaderConsumer PROPERTIES LABELS "unit;physics;headless")
 
 add_executable(HoroPhysicsTests
+        unit/runtime/physics/PhysicsCellAttachmentsTests.cpp
         support/AllocationProbe.cpp
         unit/runtime/physics/CharacterFoundationQualificationTests.cpp
         unit/runtime/physics/CharacterControllerContractsTests.cpp
@@ -1066,6 +1067,7 @@ target_link_libraries(HoroTerrainAsyncJobsTests PRIVATE HoroEngine::TerrainRunti
 horo_register_catch_test(HoroTerrainAsyncJobsTests LABELS "unit;terrain;headless")
 
 add_executable(HoroWorldStreamingTests
+        unit/runtime/world_streaming/CellAttachmentManifestTests.cpp
         unit/runtime/world_streaming/NetworkStreamingAuthorityTests.cpp
         unit/runtime/world_streaming/OriginFrameTests.cpp
         unit/runtime/world_streaming/OriginRebaseTransactionTests.cpp
