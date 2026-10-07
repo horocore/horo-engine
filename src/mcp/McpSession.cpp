@@ -1,6 +1,7 @@
 #include "Horo/Mcp/McpSession.h"
 
 #include "Horo/Foundation/Utf8.h"
+#include "Horo/Mcp/McpAuthorization.h"
 #include "Horo/Mcp/McpErrors.h"
 #include "McpJsonBounds.h"
 
@@ -15,6 +16,12 @@
 #include <utility>
 
 namespace Horo::Mcp {
+    /** @copydoc McpRequestContext::IsStopRequested */
+    bool McpRequestContext::IsStopRequested() const noexcept {
+        return cancellation.IsCancellationRequested() || std::chrono::steady_clock::now() >= deadline || !authority ||
+               authority->IsStopRequested();
+    }
+
     /** @copydoc IMcpRequestController::CancelAccepted */
     Result<void> IMcpRequestController::CancelAccepted(const McpSessionHandle, const nlohmann::json &) {
         return Result<void>::Failure(MakeError(McpErrors::RequestInvalid));
@@ -91,6 +98,7 @@ namespace Horo::Mcp {
         std::condition_variable drained;
         std::shared_ptr<IMcpRequestController> controller;
         McpSessionLimits limits;
+        std::shared_ptr<McpAuthorization> authorization;
         std::unordered_map<std::uint64_t, std::shared_ptr<SessionRecord>> sessions;
         std::uint64_t nextSessionId{1};
         std::size_t activeCallbacks{};
@@ -99,10 +107,12 @@ namespace Horo::Mcp {
 
     /** @copydoc McpSessionManager::Create */
     Result<std::shared_ptr<McpSessionManager>> McpSessionManager::Create(std::shared_ptr<IMcpRequestController> controller,
-                                                                         McpSessionLimits limits) {
-        if (controller == nullptr || !ValidLimits(limits))
+                                                                         McpSessionLimits limits,
+                                                                         std::shared_ptr<McpAuthorization> authorization) {
+        if (controller == nullptr || !ValidLimits(limits) || !authorization)
             return Result<std::shared_ptr<McpSessionManager>>::Failure(MakeError(McpErrors::ConfigurationInvalid));
         auto state = std::make_shared<State>(std::move(controller), std::move(limits));
+        state->authorization = std::move(authorization);
         return Result<std::shared_ptr<McpSessionManager>>::Success(
             std::shared_ptr<McpSessionManager>(new McpSessionManager(std::move(state))));
     }
@@ -111,6 +121,15 @@ namespace Horo::Mcp {
     Result<McpSessionHandle> McpSessionManager::Open(McpSessionAdmission admission) {
         if (!ValidAdmission(admission, state_->limits))
             return Result<McpSessionHandle>::Failure(MakeError(McpErrors::AdmissionInvalid));
+        const McpRequestContext authorityContext{.clientIdentity = admission.clientIdentity,
+                                                 .capabilities = admission.capabilities,
+                                                 .projectIdentity = admission.projectIdentity,
+                                                 .authorizationRevision = admission.authorizationRevision,
+                                                 .registryRevision = admission.registryRevision,
+                                                 .authority = admission.authority};
+        const auto authorized = state_->authorization->Validate(authorityContext);
+        if (authorized.HasError())
+            return Result<McpSessionHandle>::Failure(authorized.ErrorValue());
         std::lock_guard lock{state_->mutex};
         if (state_->stopping)
             return Result<McpSessionHandle>::Failure(MakeError(McpErrors::ShuttingDown));
@@ -123,6 +142,7 @@ namespace Horo::Mcp {
         auto record = std::make_shared<SessionRecord>();
         record->handle = handle;
         record->admission = std::move(admission);
+        record->cancellation = CancellationSource{record->admission.authority->Cancellation()};
         state_->sessions.try_emplace(handle.id, std::move(record));
         return Result<McpSessionHandle>::Success(handle);
     }
@@ -163,11 +183,17 @@ namespace Horo::Mcp {
             static_cast<void>(inserted);
             ++state_->activeCallbacks;
             context.cancellation = entry->second.Token();
-            context.deadline = std::chrono::steady_clock::now() + state_->limits.requestTimeout;
+            context.deadline =
+                std::min(std::chrono::steady_clock::now() + state_->limits.requestTimeout, record->admission.authority->ExpiresAt());
+            context.authority = record->admission.authority;
+            context.authorization = state_->authorization;
+            context.requestIdentity = request.id;
         }
 
         const auto controller = state_->controller;
-        const auto outcome = InvokeController(*controller, request, context, state_->limits);
+        const auto authorized = state_->authorization->Validate(context);
+        const auto outcome = authorized.HasValue() ? InvokeController(*controller, request, context, state_->limits)
+                                                   : Result<nlohmann::json>::Failure(authorized.ErrorValue());
 
         {
             std::lock_guard lock{state_->mutex};
@@ -175,6 +201,14 @@ namespace Horo::Mcp {
             --state_->activeCallbacks;
             state_->drained.notify_all();
         }
+        // A synchronous adapter may finish after close, project replacement or revocation.
+        // Never publish its stale result to a caller whose authority has already ended.
+        const auto current = state_->authorization->Validate(context);
+        if (current.HasError())
+            return Result<nlohmann::json>::Failure(current.ErrorValue());
+        if (context.IsStopRequested())
+            return Result<nlohmann::json>::Failure(
+                MakeError(std::chrono::steady_clock::now() >= context.deadline ? McpErrors::RequestTimedOut : McpErrors::RequestCancelled));
         return outcome;
     }
 
@@ -210,11 +244,14 @@ namespace Horo::Mcp {
             return Result<McpSessionHandle>::Failure(MakeError(McpErrors::SessionUnavailable));
         if (session.generation == std::numeric_limits<std::uint64_t>::max())
             return Result<McpSessionHandle>::Failure(MakeError(McpErrors::SessionCapacityExceeded));
+        // Project replacement never carries a credential or approvals into the new scope.
+        // The host must authenticate again; the advanced handle exists only for lifecycle cleanup.
         CancellationSource replacement;
         auto &record = *found->second;
         record.cancellation.RequestCancellation();
         record.cancellation = std::move(replacement);
         record.admission.projectIdentity = std::move(projectIdentity);
+        record.admission.authority.reset();
         ++record.handle.generation;
         return Result<McpSessionHandle>::Success(record.handle);
     }

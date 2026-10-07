@@ -2012,7 +2012,10 @@ target_compile_features(HoroMcpRegistryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroMcpRegistryTests PRIVATE HoroEngine::McpRegistry Threads::Threads)
 horo_register_catch_test(HoroMcpRegistryTests LABELS "unit;mcp;headless")
 
-add_executable(HoroMcpControllerTests unit/mcp/McpControllerTests.cpp)
+add_executable(HoroMcpControllerTests
+    unit/mcp/McpControllerTests.cpp
+    unit/mcp/McpAuthorizationTests.cpp
+)
 target_compile_features(HoroMcpControllerTests PRIVATE cxx_std_20)
 target_link_libraries(HoroMcpControllerTests PRIVATE HoroEngine::McpController Threads::Threads)
 horo_register_catch_test(HoroMcpControllerTests LABELS "unit;mcp;headless")

@@ -75,6 +75,7 @@ horo_configure_target_header_boundary(HoroCliHost PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroMcpSession PUBLIC_HEADERS
+    Horo/Mcp/McpAuthorization.h
     Horo/Mcp/McpErrors.h
     Horo/Mcp/McpSession.h
     Horo/Mcp/McpInProcessAdapter.h

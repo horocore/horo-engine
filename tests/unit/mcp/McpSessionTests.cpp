@@ -1,6 +1,7 @@
 #include "Horo/Mcp/McpErrors.h"
 #include "Horo/Mcp/McpInProcessAdapter.h"
 #include "Horo/Mcp/McpLocalTransport.h"
+#include "McpAuthorizationTestSupport.h"
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
@@ -29,15 +30,15 @@ namespace Horo::Mcp {
         };
 
         McpSessionAdmission Admission() {
-            return {.clientIdentity = "local-client",
-                    .capabilities = {"project.read"},
-                    .projectIdentity = "project-one",
-                    .authorizationRevision = 3,
-                    .registryRevision = 7};
+            return Test::Authenticate({.clientIdentity = "local-client",
+                                       .capabilities = {"project.read"},
+                                       .projectIdentity = "project-one",
+                                       .authorizationRevision = 3,
+                                       .registryRevision = 7});
         }
 
         std::shared_ptr<McpSessionManager> Manager(const std::shared_ptr<Controller> &controller, McpSessionLimits limits = {}) {
-            auto created = McpSessionManager::Create(controller, limits);
+            auto created = McpSessionManager::Create(controller, limits, Test::Authorization());
             REQUIRE(created.HasValue());
             return std::move(created).Value();
         }
@@ -172,7 +173,7 @@ namespace Horo::Mcp {
         const auto stale = manager->Dispatch(oldHandle, {.id = 2, .method = "tools/list"});
         REQUIRE(stale.HasError());
         RequireCode(stale.ErrorValue(), McpErrors::SessionUnavailable);
-        REQUIRE(completed.load());
+        REQUIRE_FALSE(completed.load());
         REQUIRE(cancelled.load());
         embedded.Value()->Disconnect();
         REQUIRE(manager->ActiveSessions() == 0);

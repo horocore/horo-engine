@@ -500,6 +500,17 @@ enabled by a remote caller or archive field.
 
 ## Security
 
+[MCP authentication and approval migration](../../guides/mcp-authentication-approval-migration.md)
+defines the implemented local credential and approval boundary. Host composition
+injects one `McpAuthorization` into sessions and the controller. Protected discovery
+and invocation require a live, non-forgeable principal bound to exact project trust,
+capabilities and registry revisions. Non-query tools require a local, expiring,
+single-use approval bound to the exact request; the registry consumes it at owner
+invocation. Project replacement and revocation cancel old authority rather than
+carrying approval into another project. No mutable policy or credential material
+is exposed through protocol frames. The new header is owned by `HoroMcpSession`,
+whose one-way Security dependency supplies zeroizing secret and OS entropy contracts.
+
 [ADR-172](../../adr/172-immersive-agent-ownership-authoring-mode-and-risk.md)
 specializes immersive editor-agent tools. Multimodal input is bounded evidence,
 not MCP authorization: voice, gaze, pointing, contact and physical interaction

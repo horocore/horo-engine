@@ -2,6 +2,7 @@
 
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Utf8.h"
+#include "Horo/Mcp/McpAuthorization.h"
 #include "Horo/Mcp/McpErrors.h"
 
 #include <algorithm>
@@ -107,6 +108,7 @@ namespace Horo::Mcp {
         std::mutex mutex;
         std::condition_variable drained;
         std::shared_ptr<McpToolRegistry> registry;
+        std::shared_ptr<McpAuthorization> authorization;
         McpControllerLimits limits;
         std::array<std::optional<std::thread::id>, 4> owners;
         std::array<bool, 4> pumping{};
@@ -136,11 +138,13 @@ namespace Horo::Mcp {
                 std::erase(queue, operation);
                 --pending;
                 operation->snapshot.reset();
+                operation->arguments = nullptr;
             }
             --active;
             operation->state = terminal;
             operation->error = std::move(error);
             operation->result = std::move(result);
+            operation->phase.clear();
             recent.push_back(operation->id);
             if (prune)
                 PruneRecent();
@@ -151,6 +155,12 @@ namespace Horo::Mcp {
         bool StopIfRequested(const std::shared_ptr<Operation> &operation) {
             if (Terminal(operation->state))
                 return true;
+            const auto authority = authorization->Validate(operation->context);
+            if (authority.HasError()) {
+                operation->cancellation.RequestCancellation();
+                Finish(operation, OperationState::Failed, authority.ErrorValue());
+                return true;
+            }
             if (std::chrono::steady_clock::now() >= operation->context.deadline) {
                 operation->cancellation.RequestCancellation();
                 Finish(operation, OperationState::TimedOut, MakeError(McpErrors::RequestTimedOut));
@@ -172,7 +182,9 @@ namespace Horo::Mcp {
             const auto found = operations.find(id);
             if (found != operations.end() && found->second->state == OperationState::Running) {
                 found->second->progress = fraction;
-                found->second->phase = std::move(phase);
+                // Adapter phase text may contain argument or credential-derived content.
+                // Keep numeric progress only; presentation translates typed state instead.
+                found->second->phase.clear();
             }
         }
 
@@ -196,6 +208,7 @@ namespace Horo::Mcp {
             operation->tool = std::move(tool);
             operation->arguments = request.params["arguments"];
             operation->context = context;
+            operation->context.requestIdentity = request.id;
             operation->cancellation = CancellationSource{context.cancellation};
             operation->context.cancellation = operation->cancellation.Token();
             operation->context.reportProgress = [weak = weak_from_this(), id = operation->id](const double fraction, std::string phase) {
@@ -232,11 +245,13 @@ namespace Horo::Mcp {
     };
 
     /** @copydoc McpController::Create */
-    Result<std::shared_ptr<McpController>> McpController::Create(std::shared_ptr<McpToolRegistry> registry, McpControllerLimits limits) {
-        if (registry == nullptr || !ValidLimits(limits))
+    Result<std::shared_ptr<McpController>> McpController::Create(std::shared_ptr<McpToolRegistry> registry, McpControllerLimits limits,
+                                                                 std::shared_ptr<McpAuthorization> authorization) {
+        if (registry == nullptr || !ValidLimits(limits) || !authorization || !registry->UsesAuthorization(authorization))
             return Result<std::shared_ptr<McpController>>::Failure(MakeError(McpErrors::ConfigurationInvalid));
-        return Result<std::shared_ptr<McpController>>::Success(
-            std::make_shared<McpController>(ConstructionKey{}, std::make_shared<State>(std::move(registry), limits)));
+        auto state = std::make_shared<State>(std::move(registry), limits);
+        state->authorization = std::move(authorization);
+        return Result<std::shared_ptr<McpController>>::Success(std::make_shared<McpController>(ConstructionKey{}, std::move(state)));
     }
 
     McpController::McpController(ConstructionKey, std::shared_ptr<State> state) noexcept : state_(std::move(state)) {}
@@ -253,6 +268,11 @@ namespace Horo::Mcp {
 
     /** @copydoc McpController::Dispatch */
     Result<nlohmann::json> McpController::Dispatch(const McpRequest &request, const McpRequestContext &context) {
+        if (!context.session.IsValid() || context.authorization != state_->authorization)
+            return Result<nlohmann::json>::Failure(MakeError(McpErrors::AuthorizationDenied));
+        const auto authorized = state_->authorization->Validate(context);
+        if (authorized.HasError())
+            return Result<nlohmann::json>::Failure(authorized.ErrorValue());
         if (request.method == "tools/list")
             return DispatchList(context);
         if (request.method == "operations/get" || request.method == "operations/cancel")
@@ -284,7 +304,8 @@ namespace Horo::Mcp {
             return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestInvalid));
         std::lock_guard lock{state_->mutex};
         const auto found = state_->operations.find(*id);
-        if (found == state_->operations.end() || found->second->session != context.session)
+        if (found == state_->operations.end() || found->second->session != context.session ||
+            found->second->context.authority != context.authority)
             return Result<nlohmann::json>::Failure(MakeError(McpErrors::OperationUnavailable));
         const auto &operation = found->second;
         if (request.method == "operations/cancel" && !Terminal(operation->state)) {
@@ -298,8 +319,9 @@ namespace Horo::Mcp {
 
     /** @copydoc McpController::DispatchCall */
     Result<nlohmann::json> McpController::DispatchCall(const McpRequest &request, const McpRequestContext &context) const {
-        if (request.method != "tools/call" || !request.params.is_object() || !request.params.contains("name") ||
-            !request.params["name"].is_string() || !request.params.contains("arguments") || !request.params["arguments"].is_object())
+        if (request.method != "tools/call" || !request.params.is_object() || request.params.size() != 2 ||
+            !request.params.contains("name") || !request.params["name"].is_string() || !request.params.contains("arguments") ||
+            !request.params["arguments"].is_object())
             return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestInvalid));
 
         const McpToolId tool{request.params["name"].get<std::string>()};
@@ -318,6 +340,12 @@ namespace Horo::Mcp {
         const auto owner = snapshot->Owner(tool, context.capabilities);
         if (owner.HasError())
             return Result<nlohmann::json>::Failure(owner.ErrorValue());
+        const auto effect = snapshot->Effect(tool, context.capabilities);
+        if (effect.HasError())
+            return Result<nlohmann::json>::Failure(effect.ErrorValue());
+        const auto approval = state_->authorization->Authorize(context, request, effect.Value() != McpToolEffect::Query, false);
+        if (approval.HasError())
+            return Result<nlohmann::json>::Failure(approval.ErrorValue());
         return state_->QueueCall(request, context, tool, owner.Value(), snapshot);
     }
 
@@ -421,6 +449,7 @@ namespace Horo::Mcp {
             complete(Result<nlohmann::json>::Failure(MakeError(McpErrors::ControllerFailed)));
         }
         operation->snapshot.reset();
+        operation->arguments = nullptr;
         return true;
     }
 

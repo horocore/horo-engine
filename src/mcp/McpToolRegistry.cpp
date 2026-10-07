@@ -1,10 +1,12 @@
 #include "Horo/Mcp/McpToolRegistry.h"
 
 #include "Horo/Foundation/Utf8.h"
+#include "Horo/Mcp/McpAuthorization.h"
 #include "Horo/Mcp/McpErrors.h"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <limits>
 #include <ranges>
@@ -298,8 +300,9 @@ namespace Horo::Mcp {
     }  // namespace
 
     /** @copydoc McpToolSnapshot::McpToolSnapshot */
-    McpToolSnapshot::McpToolSnapshot(ConstructionKey, const std::uint64_t generation, std::vector<McpToolRegistration> entries)
-        : generation_(generation), entries_(std::move(entries)) {}
+    McpToolSnapshot::McpToolSnapshot(ConstructionKey, const std::uint64_t generation, std::vector<McpToolRegistration> entries,
+                                     std::shared_ptr<McpAuthorization> authorization)
+        : generation_(generation), entries_(std::move(entries)), authorization_(std::move(authorization)) {}
 
     /** @copydoc McpToolSnapshot::Generation */
     std::uint64_t McpToolSnapshot::Generation() const noexcept {
@@ -328,9 +331,26 @@ namespace Horo::Mcp {
         return Result<McpOwnerContext>::Success(found->owner);
     }
 
+    /** @copydoc McpToolSnapshot::Effect */
+    Result<McpToolEffect> McpToolSnapshot::Effect(const McpToolId &id, const std::span<const std::string> capabilities) const {
+        const auto found = std::ranges::lower_bound(entries_, id.value, {}, [](const McpToolRegistration &entry) -> const std::string & {
+            return entry.descriptor.id.value;
+        });
+        if (found == entries_.end() || found->descriptor.id != id)
+            return Result<McpToolEffect>::Failure(MakeError(McpErrors::ToolUnavailable));
+        if (!Granted(found->descriptor, capabilities))
+            return Result<McpToolEffect>::Failure(MakeError(McpErrors::ToolCapabilityUnavailable));
+        return Result<McpToolEffect>::Success(found->descriptor.effect);
+    }
+
     /** @copydoc McpToolSnapshot::Invoke */
     Result<nlohmann::json> McpToolSnapshot::Invoke(const McpToolId &id, const nlohmann::json &arguments,
                                                    const McpRequestContext &context) const {
+        if (!authorization_ || context.authorization != authorization_)
+            return Result<nlohmann::json>::Failure(MakeError(McpErrors::AuthorizationDenied));
+        const auto admission = authorization_->Validate(context);
+        if (admission.HasError())
+            return Result<nlohmann::json>::Failure(admission.ErrorValue());
         const auto found = std::ranges::lower_bound(entries_, id.value, {}, [](const McpToolRegistration &entry) -> const std::string & {
             return entry.descriptor.id.value;
         });
@@ -342,7 +362,25 @@ namespace Horo::Mcp {
             !MatchesSchema(found->descriptor.inputSchema, arguments))
             return Result<nlohmann::json>::Failure(MakeError(McpErrors::ToolInputInvalid));
         try {
-            auto outcome = found->adapter->Invoke(arguments, context);
+            if (!context.authorization)
+                return Result<nlohmann::json>::Failure(MakeError(McpErrors::AuthorizationDenied));
+            const McpRequest request{.id = context.requestIdentity,
+                                     .method = "tools/call",
+                                     .params = {{"name", id.value}, {"arguments", arguments}}};
+            const auto authorized =
+                context.authorization->Authorize(context, request, found->descriptor.effect != McpToolEffect::Query, true);
+            if (authorized.HasError())
+                return Result<nlohmann::json>::Failure(authorized.ErrorValue());
+            if (context.IsStopRequested())
+                return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestCancelled));
+            auto invocation = context;
+            invocation.deadline = std::min(invocation.deadline, invocation.authority->ExpiresAt());
+            auto outcome = found->adapter->Invoke(arguments, invocation);
+            const auto current = authorization_->Validate(context);
+            if (current.HasError())
+                return Result<nlohmann::json>::Failure(current.ErrorValue());
+            if (context.IsStopRequested())
+                return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestCancelled));
             if (outcome.HasValue() &&
                 (!BoundedValue(outcome.Value(), found->descriptor.bounds.maximumResultBytes, found->descriptor.bounds) ||
                  !MatchesSchema(found->descriptor.outputSchema, outcome.Value())))
@@ -356,6 +394,15 @@ namespace Horo::Mcp {
     /** @copydoc McpToolSnapshot::InvokeAsync */
     void McpToolSnapshot::InvokeAsync(const McpToolId &id, const nlohmann::json &arguments, const McpRequestContext &context,
                                       std::function<void(Result<nlohmann::json>)> complete) const {
+        if (!authorization_ || context.authorization != authorization_) {
+            complete(Result<nlohmann::json>::Failure(MakeError(McpErrors::AuthorizationDenied)));
+            return;
+        }
+        const auto admission = authorization_->Validate(context);
+        if (admission.HasError()) {
+            complete(Result<nlohmann::json>::Failure(admission.ErrorValue()));
+            return;
+        }
         const auto found = std::ranges::lower_bound(entries_, id.value, {}, [](const McpToolRegistration &entry) -> const std::string & {
             return entry.descriptor.id.value;
         });
@@ -372,7 +419,32 @@ namespace Horo::Mcp {
             complete(Result<nlohmann::json>::Failure(MakeError(McpErrors::ToolInputInvalid)));
             return;
         }
-        auto checked = [descriptor = found->descriptor, complete = std::move(complete)](Result<nlohmann::json> outcome) {
+        if (!context.authorization) {
+            complete(Result<nlohmann::json>::Failure(MakeError(McpErrors::AuthorizationDenied)));
+            return;
+        }
+        const McpRequest request{.id = context.requestIdentity,
+                                 .method = "tools/call",
+                                 .params = {{"name", id.value}, {"arguments", arguments}}};
+        const auto authorized = context.authorization->Authorize(context, request, found->descriptor.effect != McpToolEffect::Query, true);
+        if (authorized.HasError()) {
+            complete(Result<nlohmann::json>::Failure(authorized.ErrorValue()));
+            return;
+        }
+        const auto completed = std::make_shared<std::atomic_bool>(false);
+        auto checked = [descriptor = found->descriptor, context, completed,
+                        complete = std::move(complete)](Result<nlohmann::json> outcome) {
+            if (completed->exchange(true))
+                return;
+            const auto current = context.authorization->Validate(context);
+            if (current.HasError()) {
+                complete(Result<nlohmann::json>::Failure(current.ErrorValue()));
+                return;
+            }
+            if (context.IsStopRequested()) {
+                complete(Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestCancelled)));
+                return;
+            }
             if (outcome.HasValue() && (!BoundedValue(outcome.Value(), descriptor.bounds.maximumResultBytes, descriptor.bounds) ||
                                        !MatchesSchema(descriptor.outputSchema, outcome.Value())))
                 complete(Result<nlohmann::json>::Failure(MakeError(McpErrors::ToolOutputInvalid)));
@@ -380,14 +452,32 @@ namespace Horo::Mcp {
                 complete(std::move(outcome));
         };
         try {
-            found->adapter->InvokeAsync(arguments, context, checked);
+            if (context.IsStopRequested()) {
+                checked(Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestCancelled)));
+                return;
+            }
+            auto invocation = context;
+            invocation.deadline = std::min(invocation.deadline, invocation.authority->ExpiresAt());
+            invocation.reportProgress = [context](const double fraction, std::string) {
+                if (std::isfinite(fraction) && fraction >= 0.0 && fraction <= 1.0 && !context.IsStopRequested() &&
+                    context.authorization->Validate(context).HasValue() && context.reportProgress)
+                    context.reportProgress(fraction, {});
+            };
+            found->adapter->InvokeAsync(arguments, invocation, checked);
         } catch (...) {  // NOSONAR: untrusted adapter boundaries can throw non-standard exceptions.
             checked(Result<nlohmann::json>::Failure(MakeError(McpErrors::ControllerFailed)));
         }
     }
 
-    McpToolRegistry::McpToolRegistry()
-        : current_(std::make_shared<const McpToolSnapshot>(McpToolSnapshot::ConstructionKey{}, 0, std::vector<McpToolRegistration>{})) {}
+    McpToolRegistry::McpToolRegistry(std::shared_ptr<McpAuthorization> authorization)
+        : current_(std::make_shared<const McpToolSnapshot>(McpToolSnapshot::ConstructionKey{}, 0, std::vector<McpToolRegistration>{},
+                                                           authorization)),
+          authorization_(std::move(authorization)) {}
+
+    /** @copydoc McpToolRegistry::UsesAuthorization */
+    bool McpToolRegistry::UsesAuthorization(const std::shared_ptr<McpAuthorization> &authorization) const noexcept {
+        return authorization_ && authorization_ == authorization;
+    }
 
     /** @copydoc McpToolRegistry::Publish */
     Result<std::uint64_t> McpToolRegistry::Publish(std::vector<McpToolRegistration> entries,
@@ -433,7 +523,8 @@ namespace Horo::Mcp {
                 return Result<std::uint64_t>::Failure(MakeError(McpErrors::ToolIncompatible));
         }
         const auto generation = current_->Generation() + 1;
-        current_ = std::make_shared<const McpToolSnapshot>(McpToolSnapshot::ConstructionKey{}, generation, std::move(entries));
+        current_ =
+            std::make_shared<const McpToolSnapshot>(McpToolSnapshot::ConstructionKey{}, generation, std::move(entries), authorization_);
         return Result<std::uint64_t>::Success(generation);
     }
 
