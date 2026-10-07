@@ -299,5 +299,22 @@ namespace Horo::WorldStreaming {
             REQUIRE_FALSE(waiting.thrashing);
         }
 
+        TEST_CASE("Linger outliving the thrash window releases without empty watching metadata",
+                  "[unit][world_streaming][stability][thrash][boundary]") {
+            const auto policy = Policy(1, 1, 60'000, 500, 2);
+            auto state = Decision(policy, Context(0), Observation(100));
+            state = Decision(policy, Context(10, 1), Observation(-201), state.snapshot);
+            REQUIRE(state.snapshot.boundaryExitCount == 1);
+            state = Decision(policy, Context(30'010, 1), Observation(-201), state.snapshot);
+            REQUIRE(state.snapshot.phase == StreamingCellStabilityPhase::Lingering);
+            REQUIRE(state.snapshot.boundaryExitCount == 0);
+            REQUIRE(state.snapshot.lingerStartedAtServiceMilliseconds == 10);
+            state = Decision(policy, Context(60'010, 1), Observation(-201), state.snapshot);
+            REQUIRE(state.snapshot.phase == StreamingCellStabilityPhase::Unloaded);
+            REQUIRE(state.lingerExpired);
+            REQUIRE_FALSE(state.thrashing);
+            REQUIRE_FALSE(state.cooldownHeld);
+        }
+
     }  // namespace
 }  // namespace Horo::WorldStreaming

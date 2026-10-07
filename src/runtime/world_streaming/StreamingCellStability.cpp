@@ -141,7 +141,7 @@ namespace Horo::WorldStreaming {
                 if (decision.snapshot.boundaryExitCount >= policy.ThrashExitThreshold() && policy.CooldownMilliseconds() != 0) {
                     decision.snapshot.phase = StreamingCellStabilityPhase::Cooldown;
                     decision.snapshot.cooldownStartedAtServiceMilliseconds = context.serviceTimeMilliseconds;
-                } else if (policy.CooldownMilliseconds() != 0) {
+                } else if (policy.CooldownMilliseconds() != 0 && decision.snapshot.boundaryExitCount != 0) {
                     decision.snapshot.phase = StreamingCellStabilityPhase::Watching;
                 }
                 return;
