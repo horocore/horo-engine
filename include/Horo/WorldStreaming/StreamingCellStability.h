@@ -32,9 +32,17 @@ namespace Horo::WorldStreaming {
         Count,
     };
 
-    /** @brief Versioned bounded hysteresis and linger policy. */
+    /** @brief Authority-supplied memory pressure; the evaluator never samples ambient memory. */
+    enum class StreamingCellStabilityPressure : std::uint8_t {
+        Normal,
+        Elevated,
+        Critical,
+        Count,
+    };
+
+    /** @brief Versioned bounded hysteresis, linger and reload-cooldown policy. */
     struct StreamingCellStabilityPolicyRequest final {
-        static constexpr std::uint32_t CurrentContractVersion = 1;
+        static constexpr std::uint32_t CurrentContractVersion = 2;
         static constexpr std::int64_t MaximumMarginMillimeters = 1'000'000'000;
         static constexpr std::uint64_t MaximumLingerMilliseconds = 600'000;
         static constexpr std::uint32_t MaximumTrackedCellCount = 1'048'576;
@@ -45,7 +53,11 @@ namespace Horo::WorldStreaming {
         std::int64_t enterMarginMillimeters{};                 /**< Required depth inside a source boundary before admission. */
         std::int64_t exitMarginMillimeters{};                  /**< Allowed distance outside a boundary before linger begins. */
         std::uint64_t lingerMilliseconds{5'000};               /**< Unscaled no-demand retention interval. */
-        std::uint32_t maximumTrackedCells{1'024};              /**< Authority-owned record ceiling. */
+        std::uint64_t pressureLingerMilliseconds{1'000};       /**< Elevated-pressure linger cap; critical pressure releases immediately. */
+        std::uint64_t cooldownMilliseconds{};                  /**< Reload delay after a thrashing release; zero disables cooldown. */
+        std::uint64_t thrashWindowMilliseconds{30'000};        /**< Fixed unscaled window for counting boundary exits. */
+        std::uint32_t thrashExitThreshold{3};     /**< Exits in a window that arm cooldown, bounded by MaximumTrackedCellCount. */
+        std::uint32_t maximumTrackedCells{1'024}; /**< Authority-owned record ceiling. */
     };
 
     /** @brief Immutable validated cell-stability policy with no ambient registration effects. */
@@ -67,6 +79,15 @@ namespace Horo::WorldStreaming {
         /** @brief Returns the no-demand retention interval. @return Bounded unscaled milliseconds. */
         [[nodiscard]] std::uint64_t LingerMilliseconds() const noexcept;
 
+        /** @brief Returns the elevated-pressure retention cap. @return Bounded milliseconds. */
+        [[nodiscard]] std::uint64_t PressureLingerMilliseconds() const noexcept;
+        /** @brief Returns the armed reload delay. @return Bounded milliseconds; zero disables it. */
+        [[nodiscard]] std::uint64_t CooldownMilliseconds() const noexcept;
+        /** @brief Returns the boundary-exit observation window. @return Positive bounded milliseconds. */
+        [[nodiscard]] std::uint64_t ThrashWindowMilliseconds() const noexcept;
+        /** @brief Returns the number of exits that arm cooldown. @return Positive bounded count. */
+        [[nodiscard]] std::uint32_t ThrashExitThreshold() const noexcept;
+
     private:
         explicit StreamingCellStabilityPolicy(const StreamingCellStabilityPolicyRequest &request) noexcept;
 
@@ -78,6 +99,7 @@ namespace Horo::WorldStreaming {
         Unloaded,
         Resident,
         Lingering,
+        Cooldown,
         Count,
     };
 
@@ -90,6 +112,7 @@ namespace Horo::WorldStreaming {
         std::uint64_t serviceTimeMilliseconds{};               /**< Unscaled monotonic observation time. */
         std::uint32_t trackedCells{};                          /**< Records currently owned by the authority. */
         StreamingCellStabilityLifecycle lifecycle{StreamingCellStabilityLifecycle::Closed}; /**< Admission gate. */
+        StreamingCellStabilityPressure pressure{StreamingCellStabilityPressure::Normal};    /**< Explicit current pressure. */
     };
 
     /** @brief Reduced demand and signed boundary evidence for one canonical cell. */
@@ -112,18 +135,26 @@ namespace Horo::WorldStreaming {
         std::uint64_t observedAtServiceMilliseconds{};                                    /**< Last unscaled monotonic observation time. */
         std::uint64_t lingerStartedAtServiceMilliseconds{};                               /**< Linger origin, or zero outside Lingering. */
 
+        std::uint64_t cooldownStartedAtServiceMilliseconds{};     /**< Reload-delay origin; zero outside Cooldown. */
+        std::uint64_t thrashWindowStartedAtServiceMilliseconds{}; /**< Fixed exit-count window origin. */
+        std::uint32_t boundaryExitCount{};                        /**< Saturating exits in the current window. */
+
         [[nodiscard]] constexpr auto operator<=>(const StreamingCellStabilitySnapshot &) const noexcept = default;
     };
 
-    /** @brief Typed next-state decision; Unloaded tells the authority to release its bounded record. */
+    /** @brief Typed next-state decision; Cooldown retains metadata only, while Unloaded tells the authority to release its bounded record.
+     */
     struct StreamingCellStabilityDecision final {
         StreamingCellStabilitySnapshot snapshot{}; /**< Complete immutable next state. */
         bool boundaryHeld{};                       /**< True when hysteresis retained demand outside the enter threshold. */
-        bool lingerExpired{};                      /**< True only on the transition that releases an expired record. */
+        bool lingerExpired{};                      /**< True only on the transition that releases retained residency. */
+        bool cooldownHeld{};                       /**< Eligible unpinned demand suppressed by an unexpired cooldown. */
+        bool pressureReleased{};                   /**< Pressure shortened linger and caused this release. */
+        bool thrashing{};                          /**< Current window reached the configured exit threshold. */
     };
 
     /**
-     * @brief Evaluates one pure per-cell hysteresis and linger transition without mutating authority storage.
+     * @brief Evaluates one pure per-cell hysteresis, pressure, linger and cooldown transition without mutating authority storage.
      * @param policy Immutable policy publication.
      * @param context Exact authority, time, record-count, and lifecycle facts.
      * @param observation Reduced demand and signed source-boundary evidence.

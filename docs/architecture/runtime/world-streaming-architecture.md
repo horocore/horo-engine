@@ -874,6 +874,35 @@ while the authority's existing retirement path remains responsible for draining
 resources. Zero linger explicitly disables retention rather than selecting a hidden
 fallback.
 
+`StreamingCellStabilityPolicy` version 2 adds explicit Normal/Elevated/Critical
+memory-pressure evidence, fixed-window boundary-exit counts, and a metadata-only
+Cooldown phase. Elevated pressure caps linger at the configured interval from its
+original origin; Critical pressure releases a no-longer-demanded cell immediately.
+Neither mode overrides current demand or pins. Each Resident-to-Lingering exit
+counts once; continuous linger polling does not count as thrash. Counts saturate,
+and the fixed unscaled window resets at its inclusive deadline. Reentry during
+linger preserves this history. At release, reaching the configured exit threshold
+arms the configured cooldown; zero cooldown preserves immediate reload behavior.
+
+Cooldown holds no residency or byte reservation. Its bounded record remains owned
+by the authority until the delay expires, when eligible demand may reenter at the
+enter margin or absent demand releases the record. Pins bypass cooldown, without
+allocating an extra record or bypassing initial capacity admission. Deadlines use
+elapsed-time subtraction so service-time values near uint64 exhaustion remain
+representable. Decisions expose cooldown suppression, pressure-caused release and
+current-window thrashing separately. A cooldown may outlast its counting window.
+Cancellation, shutdown and policy/partition replacement use the existing authority
+retirement path; no evaluator-owned sleeps, resources or ambient state are added.
+
+Migration from version 1: rebuild callers with the new snapshot layout, publish a
+version-2 policy and discard version-1 snapshots at the authority safe point. The
+only active callers are contract tests; no serialized snapshots or production
+stability authority exist yet. Default Normal pressure and zero cooldown preserve
+existing admission and retention behavior. Consumers must release resources on
+Unloaded or Cooldown, while retaining only the latter's metadata; Unloaded remains
+the instruction to discard the record. Public-header ownership remains with
+HoroWorldStreaming; no new dependency or header is introduced.
+
 CellBudgetExceeded leaves an unadmitted request pending and re-evaluated under queue
 and byte caps; it does not put an unallocated cell into Failed. Preflight reports
 permanently oversized cells distinctly so they do not retry forever.
