@@ -20,16 +20,21 @@ namespace Horo::XR {
             FeatureSetting{"xr.features.android_standalone", XRCapability::AndroidStandalone},
         };
 
-        /** @brief Preserves the winning source and exact setting path at the project-policy boundary. */
-        Error Failure(const ConfigurationSnapshot &source, const std::string_view key, const ErrorCodeDescriptor &descriptor,
-                      const std::string_view reason) {
-            Error error = MakeError(descriptor, std::string(reason));
+        /** @brief Adds winning-source context while preserving the original typed error identity and cause. */
+        Error WithSource(Error error, const ConfigurationSnapshot &source, const std::string_view key) {
             SourceLocation location;
             if (const auto *entry = source.FindResolved(SettingKey{std::string(key)}); entry && entry->location)
                 location = *entry->location;
-            error.diagnostics.push_back(
-                {DiagnosticCode{descriptor.code.Value()}, DiagnosticSeverity::Error, error.message, std::move(location), std::string(key)});
+            error.diagnostics.push_back({DiagnosticCode{error.code.Value()},
+                                         DiagnosticSeverityForError(error.severity).value_or(DiagnosticSeverity::Error), error.message,
+                                         std::move(location), std::string(key)});
             return error;
+        }
+
+        /** @brief Forms a declared project-policy error with source provenance. */
+        Error Failure(const ConfigurationSnapshot &source, const std::string_view key, const ErrorCodeDescriptor &descriptor,
+                      const std::string_view reason) {
+            return WithSource(MakeError(descriptor, std::string(reason)), source, key);
         }
 
         /** @brief Reads one required integer without interpreting missing or wrong-typed values as defaults. */
@@ -70,6 +75,32 @@ namespace Horo::XR {
             }
 
             return Result<std::optional<XRFeatureRequest>>::Success(request);
+        }
+
+        /** @brief Revalidates retained loader evidence against the complete current host request. */
+        Result<void> ValidateLoader(const XRProjectSettings &settings, const XRProjectSettingsAdmission &admission) {
+            const auto &request = admission.currentLoaderRequest;
+            const auto loader = ValidateXRLoaderPreflight(admission.loader, request.attempt, request.backend, request.installRecord,
+                                                          request.productProfile);
+            if (loader.HasError()) {
+                return Result<void>::Failure(WithSource(loader.ErrorValue(), settings.Source(), "xr.runtime_selection"));
+            }
+            const auto current = CreateXRLoaderPreflightSnapshot(request, {
+                                                                              .attempt = admission.loader.Attempt(),
+                                                                              .loader = XRLoaderAvailability::Available,
+                                                                              .runtime = XRRuntimeAvailability::Available,
+                                                                              .system = XRSystemAvailability::Supported,
+                                                                              .loaderApiVersion = admission.loader.LoaderApiVersion(),
+                                                                              .runtimeGeneration = admission.loader.RuntimeGeneration(),
+                                                                              .consumedProbeSteps = admission.loader.ConsumedProbeSteps(),
+                                                                          });
+            if (current.HasError()) {
+                return Result<void>::Failure(WithSource(current.ErrorValue(), settings.Source(), "xr.runtime_selection"));
+            }
+            if (admission.loader.RuntimeGeneration() != admission.activeSystem.runtime)
+                return Result<void>::Failure(Failure(settings.Source(), "xr.runtime_selection", XRErrors::IdentityStale,
+                                                     "Selected runtime evidence belongs to a replaced XR system."));
+            return Result<void>::Success();
         }
 
         /** @brief Maps feature-resolution failure categories without discarding the failing capability state. */
@@ -228,31 +259,9 @@ namespace Horo::XR {
             (settings.RuntimeSelection() == XRRuntimeSelectionPolicy::SystemDefault && request.developerOverrideApproved))
             return fail("xr.runtime_selection", XRErrors::RuntimeOverrideRejected,
                         "Match current runtime policy and obtain host approval for a non-shipping developer override.");
-        const auto loader =
-            ValidateXRLoaderPreflight(admission.loader, request.attempt, request.backend, request.installRecord, request.productProfile);
-        if (loader.HasError()) {
-            Error error = loader.ErrorValue();
-            error.diagnostics =
-                Failure(settings.Source(), "xr.runtime_selection", XRErrors::LoaderPreflightStale, error.message).diagnostics;
-            return Result<XRFeaturePlan>::Failure(std::move(error));
-        }
-        const auto current = CreateXRLoaderPreflightSnapshot(request, {
-                                                                          .attempt = admission.loader.Attempt(),
-                                                                          .loader = XRLoaderAvailability::Available,
-                                                                          .runtime = XRRuntimeAvailability::Available,
-                                                                          .system = XRSystemAvailability::Supported,
-                                                                          .loaderApiVersion = admission.loader.LoaderApiVersion(),
-                                                                          .runtimeGeneration = admission.loader.RuntimeGeneration(),
-                                                                          .consumedProbeSteps = admission.loader.ConsumedProbeSteps(),
-                                                                      });
-        if (current.HasError()) {
-            Error error = current.ErrorValue();
-            error.diagnostics =
-                Failure(settings.Source(), "xr.runtime_selection", XRErrors::LoaderPreflightInvalid, error.message).diagnostics;
-            return Result<XRFeaturePlan>::Failure(std::move(error));
-        }
-        if (admission.loader.RuntimeGeneration() != admission.activeSystem.runtime)
-            return fail("xr.runtime_selection", XRErrors::IdentityStale, "Selected runtime evidence belongs to a replaced XR system.");
+        const auto loader = ValidateLoader(settings, admission);
+        if (loader.HasError())
+            return Result<XRFeaturePlan>::Failure(loader.ErrorValue());
         if (admission.renderer != XRRendererCompatibility::Compatible)
             return fail("xr.enabled", XRErrors::OperationIncompatible,
                         "Select a renderer/runtime tuple qualified for external XR targets.");

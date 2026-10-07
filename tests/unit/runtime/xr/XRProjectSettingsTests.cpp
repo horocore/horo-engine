@@ -91,8 +91,8 @@ namespace Horo::XR {
             REQUIRE(resolved.Value().Profile() == XRFeatureProfile::Projection1_0);
             REQUIRE(resolved.Value().Features().empty());
             const Evidence evidence;
-            REQUIRE(AdmitXRProjectSettings(resolved.Value(), evidence.Admission()).ErrorValue().code ==
-                    XRErrors::OperationUnavailable.code);
+            REQUIRE(AdmitXRProjectSettings(resolved.Value(), evidence.Admission()).ErrorValue().code.Value() ==
+                    XRErrors::OperationUnavailable.code.Value());
         }
 
         TEST_CASE("XR settings preserve Foundation precedence and winning source diagnostics", "[unit][xr][settings]") {
@@ -168,14 +168,15 @@ namespace Horo::XR {
             for (const auto revision : {ConfigurationRevision{0}, ConfigurationRevision{2}}) {
                 const auto result = AdmitXRProjectSettings(settings, evidence.Admission(revision));
                 REQUIRE(result.HasError());
-                REQUIRE(result.ErrorValue().code == XRErrors::IdentityStale.code);
+                REQUIRE(result.ErrorValue().code.Value() == XRErrors::IdentityStale.code.Value());
             }
             auto admission = evidence.Admission();
             admission.activeSystem = {};
             REQUIRE(AdmitXRProjectSettings(settings, admission).HasError());
             auto incompatible = evidence.Admission();
             incompatible.renderer = XRRendererCompatibility::Incompatible;
-            REQUIRE(AdmitXRProjectSettings(settings, incompatible).ErrorValue().code == XRErrors::OperationIncompatible.code);
+            REQUIRE(AdmitXRProjectSettings(settings, incompatible).ErrorValue().code.Value() ==
+                    XRErrors::OperationIncompatible.code.Value());
             REQUIRE(settings.Enabled());
             REQUIRE(settings.Revision() == 1);
             REQUIRE(AdmitXRProjectSettings(Enabled({}, 2), evidence.Admission(2)).HasValue());
@@ -199,13 +200,33 @@ namespace Horo::XR {
             REQUIRE(AdmitXRProjectSettings(settings, evidence.Admission()).HasError());
         }
 
+        TEST_CASE("XR admission rechecks changed loader policy and capability revisions", "[unit][xr][settings]") {
+            const auto settings = Enabled();
+            Evidence evidence;
+            evidence.request.admittedLoaderVersions = {{1, 1, 0}, {1, 2, 0}};
+            const auto incompatible = AdmitXRProjectSettings(settings, evidence.Admission());
+            REQUIRE(incompatible.HasError());
+            REQUIRE(incompatible.ErrorValue().code.Value() == XRErrors::LoaderIncompatible.code.Value());
+            REQUIRE(incompatible.ErrorValue().diagnostics.front().code.Value() == XRErrors::LoaderIncompatible.code.Value());
+            evidence.request.admittedLoaderVersions = {{1, 0, 0}, {1, 1, 0}};
+            evidence.request.loaderSource = XRLoaderSourcePolicy::PlatformProvided;
+            REQUIRE(AdmitXRProjectSettings(settings, evidence.Admission()).HasError());
+            evidence.request.loaderSource = XRLoaderSourcePolicy::BundledVerified;
+            auto stale = evidence.Admission();
+            stale.expectedCapabilityRevision = Identity<XRCapabilityRevision>(2);
+            REQUIRE(AdmitXRProjectSettings(settings, stale).ErrorValue().code.Value() == XRErrors::CapabilityStale.code.Value());
+            evidence.request.cancellationRequested = true;
+            REQUIRE(AdmitXRProjectSettings(settings, evidence.Admission()).ErrorValue().code.Value() ==
+                    XRErrors::LoaderPreflightCancelled.code.Value());
+        }
+
         TEST_CASE("XR admission preserves failure provenance for unavailable required feature and finite budgets", "[unit][xr][settings]") {
             const Evidence evidence;
             ConfigurationResolutionRequest request;
             Project(request, "xr.limits.actions", std::int64_t{17});
             const auto over = AdmitXRProjectSettings(Enabled(request), evidence.Admission());
             REQUIRE(over.HasError());
-            REQUIRE(over.ErrorValue().code == XRErrors::CapacityExceeded.code);
+            REQUIRE(over.ErrorValue().code.Value() == XRErrors::CapacityExceeded.code.Value());
             XRCapabilityDescriptor descriptor{
                 .system = evidence.capabilities.System(),
                 .revision = evidence.capabilities.Revision(),
@@ -226,7 +247,7 @@ namespace Horo::XR {
                                                        limited.Value().Revision()};
             const auto failed = AdmitXRProjectSettings(Enabled(request), admission);
             REQUIRE(failed.HasError());
-            REQUIRE(failed.ErrorValue().code == XRErrors::OperationUnavailable.code);
+            REQUIRE(failed.ErrorValue().code.Value() == XRErrors::OperationUnavailable.code.Value());
             REQUIRE(failed.ErrorValue().diagnostics.front().path == "xr.features.depth_composition");
             REQUIRE(failed.ErrorValue().diagnostics.front().location.source == "project.json");
         }
