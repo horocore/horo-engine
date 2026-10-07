@@ -518,7 +518,7 @@ namespace Horo::Extensions {
                     !ReadId(value, "id", path, contribution.id) || !ReadId(value, "module", path, contribution.owningModule)) {
                     return false;
                 }
-                return IsCanonicalId(contribution.type, Limits().maximumIdentifierBytes) ||
+                return IsCanonicalContributionType(contribution.type, Limits().maximumIdentifierBytes) ||
                        Reject(ChildPath(path, "type"), "extension.manifest.invalid_identifier", "Contribution type is not canonical.");
             }
         };

@@ -63,6 +63,9 @@ namespace Horo::Extensions {
         while (!lifetimes_.empty()) {
             std::shared_ptr<ExtensionModuleLifetime> lifetime = std::move(lifetimes_.back());
             lifetimes_.pop_back();
+            if (lifetime != nullptr)
+                if (const auto retirement = lifetime->retirement.lock())
+                    retirement->CloseAdmission();
             if (lifetime == nullptr || lifetime->UnloadNow())
                 continue;
             if (primary != nullptr)

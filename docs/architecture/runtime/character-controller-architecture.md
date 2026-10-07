@@ -576,6 +576,43 @@ typed selectors under ADR-086. Collider profiles answer that channel with
 identity. Trigger inclusion is explicit. Trigger enter/exit events remain owned by
 the gameplay volume/Physics event contract, not controller surface events.
 
+### Implemented bounded collision selectors
+
+`CharacterCollisionSelectors` intersects the descriptor's stable query channel with
+at most one required layer, one required profile and one excluded body identity.
+Every spawn recovery, teleport clearance, shape clearance, movement sweep and
+floor/snap probe receives the same owned selectors. Character physical probes
+exclude triggers and query `Overlap` responses before collection and recovery;
+trigger evidence from a custom sweep adapter is also ineligible for contact and
+ground reduction. Sweep hits copy typed layer/profile evidence when selected;
+missing or malformed evidence fails closed, while valid mismatches and excluded
+body identities cannot block or become ground. Ignored channel responses are
+absent from the query inventory.
+
+`CharacterMovementRequest::filterChange` replaces the complete selector value for
+its addressed tick. The final replacement command selected at command closure
+supplies the filter for that tick's shape and movement probes. Only successful
+atomic tick publication persists it to the controller policy. Admission, future
+commands and failed ticks cannot change the committed filter. An explicit empty
+value clears selectors; absence retains them. Teleports use the last committed
+filter. Changes require a spawned controller and obey command capacity, sequence,
+world-generation and shutdown validation.
+
+`CharacterPhysicsQueryAdapter` borrows one explicitly selected Physics world on
+its owner thread. It maps probes to inline analytic capsule queries, using fixed
+world-owned native collector storage and stack capsule geometry. It admits only
+blocking, non-trigger fixtures before reduction, preserves typed query errors and
+fails rather than silently accepting over-capacity evidence. Recovery chooses the
+first positive penetration in Physics' canonical hit ordering and then re-probes
+under Character's iteration/displacement budget.
+
+The adapter currently uses the supported canonical immediate-query fixture
+inventory. Authored scene/cooked collider query projection and immutable Physics
+snapshot execution retain their documented unsupported status; this change does
+not infer collision layers or query responses from a scene collision profile.
+Application composition may use the adapter with Scene's transform command buffer
+and the existing Gameplay Physics capability; no native API enters those contracts.
+
 ## Dynamic-Body Visibility And Push
 
 Query visibility, Character-to-body push and body-to-Character reaction are

@@ -162,14 +162,24 @@ namespace Horo::Character::Detail {
         Math::Vec3 remaining{};
     };
 
+    /** @brief Applies identical physical eligibility to movement, contact projection and ground selection. */
+    [[nodiscard]] bool IsBlockingSweepHit(const CharacterSweepHit &hit, const CharacterControllerDescriptor &descriptor) noexcept {
+        const auto &selectors = descriptor.selectors;
+        return !hit.trigger && hit.response == Physics::PhysicsQueryResponse::Block &&
+               (!selectors.excludedBody || hit.body != selectors.excludedBody) &&
+               (!selectors.requiredLayer || hit.layer == selectors.requiredLayer) &&
+               (!selectors.requiredProfile || hit.profile == selectors.requiredProfile);
+    }
+
     /** @brief Selects the canonical nearest blocking hit from one sorted response prefix. */
     [[nodiscard]] SweepBlockSelection SelectNearestSweepBlock(const CharacterSweepProbeResult &evidence, const Math::Vec3 direction,
-                                                              const float distance) noexcept {
+                                                              const float distance,
+                                                              const CharacterControllerDescriptor &descriptor) noexcept {
         SweepBlockSelection selection{distance};
         constexpr float NormalEpsilon = 1.0e-5F;
         for (std::uint32_t index{}; index < evidence.hitCount; ++index) {
             const auto &hit = evidence.hits[index];
-            if (hit.response != Physics::PhysicsQueryResponse::Block || Math::Dot(hit.normal, direction) >= -NormalEpsilon)
+            if (!IsBlockingSweepHit(hit, descriptor) || Math::Dot(hit.normal, direction) >= -NormalEpsilon)
                 continue;
             // The active prefix is sorted by distance before this reducer runs, so the first valid
             // blocking hit is the nearest one and no later evidence can change the selection.
@@ -196,7 +206,7 @@ namespace Horo::Character::Detail {
         std::uint32_t activeNormalCount{};
         for (std::uint32_t index{}; index < evidence.hitCount; ++index) {
             const auto &hit = evidence.hits[index];
-            if (hit.response != Physics::PhysicsQueryResponse::Block || hit.distanceMeters > nearest + DistanceEpsilon ||
+            if (!IsBlockingSweepHit(hit, descriptor) || hit.distanceMeters > nearest + DistanceEpsilon ||
                 Math::Dot(hit.normal, direction) >= -NormalEpsilon)
                 continue;
             result.collisions = result.collisions | CollisionFlagForNormal(hit.normal, descriptor.up, walkableCosine);
@@ -258,7 +268,7 @@ namespace Horo::Character::Detail {
         const float snapDistance = std::max(descriptor.skinWidthMeters, descriptor.maximumStepHeightMeters);
         for (std::uint32_t index{}; index < evidence.hitCount; ++index) {
             const CharacterSweepHit &hit = evidence.hits[index];
-            if (hit.response != Physics::PhysicsQueryResponse::Block || hit.distanceMeters > snapDistance + GroundDistanceTolerance ||
+            if (!IsBlockingSweepHit(hit, descriptor) || hit.distanceMeters > snapDistance + GroundDistanceTolerance ||
                 !IsWalkableGroundNormal(hit.normal, descriptor.up, walkableCosine))
                 continue;
             return hit;
@@ -306,7 +316,8 @@ namespace Horo::Character::Detail {
                                                  GroundProbeDistance(descriptor),
                                                  descriptor.collisionProfile,
                                                  descriptor.queryChannel,
-                                                 impl.settings.Values().work.maximumMovementIterations};
+                                                 impl.settings.Values().work.maximumMovementIterations,
+                                                 descriptor.selectors};
         if (const auto budget = ReserveTickQuery(impl); budget.HasError())
             return budget;
         if (input.metrics != nullptr)
@@ -348,7 +359,8 @@ namespace Horo::Character::Detail {
                                                  distance,
                                                  descriptor.collisionProfile,
                                                  descriptor.queryChannel,
-                                                 iteration};
+                                                 iteration,
+                                                 descriptor.selectors};
         if (const auto budget = ReserveTickQuery(impl); budget.HasError())
             return Result<bool>::Failure(budget.ErrorValue());
         if (input.metrics != nullptr) {
@@ -362,7 +374,7 @@ namespace Horo::Character::Detail {
         if (const auto valid = ValidateCharacterSweepProbeResult(evidence, request); valid.HasError())
             return Result<bool>::Failure(valid.ErrorValue());
         std::ranges::sort(evidence.hits.begin(), evidence.hits.begin() + evidence.hitCount, SweepHitLess);
-        const auto selection = SelectNearestSweepBlock(evidence, direction, distance);
+        const auto selection = SelectNearestSweepBlock(evidence, direction, distance, descriptor);
         if (!selection.blocked) {
             motion.position += motion.remaining;
             motion.remaining = {};

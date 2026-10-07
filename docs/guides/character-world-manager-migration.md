@@ -72,3 +72,34 @@ suppress presentation; lookup cannot alter movement or reinterpret copied old
 material generations after reload or shutdown. Physical references are not
 semantic surface IDs. The ADR-181 semantic producer/catalog remains a separate
 unimplemented prerequisite; do not infer surfaces from material names or media.
+
+## Collision filtering migration
+
+The additive `CharacterCollisionSelectors` fields on controller descriptors and
+probe requests default to no selectors. Existing custom overlap adapters must
+apply the supplied selectors and exclude triggers and overlap-only colliders
+before producing their reduced count and recovery displacement. Custom sweep
+adapters copy `CharacterSweepHit::trigger` when returning trigger evidence; that
+evidence cannot block or become support. Sweep adapters also copy typed `layer`
+and `profile` evidence whenever their request selects those values. Missing or
+malformed selector evidence fails the attempt; nonmatching valid evidence and
+excluded body identities are ineligible for both movement and ground reduction. New hosts can use the owner-thread
+`CharacterPhysicsQueryAdapter` for the current analytic Physics fixture inventory.
+It retains no world lifetime; destroy Character and its borrowed adapter before
+retiring the paired Physics world.
+
+Use `CharacterMovementRequest::filterChange` for live changes, rather than mutating
+a descriptor copy. The final command for the addressed tick applies the entire
+replacement to shape clearance, movement and snap. The controller commits it only
+with successful publication. `ControllerDescriptor` then returns the last
+committed selectors, which also govern subsequent placement operations. Submit an
+explicit empty selector value to clear all three selectors. The stable query
+channel and controller collision profile remain creation policy.
+
+Physics' additive inline capsule query alternatives avoid creating resident source
+fixtures during a tick. They use the same typed `PhysicsQueryFilter` and owner
+validation as existing queries. `blockingOnly` defaults to false for ordinary
+Gameplay queries; Character enables it and always excludes triggers. Copied hits
+now include nonnegative penetration depth for bounded recovery. Existing consumers
+that do not inspect it retain their previous behavior. Generic visitors over
+`PhysicsQueryGeometry` must handle the two inline capsule alternatives.

@@ -67,6 +67,21 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## GAI-002.4 Sight Integration Boundary
+
+`HoroEngine::AISightIntegration` solely owns the additive public
+`Horo/AI/PerceptionSight.h` contract and depends on `AISceneIntegration` and
+`Physics`. Core `HoroAI` and `RuntimeScene` gain no Physics dependency. No private
+Physics header or native solver type is exposed. `PerceptionSpatialBroadphase.h`
+remains owned by `AISceneIntegration`; its additive `ListenerPosition` accessor
+supplies the exact frozen position used for candidate gathering. Existing callers
+need no signature migration. Opt-in host wiring and lifecycle migration are
+documented in the sight section of
+[Navigation and AI Architecture](../runtime/navigation-and-ai-architecture.md).
+Generated `HoroAISightIntegrationPublicHeaderConsumer` and
+`HoroAISceneIntegrationPublicHeaderConsumer` compile each staged public header;
+`HoroAISightTests` consumes only declared public dependencies.
+
 ## AUD-002.8 Streaming Service Boundary
 
 `HoroEngine::AudioApi` owns the additive `Horo/Audio/AudioStreamingService.h`

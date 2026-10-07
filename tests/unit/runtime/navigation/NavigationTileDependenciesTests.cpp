@@ -92,4 +92,84 @@ namespace Horo::Navigation {
                                                     .maximumWorkUnits = 1};
         STATIC_REQUIRE(minimum.IsValid());
     }
+
+    TEST_CASE("HNS2 policy changes preserve HNT1 tiles and distinguish aggregate provenance", "[unit][navigation][content]") {
+        IncrementalBakeFixture fixture;
+        const auto input = fixture.Input();
+        const auto prepared = PrepareNavigationBakeTile(*input, fixture.Tiles().front(), fixture.compatibility);
+        REQUIRE(prepared.HasValue());
+        const auto tile =
+            NavigationCookedTile::Create(prepared.Value(), {.key = prepared.Value().tile.key.tile, .bounds = prepared.Value().tile.bounds});
+        REQUIRE(tile.HasValue());
+        NavigationProjectProfileInput policy{.id = Id<NavigationProjectProfileId>(17),
+                                             .revision = fixture.revisions.projectProfile,
+                                             .capacities = {64, 4, 8, 2, 4096, 32768, 2048},
+                                             .maximumQuery = {.query = NavigationQueryKind::Path,
+                                                              .quality = NavigationQualityLevel::Balanced,
+                                                              .limits = {1024, 128, 2000}}};
+        policy.capabilities.fill(NavigationCapabilityRequirement::Optional);
+        const auto first = NavigationProjectProfile::Create(policy);
+        REQUIRE(first.HasValue());
+        NavigationCookedTileSet set{input->Fingerprint(),
+                                    {tile.Value()},
+                                    NavigationCookedContentProvenance{fixture.compatibility, first.Value()}};
+        const auto encoded = EncodeNavigationCookedTileSet(set, 16384);
+        REQUIRE(encoded.HasValue());
+        REQUIRE(encoded.Value()[3] == '2');
+        const auto decoded = DecodeNavigationCookedTileSet(encoded.Value(), 16384);
+        REQUIRE(decoded.HasValue());
+        REQUIRE(decoded.Value().provenance.has_value());
+        REQUIRE(decoded.Value().provenance->projectProfile.has_value());
+        CHECK(decoded.Value().provenance->projectProfile->MatchesAuthority(first.Value()));
+        CHECK(decoded.Value().provenance->compatibility == fixture.compatibility);
+        ++policy.capacities.maximumAgents;
+        const auto second = NavigationProjectProfile::Create(policy);
+        REQUIRE(second.HasValue());
+        set.provenance->projectProfile = second.Value();
+        const auto changed = EncodeNavigationCookedTileSet(set, 16384);
+        REQUIRE(changed.HasValue());
+        CHECK(changed.Value() != encoded.Value());
+        CHECK(ComputeSha256(std::as_bytes(std::span{changed.Value()})) != ComputeSha256(std::as_bytes(std::span{encoded.Value()})));
+        const auto changedDecoded = DecodeNavigationCookedTileSet(changed.Value(), 16384);
+        REQUIRE(changedDecoded.HasValue());
+        REQUIRE(!changedDecoded.Value().tiles.empty());
+        CHECK(changedDecoded.Value().tiles.front()->ContentIdentity() == tile.Value()->ContentIdentity());
+        CHECK(changedDecoded.Value().tiles.front()->Bytes().size() == tile.Value()->Bytes().size());
+    }
+
+    TEST_CASE("HNS2 rejects missing compatibility unknown versions truncated evidence and false partition closure",
+              "[unit][navigation][content][malformed]") {
+        IncrementalBakeFixture fixture;
+        const auto input = fixture.Input();
+        const auto prepared = PrepareNavigationBakeTile(*input, fixture.Tiles().front(), fixture.compatibility);
+        REQUIRE(prepared.HasValue());
+        const auto tile =
+            NavigationCookedTile::Create(prepared.Value(), {.key = prepared.Value().tile.key.tile, .bounds = prepared.Value().tile.bounds});
+        REQUIRE(tile.HasValue());
+        NavigationCookedTileSet set{input->Fingerprint(),
+                                    {tile.Value()},
+                                    NavigationCookedContentProvenance{fixture.compatibility, std::nullopt}};
+        const auto encoded = EncodeNavigationCookedTileSet(set, 16384);
+        REQUIRE(encoded.HasValue());
+        for (std::size_t size = 0; size < encoded.Value().size(); ++size)
+            CHECK(DecodeNavigationCookedTileSet(std::span{encoded.Value()}.first(size), 16384).HasError());
+        auto malformed = encoded.Value();
+        malformed[3] = '3';
+        RequireError(DecodeNavigationCookedTileSet(malformed, 16384), NavigationErrors::UnsupportedCookedVersion);
+        malformed = encoded.Value();
+        // Fixed HNS2 prefix: magic, source digest, three compatibility digests, no-policy marker, count, profile/surface pair.
+        constexpr std::size_t ClosureProfileOffset = 4 + 32 + 96 + 1 + 4;
+        REQUIRE(malformed.size() > ClosureProfileOffset + 16);
+        malformed[ClosureProfileOffset] ^= 1;
+        RequireError(DecodeNavigationCookedTileSet(malformed, 16384), NavigationErrors::NavMeshArtifactCorrupt);
+        set.provenance->compatibility.schemas = {};
+        RequireError(EncodeNavigationCookedTileSet(set, 16384), NavigationErrors::BakeInputInvalid);
+        set.provenance.reset();
+        const auto legacy = EncodeNavigationCookedTileSet(set, 16384);
+        REQUIRE(legacy.HasValue());
+        REQUIRE(legacy.Value()[3] == '1');
+        const auto decodedLegacy = DecodeNavigationCookedTileSet(legacy.Value(), 16384);
+        REQUIRE(decodedLegacy.HasValue());
+        CHECK_FALSE(decodedLegacy.Value().provenance.has_value());
+    }
 }  // namespace Horo::Navigation
