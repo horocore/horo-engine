@@ -784,6 +784,9 @@ horo_configure_target_header_boundary(HoroTerrainRender PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroTerrainImport PUBLIC_HEADERS
     Horo/Terrain/TerrainSourceImport.h
 )
+horo_configure_target_header_boundary(HoroTerrainAuthoring PUBLIC_HEADERS
+    Horo/Editor/TerrainAuthoringDocument.h
+)
 horo_configure_target_header_boundary(HoroTerrainCook PUBLIC_HEADERS
     Horo/Terrain/FoliageClusterCook.h
     Horo/Terrain/FoliagePlacementCook.h

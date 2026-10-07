@@ -1093,6 +1093,11 @@ add_executable(HoroTerrainImportTests
 target_compile_features(HoroTerrainImportTests PRIVATE cxx_std_20)
 target_link_libraries(HoroTerrainImportTests PRIVATE HoroEngine::TerrainImport)
 horo_register_catch_test(HoroTerrainImportTests LABELS "unit;terrain;assets;headless")
+add_executable(HoroTerrainAuthoringTests unit/editor/TerrainAuthoringDocumentTests.cpp)
+target_compile_features(HoroTerrainAuthoringTests PRIVATE cxx_std_20)
+target_link_libraries(HoroTerrainAuthoringTests PRIVATE HoroEngine::TerrainAuthoring)
+horo_register_catch_test(HoroTerrainAuthoringTests LABELS "unit;editor;terrain;headless;lifecycle")
+target_sources(HoroTerrainAuthoringPublicHeaderConsumer PRIVATE support/TerrainAuthoringPublicHeaderConsumer.cpp)
 add_executable(HoroTerrainTileCookTests
         unit/runtime/terrain/TerrainTileCookTests.cpp
 )
