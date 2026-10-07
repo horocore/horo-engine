@@ -225,11 +225,12 @@ namespace Horo::Editor {
     void ExtensionActivityView::CommitEntries(std::vector<Entry> next) noexcept {
         static_assert(std::is_nothrow_move_constructible_v<Entry> && std::is_nothrow_move_assignable_v<Entry>);
         for (auto &entry : next) {
-            const auto previous = std::ranges::find_if(entries_, [&entry](const Entry &old) {
+            if (const auto previous = std::ranges::find_if(entries_,
+                                                           [&entry](const Entry &old) {
                 return old.projection.surface.descriptor.id == entry.projection.surface.descriptor.id &&
                        old.projection.surface.descriptor.provider == entry.projection.surface.descriptor.provider;
             });
-            if (previous != entries_.end() && !entry.texture.Id())
+                previous != entries_.end() && !entry.texture.Id())
                 entry.texture = std::move(previous->texture);
             if (entry.requestNativePanelClear)
                 nativePanelClear_[static_cast<std::size_t>(entry.projection.surface.descriptor.activity->side)] = entry.token;

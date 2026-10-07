@@ -280,10 +280,11 @@ namespace Horo::Extensions {
             const auto declaredActivities = std::ranges::count_if(manifest.contributions, [&manifestModule](const auto &claim) {
                 return claim.owningModule == manifestModule.id && claim.type == "editor.activity_item";
             });
-            const auto declaredPanels = std::ranges::count_if(manifest.contributions, [&manifestModule](const auto &claim) {
+            if (const auto declaredPanels = std::ranges::count_if(manifest.contributions,
+                                                                  [&manifestModule](const auto &claim) {
                 return claim.owningModule == manifestModule.id && claim.type == "editor.panel";
             });
-            if (static_cast<std::size_t>(declaredActivities) != registeredActivities || declaredPanels != declaredActivities)
+                static_cast<std::size_t>(declaredActivities) != registeredActivities || declaredPanels != declaredActivities)
                 return Result<void>::Failure(MakeError(ExtensionErrors::ContributionRejected,
                                                        "Native module did not register every declared activity/drawer pair."));
             return Result<void>::Success();
