@@ -44,6 +44,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroRuntimeSaveFilesystemLockTests
     HoroRuntimeSaveSlotCommitTransactionTests
     HoroRuntimePublicHeaderConsumer
+    HoroTerrainSourceArtifactTests
+    HoroTerrainSourceArtifactPublicHeaderConsumer
 )
 
 set(HORO_CI_NAVIGATION_TARGETS

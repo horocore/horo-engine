@@ -1031,6 +1031,20 @@ add_executable(HoroTerrainImportTests
 target_compile_features(HoroTerrainImportTests PRIVATE cxx_std_20)
 target_link_libraries(HoroTerrainImportTests PRIVATE HoroEngine::TerrainImport)
 horo_register_catch_test(HoroTerrainImportTests LABELS "unit;terrain;assets;headless")
+add_executable(HoroTerrainSourceArtifactTests
+        unit/runtime/terrain/TerrainSourceArtifactTests.cpp
+)
+target_compile_features(HoroTerrainSourceArtifactTests PRIVATE cxx_std_20)
+target_link_libraries(HoroTerrainSourceArtifactTests PRIVATE HoroEngine::TerrainCook)
+horo_register_catch_test(HoroTerrainSourceArtifactTests LABELS "unit;terrain;assets;headless")
+add_executable(HoroTerrainSourceArtifactPublicHeaderConsumer
+        support/TerrainSourceArtifactPublicHeaderConsumer.cpp
+)
+target_compile_features(HoroTerrainSourceArtifactPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroTerrainSourceArtifactPublicHeaderConsumer PRIVATE HoroEngine::TerrainCook)
+add_test(NAME HoroTerrainSourceArtifactPublicHeaderConsumer COMMAND HoroTerrainSourceArtifactPublicHeaderConsumer)
+set_tests_properties(HoroTerrainSourceArtifactPublicHeaderConsumer PROPERTIES LABELS "unit;terrain;assets;headless;ci-windows")
+
 add_executable(HoroTerrainTileCookTests
         unit/runtime/terrain/TerrainTileCookTests.cpp
 )
