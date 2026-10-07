@@ -1054,6 +1054,7 @@ horo_register_catch_test(HoroXRApiTests LABELS "unit;xr;headless")
 add_executable(HoroXRRuntimeTests
         support/AllocationProbe.cpp
         unit/runtime/xr/XRFeatureNegotiationTests.cpp
+        unit/runtime/xr/XRFakeRuntimeTests.cpp
         unit/runtime/xr/XRFrameLifecycleTests.cpp
         unit/runtime/xr/XRSessionLifecycleTests.cpp
 )
@@ -3835,3 +3836,9 @@ target_link_libraries(HoroMixerDocumentTests PRIVATE HoroEngine::EditorServices)
 horo_register_catch_test(HoroMixerDocumentTests LABELS "unit;editor;audio;headless")
 
 horo_finalize_ci_suites()
+
+add_executable(HoroXRFakeRuntimePublicHeaderConsumer public_headers/XRFakeRuntimeConsumer.cpp)
+target_compile_features(HoroXRFakeRuntimePublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroXRFakeRuntimePublicHeaderConsumer PRIVATE HoroEngine::XRRuntime)
+add_test(NAME HoroXRFakeRuntimePublicHeaderConsumer COMMAND HoroXRFakeRuntimePublicHeaderConsumer)
+set_tests_properties(HoroXRFakeRuntimePublicHeaderConsumer PROPERTIES LABELS "unit;xr;headless")

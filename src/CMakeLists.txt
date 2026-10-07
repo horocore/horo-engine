@@ -1455,6 +1455,7 @@ target_link_libraries(HoroNavigationContentIntegration PUBLIC HoroEngine::Applic
 
 add_library(HoroXRRuntime STATIC
         runtime/xr/runtime/XRFeatureNegotiation.cpp
+        runtime/xr/runtime/XRFakeRuntime.cpp
         runtime/xr/runtime/XRFrameLifecycle.cpp
         runtime/xr/runtime/XRSessionErrors.cpp
         runtime/xr/runtime/XRSessionLifecycle.cpp
