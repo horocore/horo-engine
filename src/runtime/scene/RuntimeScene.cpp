@@ -59,8 +59,7 @@ namespace Horo::Runtime {
     /** @copydoc SceneCommandBuffer::ValidateAdmission */
     Result<void> SceneCommandBuffer::ValidateAdmission(SceneRuntimeId scene, Assets::AssetRegistryRevision registry) const {
         for (const auto &command : commands_) {
-            const auto valid = std::visit([&](const auto &value) -> Result<void> {
-                using T = std::decay_t<decltype(value)>;
+            const auto valid = std::visit([&]<typename T>(const T &value) -> Result<void> {
                 if constexpr (std::is_same_v<T, CreateGroupCommand> || std::is_same_v<T, AttachBaselineCommand> ||
                               std::is_same_v<T, DetachBaselineCommand>) {
                     if (value.admission.cancellation.IsCancellationRequested() ||

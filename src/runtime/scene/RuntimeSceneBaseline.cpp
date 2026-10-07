@@ -48,8 +48,8 @@ namespace Horo::Runtime {
     /** @copydoc RuntimeScene::ApplyBaseline */
     Result<void> RuntimeScene::ApplyBaseline(RuntimeSceneStorage &storage, const SceneCommandBuffer::AttachBaselineCommand &command) const {
         const auto &definition = command.definition;
-        const auto found = std::ranges::find(storage.baselines, definition.Id(), &BaselineAttachment::id);
-        if (definition.Id() == definitionId_ || (command.expectedRevision.value == 0 && found != storage.baselines.end()))
+        if (const auto found = std::ranges::find(storage.baselines, definition.Id(), &BaselineAttachment::id);
+            definition.Id() == definitionId_ || (command.expectedRevision.value == 0 && found != storage.baselines.end()))
             return Result<void>::Failure(MakeError(SceneErrors::BaselineStale));
         if (command.expectedRevision.value != 0) {
             if (definition.Revision().value <= command.expectedRevision.value)
@@ -58,7 +58,7 @@ namespace Horo::Runtime {
                 removed.HasError())
                 return removed;
         }
-        const auto limits = command.limits;
+        const auto &limits = command.limits;
         if (const auto capacity = ValidateBaselineCapacity(storage, definition, command.resources.size(), limits); capacity.HasError())
             return capacity;
         BaselineAttachment baseline{definition.Id(),
@@ -97,15 +97,14 @@ namespace Horo::Runtime {
         for (const auto entity : baseline.entities) {
             auto &slot = storage.slots[entity.index];
             std::vector<ResolvedGroupPhysicsBodyReference> references;
-            const auto bind = [&](const GroupPhysicsReferenceKind kind, const std::size_t occurrence,
-                                  const PhysicsBodyReference source) -> Result<void> {
+            const auto bind = [&](const GroupPhysicsReferenceKind kind, const std::size_t occurrence, const PhysicsBodyReference source) {
                 const auto target = std::ranges::find_if(baseline.entities, [&](const EntityId candidate) {
                     return storage.slots[candidate.index].authoredObject == source.object;
                 });
                 if (target == baseline.entities.end())
                     return Result<void>::Failure(MakeError(SceneErrors::BaselineInvalid));
-                const auto &body = storage.slots[target->index].components.rigidBody;
-                if (!body || !body->enabled || body->body != source.body)
+                if (const auto &body = storage.slots[target->index].components.rigidBody;
+                    !body || !body->enabled || body->body != source.body)
                     return Result<void>::Failure(MakeError(SceneErrors::BaselineInvalid));
                 references.push_back({kind, occurrence, {runtimeId_, *target}, source.body});
                 return Result<void>::Success();
@@ -119,10 +118,11 @@ namespace Horo::Runtime {
                 const auto &constraint = slot.components.physicsConstraints[index];
                 if (const auto valid = bind(GroupPhysicsReferenceKind::ConstraintFirst, index, constraint.first.body); valid.HasError())
                     return valid;
-                if (const auto *second = std::get_if<PhysicsConstraintBodyEndpoint>(&constraint.second)) {
-                    if (const auto valid = bind(GroupPhysicsReferenceKind::ConstraintSecond, index, second->body); valid.HasError())
-                        return valid;
-                }
+                const auto *second = std::get_if<PhysicsConstraintBodyEndpoint>(&constraint.second);
+                if (!second)
+                    continue;
+                if (const auto valid = bind(GroupPhysicsReferenceKind::ConstraintSecond, index, second->body); valid.HasError())
+                    return valid;
             }
             if (!references.empty())
                 slot.groupPhysicsReferences = std::make_shared<const std::vector<ResolvedGroupPhysicsBodyReference>>(std::move(references));

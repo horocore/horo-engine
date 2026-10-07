@@ -292,8 +292,8 @@ namespace Horo::Runtime {
             return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
         if (!active_.scene || active_.scene->runtimeId_ != scene || !structuralCommands_ || structuralCommands_->commands_.size() != 1)
             return Result<void>::Failure(MakeError(SceneErrors::BaselineStale));
-        const bool matches = std::visit([&](const auto &command) {
-            using T = std::decay_t<decltype(command)>;
+        if (const bool matches = std::visit(
+                [&]<typename T>(const T &command) {
             if constexpr (std::is_same_v<T, SceneCommandBuffer::AttachBaselineCommand>)
                 return command.definition.Id() == baseline && command.ownership->MatchesOperation(ownership);
             else if constexpr (std::is_same_v<T, SceneCommandBuffer::DetachBaselineCommand>)
@@ -301,7 +301,7 @@ namespace Horo::Runtime {
             else
                 return false;
         }, structuralCommands_->commands_.front());
-        if (!matches)
+            !matches)
             return Result<void>::Failure(MakeError(SceneErrors::BaselineStale));
         const LifecycleMutation mutation{*this};
         structuralCommands_.reset();

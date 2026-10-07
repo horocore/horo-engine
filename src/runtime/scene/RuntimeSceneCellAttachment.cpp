@@ -7,7 +7,7 @@ namespace Horo::Runtime {
         /** @brief Stores the exact durable cell owner and mounted partition incarnation without retaining host services. */
         class AttachmentOwnership final : public SceneBaselineOwnership {
         public:
-            AttachmentOwnership(SceneCellPayloadIdentity identity, WorldStreaming::StreamingFence fence) noexcept
+            AttachmentOwnership(const SceneCellPayloadIdentity &identity, const WorldStreaming::StreamingFence &fence) noexcept
                 : identity_(identity), fence_(fence) {}
 
             bool Matches(const SceneBaselineOwnership &other) const noexcept override {
@@ -29,7 +29,7 @@ namespace Horo::Runtime {
         /** @brief Retains exact durable content and residency fence until the pending structural transaction retires. */
         class AttachmentPublicationCheck final : public ScenePublicationCheck {
         public:
-            AttachmentPublicationCheck(SceneCellPayloadIdentity identity, SceneCellAttachmentRequest request,
+            AttachmentPublicationCheck(const SceneCellPayloadIdentity &identity, SceneCellAttachmentRequest request,
                                        std::shared_ptr<const SceneCellPayloadAuthority> authority)
                 : identity_(identity), request_(std::move(request)), authority_(std::move(authority)) {}
 
@@ -54,8 +54,7 @@ namespace Horo::Runtime {
                 return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Invalid));
             if (request.fence.partition != identity.partition || request.fence.cell != identity.cell)
                 return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Stale));
-            const auto active = service.ActiveScene();
-            if (!active || active->RuntimeId() != request.runtime)
+            if (const auto active = service.ActiveScene(); !active || active->RuntimeId() != request.runtime)
                 return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Stale));
             return Result<void>::Success();
         }
@@ -67,8 +66,8 @@ namespace Horo::Runtime {
                                                                               const SceneCellPayloadIdentity &identity,
                                                                               const WorldStreaming::PartitionEpoch epoch) noexcept {
         const auto found = scene.FindBaseline(identity.scene);
-        const AttachmentOwnership expected{identity, {identity.partition, epoch, identity.cell, {}}};
-        if (!found || found->revision != identity.revision || !found->ownership || !found->ownership->Matches(expected))
+        if (const AttachmentOwnership expected{identity, {identity.partition, epoch, identity.cell, {}}};
+            !found || found->revision != identity.revision || !found->ownership || !found->ownership->Matches(expected))
             return std::nullopt;
         return found;
     }
@@ -90,12 +89,12 @@ namespace Horo::Runtime {
             return Result<void>::Failure(MakeError(SceneCellPayloadErrors::CapacityExceeded));
         SceneCommandBuffer commands;
         // Keep cancellation in the cell publication check so deferred commits retain the cell-specific error code.
-        auto queued =
-            commands.AttachBaseline(payload.Definition(), std::move(resources), {request.runtime, request.registry, {}, {}}, request.limits,
-                                    request.expectedRevision,
-                                    std::make_shared<AttachmentPublicationCheck>(payload.Identity(), request, std::move(authority)),
-                                    std::make_shared<AttachmentOwnership>(payload.Identity(), request.fence));
-        if (queued.HasError())
+        if (auto queued =
+                commands.AttachBaseline(payload.Definition(), std::move(resources), {request.runtime, request.registry, {}, {}},
+                                        request.limits, request.expectedRevision,
+                                        std::make_shared<AttachmentPublicationCheck>(payload.Identity(), request, std::move(authority)),
+                                        std::make_shared<AttachmentOwnership>(payload.Identity(), request.fence));
+            queued.HasError())
             return queued;
         return service.QueueStructuralCommands(std::move(commands));
     }
@@ -108,10 +107,10 @@ namespace Horo::Runtime {
             return valid;
         SceneCommandBuffer commands;
         // The publication check owns both cancellation tokens and reports their cell-specific outcome.
-        auto queued = commands.DetachBaseline(identity.scene, identity.revision, {request.runtime, request.registry, {}, {}},
-                                              std::make_shared<AttachmentPublicationCheck>(identity, request, std::move(authority)),
-                                              std::make_shared<AttachmentOwnership>(identity, request.fence));
-        if (queued.HasError())
+        if (auto queued = commands.DetachBaseline(identity.scene, identity.revision, {request.runtime, request.registry, {}, {}},
+                                                  std::make_shared<AttachmentPublicationCheck>(identity, request, std::move(authority)),
+                                                  std::make_shared<AttachmentOwnership>(identity, request.fence));
+            queued.HasError())
             return queued;
         return service.QueueStructuralCommands(std::move(commands));
     }
