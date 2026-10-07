@@ -1572,6 +1572,7 @@ add_library(HoroWorldStreaming STATIC
         runtime/world_streaming/StreamingCellAssetRequest.cpp
         runtime/world_streaming/WorldPackageChunkAssignment.cpp
         runtime/world_streaming/WorldPackageChunkErrors.cpp
+        runtime/world_streaming/StreamingOwnerFrameBudget.cpp
         runtime/world_streaming/StreamingCellActivation.cpp
         runtime/world_streaming/StreamingCellDirection.cpp
         runtime/world_streaming/StreamingCellStability.cpp
