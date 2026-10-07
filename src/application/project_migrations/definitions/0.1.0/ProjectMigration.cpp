@@ -1,6 +1,33 @@
 #include "ProjectMigration.h"
 
+#include "src/application/project/ProjectErrors.h"
+
 namespace Horo::ProjectMigrations::R0_1_0 {
+    namespace {
+        /** @brief Owns the ordered read-only prefab and compression checks behind one terminal definition barrier. */
+        class DefinitionPostconditionValidator final : public Application::IProjectMigrationValidator {
+        public:
+            [[nodiscard]] Application::MigrationStageDescriptor Describe() const override {
+                return {.id = {"validate_project_adoption"},
+                        .readFamilies = {"asset.sidecar", "prefab.source", "scene.prefab_reference", "project.settings.compression"},
+                        .estimatedWeight = 2};
+            }
+
+            [[nodiscard]] Result<void> Validate(const Application::ProjectMigrationContext &context,
+                                                const CancellationToken &cancellation) const override {
+                if (auto valid = prefab_->Validate(context, cancellation); valid.HasError())
+                    return valid;
+                if (cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(Application::ProjectErrors::MigrationCancelled));
+                return compression_->Validate(context, cancellation);
+            }
+
+        private:
+            const std::shared_ptr<const Application::IProjectMigrationValidator> prefab_{BuildPrefabAdoptionValidator()};
+            const std::shared_ptr<const Application::IProjectMigrationValidator> compression_{BuildCompressionPostconditionValidator()};
+        };
+    }  // namespace
+
     /** @copydoc SerializeDocumentBytes */
     std::vector<std::byte> SerializeDocumentBytes(const std::string_view text) {
         const auto *first = reinterpret_cast<const std::byte *>(text.data());
@@ -25,8 +52,7 @@ namespace Horo::ProjectMigrations::R0_1_0 {
             builder.AddForEach(MigrationDocumentQuery::Kind(MigrationDocumentKind::ProjectMetadata), BuildCompressionDefaultsStage()));
         static_cast<void>(builder.AddThen(BuildPrefabSourceAdoptionStage()));
         static_cast<void>(builder.AddThen(BuildPrefabReferenceAdoptionStage()));
-        static_cast<void>(builder.AddValidator(BuildPrefabAdoptionValidator()));
-        static_cast<void>(builder.AddValidator(BuildCompressionPostconditionValidator()));
+        static_cast<void>(builder.AddValidator(std::make_shared<DefinitionPostconditionValidator>()));
         auto pipeline = std::move(builder).Build();
         if (pipeline.HasError())
             return Result<ProjectMigrationDefinition>::Failure(pipeline.ErrorValue());

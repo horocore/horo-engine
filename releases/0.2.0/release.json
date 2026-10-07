@@ -3,12 +3,12 @@
   "contractBaseline": "0.2.0",
   "projectContract": "project-contract.json",
   "persistentContract": "sha256:e068efe802defac5ec18d9742f0b1e1c50b1bfda5b26f8fc4a3a02eaf478065c",
-  "migrationDefinitions": "sha256:8c67aa3d2aad428453dccd2375bc781cd9ea9f04131b742a87c6e1807e1d4622",
+  "migrationDefinitions": "sha256:958340c249d9a75e41ef757fd5d38c052e064975bb351b1d35563e1d704fab29",
   "migrationRecoveryContract": "sha256:ccca65a3a1fab86ad116098c3d5c1b8499118137470761e50eb174b7de121acb",
   "supportedMigrationRecoveryContracts": [
     {"contract": "sha256:ccca65a3a1fab86ad116098c3d5c1b8499118137470761e50eb174b7de121acb", "reader": "journal-v1"}
   ],
-  "decisionHash": "sha256:b0dc2725d0011c07c4102fdc5dd45acf2c4cb27d3e3ecab58744c818902a29ed",
+  "decisionHash": "sha256:22f94293a569fdab2b3bf40310c6bfa3d20439077bca0af3de89209c657b0e3d",
   "minimumMigratableVersion": "0.0.1",
   "migrationCheckpoints": [],
   "developmentSnapshot": true

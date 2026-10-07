@@ -341,6 +341,22 @@ namespace Horo::ProjectMigrations::R0_1_0 {
             return Result<void>::Success();
         }
 
+        /** @brief Checks a bounded scene reference set against its already adopted identities. */
+        [[nodiscard]] Result<void> ValidateSceneReferenceSet(const Json &references, const PrefabIdentityIndex &index,
+                                                             const std::string &path) {
+            if (!references.is_array() || references.size() > MaximumScenePrefabReferences)
+                return Result<void>::Failure(InvalidPrefabMigration("Scene prefab reference set exceeds its bounded array contract."));
+            for (const Json &reference : references) {
+                Json adopted = reference;
+                auto migrated = MigrateSceneReference(adopted, index);
+                if (migrated.HasError())
+                    return Result<void>::Failure(migrated.ErrorValue());
+                if (adopted != reference)
+                    return Result<void>::Failure(InvalidPrefabMigration("Scene prefab reference adoption is incomplete: " + path));
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Verifies every scene reference resolves to an adopted source without mutation. */
         [[nodiscard]] Result<void> ValidatePrefabReferences(const ProjectMigrationContext &context, const PrefabIdentityIndex &index,
                                                             const CancellationToken &cancellation) {
@@ -355,18 +371,8 @@ namespace Horo::ProjectMigrations::R0_1_0 {
                     return Result<void>::Failure(parsed.ErrorValue());
                 if (!parsed.Value().contains("prefabInstances"))
                     continue;
-                const Json &references = parsed.Value()["prefabInstances"];
-                if (!references.is_array() || references.size() > MaximumScenePrefabReferences)
-                    return Result<void>::Failure(InvalidPrefabMigration("Scene prefab reference set exceeds its bounded array contract."));
-                for (const Json &reference : references) {
-                    Json adopted = reference;
-                    auto migrated = MigrateSceneReference(adopted, index);
-                    if (migrated.HasError())
-                        return Result<void>::Failure(migrated.ErrorValue());
-                    if (adopted != reference)
-                        return Result<void>::Failure(
-                            InvalidPrefabMigration("Scene prefab reference adoption is incomplete: " + entry.path));
-                }
+                if (auto valid = ValidateSceneReferenceSet(parsed.Value()["prefabInstances"], index, entry.path); valid.HasError())
+                    return valid;
             }
             return Result<void>::Success();
         }

@@ -98,9 +98,11 @@ conflicting identity fails the unpublished candidate rather than mutating the
 project.
 
 PFB-007.8 exposes prefab source adoption, dependent scene-reference adoption,
-and a read-only prefab postcondition barrier as separate ordered nodes in that
-same definition. The reference node requires every typed sidecar to have a
-matching adopted source before rewriting references; the barrier verifies both
+and a single read-only definition postcondition barrier as separate ordered nodes
+in that same definition. The terminal barrier owns the prefab and compression
+validators, runs them in that order, and checks cancellation between them;
+the pipeline never contains two separate `Validate` nodes. The reference node
+requires every typed sidecar to have a matching adopted source before rewriting references; the barrier verifies both
 source and reference postconditions using the adoption helpers without replacing
 candidate bytes. These nodes enter the existing generated definition hash and
 transaction receipt. Verified dry-run uses this pipeline and reports changed
