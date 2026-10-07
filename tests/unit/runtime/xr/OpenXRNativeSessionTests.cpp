@@ -111,6 +111,9 @@ namespace Horo::Tests::OpenXR {
         SECTION("host exception") {
             fixture.script.throwAfterInstance = true;
         }
+        SECTION("non-standard host exception") {
+            fixture.script.throwUnknownAfterInstance = true;
+        }
         CHECK(fixture.owner.Create(fixture.Request()).HasError());
         CHECK(fixture.script.liveInstances == 0);
         CHECK(fixture.script.liveSessions == 0);
@@ -247,6 +250,52 @@ namespace Horo::Tests::OpenXR {
         CHECK(result.ErrorValue().message.find(std::to_string(XR_ERROR_FORM_FACTOR_UNSUPPORTED)) != std::string::npos);
         CHECK(fixture.script.liveInstances == 0);
         CHECK(fixture.script.liveSessions == 0);
+    }
+
+    TEST_CASE("OpenXR native result translation preserves every mapped category", "[unit][xr][native]") {
+        struct Mapping {
+            XrResult result;
+            const ErrorCodeDescriptor *error;
+        };
+
+        const std::array mappings{Mapping{XR_ERROR_RUNTIME_UNAVAILABLE, &XRErrors::RuntimeUnavailable},
+                                  Mapping{XR_ERROR_FORM_FACTOR_UNAVAILABLE, &XRErrors::SystemTemporarilyUnavailable},
+                                  Mapping{XR_ERROR_FORM_FACTOR_UNSUPPORTED, &XRErrors::SystemUnsupported},
+                                  Mapping{XR_ERROR_EXTENSION_NOT_PRESENT, &XRErrors::OperationUnsupported},
+                                  Mapping{XR_ERROR_API_LAYER_NOT_PRESENT, &XRErrors::OperationUnsupported},
+                                  Mapping{XR_ERROR_RUNTIME_FAILURE, &XRErrors::OperationUnavailable}};
+        for (const auto &mapping : mappings) {
+            Fixture fixture;
+            fixture.script.fail = "system";
+            fixture.script.failureResult = mapping.result;
+            const auto result = fixture.owner.Create(fixture.Request());
+            RequireFailureIdentity(result, *mapping.error);
+            CHECK(result.ErrorValue().message.find("xrGetSystem failed; native result=") == 0);
+            CHECK(result.ErrorValue().message.find(std::to_string(mapping.result)) != std::string::npos);
+            CHECK(fixture.script.liveInstances == 0);
+            CHECK_FALSE(fixture.owner.Session().IsValid());
+        }
+    }
+
+    TEST_CASE("OpenXR host exception preserves failed rollback ownership and its cause", "[unit][xr][native]") {
+        Fixture fixture;
+        SECTION("standard exception") {
+            fixture.script.throwAfterInstance = true;
+        }
+        SECTION("non-standard exception") {
+            fixture.script.throwUnknownAfterInstance = true;
+        }
+        fixture.script.fail = "destroy-instance";
+        const auto result = fixture.owner.Create(fixture.Request());
+        RequireFailureIdentity(result, XRErrors::OperationUnavailable);
+        REQUIRE(result.ErrorValue().cause.Get() != nullptr);
+        CHECK(result.ErrorValue().cause.Get()->message.find("xrDestroyInstance failed; native result=") == 0);
+        CHECK(fixture.script.liveInstances == 1);
+        CHECK(fixture.script.liveSessions == 0);
+        CHECK_FALSE(fixture.owner.Session().IsValid());
+        fixture.script.fail = {};
+        REQUIRE(fixture.owner.Close().HasValue());
+        CHECK(fixture.script.liveInstances == 0);
     }
 
     TEST_CASE("OpenXR plan admission preserves stale system and capacity errors before native work", "[unit][xr][native]") {

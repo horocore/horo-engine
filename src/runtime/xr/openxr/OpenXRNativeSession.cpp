@@ -3,32 +3,66 @@
 #include "host/OpenXRNativeNames.h"
 
 #include <algorithm>
+#include <bit>
 #include <exception>
+#include <format>
 #include <string>
 
 namespace Horo::XR::OpenXRInternal {
     namespace {
+        /** @brief Maps native result categories without discarding phase or numeric evidence. */
+        const ErrorCodeDescriptor &NativeErrorDescriptor(XrResult result) noexcept {
+            switch (result) {
+                case XR_ERROR_RUNTIME_UNAVAILABLE:
+                    return XRErrors::RuntimeUnavailable;
+                case XR_ERROR_FORM_FACTOR_UNAVAILABLE:
+                    return XRErrors::SystemTemporarilyUnavailable;
+                case XR_ERROR_FORM_FACTOR_UNSUPPORTED:
+                    return XRErrors::SystemUnsupported;
+                case XR_ERROR_EXTENSION_NOT_PRESENT:
+                case XR_ERROR_API_LAYER_NOT_PRESENT:
+                    return XRErrors::OperationUnsupported;
+                default:
+                    return XRErrors::OperationUnavailable;
+            }
+        }
+
         /** @brief Keeps native phase/result evidence bounded and private to adapter error translation. */
         Error NativeError(const char *operation, XrResult result) {
-            const auto &descriptor = result == XR_ERROR_RUNTIME_UNAVAILABLE       ? XRErrors::RuntimeUnavailable
-                                     : result == XR_ERROR_FORM_FACTOR_UNAVAILABLE ? XRErrors::SystemTemporarilyUnavailable
-                                     : result == XR_ERROR_FORM_FACTOR_UNSUPPORTED ? XRErrors::SystemUnsupported
-                                     : result == XR_ERROR_EXTENSION_NOT_PRESENT || result == XR_ERROR_API_LAYER_NOT_PRESENT
-                                         ? XRErrors::OperationUnsupported
-                                         : XRErrors::OperationUnavailable;
-            return MakeError(descriptor, std::string{operation} + " failed; native result=" + std::to_string(result));
+            return MakeError(NativeErrorDescriptor(result),
+                             std::format("{} failed; native result={}", operation, static_cast<std::int32_t>(result)));
+        }
+
+        /** @brief Fixed outcome of host invocation; error allocation and native retirement stay outside this boundary. */
+        enum class PreparationFailure {
+            None,
+            StandardException,
+            UnknownException
+        };
+
+        /** @brief Contains every host preparation exception without allocating a translated error while unwinding. */
+        template <typename Prepare> PreparationFailure CapturePreparationFailure(Prepare prepare) noexcept {
+            try {
+                prepare();
+                return PreparationFailure::None;
+            } catch (const std::exception &) {
+                return PreparationFailure::StandardException;
+            } catch (...) {
+                return PreparationFailure::UnknownException;
+            }
         }
 
         /** @brief Resolves exactly one candidate-scoped official function; absence never becomes success. */
-        template <typename Function>
-        Result<void> Resolve(PFN_xrGetInstanceProcAddr getProc, XrInstance instance, const char *name, Function &destination) {
+        template <typename GetProc, typename Function>
+        Result<void> Resolve(GetProc getProc, XrInstance instance, const char *name, Function &destination) {
             PFN_xrVoidFunction function{};
             const XrResult result = getProc(instance, name, &function);
             if (XR_FAILED(result))
                 return Result<void>::Failure(NativeError(name, result));
             if (!function)
                 return Result<void>::Failure(MakeError(XRErrors::LoaderIncompatible, std::string{name} + " dispatch is absent"));
-            destination = reinterpret_cast<Function>(function);
+            // OpenXR dispatch preserves the native function-pointer representation; bit_cast enforces equal size.
+            destination = std::bit_cast<Function>(function);
             return Result<void>::Success();
         }
 
@@ -89,8 +123,8 @@ namespace Horo::XR::OpenXRInternal {
                 if (!ValidExtensionPublication(entry))
                     return Result<void>::Failure(MakeError(XRErrors::OperationInvalid, "Malformed native extension publication"));
                 const auto name = NativeName(entry.extensionName);
-                const auto end = available.begin() + availableCount;
-                if (std::find_if(available.begin(), end, [name](const auto &extension) {
+                if (const auto end = available.begin() + availableCount;
+                    std::find_if(available.begin(), end, [name](const auto &extension) {
                     return NativeName(extension.extensionName) == name;
                 }) != end)
                     continue;  // Global and enabled layers may advertise the same extension.
@@ -168,21 +202,21 @@ namespace Horo::XR::OpenXRInternal {
     Result<void> OpenXRNativeSession::ResolveGlobal() {
         if (!loader_)
             return Result<void>::Failure(MakeError(XRErrors::LoaderAbsent));
-        getProc_ = reinterpret_cast<PFN_xrGetInstanceProcAddr>(loader_->GetSymbol("xrGetInstanceProcAddr"));
-        if (!getProc_)
+        dispatch_.getProc = std::bit_cast<PFN_xrGetInstanceProcAddr>(loader_->GetSymbol("xrGetInstanceProcAddr"));
+        if (!dispatch_.getProc)
             return Result<void>::Failure(MakeError(XRErrors::LoaderIncompatible, "Verified loader has no xrGetInstanceProcAddr"));
         // The official loader exports retirement as well as dispatch. Secure a
         // cleanup path before allocation, even if instance dispatch is corrupt.
-        destroyInstance_ = reinterpret_cast<PFN_xrDestroyInstance>(loader_->GetSymbol("xrDestroyInstance"));
-        if (!destroyInstance_)
+        dispatch_.destroyInstance = std::bit_cast<PFN_xrDestroyInstance>(loader_->GetSymbol("xrDestroyInstance"));
+        if (!dispatch_.destroyInstance)
             return Result<void>::Failure(MakeError(XRErrors::LoaderIncompatible, "Verified loader has no bootstrap instance retirement"));
-        auto resolved = Resolve(getProc_, XR_NULL_HANDLE, "xrEnumerateApiLayerProperties", enumerateLayers_);
+        auto resolved = Resolve(dispatch_.getProc, XR_NULL_HANDLE, "xrEnumerateApiLayerProperties", dispatch_.enumerateLayers);
         if (resolved.HasError())
             return resolved;
-        resolved = Resolve(getProc_, XR_NULL_HANDLE, "xrEnumerateInstanceExtensionProperties", enumerateExtensions_);
+        resolved = Resolve(dispatch_.getProc, XR_NULL_HANDLE, "xrEnumerateInstanceExtensionProperties", dispatch_.enumerateExtensions);
         if (resolved.HasError())
             return resolved;
-        return Resolve(getProc_, XR_NULL_HANDLE, "xrCreateInstance", createInstance_);
+        return Resolve(dispatch_.getProc, XR_NULL_HANDLE, "xrCreateInstance", dispatch_.createInstance);
     }
 
     /** @copydoc OpenXRNativeSession::CheckCurrent */
@@ -193,9 +227,9 @@ namespace Horo::XR::OpenXRInternal {
                                                   request.preflight.InstallRecord(), request.preflight.ProductProfile());
         if (admitted.HasError())
             return admitted;
-        const auto featureStatus =
-            ValidateXRFeaturePlan(request.plan, request.capabilities, request.candidate.system, request.capabilities.Revision());
-        if (featureStatus != XRFeatureNegotiationStatus::Ok)
+        if (const auto featureStatus =
+                ValidateXRFeaturePlan(request.plan, request.capabilities, request.candidate.system, request.capabilities.Revision());
+            featureStatus != XRFeatureNegotiationStatus::Ok)
             return Result<void>::Failure(FeaturePlanError(featureStatus));
         admitted = fence_->Validate(request.candidate, request.preflight, request.plan);
         return admitted.HasError() ? admitted : graphics_->Validate(request.candidate);
@@ -204,17 +238,17 @@ namespace Horo::XR::OpenXRInternal {
     /** @copydoc OpenXRNativeSession::CollectExtensions */
     Result<void> OpenXRNativeSession::CollectExtensions(const char *layer,
                                                         std::array<XrExtensionProperties, MaximumNativeExtensions> &available,
-                                                        std::uint32_t &availableCount) {
+                                                        std::uint32_t &availableCount) const {
         std::array<XrExtensionProperties, MaximumNativeExtensions> publication{};
         for (auto &extension : publication)
             extension.type = XR_TYPE_EXTENSION_PROPERTIES;
         std::uint32_t count{};
-        auto result = enumerateExtensions_(layer, 0, &count, nullptr);
+        auto result = dispatch_.enumerateExtensions(layer, 0, &count, nullptr);
         if (XR_FAILED(result))
             return Result<void>::Failure(NativeError("xrEnumerateInstanceExtensionProperties/count", result));
         if (count > publication.size())
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
-        result = enumerateExtensions_(layer, static_cast<std::uint32_t>(publication.size()), &count, publication.data());
+        result = dispatch_.enumerateExtensions(layer, static_cast<std::uint32_t>(publication.size()), &count, publication.data());
         if (XR_FAILED(result))
             return Result<void>::Failure(NativeError("xrEnumerateInstanceExtensionProperties/list", result));
         if (count > publication.size())
@@ -238,12 +272,12 @@ namespace Horo::XR::OpenXRInternal {
         for (auto &layer : availableLayers)
             layer.type = XR_TYPE_API_LAYER_PROPERTIES;
         std::uint32_t count{};
-        XrResult result = enumerateLayers_(0, &count, nullptr);
+        XrResult result = dispatch_.enumerateLayers(0, &count, nullptr);
         if (XR_FAILED(result))
             return Result<void>::Failure(NativeError("xrEnumerateApiLayerProperties/count", result));
         if (count > availableLayers.size())
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
-        result = enumerateLayers_(static_cast<std::uint32_t>(availableLayers.size()), &count, availableLayers.data());
+        result = dispatch_.enumerateLayers(static_cast<std::uint32_t>(availableLayers.size()), &count, availableLayers.data());
         if (XR_FAILED(result))
             return Result<void>::Failure(NativeError("xrEnumerateApiLayerProperties/list", result));
         if (count > availableLayers.size())
@@ -251,7 +285,7 @@ namespace Horo::XR::OpenXRInternal {
         const std::span publication{availableLayers.data(), count};
         if (!std::ranges::all_of(publication, ValidLayerPublication))
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid, "Malformed native layer publication"));
-        layerCount_ = 0;
+        names_.layerCount = 0;
         for (const auto name : requested) {
             const auto admitted = EnableLayer(name, publication);
             if (admitted.HasError())
@@ -264,18 +298,18 @@ namespace Horo::XR::OpenXRInternal {
     Result<void> OpenXRNativeSession::EnableLayer(std::string_view name, std::span<const XrApiLayerProperties> available) {
         if (!ValidName(name, XR_MAX_API_LAYER_NAME_SIZE))
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
-        if (std::find(layers_.begin(), layers_.begin() + layerCount_, name) != layers_.begin() + layerCount_)
+        if (std::find(names_.layers.begin(), names_.layers.begin() + names_.layerCount, name) != names_.layers.begin() + names_.layerCount)
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid, "Duplicate API layer request"));
         if (std::ranges::none_of(available, [name](const auto &layer) {
             return NativeName(layer.layerName) == name;
         }))
             return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported, "Required API layer is absent"));
-        if (layerCount_ == layerNames_.size())
+        if (names_.layerCount == names_.layerNames.size())
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
-        if (!CopyPolicyName(name, layerNames_[layerCount_]))
+        if (!CopyPolicyName(name, names_.layerNames[names_.layerCount]))
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
-        layers_[layerCount_] = layerNames_[layerCount_].data();
-        ++layerCount_;
+        names_.layers[names_.layerCount] = names_.layerNames[names_.layerCount].data();
+        ++names_.layerCount;
         return Result<void>::Success();
     }
 
@@ -286,8 +320,8 @@ namespace Horo::XR::OpenXRInternal {
         auto collected = CollectExtensions(nullptr, available, count);
         if (collected.HasError())
             return collected;
-        for (std::uint32_t index = 0; index < layerCount_; ++index) {
-            collected = CollectExtensions(layers_[index], available, count);
+        for (std::uint32_t index = 0; index < names_.layerCount; ++index) {
+            collected = CollectExtensions(names_.layers[index], available, count);
             if (collected.HasError())
                 return collected;
         }
@@ -299,7 +333,7 @@ namespace Horo::XR::OpenXRInternal {
         auto admitted = ValidateExtensionRequests(requested, bindingName);
         if (admitted.HasError())
             return admitted;
-        extensionCount_ = 0;
+        names_.extensionCount = 0;
         const std::span publication{available.data(), count};
         admitted = EnableExtension(bindingName, true, publication);
         if (admitted.HasError())
@@ -320,19 +354,18 @@ namespace Horo::XR::OpenXRInternal {
         }))
             return required ? Result<void>::Failure(MakeError(XRErrors::OperationUnsupported, "Required native extension is absent"))
                             : Result<void>::Success();
-        if (extensionCount_ == extensionNames_.size())
+        if (names_.extensionCount == names_.extensionNames.size())
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
-        if (!CopyPolicyName(name, extensionNames_[extensionCount_]))
+        if (!CopyPolicyName(name, names_.extensionNames[names_.extensionCount]))
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
-        extensions_[extensionCount_] = extensionNames_[extensionCount_].data();
-        ++extensionCount_;
+        names_.extensions[names_.extensionCount] = names_.extensionNames[names_.extensionCount].data();
+        ++names_.extensionCount;
         return Result<void>::Success();
     }
 
     /** @copydoc OpenXRNativeSession::CreateInstance */
     Result<void> OpenXRNativeSession::CreateInstance(const NativeSessionRequest &request) {
-        const auto current = CheckCurrent(request);
-        if (current.HasError())
+        if (const auto current = CheckCurrent(request); current.HasError())
             return current;
         XrInstanceCreateInfo info{XR_TYPE_INSTANCE_CREATE_INFO};
         CopyNativeLiteral(info.applicationInfo.applicationName, "Horo Engine");
@@ -342,12 +375,12 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(
                 MakeError(XRErrors::LoaderIncompatible, "Preflight API exceeds the privately compiled SDK contract"));
         info.applicationInfo.apiVersion = XR_MAKE_VERSION(version.major, version.minor, version.patch);
-        info.enabledApiLayerCount = layerCount_;
-        info.enabledApiLayerNames = layers_.data();
-        info.enabledExtensionCount = extensionCount_;
-        info.enabledExtensionNames = extensions_.data();
+        info.enabledApiLayerCount = names_.layerCount;
+        info.enabledApiLayerNames = names_.layers.data();
+        info.enabledExtensionCount = names_.extensionCount;
+        info.enabledExtensionNames = names_.extensions.data();
         XrInstance candidate{XR_NULL_HANDLE};
-        const auto result = createInstance_(&info, &candidate);
+        const auto result = dispatch_.createInstance(&info, &candidate);
         if (XR_FAILED(result))
             return Result<void>::Failure(NativeError("xrCreateInstance", result));
         instance_ = candidate;
@@ -358,22 +391,22 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRNativeSession::ResolveInstance */
     Result<void> OpenXRNativeSession::ResolveInstance() {
-        auto resolved = Resolve(getProc_, instance_, "xrDestroyInstance", destroyInstance_);
+        auto resolved = Resolve(dispatch_.getProc, instance_, "xrDestroyInstance", dispatch_.destroyInstance);
         if (resolved.HasError())
             return resolved;
-        resolved = Resolve(getProc_, instance_, "xrDestroySession", destroySession_);
+        resolved = Resolve(dispatch_.getProc, instance_, "xrDestroySession", dispatch_.destroySession);
         if (resolved.HasError())
             return resolved;
-        resolved = Resolve(getProc_, instance_, "xrGetSystem", getSystem_);
+        resolved = Resolve(dispatch_.getProc, instance_, "xrGetSystem", dispatch_.getSystem);
         if (resolved.HasError())
             return resolved;
-        return Resolve(getProc_, instance_, "xrCreateSession", createSession_);
+        return Resolve(dispatch_.getProc, instance_, "xrCreateSession", dispatch_.createSession);
     }
 
     /** @copydoc OpenXRNativeSession::SelectSystem */
     Result<void> OpenXRNativeSession::SelectSystem() {
         const XrSystemGetInfo info{XR_TYPE_SYSTEM_GET_INFO, nullptr, XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY};
-        const auto result = getSystem_(instance_, &info, &system_);
+        const auto result = dispatch_.getSystem(instance_, &info, &system_);
         if (XR_FAILED(result))
             return Result<void>::Failure(NativeError("xrGetSystem", result));
         return system_ != XR_NULL_SYSTEM_ID ? Result<void>::Success()
@@ -385,18 +418,18 @@ namespace Horo::XR::OpenXRInternal {
         auto current = CheckCurrent(request);
         if (current.HasError())
             return current;
-        auto binding = graphics_->Prepare(instance_, system_, getProc_);
+        auto binding = graphics_->Prepare(instance_, system_, dispatch_.getProc);
         if (binding.HasError())
             return Result<void>::Failure(binding.ErrorValue());
         graphicsPrepared_ = true;
-        if (!binding.Value() || binding.Value()->next || !MatchesGraphicsBinding(extensions_[0], binding.Value()->type))
+        if (!binding.Value() || binding.Value()->next || !MatchesGraphicsBinding(names_.extensions[0], binding.Value()->type))
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid, "Graphics binding must be one explicit native structure"));
         current = CheckCurrent(request);
         if (current.HasError())
             return current;
         const XrSessionCreateInfo info{XR_TYPE_SESSION_CREATE_INFO, binding.Value(), 0, system_};
         XrSession candidate{XR_NULL_HANDLE};
-        const auto result = createSession_(instance_, &info, &candidate);
+        const auto result = dispatch_.createSession(instance_, &info, &candidate);
         if (XR_FAILED(result))
             return Result<void>::Failure(NativeError("xrCreateSession", result));
         session_ = candidate;
@@ -416,8 +449,7 @@ namespace Horo::XR::OpenXRInternal {
         if (instance_ != XR_NULL_HANDLE || session_ != XR_NULL_HANDLE || owner_.IsValid())
             return Result<void>::Failure(
                 MakeError(XRErrors::OperationUnavailable, "Owner must retire before reuse; replacement uses a separate owner"));
-        auto current = CheckCurrent(request);
-        if (current.HasError())
+        if (const auto current = CheckCurrent(request); current.HasError())
             return current;
         if (request.candidate.system.runtime.Value() < lastRuntime_ ||
             (request.candidate.system.runtime.Value() == lastRuntime_ && request.candidate.slot.generation <= lastSessionGeneration_))
@@ -425,14 +457,17 @@ namespace Horo::XR::OpenXRInternal {
         preparing_ = request.candidate;
         lastRuntime_ = request.candidate.system.runtime.Value();
         lastSessionGeneration_ = request.candidate.slot.generation;
-        try {
-            return PrepareTransaction(request);
-        } catch (const std::exception &) {
+        auto prepared = Result<void>::Success();
+        const auto failure = CapturePreparationFailure([&] {
+            prepared = PrepareTransaction(request);
+        });
+        using enum PreparationFailure;
+        if (failure == StandardException)
             return Fail(MakeError(XRErrors::OperationUnavailable, "Host preparation threw; native candidate rollback requested"));
-        } catch (...) {
+        if (failure == UnknownException)
             return Fail(MakeError(XRErrors::OperationUnavailable,
                                   "Host preparation raised an unknown exception; native candidate rollback requested"));
-        }
+        return prepared;
     }
 
     /** @copydoc OpenXRNativeSession::PrepareTransaction */
@@ -468,9 +503,9 @@ namespace Horo::XR::OpenXRInternal {
         retainedPreflight_.reset();
         retainedPlan_.reset();
         if (session_ != XR_NULL_HANDLE) {
-            if (!destroySession_)
+            if (!dispatch_.destroySession)
                 return Result<void>::Failure(MakeError(XRErrors::LoaderIncompatible, "Native session has no retirement dispatch"));
-            const auto result = destroySession_(session_);
+            const auto result = dispatch_.destroySession(session_);
             if (XR_FAILED(result))
                 return Result<void>::Failure(NativeError("xrDestroySession", result));
             session_ = XR_NULL_HANDLE;
@@ -480,9 +515,9 @@ namespace Horo::XR::OpenXRInternal {
             graphicsPrepared_ = false;
         }
         if (instance_ != XR_NULL_HANDLE) {
-            if (!destroyInstance_)
+            if (!dispatch_.destroyInstance)
                 return Result<void>::Failure(MakeError(XRErrors::LoaderIncompatible, "Native instance has no retirement dispatch"));
-            const auto result = destroyInstance_(instance_);
+            const auto result = dispatch_.destroyInstance(instance_);
             if (XR_FAILED(result))
                 return Result<void>::Failure(NativeError("xrDestroyInstance", result));
             instance_ = XR_NULL_HANDLE;
@@ -493,8 +528,7 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRNativeSession::Validate */
     Result<void> OpenXRNativeSession::Validate(const XRSessionId &session) const {
-        const auto admitted = ValidateXRSession(session, owner_);
-        if (admitted.HasError())
+        if (const auto admitted = ValidateXRSession(session, owner_); admitted.HasError())
             return admitted;
         if (!retainedPreflight_ || !retainedPlan_)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
@@ -511,8 +545,8 @@ namespace Horo::XR::OpenXRInternal {
     bool OpenXRNativeSession::HasExtension(std::string_view name) const noexcept {
         if (!owner_.IsValid())
             return false;
-        for (std::uint32_t index = 0; index < extensionCount_; ++index)
-            if (name == extensions_[index])
+        for (std::uint32_t index = 0; index < names_.extensionCount; ++index)
+            if (name == names_.extensions[index])
                 return true;
         return false;
     }

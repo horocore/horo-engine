@@ -37,6 +37,7 @@ namespace Horo::Tests::OpenXR {
         bool stale{};
         bool staleAfterSession{};
         bool throwAfterInstance{};
+        bool throwUnknownAfterInstance{};
         std::uint32_t liveInstances{};
         std::uint32_t liveSessions{};
 
@@ -186,6 +187,8 @@ namespace Horo::Tests::OpenXR {
         Result<const XrBaseInStructure *> Prepare(XrInstance, XrSystemId, PFN_xrGetInstanceProcAddr) override {
             if (Script::active->throwAfterInstance)
                 throw std::runtime_error("injected private graphics failure");
+            if (Script::active->throwUnknownAfterInstance)
+                throw 7;
             const auto result = Script::Record("graphics");
             return XR_FAILED(result) ? Result<const XrBaseInStructure *>::Failure(MakeError(XRErrors::OperationUnavailable))
                                      : Result<const XrBaseInStructure *>::Success(&binding);
