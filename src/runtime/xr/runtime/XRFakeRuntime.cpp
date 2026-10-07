@@ -25,7 +25,9 @@ namespace Horo::XR {
     }
 
     /** @copydoc XRFakeRuntime::Resources::Release */
-    void XRFakeRuntime::Resources::Release(XRSessionPreparation, const XRSessionId &) noexcept {}
+    void XRFakeRuntime::Resources::Release(XRSessionPreparation, const XRSessionId &) noexcept {
+        // Preparation owns no native, GPU or external resources, so fake retirement has no work to perform.
+    }
 
     /** @copydoc XRFakeRuntime::XRFakeRuntime */
     XRFakeRuntime::XRFakeRuntime() noexcept : sessions_(resources_), frames_(sessions_) {}
@@ -64,11 +66,12 @@ namespace Horo::XR {
 
     /** @copydoc XRFakeRuntime::ValidateStep */
     XRFrameStatus XRFakeRuntime::ValidateStep(const XRFakeStep &step, const XRSessionId &session) const {
-        if ((step.event && *step.event > XRSessionEvent::InstanceLost) || step.failure >= XRFakeFailure::Count)
+        using enum XRFakeFailure;
+        if ((step.event && *step.event > XRSessionEvent::InstanceLost) || step.failure >= Count)
             return XRFrameStatus::InvalidInput;
-        if (!step.executeFrame && (!step.event || step.actionCount != 0 || step.viewCount != 0 || step.failure != XRFakeFailure::None))
+        if (!step.executeFrame && (!step.event || step.actionCount != 0 || step.viewCount != 0 || step.failure != None))
             return XRFrameStatus::InvalidInput;
-        if (!step.shouldRender && step.failure >= XRFakeFailure::Locate && step.failure <= XRFakeFailure::Release)
+        if (!step.shouldRender && step.failure >= Locate && step.failure <= Release)
             return XRFrameStatus::Unsupported;
         if (step.executeFrame && !step.prediction.IsValid())
             return XRFrameStatus::InvalidInput;
@@ -111,8 +114,8 @@ namespace Horo::XR {
             if (action.action.session != session)
                 return XRFrameStatus::StaleSession;
             constexpr std::array capabilities{XRCapability::BooleanActions, XRCapability::FloatActions, XRCapability::Vector2Actions};
-            const auto decision = plan_->Decision(capabilities[static_cast<std::size_t>(action.kind)]).state;
-            if (decision != XRFeatureDecisionState::Required && decision != XRFeatureDecisionState::OptionalEnabled)
+            if (const auto decision = plan_->Decision(capabilities[static_cast<std::size_t>(action.kind)]).state;
+                decision != XRFeatureDecisionState::Required && decision != XRFeatureDecisionState::OptionalEnabled)
                 return XRFrameStatus::Unsupported;
             if (std::any_of(step.actions.begin(), step.actions.begin() + i, [&action](const XRFakeAction &prior) {
                 return prior.action == action.action;
@@ -134,8 +137,7 @@ namespace Horo::XR {
             return XRFrameStatus::CapacityExceeded;
         XRRenderPredictionTime previous;
         for (const auto &step : steps) {
-            const auto status = ValidateStep(step, session);
-            if (status != XRFrameStatus::Ok)
+            if (const auto status = ValidateStep(step, session); status != XRFrameStatus::Ok)
                 return status;
             if (step.executeFrame) {
                 if (previous.IsValid() && step.prediction <= previous)
@@ -151,11 +153,11 @@ namespace Horo::XR {
 
     /** @copydoc XRFakeRuntime::RunFrame */
     XRFrameStatus XRFakeRuntime::RunFrame(const XRFakeStep &step, const XRSessionId &session, XRFakeOutcome &outcome) noexcept {
-        const auto reserved = frames_.ReserveWait(session);
-        if (reserved.status != XRFrameStatus::Ok)
+        using enum XRFakeFailure;
+        if (const auto reserved = frames_.ReserveWait(session); reserved.status != XRFrameStatus::Ok)
             return reserved.status;
         outcome.failure = step.failure;
-        if (step.failure == XRFakeFailure::Wait) {
+        if (step.failure == Wait) {
             static_cast<void>(frames_.CancelWait());
             return XRFrameStatus::Unavailable;
         }
@@ -163,15 +165,14 @@ namespace Horo::XR {
         // Begin failures recover through an explicit fake begin retry before zero-layer completion.
         const auto begun = frames_.Begin(waited.frame);
         HORO_INVARIANT(begun == XRFrameStatus::Ok);
-        auto status = step.failure == XRFakeFailure::Begin ? XRFrameStatus::Unavailable : XRFrameStatus::Ok;
+        auto status = step.failure == Begin ? XRFrameStatus::Unavailable : XRFrameStatus::Ok;
         if (status == XRFrameStatus::Ok && step.shouldRender)
             status = RenderFrame(step, waited.frame, outcome);
         else
             outcome.frame = frames_.Snapshot();
-        if (status == XRFrameStatus::Ok && step.failure == XRFakeFailure::End)
+        if (status == XRFrameStatus::Ok && step.failure == End)
             status = XRFrameStatus::Unavailable;
-        if (status != XRFrameStatus::Ok && step.shouldRender &&
-            (step.failure == XRFakeFailure::Begin || step.failure == XRFakeFailure::End)) {
+        if (status != XRFrameStatus::Ok && step.shouldRender && (step.failure == Begin || step.failure == End)) {
             const auto aborted = frames_.Abort(waited.frame);
             HORO_INVARIANT(aborted == XRFrameStatus::Ok);
         }
@@ -182,20 +183,21 @@ namespace Horo::XR {
 
     /** @copydoc XRFakeRuntime::RenderFrame */
     XRFrameStatus XRFakeRuntime::RenderFrame(const XRFakeStep &step, const XRFrameId &frame, XRFakeOutcome &outcome) noexcept {
+        using enum XRFakeFailure;
         const XRSwapchainImageId image{{frame.session, {.index = 1, .generation = 1}}, {.index = 1, .generation = 1}};
-        auto status = step.failure == XRFakeFailure::Locate ? XRFrameStatus::Unavailable : frames_.LocateViews(frame, step.viewCount);
+        auto status = step.failure == Locate ? XRFrameStatus::Unavailable : frames_.LocateViews(frame, step.viewCount);
         bool acquired = false;
         bool released = false;
         if (status == XRFrameStatus::Ok) {
-            status = step.failure == XRFakeFailure::Acquire ? XRFrameStatus::Unavailable : frames_.Acquire(frame, image);
+            status = step.failure == Acquire ? XRFrameStatus::Unavailable : frames_.Acquire(frame, image);
             acquired = status == XRFrameStatus::Ok;
         }
         if (status == XRFrameStatus::Ok) {
             const std::array images{image};
-            status = step.failure == XRFakeFailure::Submit ? XRFrameStatus::Unavailable : frames_.Submit(frame, images);
+            status = step.failure == Submit ? XRFrameStatus::Unavailable : frames_.Submit(frame, images);
         }
         if (status == XRFrameStatus::Ok) {
-            status = step.failure == XRFakeFailure::Release ? XRFrameStatus::Unavailable : frames_.Release(frame, image);
+            status = step.failure == Release ? XRFrameStatus::Unavailable : frames_.Release(frame, image);
             released = status == XRFrameStatus::Ok;
         }
         outcome.frame = frames_.Snapshot();
