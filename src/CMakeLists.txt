@@ -1502,6 +1502,15 @@ add_library(HoroEngine::TerrainImport ALIAS HoroTerrainImport)
 target_compile_features(HoroTerrainImport PUBLIC cxx_std_20)
 target_include_directories(HoroTerrainImport PRIVATE ${PROJECT_SOURCE_DIR}/vendor/stb)
 target_link_libraries(HoroTerrainImport PUBLIC HoroEngine::TerrainApi HoroEngine::Assets)
+# Editor-owned terrain authoring remains usable from GUI, CLI and MCP hosts without presentation dependencies.
+add_library(HoroTerrainAuthoring STATIC
+        editor/terrain/TerrainAuthoringDocument.cpp
+        editor/terrain/TerrainAuthoringDocumentState.cpp
+)
+add_library(HoroEngine::TerrainAuthoring ALIAS HoroTerrainAuthoring)
+target_compile_features(HoroTerrainAuthoring PUBLIC cxx_std_20)
+target_link_libraries(HoroTerrainAuthoring PUBLIC HoroEngine::TerrainImport)
+
 add_library(HoroTerrainCook STATIC
         runtime/terrain/cook/FoliageClusterCook.cpp
         runtime/terrain/cook/FoliageClusterCookOwner.cpp
