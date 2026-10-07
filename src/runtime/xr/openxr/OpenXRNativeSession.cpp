@@ -42,13 +42,14 @@ namespace Horo::XR::OpenXRInternal {
 
         /** @brief Contains every host preparation exception without allocating a translated error while unwinding. */
         template <typename Prepare> PreparationFailure CapturePreparationFailure(Prepare prepare) noexcept {
+            using enum PreparationFailure;
             try {
                 prepare();
-                return PreparationFailure::None;
+                return None;
             } catch (const std::exception &) {
-                return PreparationFailure::StandardException;
+                return StandardException;
             } catch (...) {
-                return PreparationFailure::UnknownException;
+                return UnknownException;
             }
         }
 
@@ -458,7 +459,7 @@ namespace Horo::XR::OpenXRInternal {
         lastRuntime_ = request.candidate.system.runtime.Value();
         lastSessionGeneration_ = request.candidate.slot.generation;
         auto prepared = Result<void>::Success();
-        const auto failure = CapturePreparationFailure([&] {
+        const auto failure = CapturePreparationFailure([this, &prepared, &request] {
             prepared = PrepareTransaction(request);
         });
         using enum PreparationFailure;

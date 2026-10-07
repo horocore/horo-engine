@@ -128,7 +128,9 @@ namespace Horo::XR::OpenXRInternal {
             PFN_xrGetSystem getSystem{};
             PFN_xrCreateSession createSession{};
             PFN_xrDestroySession destroySession{};
-        } dispatch_;
+        };
+
+        NativeDispatch dispatch_;
 
         XrInstance instance_{XR_NULL_HANDLE};
         XrSystemId system_{XR_NULL_SYSTEM_ID};
@@ -148,7 +150,9 @@ namespace Horo::XR::OpenXRInternal {
             std::array<const char *, MaximumNativeLayers> layers{};
             std::uint32_t extensionCount{};
             std::uint32_t layerCount{};
-        } names_;
+        };
+
+        NegotiatedNames names_;
 
         bool graphicsPrepared_{};
     };
