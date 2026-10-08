@@ -63,6 +63,13 @@ namespace Horo::Runtime {
 
         TEST_CASE("Runtime Save diagnostics classify every canonical failure category", "[save][diagnostics]") {
             const std::array cases{
+                std::pair{&SaveErrors::CommandInvalid, SaveFailureCategory::Validation},
+                std::pair{&SaveErrors::CommandDenied, SaveFailureCategory::Lifecycle},
+                std::pair{&SaveErrors::CommandIneligible, SaveFailureCategory::Lifecycle},
+                std::pair{&SaveErrors::CommandStale, SaveFailureCategory::Lifecycle},
+                std::pair{&SaveErrors::CommandTargetUnavailable, SaveFailureCategory::Validation},
+                std::pair{&SaveErrors::CommandIncompatible, SaveFailureCategory::Validation},
+                std::pair{&SaveErrors::CommandCooldown, SaveFailureCategory::Lifecycle},
                 std::pair{&SaveErrors::IdentityInvalid, SaveFailureCategory::Validation},
                 std::pair{&SaveErrors::VersionUnsupportedNewer, SaveFailureCategory::Compatibility},
                 std::pair{&SaveErrors::SaveRootUnavailable, SaveFailureCategory::Storage},
