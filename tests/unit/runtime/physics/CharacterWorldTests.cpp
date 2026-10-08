@@ -1,5 +1,7 @@
 #include "CharacterWorldTestHelpers.h"
 
+#include <thread>
+
 namespace Horo::Character {
     namespace {
         using namespace TestDetail;
@@ -35,6 +37,74 @@ namespace Horo::Character {
             invalid = owner;
             invalid.physicsSnapshotRevision = 0;
             RequireError(CharacterWorld::Prepare(invalid, settings), CharacterErrors::WorldInvalid);
+        }
+
+        TEST_CASE("Character explicitly refreshes only its paired Physics revision between operations", "[physics][character][world]") {
+            auto world = PreparedWorld();
+            const auto original = world->Descriptor();
+            const auto next = original.physicsSnapshotRevision + 1;
+            RequireError(world->RefreshPhysicsSnapshot(PhysicsWorldId(999), next), CharacterErrors::HandleWorldMismatch);
+            RequireError(world->RefreshPhysicsSnapshot(original.physicsWorld, 0), CharacterErrors::QuerySnapshotStale);
+            REQUIRE(world->Descriptor() == original);
+            REQUIRE(world->RefreshPhysicsSnapshot(original.physicsWorld, next).HasValue());
+            REQUIRE(world->Descriptor().physicsSnapshotRevision == next);
+            REQUIRE(world->Descriptor().identity == original.identity);
+            REQUIRE(world->Activate().HasValue());
+            REQUIRE(world->RefreshPhysicsSnapshot(original.physicsWorld, next).HasValue());
+            RequireError(world->RefreshPhysicsSnapshot(original.physicsWorld, original.physicsSnapshotRevision),
+                         CharacterErrors::QuerySnapshotStale);
+            std::optional<Result<void>> foreignResult;
+            std::thread worker([&] {
+                foreignResult = world->RefreshPhysicsSnapshot(original.physicsWorld, next + 1);
+            });
+            worker.join();
+            REQUIRE(foreignResult.has_value());
+            RequireError(*foreignResult, CharacterErrors::InvalidState);
+            REQUIRE(world->Descriptor().physicsSnapshotRevision == next);
+            world->Shutdown();
+            RequireError(world->RefreshPhysicsSnapshot(original.physicsWorld, next + 1), CharacterErrors::InvalidState);
+        }
+
+        TEST_CASE("Character cannot refresh a snapshot from placement or tick callbacks", "[physics][character][world]") {
+            auto active = ActiveWorldWithControllers(1);
+            auto &world = *active.world;
+
+            struct RefreshAttempt final {
+                CharacterWorld &world;
+                std::optional<Result<void>> result;
+
+                void Run() {
+                    const auto owner = world.Descriptor();
+                    result = world.RefreshPhysicsSnapshot(owner.physicsWorld, owner.physicsSnapshotRevision + 1);
+                }
+            } attempt{world};
+
+            OverlapProbe clear;
+            auto context = clear.Context(world.Descriptor());
+            context.context = &attempt;
+            context.overlap = [](void *state, const CharacterOverlapProbeRequest &) noexcept {
+                static_cast<RefreshAttempt *>(state)->Run();
+                return Result<CharacterOverlapProbeResult>::Success({});
+            };
+            const auto revision = world.Descriptor().physicsSnapshotRevision;
+            REQUIRE(world.SpawnController(active.controllers[0], context).HasValue());
+            REQUIRE(attempt.result.has_value());
+            RequireError(*attempt.result, CharacterErrors::InvalidState);
+            REQUIRE(world.Descriptor().physicsSnapshotRevision == revision);
+            REQUIRE(world.QueueMovementCommand(Movement(active.controllers[0], 1, 1)).HasValue());
+            CharacterTickObserver observer{.context = &attempt};
+            observer.movement = [](void *state, const CharacterMovementRequest &) noexcept {
+                static_cast<RefreshAttempt *>(state)->Run();
+            };
+            REQUIRE(world.AdvanceFixedTick(FixedTick(1, observer)).HasValue());
+            RequireError(*attempt.result, CharacterErrors::InvalidState);
+            REQUIRE(world.Descriptor().physicsSnapshotRevision == revision);
+            auto retained = clear.Context(world.Descriptor(), 2);
+            REQUIRE(world.RefreshPhysicsSnapshot(world.Descriptor().physicsWorld, revision + 1).HasValue());
+            const auto before = world.ControllerTransform(active.controllers[0]).Value();
+            RequireError(world.TeleportController({active.controllers[0], 2, {1, 0, 0}, Math::Quaternion::Identity()}, retained),
+                         CharacterErrors::QuerySnapshotStale);
+            REQUIRE(world.ControllerTransform(active.controllers[0]).Value().position == before.position);
         }
 
         TEST_CASE("Character world deterministically reuses slots without aliasing stale handles",

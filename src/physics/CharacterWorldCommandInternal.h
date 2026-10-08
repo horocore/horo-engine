@@ -228,19 +228,23 @@ namespace Horo::Character::Detail {
             descriptor.selectors = *command.filterChange;
         std::optional<CharacterShapeChangeResult> shapeChange;
         bool geometryChanged{};
+        auto candidate = previous.publication;
         if (command.shapeChange.has_value() || command.stance != CharacterStanceIntent::Keep) {
             const auto shape = ResolveShapeChange(impl, command, input, previous.publication, descriptor, capsule, previous.stance);
             if (shape.HasError())
                 return Result<CharacterMovementResult>::Failure(shape.ErrorValue());
             shapeChange = shape.Value();
             geometryChanged = !SameCapsule(capsule, shapeChange->effectiveCapsule);
+            if (geometryChanged)
+                candidate.position =
+                    BottomPreservingPosition(previous.publication.position, descriptor.up, capsule, shapeChange->effectiveCapsule);
             capsule = shapeChange->effectiveCapsule;
         }
         descriptor.capsule = capsule;
         // The crouch profile is authored against standing geometry, not the temporary query capsule.
         descriptor.crouchedCapsule.reset();
-        const auto resolved = ResolveMovementResult(impl, command, previous.publication, input, descriptor,
-                                                    geometryChanged ? Math::Vec3{} : previous.gravityVelocity);
+        const auto resolved =
+            ResolveMovementResult(impl, command, candidate, input, descriptor, geometryChanged ? Math::Vec3{} : previous.gravityVelocity);
         if (resolved.HasError())
             return Result<CharacterMovementResult>::Failure(resolved.ErrorValue());
         CharacterMovementResult movement = std::move(resolved).Value();
@@ -248,7 +252,7 @@ namespace Horo::Character::Detail {
         if (geometryChanged && !input.query.sweep) {
             ClearGroundEvidence(movement, descriptor.up);
         }
-        return Result<CharacterMovementResult>::Success(std::move(movement));
+        return FinalizeMovementResult(impl, std::move(movement), previous.publication.position);
     }
 
     /** @brief Identifies the final replacement for one controller in sorted command scratch. */

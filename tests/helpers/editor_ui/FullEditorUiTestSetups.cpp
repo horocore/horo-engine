@@ -43,11 +43,14 @@ namespace Horo::Tests::FullEditorSetups {
 
     void AwaitWorkspace(UiScenarioPipe &pipeline, FullEditorUiTestHost &editor) {
         pipeline.Setup("Wait for complete workspace", [&editor](ImGuiTestContext &ui) {
-            for (int frame = 0; frame < 1200 && editor.ActiveRoute() != Editor::GuiRouteKind::EditorWorkspace; ++frame) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+            for (int frame = 0; frame < 1200 && editor.ActiveRoute() != Editor::GuiRouteKind::EditorWorkspace &&
+                                std::chrono::steady_clock::now() < deadline;
+                 ++frame) {
                 ui.Yield();
                 // Project creation intentionally advances through real-time worker stages.
                 // Headless frames otherwise exhaust the deterministic frame budget first.
-                std::this_thread::sleep_for(std::chrono::milliseconds{2});
+                std::this_thread::sleep_for(std::chrono::milliseconds{10});
             }
             IM_CHECK(editor.WasRouteDrawn(Editor::GuiRouteKind::ProjectLoading));
             IM_CHECK(editor.ActiveRoute() == Editor::GuiRouteKind::EditorWorkspace);

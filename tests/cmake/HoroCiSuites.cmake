@@ -14,6 +14,8 @@ set(HORO_CI_AUDIO_TARGETS
 # The full Windows suite remains disabled. Preserve all existing focused checks
 # in one headless Debug build, including their public-header compile consumers.
 set(HORO_CI_WINDOWS_TARGETS
+    HoroNetworkDebuggerTests
+    HoroNetworkDebuggerPublicHeaderConsumer
     HoroTerrainAuthoringTests
     HoroTerrainAuthoringPublicHeaderConsumer
     HoroMixerDocumentTests
@@ -21,10 +23,13 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroCliCommandRegistryTests
     HoroCliOutputPublicHeaderConsumer
     HoroCliProductionOutputContract
+    HoroCliMcpServeTests
     HoroPlatformTests
     HoroUpdateZipPackageProducerTests
     HoroVfxApiTests
     HoroCinematicModelTests
+    HoroFractureDocumentTests
+    HoroFractureDocumentPublicHeaderConsumer
     HoroCinematicRuntimeTests
     HoroCameraCutRuntimeTests
     HoroCameraCutPublicHeaderConsumer
@@ -48,6 +53,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroRuntimeSaveRootResolverTests
     HoroRuntimeSaveFilesystemLockTests
     HoroRuntimeSaveSlotCommitTransactionTests
+    HoroRuntimeSaveEventTriggersTests
+    HoroSaveEventTriggersPublicHeaderConsumer
     HoroRuntimePublicHeaderConsumer
     HoroTerrainSourceArtifactTests
     HoroTerrainSourceArtifactPublicHeaderConsumer
@@ -72,6 +79,7 @@ set(HORO_CI_NETWORK_TARGETS
 
 # These editor-labelled suites were explicitly run by the coverage workflow.
 set(HORO_SONAR_EDITOR_TARGETS
+    HoroFractureDocumentTests
     HoroTerrainAuthoringTests
     HoroMixerDocumentTests
     HoroCameraCutEditorIntegrationTests
@@ -119,6 +127,7 @@ function(horo_finalize_ci_suites)
     endif()
 
     set_property(TEST
+        HoroNetworkDebuggerPublicHeaderConsumer
         HoroAudioCallbackLockPolicyTest
         HoroPrefabSceneExpansionContractConsumer
         HoroExtensionManagerTests

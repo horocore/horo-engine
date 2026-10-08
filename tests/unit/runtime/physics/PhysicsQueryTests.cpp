@@ -1,3 +1,4 @@
+#include "AllocationProbe.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Physics/PhysicsQuery.h"
 #include "Horo/Physics/PhysicsWorld.h"
@@ -430,6 +431,35 @@ namespace Horo::Physics {
         REQUIRE(world->DestroyQueryFixture(ignored).HasValue());
         REQUIRE(world->DestroyQueryFixture(trigger).HasValue());
         REQUIRE(world->DestroyQueryFixture(included).HasValue());
+    }
+
+    TEST_CASE("Canonical analytic capsule overlap honors arbitrary up and exact generation filters", "[physics][query][native]") {
+        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
+        const auto identity = PhysicsWorldId::Create(704).Value();
+        REQUIRE(world->Activate(identity).HasValue());
+        auto targetDescriptor = QueryFixture({1.2F, 0, 0});
+        targetDescriptor.shape = PhysicsBoxShape{{0.1F, 0.1F, 0.1F}};
+        const auto target = world->CreateQueryFixture(targetDescriptor).Value();
+        AdvanceOneTick(*world);
+        std::array<PhysicsQueryHit, 1> hits{};
+        auto descriptor =
+            QueryDescriptor(identity, PhysicsCapsuleOverlapQuery{{0.25F, 1.0F}, {}, {1, 0, 0}}, PhysicsQueryCollection::Any, 1);
+        const auto before = Tests::AllocationProbe::Count();
+        const auto result = world->Query(descriptor, hits);
+        const auto after = Tests::AllocationProbe::Count();
+        REQUIRE(result.HasValue());
+        REQUIRE(after == before);
+        REQUIRE(result.Value().hitCount == 1);
+        REQUIRE(hits.front().body == target.body);
+        descriptor.geometry = PhysicsCapsuleOverlapQuery{{0.25F, 1.0F}, {}, {0, 1, 0}};
+        REQUIRE(world->Query(descriptor, hits).Value().hitCount == 0);
+        descriptor.geometry = PhysicsCapsuleOverlapQuery{{0.25F, 1.0F}, {}, {1, 0, 0}};
+        descriptor.filter.excludedBody = target.body;
+        REQUIRE(world->Query(descriptor, hits).Value().hitCount == 0);
+        descriptor.filter.excludedBody.reset();
+        REQUIRE(world->DestroyQueryFixture(target).HasValue());
+        REQUIRE(world->Query(descriptor, hits).Value().hitCount == 0);
     }
 
     TEST_CASE("Canonical immediate point overlap and sweep queries project stable hits", "[physics][query][native]") {

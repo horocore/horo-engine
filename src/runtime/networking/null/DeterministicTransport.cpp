@@ -58,13 +58,15 @@ namespace Horo::Network {
 
     DeterministicTransport::DeterministicTransport(DeterministicTransportDescriptor descriptor, TransportBudgetController budget,
                                                    std::unique_ptr<ScheduledDelivery[]> deliveries,
-                                                   std::unique_ptr<std::byte[]> payloadStorage, NetworkMetrics *metrics) noexcept
+                                                   std::unique_ptr<std::byte[]> payloadStorage, NetworkMetrics *metrics,
+                                                   NetworkDebugger *debugger) noexcept
         : descriptor_(std::move(descriptor)), budget_(std::move(budget)), deliveries_(std::move(deliveries)),
-          payloadStorage_(std::move(payloadStorage)), randomState_(descriptor_.scenario.seed), metrics_(metrics) {}
+          payloadStorage_(std::move(payloadStorage)), randomState_(descriptor_.scenario.seed), metrics_(metrics), debugger_(debugger),
+          diagnosticSource_(debugger ? debugger->Source() : NetworkDiagnosticSource{}) {}
 
     /** @copydoc DeterministicTransport::Create */
     Result<DeterministicTransport> DeterministicTransport::Create(const DeterministicTransportDescriptor &descriptor,
-                                                                  NetworkMetrics *metrics) {
+                                                                  NetworkMetrics *metrics, NetworkDebugger *debugger) {
         if (!ValidDescriptor(descriptor))
             return Fail<DeterministicTransport>(NetworkErrors::TransportBudgetInvalid);
         auto budget = TransportBudgetController::Create(descriptor.budgetCapacity, descriptor.budgetPolicy);
@@ -74,8 +76,9 @@ namespace Horo::Network {
             const auto deliveryCapacity = descriptor.maximumScheduledDeliveries + descriptor.budgetCapacity.maximumConnections;
             auto deliveries = std::make_unique<ScheduledDelivery[]>(deliveryCapacity);
             auto payloadStorage = std::make_unique<std::byte[]>(deliveryCapacity * descriptor.scenario.maximumFragmentBytes);
-            return Result<DeterministicTransport>::Success(
-                DeterministicTransport{descriptor, std::move(budget).Value(), std::move(deliveries), std::move(payloadStorage), metrics});
+            return Result<DeterministicTransport>::Success(DeterministicTransport{descriptor, std::move(budget).Value(),
+                                                                                  std::move(deliveries), std::move(payloadStorage), metrics,
+                                                                                  debugger});
         } catch (const std::bad_alloc &) {
             return Fail<DeterministicTransport>(NetworkErrors::TransportBudgetCapacityExceeded);
         }
@@ -88,6 +91,8 @@ namespace Horo::Network {
         auto opened = budget_.OpenConnection(connection, shuttingDown_ ? TransportAdmissionState::ShuttingDown : state);
         if (opened.HasValue())
             deliveries_[descriptor_.maximumScheduledDeliveries + connection.Slot()] = {};
+        if (opened.HasValue() && debugger_)
+            (void)debugger_->Observe(diagnosticSource_, NetworkConnectionRecord{connection, NetworkTransportEventKind::Connected});
         return opened;
     }
 
@@ -333,6 +338,12 @@ namespace Horo::Network {
             };
             if (observe && delivery.kind == DeterministicTransportEventKind::Packet)
                 (void)metrics_->RecordMessage(NetworkMetricDirection::Received, NetworkMetricCategory::Transport, delivery.bytes);
+            if (debugger_)
+                (void)debugger_->Observe(diagnosticSource_, NetworkConnectionRecord{delivery.connection,
+                                                                                    delivery.kind == DeterministicTransportEventKind::Packet
+                                                                                        ? NetworkTransportEventKind::PacketReceived
+                                                                                        : NetworkTransportEventKind::Closed,
+                                                                                    delivery.bytes});
             ReleaseDelivery(index);
         }
         if (observe) {

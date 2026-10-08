@@ -488,6 +488,11 @@ operation execution, history, dirty/saved state and derived candidate/preview st
 Panels, inspectors, tree/graph views and viewport gizmos own presentation/input only and
 cannot mutate source, history or artifact publication directly.
 
+The DFR-005.2 headless source model is owned by `HoroEngine::FractureDocument`
+and exposed through `Horo/Editor/FractureAssetDocument.h`. Its canonical source
+schema, transactional edits, save receipts and host migration are documented in
+[the fracture document guide](../../guides/fracture-asset-document-migration.md).
+
 Import and procedural generation capture an immutable exact-revision input snapshot and
 write a bounded detached candidate in a document-owned cancellable operation. Completion
 does not dirty or publish. Only an explicit accept operation may atomically apply the

@@ -97,6 +97,11 @@ namespace Horo::Editor {
     /** @brief Draws the canonical five-pixel progress track. */
     void DrawGlobalDockProgressBar(ImVec2 origin, float width, float progress);
 
+    /** @brief Draws semantic body text within available bounds, preserving minimum typography.
+     * @param width Available line width. @param text Resolved localized or technical evidence text.
+     * @param tone Semantic text tone. @param fonts Host fonts. */
+    void DrawGlobalDockWrappedText(float width, std::string_view text, GlobalDockTone tone, const Theme::Fonts &fonts);
+
     /** @brief Draws clipped, single-line text without leaking feature-local typography. */
     void DrawGlobalDockClippedText(ImDrawList &drawList, ImFont *font, float fontSize, ImVec2 minimum, ImVec2 maximum, ImVec4 color,
                                    std::string_view text);
