@@ -2,7 +2,7 @@
 
 /**
  * @file AssetCookCache.h
- * @brief Immutable content-addressed cooked artifact cache keyed by full CacheKeyV1 digest.
+ * @brief Immutable content-addressed cooked artifact cache with versioned complete input identities.
  */
 
 #include "Horo/Assets/AssetCook.h"
@@ -44,7 +44,7 @@ namespace Horo::Assets {
      * @brief Immutable content-addressed key for cache entry lookup.
      */
     struct AssetCookCacheKey {
-        Sha256Digest digest; /**< The complete CacheKeyV1 digest. */
+        Sha256Digest digest; /**< The complete versioned cache-key digest. */
 
         /** @brief Lexicographic comparison on digest bytes. */
         [[nodiscard]] auto operator<=>(const AssetCookCacheKey &) const noexcept = default;
@@ -56,6 +56,29 @@ namespace Horo::Assets {
      * @return The immutable cache key.
      */
     [[nodiscard]] AssetCookCacheKey BuildAssetCookCacheKey(const AssetCookCacheKeyInputs &inputs);
+
+    /** @brief Exact immutable dependency artifact evidence captured by the host, never an asset path. */
+    struct AssetCookDependencyIdentity final {
+        AssetId id;                  /**< Stable dependency identity. */
+        AssetTypeId type;            /**< Type from the pinned registry. */
+        Sha256Digest artifactDigest; /**< Digest of the verified complete dependency envelope. */
+    };
+
+    /**
+     * @brief Builds CacheKeyV2 without changing the existing V1 encoding or entries.
+     * @param inputs Complete single-source V1 inputs.
+     * @param dependencies Unique host-verified dependency artifacts; input order is immaterial.
+     * @param semanticInputsDigest Digest of host-canonical project, package, resolver and role-specific inputs.
+     * @param maximumDependencies Positive admission bound checked before copying or sorting.
+     * @return Complete V2 key, or a typed bounds/identity failure for invalid or duplicate dependencies.
+     * @details The key commits to the V1 digest, semantic-input digest and ascending AssetId/type/artifact
+     * digest table. This function hashes evidence; it does not verify source files or grant publication authority.
+     * @throws std::bad_alloc if bounded scratch allocation fails; no cache or publication is modified.
+     */
+    [[nodiscard]] Result<AssetCookCacheKey> BuildAssetCookCacheKeyV2(const AssetCookCacheKeyInputs &inputs,
+                                                                     std::span<const AssetCookDependencyIdentity> dependencies,
+                                                                     const Sha256Digest &semanticInputsDigest,
+                                                                     std::size_t maximumDependencies);
 
     /**
      * @brief Immutable content-addressed cooked artifact cache.

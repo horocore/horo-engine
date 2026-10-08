@@ -53,7 +53,8 @@ namespace Horo::Extensions {
         }
 
         [[nodiscard]] bool IsSupportedPersistentSurface(const EditorSurfaceDescriptor &descriptor) {
-            return (descriptor.kind == EditorSurfaceKind::Panel || descriptor.kind == EditorSurfaceKind::Tab) &&
+            using enum EditorSurfaceKind;
+            return (descriptor.kind == Panel || descriptor.kind == Tab || descriptor.kind == ActivityItem) &&
                    descriptor.persistence != EditorSurfacePersistence::None;
         }
 
@@ -98,6 +99,8 @@ namespace Horo::Extensions {
                         .open = surface.desiredOpen,
                         .focused = surface.desiredOpen && surface.desiredFocused,
                         .opaqueState = std::move(surface.opaqueState),
+                        .activityVisible = surface.activityUserVisible,
+                        .activityPlacement = surface.activityPlacement,
                     },
             };
         }
@@ -115,7 +118,15 @@ namespace Horo::Extensions {
             using enum EditorSurfaceProviderStatus;
             if (const EditorSurfaceProviderStatus configured = ConfiguredStatus(state, surface.provider); configured != Active)
                 return configured;
-            return surface.context.IsRegistered() ? Active : Missing;
+            if (!surface.context.IsRegistered())
+                return Missing;
+            if (surface.descriptor.activity.has_value()) {
+                const auto drawer = FindSurface(state, surface.descriptor.activity->drawerId);
+                if (drawer == nullptr || drawer->descriptor.kind != EditorSurfaceKind::Panel ||
+                    drawer->descriptor.provider != surface.descriptor.provider || !drawer->context.IsRegistered())
+                    return Missing;
+            }
+            return Active;
         }
 
         [[nodiscard]] std::shared_ptr<EditorSurfaceState> FindSurface(const EditorSurfaceRegistryState &state, const std::string_view id) {
@@ -135,6 +146,8 @@ namespace Horo::Extensions {
                         .open = surface.desiredOpen,
                         .focused = surface.desiredOpen && surface.desiredFocused,
                         .opaqueState = surface.opaqueState,
+                        .activityVisible = surface.activityUserVisible,
+                        .activityPlacement = surface.activityPlacement,
                     },
             };
         }
@@ -185,15 +198,25 @@ namespace Horo::Extensions {
                 found->status = status;
         }
 
+        EditorActivityPlacement ActivityPlacementOf(const EditorSurfaceState &surface) noexcept {
+            return surface.activityPlacement.value_or(EditorActivityPlacement{surface.descriptor.activity->side,
+                                                                              surface.descriptor.activity->group,
+                                                                              surface.descriptor.placement.order});
+        }
+
         [[nodiscard]] Result<void> ValidateWorkspaceState(const EditorSurfaceWorkspaceState &workspace,
                                                           const EditorSurfaceRegistryLimits &limits) {
-            if (workspace.schemaVersion != EditorSurfaceRegistry::WorkspaceSchemaVersion ||
+            if ((workspace.schemaVersion != 1 && workspace.schemaVersion != EditorSurfaceRegistry::WorkspaceSchemaVersion) ||
                 workspace.surfaces.size() > limits.maximumWorkspaceEntries)
                 return Failure(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
 
             std::size_t totalBytes = 0;
             for (std::size_t index = 0; index < workspace.surfaces.size(); ++index) {
                 const EditorSurfaceWorkspaceEntry &entry = workspace.surfaces[index];
+                if (entry.activityPlacement && (entry.activityPlacement->side > EditorActivitySide::Bottom ||
+                                                entry.activityPlacement->group > 2 || entry.activityPlacement->order < 0 ||
+                                                static_cast<std::size_t>(entry.activityPlacement->order) >= limits.maximumSurfaces))
+                    return Failure(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
                 if (!EntryStateFits(entry, limits, totalBytes))
                     return Failure(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
                 for (std::size_t previous = 0; previous < index; ++previous) {

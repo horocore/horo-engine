@@ -89,6 +89,22 @@ namespace Horo::Gameplay {
             MakeError(Runtime::SaveErrors::ParticipantAdapterMissing));
     }
 
+    /** @copydoc LoadedGameModule::AcquireInstalledPersistence */
+    Result<Runtime::GameplayPersistenceInstallation> LoadedGameModule::AcquireInstalledPersistence(
+        const Runtime::SaveParticipantId &participant) const {
+        auto adapter = AcquirePersistence(participant);
+        if (adapter.HasError())
+            return Result<Runtime::GameplayPersistenceInstallation>::Failure(adapter.ErrorValue());
+        std::shared_ptr<const std::atomic_bool> admission{impl_, &impl_->runtimeLeaseAdmission};
+        auto ownedAdapter = std::move(adapter).Value();
+        std::shared_ptr<const Runtime::GameplayPersistenceDescriptor> descriptor{ownedAdapter, &ownedAdapter->Descriptor()};
+        Runtime::GameplayPersistenceInstallation receipt{std::move(descriptor), std::move(ownedAdapter), std::move(admission),
+                                                         Cancellation()};
+        if (!receipt.CanUse())
+            return Result<Runtime::GameplayPersistenceInstallation>::Failure(MakeError(GameplayErrors::GameplayReloadRestartRequired));
+        return Result<Runtime::GameplayPersistenceInstallation>::Success(std::move(receipt));
+    }
+
     /** @copydoc LoadedGameModule::ActiveServices */
     std::span<const GameplayServiceId> LoadedGameModule::ActiveServices() const noexcept {
         return impl_->runtimeContext.activeServices;

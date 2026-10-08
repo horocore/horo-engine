@@ -21,7 +21,7 @@ set(HORO_GAMEPLAY_SDK_FINGERPRINT
 )
 set(HORO_EXTENSION_SDK_VERSION "${HORO_ENGINE_VERSION}")
 set(HORO_EXTENSION_ABI_MAJOR_VERSION 1)
-set(HORO_EXTENSION_ABI_PUBLISHED_MINOR 3)
+set(HORO_EXTENSION_ABI_PUBLISHED_MINOR 4)
 set(HORO_EXTENSION_ABI_MIN_HOST_MINOR 0)
 set(HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE 2)
 
@@ -57,6 +57,7 @@ option(HORO_BUILD_PHYSICS_NATIVE "Build the private CanonicalV1 Physics solver" 
 option(HORO_BUILD_NAVIGATION_RECAST_DETOUR "Build the default grounded navigation query provider" ON)
 option(HORO_BUILD_AUDIO_SDL3 "Build the SDL3 portability/reference audio backend" ${HORO_BUILD_EDITOR_GUI})
 option(HORO_BUILD_NETWORK_GNS "Build the optional production GameNetworkingSockets transport" OFF)
+option(HORO_BUILD_XR_OPENXR "Build the optional privately dispatched OpenXR session backend" OFF)
 
 if(HORO_ENABLE_IMGUI_UI_TESTS AND NOT BUILD_TESTING)
     message(FATAL_ERROR "HORO_ENABLE_IMGUI_UI_TESTS requires BUILD_TESTING=ON")

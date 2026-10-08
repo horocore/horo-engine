@@ -355,6 +355,72 @@ downgrade or layout-derived compatibility.
 
 ## Validated Apply Path
 
+### Implemented bounded state codec
+
+`ReplicationStateCodec` is the NetworkRuntime-owned NET-004.4 consumer of the
+NET-004.3 committed capture pins. The admitted connection owner prepares one codec
+for an exact recipient/object role publication, negotiated descriptor generation,
+schema projection and spawn/update kind. Preparation evaluates the existing typed
+field conditions, including exact custom visibility evidence. Changing role,
+visibility, record kind or negotiated descriptors requires a fresh codec; shutdown
+revokes all of its decoded baseline values before session/module retirement.
+
+Encoding invokes only the pinned field serializers over immutable captured values;
+it never reopens a Scene read or calls a capture adapter per recipient. An exact
+acknowledgement must match the source publication, negotiated descriptor generation,
+recipient role revision and projection fingerprint. A missing, expired, future or incompatible baseline selects
+full projected state. A delta uses canonical comparison, so equivalent quantization
+buckets do not generate changed field bytes. Neither loss nor duplicate encoding or
+decoding mutates the captured canonical source.
+Acknowledgement input is a call-scoped const borrow; encoding first copies its finite
+identity and shared pin so a reentrant callback cannot invalidate caller-owned evidence
+that the operation is still using.
+
+Version-one state framing uses little-endian integers, independent of native
+layout. The 172-byte header contains `HRS1:u32, version:u8, delta:u8, reserved:u16`,
+then session/descriptor/role generations and recipient peer (`u64` each), authority
+epoch and object slot (`u64`), object generation (`u32`), schema (`u64`), schema
+major/minor (`u16`), committed tick/publication revision/baseline tick/baseline
+revision (`u64`), complete schema-set and field-projection SHA-256 digests (32 bytes
+each), and field count (`u32`). Each ascending distinct field carries
+`FieldId:u32, valueType:u32, codec:u32, byteLength:u32, canonicalBytes`. Field bytes
+retain their declared codec's byte order. Full records have zero baseline identity
+and contain the complete selected projection. Delta roots require the exact decoded
+object/schema/session/projection generation, host-resolved entity mapping, tick and publication revision.
+
+Decode performs a complete allocation-free framing pass before invoking a codec.
+It bounds counts, tags, ordering, lengths and the complete wire record, copies the
+validated field suffix before foreign callbacks can alter the borrowed input, then privately
+reconstructs a complete typed network value. Re-encoding each decoded field proves
+canonical bytes. Errors, callback faults, cancellation or shutdown publish no partial
+candidate and preserve prior decoded state. This operation has no Scene mutation
+authority: NET-004.6 still owns admission, staging and atomic owner-safe-point apply.
+Foreign codec transactions execute inside an allocation-free `noexcept` exception
+boundary. It classifies allocation failures separately from other callback faults;
+typed diagnostic construction remains outside that boundary so allocation during
+error reporting cannot terminate the host. The operation guard releases admission
+on all failure paths, allowing a later valid transaction to retry.
+NET-004.5 owns per-connection acknowledgement windows, retention and overflow policy;
+this codec contains no hidden history or retry state.
+
+Hosts charge a finite per-record allowance before each owner-thread call. The existing
+serializer API allocates bounded encoded and decoded values; the codec additionally
+bounds field work, wire storage and aggregate retained container bytes. It does not
+claim allocation-free encoding. Shutdown is required before retiring its admitted
+session; the receiving safe point must revalidate live world/object identity rather
+than treating a decoded value as authority.
+
+Migration: the codec header is an additive `HoroNetworkRuntime` public contract,
+registered in `HoroPublicHeaderOwnership.cmake` with no new dependency edge. Existing
+capture callers remain source-compatible. `ReplicationCapturedState::World()` exposes
+the existing immutable capture provenance for downstream fencing; consumers rebuild
+to use the added API. `HoroNetworkModePublicHeaderConsumer` covers ownership visibility
+and factory-only construction. `HoroReplicationStateCodecTests` exercises actual Scene
+commit/capture/codec flow, malformed framing, projection/quantization, loss, duplication,
+stale identities, cancellation and shutdown; owner mutation remains separately owned.
+The standard allocation factory uses an unforgeable private construction key; public
+consumers cannot invoke that constructor with `{}` to bypass `Create` validation.
+
 NetworkRuntime decodes a complete record into a bounded typed apply command. It
 validates session, role, authority, object lifecycle and schema before queueing the
 command to the target world.

@@ -4,6 +4,13 @@ JOB-001.2 keeps the cancellation-only submission overloads source-compatible,
 but configuration-dependent jobs should migrate to `SubmitContext` and consume
 only `JobExecutionContext` inside the callback.
 
+`SubmitResult` now accepts `const JobDescriptor &` to avoid an extra wrapper copy.
+It delegates synchronously to `SubmitContext`, which owns a descriptor copy before
+admission; no caller reference survives submission or is captured by queued work.
+Ordinary lvalue and temporary call sites remain source-compatible. Rebuild callers;
+code storing a pointer to this member function must use the new const-reference
+signature. The callback is still transferred by value and retained by the scheduler.
+
 ```cpp
 JobDescriptor descriptor{
     .parentCancellation = parent,
