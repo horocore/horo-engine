@@ -608,7 +608,7 @@ namespace Horo::Character::Detail {
                                               const CharacterFixedTickInput &input, const CharacterControllerDescriptor &descriptor,
                                               SweepMotionState &motion) {
         const auto rejected = Result<bool>::Success(false);
-        if (descriptor.maximumStepHeightMeters <= 0.0F || !MaySnapToGround(command, descriptor.up))
+        if (descriptor.maximumStepHeightMeters <= 0.0F || !MaySnapToGround(command, result, descriptor.up))
             return rejected;
         const float vertical = Math::Dot(motion.remaining, descriptor.up);
         if (vertical > GroundDistanceTolerance)
