@@ -132,7 +132,7 @@ namespace Horo::Runtime::Ui {
             frame.route.reset();
             return;
         }
-        auto *stack = &*canvas->routes;
+        const auto *stack = &*canvas->routes;
         if (route.gate) {
             const bool stageChanged = route.stage != storage.candidate.routeStage;
             route.published = true;
@@ -177,7 +177,7 @@ namespace Horo::Runtime::Ui {
     void UiAnimationOwner::CancelRouteValidated(Storage &storage, const UiAnimationCancellation reason) noexcept {
         if (!storage.route.gate)
             return;
-        auto *stack = &*storage.publisher.Current()->Canvas(storage.definition.canvas)->routes;
+        const auto *stack = &*storage.publisher.Current()->Canvas(storage.definition.canvas)->routes;
         storage.route.record->terminal = stack->CloseAnimationValidated(*storage.route.gate, UiRouteOperationRejection::Cancelled);
         storage.route.record->phase = UiAnimationRoutePhase::Cancelled;
         storage.route.record->cancellation = reason;

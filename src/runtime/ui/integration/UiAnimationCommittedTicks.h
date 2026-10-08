@@ -30,7 +30,10 @@ namespace Horo::Runtime::Ui::IntegrationInternal {
      */
     class CommittedTickLedger final {
     public:
-        ~CommittedTickLedger() = default;
+        /** @brief Retires this issuer's record objects before the vector releases its owned buffer. */
+        ~CommittedTickLedger() {
+            records_.clear();
+        }
 
         /** @brief Opaque immutable proposed consumption, pinned by its surrounding application-owner candidate. */
         class Prepared final {

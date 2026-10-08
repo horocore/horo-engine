@@ -654,7 +654,7 @@ namespace Horo::Runtime::Ui {
 
         auto &owner = *drain.held;
         std::size_t reclaimed = owner.retiredActions.size();
-        for (auto &actions : owner.actions)
+        for (const auto &actions : owner.actions)
             reclaimed += actions.router.DrainInteractionReplacement();
         for (auto &actions : owner.retiredActions)
             actions.router.Shutdown();

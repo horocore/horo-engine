@@ -1,7 +1,9 @@
+#include "AllocationProbe.h"
 #include "UiAnimationCommittedTicks.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
+#include <optional>
 
 namespace {
     using namespace Horo;
@@ -201,4 +203,23 @@ TEST_CASE("UI fixed ledger requires exact successful evidence and one-based host
     auto valid = ledger.Prepare(Commitment(tick, 3));
     REQUIRE(valid.HasValue());
     CHECK(valid.Value().Delta().nanoseconds == 11);
+}
+
+TEST_CASE("UI fixed ledger transfers and releases all record storage without allocating during destruction", "[runtime][ui][clock]") {
+    const auto allocationsBefore = Horo::Tests::AllocationProbe::Count();
+    const auto freesBefore = Horo::Tests::AllocationProbe::FreeCount();
+    std::size_t cleanupAllocations{};
+    {
+        std::optional<CommittedTickLedger> source{std::move(CommittedTickLedger::Create(2)).Value()};
+        std::optional<CommittedTickLedger> target{std::move(CommittedTickLedger::Create(3)).Value()};
+        *target = std::move(*source);
+        const auto cleanupStart = Horo::Tests::AllocationProbe::Count();
+        source.reset();
+        target.reset();
+        cleanupAllocations = Horo::Tests::AllocationProbe::Count() - cleanupStart;
+    }
+    const auto allocations = Horo::Tests::AllocationProbe::Count() - allocationsBefore;
+    const auto frees = Horo::Tests::AllocationProbe::FreeCount() - freesBefore;
+    CHECK(cleanupAllocations == 0);
+    CHECK(frees == allocations);
 }
