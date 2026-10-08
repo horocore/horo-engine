@@ -27,14 +27,19 @@ namespace Horo::Runtime::Ui {
         std::vector<UiLayoutElementDescriptor> layoutInputs;
         std::vector<UiLayoutElementDescriptor> previousLayoutInputs;
         std::vector<UiDrawCommand> paints;
-        UiLayoutStyleRevision layoutRevision;
-        UiRenderSnapshotRevision renderRevision;
+
+        /** @brief Owned revision counters for the coordinated layout and render snapshots. */
+        struct SnapshotRevisions final {
+            UiLayoutStyleRevision layout{UiLayoutStyleRevision::Create(1).Value()};
+            UiRenderSnapshotRevision render{UiRenderSnapshotRevision::Create(1).Value()};
+        };
+
+        SnapshotRevisions revisions;
 
         Storage(const UiThemeRuntimeDescriptor &source, RuntimeStyleRegistry registry, const RuntimeStyleAssetId selection,
                 UiStyleResolver resolver, UiLayoutEngine layout, UiRenderExtractor render)
             : descriptor(source), active(std::move(registry)), theme(selection), issued(active.Generation()), styles(std::move(resolver)),
-              layouts(std::move(layout)), renders(std::move(render)), layoutRevision(UiLayoutStyleRevision::Create(1).Value()),
-              renderRevision(UiRenderSnapshotRevision::Create(1).Value()) {
+              layouts(std::move(layout)), renders(std::move(render)) {
             styleInputs.reserve(source.style.elementCapacity);
             classes.reserve(source.classReferenceCapacity);
             layoutInputs.reserve(source.style.elementCapacity);
@@ -96,14 +101,14 @@ namespace Horo::Runtime::Ui {
             // Track the last inputs submitted to the private layout cache, including failed outer transactions.
             // Paint-only theme changes reuse their logical boxes; the public snapshot still advances as one unit.
             if (layoutInputs != previousLayoutInputs) {
-                const auto next = layoutRevision.Next();
+                const auto next = revisions.layout.Next();
                 if (next.HasError())
                     return Result<UiLayoutSnapshot>::Failure(next.ErrorValue());
-                layoutRevision = next.Value();
+                revisions.layout = next.Value();
                 previousLayoutInputs = layoutInputs;
             }
             auto layoutRequest = request.layout;
-            layoutRequest.sources.style = layoutRevision;
+            layoutRequest.sources.style = revisions.layout;
             layoutRequest.evaluator = &evaluator.Value();
             auto arranged = layouts.Update(tree, layoutRequest);
             if (arranged.HasError())
@@ -121,12 +126,21 @@ namespace Horo::Runtime::Ui {
                                                     const RuntimeStyleRegistry &registry, const RuntimeStyleAssetId selection,
                                                     const std::uint32_t fallbacks) {
             struct BorrowReset final {
+                explicit BorrowReset(std::vector<UiStyleElementInput> &source) : inputs(source) {}
+
+                BorrowReset(const BorrowReset &) = delete;
+                BorrowReset &operator=(const BorrowReset &) = delete;
+                BorrowReset(BorrowReset &&) = delete;
+                BorrowReset &operator=(BorrowReset &&) = delete;
+
                 std::vector<UiStyleElementInput> &inputs;
 
                 ~BorrowReset() {
                     inputs.clear();
                 }
-            } reset{styleInputs};
+            };
+
+            BorrowReset reset{styleInputs};
 
             if (request.styleSources.document != request.layout.sources.document ||
                 request.styleSources.tree != request.layout.sources.tree)
@@ -155,16 +169,16 @@ namespace Horo::Runtime::Ui {
             const UiRenderSnapshotDescriptor renderDescriptor{tree.Instance(),         tree.Canvas(),
                                                               tree.SourceDocument(),   tree.SourceDocumentRevision(),
                                                               tree.Revision(),         arranged.Value().Descriptor().interaction,
-                                                              renderRevision,          descriptor.render.view,
+                                                              revisions.render,        descriptor.render.view,
                                                               descriptor.render.limits};
             // Reserve the next revision before extraction so exhaustion never follows a successful publication.
-            const auto nextRender = renderRevision.Next();
+            const auto nextRender = revisions.render.Next();
             if (nextRender.HasError())
                 return Result<UiThemeSnapshot>::Failure(nextRender.ErrorValue());
             auto extracted = renders.Extract(tree, renderDescriptor, {.commands = paints, .transforms = transforms});
             if (extracted.HasError())
                 return Result<UiThemeSnapshot>::Failure(extracted.ErrorValue());
-            renderRevision = nextRender.Value();
+            revisions.render = nextRender.Value();
             return Result<UiThemeSnapshot>::Success(
                 {selection, fallbacks, std::move(computed).Value(), std::move(arranged).Value(), std::move(extracted).Value()});
         }

@@ -7,8 +7,8 @@ namespace Horo::Runtime::Ui::ThemeInternal {
     /** @copydoc ValidateProperties */
     Result<void> ValidateProperties(const RuntimeStyleRegistry &registry, const UiThemeSurfaceProperties &properties) {
         const std::array ids{properties.width, properties.height, properties.padding, properties.fill, properties.opacity};
-        constexpr std::array categories{UiStyleValueCategory::Dimension, UiStyleValueCategory::Dimension, UiStyleValueCategory::Dimension,
-                                        UiStyleValueCategory::Color, UiStyleValueCategory::Scalar};
+        using enum UiStyleValueCategory;
+        constexpr std::array categories{Dimension, Dimension, Dimension, Color, Scalar};
         for (std::size_t index = 0; index < ids.size(); ++index) {
             if (!ids[index].IsValid())
                 continue;
@@ -68,14 +68,14 @@ namespace Horo::Runtime::Ui::ThemeInternal {
             const auto *old = StyleInternal::FindToken(active.Assets(), fallback.token);
             if (old == nullptr || old->sealed || old->category != UiStyleValueCategoryOf(fallback.value))
                 return StyleInternal::Failure(UiErrors::StyleTypeMismatch);
-            const auto asset = std::find_if(definition.assets.begin(), definition.assets.end(), [&fallback](const auto &entry) {
+            const auto asset = std::ranges::find_if(definition.assets, [&fallback](const auto &entry) {
                 return entry.id == fallback.token.asset;
             });
             if (asset == definition.assets.end() || StyleInternal::FindToken(*asset, fallback.token.id) != nullptr)
                 return StyleInternal::Failure(UiErrors::StyleReferenceInvalid);
             if (asset->tokens.size() >= MaximumUiStyleTokens)
                 return StyleInternal::Failure(UiErrors::CapacityExceeded);
-            asset->tokens.push_back({fallback.token.id, old->category, UiStyleValueSource::Literal(fallback.value), false});
+            asset->tokens.emplace_back(fallback.token.id, old->category, UiStyleValueSource::Literal(fallback.value), false);
         }
         return Result<void>::Success();
     }
