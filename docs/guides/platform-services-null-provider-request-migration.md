@@ -1,6 +1,6 @@
 # Platform service request parameter migration
 
-Leaderboard page/window provider entry points now borrow `const LeaderboardRankedQuery&`,
+Leaderboard page/window frontend and provider entry points now borrow `const LeaderboardRankedQuery&`,
 `const LeaderboardAroundSubjectQuery&`, and `const LeaderboardFriendsQuery&` for the call.
 Providers that retain a query after returning must copy it into operation-owned storage.
 This avoids an unused copy when an explicit Null provider rejects the operation.
@@ -10,7 +10,7 @@ Cloud write/delete provider entry points now accept `CloudBlobWriteRequest&&` an
 an admitted intent into operation-owned storage before returning, preserving its bytes and
 idempotency metadata through retirement. They must never retain the argument reference.
 Passing an existing named request directly requires `std::move(request)`; passing a temporary
-continues to work. The frontend still accepts owned values and forwards them with `std::move`.
+continues to work. The frontend cloud mutation entry points still accept owned values and forward them with `std::move`.
 
 Provider implementations must update these five override signatures and rebuild against
 the matching headers/library. The provider extension C ABI, request handles, lifecycle,

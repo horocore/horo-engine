@@ -184,7 +184,7 @@ namespace Horo::PlatformServices {
 
     /** @copydoc PlatformServicesFrontend::QueryRankedLeaderboard */
     Result<PlatformRequestHandle<LeaderboardEntriesPage>> PlatformServicesFrontend::QueryRankedLeaderboard(
-        LeaderboardRankedQuery query) const {
+        const LeaderboardRankedQuery &query) const {
         if (!query.leaderboard.IsValid())
             return Failure<PlatformRequestHandle<LeaderboardEntriesPage>>(FrontendErrors::InvalidRequest);
         const auto valid = ValidateSubjectService(PlatformServiceKind::LeaderboardsAndStats, query.subject);
@@ -195,12 +195,12 @@ namespace Horo::PlatformServices {
         if (query.pageSize == 0 || query.pageSize > valid.Value()->limits.maxPageEntries ||
             query.startIndex > std::numeric_limits<std::uint32_t>::max() - query.pageSize)
             return Failure<PlatformRequestHandle<LeaderboardEntriesPage>>(FrontendErrors::InvalidRequest);
-        return ValidatedDispatch(backend_->QueryRankedLeaderboard(std::move(query)));
+        return ValidatedDispatch(backend_->QueryRankedLeaderboard(query));
     }
 
     /** @copydoc PlatformServicesFrontend::QueryLeaderboardAroundSubject */
     Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>> PlatformServicesFrontend::QueryLeaderboardAroundSubject(
-        LeaderboardAroundSubjectQuery query) const {
+        const LeaderboardAroundSubjectQuery &query) const {
         if (!query.leaderboard.IsValid())
             return Failure<PlatformRequestHandle<LeaderboardAroundSubjectResult>>(FrontendErrors::InvalidRequest);
         const auto valid = ValidateSubjectService(PlatformServiceKind::LeaderboardsAndStats, query.subject);
@@ -211,12 +211,12 @@ namespace Horo::PlatformServices {
         if (const auto entryLimit = static_cast<std::uint64_t>(query.entriesBefore) + query.entriesAfter + 1U;
             entryLimit > valid.Value()->limits.maxPageEntries)
             return Failure<PlatformRequestHandle<LeaderboardAroundSubjectResult>>(FrontendErrors::InvalidRequest);
-        return ValidatedDispatch(backend_->QueryLeaderboardAroundSubject(std::move(query)));
+        return ValidatedDispatch(backend_->QueryLeaderboardAroundSubject(query));
     }
 
     /** @copydoc PlatformServicesFrontend::QueryFriendsLeaderboard */
     Result<PlatformRequestHandle<LeaderboardEntriesPage>> PlatformServicesFrontend::QueryFriendsLeaderboard(
-        LeaderboardFriendsQuery query) const {
+        const LeaderboardFriendsQuery &query) const {
         if (!query.leaderboard.IsValid())
             return Failure<PlatformRequestHandle<LeaderboardEntriesPage>>(FrontendErrors::InvalidRequest);
         const auto valid = ValidateSubjectService(PlatformServiceKind::LeaderboardsAndStats, query.subject);
@@ -233,7 +233,7 @@ namespace Horo::PlatformServices {
         if (query.pageSize == 0 || query.pageSize > valid.Value()->limits.maxPageEntries ||
             query.startIndex > std::numeric_limits<std::uint32_t>::max() - query.pageSize)
             return Failure<PlatformRequestHandle<LeaderboardEntriesPage>>(FrontendErrors::InvalidRequest);
-        return ValidatedDispatch(backend_->QueryFriendsLeaderboard(std::move(query)));
+        return ValidatedDispatch(backend_->QueryFriendsLeaderboard(query));
     }
 
     /** @copydoc PlatformServicesFrontend::WriteStat */
