@@ -1,5 +1,6 @@
 #include "../../support/project/ProjectMigrationFailingFilesystem.h"
 #include "Horo/Application/ProjectCompatibility.h"
+#include "Horo/Application/ProjectMigrationCatalog.h"
 #include "Horo/Editor/ProjectMigrationTransaction.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Editor/ProjectOpenService.h"
@@ -184,6 +185,18 @@ namespace {
         return PumpProjectOpenToTerminal(backend.service, started.Value().Id());
     }
 
+    /** @brief Leave a failed publication pending and return its recovery operation identity. */
+    [[nodiscard]] std::string PreparePendingMigration(const ProjectMigrationTestFixture &project,
+                                                      MigrationFailure::FailingFilesystem &files, const std::string &originalRoot) {
+        BackendProjectOpen backend(&files);
+        REQUIRE(OpenProject(backend, project).outcome != ProjectOpenOutcome::ReadyToActivate);
+        REQUIRE(project.ReadProjectBytes() == originalRoot);
+        const auto recovery = backend.transactions.InspectPendingRecovery(project.Root());
+        REQUIRE(recovery.action == MigrationRecoveryAction::ResumePublish);
+        REQUIRE(recovery.operationId.has_value());
+        return *recovery.operationId;
+    }
+
     void VerifyMigratedPrefabDocuments(const ProjectMigrationTestFixture &project) {
         const auto prefab = ReadJson(project.Root() / "assets/prefabs/player.prefab");
         REQUIRE((prefab.at("projectVersion") == "0.1.0"));
@@ -193,6 +206,28 @@ namespace {
         const auto scene = ReadJson(project.Root() / "assets/scenes/main.horo");
         REQUIRE((scene.at("prefabInstances").front().at("sourceAsset") == "00112233-4455-6677-8899-aabbccddeeff"));
         REQUIRE_FALSE((scene.at("prefabInstances").front().contains("sourcePath")));
+    }
+
+    /** @brief Verify the recorded definition identities and immutable catalog hash. */
+    void VerifyMigrationReceipt(const ProjectMigrationTestFixture &project) {
+        const auto history = project.ReadHistoryJson();
+        REQUIRE((history.at("receipts").size() == 1));
+        REQUIRE((history.at("receipts").front().at("definitions").size() == 2));
+        REQUIRE((history.at("receipts").front().at("definitions").front().at("id") == ProductionDefinitionId));
+        REQUIRE((history.at("receipts").front().at("definitions").back().at("id") == AuthoringDefinitionId));
+        const auto catalog = BuildBuiltInProjectMigrationCatalog();
+        REQUIRE(catalog.HasValue());
+        const auto definition = std::ranges::find(catalog.Value(), std::string{ProductionDefinitionId}, [](const auto &entry) {
+            return entry.id.value;
+        });
+        REQUIRE(definition != catalog.Value().end());
+        constexpr std::string_view digits = "0123456789abcdef";
+        std::string definitionHash = "sha256:";
+        for (const auto byte : definition->hash.bytes) {
+            definitionHash.push_back(digits[byte >> 4]);
+            definitionHash.push_back(digits[byte & 15]);
+        }
+        REQUIRE(history.at("receipts").front().at("definitions").front().at("hash") == definitionHash);
     }
 
     void VerifyMigrationLogs(const std::vector<nlohmann::json> &records, const ProjectMigrationTestFixture &project,
@@ -274,11 +309,7 @@ TEST_CASE("Legacy 0.0.1 project migrates through immutable 0.1.0 to 0.2.0 throug
 
     VerifyMigratedPrefabDocuments(project);
 
-    const auto history = project.ReadHistoryJson();
-    REQUIRE((history.at("receipts").size() == 1));
-    REQUIRE((history.at("receipts").front().at("definitions").size() == 2));
-    REQUIRE((history.at("receipts").front().at("definitions").front().at("id") == ProductionDefinitionId));
-    REQUIRE((history.at("receipts").front().at("definitions").back().at("id") == AuthoringDefinitionId));
+    VerifyMigrationReceipt(project);
 
     const auto activeMigrationRoot = project.Root() / ".horo/local/migration";
     REQUIRE((!std::filesystem::exists(activeMigrationRoot) || std::filesystem::is_empty(activeMigrationRoot)));
@@ -405,17 +436,15 @@ TEST_CASE("0.2 production migration recovery survives host restart without rewri
     const auto scenePath = project.Root() / "assets/scenes/main.horo";
     const auto originalPrefab = ReadBytes(prefabPath);
     const auto originalScene = ReadBytes(scenePath);
+    const auto sidecarPath = project.Root() / "assets/prefabs/player.prefab.horo";
+    const auto originalSidecar = ReadBytes(sidecarPath);
+    // Derived registry/cook generations belong to their hosts and must not enter authored migration publication.
+    const auto registryPath = project.Root() / ".horo/cache/registry.snapshot";
+    std::filesystem::create_directories(registryPath.parent_path());
+    WriteText(registryPath, "prior-valid-registry-generation");
+    const auto registry = ReadBytes(registryPath);
     MigrationFailure::FailingFilesystem files(project.Root());
-    std::string operation;
-    {
-        BackendProjectOpen backend(&files);
-        REQUIRE(OpenProject(backend, project).outcome != ProjectOpenOutcome::ReadyToActivate);
-        REQUIRE(project.ReadProjectBytes() == originalRoot);
-        const auto recovery = backend.transactions.InspectPendingRecovery(project.Root());
-        REQUIRE(recovery.action == MigrationRecoveryAction::ResumePublish);
-        REQUIRE(recovery.operationId.has_value());
-        operation = *recovery.operationId;
-    }
+    const auto operation = PreparePendingMigration(project, files, originalRoot);
     const auto recoverAfterRestart = [&](const MigrationRecoveryAction expectedAction) {
         files.failRoot = false;
         BackendProjectOpen restarted(&files);
@@ -425,6 +454,8 @@ TEST_CASE("0.2 production migration recovery survives host restart without rewri
     };
     SECTION("resume verified target after restart") {
         recoverAfterRestart(MigrationRecoveryAction::ResumePublish);
+        REQUIRE(ReadBytes(sidecarPath) == originalSidecar);
+        REQUIRE(ReadBytes(registryPath) == registry);
         REQUIRE(project.ReadProjectJson()["horoVersion"] == "0.2.0");
         REQUIRE(project.ReadProjectJson()["migrationHistoryHead"] == ComputeTestSha256(project.ReadHistoryBytes()));
         REQUIRE(project.ReadHistoryJson()["receipts"].front()["definitions"].back()["id"] == AuthoringDefinitionId);
@@ -437,6 +468,8 @@ TEST_CASE("0.2 production migration recovery survives host restart without rewri
         REQUIRE(project.ReadProjectBytes() == originalRoot);
         REQUIRE(ReadBytes(prefabPath) == originalPrefab);
         REQUIRE(ReadBytes(scenePath) == originalScene);
+        REQUIRE(ReadBytes(sidecarPath) == originalSidecar);
+        REQUIRE(ReadBytes(registryPath) == registry);
         REQUIRE_FALSE(std::filesystem::exists(project.Root() / ".horo/migration_history.json"));
     }
 }

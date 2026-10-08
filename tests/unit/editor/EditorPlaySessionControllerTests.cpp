@@ -185,3 +185,27 @@ TEST_CASE("play session gates missing gameplay components with affected object d
     REQUIRE(play.Start(authoring, behaviors, restored).HasValue());
     REQUIRE(play.Scene()->View().Find(Runtime::SceneObjectId{2}).has_value());
 }
+
+TEST_CASE("Standalone Play diagnostics bind the real clone and detach across reload stop and failure", "[unit][editor][play][network]") {
+    Application::NetworkDebuggerService debugger;
+    Editor::EditorPlaySessionController play{&debugger};
+    auto registry = Registry();
+    REQUIRE(play.Start(AuthoringScene(), registry).HasValue());
+    auto first = debugger.Query();
+    REQUIRE(first.state == Application::NetworkDebuggerState::Disabled);
+    REQUIRE(first.snapshot.source.scene == play.Scene()->View().RuntimeId().value);
+    REQUIRE(first.snapshot.source.sceneGeneration != 0);
+    REQUIRE_FALSE(debugger.Request(first.snapshot.source, first.snapshot.revision, Network::NetworkCaptureAction::Pause));
+    const auto reload = play.QuiesceForReload();
+    REQUIRE(reload.HasValue());
+    REQUIRE(debugger.Query().state == Application::NetworkDebuggerState::Detached);
+    REQUIRE(play.RestoreAfterReload(registry, reload.Value()).HasValue());
+    REQUIRE(debugger.Query().state == Application::NetworkDebuggerState::Disabled);
+    REQUIRE(debugger.Query().snapshot.source.session > first.snapshot.source.session);
+    play.Stop();
+    REQUIRE(debugger.Query().state == Application::NetworkDebuggerState::Detached);
+    REQUIRE(play.Start(AuthoringScene(), registry).HasValue());
+    REQUIRE(debugger.Query().snapshot.source.session > first.snapshot.source.session);
+    play.DegradeAfterReload(MakeError(Gameplay::GameplayErrors::GameplayReloadRestoreFailed));
+    REQUIRE(debugger.Query().state == Application::NetworkDebuggerState::Detached);
+}

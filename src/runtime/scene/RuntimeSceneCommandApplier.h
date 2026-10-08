@@ -24,16 +24,36 @@ namespace Horo::Runtime {
         }
 
         Result<void> operator()(const SceneCommandBuffer::DestroyCommand &destroy) const {
+            if (scene.IsValid(candidate, destroy.entity) && candidate.slots[destroy.entity.entity.index].baselineOwner)
+                return Result<void>::Failure(
+                    MakeError(SceneErrors::BaselineInvalid, "Baseline entities retire only through exact baseline ownership."));
             if (const Result<void> destroyedResult = scene.DestroyEntity(candidate, destroy.entity); destroyedResult.HasError())
                 return Result<void>::Failure(destroyedResult.ErrorValue());
             ++result.destroyed;
             return Result<void>::Success();
         }
 
+        Result<void> operator()(const SceneCommandBuffer::AttachBaselineCommand &command) const {
+            auto attached = scene.ApplyBaseline(candidate, command);
+            if (attached.HasValue())
+                ++result.baselinesAttached;
+            return attached;
+        }
+
+        Result<void> operator()(const SceneCommandBuffer::DetachBaselineCommand &command) const {
+            auto detached = scene.RemoveBaseline(candidate, command.id, command.revision, *command.ownership);
+            if (detached.HasValue())
+                ++result.baselinesDetached;
+            return detached;
+        }
+
         Result<void> operator()(const SceneCommandBuffer::DestroyGroupCommand &group) const {
             const auto root = group.entities.front();
             if (!scene.IsValid(candidate, root))
                 return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
+            if (candidate.slots[root.entity.index].baselineOwner)
+                return Result<void>::Failure(
+                    MakeError(SceneErrors::BaselineInvalid, "Baseline entities retire only through exact baseline ownership."));
             const auto resources = candidate.slots[root.entity.index].groupResources;
             if (!resources)
                 return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
@@ -46,6 +66,9 @@ namespace Horo::Runtime {
             for (const auto entity : group.entities) {
                 if (!scene.IsValid(candidate, entity) || candidate.slots[entity.entity.index].groupResources != resources)
                     return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
+                if (candidate.slots[entity.entity.index].baselineOwner)
+                    return Result<void>::Failure(
+                        MakeError(SceneErrors::BaselineInvalid, "Baseline entities retire only through exact baseline ownership."));
             }
             for (const auto entity : group.entities | std::views::reverse) {
                 if (auto destroyed = scene.DestroyEntity(candidate, entity); destroyed.HasError())
@@ -291,17 +314,18 @@ namespace Horo::Runtime {
         /** @brief Projects additions and retirements from detached storage, retaining every admitted asset lease. */
         bool ProjectResourceGroup(std::vector<RuntimeEntityView> &created, std::vector<EntityRef> &destroyed) const {
             bool resourceGroup{};
-            created.reserve(result.created.size());
-            for (const auto &resolution : result.created) {
-                if (!scene.IsValid(candidate, resolution.entity))
+            created.reserve(candidate.slots.size());
+            for (std::size_t index = 0; index < candidate.slots.size(); ++index) {
+                const auto &slot = candidate.slots[index];
+                if (!slot.active || (index < scene.storage_.slots.size() && scene.storage_.slots[index].active &&
+                                     scene.storage_.slots[index].generation == slot.generation))
                     continue;
-                const auto &slot = candidate.slots[resolution.entity.entity.index];
                 if (!slot.groupResources)
                     continue;
                 resourceGroup = true;
+                const EntityRef entity{scene.runtimeId_, {static_cast<std::uint32_t>(index), slot.generation}};
                 const auto parent = slot.parent ? std::optional<EntityRef>{{scene.runtimeId_, *slot.parent}} : std::nullopt;
-                created.emplace_back(resolution.entity, slot.authoredObject, parent, &slot.localTransform, &slot.primitiveMesh,
-                                     &slot.components,
+                created.emplace_back(entity, slot.authoredObject, parent, &slot.localTransform, &slot.primitiveMesh, &slot.components,
                                      slot.groupPhysicsReferences
                                          ? std::span<const ResolvedGroupPhysicsBodyReference>{*slot.groupPhysicsReferences}
                                          : std::span<const ResolvedGroupPhysicsBodyReference>{},
@@ -348,9 +372,14 @@ namespace Horo::Runtime {
             for (const auto owner : {SceneStructuralOwner::Physics, SceneStructuralOwner::Gameplay, SceneStructuralOwner::AI}) {
                 if (needs(owner) && !std::ranges::any_of(participants, [owner](const auto &participant) {
                     return participant->Owner() == owner;
-                }))
+                })) {
+                    const bool hasBaseline = std::ranges::any_of(candidate.slots, [](const auto &slot) {
+                        return slot.active && slot.baselineOwner.has_value();
+                    });
                     return Result<void>::Failure(
-                        MakeError(SceneErrors::AssetServicesUnavailable, "Required structural subsystem owner is not composed."));
+                        MakeError(hasBaseline ? SceneErrors::BaselineUnsupported : SceneErrors::AssetServicesUnavailable,
+                                  "Required structural subsystem owner is not composed."));
+                }
             }
             return Result<void>::Success();
         }

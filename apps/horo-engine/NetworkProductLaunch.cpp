@@ -5,6 +5,7 @@
 #include "Horo/Network/MessageCodecRegistry.h"
 #include "Horo/Network/NetworkAddress.h"
 #include "Horo/Network/NetworkErrors.h"
+#include "Horo/Network/NetworkMetricTransport.h"
 #include "Horo/Network/NetworkTransport.h"
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
 #include "NetworkProductHost.h"
@@ -229,14 +230,16 @@ namespace Horo::Application::Internal {
 #if HORO_PRODUCT_HAS_GNS
         class GnsProductTransport final : public Net::INetworkModeService {
         public:
-            GnsProductTransport(const Net::NetworkProjectRole role, const Net::NetworkAddress &bind, const Net::NetworkAddress &connect)
-                : role_(role), bind_(bind), connect_(connect) {}
+            GnsProductTransport(const Net::NetworkProjectRole role, const Net::NetworkAddress &bind, const Net::NetworkAddress &connect,
+                                std::shared_ptr<NetworkDebuggerService> debugger)
+                : debugger_(std::move(debugger)), metrics_(debugger_->Producer().Source().session, true, &debugger_->Producer()),
+                  role_(role), bind_(bind), connect_(connect) {}
 
             Result<void> Prepare() override {
                 auto created = Net::CreateGnsTransport();
                 if (created.HasError())
                     return Result<void>::Failure(created.ErrorValue());
-                transport_ = std::move(created).Value();
+                transport_ = std::make_unique<Net::NetworkMetricTransport>(std::move(created).Value(), metrics_, &debugger_->Producer());
                 if (auto initialized =
                         transport_->Initialize({.maximumConnections = 8, .maximumEventsPerPoll = 64, .maximumMessageBytes = 1200});
                     initialized.HasError())
@@ -278,6 +281,9 @@ namespace Horo::Application::Internal {
                     return Result<void>::Success();
                 if (auto polled = router_->RunNetworkPoll(++pollTick_); polled.HasError())
                     return Result<void>::Failure(polled.ErrorValue());
+                (void)metrics_.Publish();
+                const auto snapshot = metrics_.Snapshot();
+                (void)debugger_->Publish(debugger_->Producer().Source(), &snapshot);
                 return Result<void>::Success();
             }
 
@@ -299,6 +305,8 @@ namespace Horo::Application::Internal {
             }
 
         private:
+            std::shared_ptr<NetworkDebuggerService> debugger_;
+            Net::NetworkMetrics metrics_;
             Net::NetworkProjectRole role_;
             Net::NetworkAddress bind_;
             Net::NetworkAddress connect_;
@@ -311,7 +319,8 @@ namespace Horo::Application::Internal {
 #endif
 
         [[nodiscard]] Net::NetworkModeFactories ProductFactories(const Net::NetworkProjectRole role, const Net::NetworkAddress &bind,
-                                                                 const Net::NetworkAddress &connect) {
+                                                                 const Net::NetworkAddress &connect,
+                                                                 std::shared_ptr<NetworkDebuggerService> debugger) {
             Net::NetworkModeFactories factories;
             for (const auto kind : {Net::NetworkModeServiceKind::Session, Net::NetworkModeServiceKind::LocalPlayer}) {
                 factories.services[static_cast<std::size_t>(kind)] = [](const Net::NetworkModeServiceRequest &request) {
@@ -321,11 +330,12 @@ namespace Horo::Application::Internal {
             }
 #if HORO_PRODUCT_HAS_GNS
             factories.services[static_cast<std::size_t>(Net::NetworkModeServiceKind::Transport)] =
-                [role, bind, connect](const Net::NetworkModeServiceRequest &) {
+                [role, bind, connect, debugger](const Net::NetworkModeServiceRequest &) {
                 return Result<std::unique_ptr<Net::INetworkModeService>>::Success(
-                    std::make_unique<GnsProductTransport>(role, bind, connect));
+                    std::make_unique<GnsProductTransport>(role, bind, connect, debugger));
             };
 #else
+            static_cast<void>(debugger);
             static_cast<void>(role);
             static_cast<void>(bind);
             static_cast<void>(connect);
@@ -480,6 +490,9 @@ namespace Horo::Application::Internal {
             }
             const Net::NetworkModePresentation presentation{.localPlayer = launch.role == Net::NetworkProjectRole::Client ||
                                                                            launch.role == Net::NetworkProjectRole::ListenServer};
+            auto debugger = std::make_shared<NetworkDebuggerService>();
+            (void)debugger->Begin(worlds.values[0].scene.value, 1, launch.role != Net::NetworkProjectRole::Standalone,
+                                  Net::NetworkDiagnosticProvider::Native);
             return NetworkProductHost::Create(clock,
                                               {project,
                                                product,
@@ -491,9 +504,10 @@ namespace Horo::Application::Internal {
                                                {worlds.values.data(), worlds.count},
                                                presentation},
                                               ComposeHeadlessNetworkServices(std::move(scene),
-                                                                             ProductFactories(launch.role, launch.bind, launch.connect),
+                                                                             ProductFactories(launch.role, launch.bind, launch.connect,
+                                                                                              debugger),
                                                                              launch.gameplay),
-                                              &diagnostic);
+                                              &diagnostic, debugger);
         }
 
         [[nodiscard]] int RunProductFrames(NetworkProductHost &runtime, const ProductLaunch &launch, const ProductWorlds &worlds) {

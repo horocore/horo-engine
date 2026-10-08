@@ -266,6 +266,37 @@ edge kinds, placement IDs, reachable source revisions and override digests, then
 flattens the hierarchy. Packaged runtime does not traverse authoring inheritance or
 composition graphs and never runs construction behavior to produce prefab data.
 
+#### Preview Revision Evidence And Stale Publication
+
+`PrefabResolutionRevision` retains the canonical reachable graph nodes (including
+its root), source revisions, asset types and semantic edges alongside the pinned
+registry/root context. Resolver candidates, identity maps and detached runtime
+preview subtrees retain this owned evidence; source retirement never changes it.
+A new registry revision alone does not invalidate an unrelated expansion. At an
+owner publication boundary, `ValidateRevisionPublication` compares the reachable
+graph and consumes the complete set of published asset IDs since capture. Ordinary
+resource content publication must supply these IDs because Asset Registry records
+do not carry resource digests. Missing notification history is not evidence of
+synchronization: the owner must re-resolve rather than reuse that preview.
+
+Shared SceneSource projection invalidation preserves authored instances and their old expanded
+content for repair/display while marking affected entries stale with typed errors.
+Staleness remains sticky until a fresh complete resolution replaces the entry.
+Runtime conversion of retained projections checks authored placement equality,
+complete instance coverage and current graph evidence before building a detached
+scene definition. Any stale, malformed, unavailable or over-budget required entry
+rejects the entire conversion and preserves the active scene. Packaged runtime
+entity definitions still contain no paths or mutable prefab source state.
+
+Migration: existing root/registry-only publication validation remains the strict
+worker completion fence. Its callers must retain complete resolver-generated
+revision evidence; manually assembled two-field revisions cannot establish selective
+preview synchronization. Header ownership and target dependencies are unchanged;
+the PrefabSceneExpansion public consumer exercises the extended contract.
+SceneSource owns retained projection state and validation; Editor adapters pass
+committed snapshot values to the same headless conversion. The additive retained
+conversion API rejects stale evidence for cook and editor callers alike.
+
 #### Asset Dependency Closure And Conflict Policy
 
 `PrefabAssetDependencyClosure` is the owned, immutable handoff from prefab graph

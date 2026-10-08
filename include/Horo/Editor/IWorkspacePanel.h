@@ -19,6 +19,8 @@ namespace Horo::Log {
 
 namespace Horo::Application {
     class GameplayBuildService;
+    class INetworkDebuggerQuery;
+    class INetworkDebuggerControl;
 }  // namespace Horo::Application
 
 namespace Horo {
@@ -48,6 +50,8 @@ namespace Horo::Editor {
         const IOperationQuery *operationQuery{nullptr};
         IOperationControl *operationControl{nullptr};
         EditorSurfaceEventContext *surfaceEvents{nullptr};
+        const Application::INetworkDebuggerQuery *networkDebuggerQuery{};
+        Application::INetworkDebuggerControl *networkDebuggerControl{};
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */

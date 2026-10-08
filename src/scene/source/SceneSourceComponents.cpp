@@ -290,6 +290,12 @@ namespace Horo::SceneSource::Detail {
                 return "steal_oldest";
             case StealQuietest:
                 return "steal_quietest";
+            case StealLowestPriority:
+                return "steal_lowest_priority";
+            case StealFurthest:
+                return "steal_furthest";
+            case Replace:
+                return "replace";
             case Virtualize:
                 return "virtualize";
         }

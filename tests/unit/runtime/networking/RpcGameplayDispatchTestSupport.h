@@ -375,12 +375,17 @@ namespace Horo::Network {
             std::shared_ptr<RpcGameplayDispatch> dispatch;
             std::optional<MessageCodecRegistry> envelopeCodecs;
 
+            explicit Fixture(NetworkDebugger &debugger)
+                : Fixture(false, RpcTarget::Authority, true, false, [](RpcDescriptor &) {
+                  }, {}, {Runtime::SceneRuntimeId{9}, Runtime::EntityId{7, 1}}, &debugger) {}
+
             template <typename Configure = decltype([](RpcDescriptor &) {
                           // Default fixtures leave the declared RPC metadata unchanged.
                       })>
             explicit Fixture(const bool fromAuthority = false, const RpcTarget target = RpcTarget::Authority, const bool localOwns = true,
                              const bool withValue = false, const Configure &configure = Configure{}, const RpcDispatchLimits &limits = {},
-                             const Runtime::EntityRef mappedEntity = {Runtime::SceneRuntimeId{9}, Runtime::EntityId{7, 1}})
+                             const Runtime::EntityRef mappedEntity = {Runtime::SceneRuntimeId{9}, Runtime::EntityId{7, 1}},
+                             NetworkDebugger *debugger = nullptr)
                 : outbound(fromAuthority), peer(NetworkPeerId::Create(fromAuthority ? 90 : 10).Value()), entity(mappedEntity),
                   descriptor([this, fromAuthority, target, withValue, configure] {
                       auto value = Descriptor(rpc, fromAuthority, target, withValue);
@@ -407,7 +412,7 @@ namespace Horo::Network {
                                                      localOwns ? localRecipient : NetworkPeerId::Create(11).Value()};
                 role = std::make_shared<ReplicationRoleState>(std::move(ReplicationRoleState::Create(binding)).Value());
                 session = ActiveSession();
-                dispatch = RpcGameplayDispatch::Create(descriptors, world, limits).Value();
+                dispatch = RpcGameplayDispatch::Create(descriptors, world, limits, debugger).Value();
                 REQUIRE(dispatch
                             ->RegisterPeer(session, connection, generation, peer,
                                            outbound ? RpcRemoteRole::Authority : RpcRemoteRole::Client, 22,

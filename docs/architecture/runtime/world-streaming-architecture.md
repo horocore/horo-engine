@@ -874,6 +874,42 @@ while the authority's existing retirement path remains responsible for draining
 resources. Zero linger explicitly disables retention rather than selecting a hidden
 fallback.
 
+`StreamingCellStabilityPolicy` version 2 adds explicit Normal/Elevated/Critical
+memory-pressure evidence, fixed-window boundary-exit counts, and metadata-only
+Watching and Cooldown phases. Elevated pressure caps linger at the configured interval from its
+original origin; Critical pressure releases a no-longer-demanded cell immediately.
+Neither mode overrides current demand or pins. Each Resident-to-Lingering exit
+counts once; continuous linger polling does not count as thrash. Counts saturate,
+and the fixed unscaled window resets at its inclusive deadline. Reentry during
+linger preserves this history. At release, reaching the configured exit threshold
+arms the configured cooldown; zero cooldown preserves immediate reload behavior.
+
+A release before the threshold retains only Watching metadata until the fixed
+observation window expires. Eligible demand may reload immediately, preserving the
+exit count; actual unload/reload cycles therefore cannot erase thrash evidence.
+Absent or geometrically ineligible demand preserves Watching until window expiry,
+which returns Unloaded and releases the record. The same tracked-cell ceiling bounds
+Watching and Cooldown records. Zero cooldown disables both metadata-retention phases.
+
+Cooldown holds no residency or byte reservation. Its bounded record remains owned
+by the authority until the delay expires, when eligible demand may reenter at the
+enter margin or absent demand releases the record. Pins bypass cooldown, without
+allocating an extra record or bypassing initial capacity admission. Deadlines use
+elapsed-time subtraction so service-time values near uint64 exhaustion remain
+representable. Decisions expose cooldown suppression, pressure-caused release and
+current-window thrashing separately. A cooldown may outlast its counting window.
+Cancellation, shutdown and policy/partition replacement use the existing authority
+retirement path; no evaluator-owned sleeps, resources or ambient state are added.
+
+Migration from version 1: rebuild callers with the new snapshot layout, publish a
+version-2 policy and discard version-1 snapshots at the authority safe point. The
+only active callers are contract tests; no serialized snapshots or production
+stability authority exist yet. Default Normal pressure and zero cooldown preserve
+existing admission and retention behavior. Consumers must release resources on
+Unloaded, Watching or Cooldown, retaining metadata for the latter two; Unloaded remains
+the instruction to discard the record. Public-header ownership remains with
+HoroWorldStreaming; no new dependency or header is introduced.
+
 `StreamingEvictionPolicy` is the WST-003.11 bounded pure victim-selection contract.
 Host composition publishes one stable policy identity and immutable revision. The
 StreamingAuthorityRole captures current residency, source/gameplay/provider pin
@@ -2005,3 +2041,14 @@ retry allowance. After its exact canonical terminal proves cleanup, an active
 begin the next cooldown or quarantine. Duplicate acknowledgements and live
 retirement snapshots are rejected. A closed authority simply retains history
 until teardown; it admits no new retry work.
+
+## Implemented Canonical Multi-Cell Scene Ownership
+
+WST-005.6 integrates the CoreEcs baseline through
+`QueueRuntimeSceneCellAttachment` in `HoroEngine::SceneCellPayload`. Independent
+cells share one canonical RuntimeScene service and one runtime domain. The host
+supplies exact prepared asset pins, residency/catalog/cancellation evidence and
+the complete provider-readiness authority; Scene performs no provider discovery.
+Exact revision replacement/retirement and aggregate resident count ceilings are
+part of the structural transaction. See [Scene Runtime](scene-runtime.md#independent-cell-baseline-ownership-wst-0056)
+for ownership, failure, cancellation, hierarchy and shutdown contracts.

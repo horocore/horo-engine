@@ -179,6 +179,55 @@ cell Scene domain. A host must not use it to replace an unrelated aggregate Scen
 or claim multi-cell merge support. Already published cell eviction and aggregate
 World Streaming activation remain under their existing owner transactions.
 
+## Independent Cell Baseline Ownership (WST-005.6)
+
+`QueueRuntimeSceneCellAttachment` attaches independent flattened baselines to the
+existing canonical `RuntimeSceneService`. It uses the backend-neutral
+`SceneCommandBuffer::AttachBaseline` structural contract; RuntimeScene does not
+depend on WorldStreaming. The SceneCellPayload integration owns the full durable
+partition/cell identity, epoch/generation fence, cancellation observers and shared
+host authority. Only the existing Scene safe point publishes ownership.
+
+The host supplies the complete prepared canonical artifact closure in dependency
+order. Envelope identity/type/hash validation and the current catalog check precede
+publication. Asset loading, provider readiness and live reservations remain with
+their existing owners; this operation performs no asset I/O or backend discovery.
+Each baseline retains immutable integration identity evidence (partition, cell and
+mounted epoch for CoreEcs) independently from its terminal readiness authority.
+Replacement and retirement compare that exact owner as well as the content revision;
+a valid foreign-cell authority cannot retire another cell with the same source ID.
+Each baseline owns generation-qualified entity slots and shares immutable artifact
+allocations through named leases. Empty cells also own records and resource pins.
+`FindBaseline`, `FindRuntimeSceneCellAttachment` and entity `groupAssets` expose
+borrowed ownership evidence. The immutable identity lease contains no service,
+callback, I/O or native ownership.
+
+Baseline Scene IDs and authored object IDs must be unique in the final canonical
+world. Admission requires positive aggregate ceilings for baseline records,
+entities and named resource pins. Replacement names the exact old source revision
+and requires a newer revision; an ordinary attach requires absence. Retirement
+names the exact published revision. Ordinary entity destruction cannot bypass
+baseline ownership. A foreign child depending on an attached hierarchy blocks
+retirement without partial removal. An eviction is a new fenced owner operation,
+not cancellation of already-published state.
+
+The structural storage candidate contains all hierarchy, Physics reference fixups,
+resource pins and ownership metadata. Native structural owners prepare and validate
+before the final cell predicate/catalog/cancellation check. Their no-fail publish
+and the Scene storage transfer preserve the canonical runtime domain and every
+unrelated resident EntityRef. Retired pins remain alive through owner retirement
+and after-publication notifications. Failure destroys only unpublished state.
+`CancelRuntimeSceneCellOperation`/`CancelPendingBaseline` cancel only the exact
+queued runtime/content/residency attempt, including its generation;
+foreign/mixed batches are preserved. Whole-world replacement, unload and idempotent
+shutdown retain existing aggregate owner ordering and release all cell ownership.
+
+This is an additive contract: callers using the existing one-domain
+`QueueRuntimeSceneCellPayload` retain its explicit replacement semantics. Hosts
+integrating multiple cells migrate to the attachment seam and stop creating one
+Scene service per cell. All C++ consumers rebuild against the extended header;
+there is no serialized schema change or native backend API change.
+
 ## Model Boundary
 
 ```text

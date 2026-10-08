@@ -63,6 +63,8 @@ namespace Horo::Runtime::Ui::StyleInternal {
                                                           UiStyleTokenReference reference) noexcept;
 
     [[nodiscard]] Result<void> ValidateAssetAndClassShape(const UiStyleRegistryDefinition &definition);
+    /** @brief Validates authored asset/class/state assignment references and types against flattened tokens before publication. */
+    [[nodiscard]] Result<void> ValidateRegistryAssignments(const RuntimeStyleRegistry &registry);
     [[nodiscard]] Result<UiStyleValue> ResolveTokenDefinition(const UiStyleRegistryDefinition &definition, UiStyleTokenReference reference,
                                                               std::vector<UiStyleTokenReference> &path, std::size_t depth);
 

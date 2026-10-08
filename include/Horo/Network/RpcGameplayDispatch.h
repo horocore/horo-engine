@@ -1,4 +1,5 @@
 #pragma once
+#include "Horo/Network/NetworkDebugger.h"
 
 /**
  * @file RpcGameplayDispatch.h
@@ -144,11 +145,13 @@ namespace Horo::Network {
          * @param descriptors Non-null immutable accepted declaration generation.
          * @param world Borrowed owner-thread lifecycle, retained by the host through dispatch destruction.
          * @param limits Finite registry, queue, payload and safe-point work ceilings.
+         * @param debugger Optional owner-thread collector; must outlive this dispatch.
          * @return Prepared dispatch or typed invalid/capacity failure.
          */
         [[nodiscard]] static Result<std::shared_ptr<RpcGameplayDispatch>> Create(RpcDescriptorSnapshotPtr descriptors,
                                                                                  ReplicationWorldLifecycle &world,
-                                                                                 const RpcDispatchLimits &limits = {});
+                                                                                 const RpcDispatchLimits &limits = {},
+                                                                                 NetworkDebugger *debugger = nullptr);
         ~RpcGameplayDispatch() override;
 
         /**
@@ -225,7 +228,7 @@ namespace Horo::Network {
     public:
         /** @internal Factory-only constructor; the private key cannot be created by consumers. */
         RpcGameplayDispatch(ConstructionKey, RpcDescriptorSnapshotPtr descriptors, ReplicationWorldLifecycle &world,
-                            const RpcDispatchLimits &limits);
+                            const RpcDispatchLimits &limits, NetworkDebugger *debugger);
 
     private:
         struct Peer;
@@ -287,6 +290,8 @@ namespace Horo::Network {
         std::vector<WorkScope> work_;
         std::uint64_t lastAdmissionTick_{};
         RpcTerminalTotals terminals_;
+        NetworkDebugger *debugger_{};
+        NetworkDiagnosticSource diagnosticSource_{};
         std::uint64_t revocationRevision_{};
         bool receiving_{};
         bool draining_{};

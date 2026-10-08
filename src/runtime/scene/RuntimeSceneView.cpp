@@ -70,6 +70,21 @@ namespace Horo::Runtime {
                                                          : std::span<const Assets::AssetId>{}};
     }
 
+    /** @copydoc RuntimeSceneView::FindBaseline */
+    std::optional<SceneBaselineAttachmentView> RuntimeSceneView::FindBaseline(const SceneDefinitionId id) const noexcept {
+        if (!IsCurrent())
+            return std::nullopt;
+        const auto found = std::ranges::find(scene_->storage_.baselines, id, &RuntimeScene::BaselineAttachment::id);
+        if (found == scene_->storage_.baselines.end())
+            return std::nullopt;
+        return SceneBaselineAttachmentView{found->id, found->revision, found->entities, *found->resources, found->ownership.get()};
+    }
+
+    /** @copydoc RuntimeSceneView::BaselineCount */
+    std::size_t RuntimeSceneView::BaselineCount() const noexcept {
+        return IsCurrent() ? scene_->storage_.baselines.size() : 0;
+    }
+
     /** @copydoc RuntimeSceneView::Find */
     std::optional<EntityRef> RuntimeSceneView::Find(const SceneObjectId object) const noexcept {
         if (!IsCurrent() || !object.IsValid())

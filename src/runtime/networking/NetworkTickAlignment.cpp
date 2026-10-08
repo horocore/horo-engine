@@ -25,16 +25,17 @@ namespace Horo::Network {
     }  // namespace
 
     NetworkTickAlignment::NetworkTickAlignment(const ConnectionHandle connection, const NetworkOperationGeneration session,
-                                               const NetworkTickAlignmentPolicy policy) noexcept
-        : connection_(connection), session_(session), policy_(policy) {}
+                                               const NetworkTickAlignmentPolicy policy, NetworkDebugger *debugger) noexcept
+        : debugger_(debugger), diagnosticSource_(debugger ? debugger->Source() : NetworkDiagnosticSource{}), connection_(connection),
+          session_(session), policy_(policy) {}
 
     /** @copydoc NetworkTickAlignment::Create */
     Result<NetworkTickAlignment> NetworkTickAlignment::Create(const ConnectionHandle connection, const NetworkOperationGeneration session,
-                                                              const NetworkTickAlignmentPolicy policy) {
+                                                              const NetworkTickAlignmentPolicy policy, NetworkDebugger *debugger) {
         if (!connection.IsValid() || !session.IsValid() || policy.maximumRoundTripTicks == 0 || policy.staleAfterTicks == 0 ||
             policy.retainedSamples == 0 || policy.retainedSamples > MaximumNetworkClockSamples)
             return Result<NetworkTickAlignment>::Failure(MakeError(NetworkErrors::NetworkClockInvalid));
-        return Result<NetworkTickAlignment>::Success(NetworkTickAlignment{connection, session, policy});
+        return Result<NetworkTickAlignment>::Success(NetworkTickAlignment{connection, session, policy, debugger});
     }
 
     void NetworkTickAlignment::ClearSamples() noexcept {
@@ -118,7 +119,12 @@ namespace Horo::Network {
         }
         localTick_ = localCommittedTick;
         serverTick_ = next;
-        return Result<NetworkTickAlignmentSnapshot>::Success(Snapshot());
+        const auto snapshot = Snapshot();
+        if (debugger_)
+            (void)debugger_->Observe(diagnosticSource_,
+                                     NetworkPredictionRecord{snapshot.localTick, snapshot.serverTick, snapshot.sampleAgeTicks,
+                                                             snapshot.hasMapping, snapshot.quality == NetworkTimingQuality::Stale});
+        return Result<NetworkTickAlignmentSnapshot>::Success(snapshot);
     }
 
     /** @copydoc NetworkTickAlignment::Pause */

@@ -165,6 +165,26 @@ namespace Horo::Editor {
         private:
             GlobalDockOperationsPane pane_;
         };
+
+        class NetworkPaneAdapter final : public BuiltInPaneAdapter {
+        public:
+            using BuiltInPaneAdapter::BuiltInPaneAdapter;
+
+            void Attach(PanelContext &context) override {
+                pane_.Attach(context.networkDebuggerQuery, context.networkDebuggerControl);
+            }
+
+            void Detach() override {
+                pane_.Detach();
+            }
+
+            void Draw(const GlobalDockPaneDrawContext &context) override {
+                pane_.Draw(context.contentOrigin, context.contentWidth, context.gui);
+            }
+
+        private:
+            GlobalDockNetworkPane pane_;
+        };
     }  // namespace
 
     GlobalDockPanel::GlobalDockPanel(const GlobalDockTab activeTab) : activeTab_{activeTab}, activePaneId_{PaneId(activeTab)} {
@@ -208,7 +228,7 @@ namespace Horo::Editor {
         RegisterBuiltInPane<PaneAdapter<GlobalDockPerformancePane>>(Performance);
         RegisterBuiltInPane<PaneAdapter<GlobalDockPhysicsPane>>(Physics);
         RegisterBuiltInPane<PaneAdapter<GlobalDockAudioPane>>(Audio);
-        RegisterBuiltInPane<PaneAdapter<GlobalDockNetworkPane>>(Network);
+        RegisterBuiltInPane<NetworkPaneAdapter>(Network);
     }
 
     /** @copydoc GlobalDockPanel::DrawIcon */

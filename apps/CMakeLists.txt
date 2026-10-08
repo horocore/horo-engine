@@ -16,13 +16,15 @@ target_compile_features(HoroNetworkProductHost PUBLIC cxx_std_20)
 target_include_directories(HoroNetworkProductHost PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/common)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime HoroEngine::RuntimeScene
     HoroEngine::Physics HoroEngine::Runtime HoroEngine::GameplayModuleHost HoroEngine::GameplayLua
-    HoroEngine::GameplayPhysicsIntegration HoroEngine::PrefabRuntime)
+    HoroEngine::GameplayPhysicsIntegration HoroEngine::PrefabRuntime HoroEngine::NetworkDebuggerApplication)
 
 # The terminal/headless composition remains available without GUI or GPU targets.
 add_executable(horo-engine
     horo-engine/main.cpp
     horo-engine/cli_host/CliHost.cpp
     horo-engine/cli_host/CliHostCommands.cpp
+    horo-engine/cli_host/McpServe.cpp
+    horo-engine/cli_host/McpStdio.cpp
     horo-engine/NetworkProductLaunch.cpp
 )
 target_compile_features(horo-engine PRIVATE cxx_std_20)
@@ -39,10 +41,44 @@ target_link_libraries(horo-engine PRIVATE HoroEngine::Application HoroEngine::Ex
     HoroNetworkProductHost
     HoroEngine::Runtime
     HoroEngine::CliHost
+    HoroEngine::McpController
+    HoroEngine::Platform
 )
 if(HORO_BUILD_NETWORK_GNS)
     target_link_libraries(horo-engine PRIVATE HoroEngine::NetworkTransportGNS)
 endif()
+# Validate the actual transitive link graph, including configurations that build GUI peers.
+function(horo_verify_terminal_link_boundary)
+    set(pending horo-engine)
+    set(visited)
+    while(pending)
+        list(POP_FRONT pending current)
+        if(NOT TARGET "${current}" OR current IN_LIST visited)
+            continue()
+        endif()
+        list(APPEND visited "${current}")
+        if(current MATCHES "(HoroGui|ImGui|HoroEditorViewport|HoroRender(OpenGL|Metal|Vulkan|D3D12)|HoroInputSdl|SDL)")
+            message(FATAL_ERROR "horo-engine headless link boundary reaches ${current}")
+        endif()
+        get_target_property(alias "${current}" ALIASED_TARGET)
+        if(alias)
+            list(APPEND pending "${alias}")
+        endif()
+        foreach(property LINK_LIBRARIES INTERFACE_LINK_LIBRARIES)
+            get_target_property(links "${current}" "${property}")
+            if(links)
+                foreach(link IN LISTS links)
+                    string(REGEX REPLACE "^\\$<LINK_ONLY:([^>]+)>$" "\\1" link "${link}")
+                    if(TARGET "${link}")
+                        list(APPEND pending "${link}")
+                    endif()
+                endforeach()
+            endif()
+        endforeach()
+    endwhile()
+endfunction()
+horo_verify_terminal_link_boundary()
+
 install(TARGETS horo-engine RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT Game)
 
 add_executable(horo-extension-validate
@@ -122,6 +158,7 @@ if(HORO_BUILD_EDITOR_GUI)
         HoroEditor/app/HoroEditorApp.cpp
         HoroEditor/app/EditorUserStateMigration.cpp
         HoroEditor/app/ConfiguredEditorUpdateBackend.cpp
+        HoroEditor/app/ConfiguredEditorUpdateManifestSource.cpp
     )
 
     if(APPLE)
@@ -245,6 +282,7 @@ if(HORO_BUILD_EDITOR_GUI)
             HoroEngine::InputSdl
             HoroEngine::UpdateDiscovery
             HoroEngine::UpdateDownload
+            CURL::libcurl
             HoroHostModuleComposition
             HoroThirdParty::ImGui
             nlohmann_json::nlohmann_json

@@ -306,6 +306,20 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor LifecycleCallbackFailed;
     /** @brief Lifecycle mutation attempted to re-enter an active save safe-point drain. */
     extern const ErrorCodeDescriptor LifecycleReentrant;
+    /** @brief A manual/quick command contains malformed typed inputs. */
+    extern const ErrorCodeDescriptor CommandInvalid;
+    /** @brief Host authority or cooked product policy forbids a user command. */
+    extern const ErrorCodeDescriptor CommandDenied;
+    /** @brief Runtime activity does not satisfy the command's cooked eligibility. */
+    extern const ErrorCodeDescriptor CommandIneligible;
+    /** @brief A command addresses a changed runtime/catalog/slot generation. */
+    extern const ErrorCodeDescriptor CommandStale;
+    /** @brief A command target is missing, reserved for another kind, or exceeds retention. */
+    extern const ErrorCodeDescriptor CommandTargetUnavailable;
+    /** @brief Exact slot assessment does not admit a verified or verifiable supported load. */
+    extern const ErrorCodeDescriptor CommandIncompatible;
+    /** @brief User command admission is inside its product cooldown or the clock regressed. */
+    extern const ErrorCodeDescriptor CommandCooldown;
     /** @brief Project-authored save mode policy is contradictory, malformed, or outside portable limits. */
     extern const ErrorCodeDescriptor PolicyInvalid;
     /** @brief Enabled project policy requires a runtime capability without an admitted fallback. */

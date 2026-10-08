@@ -178,6 +178,12 @@ namespace Horo::SceneSource::Detail {
             return Result<Audio::AudioConcurrencyMode>::Success(StealOldest);
         if (mode == "steal_quietest")
             return Result<Audio::AudioConcurrencyMode>::Success(StealQuietest);
+        if (mode == "steal_lowest_priority")
+            return Result<Audio::AudioConcurrencyMode>::Success(StealLowestPriority);
+        if (mode == "steal_furthest")
+            return Result<Audio::AudioConcurrencyMode>::Success(StealFurthest);
+        if (mode == "replace")
+            return Result<Audio::AudioConcurrencyMode>::Success(Replace);
         if (mode == "virtualize")
             return Result<Audio::AudioConcurrencyMode>::Success(Virtualize);
         return Result<Audio::AudioConcurrencyMode>::Failure(PersistenceError(SceneInvalid, "Audio concurrency mode is invalid."));

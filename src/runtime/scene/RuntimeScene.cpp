@@ -10,6 +10,7 @@
 #include <new>
 #include <ranges>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 namespace Horo::Runtime {
@@ -75,20 +76,27 @@ namespace Horo::Runtime {
     /** @copydoc SceneCommandBuffer::ValidateAdmission */
     Result<void> SceneCommandBuffer::ValidateAdmission(SceneRuntimeId scene, Assets::AssetRegistryRevision registry) const {
         for (const auto &command : commands_) {
-            const SceneStructuralAdmission *admission = nullptr;
-            if (const auto *group = std::get_if<CreateGroupCommand>(&command))
-                admission = &group->admission;
-            if (const auto *group = std::get_if<DestroyGroupCommand>(&command))
-                admission = &group->admission;
-            if (admission) {
-                if (admission->cancellation.IsCancellationRequested() || admission->ownerCancellation.IsCancellationRequested() ||
-                    admission->scopeCancellation.IsCancellationRequested())
-                    return JobCancelled();
-                if (admission->scene != scene)
-                    return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
-                if (std::holds_alternative<CreateGroupCommand>(command) && admission->registry != registry)
-                    return Result<void>::Failure(MakeError(SceneErrors::AssetRevisionStale));
-            }
+            const auto valid = std::visit([&]<typename T>(const T &value) -> Result<void> {
+                if constexpr (std::is_same_v<T, CreateGroupCommand> || std::is_same_v<T, DestroyGroupCommand> ||
+                              std::is_same_v<T, AttachBaselineCommand> || std::is_same_v<T, DetachBaselineCommand>) {
+                    if (value.admission.cancellation.IsCancellationRequested() ||
+                        value.admission.ownerCancellation.IsCancellationRequested() ||
+                        value.admission.scopeCancellation.IsCancellationRequested())
+                        return JobCancelled();
+                    if (value.admission.scene != scene)
+                        return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
+                    if constexpr (std::is_same_v<T, CreateGroupCommand> || std::is_same_v<T, AttachBaselineCommand> ||
+                                  std::is_same_v<T, DetachBaselineCommand>) {
+                        if (value.admission.registry != registry)
+                            return Result<void>::Failure(MakeError(SceneErrors::AssetRevisionStale));
+                    }
+                    if constexpr (std::is_same_v<T, AttachBaselineCommand> || std::is_same_v<T, DetachBaselineCommand>)
+                        return value.publicationCheck->ValidatePublication();
+                }
+                return Result<void>::Success();
+            }, command);
+            if (valid.HasError())
+                return valid;
         }
         return Result<void>::Success();
     }
@@ -252,6 +260,7 @@ namespace Horo::Runtime {
         slot.parent.reset();
         slot.primitiveMesh.reset();
         slot.components = {};
+        slot.baselineOwner.reset();
         slot.groupResources.reset();
         slot.groupReferences.reset();
         slot.groupSpawnLineage.reset();
@@ -284,6 +293,8 @@ namespace Horo::Runtime {
         const auto revision = registry ? registry->Snapshot().Revision() : Assets::AssetRegistryRevision{};
         if (auto admission = commands.ValidateAdmission(runtimeId_, revision); admission.HasError())
             return Result<StructuralCommitResult>::Failure(admission.ErrorValue());
+        if (const auto valid = commands.ValidateBaselineResources(registry); valid.HasError())
+            return Result<StructuralCommitResult>::Failure(valid.ErrorValue());
         RuntimeSceneStorage candidate = storage_;
         StructuralCommitResult result;
         result.created.reserve(commands.commands_.size());
@@ -302,6 +313,7 @@ namespace Horo::Runtime {
             return Result<StructuralCommitResult>::Failure(admission.ErrorValue());
         for (const auto &owner : owners)
             owner->Publish();
+        RuntimeSceneStorage retired = std::move(storage_);
         storage_ = std::move(candidate);
         ++structuralRevision_;
         for (const auto &owner : owners) {
