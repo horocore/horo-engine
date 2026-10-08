@@ -918,6 +918,8 @@ horo_configure_target_header_boundary(HoroPrefabCookHost PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
     Horo/Runtime/Render/MotionHistory.h
     Horo/Runtime/Render/MotionHistoryErrors.h
+    Horo/Runtime/Render/PipelinePreparation.h
+    Horo/Runtime/Render/PipelinePreparationErrors.h
     Horo/Runtime/Render/PipelineCache.h
     Horo/Runtime/Render/PipelineCacheErrors.h
     Horo/Runtime/Render/Mesh.h
