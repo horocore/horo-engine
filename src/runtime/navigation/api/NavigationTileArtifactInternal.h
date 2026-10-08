@@ -111,6 +111,14 @@ namespace Horo::Navigation::TileArtifactInternal {
         std::size_t allocationRemaining_;
     };
 
+    /** @brief Encodes the exact validated owned project profile captured by the producer.
+     * @param writer Bounded canonical payload writer. @param profile Validated project authority. */
+    void WriteContentProfile(Writer &writer, const NavigationProjectProfile &profile);
+    /** @brief Reconstructs and validates captured profile facts and their deterministic fingerprint.
+     * @param reader Bounded payload reader. @return Owned validated profile.
+     * @throws std::invalid_argument Malformed or noncanonical captured profile. */
+    [[nodiscard]] NavigationProjectProfile ReadContentProfile(Reader &reader);
+
     /** @brief Constructs a domain error without discarding its registered identity. */
     template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &error) {
         return Result<T>::Failure(MakeError(error));

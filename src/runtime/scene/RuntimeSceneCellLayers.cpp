@@ -291,8 +291,12 @@ namespace Horo::Runtime {
         const auto &evidence = selection.Evidence();
         if (fence.partition != evidence.identity.partition || fence.cell != evidence.identity.cell || fence.epoch != evidence.world.epoch)
             return Failure<void>(SceneCellPayloadErrors::Stale);
-        return service.QueuePreparationWithPublicationCheck(selection.Definition(),
-                                                            std::make_unique<LayerPublicationCheck>(evidence, fence, std::move(authority),
-                                                                                                    cancellation));
+        if (const auto queued =
+                service.QueuePreparationWithPublicationCheck(selection.Definition(),
+                                                             std::make_unique<LayerPublicationCheck>(evidence, fence, std::move(authority),
+                                                                                                     cancellation));
+            queued.HasError())
+            return Result<void>::Failure(queued.ErrorValue());
+        return Result<void>::Success();
     }
 }  // namespace Horo::Runtime

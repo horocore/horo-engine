@@ -66,6 +66,80 @@ namespace Horo::Character {
             }
         };
 
+        TEST_CASE("Character discards trigger evidence even when an adapter labels it Block", "[physics][character][filter][grounding]") {
+            auto spawned = SpawnedActiveWorldWithController();
+            GroundProbe probe;
+            probe.provideGround = true;
+            probe.ground = SweepHit(spawned.world->Descriptor(), 9, {0, 1, 0}, 0.02F);
+            probe.ground.trigger = true;
+            probe.wall = SweepHit(spawned.world->Descriptor(), 10, {-1, 0, 0}, 0.005F);
+            probe.wall->trigger = true;
+            auto command = Movement(spawned.controller, 1, 1);
+            command.desiredVelocityMetersPerSecond = Math::Vec3{1, 0, 0};
+            REQUIRE(spawned.world->QueueMovementCommand(command).HasValue());
+            auto input = FixedTick(1);
+            input.query = probe.Context(spawned.world->Descriptor(), 1);
+            REQUIRE(spawned.world->AdvanceFixedTick(input).HasValue());
+            const auto result = spawned.world->ControllerLocomotionSnapshot(spawned.controller).Value().movement;
+            REQUIRE_FALSE(result.grounded);
+            REQUIRE(result.collisions == CharacterCollisionFlags::None);
+            REQUIRE(result.contactCount == 0);
+            REQUIRE(result.finalPosition.x > 0.016F);
+        }
+
+        TEST_CASE("Character excludes copied body layer and profile mismatches from walls and ground",
+                  "[physics][character][filter][grounding]") {
+            for (const int selector : {0, 1, 2}) {
+                auto spawned = SpawnedActiveWorldWithController();
+                GroundProbe probe;
+                probe.provideGround = true;
+                probe.ground = SweepHit(spawned.world->Descriptor(), 9, {0, 1, 0}, 0.02F);
+                probe.wall = SweepHit(spawned.world->Descriptor(), 10, {-1, 0, 0}, 0.005F);
+                probe.wall->body = probe.ground.body;
+                CharacterCollisionSelectors filter;
+                if (selector == 0)
+                    filter.excludedBody = probe.ground.body;
+                else if (selector == 1) {
+                    filter.requiredLayer = Physics::CollisionLayerId::Parse("12345678-1234-4234-8234-123456789abc").Value();
+                    probe.ground.layer = Physics::CollisionLayerId::Parse("22345678-1234-4234-8234-123456789abc").Value();
+                    probe.wall->layer = probe.ground.layer;
+                } else {
+                    filter.requiredProfile = Physics::CollisionProfileId::Parse("12345678-1234-4234-8234-123456789abc").Value();
+                    probe.ground.profile = Physics::CollisionProfileId::Parse("22345678-1234-4234-8234-123456789abc").Value();
+                    probe.wall->profile = probe.ground.profile;
+                }
+                auto command = Movement(spawned.controller, 1, 1);
+                command.desiredVelocityMetersPerSecond = Math::Vec3{1, 0, 0};
+                command.filterChange = filter;
+                REQUIRE(spawned.world->QueueMovementCommand(command).HasValue());
+                auto input = FixedTick(1);
+                input.query = probe.Context(spawned.world->Descriptor(), 1);
+                REQUIRE(spawned.world->AdvanceFixedTick(input).HasValue());
+                const auto result = spawned.world->ControllerLocomotionSnapshot(spawned.controller).Value().movement;
+                REQUIRE_FALSE(result.grounded);
+                REQUIRE(result.collisions == CharacterCollisionFlags::None);
+                REQUIRE(result.contactCount == 0);
+                REQUIRE(result.finalPosition.x > 0.016F);
+            }
+        }
+
+        TEST_CASE("Character rejects missing selected layer evidence before publishing movement",
+                  "[physics][character][filter][grounding]") {
+            auto spawned = SpawnedActiveWorldWithController();
+            GroundProbe probe;
+            probe.provideGround = true;
+            probe.ground = SweepHit(spawned.world->Descriptor(), 9, {0, 1, 0}, 0.02F);
+            auto command = Movement(spawned.controller, 1, 1);
+            command.filterChange = CharacterCollisionSelectors{
+                .requiredLayer = Physics::CollisionLayerId::Parse("12345678-1234-4234-8234-123456789abc").Value()};
+            REQUIRE(spawned.world->QueueMovementCommand(command).HasValue());
+            auto input = FixedTick(1);
+            input.query = probe.Context(spawned.world->Descriptor(), 1);
+            RequireError(spawned.world->AdvanceFixedTick(input), CharacterErrors::DescriptorInvalid);
+            REQUIRE(spawned.world->PublishedTick().completedTick == 0);
+            REQUIRE_FALSE(spawned.world->ControllerDescriptor(spawned.controller).Value().selectors.requiredLayer);
+        }
+
         TEST_CASE("Character classifies and stably snaps a stationary flat support with coherent evidence",
                   "[physics][character][world][grounding]") {
             auto spawned = SpawnedActiveWorldWithController();

@@ -114,7 +114,7 @@ namespace Horo::Character {
                                                                           const CharacterPhysicsQueryContext &query);
 
         /**
-         * @brief Copies the inert descriptor for one exact live controller generation.
+         * @brief Copies the controller policy including its last committed collision selectors.
          * @param handle Handle issued by this world for a currently resident controller.
          * @return Owned descriptor copy, or a typed malformed/foreign/stale/lifecycle error.
          */
@@ -148,7 +148,9 @@ namespace Horo::Character {
          * @brief Freezes and schedules one exact next Character fixed tick on the owner thread.
          * @param input One-based next tick, exact scene generation and positive host fixed quantum.
          * @return Success or a typed affinity/lifecycle/order/request error without partial publication.
-         * @post Commands are ordered by stable controller identity. A controller with no command performs no
+         * @post A filter change is selected with the final command before its shape/movement probes;
+         * it becomes persistent only at atomic publication. Failed attempts keep prior selectors.
+         * Commands are ordered by stable controller identity. A controller with no command performs no
          * movement for the tick; prior intent is never replayed. The queue closes before callbacks execute.
          */
         [[nodiscard]] Result<void> AdvanceFixedTick(const CharacterFixedTickInput &input);

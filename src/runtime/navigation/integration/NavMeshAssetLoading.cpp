@@ -27,6 +27,17 @@ namespace Horo::Navigation {
             return envelope.id == metadata.id && envelope.type == metadata.expectedType && envelope.target == target;
         }
 
+        /** @brief Required promoted policy is checked before any immutable byte-cache admission. */
+        [[nodiscard]] bool MatchesContent(const NavigationCookedTileSet &set, const Assets::AssetId id, const Sha256Digest &digest,
+                                          const NavMeshAssetContentExpectation &expected) noexcept {
+            if (id != expected.id || digest != expected.cookedContentDigest || !set.provenance || !set.provenance->projectProfile)
+                return false;
+            const auto &actual = set.provenance->compatibility;
+            return actual.provider == expected.compatibility.provider && actual.schemas == expected.compatibility.schemas &&
+                   actual.settings == expected.compatibility.settings &&
+                   set.provenance->projectProfile->MatchesAuthority(expected.projectProfile);
+        }
+
         /** @brief Resolve complete canonical partitions before admitting any reusable cache allocations. */
         [[nodiscard]] Result<void> GroupTiles(const NavigationCookedTileSet &set, LoadedNavMeshAsset &loaded,
                                               const NavMeshAssetLimits &limits) {
@@ -63,7 +74,8 @@ namespace Horo::Navigation {
     Result<LoadedNavMeshAsset> LoadNavMeshAsset(const Assets::AssetDependency &metadata,
                                                 const Assets::AssetRegistryRevision registryRevision,
                                                 const std::span<const std::uint8_t> encoded, const AssetCookTargetId &target,
-                                                Assets::AssetPayloadCache &cache, const NavMeshAssetLimits &limits) {
+                                                Assets::AssetPayloadCache &cache, const NavMeshAssetLimits &limits,
+                                                const NavMeshAssetContentExpectation *expectation) {
         if (!ValidMetadata(metadata, registryRevision, limits))
             return Result<LoadedNavMeshAsset>::Failure(MakeError(NavigationErrors::NavMeshArtifactInvalid));
         try {
@@ -77,8 +89,12 @@ namespace Horo::Navigation {
                 return Result<LoadedNavMeshAsset>::Failure(decoded.ErrorValue());
             if (decoded.Value().inputFingerprint != envelope.Value().sourceDigest)
                 return Result<LoadedNavMeshAsset>::Failure(MakeError(NavigationErrors::NavMeshArtifactCorrupt));
-            LoadedNavMeshAsset loaded{metadata.id, registryRevision, ComputeSha256(std::as_bytes(encoded)), envelope.Value().sourceDigest,
+            const auto contentDigest = ComputeSha256(std::as_bytes(encoded));
+            if (expectation && !MatchesContent(decoded.Value(), metadata.id, contentDigest, *expectation))
+                return Result<LoadedNavMeshAsset>::Failure(MakeError(NavigationErrors::NavMeshArtifactCorrupt));
+            LoadedNavMeshAsset loaded{metadata.id, registryRevision, contentDigest, envelope.Value().sourceDigest,
                                       envelope.Value().cacheKeyDigest};
+            loaded.contentProvenance = decoded.Value().provenance;
             if (const auto grouped = GroupTiles(decoded.Value(), loaded, limits); grouped.HasError())
                 return Result<LoadedNavMeshAsset>::Failure(grouped.ErrorValue());
             loaded.tileBytes.reserve(decoded.Value().tiles.size());
@@ -95,16 +111,16 @@ namespace Horo::Navigation {
     }
 
     /** @copydoc LoadNavMeshAsset */
-    Result<LoadedNavMeshAsset> LoadNavMeshAsset(const Assets::AssetRegistrySnapshot &registry, const Assets::IAssetProvider &provider,
-                                                const Assets::AssetId id, const AssetCookTargetId &target, Assets::AssetPayloadCache &cache,
-                                                const CancellationToken &cancellation, const NavMeshAssetLimits &limits) {
-        const auto *record = registry.Find(id);
+    Result<LoadedNavMeshAsset> LoadNavMeshAsset(const NavMeshAssetSource &source, const Assets::AssetId id, const AssetCookTargetId &target,
+                                                Assets::AssetPayloadCache &cache, const CancellationToken &cancellation,
+                                                const NavMeshAssetLimits &limits, const NavMeshAssetContentExpectation *expectation) {
+        const auto *record = source.registry.Find(id);
         if (!record)
             return Result<LoadedNavMeshAsset>::Failure(MakeError(NavigationErrors::NoNavigationData));
-        const auto bytes = provider.Load(id, cancellation);
+        const auto bytes = source.provider.Load(id, cancellation);
         if (bytes.HasError())
             return Result<LoadedNavMeshAsset>::Failure(bytes.ErrorValue());
-        return LoadNavMeshAsset(Assets::AssetDependency{record->id, record->type}, registry.Revision(), bytes.Value(), target, cache,
-                                limits);
+        return LoadNavMeshAsset(Assets::AssetDependency{record->id, record->type}, source.registry.Revision(), bytes.Value(), target, cache,
+                                limits, expectation);
     }
 }  // namespace Horo::Navigation

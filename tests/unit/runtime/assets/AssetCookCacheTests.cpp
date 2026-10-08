@@ -237,3 +237,44 @@ TEST_CASE("BuildAssetCookCacheKey artifact format version change invalidates key
 
     REQUIRE((key1.digest.bytes != key2.digest.bytes));
 }
+
+TEST_CASE("Dependency cache identity is canonical and separately versioned", "[native][prefab-cook]") {
+    const auto inputs = MakeInputs("scene");
+    const auto semantic = inputs.sourceDigest;
+    std::vector<AssetCookDependencyIdentity> dependencies{{Id("00000000-0000-0000-0000-000000000002"), Type("core.mesh"), semantic},
+                                                          {Id("00000000-0000-0000-0000-000000000003"), Type("core.mesh"), semantic}};
+    const auto key = BuildAssetCookCacheKeyV2(inputs, dependencies, semantic, 2);
+    REQUIRE(key.HasValue());
+    REQUIRE(key.Value() != BuildAssetCookCacheKey(inputs));
+    std::swap(dependencies[0], dependencies[1]);
+    const auto reordered = BuildAssetCookCacheKeyV2(inputs, dependencies, semantic, 2);
+    REQUIRE(reordered.HasValue());
+    REQUIRE(reordered.Value() == key.Value());
+
+    SECTION("dependency bytes") {
+        dependencies[0].artifactDigest.bytes[0] ^= 1;
+    }
+    SECTION("dependency type") {
+        dependencies[0].type = Type("core.material");
+    }
+    const auto changed = BuildAssetCookCacheKeyV2(inputs, dependencies, semantic, 2);
+    REQUIRE(changed.HasValue());
+    REQUIRE(changed.Value() != key.Value());
+}
+
+TEST_CASE("Dependency cache identity binds semantic context and rejects ambiguous or oversized input", "[native][prefab-cook]") {
+    const auto inputs = MakeInputs("scene");
+    auto semantic = inputs.sourceDigest;
+    const AssetCookDependencyIdentity dependency{Id("00000000-0000-0000-0000-000000000002"), Type("core.mesh"), semantic};
+    const std::vector<AssetCookDependencyIdentity> dependencies{dependency};
+    const auto key = BuildAssetCookCacheKeyV2(inputs, dependencies, semantic, 1);
+    REQUIRE(key.HasValue());
+    semantic.bytes[0] ^= 1;
+    const auto changed = BuildAssetCookCacheKeyV2(inputs, dependencies, semantic, 1);
+    REQUIRE(changed.HasValue());
+    REQUIRE(changed.Value() != key.Value());
+    const std::vector<AssetCookDependencyIdentity> duplicates{dependency, dependency};
+    REQUIRE(BuildAssetCookCacheKeyV2(inputs, duplicates, semantic, 2).HasError());
+    REQUIRE(BuildAssetCookCacheKeyV2(inputs, duplicates, semantic, 1).HasError());
+    REQUIRE(BuildAssetCookCacheKeyV2(inputs, dependencies, semantic, 0).HasError());
+}

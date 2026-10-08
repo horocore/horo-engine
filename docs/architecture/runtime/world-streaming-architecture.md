@@ -292,6 +292,45 @@ is replaced by this one contract, not a second provider hierarchy. Notifications
 such as OnCellActive, if offered to observers, occur after commit and are never
 entity-creation hooks or readiness acknowledgements.
 
+`CellAttachmentManifest` binds Terrain, Foliage, NavigationMesh, PhysicsMesh and Audio
+TOC rows to exact feature-owned artifact `AssetId`, semantic subresource, immutable
+content revision, schema, byte size and SHA-256. Construction copies canonical complete
+membership under explicit count and byte ceilings. Required TOC data cannot be weakened;
+optional data may be promoted by the cell profile. CoreEcs remains Scene-owned. This
+load/cook handoff adds no binary schema or independent cell topology.
+
+`SceneCellAttachmentParticipant` is the production Scene aggregate adapter. The host
+supplies an exact Scene definition revision, complete streaming operation fence,
+manifest revision, provider identities/revisions and immutable Assets byte leases.
+Complete required reference/binding/integrity admission precedes any provider factory
+call. Feature factories decode and stage their own resources, returning existing
+`SceneActivationCandidate` ownership. Byte presence alone never establishes readiness.
+All required native candidates must validate before common Scene publication; native
+errors preserve their original typed cause and leave the active aggregate unchanged.
+Unsupported/absent/failed optional references publish explicit unavailable status.
+Optional native invalidation before commit suppresses only that capability and retires
+its prepared resources; it cannot downgrade a required reference.
+
+The participant retains byte pins and native candidates through deferred publication.
+A strictly newer complete replacement validates before closing the old publication
+gate; cancellation/shutdown close pending admission and publication without claiming
+native retirement. Scene aggregate shutdown/unload retires candidates in reverse order;
+domain implementations retain outstanding readers/jobs/device resources until their own
+real acknowledgement. The host must close or replace this owner when canonical attempt
+fencing changes. Late optional attachment after Active remains a separately admitted
+transaction; this initial aggregate seam does not fabricate late readiness.
+
+`MakePhysicsCellAttachmentProvider` is a concrete feature-owned bridge in
+`HoroPhysicsSceneIntegration`: it matches the exact cooked descriptor, acquires a real
+`PhysicsCookedShapeLease`, and invokes existing Physics/Character aggregate preparation.
+It preserves solver/capability failures, including currently unsupported native cooked
+shape realization; a verified byte/shape lease cannot turn that failure into readiness.
+Shared immutable shape cache retention is separately owned from cell native candidates.
+Other feature owners use the same exact-reference factory boundary with their existing
+schemas and qualified native preparation paths; missing implementations fail required
+admission explicitly. Host composition selects them without streaming discovering a
+backend or importing a feature-private header.
+
 Host-composed inert provider descriptors declare stable provider/payload IDs,
 supported versions, native execution role, resource cost bounds, dependency DAG,
 activation policy, finite positive stage/prepare/retirement deadlines and teardown
@@ -491,7 +530,9 @@ retirement disposition. Terminal results consume exactly once. Successful resour
 transfer explicitly to their resident/active owner; operation-capacity release does
 not release separately accounted resident resources.
 
-Existing scheduler, asset-request, activation and residency APIs remain intact.
+Scheduler, asset-request and residency APIs retain their existing contracts.
+Activation/direction publication and retirement now require the shared owner-frame
+budget documented in WST-003.8 below; unbudgeted entry points are removed.
 Hosts integrating this seam stop advancing its reservation directly, wrap their
 started participants in lifetime-safe adapters, supply their validated retirement
 order, and transfer successful controllers with residency ownership. The generated
@@ -654,6 +695,33 @@ sub-caps, leaving 320 MiB for general/other-provider work. These are baseline po
 values, not a guarantee of frame timing or a rendering-tier gate. Each task unit is
 bounded; the time target stops starting new units, not preempts a native call.
 
+`StreamingOwnerFrameBudget` is the mandatory WST-003.8 owner-work ledger shared
+across all cells and current/retiring partition incarnations of one scheduler
+lifetime. The host issues one typed policy revision and monotonic frame identity,
+a positive work-time target and a unit-count ceiling. Every publication or
+retirement unit consumes that same unique ledger before callbacks begin;
+conservative charges and immediately sampled monotonic elapsed service time both
+bound admission. Pending/error polls remain charged, and a moved budget closes
+its source. Resource reservation accounting remains with the canonical scheduler.
+
+Activation receipts declare immutable positive publication bounds. Their complete
+checked sum is one atomic commit unit; frame exhaustion retains the prepared
+transaction and returns `OwnerFrameDeferred`. Partial publication over several
+frames is forbidden. Heavy preparation remains detached, and rollback performs
+bounded revocation/transfer to the admitted retirement owner rather than hidden
+synchronous heavy destruction. An oversized indivisible mandatory unit returns
+`OwnerFrameCapacityExceeded` and requires an explicit host barrier or work split.
+
+`StreamingCellDirectionOwner::PollRetirement` starts at most one admitted participant
+step per call and retains its dependency index/begun flag across frames and moves.
+A step includes begin, one non-blocking poll and exact-acknowledged adapter
+destruction. Heavy cleanup must be resumable inside the poll or native-affinity
+work, never deferred into a destructor. Frame deferral invokes no callbacks;
+stale/error evidence cannot release reservations. Cancellation, replacement,
+failure and shutdown retain the same continuation and ordered acknowledgements.
+Hosts and external adapters migrate through the
+[owner-frame migration guide](../../guides/world-streaming-owner-frame-migration.md).
+
 Providers may evict disposable local cache/LOD entries within their allowance but
 cannot discard activation-critical resources beneath an Active cell. They request
 cell eviction or an admitted fallback transition through the authority. Navigation
@@ -805,6 +873,25 @@ state transactionally. Cancellation and shutdown close new stability evaluation,
 while the authority's existing retirement path remains responsible for draining
 resources. Zero linger explicitly disables retention rather than selecting a hidden
 fallback.
+
+`StreamingEvictionPolicy` is the WST-003.11 bounded pure victim-selection contract.
+Host composition publishes one stable policy identity and immutable revision. The
+StreamingAuthorityRole captures current residency, source/gameplay/provider pin
+counts, outstanding resource leases, aggregate retention priority and last-use
+service time atomically under one non-reused snapshot revision. Every change to
+those facts advances that revision and invalidates older proposals. Selection
+rejects duplicate canonical cells, malformed facts and stale owner/epoch/publication
+fences before writing caller output. Only unpinned Resident or Active attempts are
+selected, ordered by lowest retention priority, oldest service use and canonical
+cell tuple. Pins always retain their requested residency; pressure never overrides
+them. Leases are reclamation barriers rather than residency demands: a victim may
+begin logical retirement while its captured leases remain outstanding, but no
+selection result returns budget credit or authorizes destruction. The authority
+revalidates the exact publication and cell generation before beginning the existing
+canonical retirement DAG; physical release still requires every ordinary retirement
+acknowledgement. Cancellation and shutdown close selection while that DAG drains.
+Policy or partition replacement routes old retirement to the original owner without
+resetting retained charges. See the [eviction contract migration guide](../../guides/world-streaming-eviction-policy-migration.md).
 
 CellBudgetExceeded leaves an unadmitted request pending and re-evaluated under queue
 and byte caps; it does not put an unallocated cell into Failed. Preflight reports
@@ -1375,6 +1462,51 @@ These are required implementation tests, not runtime changes delivered by this A
   spawns are cancelled, and persistent/network entities are not accidentally deleted.
 - Multiplayer delayed/missing content, stale relevance commands and local budget
   rejection do not grant gameplay authority. Authoring pages survive runtime eviction.
+
+## Incremental Scene Cell Baseline Cook
+
+`HoroEngine::SceneCellPayload` owns `IncrementalSceneCellCook`, a synchronous,
+owner-thread tooling/load-time cache over the existing `CookRuntimeSceneCellPayload`
+pipeline. The host supplies the complete desired cell set after offline expansion,
+exact expected source identities, current partition descriptor, mandatory ceilings,
+and an immutable captured catalog of already verified dependency artifacts. Assets
+retains dependency cooking and artifact verification authority; this Scene cache
+never loads sources, discovers providers, or schedules dependency cookers.
+
+A separate `Horo.SceneCellCook.Key.v1` SHA-256 stream covers durable partition/cell/
+scene/revision identity, every typed entity field in authored order, unordered
+requirements and supported gameplay schemas in canonical order, host-captured
+byte-affecting settings digest, and the canonical transitive dependency closure.
+Each dependency contributes stable AssetId, positive publication revision, verified
+content digest and canonical direct edges. A changed dependency invalidates exactly
+cells that reach it; changes to unreferenced artifacts do not invalidate cells.
+Missing nodes, duplicate nodes/edges and cycles fail before publication. This key
+neither extends Assets `CacheKeyV1` nor changes the HOROCELL wire format.
+
+Scalars use fixed eight-byte little-endian words (signed integers modulo 2^64),
+floating-point values contribute exact IEEE bits, strings/sequences have length
+prefixes, optionals have presence tags and variants have alternative indices. UUID
+bytes retain their persistent order. No padding, pointers, paths or runtime handles
+enter the stream. Per-cell key bytes and captured schema counts are explicitly
+bounded independently of logical native storage charges. Schema or byte-affecting
+cooker changes require a new key version; settings include target/profile and
+all effective host cook settings.
+
+A hit leases the exact immutable validated baseline and rechecks current topology,
+source fence and per-cell ceilings. A miss invokes the real Scene cook and preserves
+its typed errors. Reports distinguish actual cooks from reuse and order cells by
+manifest cell order. The host can pass either output through the existing
+`QueueRuntimeSceneCellPayload` deferred publication authority.
+
+One complete successful batch atomically replaces the retained set and advances a
+non-wrapping revision. Stale expected cache revisions, invalid input, later-cell
+failure, cancellation and allocation failure leave the prior set and revision
+unchanged. Omitted cells retire from cache ownership. Shutdown closes admission
+and releases retained entries; immutable caller leases survive replacement and
+shutdown. Candidate and prior sets may coexist during transactional preparation;
+aggregate retained-payload ceilings bound each set, while caller-held leases remain
+charged to their owning callers. There is no frame-hot work, disk cache, ambient
+state or background job to drain.
 
 ## Cooked World Index Format (`world.index`)
 

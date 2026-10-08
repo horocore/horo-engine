@@ -110,7 +110,9 @@ namespace Horo::Runtime {
         /**
          * @brief Selects one already-integrity-verified chunk without invoking module code.
          * @param record Stable record identity.
-         * @return Owned canonical chunk bytes or an empty optional for an unknown lookup.
+         * @return Owned canonical chunk bytes or an empty optional for an unknown lookup. Unknown codecs always
+         * return ArchiveCodecUnsupported, including optional opaque storage admitted by container v2/schema 2.
+         * Structural archive admission grants no decoder or participant activation capability.
          */
         [[nodiscard]] Result<std::optional<std::vector<std::byte>>> SelectChunk(SaveRecordId record) const;
         /**
@@ -136,6 +138,7 @@ namespace Horo::Runtime {
         };
 
         friend class SaveArchiveReader;
+        friend class ValidatedSaveSceneCanonicalPreservation;
         friend struct SaveArchiveReaderDetail::Reader;
         explicit ValidatedSaveArchive(Contents contents) noexcept;
 
