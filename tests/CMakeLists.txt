@@ -2936,6 +2936,17 @@ add_executable(HoroRuntimeSaveStoragePolicyTests
 target_compile_features(HoroRuntimeSaveStoragePolicyTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSaveStoragePolicyTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroRuntimeSaveStoragePolicyTests PRIVATE HoroEngine::Runtime)
+add_executable(HoroRuntimeSaveCommandsTests unit/runtime/save/SaveCommandsTests.cpp)
+target_compile_features(HoroRuntimeSaveCommandsTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeSaveCommandsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRuntimeSaveCommandsTests PRIVATE HoroEngine::Runtime)
+
+add_executable(HoroSaveCommandsPublicHeaderConsumer support/SaveCommandsPublicHeaderConsumer.cpp)
+target_compile_features(HoroSaveCommandsPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroSaveCommandsPublicHeaderConsumer PRIVATE HoroEngine::Runtime)
+add_test(NAME HoroSaveCommandsPublicHeaderConsumer COMMAND HoroSaveCommandsPublicHeaderConsumer)
+set_tests_properties(HoroSaveCommandsPublicHeaderConsumer PROPERTIES LABELS "unit;save;headless")
+
 add_executable(HoroRuntimeSaveOperationArbiterTests
         unit/runtime/save/SaveOperationArbiterTests.cpp
 )
@@ -3810,6 +3821,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeRestoreReferenceTests
         HoroRuntimeSaveStorageAdapterTests
         HoroRuntimeSaveStoragePolicyTests
+        HoroRuntimeSaveCommandsTests
         HoroRuntimeSaveOperationArbiterTests
         HoroRuntimeSaveAutosaveSchedulerTests
         HoroRuntimeSaveEventTriggersTests

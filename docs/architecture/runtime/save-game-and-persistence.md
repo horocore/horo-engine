@@ -1343,6 +1343,46 @@ is owned by `HoroRuntime` in the header-ownership registry. Existing catalog/sto
 callers need no migration; presentation adapters should replace retained catalog or
 storage objects with this immutable view and command preconditions.
 
+### Manual, quick-save and load command admission
+
+`SaveCommands` is the owner-thread gameplay/script command adapter over the existing
+session `SaveOperationArbiter`. The host supplies trusted namespace binding, runtime
+revision/activity/authority, cooked product policy, a bounded catalog and exact-generation
+compatibility/integrity assessments. Requests cannot supply those authority facts.
+Manual save and slot load name opaque slots and capture their exact generation;
+all requests carry namespace/binding, catalog and runtime revisions. Rejected admission
+leaves the arbiter unchanged. Loading requires a Direct or MigrationAvailable assessment
+and Verified or VerificationRequired integrity; archive verification and migration are
+still mandatory in the existing load pipeline.
+
+Cooked Quick policy already requires ReplaceSingle with one retained logical slot.
+Both quick commands resolve the host's reserved `quickSlot`, independent of timestamps,
+display names or catalog ordering. A missing quick generation permits quick save and
+rejects quick load. Manual save cannot write the reserved quick slot or reclassify
+another slot kind, and new manual slots must fit the cooked category capacity.
+
+Confirmation returns a typed exact target and no operation handle. UI adapters own
+prompt wording and interaction. A confirmed retry preserves the original revisions
+and expected target generation; it cannot follow an overwrite or namespace/session
+change. At most one nonterminal user command is retained: identical repeated input
+returns its original handle and cancellation/deadline, while other user requests or
+existing arbiter work return `save.operation.in_progress`. Product cooldown is measured
+from admission using the host's monotonic clock and never accumulates delayed requests.
+
+The host calls `Revalidate` under its mutation lease before dispatch/capture/load and
+publication, then carries the exact expected generation into the existing slot CAS.
+Changed authority, eligibility, binding, revision, kind or assessment rejects dispatch;
+the host publishes the failure/cancellation through the arbiter. This adapter does no
+I/O, capture, callbacks, worker scheduling or blocking. The host still owns barrier,
+archive, storage, restore, shutdown and terminal acknowledgement. Close the command
+adapter before settling the shared arbiter. Borrowed host facts/arbiter outlive the
+adapter; recreate it for a replacement runtime session.
+
+The public header is assigned to `HoroRuntime` with a dedicated public-header consumer.
+This additive command contract changes no archive format or existing storage/capture API;
+new adapters should submit typed commands rather than admitting arbitrary user intents
+directly to the arbiter. Existing host producers retain their explicit composition path.
+
 ### Physical mapping and safety
 
 Platform Abstraction resolves a product state root for the validated
