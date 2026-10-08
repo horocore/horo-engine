@@ -335,6 +335,48 @@ invalidates the old intent; the host reports cancellation or explicitly schedule
 new-session checkpoint. Autosave ring rotation advances only after durable success;
 a failed save never consumes the last good ring entry.
 
+`SaveEventTriggers` is the additive owner-thread event adapter for SAV-005.6.
+A host copies an immutable allowlist of at most 64 product-issued trigger IDs,
+typed payload requirements, Auto/Checkpoint modes, safe logical targets and
+Continue/Block transition-failure policy. Publishers supply only an ID, monotonic
+sequence, generation and a bounded gameplay/milestone/project/transition payload;
+paths and target selection are absent from that contract. Registrations cannot
+publish Manual/Quick slots or bypass namespace, catalog capacity, generation CAS,
+product eligibility, cooldown or confirmation policy. A fixed registered target
+is chosen by the host's catalog policy; ring selection/rotation remains a separate
+host responsibility and advances only on durable success. Recompose registrations
+at a quiescent session boundary to change allowed targets.
+
+One pending intent survives competing arbiter work. Equivalent rapid events
+coalesce only when cooked policy permits it and return the original effective
+correlation; distinct busy intents are explicitly rejected rather than silently
+lost or queued without bound. Receipts retain one effective event per registration;
+older monotonic sequences cannot replay work. Callers keep the returned handle for
+terminal observation after the bounded receipt is replaced. Cooldown is shared by
+all triggers for a mode, so a second publisher cannot bypass it.
+
+BeforeTransition payloads capture the exact source scene/registry incarnation;
+the transition owner waits asynchronously for durable completion before applying
+the scene change. AfterTransition payloads capture the activated destination and
+hold transition finalization; Block denotes an explicit failure state and never
+an automatic rollback. Either failure or cancellation applies the registered
+Continue/Block policy and preserves its original typed cause. No timer-time state
+or live scene pointer is retained. A transition to the wrong incarnation before
+capture fails visibly. Session replacement closes and recreates the dispatcher.
+
+Migration for event publishers: replace direct storage calls with Submit, retain
+the effective correlation, and poll Receipt/DecideSaveTransition. Host composition
+calls CommitAtSafePoint only inside CommitDeferredLifecycleChanges and forwards
+its immutable handoff with the existing handle. The adapter reserves the existing
+safe-point coordinator's exact-generation capture fence. The host capture executor
+polls cancellation, calls Revalidate under its mutation lease, uses the existing
+capture barrier, and advances the arbiter to Encoding only after a coherent cut.
+Workers receive the same correlation and expected generation; the host enforces
+storage CAS, publication, terminal acknowledgement and lifecycle-fence retirement.
+Close admission on the owner before destroying dependencies; admitted workers
+remain host-owned. There is no independent event bus, operation store or worker
+pipeline, and timer/manual producer contracts are unchanged.
+
 The host registers capture and restore publication **inside**
 CommitDeferredLifecycleChanges, after pending structural changes are resolved and
 before the next simulation step. PumpOwnerThread runs on the owner and drains ready

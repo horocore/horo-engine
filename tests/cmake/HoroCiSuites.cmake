@@ -50,6 +50,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroRuntimeSaveRootResolverTests
     HoroRuntimeSaveFilesystemLockTests
     HoroRuntimeSaveSlotCommitTransactionTests
+    HoroRuntimeSaveEventTriggersTests
+    HoroSaveEventTriggersPublicHeaderConsumer
     HoroRuntimePublicHeaderConsumer
 )
 

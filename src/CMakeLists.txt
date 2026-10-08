@@ -437,6 +437,8 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveCaptureBarrier.cpp
         runtime/save/SaveAutosaveScheduler.cpp
         runtime/save/SaveAutosaveCapture.cpp
+        runtime/save/SaveEventTriggers.cpp
+        runtime/save/SaveEventAdmission.cpp
         runtime/save/SaveTestCompositions.cpp
 )
 add_library(HoroEngine::Runtime ALIAS HoroRuntime)
