@@ -85,10 +85,7 @@ namespace Horo::Audio {
         [[nodiscard]] bool CountsInBucket(const AudioVoiceAdmissionCandidate &candidate,
                                           const AudioVoiceAdmissionConstraint &constraint) noexcept {
             const auto records = constraint.snapshot.voices;
-            const auto found = std::lower_bound(records.begin(), records.end(), candidate.snapshot.voice,
-                                                [](const AudioVoiceSnapshot &snapshot, const AudioVoiceHandle voice) {
-                return snapshot.voice < voice;
-            });
+            const auto found = std::ranges::lower_bound(records, candidate.snapshot.voice, {}, &AudioVoiceSnapshot::voice);
             if (found == records.end() || found->voice != candidate.snapshot.voice)
                 return false;
             if (found->state == AudioVoiceState::Paused)
@@ -115,11 +112,12 @@ namespace Horo::Audio {
         /** @brief Compare exactly the authored ranking metric, then stable order and complete identity. */
         [[nodiscard]] bool Better(const AudioVoiceAdmissionCandidate &candidate, const AudioVoiceAdmissionCandidate &best,
                                   const AudioConcurrencyMode mode) noexcept {
-            if (mode == AudioConcurrencyMode::StealQuietest && candidate.audibleGain != best.audibleGain)
+            using enum AudioConcurrencyMode;
+            if (mode == StealQuietest && candidate.audibleGain != best.audibleGain)
                 return candidate.audibleGain < best.audibleGain;
-            if (mode == AudioConcurrencyMode::StealLowestPriority && candidate.priority != best.priority)
+            if (mode == StealLowestPriority && candidate.priority != best.priority)
                 return candidate.priority < best.priority;
-            if (mode == AudioConcurrencyMode::StealFurthest && candidate.listenerDistance != best.listenerDistance)
+            if (mode == StealFurthest && candidate.listenerDistance != best.listenerDistance)
                 return candidate.listenerDistance > best.listenerDistance;
             if (candidate.admissionOrder != best.admissionOrder)
                 return candidate.admissionOrder < best.admissionOrder;
@@ -129,17 +127,18 @@ namespace Horo::Audio {
         /** @brief Map replacement policies to one stable observable reason. */
         [[nodiscard]] Reason ReplacementReason(const AudioConcurrencyMode mode) noexcept {
             using enum AudioConcurrencyMode;
+            using enum AudioVoiceAdmissionReason;
             switch (mode) {
                 case StealQuietest:
-                    return Reason::StopQuietest;
+                    return StopQuietest;
                 case StealLowestPriority:
-                    return Reason::StopLowestPriority;
+                    return StopLowestPriority;
                 case StealFurthest:
-                    return Reason::StopFurthest;
+                    return StopFurthest;
                 case Replace:
-                    return Reason::ReplaceOldest;
+                    return ReplaceOldest;
                 default:
-                    return Reason::StopOldest;
+                    return StopOldest;
             }
         }
 
@@ -162,18 +161,19 @@ namespace Horo::Audio {
         [[nodiscard]] AudioVoiceAdmissionDecision Select(const AudioVoiceAdmissionRequest &request,
                                                          const std::array<bool, MaximumAudioVoiceAdmissionConstraints> &saturated,
                                                          const bool physicalFull, const bool bucketFull) noexcept {
+            using enum AudioVoiceAdmissionReason;
             if (!physicalFull && !bucketFull)
-                return {Action::AdmitPhysical, Reason::CapacityAvailable, {}};
-            const Reason capacityReason = bucketFull ? Reason::InstanceCapacity : Reason::PhysicalCapacity;
+                return {Action::AdmitPhysical, CapacityAvailable, {}};
+            const Reason capacityReason = bucketFull ? InstanceCapacity : PhysicalCapacity;
             switch (request.mode) {
                 case AudioConcurrencyMode::Reject:
-                    return {Action::Reject, Reason::RejectNewest, {}};
+                    return {Action::Reject, RejectNewest, {}};
                 case AudioConcurrencyMode::Allow:
                     return {Action::Reject, capacityReason, {}};
                 case AudioConcurrencyMode::Virtualize:
                     if (bucketFull)
                         return {Action::Reject, capacityReason, {}};
-                    return {Action::AdmitVirtual, Reason::Virtualized, {}};
+                    return {Action::AdmitVirtual, Virtualized, {}};
                 default:
                     break;
             }
