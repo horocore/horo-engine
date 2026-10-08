@@ -7,6 +7,30 @@
 #include <tuple>
 
 namespace Horo::Prefab {
+    /** @copydoc ValidatePrefabInitializationValue */
+    Result<void> ValidatePrefabInitializationValue(const CookedPrefabInitialization &declaration,
+                                                   const Gameplay::BehaviorFieldValue &value) {
+        if (const auto kind = static_cast<std::size_t>(declaration.kind);
+            declaration.id.value == 0 || kind == 0 || kind > 7 || value.index() != kind || !std::isfinite(declaration.minimum) ||
+            !std::isfinite(declaration.maximum) || declaration.minimum > declaration.maximum)
+            return Result<void>::Failure(MakeError(PrefabErrors::AdmissionRejected, "Invalid typed initialization interface."));
+        const bool valid = std::visit([&declaration]<typename Value>(const Value &input) {
+            if constexpr (std::is_same_v<Value, double> || std::is_same_v<Value, std::int64_t>) {
+                const auto number = static_cast<long double>(input);
+                return std::isfinite(number) && number >= declaration.minimum && number <= declaration.maximum;
+            } else if constexpr (std::is_same_v<Value, std::string>)
+                return input.size() <= 256;
+            else if constexpr (std::is_same_v<Value, Math::Vec2> || std::is_same_v<Value, Math::Vec3>)
+                return Math::IsFinite(input);
+            else if constexpr (std::is_same_v<Value, Math::Quaternion>)
+                return Math::IsFinite(input) && input.TryNormalized().HasValue();
+            else
+                return std::is_same_v<Value, bool>;
+        }, value);
+        return valid ? Result<void>::Success()
+                     : Result<void>::Failure(MakeError(PrefabErrors::AdmissionRejected, "Initialization value exceeds its typed bounds."));
+    }
+
     namespace {
         /** @brief Tests that a digest carries explicit revision evidence. */
         [[nodiscard]] bool HasDigest(const Sha256Digest &digest) noexcept {
@@ -18,6 +42,31 @@ namespace Horo::Prefab {
         /** @brief Resolves a member occurrence without returning mutable storage. */
         [[nodiscard]] bool HasMember(const CookedPrefabData &data, const CookedPrefabMemberSlot slot) noexcept {
             return slot.entity.value < data.entities.size() && slot.member < data.entities[slot.entity.value].members.size();
+        }
+
+        /** @brief Validates every cook-owned target and its immutable default before publishing the artifact. */
+        [[nodiscard]] Result<void> ValidateInitialization(const CookedPrefabData &data) {
+            if (data.initialization.size() > MaximumPrefabInitializationValues)
+                return Result<void>::Failure(MakeError(PrefabErrors::AdmissionRejected));
+            PrefabInitializationId previous;
+            for (std::size_t index = 0; index < data.initialization.size(); ++index) {
+                const auto &declaration = data.initialization[index];
+                if (declaration.id <= previous || !HasMember(data, declaration.owner))
+                    return Result<void>::Failure(MakeError(PrefabErrors::CookArtifactInvalid));
+                const auto *behavior = std::get_if<Gameplay::BehaviorComponent>(
+                    &data.entities[declaration.owner.entity.value].members[declaration.owner.member]);
+                if (!behavior || declaration.field >= behavior->fields.size())
+                    return Result<void>::Failure(MakeError(PrefabErrors::CookArtifactInvalid));
+                for (std::size_t prior = 0; prior < index; ++prior) {
+                    if (data.initialization[prior].owner == declaration.owner && data.initialization[prior].field == declaration.field)
+                        return Result<void>::Failure(MakeError(PrefabErrors::CookArtifactInvalid));
+                }
+                if (auto valid = ValidatePrefabInitializationValue(declaration, behavior->fields[declaration.field].value);
+                    valid.HasError())
+                    return valid;
+                previous = declaration.id;
+            }
+            return Result<void>::Success();
         }
 
         /** @brief Rejects nonfinite behavioral values even when provider descriptors are unavailable. */
@@ -181,6 +230,9 @@ namespace Horo::Prefab {
         if (valid.HasError())
             return Result<CookedPrefab>::Failure(valid.ErrorValue());
         valid = ValidateReferences(candidate);
+        if (valid.HasError())
+            return Result<CookedPrefab>::Failure(valid.ErrorValue());
+        valid = ValidateInitialization(candidate);
         if (valid.HasError())
             return Result<CookedPrefab>::Failure(valid.ErrorValue());
         auto payload = Detail::EncodeCookedPrefabPayload(candidate, limits.Policy().maximumCookedPayloadBytes);

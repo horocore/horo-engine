@@ -1,5 +1,17 @@
 # Scene Runtime Architecture
 
+`QueueTrackedStructuralCommands` provides a retainable immutable receipt for one
+complete Scene transaction. Prefab Runtime uses this dedicated evidence without
+consuming global host operation notifications. Receipts preserve the original
+pre-publication error or the committed group identities through service shutdown.
+Post-publication hook faults remain distinct host errors and do not reverse
+committed topology. `DestroyGroup` validates complete resource-group membership,
+exact generations and cancellation, then retires reverse topology atomically.
+Cook-projected reference interfaces and inherited spawn lineage are immutable
+Scene-owned group metadata; Scene resolves interfaces after complete reservation
+and rechecks external compatibility before aggregate publication. None of these
+contracts adds a dependency from Scene to Prefab or Gameplay Runtime.
+
 ## Purpose
 
 This document defines the runtime scene model, ECS ownership, entity and

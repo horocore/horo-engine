@@ -54,6 +54,20 @@ namespace Horo::Gameplay {
         [[nodiscard]] static Result<std::unique_ptr<BehaviorRuntime>> Create(Runtime::RuntimeScene &scene, const BehaviorRegistry &registry,
                                                                              BehaviorRuntimeLimits limits,
                                                                              std::shared_ptr<const GameplayPhysicsContext> physics);
+        /** @brief Activates Gameplay against the actual Scene service and explicitly admitted prefab scope.
+         * @param scenes Scene authority outliving the runner; callbacks retain no mutable Scene storage.
+         * @param registry Frozen module registry outliving the runner.
+         * @param limits Bounded behavior/event admission.
+         * @param physics Optional explicitly admitted Physics scope.
+         * @param prefabs Explicitly admitted cooked-prefab scope for the same Scene incarnation.
+         * @return Active runner or typed activation failure with complete instance rollback.
+         * @pre The host registered the Gameplay structural participant before Scene service startup.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<BehaviorRuntime>> Create(Runtime::RuntimeSceneService &scenes,
+                                                                             const BehaviorRegistry &registry,
+                                                                             BehaviorRuntimeLimits limits = {},
+                                                                             std::shared_ptr<const GameplayPhysicsContext> physics = {},
+                                                                             std::shared_ptr<const GameplayPrefabContext> prefabs = {});
         ~BehaviorRuntime();
         BehaviorRuntime(const BehaviorRuntime &) = delete;
         BehaviorRuntime &operator=(const BehaviorRuntime &) = delete;
@@ -95,6 +109,11 @@ namespace Horo::Gameplay {
 
     private:
         struct Impl;
+        /** @brief Activates instances and rolls back failed factory/lifecycle construction.
+         * @param impl Complete host-routed state with admitted scopes.
+         * @return Active runner or original typed activation/rollback failure.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<BehaviorRuntime>> ActivateImpl(std::shared_ptr<Impl> impl);
         explicit BehaviorRuntime(std::shared_ptr<Impl> impl) noexcept;
         std::shared_ptr<Impl> impl_;
     };

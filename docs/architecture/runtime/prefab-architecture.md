@@ -32,9 +32,10 @@ architecture spanning two lifecycles:
    - Compiled by the Asset Pipeline from source `.prefab` files into immutable,
      platform-optimized binary artifacts (`core.prefab` asset type).
    - Registered in the `AssetRegistry` and `CookCatalog` with a stable 128-bit `AssetId`.
-   - Gameplay requests spawn via `SceneCommandBuffer::RequestSpawnPrefab` (any thread,
-     `Result<OperationId, PrefabError>`). `SceneRuntimeAccess::SpawnPrefab` commits on the scene owner thread
-     (`OwnerThreadNextFrame`, [ADR-018](../../adr/018-command-registration-permissions-threading-and-packaged-build-policy.md); job wait in [ADR-010](../../adr/010-job-waiting-and-operation-store-ownership.md)).
+   - Gameplay requests spawn through the explicitly admitted `GameplayPrefabContext`.
+     `PrefabSpawnService` prepares immutable artifacts and hands a complete group to
+     `RuntimeSceneService` on the Scene owner lane. Host command adapters dispatch
+     external callers to that lane (`OwnerThreadNextFrame`, [ADR-018](../../adr/018-command-registration-permissions-threading-and-packaged-build-policy.md)).
    - Commit allocates fresh `EntityId`s, copies components, and parents the hierarchy, then
      publishes. `OnCreate` / `OnStart` run only after commit.
 
@@ -150,8 +151,22 @@ own those delivery decisions:
 - **Cooked Binary Artifact**: The Asset Pipeline compiles `.prefab` assets into immutable binary
   `CookedPrefab` artifacts registered under `core.prefab` in `CookCatalog`.
 - **Runtime Asset Management**: Loaded through `IAssetProvider` via stable `AssetId`.
-- **Dynamic Spawn API**: `SceneCommandBuffer::RequestSpawnPrefab` (any thread, returns `Result<OperationId, PrefabError>`)
-  wraps `SceneRuntimeAccess::SpawnPrefab` (owner thread, `OwnerThreadNextFrame`).
+- **Dynamic Spawn API**: `GameplayPrefabContext::Spawn` returns a bounded operation
+  observation. `notBeforeTick` addresses the first eligible lifecycle safe point;
+  asynchronous preparation expires after a finite 64-tick window. Complete groups
+  publish through Scene-owned transactions. `Despawn` accepts only an opaque
+  committed group under the same service/module scope. See the
+  [implementation and migration contract](../../guides/gameplay-prefab-spawn-migration.md).
+- **Prepared group publication**: `PrefabTemplateProvider::QueuePreparedGroup`
+  consumes the projected components with one `PrefabPreparedGroupOptions` value
+  for fixups, placement, scope cancellation, occurrence metadata, references and
+  lineage. The optional receipt output is borrowed only for synchronous submission
+  and written after success; Scene retains the actual queued publication evidence.
+- **Initialization**: HPFB v2 owns at most 64 stable, distinct runtime initialization
+  declarations, mapped by cook to existing typed behavior field occurrences. Exact
+  kinds, required/optional coverage, finite bounds and uniqueness validate before
+  staging. Optional omission preserves the immutable default. No caller property
+  paths, structural edits or authoring override records enter this capability.
 - **Lifecycle Guarantees**: Owner-thread `EntityId` allocation, staged component copy, commit,
   then `OnCreate`, `OnEnable` when enabled, and `OnStart` once before the first eligible fixed
   update after first enable. Created-disabled behaviors defer enable/start. Repeated IDs in

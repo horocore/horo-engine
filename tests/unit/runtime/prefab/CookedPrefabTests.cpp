@@ -103,7 +103,7 @@ namespace Horo::Prefab {
         CHECK(std::ranges::equal(decoded.Value().Bytes(), artifact.Value().Bytes()));
         CHECK(Encoded(data) == Encoded(data));
         CHECK(artifact.Value().Bytes()[0] == std::byte{'H'});
-        CHECK(artifact.Value().Bytes()[7] == std::byte{1});
+        CHECK(artifact.Value().Bytes()[7] == static_cast<std::byte>(CurrentCookedPrefabVersion));
     }
 
     TEST_CASE("Cooked prefab owns its source-free data across candidate destruction and replacement", "[prefab][cooked]") {
@@ -364,7 +364,7 @@ namespace Horo::Prefab {
 
     TEST_CASE("Cooked prefab rejects unsupported runtime formats independently from source versions", "[prefab][cooked]") {
         auto bytes = Encoded();
-        Word(bytes, 4, 2);
+        Word(bytes, 4, CurrentCookedPrefabVersion + 1);
         Reject(CookedPrefab::Parse(bytes, Test::Asset(), Limits()), PrefabErrors::UnsupportedCookedVersion);
         Word(bytes, 4, 0);
         Reject(CookedPrefab::Parse(bytes, Test::Asset(), Limits()), PrefabErrors::UnsupportedCookedVersion);
@@ -396,7 +396,9 @@ namespace Horo::Prefab {
             Reject(CookedPrefab::Parse(bytes, Test::Asset(), Limits()), PrefabErrors::CorruptedPayload);
         }
         SECTION("unrecognized reference tag") {
-            bytes[bytes.size() - 5] = std::byte{4};
+            // The final binding target is followed by the v2 initialization-table count.
+            constexpr auto trailerBytes = 2 * sizeof(std::uint32_t);
+            bytes[bytes.size() - trailerBytes - 1] = std::byte{4};
             Reseal(bytes);
             Reject(CookedPrefab::Parse(bytes, Test::Asset(), Limits()), PrefabErrors::CorruptedPayload);
         }

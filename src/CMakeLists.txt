@@ -692,6 +692,7 @@ add_library(HoroRuntimeScene STATIC
         runtime/scene/SaveContentWorld.cpp
         runtime/scene/SaveContentSnapshot.cpp
         runtime/scene/RuntimeScene.cpp
+        runtime/scene/RuntimeSceneCommandApplier.h
         runtime/scene/RuntimeSceneBaseline.cpp
         runtime/scene/RuntimeSceneBaselineCommands.cpp
         runtime/scene/RuntimeSceneView.cpp
@@ -741,6 +742,7 @@ target_link_libraries(HoroNetworkDebuggerApplication PUBLIC HoroEngine::NetworkA
 add_library(HoroGameplayRuntime STATIC
         gameplay/runtime/BehaviorRegistry.cpp
         gameplay/runtime/BehaviorRuntime.cpp
+        gameplay/runtime/BehaviorRuntimeState.h
         gameplay/runtime/SaveGameplayPersistence.cpp
         gameplay/runtime/GameplayRegistrationRuntimeDetail.h
         gameplay/runtime/GameplayRuntimeInvocation.h
@@ -1093,6 +1095,7 @@ add_library(HoroEngine::GameplayPhysicsIntegration ALIAS HoroGameplayPhysicsInte
 target_compile_features(HoroGameplayPhysicsIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroGameplayPhysicsIntegration PUBLIC HoroEngine::GameplayApi HoroEngine::Physics)
 target_link_libraries(HoroGameplayRuntime PRIVATE HoroEngine::GameplayPhysicsIntegration)
+target_link_libraries(HoroGameplayRuntime PRIVATE HoroEngine::PrefabRuntime)
 target_link_libraries(HoroGameplayModuleHost PRIVATE HoroEngine::GameplayPhysicsIntegration)
 target_link_libraries(HoroGameplayLua PRIVATE HoroEngine::GameplayPhysicsIntegration)
 if(HORO_BUILD_PHYSICS_NATIVE)
@@ -1740,6 +1743,8 @@ target_link_libraries(HoroPrefab PUBLIC HoroEngine::Foundation HoroEngine::Asset
 add_library(HoroPrefabRuntime STATIC
         runtime/prefab/PrefabTemplateProvider.cpp
         runtime/prefab/PrefabTemplateLoading.cpp
+        runtime/prefab/PrefabSpawnService.cpp
+        runtime/prefab/PrefabSpawnState.h
 )
 add_library(HoroEngine::PrefabRuntime ALIAS HoroPrefabRuntime)
 target_compile_features(HoroPrefabRuntime PUBLIC cxx_std_20)

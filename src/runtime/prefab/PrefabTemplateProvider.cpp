@@ -7,6 +7,35 @@
 #include <utility>
 
 namespace Horo::Prefab {
+    namespace {
+        /** @brief Transfers dense projected components and metadata while preserving cooked topology and ordering. */
+        std::vector<Runtime::RuntimeEntityGroupEntry> MakePreparedEntries(const std::span<const CookedPrefabEntity> entities,
+                                                                          std::vector<Runtime::RuntimeComponentSet> components,
+                                                                          PrefabPreparedGroupOptions &options) {
+            std::vector<Runtime::RuntimeEntityGroupEntry> entries;
+            entries.reserve(entities.size());
+            for (std::size_t index = 0; index < entities.size(); ++index) {
+                Runtime::RuntimeEntityGroupEntry entry;
+                entry.info.localTransform = entities[index].localTransform;
+                entry.info.components = std::move(components[index]);
+                if (!options.physicsReferences.empty())
+                    entry.physicsReferences = std::move(options.physicsReferences[index]);
+                if (!options.members.empty())
+                    entry.members = std::move(options.members[index]);
+                if (!options.references.empty())
+                    entry.references = std::move(options.references[index]);
+                entry.spawnLineage = options.spawnLineage;
+                if (entities[index].parent)
+                    entry.parentInGroup = entities[index].parent->value;
+                entries.push_back(std::move(entry));
+            }
+            if (options.rootPlacement)
+                entries.front().info.localTransform = *options.rootPlacement;
+            entries.front().info.parent = options.parent;
+            return entries;
+        }
+    }  // namespace
+
     /** @copydoc PrefabTemplateLease::PrefabTemplateLease */
     PrefabTemplateLease::PrefabTemplateLease(std::shared_ptr<const Detail::PrefabTemplateAllocation> allocation,
                                              Runtime::SceneRuntimeId scene) noexcept
@@ -163,30 +192,34 @@ namespace Horo::Prefab {
         return state_->CheckAdmission(lease.allocation_->registry, lease.scene_);
     }
 
+    /** @copydoc PrefabTemplateProvider::UsesSceneService */
+    bool PrefabTemplateProvider::UsesSceneService(const Runtime::RuntimeSceneService &scenes) const noexcept {
+        return &state_->scenes == &scenes;
+    }
+
     /** @copydoc PrefabTemplateProvider::QueuePreparedGroup */
     Result<std::vector<Runtime::DeferredEntity>> PrefabTemplateProvider::QueuePreparedGroup(
         const PrefabTemplateLease &lease, std::vector<Runtime::RuntimeComponentSet> components, const CancellationToken &cancellation,
-        std::vector<std::vector<Runtime::GroupPhysicsBodyReference>> physicsReferences) {
+        PrefabPreparedGroupOptions options) {
         using Tokens = std::vector<Runtime::DeferredEntity>;
         if (auto admission = ValidateAdmission(lease); admission.HasError())
             return Result<Tokens>::Failure(admission.ErrorValue());
-        if (cancellation.IsCancellationRequested())
+        if (cancellation.IsCancellationRequested() || options.scopeCancellation.IsCancellationRequested())
             return Result<Tokens>::Failure(MakeError(PrefabErrors::Cancelled));
         const auto &entities = lease.Template()->Data().entities;
-        if (components.size() != entities.size() || (!physicsReferences.empty() && physicsReferences.size() != entities.size()))
-            return Result<Tokens>::Failure(MakeError(PrefabErrors::ComponentAllocationFailed));
-        std::vector<Runtime::RuntimeEntityGroupEntry> entries;
-        entries.reserve(entities.size());
-        for (std::size_t index = 0; index < entities.size(); ++index) {
-            Runtime::RuntimeEntityGroupEntry entry;
-            entry.info.localTransform = entities[index].localTransform;
-            entry.info.components = std::move(components[index]);
-            if (!physicsReferences.empty())
-                entry.physicsReferences = std::move(physicsReferences[index]);
-            if (entities[index].parent)
-                entry.parentInGroup = entities[index].parent->value;
-            entries.push_back(std::move(entry));
+        if (options.rootPlacement && options.rootPlacement->TryToMatrix().HasError())
+            return Result<Tokens>::Failure(MakeError(PrefabErrors::InvalidPlacement));
+        if (options.parent) {
+            const auto active = state_->scenes.ActiveScene();
+            if (!active || active->Get(*options.parent).HasError())
+                return Result<Tokens>::Failure(MakeError(PrefabErrors::InvalidParent));
         }
+        if (components.size() != entities.size() ||
+            (!options.physicsReferences.empty() && options.physicsReferences.size() != entities.size()) ||
+            (!options.members.empty() && options.members.size() != entities.size()) ||
+            (!options.references.empty() && options.references.size() != entities.size()))
+            return Result<Tokens>::Failure(MakeError(PrefabErrors::ComponentAllocationFailed));
+        auto entries = MakePreparedEntries(entities, std::move(components), options);
         std::vector<Runtime::RuntimeGroupAssetLease> resources;
         resources.reserve(lease.Dependencies().size() + 1);
         resources.emplace_back(Assets::AssetDependency{lease.Template()->Data().assetId, Assets::AssetTypeId::Parse("core.prefab").Value()},
@@ -195,10 +228,16 @@ namespace Horo::Prefab {
             resources.emplace_back(dependency.metadata, dependency.artifact);
         Runtime::SceneCommandBuffer commands;
         auto tokens = commands.CreateGroup(std::move(entries), std::move(resources),
-                                           {lease.Scene(), lease.RegistryRevision(), cancellation, state_->retirement.Token()});
+                                           {lease.Scene(), lease.RegistryRevision(), cancellation, state_->retirement.Token(),
+                                            options.scopeCancellation});
         if (tokens.HasError())
             return tokens;
-        if (auto queued = state_->scenes.QueueStructuralCommands(std::move(commands)); queued.HasError())
+        if (options.receipt) {
+            auto queued = state_->scenes.QueueTrackedStructuralCommands(std::move(commands));
+            if (queued.HasError())
+                return Result<Tokens>::Failure(queued.ErrorValue());
+            *options.receipt = std::move(queued).Value();
+        } else if (auto queued = state_->scenes.QueueStructuralCommands(std::move(commands)); queued.HasError())
             return Result<Tokens>::Failure(queued.ErrorValue());
         return tokens;
     }

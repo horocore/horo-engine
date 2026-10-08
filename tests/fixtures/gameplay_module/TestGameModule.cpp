@@ -8,6 +8,7 @@
 #include "Horo/Gameplay/PersistenceRegistration.h"
 #include "Horo/Gameplay/ReplicationRegistration.h"
 #include "Horo/Gameplay/SystemRegistry.h"
+#include "Horo/Prefab/PrefabSpawnService.h"
 #include "gameplay/GameAssetTestSupport.h"
 #if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
@@ -15,9 +16,17 @@
 
 #include <algorithm>
 #include <format>
+#include <memory>
+#include <stdexcept>
 
 using namespace Horo;
 using namespace Horo::Gameplay;
+
+/** @brief Reports a rejected typed prefab operation from the native integration fixture. */
+class NativePrefabOperationFailure final : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
 
 class MoveBehavior final : public IBehaviorInstance {
 public:
@@ -42,6 +51,56 @@ public:
 };
 
 HORO_BEHAVIOR(MoveBehavior, "game.tests.dynamic_mover")
+
+/** @brief Real module consumer of the host-admitted typed prefab capability, with no Scene storage or source access. */
+class PrefabSpawnerBehavior final : public IBehaviorInstance {
+public:
+    static BehaviorDescriptor DescribeBehavior() {
+        BehaviorDescriptor descriptor;
+        descriptor.displayName = "Prefab Spawner";
+        descriptor.fields = {{"asset", std::string{}}, {"digest", std::string{}}};
+        descriptor.phases.push_back({BehaviorPhase::Gameplay, "game.tests.prefab_spawner", {}, {}, {}});
+        return descriptor;
+    }
+
+    void OnFixedUpdate(BehaviorContext &context, FixedDeltaTime) override {
+        ++tick_;
+        const auto capability = context.PrefabContext();
+        if (!capability)
+            return;
+        if (!requested_) {
+            Prefab::PrefabSpawnRequest request;
+            for (const auto &field : context.Fields()) {
+                if (field.name == "asset")
+                    request.source.asset = Assets::AssetId::Parse(std::get<std::string>(field.value)).Value();
+                if (field.name == "digest")
+                    request.source.artifactDigest = ParseSha256(std::get<std::string>(field.value)).Value();
+            }
+            request.source.target = AssetCookTargetId::Parse("linux-x64").Value();
+            request.notBeforeTick = tick_;
+            auto operation = capability->Spawn(request);
+            if (operation.HasError())
+                throw NativePrefabOperationFailure("Typed prefab spawn admission failed.");
+            operation_ = std::move(operation).Value();
+            requested_ = true;
+        } else if (!retired_ && operation_.State() == Prefab::PrefabSpawnState::Committed) {
+            auto operation = capability->Despawn(operation_.Spawned().Value(), tick_);
+            if (operation.HasError())
+                throw NativePrefabOperationFailure("Typed prefab despawn admission failed.");
+            retirement_ = std::move(operation).Value();
+            retired_ = true;
+        }
+    }
+
+private:
+    Prefab::PrefabOperation operation_;
+    Prefab::PrefabOperation retirement_;
+    std::uint64_t tick_{};
+    bool requested_{};
+    bool retired_{};
+};
+
+HORO_BEHAVIOR(PrefabSpawnerBehavior, "game.tests.prefab_spawner")
 
 namespace {
     class DurableCandidate final : public IPreparedPersistenceState {
@@ -108,7 +167,9 @@ namespace {
                                                                   : Result<void>::Success();
         }
 
-        void Stop(const GameplayServiceContext &) noexcept override {}
+        void Stop(const GameplayServiceContext &) noexcept override {
+            // This cancellation-checking fixture retains no resources after Start.
+        }
     };
 
     class TestGameplaySystem final : public IGameplaySystem {
@@ -122,23 +183,25 @@ namespace {
                                                                   : Result<void>::Success();
         }
 
-        void Stop(const GameplaySystemContext &) noexcept override {}
+        void Stop(const GameplaySystemContext &) noexcept override {
+            // This stateless fault fixture owns no background or runtime work.
+        }
     };
 
     IGameplayService *CreateTestProjectService(void *) {
-        return new TestProjectService{};
+        return std::make_unique<TestProjectService>().release();
     }
 
     void DestroyTestProjectService(void *, IGameplayService *service) noexcept {
-        delete service;
+        const std::unique_ptr<IGameplayService> owned{service};
     }
 
     IGameplaySystem *CreateTestGameplaySystem(void *) {
-        return new TestGameplaySystem{};
+        return std::make_unique<TestGameplaySystem>().release();
     }
 
     void DestroyTestGameplaySystem(void *, IGameplaySystem *system) noexcept {
-        delete system;
+        const std::unique_ptr<IGameplaySystem> owned{system};
     }
 
     Result<SerializedGameAsset> ImportTestAsset(void *, const GameAssetImportInput &input, const CancellationToken &) {
@@ -271,15 +334,17 @@ namespace {
                 return Result<void>::Failure(MakeError(GameplayErrors::PhysicsPermissionDenied));
 #endif
             const GameplayServiceId service = GameplayServiceId::Parse("game.tests.session_service").Value();
-            const GameplayCapabilityId capability = GameplayCapabilityId::Parse("game.tests.session.read").Value();
-            if (context.cancellation.IsCancellationRequested() ||
+            if (const GameplayCapabilityId capability = GameplayCapabilityId::Parse("game.tests.session.read").Value();
+                context.cancellation.IsCancellationRequested() ||
                 std::ranges::find(context.activeServices, service) == context.activeServices.end() ||
                 std::ranges::find(context.capabilities, capability) == context.capabilities.end())
                 return Result<void>::Failure(MakeError(GameplayErrors::CapabilityMissing));
             return Result<void>::Success();
         }
 
-        void Stop(GameRuntimeContext &) noexcept override {}
+        void Stop(GameRuntimeContext &) noexcept override {
+            // The module host retires the registration-only fixture's services and descriptors.
+        }
 
         Result<GameModuleReloadSnapshot> PrepareReload(GameRuntimeContext &context) override {
             if (!context.cancellation.IsCancellationRequested())
@@ -320,9 +385,9 @@ namespace {
 }  // namespace
 
 extern "C" HORO_GAME_EXPORT IGameModule *CreateGameModule() noexcept {
-    return new Module{};
+    return std::make_unique<Module>().release();
 }
 
 extern "C" HORO_GAME_EXPORT void DestroyGameModule(IGameModule *gameModule) noexcept {
-    delete gameModule;
+    const std::unique_ptr<IGameModule> owned{gameModule};
 }

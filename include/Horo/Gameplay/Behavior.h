@@ -16,6 +16,7 @@
 
 namespace Horo::Gameplay {
     class GameplayPhysicsContext;
+    class GameplayPrefabContext;
     inline constexpr std::size_t MaximumBehaviorReloadStateBytes = 1024U * 1024U;
     inline constexpr std::size_t MaximumBehaviorReloadSnapshotBytes = 16U * 1024U * 1024U;
 
@@ -117,6 +118,11 @@ namespace Horo::Gameplay {
             [[nodiscard]] virtual std::shared_ptr<const GameplayPhysicsContext> PhysicsContext() const noexcept {
                 return {};
             }
+
+            /** @brief Returns the explicitly granted cooked-prefab module scope, or no grant. */
+            [[nodiscard]] virtual std::shared_ptr<const GameplayPrefabContext> PrefabContext() const noexcept {
+                return {};
+            }
         };
     }  // namespace Detail
 
@@ -156,6 +162,11 @@ namespace Horo::Gameplay {
         /** @brief Returns the same host Physics binding for native and script callbacks; no world discovery. */
         [[nodiscard]] std::shared_ptr<const GameplayPhysicsContext> PhysicsContext() const noexcept {
             return backend_->PhysicsContext();
+        }
+
+        /** @brief Returns the revocable Scene-scoped prefab capability composed by the host. @return Null without explicit permission. */
+        [[nodiscard]] std::shared_ptr<const GameplayPrefabContext> PrefabContext() const noexcept {
+            return backend_->PrefabContext();
         }
 
     private:

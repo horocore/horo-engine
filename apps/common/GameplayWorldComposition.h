@@ -8,10 +8,16 @@
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
 #include "Horo/Gameplay/LuaBehavior.h"
+#include "Horo/Prefab/PrefabSpawnService.h"
 
 namespace Horo::Application::Internal {
     /** @brief Trusted host policy resolved before invoking project code; no ambient grant. */
     enum class GameplayPhysicsPermission {
+        Denied,
+        Granted
+    };
+    /** @brief Trusted explicit permission for cooked prefab creation and group retirement. */
+    enum class GameplayPrefabPermission {
         Denied,
         Granted
     };
@@ -25,6 +31,7 @@ namespace Horo::Application::Internal {
         std::filesystem::path scriptSidecar;
         GameplayPhysicsPermission physicsPermission{GameplayPhysicsPermission::Denied};
         bool enabled{true}; /**< Trusted host enablement; disabled modules never execute a callback. */
+        GameplayPrefabPermission prefabPermission{GameplayPrefabPermission::Denied};
     };
 
     /** @brief Owner-thread gameplay lifetime borrowing an explicit world and Scene.
@@ -45,12 +52,35 @@ namespace Horo::Application::Internal {
                                                                                       Physics::PhysicsWorld *world,
                                                                                       std::uint64_t sceneGeneration,
                                                                                       const GameplayWorldSelection &selection);
+        /** @brief Activates the production cooked-prefab path against the actual Scene transaction authority.
+         * @param scenes Active host Scene service, outliving this composition.
+         * @param templates Cooked runtime provider, outliving this composition and borrowing the same Scene service.
+         * @param world Explicit optional Physics world.
+         * @param sceneGeneration Exact non-zero host activation epoch.
+         * @param selection Selected module/script and independent trusted prefab/Physics permissions.
+         * @param components Frozen optional custom component registry, outliving this composition.
+         * @return Active Gameplay/Prefab owner or typed admission/activation failure with rollback.
+         * @pre MakeGameplayStructuralParticipant was registered against this host's active composition slot before Scene startup.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<GameplayWorldComposition>> Create(
+            Runtime::RuntimeSceneService &scenes, Prefab::PrefabTemplateProvider &templates, Physics::PhysicsWorld *world,
+            std::uint64_t sceneGeneration, const GameplayWorldSelection &selection,
+            const Gameplay::ComponentRegistry *components = nullptr);
         ~GameplayWorldComposition();
         GameplayWorldComposition() = default;
         GameplayWorldComposition(const GameplayWorldComposition &) = delete;
         GameplayWorldComposition &operator=(const GameplayWorldComposition &) = delete;
         /** @brief Dispatch the canonical fixed Gameplay phase. @return First callback/transaction failure. */
         [[nodiscard]] Result<void> FixedUpdate(Gameplay::FixedDeltaTime delta);
+        /** @brief Advances exact host tick addressing then invokes Gameplay callbacks. @param context Current host tick.
+         * @return Tick/callback failure; admission is revoked on callback failure. */
+        [[nodiscard]] Result<void> FixedTick(const Runtime::FixedStepContext &context);
+        /** @brief Advances prefab preparation, commits the actual Scene transaction, and observes its completion.
+         * @param phase Host lifecycle phase.
+         * @param context Current immutable frame context.
+         * @return Typed owner failure. This composition owns Scene safe-point dispatch for the service-backed path.
+         */
+        [[nodiscard]] Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &context);
         /** @brief Revoke the whole world scope before any shutdown callback or storage retirement. */
         void Shutdown() noexcept;
         /** @brief Retire just the module/script; the explicit Physics world may stay active. */
@@ -66,11 +96,17 @@ namespace Horo::Application::Internal {
     private:
         /** @brief Validates artifacts and activates callbacks only after Physics admission is resolved. */
         [[nodiscard]] Result<void> Activate(Runtime::RuntimeScene &scene, const GameplayWorldSelection &selection);
+        /** @brief Loads the explicitly selected module/script and freezes its registry before any callback. */
+        [[nodiscard]] Result<void> RegisterModule(const GameplayWorldSelection &selection);
         std::shared_ptr<Gameplay::GameplayPhysicsContext> physics_;
         std::unique_ptr<Gameplay::LoadedGameModule> native_;
         std::unique_ptr<Gameplay::LuaBehaviorProgram> script_;
         Gameplay::BehaviorRegistry registry_;
         std::unique_ptr<Gameplay::BehaviorRuntime> behaviors_;
+        std::unique_ptr<Prefab::PrefabSpawnService> prefabs_;
+        std::shared_ptr<Gameplay::GameplayPrefabContext> prefabContext_;
+        Runtime::RuntimeSceneService *scenes_{};
+        std::uint64_t tick_{};
     };
 
     /** @brief Composes the Gameplay structural owner before Scene startup using an explicit application-owned active slot.

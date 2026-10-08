@@ -18,7 +18,7 @@
 
 namespace Horo::Prefab {
     /** @brief Runtime format version, independent from project source migration versions. */
-    inline constexpr std::uint32_t CurrentCookedPrefabVersion = 1;
+    inline constexpr std::uint32_t CurrentCookedPrefabVersion = 2;
     /** @brief Fixed HPFB envelope bytes: magic, version, identity, object count, payload size and SHA-256. */
     inline constexpr std::size_t CookedPrefabHeaderBytes = 64;
 
@@ -34,6 +34,55 @@ namespace Horo::Prefab {
         std::uint32_t member{};
         [[nodiscard]] auto operator<=>(const CookedPrefabMemberSlot &) const noexcept = default;
     };
+
+    /** @brief Stable initialization interface identity, distinct from authoring properties and binding slots. */
+    struct PrefabInitializationId final {
+        std::uint64_t value{};
+        [[nodiscard]] auto operator<=>(const PrefabInitializationId &) const noexcept = default;
+    };
+
+    /** @brief Closed value kinds; values cannot contain entity references or structural operations. */
+    enum class PrefabInitializationKind : std::uint8_t {
+        Boolean = 1,
+        Integer,
+        Number,
+        String,
+        Vec2,
+        Vec3,
+        Quaternion
+    };
+
+    /** @brief Cook-owned mapping to one existing behavior field occurrence, never a caller-supplied property path.
+     * Optional omission retains the immutable template value. Numeric limits are inclusive for Integer/Number;
+     * strings are limited to 256 bytes. Declarations are sorted by identity and cannot alias one field.
+     */
+    struct CookedPrefabInitialization final {
+        PrefabInitializationId id;
+        CookedPrefabMemberSlot owner;
+        std::uint32_t field{};
+        PrefabInitializationKind kind{PrefabInitializationKind::Boolean};
+        bool required{true};
+        double minimum{-1.0e18};
+        double maximum{1.0e18};
+        [[nodiscard]] bool operator==(const CookedPrefabInitialization &) const noexcept = default;
+    };
+
+    /** @brief One copied initialization value addressed solely through a declared runtime interface. */
+    struct PrefabInitializationValue final {
+        PrefabInitializationId id;
+        Gameplay::BehaviorFieldValue value;
+    };
+
+    /** @brief Maximum declarations and supplied values per complete runtime template/spawn. */
+    inline constexpr std::size_t MaximumPrefabInitializationValues = 64;
+
+    /** @brief Validates one value against an exact declaration without mutation.
+     * @param declaration Immutable typed interface and bounds.
+     * @param value Copied value with no source/structural authority.
+     * @return Success or typed initialization admission failure.
+     */
+    [[nodiscard]] Result<void> ValidatePrefabInitializationValue(const CookedPrefabInitialization &declaration,
+                                                                 const Gameplay::BehaviorFieldValue &value);
 
     /** @brief Dense entry in the complete typed runtime dependency table. */
     struct CookedPrefabAssetSlot final {
@@ -98,9 +147,10 @@ namespace Horo::Prefab {
     struct CookedPrefabData final {
         Assets::AssetId assetId;
         std::vector<CookedPrefabEntity> entities;
-        std::vector<CookedPrefabDependency> dependencies;     /**< Strict ascending unique AssetId order. */
-        std::vector<CookedPrefabBindingDeclaration> bindings; /**< Strict ascending unique interface ID order. */
-        std::vector<CookedPrefabReference> references;        /**< Strict ascending owner/property order. */
+        std::vector<CookedPrefabDependency> dependencies;       /**< Strict ascending unique AssetId order. */
+        std::vector<CookedPrefabBindingDeclaration> bindings;   /**< Strict ascending unique interface ID order. */
+        std::vector<CookedPrefabReference> references;          /**< Strict ascending owner/property order. */
+        std::vector<CookedPrefabInitialization> initialization; /**< Strict ascending unique runtime interface IDs. */
         [[nodiscard]] bool operator==(const CookedPrefabData &) const noexcept = default;
     };
 
