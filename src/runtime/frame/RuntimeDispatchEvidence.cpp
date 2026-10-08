@@ -47,15 +47,16 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeDispatchSource::ValidateRun */
     RuntimeDispatchStatus RuntimeDispatchSource::ValidateRun() const noexcept {
+        using enum RuntimeDispatchStatus;
         if (!storage_.Get())
-            return RuntimeDispatchStatus::Invalid;
+            return Invalid;
         if (storage_->owner != std::this_thread::get_id())
-            return RuntimeDispatchStatus::WrongThread;
+            return WrongThread;
         if (storage_->retired.load())
-            return RuntimeDispatchStatus::Retired;
+            return Retired;
         if (storage_->exhausted)
-            return RuntimeDispatchStatus::Exhausted;
-        return storage_->active ? RuntimeDispatchStatus::Reentrant : RuntimeDispatchStatus::Valid;
+            return Exhausted;
+        return storage_->active ? Reentrant : Valid;
     }
 
     /** @copydoc RuntimeDispatchSource::Begin */
@@ -81,7 +82,7 @@ namespace Horo::Runtime {
     /** @copydoc RuntimeDispatchSource::Retire */
     void RuntimeDispatchSource::Retire() noexcept {
         if (storage_.Get())
-            storage_->retired.store(true, std::memory_order_release);
+            storage_->retired.store(true);
     }
 
     /** @copydoc RuntimeDispatchSource::Evidence */

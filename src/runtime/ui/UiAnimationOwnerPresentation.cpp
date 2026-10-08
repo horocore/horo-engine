@@ -30,7 +30,7 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiAnimationOwner::InputEligible */
     bool UiAnimationOwner::InputEligible(const UiRenderViewId view) const noexcept {
         return storage_ && storage_->ownerThread == std::this_thread::get_id() && !storage_->stopped && !storage_->draining &&
-               !storage_->candidate.admitted && !storage_->route.gate && storage_->currentFrame &&
+               !storage_->candidate.admitted && !storage_->route.gate && storage_->currentFrame.has_value() &&
                storage_->publisher.InputEligible(storage_->definition.canvas, view) &&
                (storage_->definition.routes.empty() || (ReadCanvas(*storage_)->routes && ReadCanvas(*storage_)->routes->Top()));
     }

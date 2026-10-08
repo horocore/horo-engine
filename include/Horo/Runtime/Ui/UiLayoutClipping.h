@@ -191,7 +191,7 @@ namespace Horo::Runtime::Ui {
         /** @brief Closes new updates while preserving external immutable snapshot leases. @return Success or lifecycle failure. */
         [[nodiscard]] Result<void> BeginRetirement();
         /** @brief Idempotently stops the projector and releases mutable storage. */
-        void Shutdown() noexcept;
+        void Shutdown() const noexcept;
         /** @brief Returns the explicit admission lifecycle. @return Active, Retiring, or Stopped. */
         [[nodiscard]] UiLayoutClipEngineState State() const noexcept;
         /** @brief Reports whether all external immutable snapshot leases have drained. @return True when drained. */
@@ -230,7 +230,7 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<PreparedUpdate> Prepare(const UiElementTree &tree, const UiLayoutSnapshot &layout,
                                                      const UiLayoutClipUpdateRequest &request) const;
         /** @brief Publishes an already revalidated candidate without allocation or callbacks. @return Immutable projection. */
-        [[nodiscard]] UiLayoutClipSnapshot PublishValidated(PreparedUpdate &&candidate) noexcept;
+        [[nodiscard]] UiLayoutClipSnapshot PublishValidated(PreparedUpdate &&candidate) const noexcept;
         explicit UiLayoutClipEngine(std::shared_ptr<Storage> storage) noexcept;
         std::shared_ptr<Storage> storage_;
     };

@@ -709,7 +709,7 @@ namespace Horo::Runtime::Ui {
          * @param invalidation Exact tree revision, element, and work strength.
          * @return Success or typed validation/capacity/lifecycle failure.
          */
-        [[nodiscard]] Result<void> Invalidate(const UiLayoutInvalidation &invalidation);
+        [[nodiscard]] Result<void> Invalidate(const UiLayoutInvalidation &invalidation) const;
         /**
          * @brief Atomically queues exact-tree invalidations for binding/content publication.
          * @param tree Active retained tree owned by this layout engine.
@@ -717,13 +717,13 @@ namespace Horo::Runtime::Ui {
          * @return Success or typed owner/revision/capacity/lifecycle failure, leaving the queue unchanged on failure.
          * @pre Serialized on the Runtime UI owner thread before Update; no allocation occurs.
          */
-        [[nodiscard]] Result<void> InvalidateBatch(const UiElementTree &tree, std::span<const UiLayoutInvalidation> invalidations);
+        [[nodiscard]] Result<void> InvalidateBatch(const UiElementTree &tree, std::span<const UiLayoutInvalidation> invalidations) const;
         /**
          * @brief Evaluates a candidate without changing the published layout generation.
          * @param tree Actual active tree. @param request Synchronous source and evaluator inputs, borrowed only here.
          * @return Reserved copied snapshot, or typed failure preserving last-good state.
          */
-        [[nodiscard]] Result<PreparedUpdate> Prepare(const UiElementTree &tree, const UiLayoutUpdateRequest &request);
+        [[nodiscard]] Result<PreparedUpdate> Prepare(const UiElementTree &tree, const UiLayoutUpdateRequest &request) const;
         /**
          * @brief Revalidates and publishes this owner's outstanding candidate.
          * @param candidate Candidate consumed on success. @param tree Actual current tree.
@@ -738,9 +738,9 @@ namespace Horo::Runtime::Ui {
          */
         [[nodiscard]] Result<UiLayoutSnapshot> Update(const UiElementTree &tree, const UiLayoutUpdateRequest &request);
         /** @brief Closes new update/invalidation admission while preserving leased snapshots. @return Success or lifecycle failure. */
-        [[nodiscard]] Result<void> BeginRetirement();
+        [[nodiscard]] Result<void> BeginRetirement() const;
         /** @brief Idempotently stops the engine and releases mutable caches and its active lease. */
-        void Shutdown() noexcept;
+        void Shutdown() const noexcept;
         /** @brief Returns the explicit admission lifecycle. @return Active, Retiring, or Stopped. */
         [[nodiscard]] UiLayoutEngineState State() const noexcept;
         /** @brief Reports whether no external immutable snapshot lease remains. @return True when retirement may finish. */

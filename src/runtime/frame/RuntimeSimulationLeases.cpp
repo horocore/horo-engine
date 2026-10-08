@@ -7,7 +7,7 @@
 namespace Horo::Runtime {
     /** @copydoc RuntimeSimulationPolicyRead::RuntimeSimulationPolicyRead */
     RuntimeSimulationPolicyRead::RuntimeSimulationPolicyRead(std::shared_ptr<const SimulationTimingDetail::Storage> owner,
-                                                             const RuntimeSimulationPolicy policy) noexcept
+                                                             const RuntimeSimulationPolicy &policy) noexcept
         : owner_(std::move(owner)), policy_(policy) {}
 
     /** @copydoc RuntimeSimulationPauseLease::RuntimeSimulationPauseLease */
@@ -37,9 +37,8 @@ namespace Horo::Runtime {
         if (!owner_)
             return;
         // This pin excludes slot reuse until the signal; no owner state or callback is touched by the releasing thread.
-        auto &record = owner_->pauses[slot_];
-        if (record.generation == generation_)
-            record.released.store(true, std::memory_order_release);
+        if (auto &record = owner_->pauses[slot_]; record.generation == generation_)
+            record.released.store(true);
         owner_.reset();
     }
 
@@ -84,9 +83,8 @@ namespace Horo::Runtime {
     void RuntimeSingleStepReceipt::Release() noexcept {
         if (!owner_)
             return;
-        auto &record = owner_->steps[slot_];
-        if (record.generation == generation_)
-            record.released.store(true, std::memory_order_release);
+        if (auto &record = owner_->steps[slot_]; record.generation == generation_)
+            record.released.store(true);
         owner_.reset();
     }
 

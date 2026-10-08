@@ -52,20 +52,20 @@ namespace Horo::Runtime::Ui {
         const UiStyleSourceRevisions lineage{tree.SourceDocumentRevision(),     tree.Revision(),
                                              storage.registry.Generation(),     storage.definition.content,
                                              storage.definition.resolvedPolicy, canvas->layoutEngine->PublishedInteraction()};
-        auto style = storage.resolver.Prepare(tree, storage.registry, {lineage, storage.elementInputs});
+        auto style = storage.resolver.Prepare(tree, storage.registry, {lineage, storage.work.elementInputs});
         if (style.HasError())
             return Result<void>::Failure(style.ErrorValue());
         storage.candidate.styles.emplace(std::move(style).Value());
-        for (std::size_t index = 0; index < storage.layoutDescriptors.size(); ++index)
-            storage.layoutDescriptors[index] = {storage.elementInputs[index].element, storage.definition.elements[index].layout,
-                                                storage.definition.elements[index].intrinsic};
+        for (std::size_t index = 0; index < storage.work.layoutDescriptors.size(); ++index)
+            storage.work.layoutDescriptors[index] = {storage.work.elementInputs[index].element, storage.definition.elements[index].layout,
+                                                     storage.definition.elements[index].intrinsic};
         const auto &computed = storage.candidate.styles->Candidate();
-        if (auto projected = AnimationInternal::ProjectLayout(computed, storage.layoutBindings, storage.layoutDescriptors);
+        if (auto projected = AnimationInternal::ProjectLayout(computed, storage.work.layoutBindings, storage.work.layoutDescriptors);
             projected.HasError())
             return projected;
         // Layout lookup requires handle order; authored style inputs retain their separate tree-preorder contract.
-        std::ranges::sort(storage.layoutDescriptors, {}, &UiLayoutElementDescriptor::element);
-        auto evaluator = UiDeclarativeLayoutEvaluator::Create(storage.layoutDescriptors, storage.definition.intrinsicProvider.get());
+        std::ranges::sort(storage.work.layoutDescriptors, {}, &UiLayoutElementDescriptor::element);
+        auto evaluator = UiDeclarativeLayoutEvaluator::Create(storage.work.layoutDescriptors, storage.definition.intrinsicProvider.get());
         if (evaluator.HasError())
             return Result<void>::Failure(evaluator.ErrorValue());
         const UiLayoutSourceRevisions sources{lineage.document,

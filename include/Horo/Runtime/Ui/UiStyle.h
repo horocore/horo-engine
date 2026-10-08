@@ -620,7 +620,7 @@ namespace Horo::Runtime::Ui {
         UiStyleResolver(const UiStyleResolver &) = delete;
         UiStyleResolver &operator=(const UiStyleResolver &) = delete;
         /** @brief Queues one bounded invalidation without resolving it immediately. */
-        [[nodiscard]] Result<void> Invalidate(const UiStyleInvalidation &invalidation);
+        [[nodiscard]] Result<void> Invalidate(const UiStyleInvalidation &invalidation) const;
         /**
          * @brief Resolves a copied candidate without exposing its target values as the current style generation.
          * @param tree Actual active retained tree. @param registry Actual active registry. @param request Borrowed typed inputs.
@@ -641,7 +641,7 @@ namespace Horo::Runtime::Ui {
         /** @brief Stops new work while retaining outstanding immutable snapshot leases. */
         [[nodiscard]] Result<void> BeginRetirement();
         /** @brief Idempotently closes mutable caches and releases its current snapshot lease. */
-        void Shutdown() noexcept;
+        void Shutdown() const noexcept;
         /** @brief Returns the explicit resolver lifecycle. @return Active, Retiring, or Stopped. */
         [[nodiscard]] UiStyleResolverState State() const noexcept;
         /** @brief Reports whether every external snapshot lease has retired. @return True when drained. */

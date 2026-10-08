@@ -39,7 +39,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiStyleResolver::Invalidate */
-    Result<void> UiStyleResolver::Invalidate(const UiStyleInvalidation &invalidation) {
+    Result<void> UiStyleResolver::Invalidate(const UiStyleInvalidation &invalidation) const {
         if (!storage_ || storage_->lifecycle != UiStyleResolverState::Active)
             return StyleInternal::Failure(UiErrors::StyleLifecycleUnavailable);
         if (storage_->prepared)
@@ -225,7 +225,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiStyleResolver::Shutdown */
-    void UiStyleResolver::Shutdown() noexcept {
+    void UiStyleResolver::Shutdown() const noexcept {
         if (!storage_ || storage_->lifecycle == UiStyleResolverState::Stopped)
             return;
         storage_->lifecycle = UiStyleResolverState::Stopped;

@@ -207,26 +207,23 @@ namespace Horo::Runtime {
     /** @copydoc FrameScheduler::RunVariablePhases */
     Result<void> FrameScheduler::RunVariablePhases(RuntimeLifecycle &lifecycle, const CancellationToken &cancellation,
                                                    FrameContext &frameContext) {
-        if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, frameContext, RuntimePhase::VariableUpdate);
-            result.HasError())
+        using enum RuntimePhase;
+        if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, frameContext, VariableUpdate); result.HasError())
             return result;
         completedVariableUpdateFrame_ = frameNumber_;
         presentationContinuity_ = PresentationClockContinuity::Continuous;
-        if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, frameContext, RuntimePhase::RenderExtraction);
+        if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, frameContext, RenderExtraction); result.HasError())
+            return result;
+        if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, frameContext, RenderExecution); result.HasError())
+            return result;
+        if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, frameContext, RenderGui); result.HasError())
+            return result;
+        if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, frameContext, Presentation); result.HasError())
+            return result;
+        if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, frameContext, CommitDeferredLifecycleChanges);
             result.HasError())
             return result;
-        if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, frameContext, RuntimePhase::RenderExecution);
-            result.HasError())
-            return result;
-        if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, frameContext, RuntimePhase::RenderGui); result.HasError())
-            return result;
-        if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, frameContext, RuntimePhase::Presentation);
-            result.HasError())
-            return result;
-        if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, frameContext, RuntimePhase::CommitDeferredLifecycleChanges);
-            result.HasError())
-            return result;
-        return DispatchPhaseChecked(lifecycle, cancellation, frameContext, RuntimePhase::EndFrame);
+        return DispatchPhaseChecked(lifecycle, cancellation, frameContext, EndFrame);
     }
 
     /** @copydoc FrameScheduler::ResetClock */

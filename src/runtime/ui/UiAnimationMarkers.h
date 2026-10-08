@@ -30,8 +30,7 @@ namespace Horo::Runtime::Ui::AnimationInternal {
         for (std::size_t offset = 0; offset < definition.markers.size(); ++offset) {
             const auto &marker = definition.markers[reverse ? definition.markers.size() - offset - 1 : offset];
             const auto position = reverse ? std::numeric_limits<std::uint32_t>::max() - marker.position : marker.position;
-            const auto threshold = MarkerOffset(definition.time.duration.nanoseconds, position);
-            if (threshold <= prior || threshold > next)
+            if (const auto threshold = MarkerOffset(definition.time.duration.nanoseconds, position); threshold <= prior || threshold > next)
                 continue;
             if (output.size() == publication.capacity)
                 return Result<void>::Failure(MakeError(UiErrors::AnimationBudgetExceeded));

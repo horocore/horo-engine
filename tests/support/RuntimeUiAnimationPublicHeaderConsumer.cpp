@@ -50,6 +50,10 @@ using ReloadSignature = Horo::Result<UiAnimationReloadResult> (UiAnimationOwner:
                                                                                     const UiAnimationReloadAdmission &,
                                                                                     const Horo::CancellationToken &);
 static_assert(std::is_same_v<decltype(&UiAnimationOwner::Reload), ReloadSignature>);
+using OwnerNavigateSignature = Horo::Result<UiRouteOperationId> (UiAnimationOwner::*)(const UiRouteOperationRequest &);
+static_assert(std::is_same_v<decltype(&UiAnimationOwner::Navigate), OwnerNavigateSignature>);
+static_assert(std::is_same_v<decltype(std::declval<const UiLayoutEngine &>().BeginRetirement()), Horo::Result<void>>);
+
 static_assert(std::is_same_v<decltype(std::declval<const RuntimeStyleRegistry &>().BeginRetirement()), Horo::Result<void>>);
 
 int main() {

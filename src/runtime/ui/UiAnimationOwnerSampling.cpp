@@ -62,7 +62,7 @@ namespace Horo::Runtime::Ui {
             auto sample = timeline.cursor.sample;
             sample.newTerminalOutcome = false;
             sample.crossedIterations = 0;
-            const UiAnimationTimelineId id{storage.source.ownership,
+            const UiAnimationTimelineId id{storage.binding.source.ownership,
                                            storage.range.FirstSlot() + static_cast<std::uint32_t>(UiTimeDomainCount) + 1 + index,
                                            timeline.generation};
             frame.timelines.emplace_back(id, definition.id, sample);
@@ -71,7 +71,7 @@ namespace Horo::Runtime::Ui {
         if (auto evaluated = EvaluateTimelineCursor(storage, index); evaluated.HasError())
             return evaluated;
         const bool seek = clock.continuity == UiClockContinuity::ExplicitSeek;
-        const UiAnimationTimelineId id{storage.source.ownership,
+        const UiAnimationTimelineId id{storage.binding.source.ownership,
                                        storage.range.FirstSlot() + static_cast<std::uint32_t>(UiTimeDomainCount) + 1 + index,
                                        timeline.generation};
         // Explicit preview/test/manual seek samples local values but cannot replay semantic marker callbacks.
@@ -89,7 +89,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAnimationOwner::PrepareTimelines */
     Result<void> UiAnimationOwner::PrepareTimelines(Storage &storage) {
-        std::ranges::fill(storage.sampleCounts, 0);
+        std::ranges::fill(storage.work.sampleCounts, 0);
         storage.candidate.remainingCrossings = storage.limits.markerCrossingsPerUpdate;
         for (std::uint32_t index = 0; index < storage.timelines.size(); ++index) {
             if (auto prepared = PrepareTimeline(storage, index); prepared.HasError())
@@ -99,13 +99,13 @@ namespace Horo::Runtime::Ui {
                 continue;
             for (const auto &track : storage.definition.animations[timeline.definition].tracks) {
                 const auto target = std::ranges::find(storage.definition.elements, track.target, &UiAnimationElementDefinition::element);
-                ++storage.sampleCounts[static_cast<std::size_t>(target - storage.definition.elements.begin())];
+                ++storage.work.sampleCounts[static_cast<std::size_t>(target - storage.definition.elements.begin())];
             }
         }
-        storage.sampleOffsets[0] = 0;
-        for (std::size_t index = 0; index < storage.sampleCounts.size(); ++index)
-            storage.sampleOffsets[index + 1] = storage.sampleOffsets[index] + storage.sampleCounts[index];
-        std::ranges::fill(storage.sampleCounts, 0);
+        storage.work.sampleOffsets[0] = 0;
+        for (std::size_t index = 0; index < storage.work.sampleCounts.size(); ++index)
+            storage.work.sampleOffsets[index + 1] = storage.work.sampleOffsets[index] + storage.work.sampleCounts[index];
+        std::ranges::fill(storage.work.sampleCounts, 0);
         for (const auto &timeline : storage.candidate.timelines) {
             if (!timeline.occupied || timeline.waiting || !timeline.cursor.sample.contributesValue)
                 continue;
@@ -115,12 +115,13 @@ namespace Horo::Runtime::Ui {
                 const auto value = AnimationInternal::SamplePropertyTrack(track, timeline.cursor.sample.progress);
                 if (value.HasError())
                     return Result<void>::Failure(value.ErrorValue());
-                storage.samples[storage.sampleOffsets[index] + storage.sampleCounts[index]++] = {track.property, value.Value()};
+                storage.work.samples[storage.work.sampleOffsets[index] + storage.work.sampleCounts[index]++] = {track.property,
+                                                                                                                value.Value()};
             }
         }
-        for (std::size_t index = 0; index < storage.elementInputs.size(); ++index)
-            storage.elementInputs[index].animation =
-                std::span(storage.samples).subspan(storage.sampleOffsets[index], storage.sampleCounts[index]);
+        for (std::size_t index = 0; index < storage.work.elementInputs.size(); ++index)
+            storage.work.elementInputs[index].animation =
+                std::span(storage.work.samples).subspan(storage.work.sampleOffsets[index], storage.work.sampleCounts[index]);
         return Result<void>::Success();
     }
 }  // namespace Horo::Runtime::Ui

@@ -87,7 +87,7 @@ namespace Horo::Runtime {
         available->reason = reason;
         available->occupied = true;
         ++available->generation;
-        available->released.store(false, std::memory_order_relaxed);
+        available->released.store(false);
         ++state->desired.pauseCount;
         state->desired.paused = true;
         ++state->desired.pauseRevision;
@@ -118,7 +118,7 @@ namespace Horo::Runtime {
         available->result = {.requestSequence = ++state->nextStepSequence};
         available->occupied = true;
         available->admitted = false;
-        available->released.store(false, std::memory_order_relaxed);
+        available->released.store(false);
         ++state->desired.pendingSteps;
         ++state->desired.commandRevision;
         const auto slot = static_cast<std::uint32_t>(available - state->steps.begin());

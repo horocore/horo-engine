@@ -23,7 +23,7 @@ namespace Horo::Runtime {
         if (result.HasError())
             return Result<UiAnimationRuntimeReload>::Failure(result.ErrorValue());
         const auto clocks = storage_->owner.ClockBindings();
-        for (std::size_t index = static_cast<std::size_t>(Ui::UiTimeDomain::EditorPreview); index < Ui::UiTimeDomainCount; ++index) {
+        for (auto index = static_cast<std::size_t>(Ui::UiTimeDomain::EditorPreview); index < Ui::UiTimeDomainCount; ++index) {
             controls->domains[index] = storage_->controls->domains[index];
             controls->domains[index].clock = clocks.domains[index].clock;
             controls->domains[index].pending = {};

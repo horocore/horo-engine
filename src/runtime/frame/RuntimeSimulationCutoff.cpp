@@ -9,19 +9,20 @@ namespace Horo::Runtime {
     namespace {
         /** @brief Reclaims released observations only after their pending work becomes terminal. */
         void ReconcileSteps(SimulationTimingDetail::Storage &state, const bool suspended) noexcept {
+            using enum RuntimeSingleStepState;
             for (auto &record : state.steps) {
                 if (!record.occupied)
                     continue;
-                if (record.result.state == RuntimeSingleStepState::Pending) {
+                if (record.result.state == Pending) {
                     if (record.pauseRevision != state.desired.pauseRevision || !state.desired.paused) {
-                        record.result.state = RuntimeSingleStepState::Cancelled;
+                        record.result.state = Cancelled;
                         record.result.cancellation = RuntimeSingleStepCancellation::PauseChanged;
                         --state.desired.pendingSteps;
                     } else {
                         record.admitted = !suspended;
                     }
                 }
-                if (record.result.state != RuntimeSingleStepState::Pending && record.released.load())
+                if (record.result.state != Pending && record.released.load())
                     record.occupied = false;
             }
         }
@@ -58,7 +59,7 @@ namespace Horo::Runtime {
                 if (record.releaseAtCutoff)
                     record.occupied = false;
             }
-            state->desired.pauseCount -= static_cast<std::uint32_t>(released);
+            state->desired.pauseCount -= released;
             state->desired.paused = state->desired.pauseCount != 0;
             ++state->desired.pauseRevision;
             ++state->desired.commandRevision;

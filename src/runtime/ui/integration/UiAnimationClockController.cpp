@@ -36,7 +36,7 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc UiAnimationClockController::Step */
-    Result<void> UiAnimationClockController::Step(const Ui::UiAnimationClockId clock, const Ui::UiDuration duration) {
+    Result<void> UiAnimationClockController::Step(const Ui::UiAnimationClockId clock, const Ui::UiDuration duration) const {
         if (!storage_)
             return Result<void>::Failure(MakeError(Ui::UiErrors::AnimationLifecycleUnavailable));
         const auto admitted = Admit(*storage_, clock);

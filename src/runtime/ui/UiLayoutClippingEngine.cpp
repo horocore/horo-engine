@@ -518,7 +518,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiLayoutClipEngine::PublishValidated */
-    UiLayoutClipSnapshot UiLayoutClipEngine::PublishValidated(PreparedUpdate &&candidate) noexcept {
+    UiLayoutClipSnapshot UiLayoutClipEngine::PublishValidated(PreparedUpdate &&candidate) const noexcept {
         storage_->ReleaseCurrent();
         storage_->current = std::const_pointer_cast<UiLayoutClipSnapshot::Storage>(candidate.snapshot_->storage_);
         storage_->current->leases.fetch_add(1);
@@ -536,7 +536,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiLayoutClipEngine::Shutdown */
-    void UiLayoutClipEngine::Shutdown() noexcept {
+    void UiLayoutClipEngine::Shutdown() const noexcept {
         if (!storage_ || storage_->lifecycle == UiLayoutClipEngineState::Stopped)
             return;
         storage_->lifecycle = UiLayoutClipEngineState::Stopped;

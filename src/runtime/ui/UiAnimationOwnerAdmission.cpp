@@ -59,9 +59,9 @@ namespace Horo::Runtime::Ui {
         if (auto reserved = ReserveInteractionSources(*canvas); reserved.HasError())
             return reserved;
         const auto &tree = canvas->tree;
-        storage.source = {tree.Instance().ownership, storage.range.FirstSlot(), 1};
+        storage.binding.source = {tree.Instance().ownership, storage.range.FirstSlot(), 1};
         for (std::size_t index = 0; index < UiTimeDomainCount; ++index) {
-            auto &sample = storage.clocks.domains[index];
+            auto &sample = storage.binding.clocks.domains[index];
             sample.clock = {tree.Instance().ownership, storage.range.FirstSlot() + 1 + static_cast<std::uint32_t>(index), 1};
             sample.domain = static_cast<UiTimeDomain>(index);
         }
@@ -70,22 +70,22 @@ namespace Horo::Runtime::Ui {
             const auto target = tree.Find(element.element);
             if (target.HasError())
                 return Result<void>::Failure(target.ErrorValue());
-            storage.elementInputs[index] = {target.Value(),
-                                            element.asset,
-                                            element.typeClass,
-                                            element.classes,
-                                            element.inlineProperties,
-                                            element.policyProperties,
-                                            {},
-                                            {}};
-            storage.layoutDescriptors[index] = {target.Value(), element.layout, element.intrinsic};
+            storage.work.elementInputs[index] = {target.Value(),
+                                                 element.asset,
+                                                 element.typeClass,
+                                                 element.classes,
+                                                 element.inlineProperties,
+                                                 element.policyProperties,
+                                                 {},
+                                                 {}};
+            storage.work.layoutDescriptors[index] = {target.Value(), element.layout, element.intrinsic};
         }
         for (const auto &binding : storage.definition.layoutBindings)
-            storage.layoutBindings.push_back({tree.Find(binding.target).Value(), binding.property, binding.field});
+            storage.work.layoutBindings.emplace_back(tree.Find(binding.target).Value(), binding.property, binding.field);
         const UiStyleSourceRevisions sources{tree.SourceDocumentRevision(),     tree.Revision(),
                                              storage.registry.Generation(),     storage.definition.content,
                                              storage.definition.resolvedPolicy, canvas->layoutEngine->PublishedInteraction()};
-        auto prepared = storage.resolver.Prepare(tree, storage.registry, {sources, storage.elementInputs});
+        auto prepared = storage.resolver.Prepare(tree, storage.registry, {sources, storage.work.elementInputs});
         if (prepared.HasError())
             return Result<void>::Failure(prepared.ErrorValue());
         auto reservation = std::move(prepared).Value();

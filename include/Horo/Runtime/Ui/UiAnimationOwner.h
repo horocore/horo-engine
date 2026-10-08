@@ -247,7 +247,7 @@ namespace Horo::Runtime::Ui {
          * @return Stack-issued operation identity or typed capacity, conflict, source or lifecycle failure.
          * @note No required binding means completion at the next cutoff without an animation wait. Competing navigation is rejected busy.
          */
-        [[nodiscard]] Result<UiRouteOperationId> Navigate(UiRouteOperationRequest request);
+        [[nodiscard]] Result<UiRouteOperationId> Navigate(const UiRouteOperationRequest &request);
         /** @brief Cancels one exact pending route reservation at the next successful cutoff.
          * @param operation Actual operation returned by Navigate. @param reason Explicit typed cancellation.
          * @return Admission or typed stale/lifecycle/budget failure; a caller cannot publish completion.

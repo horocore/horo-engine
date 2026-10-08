@@ -272,8 +272,8 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiScreenStack::CanCloseAnimation */
     Result<void> UiScreenStack::CanCloseAnimation(const AnimationGate &gate) const {
-        const auto &transaction = gate.transaction_;
-        if (!storage_ || storage_->state != UiScreenStackState::Active || !storage_->busy || transaction.terminal_ ||
+        if (const auto &transaction = gate.transaction_;
+            !storage_ || storage_->state != UiScreenStackState::Active || !storage_->busy || transaction.terminal_ ||
             transaction.storage_ != storage_ || storage_->activeOperation != transaction.operation_ || storage_->revision != gate.expected_)
             return Failure(UiErrors::RouteOperationStale);
         return Result<void>::Success();
@@ -631,15 +631,29 @@ namespace Horo::Runtime::Ui {
             return Failure<std::size_t>(UiErrors::RouteOperationLifecycleUnavailable);
         if (storage_->busy)
             return Failure<std::size_t>(UiErrors::RouteOperationReentrant);
-        std::size_t reclaimed = storage_->retiredActions.size();
-        for (auto &actions : storage_->actions)
+
+        struct DrainPublisher final {
+            explicit DrainPublisher(std::shared_ptr<Storage> &publisher) noexcept
+                : publisher(publisher), held(std::exchange(publisher, {})) {}
+
+            ~DrainPublisher() {
+                publisher.swap(held);
+            }
+
+            std::shared_ptr<Storage> &publisher;
+            std::shared_ptr<Storage> held;
+        } drain{storage_};
+
+        auto &owner = *drain.held;
+        std::size_t reclaimed = owner.retiredActions.size();
+        for (auto &actions : owner.actions)
             reclaimed += actions.router.DrainInteractionReplacement();
-        for (auto &actions : storage_->retiredActions)
+        for (auto &actions : owner.retiredActions)
             actions.router.Shutdown();
-        storage_->retiredActions.clear();
-        if (storage_->state == UiScreenStackState::Stopped) {
-            reclaimed += storage_->actions.size();
-            storage_->actions.clear();
+        owner.retiredActions.clear();
+        if (owner.state == UiScreenStackState::Stopped) {
+            reclaimed += owner.actions.size();
+            owner.actions.clear();
         }
         return Result<std::size_t>::Success(reclaimed);
     }
@@ -686,7 +700,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiScreenStack::AbandonActionInteractionReplacements */
-    void UiScreenStack::AbandonActionInteractionReplacements() noexcept {
+    void UiScreenStack::AbandonActionInteractionReplacements() const noexcept {
         if (storage_)
             for (auto &actions : storage_->actions)
                 actions.router.AbandonInteractionReplacement();

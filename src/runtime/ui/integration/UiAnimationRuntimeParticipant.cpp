@@ -49,7 +49,7 @@ namespace Horo::Runtime {
             auto storage =
                 std::make_unique<Storage>(std::move(owner), std::move(source), std::move(config), std::move(ledger).Value(), controls);
             storage->binding = storage->owner.SourceBinding();
-            auto participant = std::unique_ptr<UiAnimationRuntimeParticipant>(new UiAnimationRuntimeParticipant(std::move(storage)));
+            auto participant = std::make_unique<UiAnimationRuntimeParticipant>(std::move(storage));
             return Result<UiAnimationRuntimeComposition>::Success(
                 {std::move(participant), UiAnimationClockController{std::move(controls)}});
         } catch (const std::bad_alloc &) {

@@ -97,14 +97,14 @@ namespace Horo::Runtime::Ui {
                 frames.push_back(std::make_shared<UiAnimationFrameLease::Storage>(limits, controlCapacity));
             candidate.timelines.resize(limits.timelines);
             candidate.controls.reserve(controlCapacity);
-            elementInputs.resize(this->definition.elements.size());
-            layoutDescriptors.resize(this->definition.elements.size());
-            focusBounds.resize(this->definition.elements.size());
-            focusEligibility.resize(this->definition.elements.size());
-            layoutBindings.reserve(this->definition.layoutBindings.size());
-            samples.resize(static_cast<std::size_t>(limits.timelines) * limits.propertiesPerTimeline);
-            sampleCounts.resize(this->definition.elements.size());
-            sampleOffsets.resize(this->definition.elements.size() + 1);
+            work.elementInputs.resize(this->definition.elements.size());
+            work.layoutDescriptors.resize(this->definition.elements.size());
+            work.focusBounds.resize(this->definition.elements.size());
+            work.focusEligibility.resize(this->definition.elements.size());
+            work.layoutBindings.reserve(this->definition.layoutBindings.size());
+            work.samples.resize(static_cast<std::size_t>(limits.timelines) * limits.propertiesPerTimeline);
+            work.sampleCounts.resize(this->definition.elements.size());
+            work.sampleOffsets.resize(this->definition.elements.size() + 1);
         }
 
         const std::thread::id ownerThread{std::this_thread::get_id()};
@@ -116,20 +116,28 @@ namespace Horo::Runtime::Ui {
         UiElementSlotRange range;
         std::vector<Timeline> timelines;
         std::vector<std::shared_ptr<UiAnimationFrameLease::Storage>> frames;
-        std::vector<UiStyleElementInput> elementInputs;
-        std::vector<UiLayoutElementDescriptor> layoutDescriptors;
-        std::vector<UiLogicalRect> focusBounds;
-        std::vector<std::uint8_t> focusEligibility;
-        std::vector<AnimationInternal::LayoutBinding> layoutBindings;
-        std::vector<UiStyleAnimationSample> samples;
-        std::vector<std::uint32_t> sampleCounts;
-        std::vector<std::uint32_t> sampleOffsets;
+
+        struct WorkBuffers final {
+            std::vector<UiStyleElementInput> elementInputs;
+            std::vector<UiLayoutElementDescriptor> layoutDescriptors;
+            std::vector<UiLogicalRect> focusBounds;
+            std::vector<std::uint8_t> focusEligibility;
+            std::vector<AnimationInternal::LayoutBinding> layoutBindings;
+            std::vector<UiStyleAnimationSample> samples;
+            std::vector<std::uint32_t> sampleCounts;
+            std::vector<std::uint32_t> sampleOffsets;
+        } work;
+
         Candidate candidate;
         Route route;
         std::uint32_t issuedRouteClockGeneration{1};
-        UiAnimationHostSourceId source;
-        UiClockSnapshot clocks;
-        bool clocksBound{};
+
+        struct ClockBinding final {
+            UiAnimationHostSourceId source;
+            UiClockSnapshot clocks;
+            bool bound{};
+        } binding;
+
         std::optional<std::uint32_t> currentFrame;
         std::uint64_t commandRevision{1};
         std::uint32_t pendingCommands{};

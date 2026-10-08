@@ -370,6 +370,8 @@ namespace Horo::Runtime::Ui {
          * @pre Owner-thread load-time/quiescent operation; no prepared route transaction or borrowed action router remains.
          * @details Route removal closes action admission immediately, but retains router storage in preallocated slots.
          *          Call this method before admitting more removals when deferred capacity is exhausted, including after Shutdown.
+         *          Temporarily withdraws this owner's publisher handle during reclamation; reentrant operation admission
+         *          is unavailable until the quiescent drain returns. Requires a mutable owner, never a const view.
          */
         [[nodiscard]] Result<std::size_t> DrainRetiredActions();
 
@@ -435,7 +437,7 @@ namespace Horo::Runtime::Ui {
         /** @brief Swaps prepared actual route action generations without allocation, callbacks or releasing retained pools. */
         void PublishActionInteractionReplacements() const noexcept;
         /** @brief Cancels every unpublished actual action source reservation. */
-        void AbandonActionInteractionReplacements() noexcept;
+        void AbandonActionInteractionReplacements() const noexcept;
         explicit UiScreenStack(std::shared_ptr<Storage> storage) noexcept;
         [[nodiscard]] static Result<std::optional<UiRouteInstanceId>> ApplyMutation(Storage &storage, Transaction &transaction);
         static void Finish(Transaction &transaction) noexcept;

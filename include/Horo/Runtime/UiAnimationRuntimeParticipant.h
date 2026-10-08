@@ -52,7 +52,7 @@ namespace Horo::Runtime {
          * @param duration Nonnegative explicit local time.
          * @return Admission or typed stale, arithmetic, bounded capacity or lifecycle failure.
          */
-        [[nodiscard]] Result<void> Step(Ui::UiAnimationClockId clock, Ui::UiDuration duration);
+        [[nodiscard]] Result<void> Step(Ui::UiAnimationClockId clock, Ui::UiDuration duration) const;
         /** @brief Burns a fresh incarnation and explicitly replaces pending local position/steps.
          * @param clock Exact prior current controlled-domain incarnation.
          * @param position Nonnegative absolute domain position.
@@ -182,6 +182,7 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<std::size_t> DrainRetired();
 
     private:
+        friend std::unique_ptr<UiAnimationRuntimeParticipant> std::make_unique<UiAnimationRuntimeParticipant>(std::unique_ptr<Storage> &&);
         explicit UiAnimationRuntimeParticipant(std::unique_ptr<Storage> storage) noexcept;
         [[nodiscard]] Result<void> PrepareFrame(const RuntimeDispatchFacts &facts);
         [[nodiscard]] Result<void> PublishFrame(const RuntimeDispatchFacts &facts);

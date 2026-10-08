@@ -39,6 +39,10 @@ static_assert(std::is_same_v<decltype(std::declval<const UiAnimationClockControl
                                                                                               Horo::Runtime::Ui::UiDuration{})),
                              Horo::Result<Horo::Runtime::Ui::UiAnimationClockId>>);
 
+using StepSignature = Horo::Result<void> (UiAnimationClockController::*)(Horo::Runtime::Ui::UiAnimationClockId,
+                                                                         Horo::Runtime::Ui::UiDuration) const;
+static_assert(std::is_same_v<decltype(&UiAnimationClockController::Step), StepSignature>);
+
 int main() {
     const RuntimeDispatchSource absent;
     if (absent.BindingStatus() != RuntimeDispatchStatus::Invalid)

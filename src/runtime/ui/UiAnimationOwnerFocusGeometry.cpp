@@ -43,7 +43,7 @@ namespace Horo::Runtime::Ui {
             return Result<void>::Success();
         const auto &layout = storage.candidate.layout->Candidate();
         const auto records = layout.Records();
-        if (records.size() > storage.focusBounds.size())
+        if (records.size() > storage.work.focusBounds.size())
             return Result<void>::Failure(MakeError(UiErrors::LayoutClipSourceStale));
         for (std::size_t index = 0; index < records.size(); ++index) {
             UiLogicalRect box = records[index].arrangement.hitTest;
@@ -59,12 +59,12 @@ namespace Horo::Runtime::Ui {
             }
             const bool eligible = PreparedRouteTargetEligible(storage, records[index].element) &&
                                   (!storage.candidate.clipping || (box.extent.width > 0 && box.extent.height > 0));
-            storage.focusEligibility[index] = eligible ? 1 : 0;
+            storage.work.focusEligibility[index] = eligible ? 1 : 0;
             if (!eligible)
                 box.extent = {};
-            storage.focusBounds[index] = box;
+            storage.work.focusBounds[index] = box;
         }
-        return canvas->focus->PrepareLayout(layout, std::span<const UiLogicalRect>{storage.focusBounds}.first(records.size()),
-                                            std::span<const std::uint8_t>{storage.focusEligibility}.first(records.size()));
+        return canvas->focus->PrepareLayout(layout, std::span<const UiLogicalRect>{storage.work.focusBounds}.first(records.size()),
+                                            std::span<const std::uint8_t>{storage.work.focusEligibility}.first(records.size()));
     }
 }  // namespace Horo::Runtime::Ui

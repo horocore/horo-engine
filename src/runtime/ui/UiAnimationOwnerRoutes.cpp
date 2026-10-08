@@ -56,14 +56,15 @@ namespace Horo::Runtime::Ui {
             if (!timeline.occupied || !timeline.terminalIssued)
                 continue;
             const auto &prior = storage.definition.animations[timeline.definition];
-            for (const auto &stage : storage.route.stages) {
-                for (const auto &track : storage.definition.animations[stage.definition].tracks) {
-                    if (std::ranges::any_of(prior.tracks, [&](const auto &value) {
+            const bool overlaps = std::ranges::any_of(storage.route.stages, [&](const auto &stage) {
+                return std::ranges::any_of(storage.definition.animations[stage.definition].tracks, [&](const auto &track) {
+                    return std::ranges::any_of(prior.tracks, [&](const auto &value) {
                         return value.target == track.target && value.property == track.property;
-                    }))
-                        timeline.occupied = false;
-                }
-            }
+                    });
+                });
+            });
+            if (overlaps)
+                timeline.occupied = false;
         }
     }
 
@@ -93,7 +94,7 @@ namespace Horo::Runtime::Ui {
         // Every capacity/conflict check completed before any reserved incarnation becomes active.
         RetireRouteTimelines(storage);
         for (auto &stage : storage.route.stages) {
-            stage.clock = {storage.source.ownership,
+            stage.clock = {storage.binding.source.ownership,
                            storage.range.FirstSlot() + static_cast<std::uint32_t>(UiTimeDomain::ScreenTransition) + 1,
                            *clocks + static_cast<std::uint32_t>(&stage - storage.route.stages.data())};
             auto &timeline = storage.timelines[stage.timeline];
@@ -139,13 +140,13 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiAnimationOwner::Navigate */
-    Result<UiRouteOperationId> UiAnimationOwner::Navigate(UiRouteOperationRequest request) {
+    Result<UiRouteOperationId> UiAnimationOwner::Navigate(const UiRouteOperationRequest &request) {
         if (!storage_)
             return Result<UiRouteOperationId>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         if (auto admitted = AdmitCommand(*storage_); admitted.HasError())
             return Result<UiRouteOperationId>::Failure(admitted.ErrorValue());
         auto *canvas = storage_->publisher.Current()->Canvas(storage_->definition.canvas);
-        if (!canvas->routes || storage_->route.gate || !storage_->clocksBound)
+        if (!canvas->routes || storage_->route.gate || !storage_->binding.bound)
             return Result<UiRouteOperationId>::Failure(MakeError(UiErrors::AnimationConflict));
         auto prepared = canvas->routes->PrepareAnimation(request, canvas->layoutEngine->PublishedInteraction());
         if (prepared.HasError())

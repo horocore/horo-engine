@@ -8,7 +8,11 @@ namespace Horo::Runtime::Ui {
         /** @brief Qualifies only bounded actual retained-tree parent lineage. */
         bool WithinRoot(const UiElementTree &tree, UiElementHandle target, const UiElementId rootId) {
             const auto root = tree.Find(rootId);
-            for (std::size_t count = 0; root.HasValue() && count < tree.Size() && target.IsValid(); ++count) {
+            if (root.HasError())
+                return false;
+            std::size_t remaining = tree.Size();
+            while (remaining != 0 && target.IsValid()) {
+                --remaining;
                 if (target == root.Value())
                     return true;
                 const auto record = tree.Get(target);

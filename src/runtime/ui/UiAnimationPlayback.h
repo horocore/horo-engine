@@ -46,8 +46,7 @@ namespace Horo::Runtime::Ui::AnimationInternal {
         }
         if (policy.loop.iterations == 0 || (policy.duration.nanoseconds == 0 && policy.loop.iterations != 1))
             return Result<void>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
-        auto total = TotalPlaybackTime(policy);
-        if (total.HasError())
+        if (auto total = TotalPlaybackTime(policy); total.HasError())
             return Result<void>::Failure(total.ErrorValue());
         return Result<void>::Success();
     }
@@ -76,8 +75,9 @@ namespace Horo::Runtime::Ui::AnimationInternal {
 
     /** @brief Alternation changes local progress, never the forward domain sample. */
     [[nodiscard]] inline bool ReverseIteration(const UiPlaybackDirection direction, const std::uint64_t iteration) noexcept {
-        const bool initiallyReverse = direction == UiPlaybackDirection::Reverse || direction == UiPlaybackDirection::AlternatingReverse;
-        const bool alternating = direction == UiPlaybackDirection::Alternating || direction == UiPlaybackDirection::AlternatingReverse;
+        using enum UiPlaybackDirection;
+        const bool initiallyReverse = direction == Reverse || direction == AlternatingReverse;
+        const bool alternating = direction == Alternating || direction == AlternatingReverse;
         return initiallyReverse != (alternating && iteration % 2 != 0);
     }
 
@@ -121,8 +121,10 @@ namespace Horo::Runtime::Ui::AnimationInternal {
 
     /** @brief Final sampling emits one candidate terminal outcome; only successful aggregate commit may record its publication. */
     inline void SampleActive(UiAnimationPlaybackSample &sample, const UiAnimationTimePolicy &policy, const bool completed) noexcept {
-        sample.state =
-            completed ? UiAnimationState::Completed : (policy.rate.numerator == 0 ? UiAnimationState::Held : UiAnimationState::Running);
+        if (completed)
+            sample.state = UiAnimationState::Completed;
+        else
+            sample.state = policy.rate.numerator == 0 ? UiAnimationState::Held : UiAnimationState::Running;
         sample.outcome = completed ? UiAnimationOutcome::Completed : UiAnimationOutcome::None;
         sample.newTerminalOutcome = completed;
         sample.contributesValue = !completed || policy.fill == UiAnimationFill::Forwards || policy.fill == UiAnimationFill::Both;

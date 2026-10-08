@@ -5,12 +5,12 @@
 namespace Horo::Runtime::Ui {
     /** @copydoc UiAnimationOwner::SourceBinding */
     UiAnimationHostSourceId UiAnimationOwner::SourceBinding() const noexcept {
-        return storage_->source;
+        return storage_->binding.source;
     }
 
     /** @copydoc UiAnimationOwner::ClockBindings */
     UiClockSnapshot UiAnimationOwner::ClockBindings() const noexcept {
-        return storage_->clocks;
+        return storage_->binding.clocks;
     }
 
     namespace {
@@ -72,32 +72,33 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAnimationOwner::BindClocks */
     Result<void> UiAnimationOwner::BindClocks(const std::array<bool, UiTimeDomainCount> &enabled) {
+        using enum UiTimeDomain;
         if (!storage_ || storage_->ownerThread != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
-        if (storage_->stopped || storage_->draining || storage_->clocksBound || storage_->currentFrame || storage_->pendingCommands)
+        if (storage_->stopped || storage_->draining || storage_->binding.bound || storage_->currentFrame.has_value() ||
+            storage_->pendingCommands)
             return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
-        if (!enabled[static_cast<std::size_t>(UiTimeDomain::Simulation)] ||
-            !enabled[static_cast<std::size_t>(UiTimeDomain::PresentationUnscaled)] ||
-            enabled[static_cast<std::size_t>(UiTimeDomain::ScreenTransition)])
+        if (!enabled[static_cast<std::size_t>(Simulation)] || !enabled[static_cast<std::size_t>(PresentationUnscaled)] ||
+            enabled[static_cast<std::size_t>(ScreenTransition)])
             return Result<void>::Failure(MakeError(UiErrors::ClockInputInvalid));
         for (std::size_t index = 0; index < UiTimeDomainCount; ++index)
-            storage_->clocks.domains[index].available = enabled[index];
-        storage_->clocksBound = true;
+            storage_->binding.clocks.domains[index].available = enabled[index];
+        storage_->binding.bound = true;
         return Result<void>::Success();
     }
 
     /** @copydoc UiAnimationOwner::PrepareClocks */
     Result<void> UiAnimationOwner::PrepareClocks(const Storage &storage, const UiAnimationHostRead &read, UiClockSnapshot &candidate) {
-        if (!storage.clocksBound || read.Source() != storage.source || read.Frame() <= storage.lastSourceFrame)
+        if (!storage.binding.bound || read.Source() != storage.binding.source || read.Frame() <= storage.lastSourceFrame)
             return Result<void>::Failure(MakeError(UiErrors::ClockSourceStale));
-        const auto &domains = read.Domains();
-        if (domains[static_cast<std::size_t>(UiTimeDomain::Simulation)].sourceRevision != read.SimulationTick() ||
+        if (const auto &domains = read.Domains();
+            domains[static_cast<std::size_t>(UiTimeDomain::Simulation)].sourceRevision != read.SimulationTick() ||
             domains[static_cast<std::size_t>(UiTimeDomain::PresentationUnscaled)].sourceRevision != read.PresentationGeneration() ||
             read.PresentationGeneration() == 0)
             return Result<void>::Failure(MakeError(UiErrors::ClockSourceStale));
-        if (storage.clocks.updateSequence == std::numeric_limits<std::uint64_t>::max())
+        if (storage.binding.clocks.updateSequence == std::numeric_limits<std::uint64_t>::max())
             return Result<void>::Failure(MakeError(UiErrors::ClockOverflow));
-        candidate = storage.clocks;
+        candidate = storage.binding.clocks;
         ++candidate.updateSequence;
         for (std::size_t index = 0; index < UiTimeDomainCount; ++index) {
             if (index == static_cast<std::size_t>(UiTimeDomain::ScreenTransition)) {

@@ -40,7 +40,7 @@ namespace Horo::Runtime::Ui {
         for (std::size_t index = 0; index < storage_->timelines.size(); ++index)
             storage_->timelines[index] = candidate.timelines[index];
         PublishRouteValidated(*storage_);
-        storage_->clocks = frame.clocks;
+        storage_->binding.clocks = frame.clocks;
         storage_->lastSourceFrame = candidate.sourceFrame;
         storage_->pendingCommands = 0;
         storage_->currentFrame = candidate.frameSlot;

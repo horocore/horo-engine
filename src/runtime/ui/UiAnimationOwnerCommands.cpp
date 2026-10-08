@@ -40,7 +40,7 @@ namespace Horo::Runtime::Ui {
         const auto definition = std::ranges::find(storage_->definition.animations, animation, &UiAnimationDefinition::id);
         if (definition == storage_->definition.animations.end() || definition->time.lifecycle != UiAnimationLifecycle::NonBlocking)
             return Result<UiAnimationTimelineId>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
-        if (!storage_->clocksBound || !storage_->clocks.domains[static_cast<std::size_t>(definition->time.domain)].available)
+        if (!storage_->binding.bound || !storage_->binding.clocks.domains[static_cast<std::size_t>(definition->time.domain)].available)
             return Result<UiAnimationTimelineId>::Failure(MakeError(UiErrors::ClockUnavailable));
         for (const auto &timeline : storage_->timelines) {
             if (timeline.occupied && !timeline.terminalIssued && timeline.cursor.sample.outcome == UiAnimationOutcome::None &&
@@ -66,7 +66,7 @@ namespace Horo::Runtime::Ui {
         ++free->generation;
         free->definition = static_cast<std::uint32_t>(std::distance(storage_->definition.animations.begin(), definition));
         free->cursor = {};
-        free->clock = storage_->clocks.domains[static_cast<std::size_t>(definition->time.domain)].clock;
+        free->clock = storage_->binding.clocks.domains[static_cast<std::size_t>(definition->time.domain)].clock;
         free->origin = {};
         free->pendingStart = true;
         free->terminalIssued = false;
@@ -77,7 +77,7 @@ namespace Horo::Runtime::Ui {
         ++storage_->pendingCommands;
         ++storage_->commandRevision;
         return Result<UiAnimationTimelineId>::Success(
-            {storage_->source.ownership, storage_->range.FirstSlot() + static_cast<std::uint32_t>(UiTimeDomainCount) + 1 + slot,
+            {storage_->binding.source.ownership, storage_->range.FirstSlot() + static_cast<std::uint32_t>(UiTimeDomainCount) + 1 + slot,
              free->generation});
     }
 
@@ -90,7 +90,7 @@ namespace Horo::Runtime::Ui {
         if (reason == UiAnimationCancellation::None || reason > UiAnimationCancellation::AccessibilityReplacement)
             return Result<void>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
         const auto first = storage_->range.FirstSlot() + static_cast<std::uint32_t>(UiTimeDomainCount) + 1;
-        if (timeline.ownership != storage_->source.ownership || timeline.slot < first ||
+        if (timeline.ownership != storage_->binding.source.ownership || timeline.slot < first ||
             timeline.slot - first >= storage_->timelines.size())
             return Result<void>::Failure(MakeError(UiErrors::AnimationTargetStale));
         auto &entry = storage_->timelines[timeline.slot - first];

@@ -9,7 +9,7 @@ namespace Horo::Runtime {
         class FrameReservation final {
         public:
             explicit FrameReservation(bool &reserved) noexcept : reserved_(reserved) {
-                reserved_ = true;
+                reserved = true;
             }
 
             ~FrameReservation() {

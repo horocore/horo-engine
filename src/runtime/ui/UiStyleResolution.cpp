@@ -232,6 +232,7 @@ namespace Horo::Runtime::Ui::StyleInternal {
         [[nodiscard]] Result<void> ValidateAnimation(const RuntimeStyleRegistry &registry,
                                                      const std::span<const UiStyleAnimationSample> samples,
                                                      const std::uint32_t propertyCapacity) {
+            using enum UiStyleValueCategory;
             if (samples.size() > propertyCapacity)
                 return Failure(UiErrors::StyleInvalid);
             for (std::size_t index = 0; index < samples.size(); ++index) {
@@ -240,8 +241,7 @@ namespace Horo::Runtime::Ui::StyleInternal {
                 if (property == nullptr)
                     return Failure(UiErrors::StyleReferenceInvalid);
                 if (const auto category = UiStyleValueCategoryOf(sample.value);
-                    category != UiStyleValueCategory::Color && category != UiStyleValueCategory::Dimension &&
-                    category != UiStyleValueCategory::Shape && category != UiStyleValueCategory::Scalar)
+                    category != Color && category != Dimension && category != Shape && category != Scalar)
                     return Failure(UiErrors::StyleTypeMismatch);
                 if (!IsValueCompatible(*property, sample.value))
                     return Failure(UiErrors::StyleTypeMismatch);

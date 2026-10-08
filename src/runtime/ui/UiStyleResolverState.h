@@ -103,22 +103,23 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] Result<void> ApplyInvalidations(const UiRuntimeTreeRevision treeRevision) {
+            using enum UiStyleInvalidationKind;
             for (const auto &invalidation : invalidations) {
                 if (!invalidation.tree.IsValid() || invalidation.tree != treeRevision)
                     return StyleInternal::Failure(UiErrors::StyleSourceStale);
                 switch (invalidation.kind) {
-                    case UiStyleInvalidationKind::All:
+                    case All:
                         MarkAll();
                         break;
-                    case UiStyleInvalidationKind::Subtree: {
+                    case Subtree: {
                         const auto index = FindNode(invalidation.element);
                         if (index == std::numeric_limits<std::uint32_t>::max())
                             return StyleInternal::Failure(UiErrors::StyleSourceStale);
                         MarkSubtree(index);
                         break;
                     }
-                    case UiStyleInvalidationKind::Paint:
-                    case UiStyleInvalidationKind::Measure: {
+                    case Paint:
+                    case Measure: {
                         const auto index = FindNode(invalidation.element);
                         if (index == std::numeric_limits<std::uint32_t>::max())
                             return StyleInternal::Failure(UiErrors::StyleSourceStale);
@@ -148,8 +149,8 @@ namespace Horo::Runtime::Ui {
                 tree.SourceDocumentRevision() != request.sources.document || tree.Revision() != request.sources.tree ||
                 tree.Size() != request.elements.size() || tree.Size() > descriptor.elementCapacity)
                 return StyleInternal::Failure(UiErrors::StyleSourceStale);
-            for (std::size_t index = 0; index < request.elements.size(); ++index)
-                if (const auto valid = StyleInternal::ValidateElementInput(registry, request.elements[index], descriptor.propertyCapacity);
+            for (const auto &element : request.elements)
+                if (const auto valid = StyleInternal::ValidateElementInput(registry, element, descriptor.propertyCapacity);
                     valid.HasError())
                     return Result<void>::Failure(valid.ErrorValue());
 
@@ -259,8 +260,7 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] static Result<std::uint32_t> EnsureStyleRange(UiComputedStyleSnapshot::Storage &slot,
                                                                     const StyleInternal::WorkingStyle &working,
                                                                     const UiStyleResolverDescriptor &descriptor) {
-            const auto existing = FindStyleRangeIndex(slot, working);
-            if (existing != std::numeric_limits<std::uint32_t>::max())
+            if (const auto existing = FindStyleRangeIndex(slot, working); existing != std::numeric_limits<std::uint32_t>::max())
                 return Result<std::uint32_t>::Success(existing);
             if (slot.styles.size() >= descriptor.elementCapacity ||
                 slot.properties.size() + working.count > static_cast<std::size_t>(descriptor.elementCapacity) * descriptor.propertyCapacity)

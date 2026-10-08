@@ -6,7 +6,7 @@ namespace Horo::Runtime::Ui {
     namespace {
         /** @brief Projects actual typed control availability and activation without granting focus or input authority. */
         [[nodiscard]] UiVisualStateMask ControlVisualState(const UiControlState &state) noexcept {
-            return std::visit([](const auto &typed) noexcept {
+            return std::visit([]<typename Control>(const Control &typed) noexcept {
                 UiVisualStateMask result;
                 if (typed.availability == UiControlAvailability::Disabled)
                     result = result | UiVisualState::Disabled;
@@ -14,7 +14,7 @@ namespace Horo::Runtime::Ui {
                     result = result | UiVisualState::Busy;
                 if (typed.pressed)
                     result = result | UiVisualState::Pressed;
-                if constexpr (std::is_same_v<std::decay_t<decltype(typed)>, UiToggleControlState>) {
+                if constexpr (std::is_same_v<Control, UiToggleControlState>) {
                     if (typed.checked)
                         result = result | UiVisualState::Checked;
                 }
@@ -26,14 +26,14 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiAnimationOwner::PrepareVisualState */
     Result<void> UiAnimationOwner::PrepareVisualState(Storage &storage) {
         const auto *canvas = storage.publisher.Current()->Canvas(storage.definition.canvas);
-        for (auto &input : storage.elementInputs)
+        for (auto &input : storage.work.elementInputs)
             input.state = {};
         for (const auto &control : canvas->controls) {
             auto state = control.control.Snapshot();
             if (state.HasError())
                 return Result<void>::Failure(state.ErrorValue());
-            const auto input = std::ranges::find(storage.elementInputs, control.control.Element(), &UiStyleElementInput::element);
-            if (input == storage.elementInputs.end())
+            const auto input = std::ranges::find(storage.work.elementInputs, control.control.Element(), &UiStyleElementInput::element);
+            if (input == storage.work.elementInputs.end())
                 return Result<void>::Failure(MakeError(UiErrors::AnimationTargetStale));
             input->state = ControlVisualState(state.Value());
         }
@@ -42,8 +42,8 @@ namespace Horo::Runtime::Ui {
             if (focused.HasError())
                 return Result<void>::Failure(focused.ErrorValue());
             if (focused.Value()) {
-                const auto input = std::ranges::find(storage.elementInputs, focused.Value()->element, &UiStyleElementInput::element);
-                if (input == storage.elementInputs.end())
+                const auto input = std::ranges::find(storage.work.elementInputs, focused.Value()->element, &UiStyleElementInput::element);
+                if (input == storage.work.elementInputs.end())
                     return Result<void>::Failure(MakeError(UiErrors::AnimationTargetStale));
                 input->state = input->state | UiVisualState::Focused;
             }

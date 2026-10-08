@@ -28,7 +28,7 @@ namespace Horo::Runtime::Ui {
                 continue;
             // A restart is an explicit new admission; altered lifecycle/domain/overlap must still qualify normal commands.
             if (found->time.lifecycle != UiAnimationLifecycle::NonBlocking ||
-                !replacement.clocks.domains[static_cast<std::size_t>(found->time.domain)].available)
+                !replacement.binding.clocks.domains[static_cast<std::size_t>(found->time.domain)].available)
                 return Result<std::uint32_t>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
             for (std::uint32_t prior = 0; prior < count; ++prior) {
                 if (Overlaps(*found, replacement.definition.animations[replacement.timelines[prior].definition]))
@@ -37,7 +37,7 @@ namespace Horo::Runtime::Ui {
             auto &entry = replacement.timelines[count];
             entry.generation = 1;
             entry.definition = static_cast<std::uint32_t>(std::distance(replacement.definition.animations.begin(), found));
-            entry.clock = replacement.clocks.domains[static_cast<std::size_t>(found->time.domain)].clock;
+            entry.clock = replacement.binding.clocks.domains[static_cast<std::size_t>(found->time.domain)].clock;
             entry.pendingStart = true;
             entry.occupied = true;
             ++count;
@@ -49,7 +49,7 @@ namespace Horo::Runtime::Ui {
     Result<std::shared_ptr<UiAnimationOwner::Storage>> UiAnimationOwner::PrepareReloadStorage(
         Storage &source, UiReloadGeneration &replacement, UiElementSlotAllocator &allocator, RuntimeStyleRegistry registry,
         UiStyleResolver styles, UiAnimationCanvasDefinition definition, const UiAnimationReloadPolicy policy) {
-        auto *canvas = replacement.Canvas(definition.canvas);
+        const auto *canvas = replacement.Canvas(definition.canvas);
         if (!canvas || !canvas->tree.WasIssuedBy(allocator))
             return Result<std::shared_ptr<Storage>>::Failure(MakeError(UiErrors::AnimationTargetStale));
         auto reserved = allocator.Reserve(static_cast<std::uint32_t>(UiTimeDomainCount) + 1 + source.limits.timelines);
@@ -64,17 +64,17 @@ namespace Horo::Runtime::Ui {
             if (const auto bound = InitializeBindings(*next, replacement); bound.HasError())
                 return Result<std::shared_ptr<Storage>>::Failure(bound.ErrorValue());
             for (std::size_t index = 0; index < UiTimeDomainCount; ++index) {
-                const auto fresh = next->clocks.domains[index].clock;
-                next->clocks.domains[index] = source.clocks.domains[index];
-                next->clocks.domains[index].clock = fresh;
-                next->clocks.domains[index].delta = {};
+                const auto fresh = next->binding.clocks.domains[index].clock;
+                next->binding.clocks.domains[index] = source.binding.clocks.domains[index];
+                next->binding.clocks.domains[index].clock = fresh;
+                next->binding.clocks.domains[index].delta = {};
                 if (index >= static_cast<std::size_t>(UiTimeDomain::EditorPreview)) {
-                    next->clocks.domains[index].sequence = 0;
-                    next->clocks.domains[index].sourceRevision = 0;
+                    next->binding.clocks.domains[index].sequence = 0;
+                    next->binding.clocks.domains[index].sourceRevision = 0;
                 }
             }
-            next->clocks.updateSequence = source.clocks.updateSequence;
-            next->clocksBound = source.clocksBound;
+            next->binding.clocks.updateSequence = source.binding.clocks.updateSequence;
+            next->binding.bound = source.binding.bound;
             next->lastSourceFrame = source.lastSourceFrame;
             if (policy == UiAnimationReloadPolicy::Restart) {
                 if (const auto restarted = RestartReloadTimelines(source, *next); restarted.HasError())
@@ -103,8 +103,9 @@ namespace Horo::Runtime::Ui {
                 sample.contributesValue = false;
                 const auto slot =
                     source.range.FirstSlot() + static_cast<std::uint32_t>(UiTimeDomainCount) + 1 + static_cast<std::uint32_t>(index);
-                result.terminal.push_back(
-                    {{source.source.ownership, slot, timeline.generation}, source.definition.animations[timeline.definition].id, sample});
+                result.terminal.push_back({{source.binding.source.ownership, slot, timeline.generation},
+                                           source.definition.animations[timeline.definition].id,
+                                           sample});
             }
             result.cancelledTimelines = static_cast<std::uint32_t>(result.terminal.size());
             return Result<UiAnimationReloadResult>::Success(std::move(result));

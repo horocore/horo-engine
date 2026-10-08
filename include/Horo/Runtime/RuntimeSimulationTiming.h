@@ -67,7 +67,8 @@ namespace Horo::Runtime {
 
     private:
         friend class RuntimeSimulationControl;
-        RuntimeSimulationPolicyRead(std::shared_ptr<const SimulationTimingDetail::Storage> owner, RuntimeSimulationPolicy policy) noexcept;
+        RuntimeSimulationPolicyRead(std::shared_ptr<const SimulationTimingDetail::Storage> owner,
+                                    const RuntimeSimulationPolicy &policy) noexcept;
         std::shared_ptr<const SimulationTimingDetail::Storage> owner_;
         RuntimeSimulationPolicy policy_;
     };

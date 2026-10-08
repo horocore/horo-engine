@@ -8,8 +8,9 @@
 #include "Horo/Runtime/Ui/UiErrors.h"
 
 #include <limits>
-#include <memory>
 #include <new>
+#include <utility>
+#include <vector>
 
 namespace Horo::Runtime::Ui::IntegrationInternal {
     inline constexpr std::uint32_t MaximumCommittedTickRecords = 4'096;
@@ -63,20 +64,34 @@ namespace Horo::Runtime::Ui::IntegrationInternal {
                 return Result<CommittedTickLedger>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
             try {
                 return Result<CommittedTickLedger>::Success(
-                    CommittedTickLedger(capacity, std::make_unique<CommittedFixedStepEvidence[]>(capacity)));
+                    CommittedTickLedger(capacity, std::vector<CommittedFixedStepEvidence>(capacity)));
             } catch (const std::bad_alloc &) {
                 return Result<CommittedTickLedger>::Failure(MakeError(UiErrors::AnimationStorageExhausted));
             }
         }
 
-        CommittedTickLedger(CommittedTickLedger &&) noexcept = default;
-        CommittedTickLedger &operator=(CommittedTickLedger &&) noexcept = default;
+        CommittedTickLedger(CommittedTickLedger &&other) noexcept
+            : records_(std::exchange(other.records_, {})), capacity_(other.capacity_), count_(other.count_), revision_(other.revision_),
+              consumed_(other.consumed_), lastStaged_(other.lastStaged_) {}
+
+        CommittedTickLedger &operator=(CommittedTickLedger &&other) noexcept {
+            if (this != &other) {
+                records_ = std::exchange(other.records_, {});
+                capacity_ = other.capacity_;
+                count_ = other.count_;
+                revision_ = other.revision_;
+                consumed_ = other.consumed_;
+                lastStaged_ = other.lastStaged_;
+            }
+            return *this;
+        }
+
         CommittedTickLedger(const CommittedTickLedger &) = delete;
         CommittedTickLedger &operator=(const CommittedTickLedger &) = delete;
 
         /** @brief Stages a copied dispatch; a later attempt of the same uncommitted tick replaces, never adds, its duration. */
         [[nodiscard]] Result<void> Stage(const FixedStepContext &context) {
-            if (!records_ || context.simulationTick == 0 || context.attemptNumber == 0 || context.frameNumber == 0 ||
+            if (records_.empty() || context.simulationTick == 0 || context.attemptNumber == 0 || context.frameNumber == 0 ||
                 context.fixedDelta.ToNanoseconds() <= 0)
                 return Result<void>::Failure(MakeError(UiErrors::ClockInputInvalid));
             const CommittedFixedStepEvidence evidence{context.simulationTick, context.attemptNumber, context.frameNumber,
@@ -88,7 +103,7 @@ namespace Horo::Runtime::Ui::IntegrationInternal {
 
         /** @brief Copies a consumption proposal from the actual successful scheduler fence, without discarding source records. */
         [[nodiscard]] Result<Prepared> Prepare(const FrameContext &context) const {
-            if (!records_ || context.frameNumber == 0 || context.completedSimulationTick < consumed_.simulationTick ||
+            if (records_.empty() || context.frameNumber == 0 || context.completedSimulationTick < consumed_.simulationTick ||
                 context.completedSimulationTick != context.committedFixedStep.simulationTick)
                 return Result<Prepared>::Failure(MakeError(UiErrors::ClockSourceStale));
             const auto required = context.completedSimulationTick - consumed_.simulationTick;
@@ -106,7 +121,7 @@ namespace Horo::Runtime::Ui::IntegrationInternal {
 
         /** @brief Checks proposal ownership and source revision before any aggregate clock/style/layout publication. */
         [[nodiscard]] bool CanConsume(const Prepared &prepared) const noexcept {
-            return records_ && prepared.issuer_ == this && prepared.revision_ == revision_ &&
+            return !records_.empty() && prepared.issuer_ == this && prepared.revision_ == revision_ &&
                    prepared.consumedTick_ == consumed_.simulationTick && prepared.count_ <= count_;
         }
 
@@ -129,7 +144,7 @@ namespace Horo::Runtime::Ui::IntegrationInternal {
             consumed_ = prepared.fence_;
         }
 
-        CommittedTickLedger(const std::uint32_t capacity, std::unique_ptr<CommittedFixedStepEvidence[]> records) noexcept
+        CommittedTickLedger(const std::uint32_t capacity, std::vector<CommittedFixedStepEvidence> records) noexcept
             : records_(std::move(records)), capacity_(capacity) {}
 
         /** @brief Rejects stale/malformed retries before replacing the previous failed candidate. */
@@ -179,7 +194,7 @@ namespace Horo::Runtime::Ui::IntegrationInternal {
             return Result<UiDuration>::Success(UiDuration{duration});
         }
 
-        std::unique_ptr<CommittedFixedStepEvidence[]> records_;
+        std::vector<CommittedFixedStepEvidence> records_;
         std::uint32_t capacity_{};
         std::uint32_t count_{};
         std::uint64_t revision_{1};
