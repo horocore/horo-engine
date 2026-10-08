@@ -185,6 +185,31 @@ namespace Horo::Runtime::Ui {
             RequireError(engine.Layout(request), UiErrors::TextLayoutEllipsisInvalid);
         }
 
+        TEST_CASE("RTL ellipsis occupies the visual trailing edge with explicit flow alignment", "[runtime_ui][text_layout][overflow]") {
+            ShapedText text;
+            EllipsisText ellipsis;
+            text.runs[0].direction = UiTextFlowDirection::RightToLeft;
+            auto engine = MakeEngine();
+            auto request = Request(text, 160);
+            request.options.wrap = UiTextWrapMode::NoWrap;
+            request.options.overflow = UiTextOverflowMode::Ellipsis;
+            request.options.direction = UiTextFlowDirection::RightToLeft;
+            request.options.horizontal = UiTextHorizontalAlignment::Leading;
+            request.ellipsis = ellipsis.View();
+            const auto leading = engine.Layout(request);
+            REQUIRE(leading.HasValue());
+            REQUIRE(leading.Value().Glyphs().size() == 2);
+            REQUIRE(leading.Value().Glyphs()[0].glyph == 99);
+            REQUIRE(leading.Value().Glyphs()[0].origin.x == 32);
+            REQUIRE(leading.Value().Glyphs()[1].origin.x == 96);
+            REQUIRE(leading.Value().Glyphs()[1].cluster == 0);
+            request.options.horizontal = UiTextHorizontalAlignment::Trailing;
+            const auto trailing = engine.Layout(request);
+            REQUIRE(trailing.HasValue());
+            REQUIRE(trailing.Value().Glyphs()[0].origin.x == 0);
+            REQUIRE(trailing.Value().Glyphs()[1].origin.x == 64);
+        }
+
         TEST_CASE("Text layout rejects malformed shaped evidence and stale source generations", "[runtime_ui][text_layout][validation]") {
             TwoClusterText text;
             auto engine = MakeEngine();

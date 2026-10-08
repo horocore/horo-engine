@@ -32,6 +32,33 @@ namespace Horo {
 
 namespace Horo::Physics {
     class PhysicsSceneActivationParticipant;
+    class NormalizedCollisionSchema;
+
+    /** @brief Captured immutable project simulation authority retained for the complete world lifetime.
+     * @details A null schema with generation zero deliberately keeps simulation filters closed.
+     * A supplied schema requires a nonzero authoritative generation. Replacement creates a new
+     * detached world; neither the project document nor the installed tables are mutated in place.
+     */
+    struct PhysicsWorldSimulationBinding final {
+        std::shared_ptr<const NormalizedCollisionSchema> schema;
+        std::uint64_t generation{};
+    };
+
+    /** @brief Owned authored collider projection; native compound path ordinals are never authored identity. */
+    struct PhysicsSceneColliderBinding final {
+        PhysicsPose localPose;
+        std::optional<PhysicsShapeSubresourceId> subshape;
+        std::vector<PhysicsQueryMaterial> materials;
+    };
+
+    /** @brief Explicit scene simulation profile and owned collider metadata resolved against the world's schema.
+     * @details The profile selects its one project layer. Missing profiles never substitute the
+     * authoring default; all contributors of the initial scene compound require this exact profile.
+     */
+    struct PhysicsSceneCollisionBinding final {
+        CollisionProfileId profile;
+        std::vector<PhysicsSceneColliderBinding> colliders;
+    };
 
     namespace Detail {
         struct CanonicalRetirementSink;
@@ -108,6 +135,7 @@ namespace Horo::Physics {
         PhysicsInitialBodyActivity initialActivity{PhysicsInitialBodyActivity::Awake};
         /**< Moving bodies start awake by default. Sleeping requires zero velocities and world sleeping enabled. */
         std::uint64_t sceneEntity{}; /**< Stable authored scene object identity, or zero for direct world admission. */
+        std::optional<PhysicsSceneCollisionBinding> collision; /**< Absent bindings stay closed; positive CCD requires one. */
     };
 
     /** @brief One collider shape owned by a detached group; compounds reference earlier shape entries only. */
@@ -193,6 +221,7 @@ namespace Horo::Physics {
         ShapeHandle observedShape;                                   /**< Resident Horo shape matching the native shape object. */
         std::optional<float> observedMassKilograms;                  /**< Native dynamic mass when translation is unlocked. */
         Math::Vec3 observedBoundsExtent;                             /**< Native broadphase AABB full extents in world units. */
+        PhysicsDefaultMotionQuality observedMotionQuality{PhysicsDefaultMotionQuality::Discrete}; /**< Native effective linear CCD mode. */
     };
 
     /**
@@ -221,10 +250,12 @@ namespace Horo::Physics {
 
         /** @brief Creates an unpublished isolated world candidate from one validated snapshot.
          * @param settings Immutable settings copied into the candidate.
+         * @param simulation Captured immutable project schema and generation, retained by the candidate; absent means closed filters.
          * @return Prepared candidate or a typed error after releasing every acquired world resource.
          * @post No public world identity, body handle, event or command admission is published.
          */
-        [[nodiscard]] Result<std::unique_ptr<PhysicsWorld>> PrepareWorld(const PhysicsWorldSettings &settings);
+        [[nodiscard]] Result<std::unique_ptr<PhysicsWorld>> PrepareWorld(const PhysicsWorldSettings &settings,
+                                                                         const PhysicsWorldSimulationBinding &simulation = {});
 
         /** @brief Closes candidate admission and releases native registration after all retained worlds retire; safe repeatedly. */
         void Shutdown() noexcept;
@@ -311,6 +342,8 @@ namespace Horo::Physics {
          * admission or worker completion order has no semantic authority.
          * A Change/Body command may own a PhysicsBodyMutation. It is validated against the resident
          * body on admission between ticks, applied before the native step, and revalidated at that safe point.
+         * A Change/World command may instead own complete effective CCD policy; it retains exact world
+         * identity, wakes/reconciles affected CCD bodies and does not mutate initial settings.
          */
         [[nodiscard]] Result<PhysicsCommandAdmission> QueueStructuralCommand(const PhysicsStructuralCommand &command);
         /** @brief Reads the last applied policy for a resident scene body on the owner thread.
@@ -333,6 +366,13 @@ namespace Horo::Physics {
          * Work is bounded by resident scene bodies and performs no successful-path allocation.
          */
         [[nodiscard]] Result<PhysicsActivationObservation> ReadSceneActivation() const;
+
+        /** @brief Copy effective CCD policy independently of immutable initial settings.
+         * @return Current policy/revision or typed affinity, lifecycle or absent-solver failure.
+         * @pre Owner thread between joined fixed ticks; no native state is borrowed.
+         * @post A retained copy is inert after later commands, reset or shutdown.
+         */
+        [[nodiscard]] Result<PhysicsContinuousCollisionObservation> ReadContinuousCollision() const;
 
         /**
          * @brief Admits one explicit analytic query fixture on the owner thread.

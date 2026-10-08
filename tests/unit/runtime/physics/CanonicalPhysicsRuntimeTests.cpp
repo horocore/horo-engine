@@ -67,7 +67,55 @@ namespace Horo::Physics::Detail {
                     .trigger = false,
                     .subshape = PhysicsShapeSubresourceId::FromValue(11)};
         }
+
+        PhysicsWorldSimulationBinding ContactSimulation() {
+            const auto fixture = ContactFixture({});
+            ProjectCollisionSchema
+                authored{.defaultProfile = fixture.profile,
+                         .layers = {{fixture.layer}},
+                         .pairs = {{fixture.layer, fixture.layer, SimulationPairResponse::Block}},
+                         .queryChannels = {{fixture.channel}},
+                         .profiles = {
+                             {fixture.profile, fixture.layer, true, true, true, {{fixture.channel, CollisionQueryResponse::Block}}}}};
+            auto normalized = NormalizedCollisionSchema::Create(authored);
+            REQUIRE(normalized.HasValue());
+            return {std::make_shared<const NormalizedCollisionSchema>(std::move(normalized).Value()), 1};
+        }
+
+        void RequireContactAuthority(const CanonicalWorld &canonical) {
+            const auto metadata = ContactFixture({});
+            REQUIRE(canonical.simulation.Profile(metadata.profile) != nullptr);
+            REQUIRE(canonical.simulation.Channel(metadata.channel) != nullptr);
+            REQUIRE(canonical.simulation.QueryResponse(metadata.profile, metadata.channel) == CollisionQueryResponse::Block);
+            REQUIRE(canonical.simulation.SchemaGeneration() == 1);
+            REQUIRE(canonical.simulation.Layer(0) == CollisionLayerId{});
+            REQUIRE_FALSE(canonical.simulation.QueryResponse(CollisionProfileId{}, metadata.channel).has_value());
+        }
+
+        void RequireResidentBody(CanonicalWorld &canonical, const PhysicsWorldId owner, const JPH::BodyID native,
+                                 const BodyHandle expected) {
+            const auto access = MakeQueryAccess(canonical);
+            const auto *resident = ResolveCanonicalSceneBody(access, owner, native);
+            REQUIRE(resident != nullptr);
+            REQUIRE(resident->handle == expected);
+            REQUIRE(ResolveCanonicalSceneBody(access, PhysicsWorldId::Create(999).Value(), native) == nullptr);
+        }
+
     }  // namespace
+
+    TEST_CASE("Canonical native planes preserve the Horo signed-distance equation", "[physics][native][shape]") {
+        const auto created = CreateCanonicalRuntime();
+        REQUIRE(created.HasValue());
+        const RuntimeOwner runtime{created.Value()};
+        for (const float distance : {-1.7F, 1.7F}) {
+            const PhysicsStaticPlaneShape descriptor{{0, -1, 0}, distance};
+            const auto shape = CreateNativeShape(descriptor);
+            REQUIRE(shape.HasValue());
+            const auto &plane = static_cast<const JPH::PlaneShape *>(shape.Value().GetPtr())->GetPlane();
+            REQUIRE(plane.SignedDistance(JPH::Vec3{0, -distance, 0}) == 0.0F);
+            REQUIRE(plane.GetConstant() == -distance);
+        }
+    }
 
     TEST_CASE("Canonical runtime and world lifecycle retain no partial native ownership", "[physics][native][lifecycle]") {
         SECTION("process initialization rolls back every completed registration stage") {
@@ -365,20 +413,75 @@ namespace Horo::Physics::Detail {
 #endif
     }
 
+    TEST_CASE("Scene and query resources never alias and resident indices retire before native reuse", "[physics][native][identity]") {
+        const RuntimeOwner runtime{CreateCanonicalRuntime().Value()};
+        const WorldOwner world{
+            CreateCanonicalWorld(runtime.handle, Test::SmallWorldSettings(), CanonicalFailurePoint::None, ContactSimulation()).Value()};
+        const auto owner = PhysicsWorldId::Create(603).Value();
+        const auto shape = CreateCanonicalSceneShape(world.handle, owner, PhysicsBoxShape{});
+        REQUIRE(shape.HasValue());
+        PhysicsBodyDescriptor descriptor{.shape = shape.Value()};
+        const auto first =
+            CreateCanonicalSceneBody(world.handle, owner,
+                                     {.body = descriptor, .collision = PhysicsSceneCollisionBinding{ContactFixture({}).profile}});
+        REQUIRE(first.HasValue());
+        descriptor.pose.translation.x = 2.0F;
+        const auto second =
+            CreateCanonicalSceneBody(world.handle, owner,
+                                     {.body = descriptor, .collision = PhysicsSceneCollisionBinding{ContactFixture({}).profile}});
+        REQUIRE(second.HasValue());
+        const auto fixture = CreateCanonicalQueryFixture(world.handle, owner, ContactFixture({0, 0, 4}));
+        REQUIRE(fixture.HasValue());
+        REQUIRE(fixture.Value().body != first.Value());
+        REQUIRE(fixture.Value().body != second.Value());
+        REQUIRE(fixture.Value().shape != shape.Value());
+        auto &canonical = *static_cast<CanonicalWorld *>(world.handle.value);
+        RequireContactAuthority(canonical);
+        const auto retiredNative = canonical.scene.bodies.front().nativeBody;
+        const auto remainingNative = canonical.scene.bodies.back().nativeBody;
+        REQUIRE(canonical.scene.nativeBodyIndices[retiredNative.GetIndex()] == 0);
+        REQUIRE(canonical.scene.nativeBodyIndices[remainingNative.GetIndex()] == 1);
+        RequireResidentBody(canonical, owner, remainingNative, second.Value());
+        QuarantineCanonicalSceneBody(world.handle, first.Value(), {});
+        REQUIRE(canonical.scene.nativeBodyIndices[retiredNative.GetIndex()] == std::numeric_limits<std::size_t>::max());
+        REQUIRE(canonical.scene.nativeBodyIndices[remainingNative.GetIndex()] == 0);
+        REQUIRE(canonical.scene.bodies.front().handle == second.Value());
+        {
+            const auto access = MakeQueryAccess(canonical);
+            REQUIRE(ResolveCanonicalSceneBody(access, owner, retiredNative) == nullptr);
+            RequireResidentBody(canonical, owner, remainingNative, second.Value());
+        }
+        const auto replacement =
+            CreateCanonicalSceneBody(world.handle, owner,
+                                     {.body = descriptor, .collision = PhysicsSceneCollisionBinding{ContactFixture({}).profile}});
+        REQUIRE(replacement.HasValue());
+        REQUIRE(replacement.Value() != first.Value());
+        REQUIRE(replacement.Value().slot.index > fixture.Value().body.slot.index);
+        REQUIRE(ReadCanonicalSceneBodyReconciliation(world.handle, owner, first.Value()).HasError());
+        REQUIRE(DestroyCanonicalQueryFixture(world.handle, fixture.Value()).HasValue());
+    }
+
     TEST_CASE("Canonical joint collision suppression lasts until the final pair joint retires", "[physics][native][constraint]") {
         const RuntimeOwner runtime{CreateCanonicalRuntime().Value()};
-        const WorldOwner world{CreateCanonicalWorld(runtime.handle, Test::SmallWorldSettings()).Value()};
+        const WorldOwner world{
+            CreateCanonicalWorld(runtime.handle, Test::SmallWorldSettings(), CanonicalFailurePoint::None, ContactSimulation()).Value()};
         const auto owner = PhysicsWorldId::Create(601).Value();
         const ShapeHandle shape = CreateCanonicalSceneShape(world.handle, owner, PhysicsBoxShape{}).Value();
         PhysicsBodyDescriptor body;
         body.shape = shape;
         body.motion = PhysicsMotionType::Static;
         body.mass = PhysicsNoMass{};
-        const BodyHandle first = CreateCanonicalSceneBody(world.handle, owner, {body, false}).Value();
+        const BodyHandle first =
+            CreateCanonicalSceneBody(world.handle, owner,
+                                     {.body = body, .collision = PhysicsSceneCollisionBinding{ContactFixture({}).profile}})
+                .Value();
         body.pose.translation = {2.0F, 0.0F, 0.0F};
         body.motion = PhysicsMotionType::Dynamic;
         body.mass = PhysicsMass{1.0F};
-        const BodyHandle second = CreateCanonicalSceneBody(world.handle, owner, {body, false}).Value();
+        const BodyHandle second =
+            CreateCanonicalSceneBody(world.handle, owner,
+                                     {.body = body, .collision = PhysicsSceneCollisionBinding{ContactFixture({}).profile}})
+                .Value();
         auto &canonical = *static_cast<CanonicalWorld *>(world.handle.value);
         const auto contactPolicy = [&] {
             JPH::BodyLockRead firstLock(canonical.native.system->GetBodyLockInterfaceNoLock(), canonical.scene.bodies[0].nativeBody);

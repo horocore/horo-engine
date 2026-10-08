@@ -28,6 +28,19 @@ namespace Horo::Physics::Detail {
             }
         }
 
+        /** @brief Reject unknown native quality instead of presenting a fallback CCD mode. */
+        [[nodiscard]] Result<PhysicsDefaultMotionQuality> ReadNativeMotionQuality(const JPH::Body &native) {
+            if (native.IsStatic())
+                return Result<PhysicsDefaultMotionQuality>::Success(PhysicsDefaultMotionQuality::Discrete);
+            switch (native.GetMotionProperties()->GetMotionQuality()) {
+                case JPH::EMotionQuality::Discrete:
+                    return Result<PhysicsDefaultMotionQuality>::Success(PhysicsDefaultMotionQuality::Discrete);
+                case JPH::EMotionQuality::LinearCast:
+                    return Result<PhysicsDefaultMotionQuality>::Success(PhysicsDefaultMotionQuality::LinearCast);
+            }
+            return Result<PhysicsDefaultMotionQuality>::Failure(MakeError(PhysicsErrors::SolverFatalCondition));
+        }
+
         /** @brief Rejects non-finite body evidence before returning an owned snapshot. */
         [[nodiscard]] bool FiniteReconciliation(const PhysicsBodyReconciliation &value) noexcept {
             const std::array finite{Math::IsFinite(value.state.pose.translation), Math::IsFinite(value.state.pose.rotation),
@@ -82,6 +95,9 @@ namespace Horo::Physics::Detail {
         const auto mass = ReadNativeMass(native, motion.Value());
         if (mass.HasError())
             return Result<PhysicsBodyReconciliation>::Failure(mass.ErrorValue());
+        const auto quality = ReadNativeMotionQuality(native);
+        if (quality.HasError())
+            return Result<PhysicsBodyReconciliation>::Failure(quality.ErrorValue());
         PhysicsBodyReconciliation result{.policy = record->policy,
                                          .state = {.body = body,
                                                    .pose = {.translation = {position.GetX(), position.GetY(), position.GetZ()},
@@ -93,7 +109,8 @@ namespace Horo::Physics::Detail {
                                          .observedMotion = motion.Value(),
                                          .observedShape = shape->handle,
                                          .observedMassKilograms = mass.Value(),
-                                         .observedBoundsExtent = {boundsExtent.GetX(), boundsExtent.GetY(), boundsExtent.GetZ()}};
+                                         .observedBoundsExtent = {boundsExtent.GetX(), boundsExtent.GetY(), boundsExtent.GetZ()},
+                                         .observedMotionQuality = quality.Value()};
         if (!FiniteReconciliation(result))
             return Result<PhysicsBodyReconciliation>::Failure(MakeError(PhysicsErrors::BodyStateNonFinite));
         return Result<PhysicsBodyReconciliation>::Success(std::move(result));

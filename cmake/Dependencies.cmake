@@ -295,6 +295,9 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(harfbuzz)
 
+include(HoroUnicodeDependency)
+horo_add_unicode_dependency()
+
 # The extension marketplace is part of every editor distribution. Build its
 # HTTPS stack from pinned sources so users do not need a separately installed
 # libcurl SDK. Prefer the native Windows trust store through Schannel; use the

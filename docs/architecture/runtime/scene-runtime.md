@@ -1,5 +1,17 @@
 # Scene Runtime Architecture
 
+`QueueTrackedStructuralCommands` provides a retainable immutable receipt for one
+complete Scene transaction. Prefab Runtime uses this dedicated evidence without
+consuming global host operation notifications. Receipts preserve the original
+pre-publication error or the committed group identities through service shutdown.
+Post-publication hook faults remain distinct host errors and do not reverse
+committed topology. `DestroyGroup` validates complete resource-group membership,
+exact generations and cancellation, then retires reverse topology atomically.
+Cook-projected reference interfaces and inherited spawn lineage are immutable
+Scene-owned group metadata; Scene resolves interfaces after complete reservation
+and rechecks external compatibility before aggregate publication. None of these
+contracts adds a dependency from Scene to Prefab or Gameplay Runtime.
+
 ## Purpose
 
 This document defines the runtime scene model, ECS ownership, entity and
@@ -166,6 +178,29 @@ successful commit; it owns no provider resources. This seam prepares/replaces on
 cell Scene domain. A host must not use it to replace an unrelated aggregate Scene
 or claim multi-cell merge support. Already published cell eviction and aggregate
 World Streaming activation remain under their existing owner transactions.
+
+### Runtime data-layer membership and filtering
+
+`RuntimeSceneCellLayers` (WST-004.8) transfers one complete cell baseline and owns
+only canonical stable entity/layer edges plus exact layer classification references.
+Membership and manifest flags are source-revisioned cook facts; mounted owner tokens
+and layer states remain runtime input. Encoding validates complete topology,
+canonical references and mandatory count/storage ceilings before transfer.
+
+`FilterRuntimeSceneCellLayers` joins complete target-policy and layer-state snapshots.
+Unconditional entities survive; a multi-layer entity survives exactly once when any
+member layer is target-included and Activated. Other states cannot activate content.
+Selection preserves authored order and passes the existing Scene builder, so removing
+a required parent/reference fails rather than rewriting it. Complete baseline asset
+requirements remain conservative, including opaque gameplay requirements.
+
+`QueueRuntimeSceneCellLayers` uses the existing detached Scene preparation path and
+retains an owned copy of exact content, owner, policy and every layer-state fence.
+The shared explicit host authority checks all evidence plus current cell fencing and
+provider/reservation readiness at admission and safe-point commit. Replacement,
+failure, cancellation, unload and shutdown keep ordinary Scene transaction semantics.
+Neither encoding nor filtering owns live state or changes ADR-023 wire formats.
+See [migration details](../../guides/runtime-scene-cell-layers-migration.md).
 
 ## Independent Cell Baseline Ownership (WST-005.6)
 

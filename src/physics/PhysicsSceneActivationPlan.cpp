@@ -295,6 +295,7 @@ namespace Horo::Physics::Detail {
                                                                     .collider = collider.collider,
                                                                     .geometry = std::move(resolvedShape.geometry),
                                                                     .localPose = resolvedShape.localPose,
+                                                                    .profile = collider.collisionProfile,
                                                                     .sensor = collider.sensor});
         }
 
@@ -325,6 +326,10 @@ namespace Horo::Physics::Detail {
             if (!body->colliders.empty() && body->sensor != planned.Value().sensor)
                 return ContextFailure<void>(PhysicsErrors::OperationUnsupported, "collider", reference.object, collider.id.value,
                                             std::nullopt, "A native scene body cannot mix sensor and solid collider contributors.");
+            if (!body->colliders.empty() && body->colliders.front().profile != planned.Value().profile)
+                return ContextFailure<
+                    void>(PhysicsErrors::OperationUnsupported, "collider", reference.object, collider.id.value, std::nullopt,
+                          "The current native scene body realization requires one exact profile for every collider contributor.");
             body->sensor = planned.Value().sensor;
             body->colliders.emplace_back(std::move(planned).Value());
             return Result<void>::Success();

@@ -62,10 +62,13 @@ namespace Horo::Character {
                 return Result<CharacterOverlapProbeResult>::Success({});
             }
 
-            static Result<CharacterSweepProbeResult> Run(void *context, const CharacterSweepProbeRequest &) noexcept {
+            static Result<CharacterSweepProbeResult> Run(void *context, const CharacterSweepProbeRequest &request) noexcept {
                 auto &probe = *static_cast<SweepProbe *>(context);
                 ++probe.calls;
                 CharacterSweepProbeResult result;
+                // Scripted movement evidence does not describe a downward free-flight query.
+                if (request.direction.y < -0.5F)
+                    return Result<CharacterSweepProbeResult>::Success(result);
                 result.hitCount = probe.configuredHitCount;
                 for (std::uint32_t index{}; index < result.hitCount; ++index) {
                     const std::uint32_t source = probe.reverse ? result.hitCount - index - 1 : index;
@@ -233,7 +236,7 @@ namespace Horo::Character {
             REQUIRE(snapshot.Value().movement.contacts[0].material.assetGeneration == defaultMaterial.assetGeneration);
             REQUIRE(snapshot.Value().movement.contacts[0].material.slot == defaultMaterial.slot);
             REQUIRE(spawned.world->TickStatistics().retainedContacts == 1);
-            REQUIRE(probe.calls == 2);
+            REQUIRE(probe.calls == 4);
         }
 
         TEST_CASE("Character capsule slide reduction is stable when simultaneous hits change callback order",

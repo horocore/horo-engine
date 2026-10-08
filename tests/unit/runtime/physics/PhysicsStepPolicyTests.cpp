@@ -50,7 +50,7 @@ namespace Horo::Physics {
 
     TEST_CASE("Step policy rejects unadmitted overrides without modifying them", "[physics][settings]") {
         using Mutation = void (*)(PhysicsStepPolicy &);
-        const std::array<Mutation, 7> mutations{
+        const std::array<Mutation, 6> mutations{
             [](auto &p) {
             p.substepsPerTick = 2;
         },
@@ -68,9 +68,6 @@ namespace Horo::Physics {
         },
             [](auto &p) {
             p.sleepingEnabled = false;
-        },
-            [](auto &p) {
-            p.defaultMotionQuality = PhysicsDefaultMotionQuality::LinearCast;
         },
         };
         for (const auto mutate : mutations) {

@@ -101,6 +101,20 @@ namespace Horo::Prefab {
         std::shared_ptr<Detail::PrefabTemplateRequest> request_;
     };
 
+    /** @brief Owned prepared-group metadata and publication options, consumed synchronously on the Scene owner lane. */
+    struct PrefabPreparedGroupOptions final {
+        std::vector<std::vector<Runtime::GroupPhysicsBodyReference>>
+            physicsReferences;                        /**< Dense body fixups resolved after reservation. */
+        std::optional<Math::Transform> rootPlacement; /**< Replaces only the root local transform. */
+        std::optional<Runtime::EntityRef> parent;     /**< Existing generation-qualified parent, revalidated at commit. */
+        std::shared_ptr<const Runtime::SceneStructuralReceipt>
+            *receipt{};                      /**< Optional borrowed output, written only on successful submission. */
+        CancellationToken scopeCancellation; /**< Module revocation sampled again at publication. */
+        std::vector<std::vector<Runtime::RuntimeGroupMemberIdentity>> members; /**< Complete occurrence metadata in dense entity order. */
+        std::vector<std::vector<Runtime::RuntimeGroupReference>> references;   /**< Typed reference interfaces per entity. */
+        std::vector<Assets::AssetId> spawnLineage; /**< Inherited creation lineage, bounded to 16 unique assets. */
+    };
+
     /**
      * @brief Owner-lane runtime prefab preparation over host-composed Assets and Scene services.
      * @details The borrowed services outlive this provider. Loads capture one registry snapshot and active scene.
@@ -144,21 +158,26 @@ namespace Horo::Prefab {
          * @return Success or typed stale, foreign-provider or scene/shutdown failure. No scene mutation occurs.
          */
         [[nodiscard]] Result<void> ValidateAdmission(const PrefabTemplateLease &lease) const;
+        /** @brief Checks exact host composition authority, including distinct services with equal numeric scene IDs.
+         * @param scenes Host-selected Scene service.
+         * @return Whether this provider borrows that exact service.
+         */
+        [[nodiscard]] bool UsesSceneService(const Runtime::RuntimeSceneService &scenes) const noexcept;
         /** @brief Hands a complete projected group to Scene's bounded all-or-nothing structural transaction.
          * @param lease Exact verified template/resource closure from this provider.
          * @param components Complete schema-projected runtime component sets, one per dense template entity.
          * @param cancellation Owning spawn operation's cooperative cancellation ancestry.
-         * @param physicsReferences Typed body-reference fixups in dense entity order, resolved by Scene after reservation.
+         * @param options Owned fixups, placement, cancellation scope and synchronous receipt output.
          * @return Deferred Scene tokens or rejection without queued work. Scene repeats generation/catalog/cancellation
          * checks at commit and retains real artifact allocations until the last group entity is destroyed.
          * @details The caller owns component schema projection and typed reference/binding initialization. This method
          * preserves cooked topology/transforms and never fabricates a missing projection or runs behavior hooks.
          * Public gameplay requests/placement/initialization parameter validation remain owned by PFB-004.3.
          */
-        [[nodiscard]] Result<std::vector<Runtime::DeferredEntity>> QueuePreparedGroup(
-            const PrefabTemplateLease &lease, std::vector<Runtime::RuntimeComponentSet> components,
-            const CancellationToken &cancellation = {},
-            std::vector<std::vector<Runtime::GroupPhysicsBodyReference>> physicsReferences = {});
+        [[nodiscard]] Result<std::vector<Runtime::DeferredEntity>> QueuePreparedGroup(const PrefabTemplateLease &lease,
+                                                                                      std::vector<Runtime::RuntimeComponentSet> components,
+                                                                                      const CancellationToken &cancellation = {},
+                                                                                      PrefabPreparedGroupOptions options = {});
         /** @brief Drops resident lookup pins for one asset; existing leases keep their immutable storage. @param asset Exact asset. */
         void Evict(Assets::AssetId asset) noexcept;
         /** @brief Reports canonical byte ownership, including evicted externally held allocations. @return Accounting snapshot. */

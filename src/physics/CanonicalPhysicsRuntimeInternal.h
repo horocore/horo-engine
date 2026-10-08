@@ -3,6 +3,7 @@
 #include "CanonicalPhysicsRuntime.h"
 #include "CanonicalPhysicsRuntimeDiagnostics.h"
 #include "CanonicalPhysicsRuntimeQuery.h"
+#include "Horo/Physics/PhysicsCollisionSchema.h"
 #include "Horo/Physics/PhysicsErrors.h"
 
 #include <Jolt/Jolt.h>
@@ -52,6 +53,21 @@ namespace Horo::Physics::Detail {
      */
     [[nodiscard]] Result<void> ApplyCanonicalMassPolicy(JPH::BodyCreationSettings &settings, const PhysicsMassPolicy &mass);
 
+    /**
+     * @brief Reads the layer admission flag for a previously validated motion type.
+     * @param layer Immutable admitted collision layer.
+     * @param motion Validated body motion policy.
+     * @return Whether the layer permits that motion.
+     */
+    [[nodiscard]] constexpr bool CanonicalLayerAdmitsMotion(const CollisionLayerDefinition &layer,
+                                                            const PhysicsMotionType motion) noexcept {
+        if (motion == PhysicsMotionType::Static)
+            return layer.admitsStatic;
+        if (motion == PhysicsMotionType::Kinematic)
+            return layer.admitsKinematic;
+        return layer.admitsDynamic;
+    }
+
     /** @brief Process-owned Jolt registration and resource accounting. */
     struct CanonicalRuntime final {
         CanonicalRuntime() = default;
@@ -68,8 +84,64 @@ namespace Horo::Physics::Detail {
         std::unique_ptr<JPH::Factory> factory;
     };
 
-    /** @brief Temporary closed filters until the collision-profile contract installs a validated table. */
-    class ClosedBroadPhaseLayers final : public JPH::BroadPhaseLayerInterface {
+    /** @brief Load-time compiled immutable layer rows; row zero always rejects simulation. */
+    struct CanonicalSimulationTable final {
+        static constexpr std::size_t RowCount = 65;
+        PhysicsWorldSimulationBinding binding;
+        std::array<CollisionLayerDefinition, RowCount - 1> layers;
+        std::size_t layerCount{};
+        std::array<SimulationPairResponse, RowCount * RowCount> responses{};
+
+        /** @brief Borrows the exact normalized profile during the joined world operation; never substitutes the default. */
+        [[nodiscard]] const CollisionProfileDefinition *Profile(const CollisionProfileId id) const noexcept {
+            if (!binding.schema)
+                return nullptr;
+            const auto profiles = binding.schema->Profiles();
+            const auto found = std::ranges::lower_bound(profiles, id, {}, &CollisionProfileDefinition::id);
+            return found != profiles.end() && found->id == id ? std::to_address(found) : nullptr;
+        }
+
+        /** @brief Borrows an exact enabled query channel; missing or disabled identity remains unavailable. */
+        [[nodiscard]] const CollisionQueryChannelDefinition *Channel(const PhysicsQueryChannelId id) const noexcept {
+            if (!binding.schema)
+                return nullptr;
+            const auto channels = binding.schema->QueryChannels();
+            const auto found = std::ranges::lower_bound(channels, id, {}, &CollisionQueryChannelDefinition::id);
+            return found != channels.end() && found->id == id && found->enabled ? std::to_address(found) : nullptr;
+        }
+
+        /** @brief Returns copied query response, or absence for unknown profile/channel; disabled querying is closed. */
+        [[nodiscard]] std::optional<CollisionQueryResponse> QueryResponse(const CollisionProfileId id,
+                                                                          const PhysicsQueryChannelId channel) const noexcept {
+            const auto *profile = Profile(id);
+            if (!profile || !Channel(channel))
+                return std::nullopt;
+            if (!profile->queryEnabled)
+                return CollisionQueryResponse::Ignore;
+            const auto found = std::ranges::lower_bound(profile->queryResponses, channel, {}, &CollisionProfileQueryResponse::channel);
+            return found != profile->queryResponses.end() && found->channel == channel
+                       ? std::optional<CollisionQueryResponse>{found->response}
+                       : std::nullopt;
+        }
+
+        /** @brief Translates only a live compiled row to project identity; row zero is not an authored layer. */
+        [[nodiscard]] CollisionLayerId Layer(const JPH::ObjectLayer row) const noexcept {
+            return row != 0 && row <= layerCount ? layers[row - 1].id : CollisionLayerId{};
+        }
+
+        /** @brief Authoritative captured filter generation, independent of query fixture inventory revisions. */
+        [[nodiscard]] std::uint64_t SchemaGeneration() const noexcept {
+            return binding.generation;
+        }
+
+        [[nodiscard]] SimulationPairResponse Response(const JPH::ObjectLayer first, const JPH::ObjectLayer second) const noexcept {
+            if (first == 0 || second == 0 || first >= RowCount || second >= RowCount)
+                return SimulationPairResponse::Ignore;
+            return responses[static_cast<std::size_t>(first) * RowCount + second];
+        }
+    };
+
+    class CanonicalBroadPhaseLayers final : public JPH::BroadPhaseLayerInterface {
     public:
         [[nodiscard]] JPH::uint GetNumBroadPhaseLayers() const override {
             return 1;
@@ -80,18 +152,31 @@ namespace Horo::Physics::Detail {
         }
     };
 
-    class ClosedObjectVsBroadPhase final : public JPH::ObjectVsBroadPhaseLayerFilter {
+    class CanonicalObjectVsBroadPhase final : public JPH::ObjectVsBroadPhaseLayerFilter {
     public:
-        [[nodiscard]] bool ShouldCollide(JPH::ObjectLayer, JPH::BroadPhaseLayer) const override {
+        explicit CanonicalObjectVsBroadPhase(const CanonicalSimulationTable &table) noexcept : table_(table) {}
+
+        [[nodiscard]] bool ShouldCollide(const JPH::ObjectLayer layer, JPH::BroadPhaseLayer) const override {
+            for (std::size_t other = 1; other < CanonicalSimulationTable::RowCount; ++other)
+                if (table_.Response(layer, static_cast<JPH::ObjectLayer>(other)) != SimulationPairResponse::Ignore)
+                    return true;
             return false;
         }
+
+    private:
+        const CanonicalSimulationTable &table_;
     };
 
-    class ClosedObjectPairs final : public JPH::ObjectLayerPairFilter {
+    class CanonicalObjectPairs final : public JPH::ObjectLayerPairFilter {
     public:
-        [[nodiscard]] bool ShouldCollide(JPH::ObjectLayer, JPH::ObjectLayer) const override {
-            return false;
+        explicit CanonicalObjectPairs(const CanonicalSimulationTable &table) noexcept : table_(table) {}
+
+        [[nodiscard]] bool ShouldCollide(const JPH::ObjectLayer first, const JPH::ObjectLayer second) const override {
+            return table_.Response(first, second) != SimulationPairResponse::Ignore;
         }
+
+    private:
+        const CanonicalSimulationTable &table_;
     };
 
     struct CanonicalWorld;
@@ -127,8 +212,10 @@ namespace Horo::Physics::Detail {
         JPH::BodyID nativeBody;
         PhysicsPose pose;
         PhysicsBodyDescriptor policy;
+        bool sensor{};
         bool motionStorageReserved{};
         std::uint64_t sceneEntity{};
+        std::optional<PhysicsSceneCollisionBinding> collision;
         std::optional<float> injectedStateForTesting;
         std::uint8_t injectedComponentForTesting{};
         bool injectPostStepForTesting{true};
@@ -165,17 +252,18 @@ namespace Horo::Physics::Detail {
     struct CanonicalWorldSceneState final {
         CanonicalWorldSceneState(const std::uint32_t maximumBodies, const std::uint32_t maximumShapes,
                                  const std::uint32_t maximumConstraints)
-            : maximumShapes(maximumShapes), maximumBodies(maximumBodies), maximumConstraints(maximumConstraints) {}
+            : maximumShapes(maximumShapes), maximumBodies(maximumBodies), maximumConstraints(maximumConstraints),
+              nativeBodyIndices(maximumBodies, std::numeric_limits<std::size_t>::max()) {}
 
         std::uint32_t maximumShapes{};
         std::uint32_t maximumBodies{};
         std::uint32_t maximumConstraints{};
         std::vector<CanonicalSceneShapeRecord> shapes;
         std::vector<CanonicalSceneBodyRecord> bodies;
+        std::vector<std::size_t> nativeBodyIndices;
         std::vector<CanonicalSceneConstraintRecord> constraints;
         std::vector<std::uint64_t> disabledJointCollisionPairs;
-        std::uint32_t nextShapeSlot{};
-        std::uint32_t nextBodySlot{};
+
         std::uint32_t nextConstraintSlot{};
     };
 
@@ -189,7 +277,6 @@ namespace Horo::Physics::Detail {
         std::uint32_t maximumFixtures{};
         std::vector<CanonicalQueryFixtureRecord> fixtures;
         std::vector<std::size_t> nativeFixtureIndices;
-        std::uint32_t nextFixtureSlot{};
         std::uint32_t nextFixtureGeneration{1};
         std::uint64_t querySchemaGeneration{1};
         CanonicalQueryStorage storage;
@@ -204,17 +291,32 @@ namespace Horo::Physics::Detail {
         ~CanonicalWorld();
 
         CanonicalRuntime &owner;
-        ClosedBroadPhaseLayers broadPhaseLayers;
-        ClosedObjectVsBroadPhase objectVsBroadPhase;
-        ClosedObjectPairs objectPairs;
+        CanonicalSimulationTable simulation;
+        CanonicalBroadPhaseLayers broadPhaseLayers;
+        CanonicalObjectVsBroadPhase objectVsBroadPhase;
+        CanonicalObjectPairs objectPairs;
         CanonicalWorldNativeState native;
         CanonicalContactListener contactListener;
         DiagnosticInbox diagnostics;
         std::atomic<ContactCaptureRoute *> contactRoute{};
+        std::uint32_t nextResourceSlot{}; /**< Never reused across scene shapes, scene bodies, or query fixtures. */
         CanonicalWorldSceneState scene;
+        PhysicsContinuousCollisionObservation continuousCollision;
         std::weak_ptr<CanonicalSceneBodyBatchState> pendingBodyBatch;
         CanonicalWorldQueryState query;
     };
+
+    /** @brief Rebuilds bounded resident indices at a joined publication boundary, never in a query callback. */
+    inline void RebuildCanonicalSceneBodyIndices(CanonicalWorld &world) noexcept {
+        std::ranges::fill(world.scene.nativeBodyIndices, std::numeric_limits<std::size_t>::max());
+        for (std::size_t index = 0; index < world.scene.bodies.size(); ++index)
+            world.scene.nativeBodyIndices[world.scene.bodies[index].nativeBody.GetIndex()] = index;
+    }
+
+    /** @brief Resolves explicit or inherited quality only after proving actual shape/motion/sensor eligibility. */
+    [[nodiscard]] Result<JPH::EMotionQuality> ResolveCanonicalMotionQuality(const PhysicsContinuousCollisionPolicy &policy,
+                                                                            const PhysicsBodyDescriptor &body, const JPH::Shape &shape,
+                                                                            bool sensor);
 
     /** @brief Limits native contact routing to one joined fixed step and clears borrowed state on exit. */
     class ContactCaptureRoute final {
@@ -265,7 +367,8 @@ namespace Horo::Physics::Detail {
                 created = JPH::CapsuleShapeSettings(shape.cylindricalHalfHeightMeters, shape.radiusMeters).Create();
             else {
                 static_assert(std::is_same_v<ShapeType, PhysicsStaticPlaneShape>);
-                created = JPH::PlaneShapeSettings(JPH::Plane(ToNative(shape.normal), shape.signedDistanceMeters)).Create();
+                // Horo stores dot(normal, point) = distance; Jolt stores dot(normal, point) + constant = 0.
+                created = JPH::PlaneShapeSettings(JPH::Plane(ToNative(shape.normal), -shape.signedDistanceMeters)).Create();
             }
         }, descriptor);
         if (created.HasError())

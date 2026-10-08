@@ -16,7 +16,7 @@ target_compile_features(HoroNetworkProductHost PUBLIC cxx_std_20)
 target_include_directories(HoroNetworkProductHost PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/common)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime HoroEngine::RuntimeScene
     HoroEngine::Physics HoroEngine::Runtime HoroEngine::GameplayModuleHost HoroEngine::GameplayLua
-    HoroEngine::GameplayPhysicsIntegration HoroEngine::NetworkDebuggerApplication)
+    HoroEngine::GameplayPhysicsIntegration HoroEngine::PrefabRuntime HoroEngine::NetworkDebuggerApplication)
 
 # The terminal/headless composition remains available without GUI or GPU targets.
 add_executable(horo-engine

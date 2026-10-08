@@ -71,7 +71,8 @@ namespace Horo::Character {
         [[nodiscard]] Result<void> ValidateDescriptorPolicy(const CharacterControllerDescriptor &descriptor) {
             if (!std::isfinite(descriptor.skinWidthMeters) || descriptor.skinWidthMeters <= 0 ||
                 !IsFiniteNonNegative(descriptor.minimumMoveDistanceMeters) || !IsFiniteNonNegative(descriptor.maximumStepHeightMeters) ||
-                !IsFiniteNonNegative(descriptor.maximumSlopeDegrees) || descriptor.maximumSlopeDegrees > 90)
+                !IsFiniteNonNegative(descriptor.maximumSlopeDegrees) || descriptor.maximumSlopeDegrees > 90 ||
+                !IsFiniteNonNegative(descriptor.jumpSpeedMetersPerSecond))
                 return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
             if (descriptor.steepSlopePolicy != CharacterSteepSlopePolicy::Stop &&
                 descriptor.steepSlopePolicy != CharacterSteepSlopePolicy::Slide)
@@ -133,6 +134,10 @@ namespace Horo::Character {
                 !IsUnit(result.up) || !std::isfinite(result.groundSlopeDegrees) || result.groundSlopeDegrees < 0 ||
                 result.groundSlopeDegrees > 180)
                 return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid, "Movement result metadata is invalid."));
+            using enum CharacterGroundTransition;
+            if ((result.groundTransition != None && result.groundTransition != LeftGround && result.groundTransition != Landed) ||
+                (result.groundTransition == LeftGround && result.grounded) || (result.groundTransition == Landed && !result.grounded))
+                return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
             if (result.shapeChange.has_value()) {
                 using enum CharacterShapeChangeStatus;
                 const auto &shape = *result.shapeChange;

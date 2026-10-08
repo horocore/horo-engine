@@ -621,6 +621,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiTextLayoutOutput.cpp
         runtime/ui/UiTextLayoutPlanning.cpp
         runtime/ui/UiTextLayoutPublication.cpp
+        runtime/ui/UiTextLayoutShaped.cpp
         runtime/ui/UiTextLayoutTypes.cpp
         runtime/ui/UiGlyphAtlas.cpp
         runtime/ui/UiGlyphAtlasStorage.cpp
@@ -665,6 +666,8 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiTextErrors.cpp
         runtime/ui/UiTextShape.cpp
         runtime/ui/UiTextShaper.cpp
+        runtime/ui/UiTextSourceAnalysis.cpp
+        runtime/ui/UiTextUnicode.cpp
 )
 add_library(HoroEngine::RuntimeUi ALIAS HoroRuntimeUi)
 add_library(HoroUiAnimationRuntimeIntegration STATIC
@@ -688,7 +691,7 @@ target_link_libraries(HoroUiAnimationIntegrationInternal INTERFACE HoroEngine::R
 target_compile_features(HoroRuntimeUi PUBLIC cxx_std_20)
 target_include_directories(HoroRuntimeUi PRIVATE ${PROJECT_SOURCE_DIR}/src/foundation/json)
 target_link_libraries(HoroRuntimeUi PUBLIC HoroEngine::Foundation HoroEngine::Assets
-        PRIVATE nlohmann_json::nlohmann_json utf8proc harfbuzz)
+        PRIVATE nlohmann_json::nlohmann_json HoroThirdParty::Unicode)
 target_include_directories(HoroRuntimeUi PRIVATE
         $<TARGET_PROPERTY:HoroRationalDurationInternal,INTERFACE_INCLUDE_DIRECTORIES>)
 add_dependencies(HoroRuntimeUi HoroRationalDurationInternal)
@@ -757,6 +760,7 @@ add_library(HoroRuntimeScene STATIC
         runtime/scene/SaveContentWorld.cpp
         runtime/scene/SaveContentSnapshot.cpp
         runtime/scene/RuntimeScene.cpp
+        runtime/scene/RuntimeSceneCommandApplier.h
         runtime/scene/RuntimeSceneBaseline.cpp
         runtime/scene/RuntimeSceneBaselineCommands.cpp
         runtime/scene/RuntimeSceneView.cpp
@@ -806,6 +810,7 @@ target_link_libraries(HoroNetworkDebuggerApplication PUBLIC HoroEngine::NetworkA
 add_library(HoroGameplayRuntime STATIC
         gameplay/runtime/BehaviorRegistry.cpp
         gameplay/runtime/BehaviorRuntime.cpp
+        gameplay/runtime/BehaviorRuntimeState.h
         gameplay/runtime/SaveGameplayPersistence.cpp
         gameplay/runtime/GameplayRegistrationRuntimeDetail.h
         gameplay/runtime/GameplayRuntimeInvocation.h
@@ -1158,11 +1163,13 @@ add_library(HoroEngine::GameplayPhysicsIntegration ALIAS HoroGameplayPhysicsInte
 target_compile_features(HoroGameplayPhysicsIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroGameplayPhysicsIntegration PUBLIC HoroEngine::GameplayApi HoroEngine::Physics)
 target_link_libraries(HoroGameplayRuntime PRIVATE HoroEngine::GameplayPhysicsIntegration)
+target_link_libraries(HoroGameplayRuntime PRIVATE HoroEngine::PrefabRuntime)
 target_link_libraries(HoroGameplayModuleHost PRIVATE HoroEngine::GameplayPhysicsIntegration)
 target_link_libraries(HoroGameplayLua PRIVATE HoroEngine::GameplayPhysicsIntegration)
 if(HORO_BUILD_PHYSICS_NATIVE)
     target_sources(HoroPhysics PRIVATE
         physics/CanonicalPhysicsRuntime.cpp
+        physics/CanonicalPhysicsRuntimeContinuousCollision.cpp
         physics/CanonicalPhysicsRuntimeBodyCreation.cpp
         physics/CanonicalPhysicsRuntimeSceneBatch.cpp
         physics/CanonicalPhysicsRuntimeDebug.cpp
@@ -1178,6 +1185,7 @@ if(HORO_BUILD_PHYSICS_NATIVE)
     target_link_libraries(HoroPhysics PRIVATE Jolt)
     set_source_files_properties(
         physics/CanonicalPhysicsRuntime.cpp
+        physics/CanonicalPhysicsRuntimeContinuousCollision.cpp
         physics/CanonicalPhysicsRuntimeBodyCreation.cpp
         physics/CanonicalPhysicsRuntimeSceneBatch.cpp
         physics/CanonicalPhysicsRuntimeDebug.cpp
@@ -1617,6 +1625,8 @@ add_library(HoroTerrainCook STATIC
         runtime/terrain/cook/FoliageClusterCook.cpp
         runtime/terrain/cook/FoliageClusterCookOwner.cpp
         runtime/terrain/cook/FoliagePlacementCook.cpp
+        runtime/terrain/cook/TerrainSourceArtifacts.cpp
+        runtime/terrain/cook/TerrainSourceArtifactValidation.cpp
         runtime/terrain/cook/TerrainTileCook.cpp
         runtime/terrain/cook/TerrainTileCookCodec.cpp
         runtime/terrain/cook/TerrainTileCookErrors.cpp
@@ -1781,6 +1791,7 @@ add_library(HoroSceneCellPayload STATIC
         runtime/scene/RuntimeSceneCellAttachment.cpp
         runtime/scene/SceneCellAttachments.cpp
         runtime/scene/RuntimeSceneCellPayload.cpp
+        runtime/scene/RuntimeSceneCellLayers.cpp
         runtime/scene/RuntimeSceneCellPayloadErrors.cpp
         runtime/scene/IncrementalSceneCellCook.cpp
 )
@@ -1803,6 +1814,8 @@ target_link_libraries(HoroPrefab PUBLIC HoroEngine::Foundation HoroEngine::Asset
 add_library(HoroPrefabRuntime STATIC
         runtime/prefab/PrefabTemplateProvider.cpp
         runtime/prefab/PrefabTemplateLoading.cpp
+        runtime/prefab/PrefabSpawnService.cpp
+        runtime/prefab/PrefabSpawnState.h
 )
 add_library(HoroEngine::PrefabRuntime ALIAS HoroPrefabRuntime)
 target_compile_features(HoroPrefabRuntime PUBLIC cxx_std_20)

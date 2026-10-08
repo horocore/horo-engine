@@ -1,4 +1,5 @@
 #include "Horo/Runtime/Scene/IncrementalSceneCellCook.h"
+#include "Horo/Runtime/Scene/RuntimeSceneCellLayers.h"
 #include "Horo/Runtime/Scene/RuntimeSceneCellPayload.h"
 #include "Horo/Runtime/Scene/SceneCellAttachments.h"
 
@@ -6,6 +7,8 @@
 static_assert(!std::is_copy_assignable_v<Horo::Runtime::RuntimeSceneCellPayload>);
 static_assert(!std::is_move_assignable_v<Horo::Runtime::RuntimeSceneCellPayload>);
 
+static_assert(!std::is_copy_constructible_v<Horo::Runtime::RuntimeSceneCellLayers>);
+static_assert(!std::is_move_assignable_v<Horo::Runtime::RuntimeSceneCellLayers>);
 static_assert(std::is_copy_constructible_v<Horo::Runtime::SceneCellAttachmentRequest>);
 static_assert(std::is_same_v<decltype(&Horo::Runtime::QueueRuntimeSceneCellAttachment),
                              Horo::Result<void> (*)(Horo::Runtime::RuntimeSceneService &, const Horo::Runtime::RuntimeSceneCellPayload &,

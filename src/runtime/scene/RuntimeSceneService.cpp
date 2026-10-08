@@ -285,6 +285,18 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
+    /** @copydoc RuntimeSceneService::QueueTrackedStructuralCommands */
+    Result<std::shared_ptr<const SceneStructuralReceipt>> RuntimeSceneService::QueueTrackedStructuralCommands(SceneCommandBuffer commands) {
+        using Receipt = std::shared_ptr<const SceneStructuralReceipt>;
+        if (commands.Empty())
+            return Result<Receipt>::Failure(MakeError(SceneErrors::InvalidCandidate));
+        auto receipt = std::make_shared<SceneStructuralReceipt>();
+        if (auto queued = QueueStructuralCommands(std::move(commands)); queued.HasError())
+            return Result<Receipt>::Failure(queued.ErrorValue());
+        structuralReceipt_ = receipt;
+        return Result<Receipt>::Success(std::move(receipt));
+    }
+
     /** @copydoc RuntimeSceneService::CancelPendingBaseline */
     Result<void> RuntimeSceneService::CancelPendingBaseline(const SceneRuntimeId scene, const SceneDefinitionId baseline,
                                                             const SceneBaselineOwnership &ownership) {
@@ -385,6 +397,9 @@ namespace Horo::Runtime {
         if (aggregateRestore_)
             aggregateRestore_->Rollback();
         aggregateRestore_.reset();
+        if (structuralReceipt_)
+            structuralReceipt_->error_ = MakeError(SceneErrors::StaleEntity);
+        structuralReceipt_.reset();
         structuralCommands_.reset();
         structuralResult_.reset();
         operationError_.reset();

@@ -13,9 +13,9 @@ namespace Horo::Physics {
             return std::bit_cast<std::uint32_t>(value == 0 ? 0.0F : value);
         }
 
-        /** @brief Lists every schema-2 field in stable order, independent of C++ structure layout. */
+        /** @brief Lists every schema-3 field in stable order, independent of C++ structure layout. */
         auto SettingsWords(const PhysicsWorldSettingsDescriptor &v) noexcept {
-            return std::array<std::uint64_t, 34>{PhysicsWorldSettingsSchemaVersion,
+            return std::array<std::uint64_t, 36>{PhysicsWorldSettingsSchemaVersion,
                                                  v.world.contractVersion,
                                                  static_cast<std::uint64_t>(v.world.profile),
                                                  FloatWord(v.world.gravity.x),
@@ -33,6 +33,8 @@ namespace Horo::Physics {
                                                  FloatWord(v.step.sleepDelaySeconds),
                                                  v.step.sleepingEnabled,
                                                  static_cast<std::uint64_t>(v.step.defaultMotionQuality),
+                                                 FloatWord(v.step.linearCastThresholdFraction),
+                                                 FloatWord(v.step.linearCastPenetrationFraction),
                                                  v.budgets.maximumShapes,
                                                  v.budgets.maximumContactPairs,
                                                  v.budgets.maximumContactConstraints,

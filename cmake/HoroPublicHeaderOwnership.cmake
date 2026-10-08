@@ -332,6 +332,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiRenderGeometry.h
     Horo/Runtime/Ui/UiPresentationReceipt.h
     Horo/Runtime/Ui/UiTextShaping.h
+    Horo/Runtime/Ui/UiTextUnicode.h
 )
 horo_configure_target_header_boundary(HoroUiTemplateGraph PUBLIC_HEADERS
     Horo/UiTemplates/UiTemplateDependencyGraph.h
@@ -564,6 +565,7 @@ horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
     Horo/Physics/CharacterErrors.h
     Horo/Physics/CharacterWorld.h
     Horo/Physics/CharacterWorldSettings.h
+    Horo/Physics/PhysicsContinuousCollision.h
     Horo/Physics/PhysicsBodyDescriptor.h
     Horo/Physics/PhysicsBodyDynamics.h
     Horo/Physics/PhysicsCapabilities.h
@@ -824,6 +826,7 @@ horo_configure_target_header_boundary(HoroTerrainAuthoring PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroTerrainCook PUBLIC_HEADERS
     Horo/Terrain/FoliageClusterCook.h
     Horo/Terrain/FoliagePlacementCook.h
+    Horo/Terrain/TerrainSourceArtifacts.h
     Horo/Terrain/TerrainTileCook.h
 )
 horo_configure_target_header_boundary(HoroTerrainStreaming PUBLIC_HEADERS
@@ -903,6 +906,7 @@ horo_configure_target_header_boundary(HoroPrefab PUBLIC_HEADERS
 
 horo_configure_target_header_boundary(HoroPrefabRuntime PUBLIC_HEADERS
     Horo/Prefab/PrefabTemplateProvider.h
+    Horo/Prefab/PrefabSpawnService.h
 )
 
 horo_configure_target_header_boundary(HoroPrefabAuthoring PUBLIC_HEADERS
@@ -918,6 +922,7 @@ Horo/Prefab/PrefabDependencyGraph.h
 horo_configure_target_header_boundary(HoroSceneCellPayload PUBLIC_HEADERS
     Horo/Runtime/Scene/SceneCellAttachments.h
     Horo/Runtime/Scene/RuntimeSceneCellPayload.h
+    Horo/Runtime/Scene/RuntimeSceneCellLayers.h
     Horo/Runtime/Scene/IncrementalSceneCellCook.h
 )
 

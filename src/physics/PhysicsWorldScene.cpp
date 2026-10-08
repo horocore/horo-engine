@@ -179,12 +179,17 @@ namespace Horo::Physics {
         }
         if (const auto capacity = impl_->CheckPublicationRevisionCapacity(); capacity.HasError())
             return Result<BodyHandle>::Failure(capacity.ErrorValue());
-        auto created = Detail::CreateCanonicalSceneBody(impl_->native, impl_->identity, descriptor);
-        if (created.HasValue()) {
-            Detail::SetCanonicalSceneEntity(impl_->native, created.Value(), descriptor.sceneEntity);
-            impl_->InvalidateQueryEventPublication();
+        try {
+            auto created = Detail::CreateCanonicalSceneBody(impl_->native, impl_->identity, descriptor);
+            if (created.HasValue()) {
+                Detail::SetCanonicalSceneEntity(impl_->native, created.Value(), descriptor.sceneEntity);
+                impl_->InvalidateQueryEventPublication();
+            }
+            return created;
+        } catch (const std::bad_alloc &) {
+            return Result<BodyHandle>::Failure(
+                MakeError(PhysicsErrors::CapacityExceeded, "Unable to retain bounded scene collider evidence before body publication."));
         }
-        return created;
     }
 
     /** @copydoc PhysicsWorld::CreateSceneConstraint */
@@ -227,6 +232,22 @@ namespace Horo::Physics {
         if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->runtime->state != PhysicsRuntimeState::Ready || impl_->stepping)
             return Result<PhysicsActivationObservation>::Failure(MakeError(PhysicsErrors::InvalidState));
         return Detail::ReadCanonicalSceneActivation(impl_->native, impl_->identity);
+    }
+
+    /** @copydoc PhysicsWorld::ReadContinuousCollision */
+    Result<PhysicsContinuousCollisionObservation> PhysicsWorld::ReadContinuousCollision() const {
+        if (impl_->runtime->ownerThread != std::this_thread::get_id())
+            return Result<PhysicsContinuousCollisionObservation>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (impl_->state == PhysicsWorldState::ActiveNull)
+            return Result<PhysicsContinuousCollisionObservation>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->runtime->state != PhysicsRuntimeState::Ready || impl_->stepping)
+            return Result<PhysicsContinuousCollisionObservation>::Failure(MakeError(PhysicsErrors::InvalidState));
+        auto observed = Detail::ReadCanonicalContinuousCollision(impl_->native);
+        if (observed.HasError())
+            return observed;
+        auto value = std::move(observed).Value();
+        value.world = impl_->identity;
+        return Result<PhysicsContinuousCollisionObservation>::Success(std::move(value));
     }
 
     /** @copydoc PhysicsWorld::ReadSceneJointState */

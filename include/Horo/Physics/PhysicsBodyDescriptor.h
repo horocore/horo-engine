@@ -4,6 +4,7 @@
  * @brief Owned runtime body policy independent of native solver state and authored component identity.
  */
 
+#include "Horo/Physics/PhysicsContinuousCollision.h"
 #include "Horo/Physics/PhysicsIdentity.h"
 #include "Horo/Physics/PhysicsPose.h"
 
@@ -107,6 +108,7 @@ namespace Horo::Physics {
         Math::Vec3 initialLinearVelocity{};
         Math::Vec3 initialAngularVelocity{};
         PhysicsMotionSafety motionSafety;
+        PhysicsBodyContinuousCollision continuousCollision;
     };
 
     /**
@@ -131,6 +133,7 @@ namespace Horo::Physics {
         Math::Vec3 linearVelocity;
         Math::Vec3 angularVelocity;
         PhysicsMotionSafety motionSafety;
+        PhysicsBodyContinuousCollision continuousCollision;
     };
 
     /** @brief Observable body activity; this is state evidence, not a wake/sleep command. */

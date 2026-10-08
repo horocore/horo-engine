@@ -1,12 +1,14 @@
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
 #include "Horo/Assets/AssetProvider.h"
+#include "RuntimeSceneCommandApplier.h"
 #include "RuntimeSceneErrors.h"
 
 #include <algorithm>
 #include <format>
 #include <limits>
 #include <new>
+#include <ranges>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -34,6 +36,7 @@ namespace Horo::Runtime {
             return Result<std::vector<DeferredEntity>>::Failure(
                 MakeError(SceneErrors::StructuralCommitFailed, "Invalid structural group bounds."));
         std::size_t referenceCount{};
+        std::size_t interfaceCount{};
         for (std::size_t index = 0; index < entries.size(); ++index) {
             if (entries[index].parentInGroup.has_value() && (*entries[index].parentInGroup >= index || entries[index].info.parent))
                 return Result<std::vector<DeferredEntity>>::Failure(
@@ -41,6 +44,20 @@ namespace Horo::Runtime {
             if (entries[index].physicsReferences.size() > 4096 - referenceCount)
                 return Result<std::vector<DeferredEntity>>::Failure(MakeError(SceneErrors::InvalidEntity));
             referenceCount += entries[index].physicsReferences.size();
+            if (entries[index].members.size() > 64 || entries[index].references.size() > 256 - interfaceCount)
+                return Result<std::vector<DeferredEntity>>::Failure(MakeError(SceneErrors::InvalidEntity));
+            interfaceCount += entries[index].references.size();
+            if (entries[index].spawnLineage.size() > 16)
+                return Result<std::vector<DeferredEntity>>::Failure(MakeError(SceneErrors::InvalidEntity));
+            if (entries[index].spawnLineage != entries.front().spawnLineage)
+                return Result<std::vector<DeferredEntity>>::Failure(MakeError(SceneErrors::InvalidEntity));
+            for (std::size_t lineage = 0; lineage < entries[index].spawnLineage.size(); ++lineage) {
+                const auto &asset = entries[index].spawnLineage[lineage];
+                if (!asset.IsValid() || std::find(entries[index].spawnLineage.begin(),
+                                                  entries[index].spawnLineage.begin() + static_cast<std::ptrdiff_t>(lineage),
+                                                  asset) != entries[index].spawnLineage.begin() + static_cast<std::ptrdiff_t>(lineage))
+                    return Result<std::vector<DeferredEntity>>::Failure(MakeError(SceneErrors::InvalidEntity));
+            }
         }
         if (std::ranges::any_of(resources, [](const auto &pin) {
             return pin.artifact.Bytes().empty() || !pin.metadata.id.IsValid() || pin.metadata.expectedType.Value().empty();
@@ -60,16 +77,20 @@ namespace Horo::Runtime {
     Result<void> SceneCommandBuffer::ValidateAdmission(SceneRuntimeId scene, Assets::AssetRegistryRevision registry) const {
         for (const auto &command : commands_) {
             const auto valid = std::visit([&]<typename T>(const T &value) -> Result<void> {
-                if constexpr (std::is_same_v<T, CreateGroupCommand> || std::is_same_v<T, AttachBaselineCommand> ||
-                              std::is_same_v<T, DetachBaselineCommand>) {
+                if constexpr (std::is_same_v<T, CreateGroupCommand> || std::is_same_v<T, DestroyGroupCommand> ||
+                              std::is_same_v<T, AttachBaselineCommand> || std::is_same_v<T, DetachBaselineCommand>) {
                     if (value.admission.cancellation.IsCancellationRequested() ||
-                        value.admission.ownerCancellation.IsCancellationRequested())
+                        value.admission.ownerCancellation.IsCancellationRequested() ||
+                        value.admission.scopeCancellation.IsCancellationRequested())
                         return JobCancelled();
                     if (value.admission.scene != scene)
                         return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
-                    if (value.admission.registry != registry)
-                        return Result<void>::Failure(MakeError(SceneErrors::AssetRevisionStale));
-                    if constexpr (!std::is_same_v<T, CreateGroupCommand>)
+                    if constexpr (std::is_same_v<T, CreateGroupCommand> || std::is_same_v<T, AttachBaselineCommand> ||
+                                  std::is_same_v<T, DetachBaselineCommand>) {
+                        if (value.admission.registry != registry)
+                            return Result<void>::Failure(MakeError(SceneErrors::AssetRevisionStale));
+                    }
+                    if constexpr (std::is_same_v<T, AttachBaselineCommand> || std::is_same_v<T, DetachBaselineCommand>)
                         return value.publicationCheck->ValidatePublication();
                 }
                 return Result<void>::Success();
@@ -77,6 +98,20 @@ namespace Horo::Runtime {
             if (valid.HasError())
                 return valid;
         }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc SceneCommandBuffer::DestroyGroup */
+    Result<void> SceneCommandBuffer::DestroyGroup(std::vector<EntityRef> entities, const SceneStructuralAdmission &admission) {
+        if (entities.empty() || entities.size() > 256 || !admission.scene.IsValid())
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+        for (std::size_t index = 0; index < entities.size(); ++index) {
+            if (!entities[index].IsValid() || entities[index].runtime != admission.scene ||
+                std::find(entities.begin(), entities.begin() + static_cast<std::ptrdiff_t>(index), entities[index]) !=
+                    entities.begin() + static_cast<std::ptrdiff_t>(index))
+                return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+        }
+        commands_.emplace_back(DestroyGroupCommand{std::move(entities), admission});
         return Result<void>::Success();
     }
 
@@ -227,6 +262,8 @@ namespace Horo::Runtime {
         slot.components = {};
         slot.baselineOwner.reset();
         slot.groupResources.reset();
+        slot.groupReferences.reset();
+        slot.groupSpawnLineage.reset();
         slot.groupPhysicsReferences.reset();
         if (slot.generation == config_.maximumGeneration)
             slot.retired = true;
@@ -241,263 +278,6 @@ namespace Horo::Runtime {
         return entity.runtime == runtimeId_ && entity.entity.IsValid() && entity.entity.index < storage.slots.size() &&
                storage.slots[entity.entity.index].active && storage.slots[entity.entity.index].generation == entity.entity.generation;
     }
-
-    struct RuntimeScene::CommandApplier {
-        const RuntimeScene &scene;
-        RuntimeSceneStorage &candidate;
-        StructuralCommitResult &result;
-
-        Result<void> operator()(const SceneCommandBuffer::CreateCommand &create) const {
-            const Result<EntityRef> created = scene.CreateEntity(candidate, create.info);
-            if (created.HasError())
-                return Result<void>::Failure(created.ErrorValue());
-            result.created.emplace_back(create.deferred, created.Value());
-            return Result<void>::Success();
-        }
-
-        Result<void> operator()(const SceneCommandBuffer::DestroyCommand &destroy) const {
-            if (scene.IsValid(candidate, destroy.entity) && candidate.slots[destroy.entity.entity.index].baselineOwner)
-                return Result<void>::Failure(
-                    MakeError(SceneErrors::BaselineInvalid, "Baseline entities retire only through exact baseline ownership."));
-            if (const Result<void> destroyedResult = scene.DestroyEntity(candidate, destroy.entity); destroyedResult.HasError())
-                return Result<void>::Failure(destroyedResult.ErrorValue());
-            ++result.destroyed;
-            return Result<void>::Success();
-        }
-
-        Result<void> operator()(const SceneCommandBuffer::AttachBaselineCommand &command) const {
-            auto attached = scene.ApplyBaseline(candidate, command);
-            if (attached.HasValue())
-                ++result.baselinesAttached;
-            return attached;
-        }
-
-        Result<void> operator()(const SceneCommandBuffer::DetachBaselineCommand &command) const {
-            auto detached = scene.RemoveBaseline(candidate, command.id, command.revision, *command.ownership);
-            if (detached.HasValue())
-                ++result.baselinesDetached;
-            return detached;
-        }
-
-        Result<void> operator()(const SceneCommandBuffer::CreateGroupCommand &group) const {
-            if (group.admission.scene != scene.runtimeId_ || group.admission.cancellation.IsCancellationRequested() ||
-                group.admission.ownerCancellation.IsCancellationRequested())
-                return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
-            auto resources = std::make_shared<const std::vector<RuntimeGroupAssetLease>>(group.resources);
-            std::vector<EntityRef> entities;
-            entities.reserve(group.entries.size());
-            for (std::size_t index = 0; index < group.entries.size(); ++index) {
-                auto info = group.entries[index].info;
-                if (group.entries[index].parentInGroup.has_value())
-                    info.parent = entities[*group.entries[index].parentInGroup];
-                auto created = scene.CreateEntity(candidate, info);
-                if (created.HasError())
-                    return Result<void>::Failure(created.ErrorValue());
-                entities.push_back(created.Value());
-                candidate.slots[created.Value().entity.index].groupResources = resources;
-                result.created.emplace_back(group.deferred[index], created.Value());
-            }
-            return ResolveGroupReferences(group, entities);
-        }
-
-        /** @brief Validates one producer/target pair against candidate and resident Scene lifetimes. */
-        Result<ResolvedGroupPhysicsBodyReference> ResolveGroupReference(
-            const RuntimeComponentSet &components, const GroupPhysicsBodyReference &reference, const std::span<const EntityRef> entities,
-            const std::span<const ResolvedGroupPhysicsBodyReference> resolved) const {
-            if (const auto *source = SourceBodyReference(components, reference);
-                !source || source->body != reference.body || !reference.body.IsValid() ||
-                std::ranges::any_of(resolved, [&reference](const auto &other) {
-                return other.kind == reference.kind && other.component == reference.component;
-            }))
-                return Result<ResolvedGroupPhysicsBodyReference>::Failure(
-                    MakeError(SceneErrors::InvalidEntity, "Invalid or duplicated typed group body fixup."));
-            EntityRef target;
-            if (const auto *local = std::get_if<RuntimeGroupEntitySlot>(&reference.target)) {
-                if (local->index >= entities.size())
-                    return Result<ResolvedGroupPhysicsBodyReference>::Failure(MakeError(SceneErrors::InvalidEntity));
-                target = entities[local->index];
-            } else {
-                target = std::get<EntityRef>(reference.target);
-                if (!scene.IsValid(scene.storage_, target))
-                    return Result<ResolvedGroupPhysicsBodyReference>::Failure(
-                        MakeError(SceneErrors::StaleEntity, "External group targets must already belong to the committed Scene."));
-            }
-            if (!scene.IsValid(candidate, target))
-                return Result<ResolvedGroupPhysicsBodyReference>::Failure(MakeError(SceneErrors::StaleEntity));
-            if (const auto &body = candidate.slots[target.entity.index].components.rigidBody;
-                !body || !body->enabled || body->body != reference.body)
-                return Result<ResolvedGroupPhysicsBodyReference>::Failure(
-                    MakeError(SceneErrors::InvalidEntity, "Group body target has no matching enabled slot."));
-            return Result<ResolvedGroupPhysicsBodyReference>::Success({reference.kind, reference.component, target, reference.body});
-        }
-
-        /** @brief Resolves typed references only after every group entity has a candidate slot. */
-        Result<void> ResolveGroupReferences(const SceneCommandBuffer::CreateGroupCommand &group,
-                                            const std::span<const EntityRef> entities) const {
-            for (std::size_t index = 0; index < group.entries.size(); ++index) {
-                const auto &entry = group.entries[index];
-                if (entry.physicsReferences.empty())
-                    continue;
-                auto resolved = std::make_shared<std::vector<ResolvedGroupPhysicsBodyReference>>();
-                resolved->reserve(entry.physicsReferences.size());
-                for (const auto &reference : entry.physicsReferences) {
-                    auto fixup = ResolveGroupReference(entry.info.components, reference, entities, *resolved);
-                    if (fixup.HasError())
-                        return Result<void>::Failure(fixup.ErrorValue());
-                    resolved->push_back(std::move(fixup).Value());
-                }
-                candidate.slots[entities[index].entity.index].groupPhysicsReferences = std::move(resolved);
-            }
-            return Result<void>::Success();
-        }
-
-        /** @brief Resolves the exact typed producer field without changing durable authoring metadata. */
-        static const PhysicsBodyReference *SourceBodyReference(const RuntimeComponentSet &components,
-                                                               const GroupPhysicsBodyReference &reference) noexcept {
-            using enum GroupPhysicsReferenceKind;
-            switch (reference.kind) {
-                case ColliderBody:
-                    return reference.component < components.colliders.size() ? &components.colliders[reference.component].body : nullptr;
-                case ConstraintFirst:
-                    return reference.component < components.physicsConstraints.size()
-                               ? &components.physicsConstraints[reference.component].first.body
-                               : nullptr;
-                case ConstraintSecond:
-                    if (reference.component < components.physicsConstraints.size()) {
-                        if (const auto *body =
-                                std::get_if<PhysicsConstraintBodyEndpoint>(&components.physicsConstraints[reference.component].second))
-                            return &body->body;
-                    }
-                    return nullptr;
-            }
-            return nullptr;
-        }
-
-        /** @brief Validates final group body references before any native owner is prepared. */
-        Result<void> ValidateGroupReferences() const {
-            // A later command may retire a body after a group's fixups were resolved. Validate the
-            // final candidate before preparing any native owner; inactive source entities need no bindings.
-            for (const auto &slot : candidate.slots) {
-                if (!slot.active || !slot.groupPhysicsReferences)
-                    continue;
-                for (const auto &reference : *slot.groupPhysicsReferences) {
-                    if (!scene.IsValid(candidate, reference.target))
-                        return Result<void>::Failure(
-                            MakeError(SceneErrors::StaleEntity, "Group body target does not survive the complete command buffer."));
-                    const auto &body = candidate.slots[reference.target.entity.index].components.rigidBody;
-                    if (!body || !body->enabled || body->body != reference.body)
-                        return Result<void>::Failure(
-                            MakeError(SceneErrors::InvalidEntity, "Final group body target has no matching enabled slot."));
-                }
-            }
-            return Result<void>::Success();
-        }
-
-        /** @brief Projects additions and retirements from detached storage, retaining every admitted asset lease. */
-        bool ProjectResourceGroup(std::vector<RuntimeEntityView> &created, std::vector<EntityRef> &destroyed) const {
-            bool resourceGroup{};
-            created.reserve(candidate.slots.size());
-            for (std::size_t index = 0; index < candidate.slots.size(); ++index) {
-                const auto &slot = candidate.slots[index];
-                if (!slot.active || (index < scene.storage_.slots.size() && scene.storage_.slots[index].active &&
-                                     scene.storage_.slots[index].generation == slot.generation))
-                    continue;
-                const EntityRef entity{scene.runtimeId_, {static_cast<std::uint32_t>(index), slot.generation}};
-                if (!slot.groupResources)
-                    continue;
-                resourceGroup = true;
-                const auto parent = slot.parent ? std::optional<EntityRef>{{scene.runtimeId_, *slot.parent}} : std::nullopt;
-                created.emplace_back(entity, slot.authoredObject, parent, &slot.localTransform, &slot.primitiveMesh, &slot.components,
-                                     slot.groupPhysicsReferences
-                                         ? std::span<const ResolvedGroupPhysicsBodyReference>{*slot.groupPhysicsReferences}
-                                         : std::span<const ResolvedGroupPhysicsBodyReference>{},
-                                     std::span<const RuntimeGroupAssetLease>{*slot.groupResources});
-            }
-            for (std::size_t index = 0; index < scene.storage_.slots.size(); ++index) {
-                const auto &old = scene.storage_.slots[index];
-                if (old.active && old.groupResources &&
-                    (!candidate.slots[index].active || candidate.slots[index].generation != old.generation)) {
-                    resourceGroup = true;
-                    destroyed.emplace_back(scene.runtimeId_, EntityId{static_cast<std::uint32_t>(index), old.generation});
-                }
-            }
-            return resourceGroup;
-        }
-
-        /** @brief Requires explicit composition of each owner needed by the projected typed components. */
-        Result<void> ValidateOwners(const std::span<const RuntimeEntityView> created, const std::span<const EntityRef> destroyed,
-                                    const std::span<const std::unique_ptr<SceneStructuralParticipant>> participants) const {
-            const auto needs = [&](SceneStructuralOwner owner) {
-                const auto componentsNeed = [owner](const RuntimeComponentSet &components) {
-                    using enum SceneStructuralOwner;
-                    switch (owner) {
-                        case Physics:
-                            return components.rigidBody.has_value() || !components.colliders.empty() ||
-                                   !components.physicsConstraints.empty();
-                        case Gameplay:
-                            return !components.behaviors.empty() || !components.gameplayComponents.empty();
-                        case AI:
-                            return components.aiAgent.has_value() || components.aiController.has_value();
-                    }
-                    return false;
-                };
-                return std::ranges::any_of(created, [&](const auto &entity) {
-                    return componentsNeed(*entity.components);
-                }) || std::ranges::any_of(destroyed, [&](const auto &entity) {
-                    return componentsNeed(scene.storage_.slots[entity.entity.index].components);
-                });
-            };
-            for (const auto owner : {SceneStructuralOwner::Physics, SceneStructuralOwner::Gameplay, SceneStructuralOwner::AI}) {
-                if (needs(owner) && !std::ranges::any_of(participants, [owner](const auto &participant) {
-                    return participant->Owner() == owner;
-                }))
-                    return Result<void>::Failure(MakeError(std::ranges::any_of(candidate.slots,
-                                                                               [](const auto &slot) {
-                        return slot.active && slot.baselineOwner.has_value();
-                    })
-                                                               ? SceneErrors::BaselineUnsupported
-                                                               : SceneErrors::AssetServicesUnavailable,
-                                                           "Required structural subsystem owner is not composed."));
-            }
-            return Result<void>::Success();
-        }
-
-        /** @brief Prepares and validates all owner candidates before Scene's final admission fence. */
-        Result<void> PrepareOwners(const std::span<const std::unique_ptr<SceneStructuralParticipant>> participants,
-                                   std::vector<std::unique_ptr<SceneStructuralCandidate>> &owners) const {
-            if (const auto valid = ValidateGroupReferences(); valid.HasError())
-                return valid;
-            std::vector<RuntimeEntityView> created;
-            std::vector<EntityRef> destroyed;
-            const bool resourceGroup = ProjectResourceGroup(created, destroyed);
-            if (const auto valid = ValidateOwners(created, destroyed, participants); valid.HasError())
-                return valid;
-            owners.reserve(participants.size());
-            if (resourceGroup) {
-                for (const auto &participant : participants) {
-                    auto prepared = participant->Prepare(scene.View(), created, destroyed);
-                    if (prepared.HasError())
-                        return Result<void>::Failure(prepared.ErrorValue());
-                    if (!prepared.Value())
-                        return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
-                    owners.push_back(std::move(prepared).Value());
-                }
-                for (const auto &owner : owners) {
-                    if (auto valid = owner->ValidatePublication(); valid.HasError())
-                        return Result<void>::Failure(valid.ErrorValue());
-                }
-            }
-            return Result<void>::Success();
-        }
-
-        Result<void> operator()(const SceneCommandBuffer::SetLocalTransformCommand &transform) const {
-            if (!scene.IsValid(candidate, transform.entity) || transform.localTransform.TryToMatrix().HasError())
-                return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity, "Deferred transform target or value is invalid."));
-            candidate.slots[transform.entity.entity.index].localTransform = transform.localTransform;
-            ++result.transformsUpdated;
-            return Result<void>::Success();
-        }
-    };
 
     /** @copydoc RuntimeScene::Commit */
     Result<StructuralCommitResult> RuntimeScene::Commit(const SceneCommandBuffer &commands) {

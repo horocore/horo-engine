@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Ui/UiErrors.h"
 #include "Horo/Runtime/Ui/UiTextLayout.h"
+#include "Horo/Runtime/Ui/UiTextUnicode.h"
 
 #include <algorithm>
 #include <limits>
@@ -116,6 +117,10 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiTextLayoutRequest::IsValid */
     bool UiTextLayoutRequest::IsValid(const UiTextLayoutLimits &limits) const noexcept {
+        if ((unicode == nullptr) != (unicodeAnalyzer == nullptr) ||
+            (unicode != nullptr &&
+             (!unicode->IsValid() || unicode->Text().size() != shaped.sourceBytes || unicode->Content().Value() != shaped.content.Value())))
+            return false;
         if (!source.IsValid() || !assignedContent.IsValid() || !constraints.IsValid() || !options.IsValid() || !shaped.IsValid(limits) ||
             shaped.content != source.revisions.content)
             return false;

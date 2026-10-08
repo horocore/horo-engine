@@ -4,23 +4,17 @@
  * @brief Canonical fixed-step solver policy captured by an immutable world settings snapshot.
  */
 
-#include "Horo/Foundation/Result.h"
+#include "Horo/Physics/PhysicsContinuousCollision.h"
 
 #include <cstdint>
 
 namespace Horo::Physics {
-    /** @brief Default body motion-quality request; actual body admission remains a separate operation. */
-    enum class PhysicsDefaultMotionQuality : std::uint8_t {
-        Discrete,
-        LinearCast
-    };
-
     /**
      * @brief Numeric step policy in SI units; these values do not advance or activate a solver.
      *
      * CanonicalV1 currently admits one substep per fixed tick, velocity/position iterations 10/2,
-     * sleeping enabled at 0.03 m/s for 0.5 s and discrete default motion quality. Other schedules,
-     * sleep overrides and default CCD require explicit profile/capability admission, not silent
+     * sleeping enabled at 0.03 m/s for 0.5 s and bounded discrete/linear-cast defaults. Other schedules,
+     * sleep overrides require explicit profile/capability admission, not silent
      * native defaults. Individual CCD body policy belongs to body admission rather than this default.
      */
     struct PhysicsStepPolicy final {
@@ -31,6 +25,9 @@ namespace Horo::Physics {
         float sleepDelaySeconds{0.5F};
         bool sleepingEnabled{true};
         PhysicsDefaultMotionQuality defaultMotionQuality{PhysicsDefaultMotionQuality::Discrete};
+
+        float linearCastThresholdFraction{0.75F};
+        float linearCastPenetrationFraction{0.25F};
 
         bool operator==(const PhysicsStepPolicy &) const noexcept = default;
     };

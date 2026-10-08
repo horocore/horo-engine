@@ -88,13 +88,13 @@ namespace Horo::Character {
             auto first = FixedTick(1);
             first.query = probe.Context(active.world->Descriptor(), 1);
             REQUIRE(active.world->AdvanceFixedTick(first).HasValue());
-            REQUIRE(probe.calls == 1);
+            REQUIRE(probe.calls == 3);
             REQUIRE_FALSE(probe.seen[0].requiredLayer);
             probe.calls = 0;
             auto second = FixedTick(2);
             second.query = probe.Context(active.world->Descriptor(), 2);
             REQUIRE(active.world->AdvanceFixedTick(second).HasValue());
-            REQUIRE(probe.calls == 3);
+            REQUIRE(probe.calls == 5);
             for (std::size_t index{}; index < probe.calls; ++index)
                 REQUIRE(probe.seen[index].requiredLayer == Layer());
             REQUIRE(active.world->ControllerDescriptor(active.controller).Value().selectors.requiredLayer == Layer());
@@ -194,7 +194,10 @@ namespace Horo::Character {
                 auto input = FixedTick(tick);
                 input.fixedDelta = Duration::FromNanoseconds(250'000'000);
                 input.query = adapter.Context(Expectations(character->Descriptor(), tick));
-                REQUIRE(character->AdvanceFixedTick(input).HasValue());
+                const auto advanced = character->AdvanceFixedTick(input);
+                if (advanced.HasError())
+                    UNSCOPED_INFO(advanced.ErrorValue().message);
+                REQUIRE(advanced.HasValue());
                 return character->ControllerLocomotionSnapshot(controller).Value().movement;
             }
         };
@@ -340,7 +343,16 @@ namespace Horo::Character {
 
         TEST_CASE("Canonical Character solid overlap recovers and solid wall stops movement", "[physics][character][filter][native]") {
             NativeCharacter active;
-            active.Add({0, -0.5F, 0});
+            const auto descriptor = ControllerDescriptor(active.character->Descriptor());
+            // Keep support beneath the wall: this case checks solid recovery and blocking,
+            // independently of the airborne sweep budget after walking off a finite ledge.
+            REQUIRE(active.physics
+                        ->CreateQueryFixture({.shape = Physics::PhysicsBoxShape{{4.0F, 0.5F, 4.0F}},
+                                              .pose = {.translation = {0, -0.5F, 0}},
+                                              .layer = Layer(1),
+                                              .profile = descriptor.collisionProfile,
+                                              .channel = descriptor.queryChannel})
+                        .HasValue());
             active.Add({1.5F, 0.8F, 0});
             active.Spawn({}, {0, 0.6F, 0});
             REQUIRE(active.character->ControllerTransform(active.controller).Value().position.y > 0.74F);

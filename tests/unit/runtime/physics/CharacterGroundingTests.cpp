@@ -35,7 +35,7 @@ namespace Horo::Character {
                 auto &probe = *static_cast<GroundProbe *>(context);
                 ++probe.calls;
                 CharacterSweepProbeResult result;
-                if (probe.provideGround && request.direction.y < -0.5F) {
+                if (probe.provideGround && request.direction.y < -0.5F && probe.ground.distanceMeters <= request.maximumDistanceMeters) {
                     result.hits[0] = probe.ground;
                     result.hitCount = 1;
                     if (probe.secondGround.has_value()) {
@@ -214,7 +214,7 @@ namespace Horo::Character {
             REQUIRE_FALSE(snapshot.Value().movement.grounded);
             REQUIRE_FALSE(snapshot.Value().movement.groundShape.IsValid());
             REQUIRE(snapshot.Value().movement.finalPosition.y > 0.0F);
-            REQUIRE(probe.calls == 1);
+            REQUIRE(probe.calls == 2);
         }
 
         TEST_CASE("Character rejects malformed ground identity and relative velocity before publication",

@@ -25,8 +25,8 @@ namespace Horo::Physics::Detail {
             native.mPenetrationSlop = 0.02F;
             native.mMaxPenetrationDistance = 0.2F;
             native.mContactPointPreserveLambdaMaxDistSq = 0.01F * 0.01F;
-            native.mLinearCastThreshold = 0.75F;
-            native.mLinearCastMaxPenetration = 0.25F;
+            native.mLinearCastThreshold = values.step.linearCastThresholdFraction;
+            native.mLinearCastMaxPenetration = values.step.linearCastPenetrationFraction;
             native.mUseLargeIslandSplitter = false;
             native.mDeterministicSimulation = true;
             return native;

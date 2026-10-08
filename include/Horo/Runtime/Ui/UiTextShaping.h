@@ -225,6 +225,14 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsValid() const noexcept;
     };
 
+    class UiTextUnicodeAnalysis;
+    /** @brief Unicode break after a complete scalar or shaped cluster. */
+    enum class UiTextUnicodeBreak : std::uint8_t {
+        None,
+        Optional,
+        Mandatory
+    };
+
     /** @brief Non-owning input text and shaping evidence captured for one request. */
     struct UiTextShapingRequest final {
         std::string_view text;                            /**< Complete UTF-8 scalar sequence; copied into the result. */
@@ -234,6 +242,7 @@ namespace Horo::Runtime::Ui {
         UiTextDirection direction{UiTextDirection::Auto}; /**< Requested direction. */
         UiTextFontSize fontSize;                          /**< Logical em size. */
         std::span<const UiTextFeature> features;          /**< Bounded feature requests. */
+        const UiTextUnicodeAnalysis *unicode{};           /**< Exact prepared paragraph, or null for explicitly resolved run shaping. */
 
         /**
          * @brief Validates request evidence against reserved limits.
@@ -274,12 +283,14 @@ namespace Horo::Runtime::Ui {
 
     /** @brief Source cluster-to-glyph mapping used by measurement and editing. */
     struct UiTextCluster final {
-        std::uint32_t byteStart{};               /**< Inclusive UTF-8 source byte offset. */
-        std::uint32_t byteEnd{};                 /**< Exclusive UTF-8 source byte offset. */
-        std::uint32_t firstGlyph{NoUiTextIndex}; /**< First mapped glyph, or no glyph for omitted coverage. */
-        std::uint32_t glyphCount{};              /**< Number of mapped glyphs. */
-        UiLogicalPoint advance;                  /**< Advance attributed to this shaping cluster. */
-        bool missing{};                          /**< True when explicit missing-glyph policy was used. */
+        std::uint32_t byteStart{};                               /**< Inclusive UTF-8 source byte offset. */
+        std::uint32_t byteEnd{};                                 /**< Exclusive UTF-8 source byte offset. */
+        std::uint32_t firstGlyph{NoUiTextIndex};                 /**< First mapped glyph, or no glyph for omitted coverage. */
+        std::uint32_t glyphCount{};                              /**< Number of mapped glyphs. */
+        UiLogicalPoint advance;                                  /**< Advance attributed to this shaping cluster. */
+        bool missing{};                                          /**< True when explicit missing-glyph policy was used. */
+        std::uint8_t bidiLevel{};                                /**< Paragraph level when Unicode preparation was supplied. */
+        UiTextUnicodeBreak breakAfter{UiTextUnicodeBreak::None}; /**< Break at the complete shaped-cluster end. */
 
         /** @brief Checks byte ordering and optional glyph range representation. @return True when cluster evidence is valid. */
         [[nodiscard]] bool IsValid() const noexcept;

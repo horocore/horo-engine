@@ -96,8 +96,8 @@ namespace Horo::Character {
         CHECK(capture.snapshot.publicationRevision == world.PublishedTick().publicationRevision);
         CHECK(capture.snapshot.activeControllers == 1);
         CHECK(capture.snapshot.queries == probe.calls);
-        CHECK(capture.snapshot.queries == 2);
-        CHECK(capture.snapshot.movementIterations == 1);
+        CHECK(capture.snapshot.queries == 4);
+        CHECK(capture.snapshot.movementIterations == 2);
         CHECK(capture.snapshot.contacts == 0);
         CHECK_FALSE(capture.snapshot.failed);
         for (std::size_t index{}; index < capture.snapshot.phaseCompleted.size(); ++index) {
