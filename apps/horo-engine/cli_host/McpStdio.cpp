@@ -23,27 +23,41 @@
 namespace Horo::Application::Internal {
     namespace {
 #if defined(_WIN32)
-        std::atomic<bool> Interrupted{};
+        /** @brief Constant-initialized invocation stop state; no ambient mutable namespace variable. */
+        std::atomic<bool> &Interrupted() {
+            static constinit std::atomic<bool> interrupted{};
+            return interrupted;
+        }
 
         BOOL WINAPI InterruptHandler(const DWORD event) {
             if (event != CTRL_C_EVENT && event != CTRL_BREAK_EVENT)
                 return FALSE;
-            Interrupted.store(true);
+            Interrupted().store(true);
             return TRUE;
         }
 #else
-        volatile std::sig_atomic_t Interrupted{};
+        /** @brief Constant initialization keeps flag access free of runtime guards inside native signal handlers. */
+        volatile std::sig_atomic_t &Interrupted() {
+            static constinit volatile std::sig_atomic_t interrupted{};
+            return interrupted;
+        }
 
         /** @brief Signal-safe flag only; ordinary owner-thread code performs cancellation and teardown. */
         void InterruptHandler(int) {
-            Interrupted = 1;
+            Interrupted() = 1;
         }
 #endif
         /** @brief Owns native stdio/signal changes only for this synchronous process invocation. */
         class Stdio final {
         public:
+            Stdio() = default;
+            Stdio(const Stdio &) = delete;
+            Stdio &operator=(const Stdio &) = delete;
+            Stdio(Stdio &&) = delete;
+            Stdio &operator=(Stdio &&) = delete;
+
             Result<void> Start() {
-                Interrupted = false;
+                Interrupted() = false;
 #if defined(_WIN32)
                 input_ = GetStdHandle(STD_INPUT_HANDLE);
                 output_ = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -95,7 +109,7 @@ namespace Horo::Application::Internal {
             }
 
             bool Stopped() const {
-                return Interrupted != 0;
+                return Interrupted() != 0;
             }
 
             Result<McpChannelRead> Read() const {
@@ -201,9 +215,14 @@ namespace Horo::Application::Internal {
             HANDLE output_{};
             bool signals_{};
 #else
-            struct sigaction interrupt_{}, terminate_{}, pipe_{};
-            bool interruptInstalled_{}, terminateInstalled_{}, pipeInstalled_{};
-            int inputFlags_{-1}, outputFlags_{-1};
+            struct sigaction interrupt_{};
+            struct sigaction terminate_{};
+            struct sigaction pipe_{};
+            bool interruptInstalled_{};
+            bool terminateInstalled_{};
+            bool pipeInstalled_{};
+            int inputFlags_{-1};
+            int outputFlags_{-1};
 #endif
         };
 
@@ -215,8 +234,7 @@ namespace Horo::Application::Internal {
             Result<nlohmann::json> Invoke(const nlohmann::json &, const Mcp::McpRequestContext &context) override {
                 if (context.IsStopRequested())
                     return Result<nlohmann::json>::Failure(MakeError(Mcp::McpErrors::RequestCancelled));
-                const auto emitted = EmitHostObservabilitySmoke();
-                if (emitted.HasError())
+                if (const auto emitted = EmitHostObservabilitySmoke(); emitted.HasError())
                     return Result<nlohmann::json>::Failure(emitted.ErrorValue());
                 return Result<nlohmann::json>::Success({{"completed", true}});
             }
@@ -247,8 +265,7 @@ namespace Horo::Application::Internal {
     /** @copydoc ServeNativeMcp */
     Result<void> ServeNativeMcp(const Cli::CliExecutionContext &context, std::shared_ptr<HostObservabilitySession> session) {
         Stdio stdio;
-        const auto started = stdio.Start();
-        if (started.HasError())
+        if (const auto started = stdio.Start(); started.HasError())
             return started;
         if (!session || !context.HasCapability(Cli::CliCapabilityId{"horo.observability.smoke"}))
             return Result<void>::Failure(MakeError(Cli::CliErrors::CommandUnavailable));
@@ -275,15 +292,15 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(admission.ErrorValue());
         return ServeMcp(std::move(registry),
                         {.read =
-                             [&] {
+                             [&stdio] {
             return stdio.Read();
         },
                          .write =
-                             [&](const std::string_view bytes) {
+                             [&stdio](const std::string_view bytes) {
             return stdio.Write(bytes);
         },
                          .stopped =
-                             [&] {
+                             [&stdio, &context] {
             return stdio.Stopped() || context.IsStopRequested();
         }},
                         {std::move(authorization), std::move(admission).Value()});

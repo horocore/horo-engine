@@ -12,6 +12,12 @@ namespace Horo::Application::Internal {
 
         /** @brief Disconnects before controller/session drain while registry and application leases remain alive. */
         struct McpLifetime final {
+            McpLifetime() = default;
+            McpLifetime(const McpLifetime &) = delete;
+            McpLifetime &operator=(const McpLifetime &) = delete;
+            McpLifetime(McpLifetime &&) = delete;
+            McpLifetime &operator=(McpLifetime &&) = delete;
+
             std::shared_ptr<Mcp::McpController> controller;
             std::shared_ptr<Mcp::McpSessionManager> sessions;
             std::shared_ptr<Mcp::McpLocalTransport> transport;
@@ -41,7 +47,7 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
-        Result<void> PumpOwners(Mcp::McpController &controller) {
+        Result<void> PumpOwners(const Mcp::McpController &controller) {
             for (const auto owner : Owners) {
                 if (const auto pumped = controller.Pump(owner); pumped.HasError())
                     return Result<void>::Failure(pumped.ErrorValue());
@@ -50,7 +56,7 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Runs only protocol I/O and owner pumping; the caller owns reverse shutdown on every result. */
-        Result<void> RunChannel(McpLifetime &lifetime, const McpServeChannel &channel) {
+        Result<void> RunChannel(const McpLifetime &lifetime, const McpServeChannel &channel) {
             while (!channel.stopped()) {
                 auto read = channel.read();
                 if (read.HasError())
@@ -94,8 +100,7 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(transport.ErrorValue());
         lifetime.transport = std::move(transport).Value();
         const auto result = RunChannel(lifetime, channel);
-        const auto shutdown = lifetime.Shutdown();
-        if (shutdown.HasError())
+        if (const auto shutdown = lifetime.Shutdown(); shutdown.HasError())
             return shutdown;
         return result;
     }

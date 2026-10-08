@@ -86,8 +86,7 @@ namespace Horo::Application::Internal {
                     case Bundle:
                         return BundleResult(request, context);
                     case McpServe: {
-                        const auto served = ServeNativeMcp(context, session_);
-                        if (served.HasError())
+                        if (const auto served = ServeNativeMcp(context, session_); served.HasError())
                             return Result<Cli::CliCommandResult>::Failure(served.ErrorValue());
                         return Result<Cli::CliCommandResult>::Success({});
                     }
@@ -100,8 +99,7 @@ namespace Horo::Application::Internal {
         private:
             /** @brief Calls the existing observability smoke operation without changing its metrics. */
             Result<Cli::CliCommandResult> SmokeResult() const {
-                const auto emitted = EmitHostObservabilitySmoke();
-                if (emitted.HasError())
+                if (const auto emitted = EmitHostObservabilitySmoke(); emitted.HasError())
                     return Result<Cli::CliCommandResult>::Failure(emitted.ErrorValue());
                 return Result<Cli::CliCommandResult>::Success({.fields = {{"completed", true}}});
             }
