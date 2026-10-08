@@ -4,7 +4,10 @@
  * @brief Immutable validated content identities and portable tile bytes for incremental cook reuse.
  */
 
+#include "Horo/Navigation/NavigationProjectProfiles.h"
 #include "Horo/Navigation/NavigationTileDependencies.h"
+
+#include <optional>
 
 namespace Horo::Navigation {
     /** @brief Validated tile shared by a candidate, a last-valid generation and retained readers. */
@@ -79,22 +82,35 @@ namespace Horo::Navigation {
         std::vector<std::uint8_t> bytes_;
     };
 
+    /**
+     * @brief Producer-captured compatibility and optional project authority persisted in HNS2.
+     * @details Digests come from the exact bake request, never reconstructed from a tile dependency key.
+     * A missing project profile identifies non-release content; required release admission rejects it.
+     * The codec derives and validates the surface/profile closure from the immutable tiles.
+     */
+    struct NavigationCookedContentProvenance final {
+        NavigationTileBakeCompatibility compatibility;
+        std::optional<NavigationProjectProfile> projectProfile;
+    };
+
     /** @brief Complete definition-rooted cooked replacement closure; tiles never acquire authoring AssetIds. */
     struct NavigationCookedTileSet final {
         Sha256Digest inputFingerprint;
         std::vector<std::shared_ptr<const NavigationCookedTile>> tiles; /**< Strictly key-sorted complete closure, including empty tiles. */
+        std::optional<NavigationCookedContentProvenance> provenance;    /**< Absent only for explicit HNS1 legacy content. */
     };
 
     /**
      * @brief Encodes a complete sorted tile closure into the core.navmesh cook payload.
-     * @param set Complete immutable candidate tiles and source fingerprint.
+     * @param set Complete immutable candidate tiles and source fingerprint; captured provenance emits HNS2, absence emits legacy HNS1.
      * @param maximumBytes Aggregate encoded byte ceiling.
      * @return Canonical portable payload or typed invalid/capacity failure.
      */
     [[nodiscard]] Result<std::vector<std::uint8_t>> EncodeNavigationCookedTileSet(const NavigationCookedTileSet &set,
                                                                                   std::size_t maximumBytes);
     /**
-     * @brief Validates the complete cooked closure and every tile's actual-byte content identity.
+     * @brief Validates explicit HNS1 legacy or HNS2 provenance and every tile's actual-byte content identity.
+     * @details HNS1 never acquires inferred provenance. Unknown versions and incomplete HNS2 metadata fail closed.
      * @param bytes Complete versioned tile-set payload from a verified asset envelope.
      * @param maximumBytes Aggregate encoded and retained decoded storage ceiling; one bounded tile is decoded before checking its retained
      * size.

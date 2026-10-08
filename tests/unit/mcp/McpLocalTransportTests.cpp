@@ -1,5 +1,6 @@
 #include "Horo/Mcp/McpErrors.h"
 #include "Horo/Mcp/McpLocalTransport.h"
+#include "McpAuthorizationTestSupport.h"
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
@@ -57,11 +58,11 @@ namespace Horo::Mcp {
         };
 
         McpSessionAdmission Admission() {
-            return {.clientIdentity = "stdio", .capabilities = {"read"}, .projectIdentity = "first"};
+            return Test::Authenticate({.clientIdentity = "stdio", .capabilities = {"read"}, .projectIdentity = "first"});
         }
 
         std::shared_ptr<McpLocalTransport> Transport(McpSessionLimits limits = {}) {
-            auto manager = McpSessionManager::Create(std::make_shared<EchoController>(), limits);
+            auto manager = McpSessionManager::Create(std::make_shared<EchoController>(), limits, Test::Authorization());
             REQUIRE(manager.HasValue());
             auto started = McpLocalTransport::Start(manager.Value(), Admission());
             REQUIRE(started.HasValue());
@@ -142,14 +143,15 @@ namespace Horo::Mcp {
         auto switched = transport->SwitchProject("second");
         REQUIRE(switched.HasValue());
         REQUIRE(switched.Value().generation > previous.generation);
-        REQUIRE(OneReply(transport, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n")["result"]["project"] == "second");
+        REQUIRE(OneReply(transport, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n")["error"]["data"]["code"] ==
+                McpErrors::AuthorizationDenied.code.Value());
         transport->Disconnect();
         REQUIRE(transport->Feed("x").HasError());
     }
 
     TEST_CASE("local MCP cancellation notification and disconnect revoke an active request", "[mcp][framing]") {
         auto controller = std::make_shared<BlockingController>();
-        auto manager = McpSessionManager::Create(controller);
+        auto manager = McpSessionManager::Create(controller, {}, Test::Authorization());
         REQUIRE(manager.HasValue());
         auto started = McpLocalTransport::Start(manager.Value(), Admission());
         REQUIRE(started.HasValue());

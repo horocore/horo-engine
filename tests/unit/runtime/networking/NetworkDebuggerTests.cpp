@@ -14,7 +14,7 @@ using namespace Horo::Network;
 namespace {
     constexpr NetworkDiagnosticSource Source{1, 2, 3, 4};
 
-    ConnectionHandle Handle() {
+    ConnectionHandle MakeConnectionHandle() {
         return ConnectionHandle::Create(0, 1).Value();
     }
 }  // namespace
@@ -23,7 +23,7 @@ TEST_CASE("Network diagnostics retain bounded evidence and immutable revisions w
     NetworkDebugger debugger;
     REQUIRE(debugger.Begin(Source, true));
     const auto first = debugger.Snapshot();
-    const auto connection = Handle();
+    const auto connection = MakeConnectionHandle();
     bool accepted = true;
     Horo::Tests::AllocationProbe::Measurement allocation;
     {
@@ -58,7 +58,7 @@ TEST_CASE("Network diagnostics fence source replacement and bounded capture comm
     REQUIRE_FALSE(debugger.Snapshot().capturePaused);
     REQUIRE(debugger.Publish(Source, 101));
     REQUIRE(debugger.Snapshot().capturePaused);
-    REQUIRE(debugger.Observe(Source, NetworkConnectionRecord{Handle(), NetworkTransportEventKind::Connected}));
+    REQUIRE(debugger.Observe(Source, NetworkConnectionRecord{MakeConnectionHandle(), NetworkTransportEventKind::Connected}));
     REQUIRE(debugger.Publish(Source, 102));
     REQUIRE(debugger.Snapshot().capture.size == 0);
     snapshot = debugger.Snapshot();
@@ -66,18 +66,18 @@ TEST_CASE("Network diagnostics fence source replacement and bounded capture comm
         REQUIRE(debugger.Request(Source, snapshot.revision, NetworkCaptureAction::Resume));
     REQUIRE_FALSE(debugger.Request(Source, snapshot.revision, NetworkCaptureAction::Clear));
     REQUIRE(debugger.Publish(Source, 103));
-    REQUIRE(debugger.Observe(Source, NetworkConnectionRecord{Handle(), NetworkTransportEventKind::Connected}));
+    REQUIRE(debugger.Observe(Source, NetworkConnectionRecord{MakeConnectionHandle(), NetworkTransportEventKind::Connected}));
     REQUIRE(debugger.Publish(Source, 104));
     snapshot = debugger.Snapshot();
     REQUIRE(snapshot.capture.size == 1);
     REQUIRE(debugger.Request(Source, snapshot.revision, NetworkCaptureAction::Clear));
     debugger.Detach();
-    REQUIRE_FALSE(debugger.Observe(Source, NetworkConnectionRecord{Handle(), NetworkTransportEventKind::Connected}));
+    REQUIRE_FALSE(debugger.Observe(Source, NetworkConnectionRecord{MakeConnectionHandle(), NetworkTransportEventKind::Connected}));
     REQUIRE_FALSE(debugger.Request(Source, snapshot.revision, NetworkCaptureAction::Resume));
     REQUIRE(debugger.Begin({1, 3, 3, 4}, true));
     REQUIRE_FALSE(debugger.Publish(Source, 105));
     REQUIRE_FALSE(debugger.Begin(Source, true));
-    REQUIRE_FALSE(debugger.Observe(Source, NetworkConnectionRecord{Handle(), NetworkTransportEventKind::Connected}));
+    REQUIRE_FALSE(debugger.Observe(Source, NetworkConnectionRecord{MakeConnectionHandle(), NetworkTransportEventKind::Connected}));
     REQUIRE(debugger.Publish({1, 3, 3, 4}, 106));
     REQUIRE(debugger.Snapshot().capture.size == 0);
     REQUIRE(debugger.Snapshot().revision > snapshot.revision);
@@ -89,7 +89,7 @@ TEST_CASE("Disabled detached stale and wrong-thread network evidence cannot beco
     NetworkDebugger debugger;
     REQUIRE_FALSE(debugger.Begin({}, true));
     REQUIRE(debugger.Begin(Source, false));
-    REQUIRE_FALSE(debugger.Observe(Source, NetworkConnectionRecord{Handle(), NetworkTransportEventKind::Connected}));
+    REQUIRE_FALSE(debugger.Observe(Source, NetworkConnectionRecord{MakeConnectionHandle(), NetworkTransportEventKind::Connected}));
     REQUIRE(debugger.Publish(Source, 100));
     auto disabled = debugger.Snapshot();
     REQUIRE(NetworkDebuggerService::Assess(disabled, 100, 5) == NetworkDebuggerState::Disabled);
@@ -105,7 +105,7 @@ TEST_CASE("Disabled detached stale and wrong-thread network evidence cannot beco
     REQUIRE(NetworkDebuggerService::Assess(debugger.Snapshot(), 99, 5) == NetworkDebuggerState::Stale);
     bool recorded = true, published = true;
     std::thread other{[&] {
-        recorded = debugger.Observe(source, NetworkConnectionRecord{Handle(), NetworkTransportEventKind::Connected});
+        recorded = debugger.Observe(source, NetworkConnectionRecord{MakeConnectionHandle(), NetworkTransportEventKind::Connected});
         published = debugger.Publish(source, 102);
     }};
     other.join();
@@ -121,24 +121,27 @@ TEST_CASE("Disabled detached stale and wrong-thread network evidence cannot beco
 TEST_CASE("Real session and tick-alignment producers publish generation-fenced diagnostics", "[network][debugger][producer]") {
     NetworkDebugger debugger;
     REQUIRE(debugger.Begin(Source, true));
-    auto session =
-        PeerSessionLifecycle::Create(Handle(), NetworkOperationGeneration::Create(7).Value(), {10, 20, 30, 100, 20}, nullptr, &debugger);
-    REQUIRE(session.HasValue());
-    REQUIRE(session.Value().BeginNegotiation(Handle(), NetworkOperationGeneration::Create(7).Value(), 1).HasValue());
+    auto sessionResult = PeerSessionLifecycle::Create(MakeConnectionHandle(), NetworkOperationGeneration::Create(7).Value(),
+                                                      {10, 20, 30, 100, 20}, nullptr, &debugger);
+    REQUIRE(sessionResult.HasValue());
+    auto session = std::move(sessionResult).Value();
+    REQUIRE(session.BeginNegotiation(MakeConnectionHandle(), NetworkOperationGeneration::Create(7).Value(), 1).HasValue());
     REQUIRE(debugger.Publish(Source, 100));
     REQUIRE(debugger.Snapshot().connections.records[0].peerSessionGeneration == 7);
     REQUIRE_FALSE(debugger.Snapshot().connections.records[0].gameplayAdmitted);
-    auto mapper = NetworkTickAlignment::Create(Handle(), NetworkOperationGeneration::Create(7).Value(), {8, 2, 3}, &debugger);
-    REQUIRE(mapper.HasValue());
-    REQUIRE(mapper.Value().Observe({Handle(), NetworkOperationGeneration::Create(7).Value(), 1, 1, 0, 100, 2}).HasValue());
-    REQUIRE(mapper.Value().Advance(1).HasValue());
+    auto mapperResult =
+        NetworkTickAlignment::Create(MakeConnectionHandle(), NetworkOperationGeneration::Create(7).Value(), {8, 2, 3}, &debugger);
+    REQUIRE(mapperResult.HasValue());
+    auto mapper = std::move(mapperResult).Value();
+    REQUIRE(mapper.Observe({MakeConnectionHandle(), NetworkOperationGeneration::Create(7).Value(), 1, 1, 0, 100, 2}).HasValue());
+    REQUIRE(mapper.Advance(1).HasValue());
     REQUIRE(debugger.Publish(Source, 101));
     REQUIRE(debugger.Snapshot().prediction.size == 1);
     REQUIRE(debugger.Snapshot().prediction.records[0].localTick == 1);
     REQUIRE(debugger.Snapshot().prediction.records[0].hasMapping);
     debugger.Detach();
     REQUIRE(debugger.Begin({1, 3, 3, 5}, true));
-    REQUIRE(mapper.Value().Advance(2).HasValue());
+    REQUIRE(mapper.Advance(2).HasValue());
     REQUIRE(debugger.Publish(debugger.Source(), 102));
     REQUIRE(debugger.Snapshot().prediction.size == 0);
 }
@@ -151,11 +154,12 @@ TEST_CASE("Real loopback measurements reach the application projection without s
     auto created = DeterministicTransport::Create(TestSupport::DebuggerLoopbackDescriptor(), &metrics, &service.Producer());
     REQUIRE(created.HasValue());
     auto transport = std::move(created).Value();
-    REQUIRE(transport.Open(Handle()).HasValue());
+    REQUIRE(transport.Open(MakeConnectionHandle()).HasValue());
     std::array<DeterministicTransportEvent, 2> events;
     REQUIRE(transport.Advance(1, events).HasValue());
     const std::array payload{std::byte{1}, std::byte{2}, std::byte{3}};
-    REQUIRE(transport.Send(Handle(), ChannelId::Create(0, 2).Value(), TransportTrafficClass::Reliable, 0, payload).HasValue());
+    REQUIRE(
+        transport.Send(MakeConnectionHandle(), ChannelId::Create(0, 2).Value(), TransportTrafficClass::Reliable, 0, payload).HasValue());
     REQUIRE(transport.Advance(2, events).Value() == 1);
     REQUIRE(metrics.Publish());
     const auto metricSnapshot = metrics.Snapshot();
@@ -173,7 +177,8 @@ TEST_CASE("Real loopback measurements reach the application projection without s
     REQUIRE(service.Query().snapshot.capture.size == 0);
     service.Producer().Detach();
     REQUIRE(service.Begin(9, 5, true, NetworkDiagnosticProvider::Deterministic));
-    REQUIRE(transport.Send(Handle(), ChannelId::Create(0, 2).Value(), TransportTrafficClass::Reliable, 0, payload).HasValue());
+    REQUIRE(
+        transport.Send(MakeConnectionHandle(), ChannelId::Create(0, 2).Value(), TransportTrafficClass::Reliable, 0, payload).HasValue());
     REQUIRE(transport.Advance(3, events).Value() == 1);
     REQUIRE(service.Publish(service.Producer().Source()));
     REQUIRE(service.Query().snapshot.connections.size == 0);

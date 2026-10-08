@@ -1,6 +1,8 @@
+#include "../../support/AllocationProbe.h"
 #include "Horo/Mcp/McpErrors.h"
 #include "Horo/Mcp/McpInProcessAdapter.h"
 #include "Horo/Mcp/McpLocalTransport.h"
+#include "McpAuthorizationTestSupport.h"
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
@@ -9,6 +11,8 @@
 #include <functional>
 #include <limits>
 #include <mutex>
+#include <new>
+#include <optional>
 #include <thread>
 
 namespace Horo::Mcp {
@@ -29,15 +33,15 @@ namespace Horo::Mcp {
         };
 
         McpSessionAdmission Admission() {
-            return {.clientIdentity = "local-client",
-                    .capabilities = {"project.read"},
-                    .projectIdentity = "project-one",
-                    .authorizationRevision = 3,
-                    .registryRevision = 7};
+            return Test::Authenticate({.clientIdentity = "local-client",
+                                       .capabilities = {"project.read"},
+                                       .projectIdentity = "project-one",
+                                       .authorizationRevision = 3,
+                                       .registryRevision = 7});
         }
 
         std::shared_ptr<McpSessionManager> Manager(const std::shared_ptr<Controller> &controller, McpSessionLimits limits = {}) {
-            auto created = McpSessionManager::Create(controller, limits);
+            auto created = McpSessionManager::Create(controller, limits, Test::Authorization());
             REQUIRE(created.HasValue());
             return std::move(created).Value();
         }
@@ -140,8 +144,83 @@ namespace Horo::Mcp {
         const auto failed = manager->Dispatch(opened.Value(), {.id = 1, .method = "tools/call"});
         REQUIRE(failed.HasError());
         RequireCode(failed.ErrorValue(), McpErrors::ControllerFailed);
+        controller->action = {};
+        REQUIRE(manager->Dispatch(opened.Value(), {.id = 1, .method = "tools/call"}).HasValue());
         REQUIRE(manager->Shutdown().HasValue());
     }
+
+    TEST_CASE("MCP callback allocation failure releases request identity and shutdown bookkeeping", "[mcp][session][security]") {
+        auto controller = std::make_shared<Controller>();
+        controller->action = [](const McpRequest &, const McpRequestContext &) -> Result<nlohmann::json> {
+            throw std::bad_alloc{};
+        };
+        McpSessionLimits limits;
+        limits.maximumInFlightPerSession = 1;
+        limits.shutdownDrainTimeout = std::chrono::milliseconds{100};
+        auto manager = Manager(controller, limits);
+        const auto opened = manager->Open(Admission());
+        REQUIRE(opened.HasValue());
+        const McpRequest request{.id = "allocation-checked-request", .method = "tools/call"};
+        const auto failed = manager->Dispatch(opened.Value(), request);
+        REQUIRE(failed.HasError());
+        RequireCode(failed.ErrorValue(), McpErrors::ControllerFailed);
+        controller->action = [](const McpRequest &, const McpRequestContext &) {
+            return Result<nlohmann::json>::Success(1);
+        };
+        REQUIRE(manager->Dispatch(opened.Value(), request).HasValue());
+        REQUIRE(manager->Shutdown().HasValue());
+    }
+
+    // MSVC debug iterator proxies allocate in noexcept container moves. The complete global
+    // allocation sweep is qualified in Windows Release CI; the controlled failure above runs in Debug too.
+#if !defined(_MSC_VER) || _ITERATOR_DEBUG_LEVEL == 0
+    TEST_CASE("MCP allocation failures never orphan request identity or shutdown bookkeeping", "[mcp][session][security]") {
+        auto controller = std::make_shared<Controller>();
+        // Keep callback allocation throwable: nested JSON destruction itself allocates in a noexcept destructor.
+        controller->action = [](const McpRequest &, const McpRequestContext &context) {
+            const std::string response = context.clientIdentity + "-allocation-checked-controller-response";
+            return Result<nlohmann::json>::Success(response.size());
+        };
+        McpSessionLimits limits;
+        limits.maximumInFlightPerSession = 1;
+        limits.shutdownDrainTimeout = std::chrono::milliseconds{100};
+        auto manager = Manager(controller, limits);
+        const auto opened = manager->Open(Admission());
+        REQUIRE(opened.HasValue());
+        const McpRequest request{.id = "allocation-checked-request", .method = "tools/call", .params = {{"argument", "private-proof"}}};
+        std::size_t allocations{};
+        bool succeeded{};
+        {
+            Tests::AllocationProbe::ScopedMeasurement measurement;
+            const auto outcome = manager->Dispatch(opened.Value(), request);
+            allocations = measurement.Snapshot().requests;
+            succeeded = outcome.HasValue();
+        }
+        REQUIRE(succeeded);
+        REQUIRE(allocations > 0);
+        unsigned propagated{}, translated{};
+        for (std::size_t offset = 0; offset < allocations; ++offset) {
+            std::optional<Result<nlohmann::json>> outcome;
+            {
+                Tests::AllocationProbe::ScopedFailure failure{offset};
+                try {
+                    outcome.emplace(manager->Dispatch(opened.Value(), request));
+                } catch (const std::bad_alloc &) {
+                    ++propagated;
+                }
+            }
+            if (outcome && outcome->HasError()) {
+                ++translated;
+                RequireCode(outcome->ErrorValue(), McpErrors::ControllerFailed);
+            }
+            REQUIRE(manager->Dispatch(opened.Value(), request).HasValue());
+        }
+        CHECK(propagated > 0);
+        CHECK(translated > 0);
+        REQUIRE(manager->Shutdown().HasValue());
+    }
+
+#endif
 
     TEST_CASE("MCP cancellation, project switch and disconnect revoke old work", "[mcp][session]") {
         auto gate = std::make_shared<Gate>();
@@ -172,7 +251,7 @@ namespace Horo::Mcp {
         const auto stale = manager->Dispatch(oldHandle, {.id = 2, .method = "tools/list"});
         REQUIRE(stale.HasError());
         RequireCode(stale.ErrorValue(), McpErrors::SessionUnavailable);
-        REQUIRE(completed.load());
+        REQUIRE_FALSE(completed.load());
         REQUIRE(cancelled.load());
         embedded.Value()->Disconnect();
         REQUIRE(manager->ActiveSessions() == 0);

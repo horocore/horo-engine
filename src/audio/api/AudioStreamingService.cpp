@@ -47,6 +47,7 @@ namespace Horo::Audio {
         bool sourceOpenReturned{};
         std::optional<Error> failure;
         bool portIssued{};
+        bool retainedPort{};  // Only control issues/releases the pin; callback never consults it.
         UnderrunReporting reporting;
         std::size_t chargedBytes{};
 
@@ -239,6 +240,14 @@ namespace Horo::Audio {
         }
     }  // namespace
 
+    /** @copydoc AudioStreamRenderPort::~AudioStreamRenderPort */
+    AudioStreamRenderPort::~AudioStreamRenderPort() {
+        if (retained_ && state_ != nullptr) {
+            state_->retainedPort = false;
+            state_->portIssued = false;
+        }
+    }
+
     /** @copydoc AudioStreamRenderPort::Render */
     AudioStreamRenderResult AudioStreamRenderPort::Render(const std::span<AudioSample *const> planes,
                                                           const std::uint32_t frames) const noexcept {
@@ -326,13 +335,32 @@ namespace Horo::Audio {
 
     /** @copydoc AudioStreamingService::RenderPort */
     Result<AudioStreamRenderPort> AudioStreamingService::RenderPort(const AudioStreamHandle handle) {
+        return IssueRenderPort(handle, false);
+    }
+
+    /** @copydoc AudioStreamingService::RetainedRenderPort */
+    Result<AudioStreamRenderPort> AudioStreamingService::RetainedRenderPort(const AudioStreamHandle handle) {
+        return IssueRenderPort(handle, true);
+    }
+
+    /** @copydoc AudioStreamingService::IssueRenderPort */
+    Result<AudioStreamRenderPort> AudioStreamingService::IssueRenderPort(const AudioStreamHandle handle, const bool retained) {
         auto *state = Find(handle);
         if (state == nullptr)
             return Result<AudioStreamRenderPort>::Failure(MakeError(AudioErrors::HandleStale));
         if (state->portIssued)
             return Result<AudioStreamRenderPort>::Failure(MakeError(AudioErrors::VoiceAdmissionClosed));
         state->portIssued = true;
-        return Result<AudioStreamRenderPort>::Success(AudioStreamRenderPort(state));
+        state->retainedPort = retained;
+        return Result<AudioStreamRenderPort>::Success(AudioStreamRenderPort(state, retained));
+    }
+
+    /** @copydoc AudioStreamingService::DecoderSpec */
+    Result<AudioStreamDecoderSpec> AudioStreamingService::DecoderSpec(const AudioStreamHandle handle) const {
+        const auto *state = Find(handle);
+        if (state == nullptr)
+            return Result<AudioStreamDecoderSpec>::Failure(MakeError(AudioErrors::HandleStale));
+        return Result<AudioStreamDecoderSpec>::Success(state->request.decoder);
     }
 
     /** @copydoc AudioStreamingService::Slot::Reap */
@@ -433,6 +461,8 @@ namespace Horo::Audio {
         const auto *state = Find(handle);
         if (state == nullptr)
             return Result<void>::Failure(MakeError(AudioErrors::HandleStale));
+        if (state->retainedPort)
+            return Result<void>::Failure(MakeError(AudioErrors::VoiceAdmissionClosed));
         (void)Stop(handle);
         auto &slot = slots_[handle.slot - 1];
         if (slot.fill) {

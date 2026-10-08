@@ -19,6 +19,9 @@
 #include <vector>
 
 namespace Horo::Mcp {
+    class McpAuthority;
+    class McpAuthorization;
+
     /** @brief Explicit finite budgets for one host-owned MCP session service. */
     struct McpSessionLimits {
         std::size_t maximumSessions{16};
@@ -42,6 +45,7 @@ namespace Horo::Mcp {
         std::optional<std::string> projectIdentity;
         std::uint64_t authorizationRevision{1};
         std::uint64_t registryRevision{1};
+        std::shared_ptr<const McpAuthority> authority; /**< Authenticated host-issued evidence; a name alone grants nothing. */
     };
 
     /** @brief Monotonic session identity with a generation that changes on project replacement. */
@@ -71,14 +75,17 @@ namespace Horo::Mcp {
         std::optional<std::string> projectIdentity;
         std::uint64_t authorizationRevision{};
         std::uint64_t registryRevision{};
-        CancellationToken cancellation;
-        std::chrono::steady_clock::time_point deadline;
+        CancellationToken cancellation;                 /**< Explicit cancellation only; observe the complete stop view for expiry. */
+        std::chrono::steady_clock::time_point deadline; /**< Cooperative monotonic deadline, bounded by authority expiry. */
         std::function<void(double, std::string)> reportProgress;
+        std::shared_ptr<const McpAuthority> authority;   /**< Revocable, non-secret principal retained through queued work. */
+        std::shared_ptr<McpAuthorization> authorization; /**< Exact host policy; never deserialized from protocol fields. */
+        nlohmann::json requestIdentity;                  /**< Exact immutable ID used for one-use approval, not an argument. */
 
-        /** @brief Reports cooperative cancellation or an elapsed deadline. */
-        [[nodiscard]] bool IsStopRequested() const noexcept {
-            return cancellation.IsCancellationRequested() || std::chrono::steady_clock::now() >= deadline;
-        }
+        /** @brief Reports cancellation, request deadline, credential expiry or revoked/missing authority.
+         * @return True when deferred work must stop before its next application commit.
+         * @note No timer thread terminates application work; retained jobs must poll this complete view. */
+        [[nodiscard]] bool IsStopRequested() const noexcept;
 
         /** @brief Publishes bounded progress if the operation still owns this callback. @param fraction Completion in [0,1].
          * @param phase Safe short application phase. */
@@ -114,14 +121,16 @@ namespace Horo::Mcp {
          * @brief Constructs a manager only when its controller and every finite limit are valid.
          * @param controller Shared controller lease that remains alive through admitted callbacks.
          * @param limits Host-declared session and request budgets.
+         * @param authorization Exact host-owned credential and trust policy; missing policy fails closed.
          * @return A manager or a typed configuration failure.
          */
         [[nodiscard]] static Result<std::shared_ptr<McpSessionManager>> Create(std::shared_ptr<IMcpRequestController> controller,
-                                                                               McpSessionLimits limits = {});
+                                                                               McpSessionLimits limits = {},
+                                                                               std::shared_ptr<McpAuthorization> authorization = {});
 
         /**
          * @brief Opens one explicitly approved local or embedded session.
-         * @param admission Immutable caller capability and project admission snapshot.
+         * @param admission Immutable admission carrying a live authenticated principal from the composed policy.
          * @return Generation-checked session handle or a typed admission/capacity failure.
          */
         [[nodiscard]] Result<McpSessionHandle> Open(McpSessionAdmission admission);
@@ -147,6 +156,8 @@ namespace Horo::Mcp {
          * @param session Current session handle.
          * @param projectIdentity New host-approved project identity, or no project.
          * @return New handle; old handles cannot dispatch or cancel new work.
+         * @note The new generation has no credential authority. Disconnect and authenticate a new
+         * session under the replacement project's trust policy before dispatching again.
          */
         [[nodiscard]] Result<McpSessionHandle> SwitchProject(McpSessionHandle session, std::optional<std::string> projectIdentity);
 

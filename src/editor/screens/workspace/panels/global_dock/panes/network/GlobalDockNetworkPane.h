@@ -5,6 +5,7 @@
 #include "Horo/Application/NetworkDebugger.h"
 
 #include <array>
+#include <string>
 struct ImVec2;
 
 namespace Horo::Editor {
@@ -42,6 +43,8 @@ namespace Horo::Editor {
         };
         void DrawToolbar(float width, const EditorGuiContext &context);
         void DrawEvidence(float width, const EditorGuiContext &context) const;
+        void DrawEvidenceRow(float width, const EditorGuiContext &context, const std::string &label, const std::string &value) const;
+        [[nodiscard]] bool DrawHistory(float width, const EditorGuiContext &context) const;
         void Request(Network::NetworkCaptureAction action);
         const Application::INetworkDebuggerQuery *query_{};
         Application::INetworkDebuggerControl *control_{};

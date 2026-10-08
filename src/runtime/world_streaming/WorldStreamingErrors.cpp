@@ -5,6 +5,20 @@
 namespace Horo::WorldStreaming::WorldStreamingErrors {
     using Internal::Describe;
 
+    const ErrorCodeDescriptor OwnerFrameInvalid =
+        Describe("world_streaming.owner_frame.invalid", ErrorSeverity::Error, "Owner-frame facts or unit cost are malformed.",
+                 "Provide a complete owner/frame policy and positive bounded unit costs.", true);
+    const ErrorCodeDescriptor OwnerFrameStale =
+        Describe("world_streaming.owner_frame.stale", ErrorSeverity::Warning, "Owner-frame admission has stale owner or clock evidence.",
+                 "Use the current scheduler frame and monotonic owner-service elapsed time.", false);
+    const ErrorCodeDescriptor OwnerFrameCapacityExceeded =
+        Describe("world_streaming.owner_frame.capacity_exceeded", ErrorSeverity::Error,
+                 "One indivisible work unit exceeds the frame target.",
+                 "Split detached preparation or retirement work, or use an explicit host loading barrier.", false);
+    const ErrorCodeDescriptor OwnerFrameDeferred =
+        Describe("world_streaming.owner_frame.deferred", ErrorSeverity::Info, "Prepared publication is deferred until another owner frame.",
+                 "Retain the prepared attempt and retry with the next shared frame budget.", false);
+
     const ErrorCodeDescriptor OriginFrameInvalid =
         Describe("world_streaming.origin_frame.invalid", ErrorSeverity::Error,
                  "An origin-frame binding or externally supplied local coordinate is malformed.",

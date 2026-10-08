@@ -37,7 +37,7 @@ namespace Horo::Network {
         limits.maximumTargetsPerTick = 1;
         auto capture = std::move(ReplicationStateCapture::Prepare(Read(lifecycle), registry, targets, limits)).Value();
         for (std::uint64_t tick = 1; tick <= 8; ++tick) {
-            for (auto &owner : owners)
+            for (const auto &owner : owners)
                 owner->Commit(tick, tick > 4 ? 7.0 : 2.0);
             const auto result = capture->CaptureAtCommit(Read(lifecycle, tick), tick);
             REQUIRE(result.HasValue());
@@ -90,17 +90,16 @@ namespace Horo::Network {
         bool passed = true;
         for (std::uint64_t tick = 2; tick <= 64; ++tick) {
             fixture.owner->Commit(tick, static_cast<double>(tick));
-            const auto world =
-                fixture.lifecycle.AcquireCaptureRead({World().scene, World().session, Runtime::RuntimePhase::NetworkFlush, tick, {}});
-            if (world.HasError()) {
+            if (const auto world =
+                    fixture.lifecycle.AcquireCaptureRead({World().scene, World().session, Runtime::RuntimePhase::NetworkFlush, tick, {}});
+                world.HasError()) {
                 passed = false;
-                break;
+            } else {
+                const auto report = fixture.capture->CaptureAtCommit(world.Value(), tick);
+                passed = report.HasValue() && report.Value().published == 1;
             }
-            const auto report = fixture.capture->CaptureAtCommit(world.Value(), tick);
-            if (report.HasError() || report.Value().published != 1) {
-                passed = false;
+            if (!passed)
                 break;
-            }
         }
         const auto after = Tests::AllocationProbe::Count();
         const auto reclaimed = Tests::AllocationProbe::FreeCount();
@@ -131,9 +130,8 @@ namespace Horo::Network {
         fixture.Capture(1);
         const auto prior = fixture.Pin();
         CancellationSource cancellation;
-        fixture.owner->context = &cancellation;
-        fixture.owner->onCapture = [](void *context) {
-            static_cast<CancellationSource *>(context)->RequestCancellation();
+        fixture.owner->onCapture = [&cancellation] {
+            cancellation.RequestCancellation();
         };
         REQUIRE(fixture.Capture(2, 5.0, cancellation.Token()).failed == 1);
         REQUIRE(fixture.Pin() == prior);
@@ -145,10 +143,8 @@ namespace Horo::Network {
         Fixture fixture;
         fixture.Capture(1);
         const auto prior = fixture.Pin();
-        fixture.codec->context = &fixture.lifecycle;
-        fixture.codec->onCompare = [](void *context) {
-            auto &world = *static_cast<ReplicationWorldLifecycle *>(context);
-            static_cast<void>(world.RetireObject(World().scene, World().session, Object().object));
+        fixture.codec->onCompare = [&fixture] {
+            static_cast<void>(fixture.lifecycle.RetireObject(World().scene, World().session, Object().object));
         };
         REQUIRE(fixture.Capture(2, 4.0).failed == 1);
         REQUIRE_FALSE(prior->IsCurrent());
@@ -182,7 +178,7 @@ namespace Horo::Network {
         REQUIRE(fixture.lifecycle.AcquireCaptureRead(work).HasError());
         bool affinityRejected{};
         const auto ownerRead = Read(fixture.lifecycle);
-        std::thread thread{[&] {
+        std::jthread thread{[&affinityRejected, &ownerRead] {
             affinityRejected = ownerRead.Resolve(Object().object).HasError();
         }};
         // Avoid cross-thread lifecycle access: only the immutable read is transferable.
@@ -198,7 +194,8 @@ namespace Horo::Network {
         Fixture fixture;
         fixture.Capture(1, 4.0);
         const auto baseline = fixture.Pin();
-        const std::array faults{WriterFault::Missing, WriterFault::Duplicate, WriterFault::Foreign, WriterFault::WrongKind};
+        using enum WriterFault;
+        const std::array faults{Missing, Duplicate, Foreign, WrongKind};
         std::uint64_t tick{2};
         for (const auto fault : faults) {
             fixture.owner->fault = fault;
@@ -246,9 +243,8 @@ namespace Horo::Network {
         Fixture fixture;
         fixture.Capture(1);
         const auto prior = fixture.Pin();
-        fixture.owner->context = fixture.owner.get();
-        fixture.owner->onCapture = [](void *context) {
-            static_cast<Owner *>(context)->committed = false;
+        fixture.owner->onCapture = [&fixture] {
+            fixture.owner->committed = false;
         };
         REQUIRE(fixture.Capture(2, 8.0).failed == 1);
         REQUIRE(fixture.Pin() == prior);

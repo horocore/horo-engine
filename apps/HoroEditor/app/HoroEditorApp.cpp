@@ -1187,20 +1187,22 @@ namespace Horo::Editor {
             PfdNativeDialogs nativeDialogs;
             Application::NetworkDebuggerService networkDebugger;
             GuiScreenHost screenHost{guiContext,
-                                     p.modalHost,
-                                     p.settings,
-                                     p.localization,
-                                     p.engineEvents,
-                                     p.projectCreationService,
-                                     p.background.jobs,
-                                     p.inputRouter,
-                                     p.rendererAvailability,
-                                     std::move(screenRegistry),
-                                     std::move(workspacePanelRegistry),
-                                     (std::uintptr_t)(void *)(intptr_t)p.textures.logo,
-                                     extensionInventoryRefresh.HasValue() ? &extensionInventory : nullptr,
-                                     extensionInventoryRefresh.HasValue() ? &extensionMarketplace : nullptr,
-                                     &nativeDialogs};
+                                     GuiScreenHostComposition{.modalHost = p.modalHost,
+                                                              .settingsService = p.settings,
+                                                              .localization = p.localization,
+                                                              .engineEvents = p.engineEvents,
+                                                              .creationService = p.projectCreationService,
+                                                              .jobs = p.background.jobs,
+                                                              .inputRouter = p.inputRouter,
+                                                              .rendererAvailability = p.rendererAvailability,
+                                                              .screenRegistry = std::move(screenRegistry),
+                                                              .workspacePanelRegistry = std::move(workspacePanelRegistry),
+                                                              .logoTexture = (std::uintptr_t)(void *)(intptr_t)p.textures.logo,
+                                                              .extensionInventory =
+                                                                  extensionInventoryRefresh.HasValue() ? &extensionInventory : nullptr,
+                                                              .extensionMarketplace =
+                                                                  extensionInventoryRefresh.HasValue() ? &extensionMarketplace : nullptr,
+                                                              .nativeDialogs = &nativeDialogs}};
             screenHost.Services().Register<IEditorViewportRenderer>(p.presentation.viewportRenderer);
             screenHost.Services().Register<IEditorGuiRenderer>(p.presentation.guiRenderer);
             screenHost.Services().Register<EditorViewportSceneState>(viewportSceneState);

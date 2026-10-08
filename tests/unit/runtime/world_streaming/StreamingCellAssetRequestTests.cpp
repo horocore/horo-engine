@@ -260,6 +260,15 @@ namespace Horo::WorldStreaming {
             mutable std::atomic<bool> release{};
         };
 
+        /** @brief Simulates successive owner frames while actual uncancellable reads drain in the regression. */
+        Result<StreamingCellOperation> PollNextFrame(StreamingCellDirectionOwner &owner, const StreamingSchedulerAdmissionLedger &scheduler,
+                                                     std::uint64_t &frame) {
+            auto budget = StreamingOwnerFrameBudget::Create({scheduler.Owner(), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                                             IdentityFrom<StreamingOwnerFrameId>(++frame), 2000000, 1})
+                              .Value();
+            return owner.PollRetirement(budget, 0);
+        }
+
         class AssetRetirementParticipant final : public IStreamingCellRetirementParticipant {
         public:
             explicit AssetRetirementParticipant(bool &published) : published_(published) {}
@@ -282,6 +291,10 @@ namespace Horo::WorldStreaming {
             }
 
             void BeginRetirement() noexcept override {}
+
+            std::uint64_t MaximumRetirementNanoseconds() const noexcept override {
+                return 1000000;
+            }
 
             Result<std::optional<StreamingCellRetirementAcknowledgement>> PollRetirement() override {
                 if (!request_)
@@ -321,6 +334,7 @@ namespace Horo::WorldStreaming {
         LoadHarness loads{provider, 1};
         ReleaseRead release{provider};
         auto scheduler = RetirementScheduler();
+        std::uint64_t frame{};
         const auto operation = StreamingCellOperation::Create(CandidateTestSupport::Operation(), StreamingCellOperationKind::Load).Value();
         std::vector<std::unique_ptr<IStreamingCellRetirementParticipant>> participants;
         bool published{};
@@ -343,7 +357,7 @@ namespace Horo::WorldStreaming {
                     .UpdateDemand(operation.Handle(), IdentityFrom<StreamingCellDemandRevision>(1),
                                   IdentityFrom<StreamingCellDemandRevision>(2), StreamingDesiredResidency::Unloaded)
                     .HasValue());
-        REQUIRE(owner.PollRetirement().Value().State() == StreamingCellOperationState::Retiring);
+        REQUIRE(PollNextFrame(owner, scheduler, frame).Value().State() == StreamingCellOperationState::Retiring);
         REQUIRE(scheduler.ReservedCapacityUnits() == 5);
         REQUIRE(owner
                     .UpdateDemand(operation.Handle(), IdentityFrom<StreamingCellDemandRevision>(2),
@@ -352,7 +366,7 @@ namespace Horo::WorldStreaming {
         provider.release.store(true);
         const auto drainDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
         while (!owner.Operation().IsTerminal() && std::chrono::steady_clock::now() < drainDeadline) {
-            REQUIRE(owner.PollRetirement().HasValue());
+            REQUIRE(PollNextFrame(owner, scheduler, frame).HasValue());
             std::this_thread::yield();
         }
         REQUIRE(owner.Operation().IsTerminal());

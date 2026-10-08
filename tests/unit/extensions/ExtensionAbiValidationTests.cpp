@@ -5,16 +5,36 @@
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <type_traits>
+
+// Real C ABI test endpoints; these are not exported SDK entry points.
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC visibility push(hidden)
+#endif
+extern "C" {
+HoroExtensionStatus HoroTestRegisterUnused(void *, const HoroAssetImporterDescriptor *) noexcept {
+    return HORO_EXTENSION_SUCCESS;
+}
+
+HoroExtensionStatus HoroTestRegisterProviderUnused(void *, const HoroPlatformServicesProviderDescriptor *) noexcept {
+    return HORO_EXTENSION_SUCCESS;
+}
+
+HoroExtensionStatus HoroTestRegisterActivityUnused(void *, const HoroEditorActivityDescriptor *, HoroEditorActivitySessionApi *) noexcept {
+    return HORO_EXTENSION_SUCCESS;
+}
+}
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC visibility pop
+#endif
 
 namespace Horo::Extensions::Tests {
     namespace {
-        HoroExtensionStatus RegisterUnused(void *, const HoroAssetImporterDescriptor *) {
-            return HORO_EXTENSION_SUCCESS;
-        }
-
-        HoroExtensionStatus RegisterProviderUnused(void *, const HoroPlatformServicesProviderDescriptor *) {
-            return HORO_EXTENSION_SUCCESS;
-        }
+        static_assert(std::is_convertible_v<decltype(&HoroTestRegisterUnused), decltype(HoroExtensionHostApi::registerAssetImporter)>);
+        static_assert(std::is_convertible_v<decltype(&HoroTestRegisterProviderUnused),
+                                            decltype(HoroExtensionHostApi::registerPlatformServicesProvider)>);
+        static_assert(
+            std::is_convertible_v<decltype(&HoroTestRegisterActivityUnused), decltype(HoroExtensionHostApi::registerEditorActivity)>);
 
         HoroExtensionStatus QueryLegacy(HoroExtensionRequirements *requirements) {
             *requirements = {.structSize = sizeof(HoroExtensionRequirements),
@@ -49,14 +69,14 @@ namespace Horo::Extensions::Tests {
     TEST_CASE("ABI negotiation accepts compatible minors and requires requested functions", "[Extensions][ABI]") {
         HoroExtensionHostApi host{.structSize = sizeof(HoroExtensionHostApi),
                                   .abiVersion = HORO_EXTENSION_ABI_VERSION,
-                                  .registerAssetImporter = RegisterUnused,
+                                  .registerAssetImporter = HoroTestRegisterUnused,
                                   .abiMinorVersion = HORO_EXTENSION_ABI_MINOR_VERSION};
         CHECK(NegotiateModuleAbi(nullptr, host) == HORO_EXTENSION_SUCCESS);
         CHECK(NegotiateModuleAbi(QueryLegacy, host) == HORO_EXTENSION_SUCCESS);
         CHECK(NegotiateModuleAbi(QueryV11, host) == HORO_EXTENSION_SUCCESS);
         CHECK(NegotiateModuleAbi(QueryCurrent, host) == HORO_EXTENSION_SUCCESS);
         CHECK(NegotiateModuleAbi(QueryProvider, host) == HORO_EXTENSION_ERROR_INVALID_ARGS);
-        host.registerPlatformServicesProvider = RegisterProviderUnused;
+        host.registerPlatformServicesProvider = HoroTestRegisterProviderUnused;
         CHECK(NegotiateModuleAbi(QueryProvider, host) == HORO_EXTENSION_SUCCESS);
         host.registerPlatformServicesProvider = nullptr;
         host.registerAssetImporter = nullptr;
@@ -66,7 +86,7 @@ namespace Horo::Extensions::Tests {
     TEST_CASE("ABI negotiation rejects malformed requirements before load", "[Extensions][ABI]") {
         const HoroExtensionHostApi host{.structSize = sizeof(HoroExtensionHostApi),
                                         .abiVersion = HORO_EXTENSION_ABI_VERSION,
-                                        .registerAssetImporter = RegisterUnused,
+                                        .registerAssetImporter = HoroTestRegisterUnused,
                                         .abiMinorVersion = HORO_EXTENSION_ABI_MINOR_VERSION};
         const std::array<HoroExtensionQueryFunc, 6> invalid{[](HoroExtensionRequirements *r) -> HoroExtensionStatus {
             QueryLegacy(r);
@@ -90,7 +110,7 @@ namespace Horo::Extensions::Tests {
             return HORO_EXTENSION_SUCCESS;
         }, [](HoroExtensionRequirements *r) -> HoroExtensionStatus {
             QueryLegacy(r);
-            r->requiredFunctions = 4;
+            r->requiredFunctions = 8;
             return HORO_EXTENSION_SUCCESS;
         }};
         for (const auto query : invalid)
@@ -101,6 +121,34 @@ namespace Horo::Extensions::Tests {
         CHECK(NegotiateModuleAbi([](HoroExtensionRequirements *) -> HoroExtensionStatus {
             throw std::runtime_error("invalid native callback");
         }, host) == HORO_EXTENSION_ERROR_INIT_FAILED);
+    }
+
+    TEST_CASE("ABI 1.4 keeps the 1.3 prefix valid and rejects editor transport without exact negotiation", "[Extensions][ABI][Activity]") {
+        HoroExtensionHostApi oldHost{.structSize = offsetof(HoroExtensionHostApi, registerEditorActivity),
+                                     .abiVersion = 1,
+                                     .registerAssetImporter = HoroTestRegisterUnused,
+                                     .abiMinorVersion = 3,
+                                     .registerPlatformServicesProvider = HoroTestRegisterProviderUnused};
+        const HoroExtensionQueryFunc oldQuery = [](HoroExtensionRequirements *requirements) -> HoroExtensionStatus {
+            QueryProvider(requirements);
+            requirements->minimumHostMinor = 3;
+            requirements->requiredHostApiSize = offsetof(HoroExtensionHostApi, registerEditorActivity);
+            return HORO_EXTENSION_SUCCESS;
+        };
+        const HoroExtensionQueryFunc editorQuery = [](HoroExtensionRequirements *requirements) -> HoroExtensionStatus {
+            QueryCurrent(requirements);
+            requirements->requiredFunctions = HORO_EXTENSION_REQUIRES_EDITOR_ACTIVITY;
+            return HORO_EXTENSION_SUCCESS;
+        };
+        CHECK(NegotiateModuleAbi(oldQuery, oldHost) == HORO_EXTENSION_SUCCESS);
+        CHECK(NegotiateModuleAbi(editorQuery, oldHost) == HORO_EXTENSION_ERROR_VERSION_MISMATCH);
+        auto current = oldHost;
+        current.structSize = sizeof(HoroExtensionHostApi);
+        current.abiMinorVersion = 4;
+        CHECK(NegotiateModuleAbi(editorQuery, current) == HORO_EXTENSION_ERROR_INVALID_ARGS);
+        current.registerEditorActivity = HoroTestRegisterActivityUnused;
+        CHECK(NegotiateModuleAbi(editorQuery, current) == HORO_EXTENSION_SUCCESS);
+        CHECK(NegotiateModuleAbi(oldQuery, current) == HORO_EXTENSION_SUCCESS);
     }
 
     TEST_CASE("Module result sizes accept complete legacy prefixes only", "[Extensions][ABI]") {

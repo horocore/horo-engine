@@ -45,6 +45,10 @@ namespace Horo::Network {
         [[nodiscard]] bool IsCurrent() const noexcept;
         /** @brief Returns exact source occurrence. @return Owned mapping provenance. */
         [[nodiscard]] const NetworkObjectMappingEntry &Object() const noexcept;
+        /** @brief Returns pinned capture-world identity for downstream generation fencing.
+         * @return Immutable capture read; consult IsCurrent before its descriptor.
+         */
+        [[nodiscard]] const ReplicationWorldCaptureRead &World() const noexcept;
         /** @brief Returns committed capture tick. @return Positive owner simulation tick. */
         [[nodiscard]] std::uint64_t SimulationTick() const noexcept;
         /** @brief Returns owner source revision. @return Positive committed source revision. */

@@ -36,6 +36,48 @@ namespace Horo::Editor {
             }
             return "workspace.global_dock.network.unavailable";
         }
+
+        /** @brief Formats transport evidence while preserving explicit gameplay admission. */
+        std::string DescribeRecord(const Network::NetworkConnectionRecord &record, const EditorGuiContext &context) {
+            const char *key = record.gameplayAdmitted ? "workspace.global_dock.network.event.admitted" : EventKey(record.event);
+            return std::format("{}:{} | {} | {}", record.connection.Slot(), record.connection.Generation(),
+                               context.localization.Get("editor", key), record.bytes);
+        }
+
+        /** @brief Formats committed replication counts in legend order. */
+        std::string DescribeRecord(const Network::NetworkReplicationRecord &record, const EditorGuiContext &) {
+            return std::format("{} / {} / {} / {} / {} / {}", record.registered, record.retired, record.considered, record.published,
+                               record.failed, record.deferred);
+        }
+
+        /** @brief Formats admitted RPC execution counts in legend order. */
+        std::string DescribeRecord(const Network::NetworkRpcRecord &record, const EditorGuiContext &) {
+            return std::format("{} / {} / {} / {}", record.accepted, record.succeeded, record.failed, record.cancelled);
+        }
+
+        /** @brief Formats timing evidence while retaining unavailable and stale provenance. */
+        std::string DescribeRecord(const Network::NetworkPredictionRecord &record, const EditorGuiContext &context) {
+            const char *key = record.hasMapping && !record.stale ? "workspace.global_dock.network.timing.measured"
+                                                                 : "workspace.global_dock.network.unavailable";
+            return std::format("{} / {} / {} | {}", record.localTick, record.serverTick, record.sampleAgeTicks,
+                               context.localization.Get("editor", key));
+        }
+
+        /** @brief Formats owner-provided interest counts in legend order. */
+        std::string DescribeRecord(const Network::NetworkInterestRecord &record, const EditorGuiContext &) {
+            return std::format("{} / {} / {}", record.considered, record.relevant, record.deferred);
+        }
+
+        /** @brief Formats metadata-only capture entries with their localized evidence category. */
+        std::string DescribeRecord(const Network::NetworkCaptureRecord &record, const EditorGuiContext &context) {
+            return std::format("{} | {} | {}", record.sequence,
+                               context.localization.Get("editor", ViewKeys[static_cast<std::size_t>(record.kind)]), record.amount);
+        }
+
+        /** @brief Draws the unfiltered legend for the selected evidence category. */
+        void DrawLegend(const float width, const EditorGuiContext &context, const char *key) {
+            DrawGlobalDockWrappedText(width, context.localization.Get("editor", key), GlobalDockTone::Neutral, context.theme.fonts);
+        }
     }  // namespace
 
     /** @copydoc GlobalDockNetworkPane::Attach */
@@ -141,80 +183,70 @@ namespace Horo::Editor {
         ImGui::EndChild();
     }
 
-    /** @brief Formats only retained measured evidence; missing producers stay explicitly unavailable. */
-    void GlobalDockNetworkPane::DrawEvidence(const float width, const EditorGuiContext &context) const {
+    /** @brief Filters one formatted row using the retained search query. */
+    void GlobalDockNetworkPane::DrawEvidenceRow(const float width, const EditorGuiContext &context, const std::string &label,
+                                                const std::string &value) const {
+        if (!GlobalDockContainsCaseInsensitive(label, search_.data()) && !GlobalDockContainsCaseInsensitive(value, search_.data()))
+            return;
+        DrawGlobalDockWrappedText(width, std::format("{}: {}", label, value), GlobalDockTone::Neutral, context.theme.fonts);
+    }
+
+    /** @brief Draws the selected bounded history and reports whether the producer supplied any records. */
+    bool GlobalDockNetworkPane::DrawHistory(const float width, const EditorGuiContext &context) const {
         const auto &s = projection_.snapshot;
-        const auto text = [&](const char *key) -> const std::string & {
-            return context.localization.Get("editor", key);
-        };
-        const auto row = [&](const std::string &label, const std::string &value) {
-            if (!GlobalDockContainsCaseInsensitive(label, search_.data()) && !GlobalDockContainsCaseInsensitive(value, search_.data()))
-                return;
-            DrawGlobalDockWrappedText(width, std::format("{}: {}", label, value), GlobalDockTone::Neutral, context.theme.fonts);
-        };
-        ImGui::BeginChild("##NetworkEvidence", {std::max(1.0F, width), 0.0F}, false, ImGuiWindowFlags_NoSavedSettings);
-        row(text("workspace.global_dock.network.metric.rtt"),
-            s.metrics.rttAvailable ? std::to_string(s.metrics.rttMilliseconds) : text("workspace.global_dock.network.unavailable"));
-        row(text("workspace.global_dock.network.metric.receive"),
-            s.metrics.enabled ? std::to_string(s.metrics.bytes[1][0]) : text("workspace.global_dock.network.unavailable"));
-        row(text("workspace.global_dock.network.metric.send"),
-            s.metrics.enabled ? std::to_string(s.metrics.bytes[0][0]) : text("workspace.global_dock.network.unavailable"));
-        row(text("workspace.global_dock.network.dropped"), std::to_string(s.capture.dropped));
         bool available = false;
-        const auto totals = [&](const auto &history, const auto &format) {
+        const auto totals = [this, width, &context, &available](const auto &history) {
             available = history.size != 0;
             for (std::size_t i = 0; i < history.size; ++i)
-                row(std::to_string(i + 1), format(history.records[i]));
-            row(text("workspace.global_dock.network.history_evicted"), std::to_string(history.dropped));
+                DrawEvidenceRow(width, context, std::to_string(i + 1), DescribeRecord(history.records[i], context));
+            DrawEvidenceRow(width, context, context.localization.Get("editor", "workspace.global_dock.network.history_evicted"),
+                            std::to_string(history.dropped));
         };
         switch (view_) {
             case View::Connections:
-                totals(s.connections, [&](const auto &r) {
-                    return std::format("{}:{} | {} | {}", r.connection.Slot(), r.connection.Generation(),
-                                       text(r.gameplayAdmitted ? "workspace.global_dock.network.event.admitted" : EventKey(r.event)),
-                                       r.bytes);
-                });
+                totals(s.connections);
                 break;
             case View::Replication:
-                DrawGlobalDockWrappedText(width, text("workspace.global_dock.network.replication_legend"), GlobalDockTone::Neutral,
-                                          context.theme.fonts);
-                totals(s.replication, [](const auto &r) {
-                    return std::format("{} / {} / {} / {} / {} / {}", r.registered, r.retired, r.considered, r.published, r.failed,
-                                       r.deferred);
-                });
+                DrawLegend(width, context, "workspace.global_dock.network.replication_legend");
+                totals(s.replication);
                 break;
             case View::Rpc:
-                DrawGlobalDockWrappedText(width, text("workspace.global_dock.network.rpc_legend"), GlobalDockTone::Neutral,
-                                          context.theme.fonts);
-                totals(s.rpc, [](const auto &r) {
-                    return std::format("{} / {} / {} / {}", r.accepted, r.succeeded, r.failed, r.cancelled);
-                });
+                DrawLegend(width, context, "workspace.global_dock.network.rpc_legend");
+                totals(s.rpc);
                 break;
             case View::Prediction:
-                DrawGlobalDockWrappedText(width, text("workspace.global_dock.network.prediction_legend"), GlobalDockTone::Neutral,
-                                          context.theme.fonts);
-                totals(s.prediction, [&](const auto &r) {
-                    return std::format("{} / {} / {} | {}", r.localTick, r.serverTick, r.sampleAgeTicks,
-                                       text(r.hasMapping && !r.stale ? "workspace.global_dock.network.timing.measured"
-                                                                     : "workspace.global_dock.network.unavailable"));
-                });
+                DrawLegend(width, context, "workspace.global_dock.network.prediction_legend");
+                totals(s.prediction);
                 break;
             case View::Interest:
-                DrawGlobalDockWrappedText(width, text("workspace.global_dock.network.interest_legend"), GlobalDockTone::Neutral,
-                                          context.theme.fonts);
-                totals(s.interest, [](const auto &r) {
-                    return std::format("{} / {} / {}", r.considered, r.relevant, r.deferred);
-                });
+                DrawLegend(width, context, "workspace.global_dock.network.interest_legend");
+                totals(s.interest);
                 break;
             case View::Capture:
-                totals(s.capture, [&](const auto &r) {
-                    return std::format("{} | {} | {}", r.sequence, text(ViewKeys[static_cast<std::size_t>(r.kind)]), r.amount);
-                });
+                totals(s.capture);
                 break;
             case View::Count:
                 break;
         }
-        if (!available)
+        return available;
+    }
+
+    /** @brief Formats only retained measured evidence; missing producers stay explicitly unavailable. */
+    void GlobalDockNetworkPane::DrawEvidence(const float width, const EditorGuiContext &context) const {
+        const auto &s = projection_.snapshot;
+        const auto text = [&context](const char *key) -> const std::string & {
+            return context.localization.Get("editor", key);
+        };
+        ImGui::BeginChild("##NetworkEvidence", {std::max(1.0F, width), 0.0F}, false, ImGuiWindowFlags_NoSavedSettings);
+        DrawEvidenceRow(width, context, text("workspace.global_dock.network.metric.rtt"),
+                        s.metrics.rttAvailable ? std::to_string(s.metrics.rttMilliseconds)
+                                               : text("workspace.global_dock.network.unavailable"));
+        DrawEvidenceRow(width, context, text("workspace.global_dock.network.metric.receive"),
+                        s.metrics.enabled ? std::to_string(s.metrics.bytes[1][0]) : text("workspace.global_dock.network.unavailable"));
+        DrawEvidenceRow(width, context, text("workspace.global_dock.network.metric.send"),
+                        s.metrics.enabled ? std::to_string(s.metrics.bytes[0][0]) : text("workspace.global_dock.network.unavailable"));
+        DrawEvidenceRow(width, context, text("workspace.global_dock.network.dropped"), std::to_string(s.capture.dropped));
+        if (!DrawHistory(width, context))
             DrawGlobalDockWrappedText(width, text("workspace.global_dock.network.unavailable"), GlobalDockTone::Neutral,
                                       context.theme.fonts);
         ImGui::EndChild();

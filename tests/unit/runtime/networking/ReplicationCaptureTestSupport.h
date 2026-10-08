@@ -5,12 +5,25 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <functional>
 #include <memory>
 #include <new>
 #include <stdexcept>
 
 namespace Horo::Network::CaptureTestSupport {
-    using namespace TestSupport;
+    using TestSupport::Bytes;
+    using TestSupport::Codec;
+    using TestSupport::Connection;
+    using TestSupport::Field;
+    using TestSupport::FieldIdValue;
+    using TestSupport::Id;
+    using TestSupport::Limits;
+    using TestSupport::RequireError;
+    using TestSupport::Schema;
+    using TestSupport::SchemaId;
+    using TestSupport::Session;
+    using TestSupport::ValueType;
+    using TestSupport::WireIdentity;
 
     inline ReplicationWorldActivationDescriptor World(const std::uint64_t generation = 1,
                                                       const ReplicationExecutionRole role = ReplicationExecutionRole::AuthorityServer) {
@@ -60,7 +73,7 @@ namespace Horo::Network::CaptureTestSupport {
         Result<bool> CanonicallyEqual(const ReplicationRuntimeValue &left, const ReplicationRuntimeValue &right) const override {
             ++compareCalls;
             if (onCompare)
-                onCompare(context);
+                onCompare();
             return scalar->CanonicallyEqual(left, right);
         }
 
@@ -68,8 +81,7 @@ namespace Horo::Network::CaptureTestSupport {
         std::shared_ptr<const CanonicalScalarReplicationSerializer> scalar;
         mutable std::size_t encodeCalls{};
         mutable std::size_t compareCalls{};
-        void *context{};
-        void (*onCompare)(void *){};
+        std::function<void()> onCompare;
     };
 
     inline std::shared_ptr<const ReplicationSerializerRegistry> Registry(const std::shared_ptr<CountingCodec> &codec,
@@ -101,12 +113,18 @@ namespace Horo::Network::CaptureTestSupport {
     /** @brief Models a foreign owner ABI exception without imposing the standard library's exception inheritance. */
     struct ForeignCallbackFault final {};
 
+    class OwnerCallbackError final : public std::runtime_error {
+    public:
+        OwnerCallbackError() : std::runtime_error("owner fault") {}
+    };
+
     inline void ThrowCallback(const CallbackThrow mode) {
-        if (mode == CallbackThrow::Allocation)
+        using enum CallbackThrow;
+        if (mode == Allocation)
             throw std::bad_alloc{};
-        if (mode == CallbackThrow::Unexpected)
-            throw std::runtime_error{"owner fault"};
-        if (mode == CallbackThrow::Foreign)
+        if (mode == Unexpected)
+            throw OwnerCallbackError{};
+        if (mode == Foreign)
             throw ForeignCallbackFault{};
     }
 
@@ -131,7 +149,7 @@ namespace Horo::Network::CaptureTestSupport {
             ThrowCallback(throwCapture);
             ++captures;
             if (onCapture)
-                onCapture(context);
+                onCapture();
             if (fail)
                 return Result<void>::Failure(MakeError(ReplicationCaptureErrors::Invalid));
             using enum WriterFault;
@@ -169,12 +187,14 @@ namespace Horo::Network::CaptureTestSupport {
         bool committed{true};
         bool fail{};
         mutable bool reading{};
-        mutable std::size_t begins{}, captures{}, ends{};
-        void *context{};
-        void (*onCapture)(void *){};
+        mutable std::size_t begins{};
+        mutable std::size_t captures{};
+        mutable std::size_t ends{};
+        std::function<void()> onCapture;
 
     private:
-        std::uint64_t tick_{1}, revision_{1};
+        std::uint64_t tick_{1};
+        std::uint64_t revision_{1};
         double value_{};
     };
 
