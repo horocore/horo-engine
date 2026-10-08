@@ -2974,6 +2974,20 @@ target_compile_features(HoroRuntimeSaveAutosaveSchedulerTests PRIVATE cxx_std_20
 target_include_directories(HoroRuntimeSaveAutosaveSchedulerTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroRuntimeSaveAutosaveSchedulerTests PRIVATE HoroEngine::Runtime)
 
+add_executable(HoroRuntimeSaveEventTriggersTests
+        unit/runtime/save/SaveEventTriggersTests.cpp
+        unit/runtime/save/SaveEventTransitionTests.cpp
+)
+target_compile_features(HoroRuntimeSaveEventTriggersTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeSaveEventTriggersTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroRuntimeSaveEventTriggersTests PRIVATE HoroEngine::Runtime)
+
+add_executable(HoroSaveEventTriggersPublicHeaderConsumer support/SaveEventTriggersPublicHeaderConsumer.cpp)
+target_compile_features(HoroSaveEventTriggersPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroSaveEventTriggersPublicHeaderConsumer PRIVATE HoroEngine::Runtime)
+add_test(NAME HoroSaveEventTriggersPublicHeaderConsumer COMMAND HoroSaveEventTriggersPublicHeaderConsumer)
+set_tests_properties(HoroSaveEventTriggersPublicHeaderConsumer PROPERTIES LABELS "unit;save;headless;ci-windows")
+
 add_executable(HoroSaveAutosavePublicHeaderConsumer support/SaveAutosavePublicHeaderConsumer.cpp)
 target_compile_features(HoroSaveAutosavePublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroSaveAutosavePublicHeaderConsumer PRIVATE HoroEngine::Runtime)
@@ -3796,6 +3810,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeSaveStoragePolicyTests
         HoroRuntimeSaveOperationArbiterTests
         HoroRuntimeSaveAutosaveSchedulerTests
+        HoroRuntimeSaveEventTriggersTests
         HoroRuntimeSaveSlotCommitTransactionTests
         HoroRuntimeSaveSlotRecoveryTests
         HoroRuntimeSaveSafePointCoordinatorTests
