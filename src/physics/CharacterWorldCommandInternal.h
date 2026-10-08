@@ -247,9 +247,9 @@ namespace Horo::Character::Detail {
         if (geometryChanged && !input.query.sweep) {
             ClearGroundEvidence(movement, descriptor.up);
         }
-        movement.groundTransition = movement.grounded == previous.publication.grounded
-                                        ? CharacterGroundTransition::None
-                                        : (movement.grounded ? CharacterGroundTransition::Landed : CharacterGroundTransition::LeftGround);
+        movement.groundTransition = CharacterGroundTransition::None;
+        if (movement.grounded != previous.publication.grounded)
+            movement.groundTransition = movement.grounded ? CharacterGroundTransition::Landed : CharacterGroundTransition::LeftGround;
         return Result<CharacterMovementResult>::Success(std::move(movement));
     }
 
