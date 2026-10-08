@@ -13,8 +13,10 @@
 namespace Horo::Prefab {
     /** @brief Exact immutable source context captured for one root resolution. */
     struct PrefabResolutionRevision final {
-        Assets::AssetRegistryRevision registry; /**< Asset Registry publication used for every lookup. */
-        PrefabSourceRevision rootSource;        /**< Root document revision used for expansion. */
+        Assets::AssetRegistryRevision registry;         /**< Asset Registry publication used for every lookup. */
+        PrefabSourceRevision rootSource;                /**< Root document revision used for expansion. */
+        std::vector<PrefabDependencyNode> dependencies; /**< Canonical reachable nodes, including the root; no paths. */
+        std::vector<PrefabDependencyEdge> edges;        /**< Canonical reachable semantic edges used by expansion. */
 
         [[nodiscard]] bool operator==(const PrefabResolutionRevision &) const noexcept = default;
     };
@@ -35,7 +37,7 @@ namespace Horo::Prefab {
     public:
         /** @brief Returns the root asset identity. @return Stable path-independent identity. */
         [[nodiscard]] Assets::AssetId RootAsset() const noexcept;
-        /** @brief Returns the exact registry and root-source revisions used. @return Immutable revision context. */
+        /** @brief Returns the exact registry, reachable source and graph revisions used. @return Immutable revision context. */
         [[nodiscard]] const PrefabResolutionRevision &Revision() const noexcept;
         /** @brief Returns the canonical expanded hierarchy. @return Borrowed immutable objects. */
         [[nodiscard]] std::span<const ResolvedPrefabObject> Objects() const noexcept;
@@ -69,7 +71,24 @@ namespace Horo::Prefab {
         [[nodiscard]] Result<EffectivePrefabCandidate> Resolve(Assets::AssetId rootAsset, PrefabInstanceId instance,
                                                                const PrefabLimitProfile &limits) const;
 
+        /**
+         * @brief Fences captured preview/cache evidence against this publication without invalidating unrelated roots.
+         * @param rootAsset Captured root identity.
+         * @param revision Immutable evidence retained with the candidate or expanded subtree.
+         * @param changedAssets Complete asset publication identities since the captured registry revision, including resource content
+         * edits.
+         * @param limits Captured work policy; failed or over-budget inspection never reports synchronization.
+         * @return Success for an unchanged reachable graph, or ResolutionStale/typed budget failure.
+         * @note Owner publication boundary only. Notifications must cover every intervening publication; registry metadata alone
+         * cannot detect ordinary resource content edits. Retired snapshots and leases remain immutable.
+         */
+        [[nodiscard]] Result<void> ValidateRevisionPublication(Assets::AssetId rootAsset, const PrefabResolutionRevision &revision,
+                                                               std::span<const Assets::AssetId> changedAssets,
+                                                               const PrefabLimitProfile &limits) const;
+
     private:
+        /** @brief Captures the canonical reachable graph, charging caller-owned bounded work before allocation. */
+        [[nodiscard]] Result<PrefabResolutionRevision> CaptureRevision(Assets::AssetId rootAsset, PrefabExpansionBudget &budget) const;
         friend Result<PrefabSourceResolverSnapshot> BuildPrefabSourceResolverSnapshot(const Assets::AssetRegistrySnapshot &,
                                                                                       std::vector<PrefabDependencySource>,
                                                                                       const PrefabLimitProfile &);
@@ -94,8 +113,8 @@ namespace Horo::Prefab {
     /**
      * @brief Fences a completed worker candidate against the current publication context.
      * @param candidate Completed immutable worker result.
-     * @param current Current registry and root-document revisions at the owner-thread publication boundary.
-     * @return Success only when both captured revisions still match; otherwise PrefabErrors::ResolutionStale.
+     * @param current Complete current revision evidence at the owner-thread worker publication boundary.
+     * @return Success only when the complete captured context matches; otherwise PrefabErrors::ResolutionStale.
      */
     [[nodiscard]] Result<void> ValidatePrefabCandidatePublication(const EffectivePrefabCandidate &candidate,
                                                                   const PrefabResolutionRevision &current);

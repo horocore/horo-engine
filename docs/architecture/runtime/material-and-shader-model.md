@@ -372,6 +372,44 @@ payload digest before returning owned bytes. Stale, foreign, oversized, and
 corrupt blobs return distinct typed failures; callers discard them and prepare
 from the cooked artifact outside frame-hot execution.
 
+### Pipeline usage and prewarming implementation
+
+`PipelinePreparation` is the backend-neutral owner of preparation admission,
+readiness and runtime compilation policy. Hosts pass an owned finite
+`PipelineUsageManifest` with exact `PipelineCacheKey` identities and a unique
+operation generation. The host must first validate cooked artifacts, reflection,
+capabilities and pass/layout compatibility; manifest flags do not replace those
+checks. Native cache rejection still rebuilds from the same admitted artifact.
+
+Packaged preparation rejects every missing cooked artifact. Development mode may
+explicitly dispatch `CompileSource` to a host-owned structured worker group;
+success acknowledges publication of the exact validated artifact, then permits
+`RealizeCooked` at a non-frame-hot graphics preparation boundary. Native realization
+is also needed on source-compiler-free packaged hosts. No compiler or backend runs
+inside admission or frame-time binding. Required entries gate release/scene
+activation through `CheckReady`; optional entries may bind only an explicitly
+listed, cooked, compatible and resident fallback. Binding reports the fallback
+and increments its diagnostic counter; it never schedules work.
+
+Storage, in-flight count, dispatch count and estimated batch time have finite
+bounds. Estimates bound admission rather than promising native driver preemption.
+Measured completion time, maximum duration and threshold exceedances expose
+preparation hitch risk; these are CPU preparation costs, not GPU timestamps or a
+claim that a gameplay frame blocked. The host records actual frame hitches using
+its existing frame metrics. Original compiler/backend errors remain available to
+binding/readiness consumers. A failed candidate never replaces last-good renderer
+resources; replacement and deferred retirement remain registry responsibilities.
+
+All coordinator access is on its owner thread. Work messages own only identity
+and action; the host task group owns immutable compilation snapshots, adapters,
+cancellation and completion delivery. Hosts retain those resources until jobs
+join, validate exact generation/key/stage completions on the owner thread and
+close preparation before shutdown. Cancellation stops admission permanently and
+late or duplicate completions cannot publish readiness. Existing pipeline cache
+callers migrate by preparing this usage policy at loading boundaries; no public
+cache API is removed, and generated public-header consumer targets cover both new
+headers under `HoroRenderApi`.
+
 Material parameters remain typed semantic values. Renderer packing uses the
 selected artifact's validated target offsets/strides and binding map; C++ struct
 layout or another backend's reflection cannot substitute for that map.

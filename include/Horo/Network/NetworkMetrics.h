@@ -17,6 +17,7 @@
 
 namespace Horo::Network {
     class NetworkIoService;
+    class NetworkDebugger;
     /** @brief Fixed measurement categories; no protocol, message, or peer identifier becomes a label. */
     enum class NetworkMetricCategory : std::uint8_t {
         Transport,
@@ -100,8 +101,9 @@ namespace Horo::Network {
     public:
         /** @brief Creates one owner generation on the calling thread.
          * @param generation Nonzero host-issued lifetime generation.
-         * @param enabled Whether collection is enabled. Zero generation always disables collection. */
-        explicit NetworkMetrics(std::uint64_t generation, bool enabled);
+         * @param enabled Whether collection is enabled. Zero generation always disables collection.
+         * @param debugger Optional owner-thread collector that outlives this metrics owner. */
+        explicit NetworkMetrics(std::uint64_t generation, bool enabled, NetworkDebugger *debugger = nullptr);
         /** @brief Disables late producer admission even if the host omitted explicit Close. */
         ~NetworkMetrics();
         NetworkMetrics(const NetworkMetrics &) = delete;
@@ -163,6 +165,8 @@ namespace Horo::Network {
         [[nodiscard]] bool Invalid() noexcept;
         static void AddSaturating(std::uint64_t &target, std::uint64_t delta, bool &saturated) noexcept;
 
+        NetworkDebugger *debugger_{};
+        std::array<std::uint64_t, 4> diagnosticSource_{};
         const std::thread::id ownerThread_;
         std::shared_ptr<std::atomic<bool>> admission_;
         NetworkMetricSnapshot current_;

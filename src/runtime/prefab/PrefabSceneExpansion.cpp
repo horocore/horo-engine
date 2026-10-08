@@ -218,6 +218,14 @@ namespace Horo::Prefab {
         return revision_;
     }
 
+    /** @copydoc ExpandedPrefabSceneSubtree::ValidatePublication */
+    Result<void> ExpandedPrefabSceneSubtree::ValidatePublication(const Assets::AssetId rootAsset,
+                                                                 const PrefabSourceResolverSnapshot &current,
+                                                                 const std::span<const Assets::AssetId> changedAssets,
+                                                                 const PrefabLimitProfile &limits) const {
+        return current.ValidateRevisionPublication(rootAsset, revision_, changedAssets, limits);
+    }
+
     /** @copydoc ExpandPrefabSceneSubtree */
     Result<ExpandedPrefabSceneSubtree> ExpandPrefabSceneSubtree(const EffectivePrefabCandidate &candidate,
                                                                 const PrefabSceneIdentityMap &identities,

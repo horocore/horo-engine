@@ -134,6 +134,10 @@ namespace Horo::Editor {
         }
         behaviors_ = std::move(runtime).Value();
         state_ = EditorPlaySessionState::Playing;
+        if (debugger_) {
+            (void)debugger_->Begin(scene_->View().RuntimeId().value, ++diagnosticGeneration_, false);
+            (void)debugger_->Publish(debugger_->Producer().Source());
+        }
         return Result<void>::Success();
     }
 
@@ -167,6 +171,8 @@ namespace Horo::Editor {
         using enum Horo::Editor::EditorPlaySessionState;
         if (state_ != EditorPlaySessionState::Idle)
             state_ = EditorPlaySessionState::Stopping;
+        if (debugger_)
+            debugger_->Producer().Detach();
         if (behaviors_)
             behaviors_->Shutdown();
         behaviors_.reset();
@@ -222,6 +228,8 @@ namespace Horo::Editor {
             return Result<EditorPlayReloadSnapshot>::Failure(captured.ErrorValue());
         EditorPlayReloadSnapshot snapshot{std::move(captured).Value(), state_};
         state_ = Reloading;
+        if (debugger_)
+            debugger_->Producer().Detach();
         behaviors_->Shutdown();
         behaviors_.reset();
         return Result<EditorPlayReloadSnapshot>::Success(std::move(snapshot));
@@ -247,6 +255,10 @@ namespace Horo::Editor {
         }
         lastError_.reset();
         state_ = snapshot.priorState;
+        if (debugger_) {
+            (void)debugger_->Begin(scene_->View().RuntimeId().value, ++diagnosticGeneration_, false);
+            (void)debugger_->Publish(debugger_->Producer().Source());
+        }
         return Result<void>::Success();
     }
 
@@ -281,6 +293,8 @@ namespace Horo::Editor {
     }
 
     void EditorPlaySessionController::Fail(Error error) noexcept {
+        if (debugger_)
+            debugger_->Producer().Detach();
         if (behaviors_)
             behaviors_->Shutdown();
         behaviors_.reset();

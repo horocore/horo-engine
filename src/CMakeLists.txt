@@ -188,6 +188,7 @@ add_library(HoroPlatformServices STATIC
         platform_services/PlatformServiceErrors.cpp
         platform_services/PlatformServicesBackend.cpp
         platform_services/PlatformServicesFrontend.cpp
+        platform_services/PlatformServicesNullBackend.cpp
         platform_services/PlatformServicesComposition.cpp
         platform_services/PlatformSessionObserver.cpp
         platform_services/PlatformServicesMetrics.cpp
@@ -431,12 +432,16 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveSlotRecovery.cpp
         runtime/save/SaveStoragePolicy.cpp
         runtime/save/SaveOperation.cpp
+        runtime/save/SaveCommands.cpp
+        runtime/save/SaveCommandErrors.cpp
         runtime/save/SaveOperationArbiter.cpp
         runtime/save/SaveProjectPolicy.cpp
         runtime/save/SaveSafePointCoordinator.cpp
         runtime/save/SaveCaptureBarrier.cpp
         runtime/save/SaveAutosaveScheduler.cpp
         runtime/save/SaveAutosaveCapture.cpp
+        runtime/save/SaveEventTriggers.cpp
+        runtime/save/SaveEventAdmission.cpp
         runtime/save/SaveTestCompositions.cpp
 )
 add_library(HoroEngine::Runtime ALIAS HoroRuntime)
@@ -445,6 +450,7 @@ target_include_directories(HoroRuntime PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(HoroRuntime PUBLIC HoroEngine::Foundation HoroEngine::SaveApi PRIVATE nlohmann_json::nlohmann_json utf8proc miniz)
 
 add_library(HoroNetworkApi STATIC
+        runtime/networking/api/NetworkDebugger.cpp
         runtime/networking/api/MessageCodecRegistry.cpp
         runtime/networking/api/MessageDeliveryGate.cpp
         runtime/networking/api/NetworkAddress.cpp
@@ -599,8 +605,11 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiStyle.cpp
         runtime/ui/UiStyleHash.cpp
         runtime/ui/UiStyleRegistry.cpp
+        runtime/ui/UiStyleRegistryAssignments.cpp
         runtime/ui/UiStyleResolution.cpp
         runtime/ui/UiStyleResolver.cpp
+        runtime/ui/UiTheme.cpp
+        runtime/ui/UiThemeSurface.cpp
         runtime/ui/UiStyleSnapshot.cpp
         runtime/ui/UiStyleValidation.cpp
         runtime/ui/UiHitTesting.cpp
@@ -683,6 +692,8 @@ add_library(HoroRuntimeScene STATIC
         runtime/scene/SaveContentWorld.cpp
         runtime/scene/SaveContentSnapshot.cpp
         runtime/scene/RuntimeScene.cpp
+        runtime/scene/RuntimeSceneBaseline.cpp
+        runtime/scene/RuntimeSceneBaselineCommands.cpp
         runtime/scene/RuntimeSceneView.cpp
         runtime/scene/RuntimeSceneService.cpp
         runtime/scene/RuntimeSceneServicePublication.cpp
@@ -721,6 +732,11 @@ add_library(HoroNetworkRuntime STATIC
 add_library(HoroEngine::NetworkRuntime ALIAS HoroNetworkRuntime)
 target_compile_features(HoroNetworkRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkRuntime PUBLIC HoroEngine::NetworkApi HoroEngine::RuntimeScene HoroEngine::Runtime)
+
+add_library(HoroNetworkDebuggerApplication STATIC application/network/NetworkDebugger.cpp)
+add_library(HoroEngine::NetworkDebuggerApplication ALIAS HoroNetworkDebuggerApplication)
+target_compile_features(HoroNetworkDebuggerApplication PUBLIC cxx_std_20)
+target_link_libraries(HoroNetworkDebuggerApplication PUBLIC HoroEngine::NetworkApi)
 
 add_library(HoroGameplayRuntime STATIC
         gameplay/runtime/BehaviorRegistry.cpp
@@ -856,6 +872,7 @@ add_library(HoroAudioApi STATIC
         audio/api/AudioStreamDecoderErrors.cpp
         audio/api/AudioStreamingService.cpp
         audio/api/AudioConcurrencyGroup.cpp
+        audio/api/AudioVoiceAdmission.cpp
         audio/api/AudioVoiceStateMachine.cpp
         audio/api/AudioVoiceControls.cpp
         audio/api/AudioHandleRegistry.h
@@ -1008,6 +1025,7 @@ target_compile_features(HoroAudioMetrics PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioMetrics PUBLIC HoroEngine::AudioCommands HoroEngine::Foundation)
 
 add_library(HoroPhysics STATIC
+        physics/CharacterClearanceQuery.cpp
         physics/CharacterControllerContracts.cpp
         physics/CharacterPhysicsQueryAdapter.cpp
         physics/CharacterDiagnostics.cpp
@@ -1138,6 +1156,7 @@ add_library(HoroAI STATIC
         runtime/ai/api/BehaviorTree.cpp
         runtime/ai/api/BehaviorTreeExecutionPlan.cpp
         runtime/ai/api/BehaviorTreeInstance.cpp
+        runtime/ai/api/DecisionWakePolicy.cpp
         runtime/ai/api/BehaviorTreeTaskExecution.cpp
         runtime/ai/api/BlackboardInstance.cpp
         runtime/ai/api/BlackboardSchema.cpp
@@ -1471,6 +1490,7 @@ target_link_libraries(HoroNavigationContentIntegration PUBLIC HoroEngine::Applic
         PRIVATE nlohmann_json::nlohmann_json)
 
 add_library(HoroXRRuntime STATIC
+        runtime/xr/runtime/XRProjectSettings.cpp
         runtime/xr/runtime/XRFeatureNegotiation.cpp
         runtime/xr/runtime/XRFakeRuntime.cpp
         runtime/xr/runtime/XRFrameLifecycle.cpp
@@ -1549,6 +1569,11 @@ target_link_libraries(HoroTerrainRender PUBLIC HoroEngine::TerrainApi HoroEngine
 add_library(HoroTerrainRuntime STATIC
         runtime/terrain/runtime/TerrainAsyncJobs.cpp
 )
+add_library(HoroTerrainStreaming STATIC runtime/terrain/streaming/TerrainResidencyCache.cpp)
+add_library(HoroEngine::TerrainStreaming ALIAS HoroTerrainStreaming)
+target_compile_features(HoroTerrainStreaming PUBLIC cxx_std_20)
+target_link_libraries(HoroTerrainStreaming PUBLIC HoroEngine::TerrainApi HoroEngine::WorldStreaming)
+
 add_library(HoroEngine::TerrainRuntime ALIAS HoroTerrainRuntime)
 target_compile_features(HoroTerrainRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroTerrainRuntime PUBLIC HoroEngine::TerrainApi HoroEngine::Foundation)
@@ -1688,6 +1713,7 @@ target_link_libraries(HoroWorldStreaming PUBLIC HoroEngine::Foundation HoroEngin
 
 # Scene owns CoreEcs baseline semantics; this host-composed seam leaves streaming policy and ECS targets independent.
 add_library(HoroSceneCellPayload STATIC
+        runtime/scene/RuntimeSceneCellAttachment.cpp
         runtime/scene/SceneCellAttachments.cpp
         runtime/scene/RuntimeSceneCellPayload.cpp
         runtime/scene/RuntimeSceneCellLayers.cpp
@@ -1765,6 +1791,8 @@ target_link_libraries(HoroRuntimeUiInput PUBLIC HoroEngine::Input HoroEngine::Ru
 add_library(HoroRenderApi STATIC
         runtime/renderer/api/MotionHistory.cpp
         runtime/renderer/api/MotionHistoryErrors.cpp
+        runtime/renderer/api/PipelinePreparation.cpp
+        runtime/renderer/api/PipelinePreparationErrors.cpp
         runtime/renderer/api/PipelineCache.cpp
         runtime/renderer/api/PipelineCacheErrors.cpp
         runtime/renderer/api/RenderAdapter.cpp
@@ -2230,6 +2258,7 @@ target_link_libraries(HoroEditorServices
         HoroEngine::HostErrors
         HoroEngine::CinematicRuntime
         HoroEngine::NetworkApi
+        HoroEngine::NetworkDebuggerApplication
         HoroEngine::Application
         HoroEngine::Platform
         HoroEngine::RuntimeUi

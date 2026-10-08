@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/Application/NetworkDebugger.h"
 #include "Horo/Network/NetworkModeComposition.h"
 #include "Horo/Runtime/RuntimeHost.h"
 
@@ -29,11 +30,13 @@ namespace Horo::Application::Internal {
     public:
         [[nodiscard]] static Result<std::unique_ptr<NetworkProductHost>> Create(Clock &clock, const NetworkProductHostInputs &inputs,
                                                                                 Network::NetworkModeFactories factories,
-                                                                                Network::NetworkTargetDiagnostic *diagnostic = nullptr);
+                                                                                Network::NetworkTargetDiagnostic *diagnostic = nullptr,
+                                                                                std::shared_ptr<NetworkDebuggerService> debugger = nullptr);
 
         NetworkProductHost(const NetworkProductHost &) = delete;
         NetworkProductHost &operator=(const NetworkProductHost &) = delete;
-        NetworkProductHost(ConstructionKey, std::unique_ptr<Runtime::RuntimeHost> runtime, ModeParticipant *mode) noexcept;
+        NetworkProductHost(ConstructionKey, std::unique_ptr<Runtime::RuntimeHost> runtime, ModeParticipant *mode,
+                           std::shared_ptr<NetworkDebuggerService> debugger) noexcept;
         ~NetworkProductHost() noexcept;
 
         [[nodiscard]] Result<void> Startup();
@@ -49,6 +52,7 @@ namespace Horo::Application::Internal {
         void Shutdown() noexcept;
 
     private:
+        std::shared_ptr<NetworkDebuggerService> debugger_;
         std::unique_ptr<Runtime::RuntimeHost> runtime_;
         ModeParticipant *mode_{};  // Borrowed from runtime_'s lifecycle participant.
     };

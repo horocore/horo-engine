@@ -33,6 +33,23 @@ namespace Horo::SceneSource {
         CHECK(EncodeSceneSource({decoded.Value().objects, decoded.Value().prefabInstances}) == encoded);
     }
 
+    TEST_CASE("Scene source round trips every distinct voice admission policy", "[unit][scene][serialization][audio]") {
+        using enum Audio::AudioConcurrencyMode;
+        for (const auto mode : {Allow, Reject, StealOldest, StealQuietest, Virtualize, StealLowestPriority, StealFurthest, Replace}) {
+            SceneSourceDocument source;
+            Runtime::AudioSourceComponent audio;
+            audio.playback.concurrency.mode = mode;
+            source.objects.push_back(SceneObjectSnapshot{.id = {1}, .name = "Audio", .components = {.audioSource = audio}});
+            const auto encoded = EncodeSceneSource({source.objects, source.prefabInstances});
+            const auto decoded = DecodeSceneSource(encoded);
+            REQUIRE(decoded.HasValue());
+            REQUIRE(decoded.Value().objects.size() == 1);
+            REQUIRE(decoded.Value().objects.front().components.audioSource.has_value());
+            CHECK(decoded.Value().objects.front().components.audioSource->playback.concurrency.mode == mode);
+            CHECK(EncodeSceneSource({decoded.Value().objects, decoded.Value().prefabInstances}) == encoded);
+        }
+    }
+
     TEST_CASE("Scene source rejects malformed future and structurally incomplete input", "[unit][scene][serialization]") {
         CHECK(DecodeSceneSource("{").HasError());
         CHECK(DecodeSceneSource(R"({"schemaVersion":2,"objects":[]})").HasError());
