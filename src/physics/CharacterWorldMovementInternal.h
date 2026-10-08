@@ -491,8 +491,8 @@ namespace Horo::Character::Detail {
         if (ahead.HasError())
             return Result<std::optional<CharacterSweepHit>>::Failure(ahead.ErrorValue());
         const auto support = SelectGroundHit(ahead.Value(), descriptor);
-        const auto aheadBlock = SelectNearestSweepBlock(ahead.Value(), -descriptor.up, lift + cast.distance, descriptor);
-        if (!MatchesStepPlane(*nearest, support, aheadBlock))
+        if (const auto aheadBlock = SelectNearestSweepBlock(ahead.Value(), -descriptor.up, lift + cast.distance, descriptor);
+            !MatchesStepPlane(*nearest, support, aheadBlock))
             return Result<std::optional<CharacterSweepHit>>::Success(std::nullopt);
         auto certified = *nearest;
         certified.normal = support->normal;
@@ -830,9 +830,9 @@ namespace Horo::Character::Detail {
         std::optional<CharacterSweepHit> steepSupport;
         // A complete step already proved its actual contact, support plane and overlap clearance.
         // Ordinary snap must not replace that proof with the capsule's rounded-edge collision normal.
-        const bool stepped =
-            (static_cast<std::uint16_t>(result.collisions) & static_cast<std::uint16_t>(CharacterCollisionFlags::Step)) != 0;
-        if (!stepped) {
+        if (const bool stepped =
+                (static_cast<std::uint16_t>(result.collisions) & static_cast<std::uint16_t>(CharacterCollisionFlags::Step)) != 0;
+            !stepped) {
             if (const auto grounded = ResolveGrounding(impl, result, command, input, descriptor, motion.position, steepSupport);
                 grounded.HasError())
                 return Result<CharacterMovementResult>::Failure(grounded.ErrorValue());
