@@ -104,6 +104,39 @@ namespace Horo::Runtime {
             CHECK(fixture.triggers->Revalidate(changed).HasError());
         }
 
+        TEST_CASE("Arbiter admission failure resolves transition policy and releases the pending intent", "[unit][save][event]") {
+            Fixture fixture;
+            const auto trigger = GENERATE(4ULL, 5ULL);
+            const auto policy = GENERATE(SaveTransitionFailurePolicy::Continue, SaveTransitionFailurePolicy::Block);
+            fixture.registrations[trigger - 1].failure = policy;
+            fixture.arbiter = CreateSaveOperationArbiter({1}).Value();
+            fixture.triggers =
+                SaveEventTriggers::Create(fixture.registrations, Policy(), fixture.host, fixture.arbiter, *fixture.safePoints).Value();
+            REQUIRE(
+                fixture.arbiter
+                    .Admit({.operation = {.operation = 44, .maximumCompletionCallbacks = 1}, .address = fixture.registrations[0].target})
+                    .HasValue());
+            REQUIRE(fixture.arbiter.Cancel(44) == SaveCancellationRequestResult::Requested);
+            REQUIRE(fixture.arbiter.Snapshot(44)->operation.IsTerminal());
+            REQUIRE_FALSE(fixture.arbiter.ActiveOperation().has_value());
+            REQUIRE(fixture.arbiter.QueuedCount() == 0);
+            const auto event = fixture.Event(trigger);
+            REQUIRE(fixture.triggers->Submit(event).HasValue());
+
+            const auto admitted = fixture.Poll();
+            REQUIRE(admitted.HasError());
+            CHECK(admitted.ErrorValue().code.Value() == SaveErrors::ArbiterCapacityExceeded.code.Value());
+            const auto receipt = fixture.triggers->Receipt(event.correlation).Value();
+            CHECK_FALSE(receipt.pending);
+            REQUIRE(receipt.error.has_value());
+            CHECK(receipt.error->code.Value() == admitted.ErrorValue().code.Value());
+            CHECK_FALSE(receipt.operation.IsValid());
+            CHECK(DecideSaveTransition(receipt) ==
+                  (policy == SaveTransitionFailurePolicy::Continue ? SaveTransitionDecision::Continue : SaveTransitionDecision::Block));
+            CHECK(fixture.captures == 0);
+            CHECK(fixture.triggers->Submit(fixture.Event(2)).HasValue());
+        }
+
         TEST_CASE("Safe-point fence admission failure terminalizes the queued save and remains observable", "[unit][save][event]") {
             Fixture fixture;
             REQUIRE(fixture.safePoints->BeginShutdown().HasValue());

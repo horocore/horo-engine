@@ -93,8 +93,10 @@ namespace Horo::Runtime {
                                          .address = record.registration.target,
                                          .priority = SaveArbiterPriority::Background,
                                          .conflict = SaveArbiterConflictPolicy::Reject});
-        if (admitted.HasError())
+        if (admitted.HasError()) {
+            RejectPending(admitted.ErrorValue());
             return Return::Failure(admitted.ErrorValue());
+        }
         record.receipt->operation = admitted.Value().handle;
         if (const auto fenced =
                 safePoints_->Admit({record.receipt->operation.Id(), SaveSafePointAction::Capture, record.receipt->event.generation});
