@@ -959,6 +959,43 @@ The new observer parameters on existing network factories default to null;
 existing callers keep their behavior and need no migration. Hosts opting in
 must enforce the documented owner and shutdown order.
 
+### Per-connection acknowledgement and snapshot history
+
+`ReplicationSnapshotHistory` is an opt-in `HoroNetworkRuntime` owner composed
+alongside `ReplicationStateCodec`. It stores only immutable committed capture
+pins and the exact projection, role and negotiated descriptor evidence used for
+each completely encoded send. Before submission the host reserves correlation
+with `RetainSent` and attaches its non-local correlation to outgoing framing; failed or cancelled
+submission calls `CancelSent` to release only that reservation. A selective
+acknowledgement identifies a complete local
+connection/session/Scene/history incarnation, non-wrapping send sequence, object
+occurrence and publication revision. Transport handles remain local routing
+metadata and are never serialized. The host resolves them from the authenticated
+channel while preserving the echoed negotiated session/Scene/incarnation; old
+acknowledgements must never be relabelled with current generations.
+Acknowledging a later send never implies receipt of an earlier send. Duplicate
+acknowledgements cannot extend the fixed send-time lease.
+
+The host budgets a finite prepared entry window and conservative retained-source
+byte allowance for each connection, and separately budgets capture pools and
+descriptor registries. Maintenance during acknowledgement, send retention and
+baseline selection releases expired or revoked pins. Missing, lost, expired or
+incompatible evidence selects a full record without recapturing Gameplay.
+Overflow releases the complete window and returns a typed capacity error: the
+admitted policy requires a new full-state encoding before retention retry,
+or permanently closes the history for host-driven disconnect. Lease-clock and
+sequence exhaustion close admission rather than wrapping. Memory pressure
+releases all history while preserving sequence identity. Hosts must call
+`Shutdown` on disconnect or Scene replacement and allocate a fresh, never-reused
+history incarnation before composing a replacement owner.
+
+Migration: the new public header is owned solely by `HoroNetworkRuntime`; existing
+codec callers keep their behavior. Hosts opting in replace ad hoc acknowledgement
+storage with this owner, retain only completely encoded sends, cancel rejected
+submissions, and pass selected short-lived baseline copies into the codec. Copies must be released before
+maintenance or lifecycle retirement. No Scene/Gameplay mutation, transport I/O,
+automatic registration or public dependency direction changes are introduced.
+
 ### Network debugger projection and capture
 
 `NetworkDebugger` is an opt-in `NetworkApi` diagnostics owner. Host composition

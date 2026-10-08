@@ -1,6 +1,7 @@
 #include "Horo/Network/AdmissionProtection.h"
 #include "Horo/Network/InboundMessageDispatcher.h"
 #include "Horo/Network/NetworkModeComposition.h"
+#include "Horo/Network/ReplicationSnapshotHistory.h"
 #include "Horo/Network/ReplicationStateCapture.h"
 #include "Horo/Network/ReplicationStateCodec.h"
 #include "Horo/Network/RpcGameplayDispatch.h"
@@ -39,6 +40,8 @@ namespace {
     static_assert(std::is_default_constructible_v<Horo::Network::RpcGameplayPolicy>);
     static_assert(!std::is_copy_constructible_v<Horo::Network::ReplicationStateCapture>);
     static_assert(!std::is_copy_constructible_v<Horo::Network::ReplicationStateCodec>);
+    static_assert(!std::is_copy_constructible_v<Horo::Network::ReplicationSnapshotHistory>);
+    static_assert(!std::is_default_constructible_v<Horo::Network::ReplicationSnapshotHistory>);
     static_assert(!std::is_default_constructible_v<Horo::Network::ReplicationDecodedState>);
     static_assert(!std::is_copy_constructible_v<Horo::Network::ReplicationCaptureWriter>);
     static_assert(std::is_trivially_copyable_v<Horo::Network::RpcTerminalTotals>);
