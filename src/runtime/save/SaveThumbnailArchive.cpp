@@ -63,7 +63,7 @@ namespace Horo::Runtime {
         }
 
         /** @brief Preserves the logical archive when only an optional presentation attachment exceeds limits. */
-        [[nodiscard]] auto FinalizePresentationArchive(const SavePresentationArchiveInput &input, const SaveManifest &manifest,
+        [[nodiscard]] auto FinalizePresentationArchive(const SavePresentationArchiveInput &input, const SaveGameManifest &manifest,
                                                        const std::vector<PreservedSaveChunk> &chunks,
                                                        SaveSlotPublicationMetadata &publication) {
             auto finalized = SaveArchiveContainerWriter::Write(input.header, manifest, chunks, input.version, input.limits);
