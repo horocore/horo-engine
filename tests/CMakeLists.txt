@@ -2300,6 +2300,10 @@ add_executable(HoroPlatformRequestTests
         unit/platform_services/PlatformServiceErrorsTests.cpp
         unit/platform_services/PlatformServicesBackendTests.cpp
         unit/platform_services/PlatformServicesFrontendTests.cpp
+        unit/platform_services/PlatformServicesMockBackend.cpp
+        unit/platform_services/PlatformServicesMockBackendCore.cpp
+        unit/platform_services/PlatformServicesMockBackendScheduling.cpp
+        unit/platform_services/PlatformServicesMockBackendTests.cpp
         unit/platform_services/PlatformSessionObserverTests.cpp
         unit/platform_services/PlatformServicesMetricsTests.cpp
         unit/platform_services/PlatformStatCacheCoordinatorTests.cpp
