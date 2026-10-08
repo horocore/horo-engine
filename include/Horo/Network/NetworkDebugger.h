@@ -108,6 +108,7 @@ namespace Horo::Network {
      * published value under a short mutex; commands enter an eight-slot mailbox under that mutex.
      * Shutdown detaches before dependencies die. Producer adapters cache their source at binding,
      * so old callbacks cannot stamp themselves as a replacement session. No recording allocates.
+     * Source arguments are borrowed only for the call; activation state and queued commands own copies.
      */
     class NetworkDebugger final {
     public:
@@ -118,36 +119,36 @@ namespace Horo::Network {
          * process/session/scene-generation tuple.
          * @param enabled Host instrumentation election. @param provider Actual host-selected provider kind. @return False on wrong thread
          * or invalid/reused identity. */
-        [[nodiscard]] bool Begin(NetworkDiagnosticSource source, bool enabled,
+        [[nodiscard]] bool Begin(const NetworkDiagnosticSource &source, bool enabled,
                                  NetworkDiagnosticProvider provider = NetworkDiagnosticProvider::Other);
         /** @brief Returns the bound source on the owner thread. @return Exact source or absent on another thread. */
         [[nodiscard]] NetworkDiagnosticSource Source() const noexcept;
         /** @brief Records a sanitized actual transport event. @param source Cached producer identity.
          * @param record Actual event evidence. @return Whether admitted by the generation/collection gate. */
-        [[nodiscard]] bool Observe(NetworkDiagnosticSource source, const NetworkConnectionRecord &record) noexcept;
+        [[nodiscard]] bool Observe(const NetworkDiagnosticSource &source, const NetworkConnectionRecord &record) noexcept;
         /** @brief Records actual committed replication accounting. @param source Cached producer identity.
          * @param record Owner report. @return Whether admitted. */
-        [[nodiscard]] bool Observe(NetworkDiagnosticSource source, const NetworkReplicationRecord &record) noexcept;
+        [[nodiscard]] bool Observe(const NetworkDiagnosticSource &source, const NetworkReplicationRecord &record) noexcept;
         /** @brief Records actual RPC accounting. @param source Cached producer identity.
          * @param record Owner report. @return Whether admitted. */
-        [[nodiscard]] bool Observe(NetworkDiagnosticSource source, const NetworkRpcRecord &record) noexcept;
+        [[nodiscard]] bool Observe(const NetworkDiagnosticSource &source, const NetworkRpcRecord &record) noexcept;
         /** @brief Records timing evidence. @param source Cached producer identity.
          * @param record Owner report. @return Whether admitted. */
-        [[nodiscard]] bool Observe(NetworkDiagnosticSource source, const NetworkPredictionRecord &record) noexcept;
+        [[nodiscard]] bool Observe(const NetworkDiagnosticSource &source, const NetworkPredictionRecord &record) noexcept;
         /** @brief Records actual interest accounting. @param source Cached producer identity.
          * @param record Owner report. @return Whether admitted. */
-        [[nodiscard]] bool Observe(NetworkDiagnosticSource source, const NetworkInterestRecord &record) noexcept;
+        [[nodiscard]] bool Observe(const NetworkDiagnosticSource &source, const NetworkInterestRecord &record) noexcept;
         /** @brief Publishes at an owner safe point and consumes bounded typed commands.
          * @param source Exact producer lifetime. @param nowNanoseconds Monotonic host time.
          * @param metrics Optional already-published metric evidence. @return False on invalid/stale input. */
-        [[nodiscard]] bool Publish(NetworkDiagnosticSource source, std::uint64_t nowNanoseconds,
+        [[nodiscard]] bool Publish(const NetworkDiagnosticSource &source, std::uint64_t nowNanoseconds,
                                    const NetworkMetricSnapshot *metrics = nullptr) noexcept;
         /** @brief Copies only the coherent last publication. @return Immutable value projection. */
         [[nodiscard]] NetworkDebuggerSnapshot Snapshot() const;
         /** @brief Queues one action against an exact currently published revision.
          * @param source Expected lifetime. @param revision Expected revision. @param action Closed action.
          * @return False if detached, disabled, stale, invalid or mailbox full. */
-        [[nodiscard]] bool Request(NetworkDiagnosticSource source, std::uint64_t revision, NetworkCaptureAction action);
+        [[nodiscard]] bool Request(const NetworkDiagnosticSource &source, std::uint64_t revision, NetworkCaptureAction action);
         /** @brief Detaches and publishes final evidence before producer dependencies are released. */
         void Detach() noexcept;
 
@@ -157,7 +158,7 @@ namespace Horo::Network {
             NetworkCaptureAction action;
         };
 
-        [[nodiscard]] bool Admits(NetworkDiagnosticSource source) const noexcept;
+        [[nodiscard]] bool Admits(const NetworkDiagnosticSource &source) const noexcept;
         void Capture(NetworkCaptureKind kind, ConnectionHandle connection = {}, std::uint64_t amount = 0) noexcept;
         const std::thread::id owner_;
         NetworkDebuggerSnapshot current_;

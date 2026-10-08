@@ -13,10 +13,11 @@ namespace Horo::Network {
     void PeerSessionLifecycle::ObserveDiagnostic() const noexcept {
         if (!debugger_)
             return;
-        const auto event = state_ == PeerSessionState::Failed ? NetworkTransportEventKind::Failed
-                                                              : (state_ == PeerSessionState::Closed || state_ == PeerSessionState::Closing
-                                                                     ? NetworkTransportEventKind::Closed
-                                                                     : NetworkTransportEventKind::Connected);
+        auto event = NetworkTransportEventKind::Connected;
+        if (state_ == PeerSessionState::Failed)
+            event = NetworkTransportEventKind::Failed;
+        else if (state_ == PeerSessionState::Closed || state_ == PeerSessionState::Closing)
+            event = NetworkTransportEventKind::Closed;
         (void)debugger_->Observe(diagnosticSource_, NetworkConnectionRecord{connection_, event, 0, sessionGeneration_.Value(),
                                                                             state_ == PeerSessionState::Active});
     }

@@ -34,9 +34,10 @@ namespace Horo::Application {
     public:
         virtual ~INetworkDebuggerControl() = default;
         /** @brief Queues a bounded action only against current live evidence.
-         * @param source Expected process/session/scene identity. @param revision Expected immutable revision.
+         * @param source Expected process/session/scene identity borrowed for this call; queued commands copy it. @param revision Expected
+         * immutable revision.
          * @param action Capture operation. @return True when queued; false for stale/disabled/detached evidence or backpressure. */
-        [[nodiscard]] virtual bool Request(Network::NetworkDiagnosticSource source, std::uint64_t revision,
+        [[nodiscard]] virtual bool Request(const Network::NetworkDiagnosticSource &source, std::uint64_t revision,
                                            Network::NetworkCaptureAction action) = 0;
     };
 
@@ -58,11 +59,11 @@ namespace Horo::Application {
         [[nodiscard]] Network::NetworkDebugger &Producer() noexcept;
         /** @brief Publishes with the process monotonic clock. @param source Exact active identity.
          * @param metrics Optional coherent owner metrics. @return Whether publication succeeds. */
-        [[nodiscard]] bool Publish(Network::NetworkDiagnosticSource source, const Network::NetworkMetricSnapshot *metrics = nullptr);
+        [[nodiscard]] bool Publish(const Network::NetworkDiagnosticSource &source, const Network::NetworkMetricSnapshot *metrics = nullptr);
         /** @copydoc INetworkDebuggerQuery::Query */
         [[nodiscard]] NetworkDebuggerProjection Query() const override;
         /** @copydoc INetworkDebuggerControl::Request */
-        [[nodiscard]] bool Request(Network::NetworkDiagnosticSource source, std::uint64_t revision,
+        [[nodiscard]] bool Request(const Network::NetworkDiagnosticSource &source, std::uint64_t revision,
                                    Network::NetworkCaptureAction action) override;
         /** @brief Assesses immutable evidence using supplied monotonic time, for host adapters and deterministic tests.
          * @param snapshot Coherent producer evidence. @param nowNanoseconds Current process monotonic time.

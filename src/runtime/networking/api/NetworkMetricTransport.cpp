@@ -9,7 +9,7 @@ namespace Horo::Network {
         class MeasuringConsumer final : public INetworkTransportEventConsumer {
         public:
             MeasuringConsumer(INetworkTransportEventConsumer &consumer, NetworkMetrics &metrics, NetworkDebugger *debugger,
-                              NetworkDiagnosticSource source) noexcept
+                              const NetworkDiagnosticSource &source) noexcept
                 : consumer_(consumer), metrics_(metrics), debugger_(debugger), source_(source) {}
 
             void Consume(NetworkTransportEvent event) noexcept override {

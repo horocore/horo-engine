@@ -39,7 +39,7 @@ namespace Horo::Network {
     NetworkDebugger::NetworkDebugger() : owner_(std::this_thread::get_id()) {}
 
     /** @copydoc NetworkDebugger::Begin */
-    bool NetworkDebugger::Begin(const NetworkDiagnosticSource source, const bool enabled, const NetworkDiagnosticProvider provider) {
+    bool NetworkDebugger::Begin(const NetworkDiagnosticSource &source, const bool enabled, const NetworkDiagnosticProvider provider) {
         if (std::this_thread::get_id() != owner_ || !source.Valid() || provider > NetworkDiagnosticProvider::Other ||
             (current_.source.Valid() && std::tie(source.process, source.session, source.sceneGeneration) <=
                                             std::tie(current_.source.process, current_.source.session, current_.source.sceneGeneration)) ||
@@ -65,7 +65,7 @@ namespace Horo::Network {
     }
 
     /** @brief Checks producer thread and exact lifetime before touching retained state. */
-    bool NetworkDebugger::Admits(const NetworkDiagnosticSource source) const noexcept {
+    bool NetworkDebugger::Admits(const NetworkDiagnosticSource &source) const noexcept {
         return std::this_thread::get_id() == owner_ && current_.attached && current_.enabled && source == current_.source;
     }
 
@@ -78,7 +78,7 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkDebugger::Observe */
-    bool NetworkDebugger::Observe(const NetworkDiagnosticSource source, const NetworkConnectionRecord &record) noexcept {
+    bool NetworkDebugger::Observe(const NetworkDiagnosticSource &source, const NetworkConnectionRecord &record) noexcept {
         if (!Admits(source) || !record.connection.IsValid() || record.event > NetworkTransportEventKind::Failed)
             return false;
         Recent(current_.connections, record);
@@ -87,7 +87,7 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkDebugger::Observe */
-    bool NetworkDebugger::Observe(const NetworkDiagnosticSource source, const NetworkReplicationRecord &record) noexcept {
+    bool NetworkDebugger::Observe(const NetworkDiagnosticSource &source, const NetworkReplicationRecord &record) noexcept {
         if (!Admits(source))
             return false;
         Recent(current_.replication, record);
@@ -96,7 +96,7 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkDebugger::Observe */
-    bool NetworkDebugger::Observe(const NetworkDiagnosticSource source, const NetworkRpcRecord &record) noexcept {
+    bool NetworkDebugger::Observe(const NetworkDiagnosticSource &source, const NetworkRpcRecord &record) noexcept {
         if (!Admits(source))
             return false;
         Recent(current_.rpc, record);
@@ -105,7 +105,7 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkDebugger::Observe */
-    bool NetworkDebugger::Observe(const NetworkDiagnosticSource source, const NetworkPredictionRecord &record) noexcept {
+    bool NetworkDebugger::Observe(const NetworkDiagnosticSource &source, const NetworkPredictionRecord &record) noexcept {
         if (!Admits(source))
             return false;
         Recent(current_.prediction, record);
@@ -114,7 +114,7 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkDebugger::Observe */
-    bool NetworkDebugger::Observe(const NetworkDiagnosticSource source, const NetworkInterestRecord &record) noexcept {
+    bool NetworkDebugger::Observe(const NetworkDiagnosticSource &source, const NetworkInterestRecord &record) noexcept {
         if (!Admits(source))
             return false;
         Recent(current_.interest, record);
@@ -123,24 +123,25 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkDebugger::Publish */
-    bool NetworkDebugger::Publish(const NetworkDiagnosticSource source, const std::uint64_t now,
+    bool NetworkDebugger::Publish(const NetworkDiagnosticSource &source, const std::uint64_t now,
                                   const NetworkMetricSnapshot *metrics) noexcept {
         if (std::this_thread::get_id() != owner_ || !current_.attached || source != current_.source || now == 0 ||
             now < current_.publishedNanoseconds || current_.revision == std::numeric_limits<std::uint64_t>::max() ||
             (metrics && metrics->ownerGeneration != source.session))
             return false;
         std::scoped_lock lock{mutex_};
+        using enum NetworkCaptureAction;
         for (std::size_t i = 0; i < commandCount_; ++i) {
             if (commands_[i].source != source)
                 continue;
             switch (commands_[i].action) {
-                case NetworkCaptureAction::Pause:
+                case Pause:
                     current_.capturePaused = true;
                     break;
-                case NetworkCaptureAction::Resume:
+                case Resume:
                     current_.capturePaused = false;
                     break;
-                case NetworkCaptureAction::Clear:
+                case Clear:
                     current_.connections = {};
                     current_.replication = {};
                     current_.rpc = {};
@@ -166,7 +167,7 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkDebugger::Request */
-    bool NetworkDebugger::Request(const NetworkDiagnosticSource source, const std::uint64_t revision, const NetworkCaptureAction action) {
+    bool NetworkDebugger::Request(const NetworkDiagnosticSource &source, const std::uint64_t revision, const NetworkCaptureAction action) {
         std::scoped_lock lock{mutex_};
         if (!published_.attached || !published_.enabled || source != published_.source || revision != published_.revision ||
             action > NetworkCaptureAction::Clear || commandCount_ == commands_.size())

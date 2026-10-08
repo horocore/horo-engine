@@ -30,21 +30,22 @@ namespace Horo::Application {
     }
 
     /** @copydoc NetworkDebuggerService::Publish */
-    bool NetworkDebuggerService::Publish(const Network::NetworkDiagnosticSource source, const Network::NetworkMetricSnapshot *metrics) {
+    bool NetworkDebuggerService::Publish(const Network::NetworkDiagnosticSource &source, const Network::NetworkMetricSnapshot *metrics) {
         return producer_.Publish(source, Now(), metrics);
     }
 
     /** @copydoc NetworkDebuggerService::Assess */
     NetworkDebuggerState NetworkDebuggerService::Assess(const Network::NetworkDebuggerSnapshot &snapshot, const std::uint64_t now,
                                                         const std::uint64_t staleAfter) noexcept {
+        using enum NetworkDebuggerState;
         if (!snapshot.attached || !snapshot.source.Valid())
-            return NetworkDebuggerState::Detached;
+            return Detached;
         if (!snapshot.enabled)
-            return NetworkDebuggerState::Disabled;
+            return Disabled;
         if (snapshot.publishedNanoseconds == 0 || now < snapshot.publishedNanoseconds || staleAfter == 0 ||
             now - snapshot.publishedNanoseconds > staleAfter || snapshot.metrics.closed)
-            return NetworkDebuggerState::Stale;
-        return NetworkDebuggerState::Live;
+            return Stale;
+        return Live;
     }
 
     /** @copydoc NetworkDebuggerService::Query */
@@ -54,7 +55,7 @@ namespace Horo::Application {
     }
 
     /** @copydoc NetworkDebuggerService::Request */
-    bool NetworkDebuggerService::Request(const Network::NetworkDiagnosticSource source, const std::uint64_t revision,
+    bool NetworkDebuggerService::Request(const Network::NetworkDiagnosticSource &source, const std::uint64_t revision,
                                          const Network::NetworkCaptureAction action) {
         if (Query().state != NetworkDebuggerState::Live)
             return false;

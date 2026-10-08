@@ -153,7 +153,7 @@ namespace Horo::Editor {
         const auto origin = ImGui::GetCursorScreenPos();
         DrawGlobalDockToolbarSurface(origin, width, height);
         float x = origin.x;
-        const auto chip = [&](GlobalDockToolbarChipProps props) {
+        const auto chip = [&](const GlobalDockToolbarChipProps &props) {
             const float chipWidth = MeasureGlobalDockToolbarChip(props, context.theme.fonts);
             const bool clicked = DrawGlobalDockToolbarChip({x, origin.y}, chipWidth, props, context.theme.fonts);
             x += chipWidth + metrics.toolbarGap;
@@ -166,8 +166,8 @@ namespace Horo::Editor {
                 view_ = static_cast<View>(i);
         }
         const bool disabled = !control_ || projection_.state != Application::NetworkDebuggerState::Live;
-        const bool paused = projection_.snapshot.capturePaused;
-        if (chip({.id = "NetworkPause",
+        if (const bool paused = projection_.snapshot.capturePaused;
+            chip({.id = "NetworkPause",
                   .label = context.localization.Get("editor", paused ? "workspace.global_dock.network.resume_capture"
                                                                      : "workspace.global_dock.network.pause_capture"),
                   .disabled = disabled,
