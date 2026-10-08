@@ -271,6 +271,7 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/Save/SaveMigration.h
     Horo/Runtime/Save/SaveCanonicalCodec.h
     Horo/Runtime/Save/SaveReference.h
+    Horo/Runtime/Save/SaveThumbnailArchive.h
     Horo/Runtime/Save/SaveThumbnailCapture.h
     Horo/Runtime/Save/SaveSlotMetadata.h
     Horo/Runtime/Save/SaveSlotIndex.h

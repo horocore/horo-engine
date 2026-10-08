@@ -1,4 +1,4 @@
-#include "Horo/Runtime/Save/SaveThumbnailCapture.h"
+#include "Horo/Runtime/Save/SaveThumbnailArchive.h"
 
 #include <type_traits>
 

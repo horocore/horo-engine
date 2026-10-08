@@ -2866,6 +2866,7 @@ target_link_libraries(HoroRuntimeSaveReferenceTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveSlotMetadataTests
         unit/runtime/save/SaveSlotMetadataTests.cpp
         unit/runtime/save/SaveThumbnailCaptureTests.cpp
+        unit/runtime/save/SaveThumbnailArchiveTests.cpp
 )
 target_compile_features(HoroRuntimeSaveSlotMetadataTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveSlotMetadataTests PRIVATE HoroEngine::Runtime)

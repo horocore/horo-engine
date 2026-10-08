@@ -420,6 +420,8 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveCanonicalCompositeWriter.cpp
         runtime/save/SaveCanonicalCompositeReader.cpp
         runtime/save/SaveReference.cpp
+        runtime/save/SaveThumbnailArchive.cpp
+        runtime/save/SaveThumbnailCodec.cpp
         runtime/save/SaveThumbnailCapture.cpp
         runtime/save/SaveThumbnailErrors.cpp
         runtime/save/SaveSlotMetadata.cpp

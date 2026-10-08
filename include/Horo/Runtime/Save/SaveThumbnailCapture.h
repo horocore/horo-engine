@@ -139,13 +139,13 @@ namespace Horo::Runtime {
          * @param now Monotonic owner time. @param current Current runtime/scene/view evidence.
          * @return Success or invalid-clock error; optional failures become Omitted, required failures become Failed.
          */
-        [[nodiscard]] Result<void> Advance(std::chrono::steady_clock::time_point now, SaveThumbnailSource current);
+        [[nodiscard]] Result<void> Advance(std::chrono::steady_clock::time_point now, const SaveThumbnailSource &current);
         /** @brief Transfers one already-completed CPU result; stale serials only discard their own bytes.
          * @param completion Detached result. @param now Monotonic owner time. @param current Current source.
          * @return True if consumed, false for late/unrelated results, or invalid-clock error.
          */
         [[nodiscard]] Result<bool> Complete(SaveThumbnailCompletion completion, std::chrono::steady_clock::time_point now,
-                                            SaveThumbnailSource current);
+                                            const SaveThumbnailSource &current);
         /** @brief Cancels exactly one pending dispatch; renderer retirement remains adapter-owned.
          * @param serial Exact dispatch serial. @return True only when pending capture was retired.
          */
@@ -177,6 +177,14 @@ namespace Horo::Runtime {
         SaveSlotCatalogEntry catalog;
         std::shared_ptr<const SaveThumbnailArtifact> artifact;
     };
+
+    /** @brief Validates terminal thumbnail evidence before archive construction or committed display.
+     * @param publication Exact candidate/publication values. @param capture Terminal capture evidence.
+     * @param limits Metadata bounds. @return Success or typed pending, required-failure or stale error.
+     */
+    [[nodiscard]] Result<void> ValidateSaveThumbnailPublication(const SaveSlotPublicationMetadata &publication,
+                                                                const SaveThumbnailCaptureSnapshot &capture,
+                                                                const SaveSlotMetadataLimits &limits = {});
 
     /** @brief Associates terminal capture with one validated committed generation; never edits an archive or index.
      * @param publication Durable metadata whose thumbnail identity already matches the finalized archive.

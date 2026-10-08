@@ -9,7 +9,7 @@
 namespace Horo::Runtime {
     namespace {
         /** @brief Matches source incarnations independently from actual frame provenance. */
-        [[nodiscard]] bool SameSource(const SaveThumbnailSource left, const SaveThumbnailSource right) noexcept {
+        [[nodiscard]] bool SameSource(const SaveThumbnailSource &left, const SaveThumbnailSource &right) noexcept {
             return left.runtime == right.runtime && left.scene == right.scene && left.view == right.view;
         }
 
@@ -41,19 +41,20 @@ namespace Horo::Runtime {
     /** @copydoc SaveThumbnailCapture::Request */
     Result<std::uint64_t> SaveThumbnailCapture::Request(SaveThumbnailRequest request, const SaveThumbnailAvailability availability,
                                                         const std::chrono::steady_clock::time_point now) {
+        using enum SaveThumbnailCaptureState;
         if (closed_)
             return Result<std::uint64_t>::Failure(MakeError(SaveErrors::ThumbnailCancelled));
-        if (snapshot_.state != SaveThumbnailCaptureState::Idle || nextSerial_ == std::numeric_limits<std::uint64_t>::max())
+        if (snapshot_.state != Idle || nextSerial_ == std::numeric_limits<std::uint64_t>::max())
             return Result<std::uint64_t>::Failure(MakeError(SaveErrors::ThumbnailBusy));
         if (!ValidRequest(request, availability) || now < std::chrono::steady_clock::time_point{})
             return Result<std::uint64_t>::Failure(MakeError(SaveErrors::ThumbnailInvalid));
         snapshot_.requestSerial = nextSerial_++;
         snapshot_.request = std::move(request);
-        snapshot_.state = SaveThumbnailCaptureState::Pending;
+        snapshot_.state = Pending;
         started_ = now;
         observed_ = now;
         if (snapshot_.request->policy == SaveThumbnailPolicy::Disabled)
-            snapshot_.state = SaveThumbnailCaptureState::Omitted;
+            snapshot_.state = Omitted;
         else if (availability != SaveThumbnailAvailability::Available)
             Finish(MakeError(SaveErrors::ThumbnailUnavailable));
         return Result<std::uint64_t>::Success(snapshot_.requestSerial);
@@ -68,7 +69,7 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc SaveThumbnailCapture::Advance */
-    Result<void> SaveThumbnailCapture::Advance(const std::chrono::steady_clock::time_point now, const SaveThumbnailSource current) {
+    Result<void> SaveThumbnailCapture::Advance(const std::chrono::steady_clock::time_point now, const SaveThumbnailSource &current) {
         if (snapshot_.state != SaveThumbnailCaptureState::Pending)
             return Result<void>::Success();
         if (now < observed_)
@@ -83,7 +84,7 @@ namespace Horo::Runtime {
 
     /** @copydoc SaveThumbnailCapture::Complete */
     Result<bool> SaveThumbnailCapture::Complete(SaveThumbnailCompletion completion, const std::chrono::steady_clock::time_point now,
-                                                const SaveThumbnailSource current) {
+                                                const SaveThumbnailSource &current) {
         if (snapshot_.state != SaveThumbnailCaptureState::Pending || completion.requestSerial != snapshot_.requestSerial ||
             completion.slot != snapshot_.request->slot || completion.generation != snapshot_.request->generation ||
             completion.thumbnail != snapshot_.request->thumbnail)
@@ -137,28 +138,36 @@ namespace Horo::Runtime {
         return true;
     }
 
+    /** @copydoc ValidateSaveThumbnailPublication */
+    Result<void> ValidateSaveThumbnailPublication(const SaveSlotPublicationMetadata &publication,
+                                                  const SaveThumbnailCaptureSnapshot &capture, const SaveSlotMetadataLimits &limits) {
+        using enum SaveThumbnailCaptureState;
+        if (const auto valid = ValidateSaveSlotPublicationMetadata(publication, limits); valid.HasError())
+            return Result<void>::Failure(valid.ErrorValue());
+        if (!capture.request || capture.requestSerial == 0 || capture.state == Idle || capture.state == Pending)
+            return Result<void>::Failure(MakeError(SaveErrors::ThumbnailInvalid));
+        if (capture.request->slot != publication.slot || capture.request->generation != publication.generation)
+            return Result<void>::Failure(MakeError(SaveErrors::ThumbnailStale));
+        if (capture.state == Failed)
+            return Result<void>::Failure(capture.error.value_or(MakeError(SaveErrors::ThumbnailInvalid)));
+        if (capture.state == Captured) {
+            if (!capture.artifact || !publication.thumbnail || *publication.thumbnail != capture.artifact->Request().thumbnail ||
+                capture.artifact->Request().slot != publication.slot || capture.artifact->Request().generation != publication.generation)
+                return Result<void>::Failure(MakeError(SaveErrors::ThumbnailStale));
+        } else if (capture.state != Omitted || capture.request->policy == SaveThumbnailPolicy::Required || publication.thumbnail ||
+                   capture.artifact) {
+            return Result<void>::Failure(MakeError(SaveErrors::ThumbnailInvalid));
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc MakeSaveCommittedPresentation */
     Result<SaveCommittedPresentation> MakeSaveCommittedPresentation(SaveSlotPublicationMetadata publication,
                                                                     SaveSlotDisplayMetadata display,
                                                                     const SaveThumbnailCaptureSnapshot &capture,
                                                                     const SaveSlotMetadataLimits &limits) {
-        if (const auto valid = ValidateSaveSlotPublicationMetadata(publication, limits); valid.HasError())
+        if (const auto valid = ValidateSaveThumbnailPublication(publication, capture, limits); valid.HasError())
             return Result<SaveCommittedPresentation>::Failure(valid.ErrorValue());
-        if (!capture.request || capture.requestSerial == 0 || capture.state == SaveThumbnailCaptureState::Idle ||
-            capture.state == SaveThumbnailCaptureState::Pending)
-            return Result<SaveCommittedPresentation>::Failure(MakeError(SaveErrors::ThumbnailInvalid));
-        if (capture.request->slot != publication.slot || capture.request->generation != publication.generation)
-            return Result<SaveCommittedPresentation>::Failure(MakeError(SaveErrors::ThumbnailStale));
-        if (capture.state == SaveThumbnailCaptureState::Failed)
-            return Result<SaveCommittedPresentation>::Failure(capture.error.value_or(MakeError(SaveErrors::ThumbnailInvalid)));
-        if (capture.state == SaveThumbnailCaptureState::Captured) {
-            if (!capture.artifact || !publication.thumbnail || *publication.thumbnail != capture.artifact->Request().thumbnail ||
-                capture.artifact->Request().slot != publication.slot || capture.artifact->Request().generation != publication.generation)
-                return Result<SaveCommittedPresentation>::Failure(MakeError(SaveErrors::ThumbnailStale));
-        } else if (capture.state != SaveThumbnailCaptureState::Omitted || capture.request->policy == SaveThumbnailPolicy::Required ||
-                   publication.thumbnail || capture.artifact) {
-            return Result<SaveCommittedPresentation>::Failure(MakeError(SaveErrors::ThumbnailInvalid));
-        }
         if (ValidateSaveSlotDisplayMetadata(display, limits).HasError())
             display = {};
         return Result<SaveCommittedPresentation>::Success(
