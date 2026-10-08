@@ -278,9 +278,11 @@ namespace Horo::AI {
             const TaskHandle other{fixture.agent.incarnation, {700, 1}};
             const auto callback = +[](void *, const BlackboardNotificationBatch &) noexcept {
             };
+            std::array<std::size_t, MaximumBlackboardObservers> contexts{};
             for (std::size_t slot = 0; slot < MaximumBlackboardObservers - 1; ++slot)
                 REQUIRE(fixture.blackboard
-                            ->RegisterObserverAtBlackboardSync({fixture.agent, other, MakeIdentity<BlackboardKeyId>(30), callback, nullptr})
+                            ->RegisterObserverAtBlackboardSync(
+                                {fixture.agent, other, MakeIdentity<BlackboardKeyId>(30), callback, &contexts[slot]})
                             .HasValue());
             ExpectError(DecisionWakePolicy::CreateAtBlackboardSync(fixture.plan, *fixture.blackboard, fixture.owner),
                         AIErrors::BlackboardObserverLimitExceeded);
@@ -288,6 +290,28 @@ namespace Horo::AI {
             CHECK(fixture.blackboard->CancelTaskObserversAtBlackboardSync(other).Value() == MaximumBlackboardObservers - 1);
             auto fresh = fixture.Policy();
             fixture.Activate(*fresh);
+        }
+
+        TEST_CASE("Closing an expired policy preserves replacement-generation observers", "[unit][ai][wake]") {
+            WakeFixture fixture;
+            auto policy = fixture.Policy();
+            fixture.Activate(*policy);
+            auto binding = fixture.blackboard->Binding();
+            ++binding.schemaGeneration;
+            ++binding.instanceGeneration;
+            REQUIRE(fixture.blackboard->ReplaceAtBlackboardSync(binding, fixture.schema).HasValue());
+            std::size_t notifications{};
+            const auto callback = +[](void *context, const BlackboardNotificationBatch &) noexcept {
+                ++*static_cast<std::size_t *>(context);
+            };
+            const TaskHandle replacementOwner{fixture.agent.incarnation, {700, 1}};
+            const auto registered = fixture.blackboard->RegisterObserverAtBlackboardSync(
+                {fixture.agent, replacementOwner, MakeIdentity<BlackboardKeyId>(10), callback, &notifications});
+            REQUIRE(registered.HasValue());
+            REQUIRE(policy->CloseAtBlackboardSync().HasValue());
+            fixture.Write(10, true);
+            CHECK(notifications == 1);
+            REQUIRE(fixture.blackboard->RemoveObserverAtBlackboardSync(registered.Value()).Value());
         }
 
         TEST_CASE("Wake metadata rejects malformed missing duplicate and over-limit inputs", "[unit][ai][wake]") {

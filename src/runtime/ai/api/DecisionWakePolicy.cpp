@@ -276,11 +276,15 @@ namespace Horo::AI {
     Result<void> DecisionWakePolicy::CloseAtBlackboardSync() {
         if (closed_)
             return Result<void>::Success();
+        // Replacement and teardown invalidate the entire old registry before releasing callback contexts.
+        const bool registryCurrent = blackboard_->IsActive() && blackboard_->Binding() == binding_;
         for (auto &watch : watches_) {
             if (!watch.token.has_value())
                 continue;
-            if (const auto removed = blackboard_->RemoveObserverAtBlackboardSync(*watch.token); removed.HasError())
-                return Result<void>::Failure(removed.ErrorValue());
+            if (registryCurrent) {
+                if (const auto removed = blackboard_->RemoveObserverAtBlackboardSync(*watch.token); removed.HasError())
+                    return Result<void>::Failure(removed.ErrorValue());
+            }
             watch.token.reset();
         }
         closed_ = true;
