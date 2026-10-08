@@ -183,7 +183,10 @@ TEST_CASE("Production Character clearance capture retains module permission and 
     auto context = GameplayPhysicsContext::Create(Binding(*world), world.get()).Value();
     const CharacterPhysicsQueryExpectations expected{7, CharacterWorldId::Create(1).Value(),       world->Identity(), 1, 1,
                                                      1, world->PublishedTick().publicationRevision};
-    REQUIRE(context->AcquireCharacterClearance("game.tests", 7, expected).HasValue());
+    auto borrowed = expected;
+    auto retained = context->AcquireCharacterClearance("game.tests", 7, borrowed).Value();
+    borrowed = {};
+    REQUIRE(ValidateCharacterPhysicsQueryContext(retained.Context(), expected).HasValue());
     Physics::Test::RequireError(context->AcquireCharacterClearance("game.other", 7, expected), GameplayErrors::PhysicsPermissionDenied);
     auto foreign = expected;
     foreign.physicsWorld = PhysicsWorldId::Create(307).Value();

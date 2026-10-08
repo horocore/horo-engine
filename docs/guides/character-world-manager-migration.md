@@ -163,3 +163,15 @@ continue to fail exact-snapshot validation after a refresh or Physics publicatio
 The owner generations and settings remain fixed. `Descriptor()` now reports the latest
 explicitly admitted revision; its borrowed view is for owner-thread use. This additive
 C++ API requires rebuilding consumers; it changes no request layout or C ABI.
+
+## Clearance metadata borrowing
+
+`CharacterClearanceQuery::Capture` and
+`GameplayPhysicsContext::AcquireCharacterClearance` now take
+`const CharacterPhysicsQueryExpectations&`. The borrow lasts only for the call;
+the returned adapter owns a value copy, so destroying or modifying caller metadata
+cannot alter a captured operation. Ordinary calls remain source-compatible, while
+function-pointer declarations must match the new signature and C++ consumers must
+rebuild. There is no request-layout or C ABI change. The erased overlap callback
+only dispatches to a typed const probe; capability identity, filtering and revocation
+checks remain in that probe.

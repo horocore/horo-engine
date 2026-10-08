@@ -73,7 +73,7 @@ namespace Horo::Gameplay {
 
     /** @copydoc GameplayPhysicsContext::AcquireCharacterClearance */
     Result<Physics::CharacterClearanceQuery> GameplayPhysicsContext::AcquireCharacterClearance(
-        const std::string_view moduleId, const std::uint64_t scene, const Character::CharacterPhysicsQueryExpectations expected) const {
+        const std::string_view moduleId, const std::uint64_t scene, const Character::CharacterPhysicsQueryExpectations &expected) const {
         auto capability = Acquire(moduleId, scene, expected.sceneGeneration);
         if (capability.HasError())
             return Result<Physics::CharacterClearanceQuery>::Failure(capability.ErrorValue());

@@ -75,11 +75,11 @@ namespace Horo::Gameplay {
         /** @brief Acquires a production per-operation Character clearance adapter under the same permission fence.
          * @param moduleId Exact module principal selected by host composition.
          * @param scene Exact runtime scene identity.
-         * @param expected Exact paired Character/Physics generations, tick and Physics publication revision.
+         * @param expected Borrowed exact operation metadata copied into the returned clearance adapter.
          * @return Clearance adapter or original permission, identity or capability error.
          */
         [[nodiscard]] Result<Physics::CharacterClearanceQuery> AcquireCharacterClearance(
-            std::string_view moduleId, std::uint64_t scene, Character::CharacterPhysicsQueryExpectations expected) const;
+            std::string_view moduleId, std::uint64_t scene, const Character::CharacterPhysicsQueryExpectations &expected) const;
         /** @brief Closes this scope permanently before teardown; retained clients observe the same fence. */
         void Revoke() const noexcept;
         /** @brief Returns immutable exact routing evidence. @return Host-copied binding. */

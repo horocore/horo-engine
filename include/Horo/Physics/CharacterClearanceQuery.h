@@ -19,11 +19,11 @@ namespace Horo::Physics {
     public:
         /** @brief Captures one exact operation identity without querying or mutating Physics.
          * @param capability Host-admitted Physics client, including its module cancellation fence.
-         * @param expected Exact Character/Physics generations, tick and Physics publication revision.
+         * @param expected Borrowed Character/Physics metadata copied into the owned adapter before return.
          * @return Owned adapter or a typed identity/snapshot error.
          */
         [[nodiscard]] static Result<CharacterClearanceQuery> Capture(PhysicsQueryEventCapability capability,
-                                                                     Character::CharacterPhysicsQueryExpectations expected);
+                                                                     const Character::CharacterPhysicsQueryExpectations &expected);
         /** @brief Borrows the clearance context for one synchronous owner-thread operation.
          * @return Context valid until this adapter is destroyed or moved; no sweep/recovery is supplied.
          */
@@ -31,10 +31,9 @@ namespace Horo::Physics {
 
     private:
         /** @brief Stores an already admitted capability and immutable operation identity. */
-        CharacterClearanceQuery(PhysicsQueryEventCapability capability, Character::CharacterPhysicsQueryExpectations expected);
+        CharacterClearanceQuery(PhysicsQueryEventCapability capability, const Character::CharacterPhysicsQueryExpectations &expected);
         /** @brief Reduces one exact operation to blocking presence without depenetration. */
-        static Result<Character::CharacterOverlapProbeResult> Probe(void *context,
-                                                                    const Character::CharacterOverlapProbeRequest &request) noexcept;
+        Result<Character::CharacterOverlapProbeResult> Probe(const Character::CharacterOverlapProbeRequest &request) const noexcept;
         PhysicsQueryEventCapability capability_;
         Character::CharacterPhysicsQueryExpectations expected_;
     };
