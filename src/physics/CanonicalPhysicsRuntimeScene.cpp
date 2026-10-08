@@ -337,11 +337,18 @@ namespace Horo::Physics::Detail {
                                                   mutation.angularVelocity ? ToNative(*mutation.angularVelocity) : angular);
         }
 
+        /** @brief Validated safe-point actions shared by geometry and policy reconciliation. */
+        struct MutationReconciliation {
+            bool changedCcd;
+            bool safetyWakes;
+            bool wake;
+        };
+
         /** @brief Reconciles motion storage, CCD contacts and wake state after the validated geometry transition. */
         [[nodiscard]] Result<void> ReconcileMutationPolicy(CanonicalWorld &canonical, CanonicalSceneBodyRecord &body,
                                                            const CanonicalSceneShapeRecord &shape, const PhysicsBodyDescriptor &desired,
                                                            const PhysicsBodyMutation &mutation, const JPH::MassProperties &preparedMass,
-                                                           const bool changedCcd, const bool safetyWakes, const bool wake) {
+                                                           const MutationReconciliation actions) {
             auto &interface = canonical.native.system->GetBodyInterface();
             if (desired.motion != PhysicsMotionType::Static) {
                 const auto quality = ResolveMutationQuality(canonical, body, shape, desired);
@@ -349,12 +356,12 @@ namespace Horo::Physics::Detail {
                     return Result<void>::Failure(quality.ErrorValue());
                 interface.SetMotionQuality(body.nativeBody, quality.Value());
             }
-            if (changedCcd)
+            if (actions.changedCcd)
                 interface.InvalidateContactCache(body.nativeBody);
             if (const auto updated = ApplyMutationMotionProperties(canonical, body, desired, preparedMass); updated.HasError())
                 return updated;
-            ApplyMutationVelocity(interface, body.nativeBody, mutation, desired.motion, safetyWakes);
-            if (wake && desired.motion != PhysicsMotionType::Static)
+            ApplyMutationVelocity(interface, body.nativeBody, mutation, desired.motion, actions.safetyWakes);
+            if (actions.wake && desired.motion != PhysicsMotionType::Static)
                 interface.ActivateBody(body.nativeBody);
             body.policy = desired;
             return Result<void>::Success();
@@ -465,7 +472,7 @@ namespace Horo::Physics::Detail {
         if (changedMotion && desired.motion != PhysicsMotionType::Static)
             interface.SetMotionType(found->nativeBody, ToNativeMotion(desired.motion), activation);
 
-        return ReconcileMutationPolicy(canonical, *found, *shape, desired, mutation, preparedMass.Value(), changedCcd, safetyWakes, wake);
+        return ReconcileMutationPolicy(canonical, *found, *shape, desired, mutation, preparedMass.Value(), {changedCcd, safetyWakes, wake});
     }
 
     /** @copydoc PrepareCanonicalConstraintRecord */

@@ -82,6 +82,25 @@ namespace Horo::Physics::Detail {
             return {std::make_shared<const NormalizedCollisionSchema>(std::move(normalized).Value()), 1};
         }
 
+        void RequireContactAuthority(const CanonicalWorld &canonical) {
+            const auto metadata = ContactFixture({});
+            REQUIRE(canonical.simulation.Profile(metadata.profile) != nullptr);
+            REQUIRE(canonical.simulation.Channel(metadata.channel) != nullptr);
+            REQUIRE(canonical.simulation.QueryResponse(metadata.profile, metadata.channel) == CollisionQueryResponse::Block);
+            REQUIRE(canonical.simulation.SchemaGeneration() == 1);
+            REQUIRE(canonical.simulation.Layer(0) == CollisionLayerId{});
+            REQUIRE_FALSE(canonical.simulation.QueryResponse(CollisionProfileId{}, metadata.channel).has_value());
+        }
+
+        void RequireResidentBody(CanonicalWorld &canonical, const PhysicsWorldId owner, const JPH::BodyID native,
+                                 const BodyHandle expected) {
+            const auto access = MakeQueryAccess(canonical);
+            const auto *resident = ResolveCanonicalSceneBody(access, owner, native);
+            REQUIRE(resident != nullptr);
+            REQUIRE(resident->handle == expected);
+            REQUIRE(ResolveCanonicalSceneBody(access, PhysicsWorldId::Create(999).Value(), native) == nullptr);
+        }
+
     }  // namespace
 
     TEST_CASE("Canonical runtime and world lifecycle retain no partial native ownership", "[physics][native][lifecycle]") {
@@ -403,24 +422,12 @@ namespace Horo::Physics::Detail {
         REQUIRE(fixture.Value().body != second.Value());
         REQUIRE(fixture.Value().shape != shape.Value());
         auto &canonical = *static_cast<CanonicalWorld *>(world.handle.value);
-        const auto metadata = ContactFixture({});
-        REQUIRE(canonical.simulation.Profile(metadata.profile) != nullptr);
-        REQUIRE(canonical.simulation.Channel(metadata.channel) != nullptr);
-        REQUIRE(canonical.simulation.QueryResponse(metadata.profile, metadata.channel) == CollisionQueryResponse::Block);
-        REQUIRE(canonical.simulation.SchemaGeneration() == 1);
-        REQUIRE(canonical.simulation.Layer(0) == CollisionLayerId{});
-        REQUIRE_FALSE(canonical.simulation.QueryResponse(CollisionProfileId{}, metadata.channel).has_value());
+        RequireContactAuthority(canonical);
         const auto retiredNative = canonical.scene.bodies.front().nativeBody;
         const auto remainingNative = canonical.scene.bodies.back().nativeBody;
         REQUIRE(canonical.scene.nativeBodyIndices[retiredNative.GetIndex()] == 0);
         REQUIRE(canonical.scene.nativeBodyIndices[remainingNative.GetIndex()] == 1);
-        {
-            const auto access = MakeQueryAccess(canonical);
-            const auto *resident = ResolveCanonicalSceneBody(access, owner, remainingNative);
-            REQUIRE(resident != nullptr);
-            REQUIRE(resident->handle == second.Value());
-            REQUIRE(ResolveCanonicalSceneBody(access, PhysicsWorldId::Create(999).Value(), remainingNative) == nullptr);
-        }
+        RequireResidentBody(canonical, owner, remainingNative, second.Value());
         QuarantineCanonicalSceneBody(world.handle, first.Value(), {});
         REQUIRE(canonical.scene.nativeBodyIndices[retiredNative.GetIndex()] == std::numeric_limits<std::size_t>::max());
         REQUIRE(canonical.scene.nativeBodyIndices[remainingNative.GetIndex()] == 0);
@@ -428,9 +435,7 @@ namespace Horo::Physics::Detail {
         {
             const auto access = MakeQueryAccess(canonical);
             REQUIRE(ResolveCanonicalSceneBody(access, owner, retiredNative) == nullptr);
-            const auto *resident = ResolveCanonicalSceneBody(access, owner, remainingNative);
-            REQUIRE(resident != nullptr);
-            REQUIRE(resident->handle == second.Value());
+            RequireResidentBody(canonical, owner, remainingNative, second.Value());
         }
         const auto replacement =
             CreateCanonicalSceneBody(world.handle, owner,
