@@ -79,9 +79,9 @@ namespace Horo::Terrain {
             const auto a = start + indices[0] * 24;
             const auto b = start + indices[1] * 24;
             const auto c = start + indices[2] * 24;
-            const auto area = (Double(bytes, b + 16) - Double(bytes, a + 16)) * (Double(bytes, c) - Double(bytes, a)) -
-                              (Double(bytes, b) - Double(bytes, a)) * (Double(bytes, c + 16) - Double(bytes, a + 16));
-            if (!std::isfinite(area) || area <= 0 || Read(bytes, offset + 12, 4) >= Read(bytes, offset + 16, 4) ||
+            if (const auto area = (Double(bytes, b + 16) - Double(bytes, a + 16)) * (Double(bytes, c) - Double(bytes, a)) -
+                                  (Double(bytes, b) - Double(bytes, a)) * (Double(bytes, c + 16) - Double(bytes, a + 16));
+                !std::isfinite(area) || area <= 0 || Read(bytes, offset + 12, 4) >= Read(bytes, offset + 16, 4) ||
                 Read(bytes, offset + 20, 4) >= Read(bytes, offset + 24, 4) ||
                 Read(bytes, offset + 16, 4) >= TerrainDescriptorHardLimits::SamplesPerAxis ||
                 Read(bytes, offset + 24, 4) >= TerrainDescriptorHardLimits::SamplesPerAxis)
@@ -135,8 +135,8 @@ namespace Horo::Terrain {
         const auto corrupt = [] {
             return Result<void>::Failure(MakeError(TerrainTileCookErrors::CorruptPrevious));
         };
-        constexpr std::array<std::uint8_t, 10> prefix{4, 0, 'H', 'T', 'S', 'G', 1, 0, 0, 0};
-        if (payload.size() < 408 || payload.size() > TerrainDescriptorHardLimits::StagingBytes ||
+        if (constexpr std::array<std::uint8_t, 10> prefix{4, 0, 'H', 'T', 'S', 'G', 1, 0, 0, 0};
+            payload.size() < 408 || payload.size() > TerrainDescriptorHardLimits::StagingBytes ||
             !std::equal(prefix.begin(), prefix.end(), payload.begin()) || ComputeSha256(std::as_bytes(payload)) != expectedDigest ||
             !ValidProvenance(payload))
             return corrupt();

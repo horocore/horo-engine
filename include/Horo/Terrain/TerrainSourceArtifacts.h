@@ -104,7 +104,7 @@ namespace Horo::Terrain {
                                                                                const TerrainSourceArtifactProfile &,
                                                                                std::span<const TerrainTileCookDependency>,
                                                                                const CancellationToken &);
-        CookedTerrainSourceArtifacts(CookedTerrainTileSet tiles, TerrainCapabilityRevision capability, Sha256Digest fingerprint,
+        CookedTerrainSourceArtifacts(CookedTerrainTileSet tiles, TerrainCapabilityRevision capability, const Sha256Digest &fingerprint,
                                      std::vector<TerrainSourceArtifact> artifacts, std::vector<std::uint8_t> manifest);
 
         CookedTerrainTileSet tiles_;

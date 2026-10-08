@@ -12,7 +12,8 @@ namespace Horo::Terrain {
 
         /** @brief Exact source-grid coverage read only after the owning tile verifier succeeds. */
         struct Grid final {
-            std::vector<std::uint32_t> xs, zs;
+            std::vector<std::uint32_t> xs;
+            std::vector<std::uint32_t> zs;
         };
 
         std::uint32_t ReadU32(const std::span<const std::uint8_t> bytes, const std::size_t offset) {
@@ -83,7 +84,10 @@ namespace Horo::Terrain {
 
         /** @brief Subtraction-based aggregate admission avoids overflow and precedes geometry allocation. */
         struct Budget final {
-            std::uint64_t vertices{}, triangles{}, bytes{}, work{};
+            std::uint64_t vertices{};
+            std::uint64_t triangles{};
+            std::uint64_t bytes{};
+            std::uint64_t work{};
 
             bool Admit(const Grid &grid, const TerrainSourceArtifactProfile &profile, const std::uint64_t overhead) {
                 const auto v = static_cast<std::uint64_t>(grid.xs.size()) * grid.zs.size();
@@ -138,8 +142,8 @@ namespace Horo::Terrain {
                 if (cancellation.IsCancellationRequested())
                     return Result<void>::Failure(MakeError(TerrainTileCookErrors::Cancelled));
                 for (const auto x : grid.xs)
-                    artifact.vertices.push_back({source.coordinates.originX + x * source.coordinates.spacingX, Height(source, x, z),
-                                                 source.coordinates.originZ + z * source.coordinates.spacingZ});
+                    artifact.vertices.emplace_back(source.coordinates.originX + x * source.coordinates.spacingX, Height(source, x, z),
+                                                   source.coordinates.originZ + z * source.coordinates.spacingZ);
             }
             for (std::uint32_t z = 0; z + 1 < grid.zs.size(); ++z) {
                 for (std::uint32_t x = 0; x + 1 < grid.xs.size(); ++x) {
@@ -270,14 +274,13 @@ namespace Horo::Terrain {
                 artifact.tile = tile.id;
                 artifact.role = role;
                 artifact.seams = tile.seams;
-                const auto built = BuildGeometry(source, grid, cancellation, artifact);
-                if (built.HasError())
+                if (const auto built = BuildGeometry(source, grid, cancellation, artifact); built.HasError())
                     return Result<void>::Failure(built.ErrorValue());
-                const auto encoded = EncodeArtifact(tiles, source.capability, fingerprint, artifact, coordinateBytes.size(), cancellation);
-                if (encoded.HasError())
+                if (const auto encoded =
+                        EncodeArtifact(tiles, source.capability, fingerprint, artifact, coordinateBytes.size(), cancellation);
+                    encoded.HasError())
                     return Result<void>::Failure(encoded.ErrorValue());
-                const auto integrity = VerifyTerrainSourceArtifactPayload(artifact.payload, artifact.digest);
-                if (integrity.HasError())
+                if (const auto integrity = VerifyTerrainSourceArtifactPayload(artifact.payload, artifact.digest); integrity.HasError())
                     return Result<void>::Failure(integrity.ErrorValue());
                 artifacts.push_back(std::move(artifact));
                 const auto actual = OwnedBytes(tiles, artifacts, 82 + artifactCount * 66) + coordinateBytes.capacity() + scratchBytes;
@@ -289,19 +292,17 @@ namespace Horo::Terrain {
 
             /** @brief Reuse one tile grid across its explicitly selected consumer roles. */
             Result<void> Build() {
-                const auto prepared = Prepare();
-                if (prepared.HasError())
+                if (const auto prepared = Prepare(); prepared.HasError())
                     return prepared;
-                constexpr std::array roles{TerrainSourceArtifactRole::Visual, TerrainSourceArtifactRole::Collision,
-                                           TerrainSourceArtifactRole::Navigation};
+                using enum TerrainSourceArtifactRole;
+                constexpr std::array roles{Visual, Collision, Navigation};
                 for (const auto &tile : tiles.tiles) {
                     const auto grid = TileGrid(tile);
                     for (const auto role : roles) {
-                        if ((role == TerrainSourceArtifactRole::Collision && tile.id.tile.lod != profile.collisionLod) ||
-                            (role == TerrainSourceArtifactRole::Navigation && tile.id.tile.lod != profile.navigationLod))
+                        if ((role == Collision && tile.id.tile.lod != profile.collisionLod) ||
+                            (role == Navigation && tile.id.tile.lod != profile.navigationLod))
                             continue;
-                        const auto built = BuildArtifact(tile, grid, role);
-                        if (built.HasError())
+                        if (const auto built = BuildArtifact(tile, grid, role); built.HasError())
                             return built;
                     }
                 }
@@ -311,7 +312,8 @@ namespace Horo::Terrain {
     }  // namespace
 
     CookedTerrainSourceArtifacts::CookedTerrainSourceArtifacts(CookedTerrainTileSet tiles, const TerrainCapabilityRevision capability,
-                                                               const Sha256Digest fingerprint, std::vector<TerrainSourceArtifact> artifacts,
+                                                               const Sha256Digest &fingerprint,
+                                                               std::vector<TerrainSourceArtifact> artifacts,
                                                                std::vector<std::uint8_t> manifest)
         : tiles_(std::move(tiles)), capability_(capability), fingerprint_(fingerprint), artifacts_(std::move(artifacts)),
           manifest_(std::move(manifest)), manifestDigest_(ComputeSha256(std::as_bytes(std::span{manifest_}))) {}
@@ -344,16 +346,14 @@ namespace Horo::Terrain {
             return Result<CookedTerrainSourceArtifacts>::Failure(cooked.ErrorValue());
         auto tiles = std::move(cooked).Value();
         // Verification owns byte-layout admission; geometry never decodes an unverified HTIL prefix.
-        const auto verified = VerifyCookedTerrainTiles(tiles);
-        if (verified.HasError())
+        if (const auto verified = VerifyCookedTerrainTiles(tiles); verified.HasError())
             return Result<CookedTerrainSourceArtifacts>::Failure(verified.ErrorValue());
         std::vector<std::uint8_t> coordinateBytes;
         CanonicalWriter coordinates{&coordinateBytes};
         Detail::WriteCoordinates(coordinates, tiles.coordinates);
         const auto fingerprint = Fingerprint(tiles, profile);
         ArtifactCandidate candidate{source, tiles, profile, cancellation, fingerprint, coordinateBytes, {}, {}, 0};
-        const auto built = candidate.Build();
-        if (built.HasError())
+        if (const auto built = candidate.Build(); built.HasError())
             return Result<CookedTerrainSourceArtifacts>::Failure(built.ErrorValue());
         if (cancellation.IsCancellationRequested())
             return Result<CookedTerrainSourceArtifacts>::Failure(MakeError(TerrainTileCookErrors::Cancelled));
