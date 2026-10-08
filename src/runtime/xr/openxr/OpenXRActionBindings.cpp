@@ -32,7 +32,7 @@ namespace Horo::XR::OpenXRInternal {
         }
 
         /** @brief Requires bounded host-localized presentation without deriving display text from implementation IDs. */
-        Result<void> ValidateLabels(const XRActionBindingSchema &schema, const NativeActionLabels labels) {
+        Result<void> ValidateLabels(const XRActionBindingSchema &schema, const NativeActionLabels &labels) {
             if (labels.actions.size() != schema.actions.size() || labels.sets.empty() ||
                 labels.sets.size() > XRActionBindingLimits::MaximumSets)
                 return Result<void>::Failure(
@@ -153,7 +153,7 @@ namespace Horo::XR::OpenXRInternal {
     }
 
     /** @brief Creates canonical action sets/actions with generated native names, never user semantic strings. */
-    Result<void> OpenXRActionBindings::CreateActions(const XRActionBindingSchema &schema, const NativeActionLabels labels) {
+    Result<void> OpenXRActionBindings::CreateActions(const XRActionBindingSchema &schema, const NativeActionLabels &labels) {
         std::vector<const XRActionDeclaration *> ordered;
         ordered.reserve(schema.actions.size());
         for (const auto &action : schema.actions) {

@@ -123,7 +123,7 @@ namespace Horo::XR::OpenXRInternal {
                                            std::span<const XRActionBindingOverride> overrides,
                                            std::span<const NativeInteractionProfilePath> profiles,
                                            std::span<const NativeActionControlPath> controls, NativeActionLabels labels);
-        [[nodiscard]] Result<void> CreateActions(const XRActionBindingSchema &schema, NativeActionLabels labels);
+        [[nodiscard]] Result<void> CreateActions(const XRActionBindingSchema &schema, const NativeActionLabels &labels);
         [[nodiscard]] Result<void> Suggest(const XRActionBindingSchema &schema, std::span<const XRProfileControl> catalog,
                                            std::span<const XRActionBindingOverride> overrides,
                                            std::span<const NativeInteractionProfilePath> profiles,
