@@ -24,6 +24,12 @@ namespace Horo::ProjectMigrations::R0_1_0 {
     /** @brief Builds the definition-local compression postcondition validator. */
     [[nodiscard]] std::shared_ptr<const Application::IProjectMigrationValidator> BuildCompressionPostconditionValidator();
 
-    /** @brief Builds the ordered prefab-source and scene-reference adoption stage. */
-    [[nodiscard]] std::shared_ptr<const Application::IProjectMigrationStage> BuildPrefabMigrationAdoptionStage();
+    /** @brief Builds prefab source adoption before dependent reference transformations. */
+    [[nodiscard]] std::shared_ptr<const Application::IProjectMigrationStage> BuildPrefabSourceAdoptionStage();
+
+    /** @brief Builds scene reference adoption over the migrated prefab identity inventory. */
+    [[nodiscard]] std::shared_ptr<const Application::IProjectMigrationStage> BuildPrefabReferenceAdoptionStage();
+
+    /** @brief Builds the read-only source and reference postcondition barrier. */
+    [[nodiscard]] std::shared_ptr<const Application::IProjectMigrationValidator> BuildPrefabAdoptionValidator();
 }  // namespace Horo::ProjectMigrations::R0_1_0

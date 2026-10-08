@@ -38,13 +38,16 @@ namespace Horo::Character {
             }
         };
 
-        [[nodiscard]] SpawnedActiveWorld StanceWorld(const std::uint32_t maximumQueries = 0) {
+        [[nodiscard]] SpawnedActiveWorld StanceWorld(const std::uint32_t maximumQueries = 0, const Math::Vec3 up = {0, 1, 0},
+                                                     const Math::Vec3 position = {}) {
             auto values = Settings().Values();
             if (maximumQueries != 0)
                 values.work.maximumQueriesPerTick = maximumQueries;
             const auto settings = CharacterWorldSettings::Capture(values).Value();
             auto world = std::move(CharacterWorld::Prepare(WorldDescriptor(), settings)).Value();
             auto descriptor = ControllerDescriptor(world->Descriptor());
+            descriptor.up = up;
+            descriptor.collisionRootPosition = position;
             descriptor.crouchedCapsule = Physics::PhysicsCapsuleShape{0.5F, 0.25F};
             const auto controller = world->CreateController(descriptor).Value();
             REQUIRE(world->Activate().HasValue());
@@ -74,6 +77,8 @@ namespace Horo::Character {
             REQUIRE(snapshot.capsule.cylindricalHalfHeightMeters == 0.25F);
             REQUIRE(snapshot.movement.shapeChange->status == CharacterShapeChangeStatus::Applied);
             REQUIRE(snapshot.transform.position == probe.position);
+            REQUIRE(probe.position == Math::Vec3{0, -0.25F, 0});
+            REQUIRE(snapshot.movement.achievedVelocityMetersPerSecond == Math::Vec3{});
             REQUIRE(snapshot.transform.groundingRevalidationRequired);
             REQUIRE_FALSE(snapshot.transform.platformAttached);
             REQUIRE(probe.calls == 1);
@@ -89,6 +94,88 @@ namespace Horo::Character {
             REQUIRE(active.world->AdvanceFixedTick(input).HasValue());
             REQUIRE(active.world->ControllerLocomotionSnapshot(active.controller).Value().stance == CharacterStance::Standing);
             REQUIRE(probe.observed.cylindricalHalfHeightMeters == 0.5F);
+        }
+
+        TEST_CASE("Character repeated stance toggles preserve the bottom on an arbitrary up axis", "[physics][character][shape]") {
+            const Math::Vec3 up{1, 0, 0};
+            auto active = StanceWorld(0, up, {2, 3, 4});
+            const auto foot = active.world->ControllerTransform(active.controller).Value().position - up;
+            ShapeProbe probe;
+            for (std::uint64_t tick = 1; tick <= 128; ++tick) {
+                auto command = Movement(active.controller, tick, tick);
+                command.stance = tick % 2 == 0 ? CharacterStanceIntent::Stand : CharacterStanceIntent::Crouch;
+                REQUIRE(active.world->QueueMovementCommand(command).HasValue());
+                auto input = FixedTick(tick);
+                input.query = probe.Context(active.world->Descriptor(), tick);
+                REQUIRE(active.world->AdvanceFixedTick(input).HasValue());
+                const auto snapshot = active.world->ControllerLocomotionSnapshot(active.controller).Value();
+                REQUIRE(snapshot.transform.position - up * (snapshot.capsule.radiusMeters + snapshot.capsule.cylindricalHalfHeightMeters) ==
+                        foot);
+                REQUIRE(snapshot.movement.achievedVelocityMetersPerSecond == Math::Vec3{});
+            }
+            REQUIRE(probe.calls == 128);
+        }
+
+        TEST_CASE("Character blocked stand retains crouched center and Keep does not retry clearance", "[physics][character][shape]") {
+            auto active = StanceWorld();
+            ShapeProbe probe;
+            for (std::uint64_t tick = 1; tick <= 4; ++tick) {
+                auto command = Movement(active.controller, tick, tick);
+                command.stance = tick == 1   ? CharacterStanceIntent::Crouch
+                                 : tick == 3 ? CharacterStanceIntent::Keep
+                                             : CharacterStanceIntent::Stand;
+                probe.blocked = tick == 2;
+                REQUIRE(active.world->QueueMovementCommand(command).HasValue());
+                auto input = FixedTick(tick);
+                input.query = probe.Context(active.world->Descriptor(), tick);
+                REQUIRE(active.world->AdvanceFixedTick(input).HasValue());
+                const auto snapshot = active.world->ControllerLocomotionSnapshot(active.controller).Value();
+                REQUIRE(snapshot.transform.position.y == (tick == 4 ? 0.0F : -0.25F));
+                if (tick == 2) {
+                    REQUIRE(probe.position.y == 0.0F);
+                    REQUIRE(snapshot.movement.shapeChange->status == CharacterShapeChangeStatus::Blocked);
+                    REQUIRE(snapshot.stance == CharacterStance::Crouched);
+                }
+            }
+            REQUIRE(probe.calls == 3);
+        }
+
+        TEST_CASE("Character validates shifted resize bounds before invoking Physics", "[physics][character][shape]") {
+            Math::Vec3 position{};
+            Physics::PhysicsCapsuleShape target{0.5F, 0.25F};
+            SECTION("local-origin boundary") {
+                position.y = -Physics::MaximumPhysicsLocalHalfExtentMeters;
+            }
+            SECTION("fixed-tick displacement bound") {
+                target.cylindricalHalfHeightMeters = Settings().Values().work.maximumDisplacementMetersPerTick + 1.0F;
+            }
+            auto active = StanceWorld(0, {0, 1, 0}, position);
+            auto command = Movement(active.controller, 1, 1);
+            command.shapeChange = CharacterShapeChangeRequest{target};
+            REQUIRE(active.world->QueueMovementCommand(command).HasValue());
+            ShapeProbe probe;
+            auto input = FixedTick(1);
+            input.query = probe.Context(active.world->Descriptor(), 1);
+            RequireError(active.world->AdvanceFixedTick(input), CharacterErrors::PlacementInvalid);
+            REQUIRE(probe.calls == 0);
+            REQUIRE(active.world->ControllerTransform(active.controller).Value().position == position);
+            REQUIRE(active.world->PublishedTick().completedTick == 0);
+        }
+
+        TEST_CASE("Character explicit radius resize preserves bottom without reporting resize as velocity", "[physics][character][shape]") {
+            auto active = StanceWorld();
+            auto command = Movement(active.controller, 1, 1);
+            command.shapeChange = CharacterShapeChangeRequest{{0.75F, 0.5F}};
+            command.desiredVelocityMetersPerSecond = Math::Vec3{1, 0, 0};
+            REQUIRE(active.world->QueueMovementCommand(command).HasValue());
+            ShapeProbe probe;
+            auto input = FixedTick(1);
+            input.query = probe.Context(active.world->Descriptor(), 1);
+            REQUIRE(active.world->AdvanceFixedTick(input).HasValue());
+            const auto snapshot = active.world->ControllerLocomotionSnapshot(active.controller).Value();
+            REQUIRE(probe.position.y == 0.25F);
+            REQUIRE(snapshot.transform.position.y - snapshot.capsule.radiusMeters - snapshot.capsule.cylindricalHalfHeightMeters == -1.0F);
+            REQUIRE(snapshot.movement.achievedVelocityMetersPerSecond == Math::Vec3{1, 0, 0});
         }
 
         TEST_CASE("Character publishes blocked or invalid shape outcomes while retaining effective dimensions",

@@ -451,6 +451,25 @@ Step down:
 - if a valid ground is found, snap to it
 - preserve momentum if the drop is significant
 
+The CHR-002.4 implementation uses `maximumStepHeightMeters` as the maximum
+physical rise and downward snap, excluding the maintained skin gap. A zero limit
+disables ascent and drop snapping while retaining touching-floor classification.
+A blocked lower-capsule contact first verifies touching walkable support, then
+casts upward, forward and downward. Eligibility covers the authored maximum rise
+as well as the lower hemisphere; the final actual surface elevation still must fit
+the height limit. A rounded capsule edge can certify the nearest contact against a
+walkable point no farther than one capsule radius ahead only if a bounded forward
+cast is clear and the point has the same body, shape, subshape and surface plane.
+Lookahead supplies only that plane normal; it never extends the requested horizontal
+endpoint or changes the actual contact point/distance. Missing, steep, foreign or
+non-coplanar support rejects the step. A complete step already owns its checked
+support, so ordinary post-movement snap cannot overwrite it with the rounded-edge
+collision normal. The complete actual landing capsule must pass overlap clearance. Rejected candidates leave ordinary movement
+unchanged; rounded lower contacts cannot manufacture uphill projection after a
+failed step. All casts and clearance probes consume the shared fixed-tick query
+budget and propagate malformed evidence, capacity and lifecycle failure before
+publication. No native Character controller or unbounded retry participates.
+
 Step behavior is configurable:
 
 - `maxStepHeight`
@@ -744,9 +763,17 @@ crouch profile, malformed dimensions or out-of-envelope capsule publishes `Inval
 This replaces the former accepted-but-unused stance intent; callers that request
 crouch must provide the descriptor profile and current overlap adapter.
 
-The collision root is the capsule center and stays fixed during instantaneous
-resize. Every different candidate geometry, including shrink, uses one exact-tick
-overlap probe without depenetration. An overlap publishes `Blocked` and keeps the
+The collision root remains the capsule center. Instantaneous resize shifts that
+center by `up * (newHalfHeight + newRadius - oldHalfHeight - oldRadius)` so the
+bottom point stays fixed. This deliberately replaces CHR-003.1's center-fixed
+contract for named stances and explicit shape replacements. Existing callers keep
+the same request schema but must use the committed center publication rather than
+assuming resize leaves the transform unchanged. The bounded movement envelope
+includes the center shift and subsequent movement; achieved velocity excludes the
+resize offset. The shifted candidate must be finite and inside the local-origin
+and per-tick displacement bounds before Physics is called.
+Every different candidate geometry, including shrink, uses one exact-tick
+overlap probe at that shifted center without depenetration. An overlap publishes `Blocked` and keeps the
 prior geometry/stance; a clear candidate publishes `Applied`. Query errors retain
 their original typed cause and fail the attempted tick. Identity, authored descriptor,
 step policy and heading are preserved. The effective capsule and stance live in the
@@ -757,6 +784,27 @@ Without a movement sweep, applied resize detaches support and requires grounding
 revalidation; the sweep path resolves support against the new geometry immediately.
 Shape clearance and movement/ground sweeps share the immutable per-tick query
 budget; exhausting it aborts the attempt before another adapter call.
+Production clearance uses `PhysicsCapsuleOverlapQuery` through a host-admitted
+`PhysicsQueryEventCapability`. The Physics-owned `CharacterClearanceQuery` captures
+exact world/scene, Character generation, fixed tick, origin/filter generations and
+Physics publication revision. `GameplayPhysicsContext::AcquireCharacterClearance`
+uses the same module permission and cancellation fence as ordinary Physics clients.
+The host prepares Character with the actual Physics publication revision and calls
+`RefreshPhysicsSnapshot` with the paired world identity and current publication
+between operations after Physics ticks or fixture changes. This owner-thread,
+monotonic update changes no owner generation, settings or controller state and is
+forbidden during tick/placement callbacks. Query contexts never adopt their own
+revision implicitly; retained contexts remain subject to exact snapshot checks.
+Its borrowed context is valid only while the captured adapter remains stationary
+and alive for the synchronous owner-thread operation. There is no retained
+`PhysicsWorld` pointer, resident Character collider or callback allocation. Canonical
+Physics constructs the analytic query capsule on the stack, aligns it to the owned
+up axis and uses the existing bounded collectors and channel/selector filtering.
+A blocker returns presence with zero recovery displacement: resize never invokes
+depenetration. Spawn recovery still requires its separate non-zero recovery vector.
+Overlap-only/trigger contacts do not block clearance. Native collector overflow,
+stale publication, world retirement and module revocation preserve typed failures
+and abort the attempted Character tick before publication.
 Queue capacity, replacement, generation and shutdown rules are the movement rules.
 No transition is retried implicitly on a later tick.
 

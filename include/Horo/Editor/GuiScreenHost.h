@@ -160,7 +160,7 @@ namespace Horo::Editor {
         /** @brief Returns the current project root, or current_path() as fallback. */
         [[nodiscard]] std::filesystem::path CurrentProjectRoot() const noexcept;
 
-        /** @brief Updates the active screen and checks pending leave dialogs. */
+        /** @brief Polls the borrowed update session on the owner thread, updates the screen, and checks pending leave dialogs. */
         void OnUpdate(float dt);
 
         /** @brief Offers the committed routed snapshot to the active screen before fixed simulation. */

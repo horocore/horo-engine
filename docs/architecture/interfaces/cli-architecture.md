@@ -798,3 +798,53 @@ route. MSVC/clang-cl select the wide console entry; MinGW uses a target-local
 `-municode` link option. No global code-page state changes. Conversion failures
 retain the canonical `cli.parse_failed` identity and use the selected machine
 envelope with usage exit 2 before invoking application operations.
+
+## Production Headless MCP Composition
+
+`horo-engine mcp serve` is an admitted CLI command requiring the host's explicit
+`horo.mcp.serve` capability. Parsing and inert registry validation precede
+application startup. The executable links the MCP controller/session/registry
+owners without GUI, window, ImGui, or interactive renderer targets. The existing
+headless application services remain constructor-owned; optional capabilities
+are never discovered or silently substituted during dispatch.
+
+The command reserves stdout exclusively for `McpLocalTransport` response frames.
+CLI syntax failures, startup errors, progress and the final terminal result use
+stderr, including when `--output=json` or `--output=jsonl` selects diagnostic
+presentation. The shared logger already emits human console records to stderr.
+MCP protocol errors retain their existing wire identities. Those short error codes
+are not registered in the CLI translator, whose canonical application codes must
+be namespaced. Unmapped service failures follow the existing fail-closed CLI
+presentation contract; mapped CLI cancellation and syntax errors keep their
+declared exit categories.
+The executable does not implement MCP methods, authorization, schema validation,
+operation identity, cancellation notifications or framing. The application
+composition publishes `observability.smoke` over the same application operation
+called by the terminal smoke command. Its declared capability is explicitly
+granted to this local session, its owner is Build, and its application
+observability lease survives controller drainage. Future tool packs must be
+explicitly admitted and injected through the same MCP registry.
+
+The admitted CLI invocation composes one OS-entropy-backed authorization policy
+for the registry, controller and sessions. It authenticates its exact projectless
+caller, capability set and registry revision using a one-use credential kept
+entirely in host memory. Protocol arguments cannot grant identity or capability.
+The principal expires after 24 hours; restarting the service authenticates a new
+invocation. Authentication does not approve mutation: this noninteractive host
+has no local exact-request approval channel, so `observability.smoke` calls return
+`approval_required`. The explicit terminal `observability smoke` command remains
+available. Query tools and discovery retain the usual authenticated MCP behavior.
+
+The process owns a bounded stdio polling loop and binds Runtime, Background and
+Build owner contexts. Editor context remains unavailable in this composition.
+EOF drops incomplete input and disconnects the local session. SIGINT/SIGTERM on
+POSIX and console interrupt events on Windows request cancellation through the
+host loop. Output uses a finite five-second write budget; a broken output pipe
+fails explicitly. Native descriptor flags and signal handlers are restored after
+service shutdown. Windows protocol input must be a redirected pipe or file.
+
+Teardown closes transport admission, cancels/drains sessions, then drains the MCP
+controller before application extensions, save telemetry, modules and host
+observability disappear. Owners are retained through synchronous drainage and
+MCP's callback leases retain asynchronous application adapters on a reported
+finite drain timeout. No shutdown path destroys callback-owned application state.

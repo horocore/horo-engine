@@ -9,7 +9,7 @@
 
 namespace Horo::Prefab {
     namespace {
-        PrefabLimitProfile ExpansionLimits(PrefabProjectPolicy policy = {}) {
+        PrefabLimitProfile ExpansionLimits(const PrefabProjectPolicy &policy = {}) {
             return PrefabLimitProfile::Create(policy).Value();
         }
 
@@ -59,7 +59,7 @@ namespace Horo::Prefab {
         }
 
         Gameplay::SerializedComponent ExpansionComponent(const std::size_t padding = 0) {
-            std::string text = "{\"value\":\"" + std::string(padding, 'x') + "\"}";
+            std::string text = R"({"value":")" + std::string(padding, 'x') + R"("})";
             std::vector<std::byte> bytes;
             for (const char value : text)
                 bytes.push_back(static_cast<std::byte>(value));
@@ -105,6 +105,22 @@ namespace Horo::Prefab {
             const auto scene = std::move(builder).Build();
             REQUIRE(scene.HasValue());
             CHECK(scene.Value().Entities().size() == 5);
+        }
+
+        TEST_CASE("Expanded runtime preview retains immutable revision evidence across replacement",
+                  "[unit][prefab][expansion][lifecycle]") {
+            const auto original = ExpansionResolver({ExpansionObject(0)});
+            const auto candidate = original.Resolve(Test::Asset(), PrefabInstanceId::Create(7).Value(), ExpansionLimits()).Value();
+            const auto identities = ExpansionIdentities(candidate);
+            const auto subtree =
+                ExpandPrefabSceneSubtree(candidate, identities, ExpansionProjections(candidate), {}, ExpansionLimits()).Value();
+            REQUIRE(subtree.ValidatePublication(Test::Asset(), original, {}, ExpansionLimits()).HasValue());
+            const auto replacement = ExpansionResolver({ExpansionObject(0), ExpansionObject(1, LocalObjectId{0})}, 2);
+            CHECK(subtree.ValidatePublication(Test::Asset(), replacement, {}, ExpansionLimits()).ErrorValue().code.Value() ==
+                  PrefabErrors::ResolutionStale.code.Value());
+            CHECK(subtree.Entities().size() == 1);
+            CHECK(subtree.Revision().rootSource == ExpansionRevision(1));
+            CHECK(subtree.Entities().front().object.value == identities.Find(candidate.Objects().front().key)->value);
         }
 
         TEST_CASE("Prefab runtime expansion rechecks lower object depth and component policies atomically",
@@ -223,7 +239,7 @@ namespace Horo::Prefab {
 
         TEST_CASE("Prefab runtime expansion rejects finite work exhaustion and overlong behavior projections",
                   "[unit][prefab][expansion][boundary]") {
-            std::vector<PrefabObjectNode> objects{ExpansionObject(0)};
+            std::vector objects{ExpansionObject(0)};
             for (std::uint32_t id = 1; id < 10; ++id)
                 objects.push_back(ExpansionObject(id, LocalObjectId{0}));
             const auto candidate = ExpansionCandidate(std::move(objects));

@@ -1220,3 +1220,18 @@ complete decoded child storage and publishes an immutable lease only after compl
 construction. Eviction/replacement/shutdown preserve old active leases. These canonical
 artifact tables retain the existing cache's backend-neutral boundary; world/body native
 activation remains under the existing Physics preparation contract.
+
+## Analytic Character clearance
+
+`PhysicsCapsuleOverlapQuery` appends a Horo-owned analytic alternative to the
+existing query geometry variant. It admits positive finite radius/cylindrical
+half-height, a local-envelope position and a finite unit up axis. Unlike a resident
+shape query it needs no body/shape slot: canonical Physics keeps the capsule on the
+stack for the immediate narrow-phase call. Existing deterministic ordering,
+selectors, trigger policy, fixed collector bounds, capability cancellation and
+publication affinity apply without a second query authority. No native type or
+handle is exposed. All C++ consumers must rebuild for the extended variant; never
+serialize variant indexes. Existing resident queries retain their layout and
+behavior. Ownership stays with `HoroEngine::Physics`, including the
+`CharacterClearanceQuery` adapter; Gameplay owns only permission admission and
+borrows the captured context during the synchronous Character operation.

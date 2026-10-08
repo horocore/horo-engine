@@ -379,3 +379,25 @@ namespace Horo::Network {
         REQUIRE(authenticated.dispatch->DrainAtGameplaySafePoint(authenticated.Work()).Value().invoked == 1);
     }
 }  // namespace Horo::Network
+
+TEST_CASE("RPC debugger records real terminal execution and cancellation without retaining arguments", "[unit][network][rpc][debugger]") {
+    using namespace Horo::Network;
+    NetworkDebugger debugger;
+    const NetworkDiagnosticSource source{1, 2, 9, 5};
+    REQUIRE(debugger.Begin(source, true));
+    RpcDispatchTestSupport::Fixture fixture{debugger};
+    REQUIRE(fixture.dispatch->HandleAdmitted(fixture.Context(), fixture.Message(1)).HasValue());
+    REQUIRE(fixture.dispatch->DrainAtGameplaySafePoint(fixture.Work()).Value().invoked == 1);
+    REQUIRE(fixture.handler->calls == 1);
+    REQUIRE(fixture.dispatch->HandleAdmitted(fixture.Context(), fixture.Message(2)).HasValue());
+    fixture.dispatch->Shutdown();
+    REQUIRE(debugger.Publish(source, 100));
+    const auto snapshot = debugger.Snapshot();
+    REQUIRE(snapshot.rpc.size == 2);
+    const auto &totals = snapshot.rpc.records[snapshot.rpc.size - 1];
+    REQUIRE(totals.accepted == 2);
+    REQUIRE(totals.succeeded == 1);
+    REQUIRE(totals.cancelled == 1);
+    REQUIRE(totals.failed == 0);
+    REQUIRE(snapshot.capture.records[snapshot.capture.size - 1].kind == NetworkCaptureKind::Rpc);
+}

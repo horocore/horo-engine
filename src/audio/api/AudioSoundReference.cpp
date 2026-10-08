@@ -52,6 +52,9 @@ namespace Horo::Audio {
                 case Reject:
                 case StealOldest:
                 case StealQuietest:
+                case StealLowestPriority:
+                case StealFurthest:
+                case Replace:
                 case Virtualize:
                     return true;
             }

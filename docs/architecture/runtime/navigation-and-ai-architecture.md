@@ -2159,6 +2159,23 @@ explicit parallel, decorator, service, clock, abort and reload semantics.
 Concrete task adapters, dependency-frame execution and aggregate scheduling
 integration remain separate deliveries.
 
+`DecisionWakePolicy` provides GAI-003.8's owner-thread reactive admission kernel.
+It subscribes distinct compiled blackboard keys with precomputed node edges,
+coalesces declared perception and exact task-generation events, and admits
+finite periodic/polling rules. The decision system remains the sole evaluator:
+no observer or worker callback advances control flow. Nonempty admissions freeze
+causes in ascending stable node order; events arriving during evaluation remain
+pending. A finite per-tick cap prevents feedback from recursively or endlessly
+waking a graph. A stable rotating due-rule cursor preserves polling fairness,
+while cached deadlines make idle admission independent of graph size. The host
+enables service polling only for active owning subtrees and retains provider,
+scene-wide execution and cancellation/drain authority. Existing direct evaluator
+callers retain their fixed-tick behavior; reactive composition is explicit.
+The policy and the allocation-free blackboard binding-fence accessor belong to
+`HoroAI`, with unchanged target dependencies and generated header-consumer coverage.
+See [Reactive decision wake policy](../../guides/reactive-decision-wake-policy.md)
+for lifetime, polling-budget and caller migration requirements.
+
 Headless hosts that deliberately omit gameplay AI compose `NullAiRuntime`. Its
 availability is always false and every task admission returns the typed
 `ai.runtime.unavailable` failure without starting a lifecycle or fabricating a

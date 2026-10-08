@@ -155,6 +155,13 @@ namespace Horo::SceneSource {
                                         projection.authored.sourcePrefab.Asset().ToString(), error.message);
         }
 
+        /** @brief Preserves typed failure and identifies its required instance at the runtime boundary. */
+        [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> InstanceFailure(Error error,
+                                                                              const ScenePrefabInstanceProjection &projection) {
+            AddInstanceContext(error, projection);
+            return Result<Runtime::RuntimeSceneDefinition>::Failure(std::move(error));
+        }
+
         [[nodiscard]] Result<Runtime::NavigationAgentComponent> ParsePrefabNavigationAgent(const Prefab::RawComponentPayload &payload) {
             if (payload.component.typeId.Value() != NavigationAgentPrefabComponentType ||
                 payload.component.encoding != Gameplay::ComponentPayloadEncoding::CanonicalJson || payload.component.schemaVersion != 1)
@@ -434,6 +441,58 @@ namespace Horo::SceneSource {
         return Result<ScenePrefabProjection>::Success(std::move(projection));
     }
 
+    /** @copydoc InvalidateScenePrefabProjection */
+    void InvalidateScenePrefabProjection(ScenePrefabProjection &projection, const Prefab::PrefabSourceResolverSnapshot &current,
+                                         const std::span<const Assets::AssetId> changedAssets, const Prefab::PrefabLimitProfile &limits) {
+        for (auto &entry : projection.instances) {
+            if (!entry.expanded || entry.stale)
+                continue;
+            const auto inspected =
+                current.ValidateRevisionPublication(entry.expanded->RootAsset(), entry.expanded->Revision(), changedAssets, limits);
+            if (inspected.HasError()) {
+                entry.stale = true;
+                entry.failure = inspected.ErrorValue();
+                AddInstanceContext(*entry.failure, entry);
+            }
+        }
+    }
+
+    /** @copydoc ConvertScenePrefabProjectionToRuntime */
+    Result<Runtime::RuntimeSceneDefinition> ConvertScenePrefabProjectionToRuntime(const SceneSourceView &document,
+                                                                                  const Runtime::SceneDefinitionId sceneId,
+                                                                                  const Runtime::SceneDefinitionRevision revision,
+                                                                                  const ScenePrefabProjection &projection,
+                                                                                  const Prefab::PrefabSourceResolverSnapshot &resolver,
+                                                                                  const Prefab::PrefabLimitProfile &limits) {
+        if (projection.instances.size() != document.prefabInstances.size())
+            return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(Prefab::PrefabErrors::ResolutionStale));
+        auto prepared = BeginSceneAssembly(document, sceneId, revision);
+        if (prepared.HasError())
+            return Result<Runtime::RuntimeSceneDefinition>::Failure(prepared.ErrorValue());
+        auto assembly = std::move(prepared).Value();
+        auto &builder = assembly.builder;
+        auto &occupied = assembly.occupied;
+        for (std::size_t index = 0; index < projection.instances.size(); ++index) {
+            const auto &entry = projection.instances[index];
+            if (entry.authored != document.prefabInstances[index] || !entry.IsSynchronized())
+                return Result<Runtime::RuntimeSceneDefinition>::Failure(
+                    entry.failure.value_or(MakeError(Prefab::PrefabErrors::ResolutionStale)));
+            const auto &candidate = *entry.expanded;
+            if (auto valid = resolver.ValidateRevisionPublication(candidate.RootAsset(), candidate.Revision(), {}, limits);
+                valid.HasError())
+                return InstanceFailure(valid.ErrorValue(), entry);
+            auto remapped = Prefab::RemapPrefabCandidateToScene(candidate, occupied, {}, limits);
+            if (remapped.HasError())
+                return InstanceFailure(remapped.ErrorValue(), entry);
+            const auto &identityMap = remapped.Value();
+            for (const auto &mapping : identityMap.Mappings())
+                occupied.push_back(mapping.scene);
+            if (const auto added = AddPrefabCandidate(entry.authored, candidate, identityMap, builder, limits); added.HasError())
+                return InstanceFailure(added.ErrorValue(), entry);
+        }
+        return std::move(builder).Build();
+    }
+
     /** @copydoc ConvertSceneSourceToRuntime */
     Result<Runtime::RuntimeSceneDefinition> ConvertSceneSourceToRuntime(const SceneSourceView &document,
                                                                         const Runtime::SceneDefinitionId sceneId,
@@ -453,39 +512,9 @@ namespace Horo::SceneSource {
                                                                         const Runtime::SceneDefinitionRevision revision,
                                                                         const Prefab::PrefabSourceResolverSnapshot &resolver,
                                                                         const Prefab::PrefabLimitProfile &limits) {
-        auto prepared = BeginSceneAssembly(document, sceneId, revision);
-        if (prepared.HasError())
-            return Result<Runtime::RuntimeSceneDefinition>::Failure(prepared.ErrorValue());
-        auto assembly = std::move(prepared).Value();
-        auto &builder = assembly.builder;
-        auto &occupied = assembly.occupied;
-
-        for (const ScenePrefabInstance &instance : document.prefabInstances) {
-            if (auto candidate = resolver.Resolve(instance.sourcePrefab.Asset(), instance.instanceId, limits); candidate.HasError()) {
-                Error error = std::move(candidate).ErrorValue();
-                ScenePrefabInstanceProjection context{.authored = instance};
-                AddInstanceContext(error, context);
-                return Result<Runtime::RuntimeSceneDefinition>::Failure(std::move(error));
-            } else {
-                Prefab::EffectivePrefabCandidate resolved = std::move(candidate).Value();
-                auto remapped = Prefab::RemapPrefabCandidateToScene(resolved, occupied, {}, limits);
-                if (remapped.HasError()) {
-                    Error error = std::move(remapped).ErrorValue();
-                    ScenePrefabInstanceProjection context{.authored = instance};
-                    AddInstanceContext(error, context);
-                    return Result<Runtime::RuntimeSceneDefinition>::Failure(std::move(error));
-                }
-                Prefab::PrefabSceneIdentityMap identityMap = std::move(remapped).Value();
-                for (const Prefab::PrefabSceneIdentityMapping &mapping : identityMap.Mappings())
-                    occupied.push_back(mapping.scene);
-                if (const auto added = AddPrefabCandidate(instance, resolved, identityMap, builder, limits); added.HasError()) {
-                    Error error = added.ErrorValue();
-                    ScenePrefabInstanceProjection context{.authored = instance};
-                    AddInstanceContext(error, context);
-                    return Result<Runtime::RuntimeSceneDefinition>::Failure(std::move(error));
-                }
-            }
-        }
-        return std::move(builder).Build();
+        auto projection = BuildScenePrefabProjection(document, resolver, limits);
+        if (projection.HasError())
+            return Result<Runtime::RuntimeSceneDefinition>::Failure(projection.ErrorValue());
+        return ConvertScenePrefabProjectionToRuntime(document, sceneId, revision, projection.Value(), resolver, limits);
     }
 }  // namespace Horo::SceneSource
