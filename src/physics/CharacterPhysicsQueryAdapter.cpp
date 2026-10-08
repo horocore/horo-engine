@@ -3,7 +3,6 @@
 #include "Horo/Physics/PhysicsWorld.h"
 
 #include <array>
-#include <utility>
 
 namespace Horo::Character {
     namespace {
@@ -19,10 +18,10 @@ namespace Horo::Character {
         }
 
         /** @brief Builds the common bounded native-query envelope from a Character probe. */
-        [[nodiscard]] Physics::PhysicsQueryDescriptor QueryDescriptor(const auto &request, Physics::PhysicsQueryGeometry geometry) {
+        [[nodiscard]] Physics::PhysicsQueryDescriptor QueryDescriptor(const auto &request, const Physics::PhysicsQueryGeometry &geometry) {
             return {.world = request.physicsWorld,
                     .sceneGeneration = request.sceneGeneration,
-                    .geometry = std::move(geometry),
+                    .geometry = geometry,
                     .filter = MovementFilter(request.queryChannel, request.selectors),
                     .collection = Physics::PhysicsQueryCollection::All,
                     .maximumHitCount = MaximumCharacterSweepHits};
@@ -34,26 +33,30 @@ namespace Horo::Character {
 
     /** @copydoc CharacterPhysicsQueryAdapter::Context */
     CharacterPhysicsQueryContext CharacterPhysicsQueryAdapter::Context(const CharacterPhysicsQueryExpectations &expected) noexcept {
+        const CharacterOverlapProbe overlap = [](auto *context, const CharacterOverlapProbeRequest &request) noexcept {
+            return static_cast<const CharacterPhysicsQueryAdapter *>(context)->Overlap(request);
+        };
+        const CharacterSweepProbe sweep = [](auto *context, const CharacterSweepProbeRequest &request) noexcept {
+            return static_cast<const CharacterPhysicsQueryAdapter *>(context)->Sweep(request);
+        };
         return {expected.sceneGeneration,
                 expected.characterWorld,
                 expected.physicsWorld,
                 this,
-                Overlap,
+                overlap,
                 expected.collisionFilterGeneration,
                 expected.originGeneration,
                 expected.tick,
                 expected.physicsSnapshotRevision,
-                Sweep};
+                sweep};
     }
 
     /** @copydoc CharacterPhysicsQueryAdapter::Overlap */
-    Result<CharacterOverlapProbeResult> CharacterPhysicsQueryAdapter::Overlap(void *context,
-                                                                              const CharacterOverlapProbeRequest &request) noexcept {
-        auto &adapter = *static_cast<CharacterPhysicsQueryAdapter *>(context);
+    Result<CharacterOverlapProbeResult> CharacterPhysicsQueryAdapter::Overlap(const CharacterOverlapProbeRequest &request) const noexcept {
         std::array<Physics::PhysicsQueryHit, MaximumCharacterSweepHits> hits{};
         const auto descriptor =
             QueryDescriptor(request, Physics::PhysicsCapsuleOverlapQuery{request.capsule, request.position, request.up});
-        const auto queried = adapter.world_->Query(descriptor, hits);
+        const auto queried = world_->Query(descriptor, hits);
         if (queried.HasError())
             return Result<CharacterOverlapProbeResult>::Failure(queried.ErrorValue());
         if (queried.Value().truncated)
@@ -74,14 +77,12 @@ namespace Horo::Character {
     }
 
     /** @copydoc CharacterPhysicsQueryAdapter::Sweep */
-    Result<CharacterSweepProbeResult> CharacterPhysicsQueryAdapter::Sweep(void *context,
-                                                                          const CharacterSweepProbeRequest &request) noexcept {
-        auto &adapter = *static_cast<CharacterPhysicsQueryAdapter *>(context);
+    Result<CharacterSweepProbeResult> CharacterPhysicsQueryAdapter::Sweep(const CharacterSweepProbeRequest &request) const noexcept {
         std::array<Physics::PhysicsQueryHit, MaximumCharacterSweepHits> hits{};
         const auto descriptor =
             QueryDescriptor(request, Physics::PhysicsCapsuleSweepQuery{request.capsule, request.position, request.up, request.direction,
                                                                        request.maximumDistanceMeters});
-        const auto queried = adapter.world_->Query(descriptor, hits);
+        const auto queried = world_->Query(descriptor, hits);
         if (queried.HasError())
             return Result<CharacterSweepProbeResult>::Failure(queried.ErrorValue());
         CharacterSweepProbeResult result;

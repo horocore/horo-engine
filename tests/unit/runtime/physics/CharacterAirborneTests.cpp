@@ -48,7 +48,7 @@ namespace Horo::Character {
                         world.identity,
                         world.physicsWorld,
                         this,
-                        OverlapProbe::Run,
+                        Overlap,
                         world.collisionFilterGeneration,
                         world.originGeneration,
                         tick,
@@ -78,7 +78,10 @@ namespace Horo::Character {
             input.fixedDelta = Duration::FromNanoseconds(nanos);
             input.query = probe.Context(host.world->Descriptor(), tick);
             REQUIRE(host.world->QueueMovementCommand(command).HasValue());
-            REQUIRE(host.world->AdvanceFixedTick(input).HasValue());
+            const auto advanced = host.world->AdvanceFixedTick(input);
+            if (advanced.HasError())
+                UNSCOPED_INFO(advanced.ErrorValue().message);
+            REQUIRE(advanced.HasValue());
             return host.world->ControllerLocomotionSnapshot(host.controller).Value();
         }
 
@@ -173,7 +176,10 @@ namespace Horo::Character {
             REQUIRE(host.world->QueueMovementCommand(request).HasValue());
             auto input = FixedTick(3);
             input.query = probe.Context(host.world->Descriptor(), 3);
-            REQUIRE(host.world->AdvanceFixedTick(input).HasValue());
+            const auto advanced = host.world->AdvanceFixedTick(input);
+            if (advanced.HasError())
+                UNSCOPED_INFO(advanced.ErrorValue().message);
+            REQUIRE(advanced.HasValue());
             const auto resized = host.world->ControllerLocomotionSnapshot(host.controller).Value();
             REQUIRE(resized.movement.gravityVelocityMetersPerSecond.y ==
                     Catch::Approx(jumped.movement.gravityVelocityMetersPerSecond.y - 9.81F / 60.0F));

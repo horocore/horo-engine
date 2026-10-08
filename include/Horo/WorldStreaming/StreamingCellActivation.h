@@ -5,6 +5,7 @@
  * @brief Transactional publication of prepared cell resources at the Scene safe point.
  */
 
+#include "Horo/WorldStreaming/StreamingOwnerFrameBudget.h"
 #include "Horo/WorldStreaming/WorldStreamingRuntimeComposition.h"
 
 #include <cstddef>
@@ -70,9 +71,14 @@ namespace Horo::WorldStreaming {
         [[nodiscard]] virtual StreamingCellActivationRequirement Requirement() const noexcept = 0;
         /** @brief Returns the exact operation and generation fence prepared by this receipt. @return Immutable operation handle. */
         [[nodiscard]] virtual StreamingCellOperationHandle Operation() const noexcept = 0;
-        /** @brief Publishes already-prepared state without allocation, waiting, or failure. */
+        /** @brief Returns a positive immutable upper bound for publication. @return Owner-work nanoseconds; the sum must cover the complete
+         * no-fail unit and scheduler finalization. */
+        [[nodiscard]] virtual std::uint64_t MaximumPublicationNanoseconds() const noexcept = 0;
+        /** @brief Publishes already-prepared state without allocation, waiting, or failure within the declared unit bound. */
         virtual void PublishPrepared() noexcept = 0;
-        /** @brief Releases uncommitted prepared state; repeated calls must be harmless. */
+        /** @brief Revokes/transfers uncommitted state to the admitted retirement owner; repeated calls must be harmless.
+         * @details This bounded no-fail control operation must not synchronously destroy heavy resources. Their destruction
+         *          remains with the same ordered retirement participants and their shared owner-frame budget. */
         virtual void RollbackPrepared() noexcept = 0;
 
     protected:
@@ -85,6 +91,7 @@ namespace Horo::WorldStreaming {
         StreamingCellOperation operation;       /**< Exact Activate operation in Activating phase. */
         std::size_t maximumReceipts{};          /**< Positive hard ceiling for required receipts. */
         StreamingCellActivationLifecycle lifecycle{StreamingCellActivationLifecycle::Closed}; /**< Admission state. */
+        StreamingSchedulerLedgerId scheduler; /**< Exact scheduler lifetime supplying shared owner-work admission. */
     };
 
     /** @brief Move-only owner of a complete required receipt set and its atomic publication decision. */
@@ -116,11 +123,16 @@ namespace Horo::WorldStreaming {
          * @param expected Exact current operation snapshot and generation fence.
          * @param commitPoint Current owner phase; only CommitDeferredLifecycleChanges is accepted.
          * @param lifecycle Current authority lifecycle; cancellation/shutdown rolls the transaction back.
-         * @return Success or typed stale, safe-point, lifecycle or already-terminal failure.
+         * @param budget Unique shared budget for this owner frame; never a new per-cell budget.
+         * @param elapsedNanoseconds Monotonic elapsed service time sampled immediately before this call.
+         * @return Success or typed stale, safe-point, lifecycle, frame-deferred or oversized-unit failure.
+         * @details Frame deferral retains the complete prepared set and publishes nothing. A cell's publication is indivisible;
+         *          detached preparation must make that final transfer bounded rather than publishing half a cell across frames.
          * @post Success publishes every receipt once in canonical participant order. Failure after a stale/lifecycle check rolls all back.
          */
         [[nodiscard]] Result<void> Commit(const StreamingCellOperation &expected, StreamingCellActivationCommitPoint commitPoint,
-                                          StreamingCellActivationLifecycle lifecycle);
+                                          StreamingCellActivationLifecycle lifecycle, StreamingOwnerFrameBudget &budget,
+                                          std::uint64_t elapsedNanoseconds);
 
         /** @brief Explicitly rolls back every prepared receipt in reverse publication order; idempotent. */
         void Rollback() noexcept;
@@ -137,11 +149,13 @@ namespace Horo::WorldStreaming {
     private:
         StreamingCellActivationTransaction(const StreamingCellActivationContext &context,
                                            std::vector<StreamingCellActivationRequirement> requirements,
-                                           std::vector<std::unique_ptr<IStreamingCellActivationReceipt>> receipts) noexcept;
+                                           std::vector<std::unique_ptr<IStreamingCellActivationReceipt>> receipts,
+                                           std::uint64_t publicationNanoseconds) noexcept;
 
         StreamingCellActivationContext context_;
         std::vector<StreamingCellActivationRequirement> requirements_;
         std::vector<std::unique_ptr<IStreamingCellActivationReceipt>> receipts_;
+        std::uint64_t publicationNanoseconds_{};
         StreamingCellActivationState state_{StreamingCellActivationState::RolledBack};
     };
 }  // namespace Horo::WorldStreaming

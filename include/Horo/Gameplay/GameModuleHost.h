@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Gameplay/GameModule.h"
+#include "Horo/Gameplay/PersistenceInstallation.h"
 #include "Horo/Gameplay/SaveGameplayPersistence.h"
 
 #include <filesystem>
@@ -60,6 +61,13 @@ namespace Horo::Gameplay {
          * @pre Called by the runtime owner at a quiescent composition boundary.
          */
         [[nodiscard]] Result<std::shared_ptr<Runtime::GameplayPersistenceAdapter>> AcquirePersistence(
+            const Runtime::SaveParticipantId &participant) const;
+        /** @brief Acquires unforgeable installed-content evidence from an actual frozen persistence registration.
+         * @pre The runtime owner serializes acquisition and subsequent owner-thread admission with this module's reload/shutdown.
+         * @param participant Exact registered durable owner.
+         * @return Generation-pinned installation, or typed missing/revoked admission failure; no callback is invoked.
+         */
+        [[nodiscard]] Result<Runtime::GameplayPersistenceInstallation> AcquireInstalledPersistence(
             const Runtime::SaveParticipantId &participant) const;
         /** @brief Returns frozen event callbacks; acquisition pins this exact native module generation. */
         [[nodiscard]] const GameEventRegistry &Events() const noexcept;

@@ -92,6 +92,10 @@ namespace Horo::Audio {
         MixerRenderPlan &operator=(const MixerRenderPlan &) = delete;
         /** @brief Return the pinned compilation identity. @return Immutable identity. */
         [[nodiscard]] const MixerPlanIdentity &Identity() const noexcept;
+        /** @brief Read immutable admitted mix rate on control. @return Frames per second. */
+        [[nodiscard]] std::uint32_t SampleRate() const noexcept;
+        /** @brief Read immutable admitted callback block bound on control. @return Maximum frames per block. */
+        [[nodiscard]] std::uint32_t MaximumFrames() const noexcept;
         /** @brief Return canonical topological buses. @return Borrow valid through plan retirement. */
         [[nodiscard]] std::span<const MixerCompiledBus> Buses() const noexcept;
         /** @brief Return destination-grouped, stable-route-ID ordered edges. @return Immutable route table. */
