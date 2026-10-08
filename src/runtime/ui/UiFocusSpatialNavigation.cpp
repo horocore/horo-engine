@@ -101,7 +101,7 @@ namespace Horo::Runtime::Ui {
             storage_->nodes[index].bounds = storage_->layoutScratch[index];
             storage_->nodes[index].presentationEligible = storage_->eligibilityScratch[index];
         }
-        if (storage_->focusedIndex && !storage_->IsAllowed(*storage_->focusedIndex))
+        if (storage_->focusedIndex.has_value() && !storage_->IsAllowed(*storage_->focusedIndex))
             storage_->focusedIndex = storage_->ResolveInitial();
         storage_->descriptor.owner.interaction = layout.Descriptor().interaction;
     }

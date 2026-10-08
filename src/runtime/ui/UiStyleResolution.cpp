@@ -239,8 +239,8 @@ namespace Horo::Runtime::Ui::StyleInternal {
                 const auto *property = FindProperty(registry.Properties(), sample.property);
                 if (property == nullptr)
                     return Failure(UiErrors::StyleReferenceInvalid);
-                const auto category = UiStyleValueCategoryOf(sample.value);
-                if (category != UiStyleValueCategory::Color && category != UiStyleValueCategory::Dimension &&
+                if (const auto category = UiStyleValueCategoryOf(sample.value);
+                    category != UiStyleValueCategory::Color && category != UiStyleValueCategory::Dimension &&
                     category != UiStyleValueCategory::Shape && category != UiStyleValueCategory::Scalar)
                     return Failure(UiErrors::StyleTypeMismatch);
                 if (!IsValueCompatible(*property, sample.value))

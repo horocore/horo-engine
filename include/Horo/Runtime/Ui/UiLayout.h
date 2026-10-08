@@ -751,7 +751,7 @@ namespace Horo::Runtime::Ui {
         /** @brief Reads the actual owner-issued initial/current interaction revision for aggregate style input admission. */
         [[nodiscard]] UiInteractionRevision PublishedInteraction() const noexcept;
         /** @brief Performs callback-free publication after all owning candidates pass admission. */
-        [[nodiscard]] UiLayoutSnapshot PublishValidated(PreparedUpdate &&candidate) noexcept;
+        [[nodiscard]] UiLayoutSnapshot PublishValidated(PreparedUpdate &&candidate) const noexcept;
         explicit UiLayoutEngine(std::shared_ptr<Storage> storage) noexcept;
         std::shared_ptr<Storage> storage_;
     };

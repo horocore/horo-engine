@@ -209,7 +209,7 @@ namespace Horo::Runtime::Ui {
         struct Storage;
         friend class UiAnimationOwner;
         /** @brief Borrows a solely owned inactive replacement for animation composition before structural publication. */
-        [[nodiscard]] UiReloadGeneration *AnimationReplacement(Prepared &prepared) noexcept;
+        [[nodiscard]] UiReloadGeneration *AnimationReplacement(const Prepared &prepared) noexcept;
 
         /**
          * @brief Const-propagating facade ownership of the existing pinned publisher state.

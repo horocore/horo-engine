@@ -62,6 +62,15 @@ namespace Horo::Audio {
         AudioMemoryHandle storage;
     };
 
+    /** @brief Adopt one complete retained voice-state generation, never resolve a scene or asset on callback.
+     * The control owner retains the exact storage until completed-block acknowledgement or verified detachment.
+     * Route/state publications are ordered operations, not coalescible parameter updates.
+     */
+    struct AudioPublishVoiceStateCommand final {
+        AudioVoiceHandle voice;
+        AudioMemoryHandle storage;
+    };
+
     /** @brief Request logical release of prepared storage; physical reclamation stays with the quiescent control owner. */
     struct AudioReleaseResourceCommand {
         AudioMemoryHandle storage;
@@ -99,10 +108,10 @@ namespace Horo::Audio {
     };
 
     /** @brief Allocation-free tagged payload; clock-mapped scheduled batches are a separate timing contract. */
-    using AudioCommandPayload =
-        std::variant<AudioCreateVoiceCommand, AudioStartVoiceCommand, AudioStopVoiceCommand, AudioSetParameterCommand,
-                     AudioAutomateParameterCommand, AudioCancelAutomationCommand, AudioSwapGraphCommand, AudioReleaseResourceCommand,
-                     AudioSceneUnloadCommand, AudioResetCommand, AudioScheduledBatchCommand, AudioVoiceControlRequest>;
+    using AudioCommandPayload = std::variant<AudioCreateVoiceCommand, AudioStartVoiceCommand, AudioStopVoiceCommand,
+                                             AudioSetParameterCommand, AudioAutomateParameterCommand, AudioCancelAutomationCommand,
+                                             AudioSwapGraphCommand, AudioReleaseResourceCommand, AudioSceneUnloadCommand, AudioResetCommand,
+                                             AudioScheduledBatchCommand, AudioVoiceControlRequest, AudioPublishVoiceStateCommand>;
 
     /** @brief Owned next-buffer-boundary intent; copying retains IDs, not resource lifetime or producer references. */
     struct AudioCommand {

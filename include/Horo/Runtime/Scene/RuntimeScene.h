@@ -24,6 +24,46 @@ namespace Horo::Assets {
 namespace Horo::Runtime {
     class RuntimeScene;
     class RuntimeSceneView;
+    class IStagedRestoreAggregatePublication;
+
+    /**
+     * @brief Owned composite restore retained behind normal Scene preparation admission.
+     * @details Preparation touches only the unpublished candidate. Pending readiness cannot activate
+     *          the Scene. Commit reuses the original save operation cancellation gate and invokes the
+     *          supplied no-fail Scene transfer before operation completion becomes observable.
+     */
+    class SceneAggregateRestore {
+    public:
+        virtual ~SceneAggregateRestore() = default;
+        /** @brief Allocates exact identities and stages core values on the unpublished Scene.
+         * @param scene Actual candidate owned by the Scene service, borrowed until retirement.
+         * @return Success or a typed preparation failure with no active-state mutation. */
+        [[nodiscard]] virtual Result<void> PrepareScene(RuntimeScene &scene) = 0;
+        /** @brief Advances bounded detached restore preparation at the owner lifecycle boundary.
+         * @return Ready, still pending, or a typed failure requiring aggregate rollback. */
+        [[nodiscard]] virtual Result<bool> PrepareOwners() = 0;
+        /** @brief Revalidates current owner evidence immediately before the shared publication gate.
+         * @param active Current active Scene view, or absence at initial load.
+         * @return Success or typed stale/cancellation/reference failure before publication. */
+        [[nodiscard]] virtual Result<void> ValidatePublication(const RuntimeSceneView *active) const = 0;
+        /** @brief Publishes prepared roots through the original restore operation commit gate.
+         * @param sceneTransfer Service-owned no-fail Scene aggregate transfer.
+         * @return Success or a typed failure before any root has changed.
+         * @pre Every Scene and restore candidate has passed publication validation.
+         */
+        [[nodiscard]] virtual Result<void> Commit(IStagedRestoreAggregatePublication &sceneTransfer) = 0;
+        /** @brief Cancels and retires unpublished owned work without touching active state; repeated calls are harmless. */
+        virtual void Rollback() noexcept = 0;
+    };
+
+    /** @brief Prepared-owner declaration of persistent dataset participation; runtime/backend world handles are not dataset IDs. */
+    enum class SceneCanonicalDatasetProjection : std::uint8_t {
+        Unqualified,
+        Absent,
+        PersistentWorld
+    };
+    /** @brief Finite admission bound for one aggregate Scene preparation. */
+    inline constexpr std::size_t MaximumSceneActivationParticipants = 256;
 
     /** @brief Detached subsystem state prepared for one aggregate runtime-scene candidate. */
     class SceneActivationCandidate {
@@ -31,6 +71,14 @@ namespace Horo::Runtime {
         virtual ~SceneActivationCandidate() = default;
         /** @brief Revalidates authoritative evidence immediately before aggregate publication. */
         [[nodiscard]] virtual Result<void> ValidatePublication() const = 0;
+
+        /** @brief Projects persistent dataset ownership from the actual prepared root, without activation or allocation.
+         * @return Absent only when this owner contains no persistent dataset; legacy owners remain Unqualified.
+         * @details PersistentWorld requires an actual typed dataset mapping before content-aware canonical capture is admitted.
+         */
+        [[nodiscard]] virtual SceneCanonicalDatasetProjection CanonicalDatasetProjection() const noexcept {
+            return SceneCanonicalDatasetProjection::Unqualified;
+        }
 
         /** @brief Installs fully validated state after every aggregate participant has passed validation.
          * @details Implementations must not fail, allocate, or perform provider work in this call. */
@@ -49,6 +97,15 @@ namespace Horo::Runtime {
          * @details Must not mutate state, allocate resources or perform I/O. Referenced authorities must outlive the pending operation.
          */
         [[nodiscard]] virtual Result<void> ValidatePublication() const = 0;
+
+        /** @brief Revalidates the actual prepared aggregate's sealed canonical dataset projection before publication.
+         * @param projection Projection gathered by Scene from the actual prepared roots at load time.
+         * @return Success or typed unsupported composition; ordinary legacy predicates retain their existing behavior.
+         */
+        [[nodiscard]] virtual Result<void> ValidatePreparedComposition(SceneCanonicalDatasetProjection projection) const {
+            (void)projection;
+            return Result<void>::Success();
+        }
     };
 
     /** @brief Host-injected subsystem participating in aggregate runtime-scene publication. */
@@ -73,6 +130,47 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] constexpr auto operator<=>(const SceneRuntimeId &) const noexcept = default;
+    };
+
+    namespace ScenePublicationDetail {
+        struct State;
+    }
+    /** @brief Terminal disposition of the exact Scene-owned queue operation. */
+    enum class ScenePublicationStatus : std::uint8_t {
+        Pending,
+        Published,
+        Rejected,
+        Cancelled
+    };
+
+    /** @brief Value-only observation; only a published receipt has a nonzero scene and revision. */
+    struct ScenePublicationSnapshot final {
+        ScenePublicationStatus status{ScenePublicationStatus::Pending};
+        SceneRuntimeId scene;
+        std::uint64_t structuralRevision{};
+        SceneCanonicalDatasetProjection datasets{SceneCanonicalDatasetProjection::Unqualified};
+    };
+
+    /** @brief Retained observer issued only by actual Scene queue admission, never a caller-provided identity assertion.
+     * @details All access occurs on the queue owner thread. The observer retains no SceneView and survives service retirement.
+     */
+    class ScenePublicationReceipt final {
+    public:
+        ScenePublicationReceipt(const ScenePublicationReceipt &) noexcept = default;
+        ScenePublicationReceipt &operator=(const ScenePublicationReceipt &) noexcept = default;
+        ScenePublicationReceipt(ScenePublicationReceipt &&) noexcept = default;
+        ScenePublicationReceipt &operator=(ScenePublicationReceipt &&) noexcept = default;
+        /** @brief Observes the exact admitted operation on its owner thread.
+         * @return Pending/terminal evidence, or typed wrong-thread/moved/ordinary queue error. Published identities are Scene-issued.
+         */
+        [[nodiscard]] Result<ScenePublicationSnapshot> Snapshot() const;
+
+    private:
+        friend class RuntimeSceneService;
+
+        explicit ScenePublicationReceipt(std::shared_ptr<ScenePublicationDetail::State> state) noexcept : state_(std::move(state)) {}
+
+        std::shared_ptr<ScenePublicationDetail::State> state_;
     };
 
     /** @brief Generation-checked entity slot identity within one runtime scene. */
@@ -317,6 +415,10 @@ namespace Horo::Runtime {
         RuntimeSceneView() = default;
         /** @brief Reports whether this borrow still observes the structural revision captured at acquisition. */
         [[nodiscard]] bool IsCurrent() const noexcept;
+        /** @brief Returns the exact committed structural revision captured by this current view.
+         * @return Non-zero revision when current, or zero for an empty/stale view; the scene owner must remain alive.
+         */
+        [[nodiscard]] std::uint64_t StructuralRevision() const noexcept;
         /** @brief Returns the owning runtime identity. */
         [[nodiscard]] SceneRuntimeId RuntimeId() const noexcept;
         /** @brief Returns the logical definition identity. */
@@ -445,12 +547,22 @@ namespace Horo::Runtime {
          * @param definition Immutable complete runtime definition consumed by this operation.
          * @param publicationCheck Optional predicate retained through preparation and revalidated before aggregate publication.
          * @param config Generation retirement policy.
-         * @return Typed admission result; deferred validation failures preserve the active scene and reach TakeOperationError().
+         * @return Owned receipt for a nonnull check; deferred failures preserve the active scene and reach TakeOperationError().
+         * Ordinary null-check preparation succeeds with an unobservable receipt; QueuePreparation preserves its void result.
          * @details Existing cancellation, replacement and shutdown paths retire the predicate with the pending operation.
          */
-        [[nodiscard]] Result<void> QueuePreparationWithPublicationCheck(RuntimeSceneDefinition definition,
-                                                                        std::unique_ptr<ScenePublicationCheck> publicationCheck,
-                                                                        RuntimeSceneConfig config = {});
+        [[nodiscard]] Result<ScenePublicationReceipt> QueuePreparationWithPublicationCheck(
+            RuntimeSceneDefinition definition, std::unique_ptr<ScenePublicationCheck> publicationCheck, RuntimeSceneConfig config = {});
+        /** @brief Queues a composite save restore through the existing exclusive Scene admission path.
+         * @param definition Validated compatible immutable authored defaults.
+         * @param restore Non-null owned restore composition, retained through pending preparation/rollback.
+         * @param config Generation retirement policy.
+         * @return Typed admission result; failed/pending owner preparation never publishes a partial Scene.
+         * @details Normal QueuePreparation callers retain their existing block preparation behavior.
+         */
+        [[nodiscard]] Result<void> QueuePreparationWithRestore(RuntimeSceneDefinition definition,
+                                                               std::unique_ptr<SceneAggregateRestore> restore,
+                                                               RuntimeSceneConfig config = {});
         /** @brief Queues active-scene unload; repeated unload with no pending transition is harmless. */
         [[nodiscard]] Result<void> QueueUnload();
         /** @brief Queues one structural batch against the current active scene. @param commands Batch consumed on success.
@@ -487,6 +599,8 @@ namespace Horo::Runtime {
         };
 
         struct Preparation;
+        struct AggregateTransfer;
+        struct LifecycleMutation;
 
         struct SceneAggregate final {
             SceneAggregate() = default;
@@ -497,6 +611,8 @@ namespace Horo::Runtime {
 
             std::unique_ptr<RuntimeScene> scene;
             std::vector<std::unique_ptr<SceneActivationCandidate>> candidates;
+            SceneCanonicalDatasetProjection datasets{SceneCanonicalDatasetProjection::Absent};
+            std::unique_ptr<SceneAggregateRestore> restore; /**< Pins committed identity/fixup/module roots until Scene retirement. */
         };
 
         [[nodiscard]] Result<void> BeginPreparation(RuntimeSceneDefinition definition, RuntimeSceneConfig config);
@@ -512,8 +628,16 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> PrepareParticipants(const RuntimeSceneDefinition &definition);
         static void ShutdownCandidates(std::vector<std::unique_ptr<SceneActivationCandidate>> &candidates) noexcept;
         [[nodiscard]] Result<void> CommitDeferredChanges();
+        /** @brief Waits for owners and validates every candidate before any ownership transfer.
+         * @return Ready, pending, or the original typed preparation/validation failure. */
+        [[nodiscard]] Result<bool> PreparePendingPublication();
+        /** @brief Transfers all prepared roots and retains the retired aggregate through completion observers.
+         * @return Success or the original pre-transfer gate failure. */
+        [[nodiscard]] Result<void> PublishPendingAggregate();
         /** @brief Records rejection and retires unpublished candidates while retaining the authority through cleanup. */
         void RejectPendingPublication(Error error);
+        /** @brief Retires only an unpublished queue receipt; already published identities remain immutable. */
+        void RetirePublicationReceipt(ScenePublicationStatus status) noexcept;
 
         SceneAggregate active_;
         SceneAggregate pending_;
@@ -521,6 +645,8 @@ namespace Horo::Runtime {
         std::vector<std::unique_ptr<SceneStructuralParticipant>> structuralParticipants_;
         std::unique_ptr<Preparation> preparation_;
         std::unique_ptr<ScenePublicationCheck> publicationCheck_;
+        std::shared_ptr<ScenePublicationDetail::State> publicationReceipt_;
+        std::unique_ptr<SceneAggregateRestore> aggregateRestore_;
         std::optional<SceneCommandBuffer> structuralCommands_;
         std::optional<StructuralCommitResult> structuralResult_;
         std::optional<Error> operationError_;
@@ -531,5 +657,7 @@ namespace Horo::Runtime {
         TransitionKind transition_{TransitionKind::None};
         bool started_{};
         bool shutdown_{};
+        bool mutatingLifecycle_{}; /**< Rejects reentrant mutation during owned lifecycle callbacks and retirement. */
+        bool shutdownDeferred_{};  /**< Shutdown waits until the current scoped lifecycle mutation returns. */
     };
 }  // namespace Horo::Runtime

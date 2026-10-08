@@ -143,6 +143,39 @@
       }
     },
     {
+      "name": "ci-xr-base",
+      "hidden": true,
+      "inherits": "ci-headless",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "HORO_BUILD_INPUT_SDL3": "OFF",
+        "HORO_BUILD_PHYSICS_NATIVE": "OFF",
+        "HORO_BUILD_NAVIGATION_RECAST_DETOUR": "OFF",
+        "HORO_BUILD_EXAMPLES": "OFF",
+        "HORO_BUILD_NETWORK_GNS": "OFF"
+      }
+    },
+    {
+      "name": "ci-xr-openxr",
+      "inherits": "ci-xr-base",
+      "binaryDir": "${sourceDir}/build/ci-xr-openxr",
+      "cacheVariables": {
+        "HORO_BUILD_XR_OPENXR": "ON",
+        "HORO_VERIFY_XR_DISABLED": "OFF"
+      }
+    },
+    {
+      "name": "ci-xr-disabled",
+      "inherits": "ci-xr-base",
+      "binaryDir": "${sourceDir}/build/ci-xr-disabled",
+      "cacheVariables": {
+        "BUILD_TESTING": "OFF",
+        "HORO_BUILD_XR_OPENXR": "OFF",
+        "HORO_VERIFY_XR_DISABLED": "ON"
+      }
+    },
+    {
       "name": "sonar",
       "inherits": "ci-linux-debug",
       "binaryDir": "${sourceDir}/build/sonar",
@@ -158,7 +191,8 @@
         "HORO_ENABLE_IMGUI_UI_TESTS": "ON",
         "HORO_ENABLE_GPU_SMOKE_TESTS": "ON",
         "HORO_BUILD_RENDER_VULKAN": "ON",
-        "HORO_BUILD_NETWORK_GNS": "ON"
+        "HORO_BUILD_NETWORK_GNS": "ON",
+        "HORO_BUILD_XR_OPENXR": "ON"
       }
     }
   ],
@@ -200,6 +234,19 @@
       "configurePreset": "ci-network-gns",
       "targets": [
         "HoroCiNetworkGnsChecks"
+      ],
+      "jobs": 2
+    },
+    {
+      "name": "ci-xr-openxr",
+      "configurePreset": "ci-xr-openxr",
+      "targets": [
+        "HoroXROpenXRTests",
+        "HoroXROpenXRHostInterfaceConsumer",
+        "HoroXRApiTests",
+        "HoroXRRuntimeTests",
+        "HoroXRApiPublicHeaderConsumer",
+        "HoroXRRuntimePublicHeaderConsumer"
       ],
       "jobs": 2
     },
@@ -306,6 +353,23 @@
       },
       "execution": {
         "jobs": 1
+      }
+    },
+    {
+      "name": "ci-xr-openxr",
+      "inherits": "ci-test-base",
+      "configurePreset": "ci-xr-openxr",
+      "output": {
+        "outputJUnitFile": "${sourceDir}/build/ci-xr-openxr/ctest.xml"
+      },
+      "filter": {
+        "include": {
+          "name": "^Horo(XROpenXR|XRApi|XRRuntime)Tests::"
+        }
+      },
+      "execution": {
+        "jobs": 1,
+        "timeout": 90
       }
     },
     {

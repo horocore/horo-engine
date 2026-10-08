@@ -1015,6 +1015,31 @@ a project needs broadcast-style auto-ducking.
 
 ## Voice Model
 
+### AUD-003.8 immutable callback voice state
+
+`HoroEngine::AudioVoiceRender` owns the host-composed `AudioVoiceRenderRuntime`
+boundary over AudioPlayback and AudioMixer. Control captures source/listener
+values and resolves the bus against an immutable mixer generation; the callback
+retains only numeric targets, identities, prepared processing storage and owned
+PCM/stream access. Neither lane discovers a scene, asset provider or backend.
+
+Two bounded slots retain one current and at most one pending state. The ordinary
+FIFO carries `AudioPublishVoiceStateCommand`; complete route/state generations
+never coalesce. Existing adjacent unpublished gain commands remain coalescible,
+without crossing voice controls, unload/reset or resource-lifetime barriers.
+The callback returns an exact graph-generation mixer input. Control may reclaim
+replaced state only after its publication decision and completed-block evidence
+following the mixer's last sample access, not after command consumption.
+
+Resident playback copies its PCM before publication. Streaming owns a sole
+retirement-pinned render port and retains the service; attempted retirement while
+pinned rejects without freeing its ring. Conversion keeps unconsumed PCM and
+renders bounded silence on starvation. Port release, processing destruction and
+worker cancellation remain on detached control after native callback stop/join.
+Shared pins do not permit concurrent mutation of the canonical voice registry.
+See [the adoption guide](../../guides/audio-voice-render-state-migration.md) for
+host dispatcher ordering, explicit budgets and affected public consumers.
+
 ### AUD-003.3 resident playback controls
 
 `HoroEngine::AudioPlayback` owns `AudioVoicePlayback`, the resident PCM execution
@@ -1179,6 +1204,56 @@ remain optional providers behind the 1.0 ADR-066 contract. Basic raycast occlusi
 acoustic-material contribution, zones and environment sends are the AUD-006 M5 —
 1.0 environmental baseline; rooms/portals, diffraction, baked/geometric
 propagation and advanced reflections are AUD-014 Post-1.0.
+
+### Core stereo processing
+
+`CoreStereoSpatialRenderer.h` belongs exclusively to `HoroAudioDsp`; it consumes
+`HoroAudioApi`'s copied spatial snapshots without reversing the RuntimeScene
+extraction dependency. Hosts prepare one processor per source/selected-listener
+pair and transfer updates at an exclusive quiescent boundary. Listener weighting,
+voice lifecycle, loop feeding, provider/profile resolution and bus accumulation
+remain host responsibilities. The processor provides real streaming mono/stereo
+PCM-to-stereo output; it does not select or register a backend/provider.
+
+Control-side `PrepareAudioStereoSpatialTarget` computes an inspectable matrix and
+pitch. Distances are metres; linear, inverse and inverse-square curves normalize
+to unity at the positive minimum and zero at the greater maximum, with clamping
+outside. Source cones use negative-Z forward and full apex angles, interpolating
+linearly between inner unity gain and outer gain. Coincident sources center and
+ignore cone/Doppler direction. Panning projects the normalized listener-to-source
+vector onto listener-local +X and uses equal-power mono gains. Stereo width
+positions left/right sub-sources on either side of that pan; width zero folds to
+mono with half-amplitude channel contributions, width one preserves centered
+stereo. Spread reduces both sub-source directions toward center. Listener weights
+are applied by the owning output mix, not twice inside each source processor.
+
+Doppler uses `(c + listenerRadialVelocity)/(c + sourceRadialVelocity)`. Scaled radial
+velocities clamp to +/-90 percent of speed of sound, and authored pitch times
+Doppler clamps to [0.125,8]. Discontinuous motion, changed teleport revisions or
+new complete source/listener identities suppress Doppler. Teleports immediately
+restore authored pitch; gains/panning retain the admitted output-sample ramp.
+Changed identities reset stream history and initialize gains immediately. Ordinary
+updates preserve phase/history and ramp pitch and matrix by produced samples;
+starvation and zero-capacity calls do not advance smoothing.
+
+The explicit baseline uses `AudioResamplerQuality::Linear`, including source-to-mix
+rate conversion exactly once. `AudioResampler::SetLinearPitch` changes only Linear
+ClipToMix plans, preserves fractional history, rejects invalid rate/pitch products
+transactionally and resets to the admitted descriptor pitch on Reset. This mode
+is unfiltered and makes no anti-aliasing promise. Sinc plans retain their existing
+prepared-coefficient pitch contract; device converters cannot apply voice pitch.
+Processing performs bounded work with prepared storage, copies no caller spans,
+reports exact consumed/produced counts and retains the existing bounded EOF tail.
+
+Migration is additive: existing spatial frames, scene/sound schemas, playback
+owners and Sinc callers retain their contracts. Hosts opting into core stereo
+provide explicit distance/cone/spread/width policy, reserve coefficients at Create,
+retain unconsumed input/end markers, route output to their normal stereo bus and
+stop applying pitch/rate conversion a second time. No persisted defaults are
+silently changed. The new header is covered by the DSP public consumer target.
+Reference scenes verify attenuation, listener rotation, cone transitions, rendered
+spread/width, actual Doppler PCM, teleport limits, block partition invariance,
+malformed-input rejection, bounded EOF and callback allocation/free counts.
 
 ### Spatial scene extraction and listener policy
 
@@ -1877,6 +1952,18 @@ decoded resident clips. Per-platform cook settings may override compression,
 sample rate, channel layout, and streaming thresholds.
 
 ## Editor Tooling
+
+`MixerAssetDocument` in `HoroEngine::EditorServices` is the editor owner of
+validated mixer authoring state, typed bus/route/effect transactions and bounded
+semantic undo/redo history. It reuses `MixerAssetSchema` validation/migration from
+AudioApi; Audio has no Editor dependency. Source snapshots are immutable owned
+captures correlated to host-issued document identity and monotonic revision.
+Dirty state follows semantic saved-state identity, while reload fences old
+captures and clears history. Source I/O, workspace routing and derived Audio
+compilation/publication remain explicit host/application operations. The document
+creates no device/backend and retains no preview, scene or callback state. See
+[Mixer document commands](../../guides/mixer-document-commands.md) for the additive
+consumer contract, lifecycle and migration path.
 
 [AUD-009](https://github.com/HoroCore/horo-engine/issues/615) delivers these
 workflows for M5 — 1.0. Middleware/procedural/capture-specific authoring surfaces

@@ -16,7 +16,8 @@ namespace Horo::Runtime::Ui {
     namespace {
         /** @brief Only explicit application-controlled domains may seek; host time can never be rewritten by a UI input. */
         [[nodiscard]] bool SeekDomain(const UiTimeDomain domain) noexcept {
-            return domain == UiTimeDomain::EditorPreview || domain == UiTimeDomain::DeterministicTest || domain == UiTimeDomain::Manual;
+            using enum UiTimeDomain;
+            return domain == EditorPreview || domain == DeterministicTest || domain == Manual;
         }
 
         /** @brief Validates copied private-controller observations before changing any inactive clock sample. */
@@ -51,9 +52,9 @@ namespace Horo::Runtime::Ui {
             const auto base = input.seek ? input.seek->nanoseconds : sample.elapsed.nanoseconds;
             if (input.delta.nanoseconds > std::numeric_limits<std::int64_t>::max() - base)
                 return Result<void>::Failure(MakeError(UiErrors::ClockOverflow));
-            const bool newIncarnation = sample.sequence != 0 && input.continuity == UiClockContinuity::BaselineReset &&
-                                        input.sourceRevision != sample.sourceRevision;
-            if (newIncarnation) {
+            if (const bool newIncarnation = sample.sequence != 0 && input.continuity == UiClockContinuity::BaselineReset &&
+                                            input.sourceRevision != sample.sourceRevision;
+                newIncarnation) {
                 if (sample.clock.generation == std::numeric_limits<std::uint32_t>::max())
                     return Result<void>::Failure(MakeError(UiErrors::ClockOverflow));
                 ++sample.clock.generation;
@@ -100,8 +101,8 @@ namespace Horo::Runtime::Ui {
         ++candidate.updateSequence;
         for (std::size_t index = 0; index < UiTimeDomainCount; ++index) {
             if (index == static_cast<std::size_t>(UiTimeDomain::ScreenTransition)) {
-                const auto &input = read.Domains()[index];
-                if (input.available || input.delta.nanoseconds != 0 || input.seek || input.controlledClock.IsValid())
+                if (const auto &input = read.Domains()[index];
+                    input.available || input.delta.nanoseconds != 0 || input.seek || input.controlledClock.IsValid())
                     return Result<void>::Failure(MakeError(UiErrors::ClockInputInvalid));
                 continue;
             }

@@ -11,7 +11,7 @@ namespace Horo::Runtime::Ui {
             return Result<Prepared>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         const auto frame = std::ranges::find_if(storage_->frames, [&](const auto &slot) {
             const auto index = static_cast<std::uint32_t>(&slot - storage_->frames.data());
-            return slot.use_count() == 1 && (!storage_->currentFrame || index != *storage_->currentFrame);
+            return slot.use_count() == 1 && (!storage_->currentFrame.has_value() || index != *storage_->currentFrame);
         });
         if (frame == storage_->frames.end())
             return Result<Prepared>::Failure(MakeError(UiErrors::AnimationStorageExhausted));

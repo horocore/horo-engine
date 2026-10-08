@@ -19,8 +19,7 @@ namespace Horo::Runtime::Ui {
         auto &frame = *storage.frames[storage.candidate.frameSlot];
         frame.controls.clear();
         for (auto &element : canvas->controls) {
-            auto prepared = element.control.PrepareInteractionReplacement(owner);
-            if (prepared.HasError())
+            if (auto prepared = element.control.PrepareInteractionReplacement(owner); prepared.HasError())
                 return prepared;
             storage.candidate.controls.push_back(&element.control);
             frame.controls.push_back({element.id, {owner, element.control.Element()}, element.control.PreparedInteractionState()});

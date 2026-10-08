@@ -66,9 +66,12 @@ namespace Horo::Runtime::Ui {
         std::vector<UiLogicalPoint> maximumOffsets;
         std::vector<UiLogicalRect> viewports;
         std::vector<UiLogicalRect> contents;
-        std::vector<UiLayoutClipRecord> candidateRecords;
-        std::vector<UiLayoutClipNode> candidateClips;
-        std::vector<UiLayoutScrollRecord> candidateScrolls;
+
+        struct CandidateProjection final {
+            std::vector<UiLayoutClipRecord> records;
+            std::vector<UiLayoutClipNode> clips;
+            std::vector<UiLayoutScrollRecord> scrolls;
+        } candidate;
 
         explicit Storage(const UiLayoutClipEngineDescriptor &source);
         Storage(const Storage &) = delete;

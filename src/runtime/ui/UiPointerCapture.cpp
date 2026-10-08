@@ -511,7 +511,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiPointerCaptureStore::PublishInteractionValidated */
     void UiPointerCaptureStore::PublishInteractionValidated(const UiCanvasInstanceId canvas,
-                                                            const UiInteractionRevision interaction) noexcept {
+                                                            const UiInteractionRevision interaction) const noexcept {
         (void)storage_->CancelMatching([canvas, interaction](const Detail::CaptureSlot &entry) noexcept {
             return entry.request.route.canvas == canvas && entry.request.route.interaction != interaction;
         }, UiPointerCaptureCancellationReason::InteractionRevisionLost);

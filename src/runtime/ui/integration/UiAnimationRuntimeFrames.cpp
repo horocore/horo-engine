@@ -41,7 +41,7 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> ControlledInputs(std::array<AnimationRuntimeInternal::ControlledDomain, Ui::UiTimeDomainCount> &controls,
                                                     const std::int64_t presentationDelta,
                                                     std::array<Ui::UiAnimationDomainInput, Ui::UiTimeDomainCount> &inputs) {
-            for (std::size_t index = static_cast<std::size_t>(Ui::UiTimeDomain::EditorPreview); index < Ui::UiTimeDomainCount; ++index) {
+            for (auto index = static_cast<std::size_t>(Ui::UiTimeDomain::EditorPreview); index < Ui::UiTimeDomainCount; ++index) {
                 auto &control = controls[index];
                 if (!control.available)
                     continue;
@@ -134,8 +134,7 @@ namespace Horo::Runtime {
             storage_->controls->frameReserved = false;
             return Result<void>::Failure(MakeError(Ui::UiErrors::ClockSourceStale));
         }
-        auto committed = storage_->owner.Commit(*storage_->prepared);
-        if (committed.HasError()) {
+        if (auto committed = storage_->owner.Commit(*storage_->prepared); committed.HasError()) {
             storage_->prepared.reset();
             storage_->consumption.reset();
             storage_->controls->frameReserved = false;

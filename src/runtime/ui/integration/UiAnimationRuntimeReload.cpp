@@ -19,7 +19,7 @@ namespace Horo::Runtime {
         }
         controls->capacity = storage_->controls->capacity;
         auto result = storage_->owner.Reload(std::move(replacement), allocator, std::move(registry), std::move(styles),
-                                             std::move(definition), policy, point, cancellation);
+                                             std::move(definition), {policy, point}, cancellation);
         if (result.HasError())
             return Result<UiAnimationRuntimeReload>::Failure(result.ErrorValue());
         const auto clocks = storage_->owner.ClockBindings();

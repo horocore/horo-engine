@@ -417,7 +417,8 @@ namespace Horo::Runtime::Ui {
         /** @brief Checks actual gate identity, unchanged stack, deferred retirement capacity and private completed-candidate evidence. */
         [[nodiscard]] Result<void> CanPublishAnimation(const AnimationGate &gate, const AnimationTerminalProof &proof) const;
         /** @brief Applies the already checked route mutation once without allocation, callbacks or reclamation. */
-        [[nodiscard]] UiRouteOperationResult PublishAnimationValidated(AnimationGate &gate, const AnimationTerminalProof &proof) noexcept;
+        [[nodiscard]] UiRouteOperationResult PublishAnimationValidated(AnimationGate &gate,
+                                                                       const AnimationTerminalProof &proof) const noexcept;
         /** @brief Applies one pre-issued mutation after all revision, capacity and instance checks have succeeded. */
         /** @brief Qualifies exact live reservation without granting terminal success. */
         [[nodiscard]] Result<void> CanCloseAnimation(const AnimationGate &gate) const;
@@ -426,13 +427,13 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] static std::optional<UiRouteInstanceId> ApplyIssuedMutation(Storage &storage, const Transaction &transaction,
                                                                                   std::optional<UiRouteInstanceId> instance) noexcept;
         /** @brief Load-time reservation for each actual route-owned action source. @return Reservation or failure. */
-        [[nodiscard]] Result<void> ReserveActionInteractionReplacements();
+        [[nodiscard]] Result<void> ReserveActionInteractionReplacements() const;
         /** @brief Prepares new action source generations only after queues, pending operations and retained producers drain. */
         [[nodiscard]] Result<void> PrepareActionInteractionReplacements(const UiActionOwnerContext &owner);
         /** @brief Revalidates actual route-owned replacement sources before no-fail aggregate publication. */
         [[nodiscard]] Result<void> CanPublishActionInteractionReplacements(const UiActionOwnerContext &owner) const;
         /** @brief Swaps prepared actual route action generations without allocation, callbacks or releasing retained pools. */
-        void PublishActionInteractionReplacements() noexcept;
+        void PublishActionInteractionReplacements() const noexcept;
         /** @brief Cancels every unpublished actual action source reservation. */
         void AbandonActionInteractionReplacements() noexcept;
         explicit UiScreenStack(std::shared_ptr<Storage> storage) noexcept;

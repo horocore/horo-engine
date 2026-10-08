@@ -657,8 +657,8 @@ namespace Horo::Runtime::Ui {
             return Result<PreparedUpdate>::Failure(evaluated.ErrorValue());
         if (owner->lifecycle != UiLayoutEngineState::Active)
             return Failure<PreparedUpdate>(UiErrors::LayoutLifecycleUnavailable);
-        const auto evaluatedRoot = tree.Root();
-        if (evaluatedRoot.HasError() || evaluatedRoot.Value().handle != admittedRoot.Value().handle || tree.IssuerPin() != treeIssuer ||
+        if (const auto evaluatedRoot = tree.Root();
+            evaluatedRoot.HasError() || evaluatedRoot.Value().handle != admittedRoot.Value().handle || tree.IssuerPin() != treeIssuer ||
             tree.State() != UiElementTreeState::Active || tree.Revision() != request.sources.tree ||
             tree.SourceDocumentRevision() != request.sources.document)
             return Failure<PreparedUpdate>(UiErrors::LayoutSourceStale);
@@ -722,17 +722,17 @@ namespace Horo::Runtime::Ui {
         if (!owner_ || !snapshot_ || !owner_->prepared || owner_->lifecycle != UiLayoutEngineState::Active)
             return Failure(UiErrors::LayoutLifecycleUnavailable);
         const auto &candidate = snapshot_->Descriptor();
-        const auto root = tree.Root();
-        if (root.HasError() || root.Value().handle != root_ || tree.IssuerPin() != treeIssuer_ ||
-            tree.State() != UiElementTreeState::Active || tree.Instance() != candidate.instance || tree.Canvas() != candidate.canvas ||
-            tree.SourceDocument() != candidate.document || tree.SourceDocumentRevision() != candidate.sources.document ||
-            tree.Revision() != candidate.sources.tree)
+        if (const auto root = tree.Root(); root.HasError() || root.Value().handle != root_ || tree.IssuerPin() != treeIssuer_ ||
+                                           tree.State() != UiElementTreeState::Active || tree.Instance() != candidate.instance ||
+                                           tree.Canvas() != candidate.canvas || tree.SourceDocument() != candidate.document ||
+                                           tree.SourceDocumentRevision() != candidate.sources.document ||
+                                           tree.Revision() != candidate.sources.tree)
             return Failure(UiErrors::LayoutSourceStale);
         return Result<void>::Success();
     }
 
     /** @copydoc UiLayoutEngine::PublishValidated */
-    UiLayoutSnapshot UiLayoutEngine::PublishValidated(PreparedUpdate &&candidate) noexcept {
+    UiLayoutSnapshot UiLayoutEngine::PublishValidated(PreparedUpdate &&candidate) const noexcept {
         if (candidate.changes_) {
             storage_->ReleaseCurrent();
             storage_->current = std::const_pointer_cast<UiLayoutSnapshot::Storage>(candidate.snapshot_->storage_);

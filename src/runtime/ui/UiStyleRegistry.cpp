@@ -119,7 +119,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc RuntimeStyleRegistry::BeginRetirement */
-    Result<void> RuntimeStyleRegistry::BeginRetirement() {
+    Result<void> RuntimeStyleRegistry::BeginRetirement() const {
         if (!storage_ || storage_->lifecycle != RuntimeStyleRegistryState::Active)
             return StyleInternal::Failure(UiErrors::StyleLifecycleUnavailable);
         storage_->lifecycle = RuntimeStyleRegistryState::Retiring;
@@ -127,7 +127,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc RuntimeStyleRegistry::Shutdown */
-    void RuntimeStyleRegistry::Shutdown() noexcept {
+    void RuntimeStyleRegistry::Shutdown() const noexcept {
         if (!storage_ || storage_->lifecycle == RuntimeStyleRegistryState::Stopped)
             return;
         storage_->lifecycle = RuntimeStyleRegistryState::Stopped;

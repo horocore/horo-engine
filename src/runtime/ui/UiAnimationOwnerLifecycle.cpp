@@ -10,7 +10,7 @@ namespace Horo::Runtime::Ui {
         class DrainAdmissionGuard final {
         public:
             explicit DrainAdmissionGuard(bool &draining) noexcept : draining_(draining) {
-                draining_ = true;
+                draining = true;
             }
 
             ~DrainAdmissionGuard() {
@@ -48,14 +48,14 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAnimationOwner::Acquire */
     Result<UiAnimationFrameLease> UiAnimationOwner::Acquire() const {
-        if (!storage_ || storage_->stopped || storage_->draining || !storage_->currentFrame)
+        if (!storage_ || storage_->stopped || storage_->draining || !storage_->currentFrame.has_value())
             return Result<UiAnimationFrameLease>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         return Result<UiAnimationFrameLease>::Success(UiAnimationFrameLease{storage_->frames[*storage_->currentFrame]});
     }
 
     /** @copydoc UiAnimationOwner::IsCurrent */
     bool UiAnimationOwner::IsCurrent(const UiAnimationFrameLease &frame) const noexcept {
-        return storage_ && !storage_->stopped && !storage_->draining && storage_->currentFrame &&
+        return storage_ && !storage_->stopped && !storage_->draining && storage_->currentFrame.has_value() &&
                frame.storage_ == storage_->frames[*storage_->currentFrame] && storage_->publisher.IsCurrent(frame.storage_->generation);
     }
 
@@ -84,7 +84,7 @@ namespace Horo::Runtime::Ui {
             return Result<std::size_t>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         // The application calls this outside frame work; owned frame slots retain snapshots until external leases drain.
         if (storage_->stopped) {
-            for (auto &frame : storage_->frames) {
+            for (const auto &frame : storage_->frames) {
                 if (frame.use_count() != 1)
                     continue;
                 frame->styles.reset();

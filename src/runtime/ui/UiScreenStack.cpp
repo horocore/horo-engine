@@ -96,7 +96,7 @@ namespace Horo::Runtime::Ui {
             if (found != actions.end()) {
                 if (found->router.State() == UiActionRouterState::Active)
                     (void)found->router.BeginRetirement(reason);
-                retiredActions.push_back({found->route, std::move(found->router)});
+                retiredActions.emplace_back(found->route, std::move(found->router));
                 // The erased destination and each shifted source are moved-from routers, so erase cannot reclaim router storage.
                 actions.erase(found);
             }
@@ -212,7 +212,7 @@ namespace Horo::Runtime::Ui {
             case UiRouteOperationKind::Navigate:
                 if (!storage.routes.empty())
                     storage.routes.back().visibility = UiRouteVisibilityState::Covered;
-                storage.routes.push_back({*instance, *transaction.definition_, UiRouteVisibilityState::Visible});
+                storage.routes.emplace_back(*instance, *transaction.definition_, UiRouteVisibilityState::Visible);
                 return instance;
             case UiRouteOperationKind::Pop:
             case UiRouteOperationKind::Back:
@@ -337,7 +337,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiScreenStack::PublishAnimationValidated */
-    UiRouteOperationResult UiScreenStack::PublishAnimationValidated(AnimationGate &gate, const AnimationTerminalProof &) noexcept {
+    UiRouteOperationResult UiScreenStack::PublishAnimationValidated(AnimationGate &gate, const AnimationTerminalProof &) const noexcept {
         auto &transaction = gate.transaction_;
         const auto route = ApplyIssuedMutation(*storage_, transaction, gate.instance_);
         storage_->revision = gate.next_;
@@ -645,7 +645,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiScreenStack::ReserveActionInteractionReplacements */
-    Result<void> UiScreenStack::ReserveActionInteractionReplacements() {
+    Result<void> UiScreenStack::ReserveActionInteractionReplacements() const {
         if (!storage_ || storage_->state != UiScreenStackState::Active || storage_->busy)
             return Failure(UiErrors::RouteOperationLifecycleUnavailable);
         for (auto &actions : storage_->actions) {
@@ -680,7 +680,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiScreenStack::PublishActionInteractionReplacements */
-    void UiScreenStack::PublishActionInteractionReplacements() noexcept {
+    void UiScreenStack::PublishActionInteractionReplacements() const noexcept {
         for (auto &actions : storage_->actions)
             actions.router.PublishInteractionReplacement();
     }

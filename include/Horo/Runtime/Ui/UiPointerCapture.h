@@ -286,7 +286,7 @@ namespace Horo::Runtime::Ui {
         /** @brief Revalidates the actual active capture owner before aggregate interaction publication. */
         [[nodiscard]] Result<void> CanPublishInteraction(UiCanvasInstanceId canvas) const;
         /** @brief Cancels only obsolete interaction leases after all aggregate checks, without callbacks or reclamation. */
-        void PublishInteractionValidated(UiCanvasInstanceId canvas, UiInteractionRevision interaction) noexcept;
+        void PublishInteractionValidated(UiCanvasInstanceId canvas, UiInteractionRevision interaction) const noexcept;
         explicit UiPointerCaptureStore(std::shared_ptr<Detail::UiPointerCaptureStorage> storage) noexcept;
 
         std::shared_ptr<Detail::UiPointerCaptureStorage> storage_;

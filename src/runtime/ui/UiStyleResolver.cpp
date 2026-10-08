@@ -83,7 +83,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiStyleResolver::Prepare */
     Result<UiStyleResolver::PreparedUpdate> UiStyleResolver::Prepare(const UiElementTree &tree, const RuntimeStyleRegistry &registry,
-                                                                     const UiStyleUpdateRequest &request) {
+                                                                     const UiStyleUpdateRequest &request) const {
         if (!storage_ || storage_->lifecycle != UiStyleResolverState::Active)
             return StyleInternal::Failure<PreparedUpdate>(UiErrors::StyleLifecycleUnavailable);
         if (storage_->prepared)
@@ -169,8 +169,8 @@ namespace Horo::Runtime::Ui {
             registry.State() != RuntimeStyleRegistryState::Active)
             return StyleInternal::Failure(UiErrors::StyleLifecycleUnavailable);
         const auto &candidate = snapshot_->Descriptor();
-        const auto root = tree.Root();
-        if (root.HasError() || root.Value().handle != root_ || tree.IssuerPin() != treeIssuer_ || registry.storage_ != registryOwner_ ||
+        if (const auto root = tree.Root();
+            root.HasError() || root.Value().handle != root_ || tree.IssuerPin() != treeIssuer_ || registry.storage_ != registryOwner_ ||
             tree.State() != UiElementTreeState::Active || tree.Instance() != candidate.instance || tree.Canvas() != candidate.canvas ||
             tree.SourceDocument() != candidate.document || tree.SourceDocumentRevision() != candidate.sources.document ||
             tree.Revision() != candidate.sources.tree || registry.Generation() != candidate.sources.registry)

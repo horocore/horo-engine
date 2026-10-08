@@ -13,8 +13,8 @@ namespace Horo::Runtime::Ui::AnimationInternal {
             const auto properties = registry.Properties();
             for (std::size_t index = 0; index < definition.layoutBindings.size(); ++index) {
                 const auto &binding = definition.layoutBindings[index];
-                const auto property = std::ranges::find(properties, binding.property, &UiStylePropertyDescriptor::id);
-                if (binding.field >= UiAnimationLayoutField::Count || tree.Find(binding.target).HasError() ||
+                if (const auto property = std::ranges::find(properties, binding.property, &UiStylePropertyDescriptor::id);
+                    binding.field >= UiAnimationLayoutField::Count || tree.Find(binding.target).HasError() ||
                     property == properties.end() || property->category != UiStyleValueCategory::Dimension || !property->effects.measure)
                     return Result<void>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
                 const auto prior = std::span(definition.layoutBindings).first(index);

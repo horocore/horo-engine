@@ -21,7 +21,7 @@ namespace Horo::Runtime {
                         record.admitted = !suspended;
                     }
                 }
-                if (record.result.state != RuntimeSingleStepState::Pending && record.released.load(std::memory_order_acquire))
+                if (record.result.state != RuntimeSingleStepState::Pending && record.released.load())
                     record.occupied = false;
             }
         }
@@ -47,11 +47,11 @@ namespace Horo::Runtime {
             return Result<void>::Failure(MakeError(RuntimeErrors::SimulationTimingInvalid));
         std::uint32_t released{};
         for (auto &record : state->pauses) {
-            record.releaseAtCutoff = record.occupied && record.released.load(std::memory_order_acquire);
+            record.releaseAtCutoff = record.occupied && record.released.load();
             released += record.releaseAtCutoff ? 1U : 0U;
         }
-        constexpr auto Maximum = std::numeric_limits<std::uint64_t>::max();
-        if (released != 0 && (state->desired.commandRevision == Maximum || state->desired.pauseRevision == Maximum))
+        if (constexpr auto Maximum = std::numeric_limits<std::uint64_t>::max();
+            released != 0 && (state->desired.commandRevision == Maximum || state->desired.pauseRevision == Maximum))
             return Result<void>::Failure(MakeError(RuntimeErrors::SimulationTimingOverflow));
         if (released != 0) {
             for (auto &record : state->pauses) {

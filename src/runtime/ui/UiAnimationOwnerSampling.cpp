@@ -21,10 +21,13 @@ namespace Horo::Runtime::Ui {
             initial = {};
             delta = {std::max<std::int64_t>(0, clock.elapsed.nanoseconds - timeline.origin.nanoseconds)};
         }
-        auto evaluated = timeline.cancellation != UiAnimationCancellation::None
-                             ? AnimationInternal::CancelPlayback(initial, timeline.cancellation)
-                         : seek ? AnimationInternal::SeekPlayback(definition.time, delta)
-                                : AnimationInternal::AdvancePlayback(initial, definition.time, delta, storage.candidate.remainingCrossings);
+        auto evaluated = [&] {
+            if (timeline.cancellation != UiAnimationCancellation::None)
+                return AnimationInternal::CancelPlayback(initial, timeline.cancellation);
+            if (seek)
+                return AnimationInternal::SeekPlayback(definition.time, delta);
+            return AnimationInternal::AdvancePlayback(initial, definition.time, delta, storage.candidate.remainingCrossings);
+        }();
         if (evaluated.HasError())
             return Result<void>::Failure(evaluated.ErrorValue());
         if (timeline.required && !timeline.waiting && storage.route.gate &&
@@ -62,7 +65,7 @@ namespace Horo::Runtime::Ui {
             const UiAnimationTimelineId id{storage.source.ownership,
                                            storage.range.FirstSlot() + static_cast<std::uint32_t>(UiTimeDomainCount) + 1 + index,
                                            timeline.generation};
-            frame.timelines.push_back({id, definition.id, sample});
+            frame.timelines.emplace_back(id, definition.id, sample);
             return Result<void>::Success();
         }
         if (auto evaluated = EvaluateTimelineCursor(storage, index); evaluated.HasError())

@@ -5,6 +5,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -216,6 +217,51 @@ namespace Horo::Runtime {
                 {Descriptor("horo.test.consumer", 2, true,
                             {{providerId, SaveParticipantDependencyRequirement::Required, SaveParticipantDependencyPhase::Restore}}),
                  Descriptor("horo.test.provider", 1)});
+        }
+
+        TEST_CASE("Foreign resolver faults roll back every applied owner with their original typed fault category",
+                  "[unit][save][restore][activation]") {
+            struct ForeignResolverFault final {};
+
+            class ThrowingResolver final : public IStagedRestoreReferenceResolver {
+            public:
+                explicit ThrowingResolver(const unsigned fault) : fault_(fault) {}
+
+                Result<SaveRestoreReferenceContext> Resolve(const StagedRestoreContext &,
+                                                            const std::span<const StagedRestorePreparedParticipant> participants) override {
+                    REQUIRE(participants.size() == 2);
+                    if (fault_ == 1)
+                        throw std::bad_alloc{};
+                    if (fault_ == 2)
+                        throw ForeignResolverFault{};
+                    throw std::runtime_error{"resolver fixture fault"};
+                }
+
+            private:
+                unsigned fault_;
+            };
+
+            for (const unsigned fault : {1U, 2U, 3U}) {
+                const auto registry = DependencyRegistry();
+                ParticipantLog log;
+                std::vector<std::unique_ptr<IStagedRestoreParticipant>> staged;
+                staged.push_back(Candidate("horo.test.consumer", log));
+                staged.push_back(Candidate("horo.test.provider", log));
+                auto operation = Operation();
+                const auto handle = operation.Handle();
+                auto transaction =
+                    StagedRestoreTransaction::Create(Context(registry), std::move(operation), registry, std::move(staged)).Value();
+                REQUIRE(transaction.SetReferenceResolver(std::make_unique<ThrowingResolver>(fault)).HasValue());
+                const auto failed = transaction.Prepare();
+                REQUIRE(failed.HasError());
+                const auto &expected = fault == 1 ? SaveErrors::RestoreAllocationFailed : SaveErrors::RestoreAdapterContractInvalid;
+                CHECK(failed.ErrorValue().code.Value() == expected.code.Value());
+                CHECK(transaction.State() == StagedRestoreTransactionState::Failed);
+                CHECK(log.published.empty());
+                CHECK(log.rolledBack.size() == 2);
+                CHECK(Snapshot(handle).IsTerminal());
+                CHECK(Snapshot(handle).terminalError->code.Value() == expected.code.Value());
+            }
         }
 
         TEST_CASE("Staged restore prepares dependencies deterministically and publishes one complete bundle",

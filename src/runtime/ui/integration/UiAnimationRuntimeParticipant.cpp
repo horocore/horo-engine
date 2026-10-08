@@ -42,7 +42,7 @@ namespace Horo::Runtime {
             auto controls = std::make_shared<UiAnimationClockController::Storage>();
             controls->capacity = config.clockCommands;
             const auto clocks = owner.ClockBindings();
-            for (std::size_t index = static_cast<std::size_t>(Ui::UiTimeDomain::EditorPreview); index < Ui::UiTimeDomainCount; ++index) {
+            for (auto index = static_cast<std::size_t>(Ui::UiTimeDomain::EditorPreview); index < Ui::UiTimeDomainCount; ++index) {
                 controls->domains[index].available = enabled[index];
                 controls->domains[index].clock = clocks.domains[index].clock;
             }
@@ -75,16 +75,17 @@ namespace Horo::Runtime {
 
     /** @copydoc UiAnimationRuntimeParticipant::OnPhase */
     Result<void> UiAnimationRuntimeParticipant::OnPhase(const RuntimePhase phase, const FrameContext &context) {
+        using enum RuntimePhase;
         if (storage_->ownerThread != std::this_thread::get_id() || !storage_->started || storage_->stopped)
             return Result<void>::Failure(MakeError(Ui::UiErrors::AnimationLifecycleUnavailable));
-        if (phase != RuntimePhase::VariableUpdate && phase != RuntimePhase::RenderExtraction)
+        if (phase != VariableUpdate && phase != RenderExtraction)
             return Result<void>::Success();
         RuntimeDispatchFacts facts;
         if (context.dispatchEvidence.Read(storage_->source, phase, facts) != RuntimeDispatchStatus::Valid)
             return Result<void>::Failure(MakeError(Ui::UiErrors::ClockSourceStale));
         if (context.cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(Ui::UiErrors::AnimationLifecycleUnavailable));
-        return phase == RuntimePhase::VariableUpdate ? PrepareFrame(facts) : PublishFrame(facts);
+        return phase == VariableUpdate ? PrepareFrame(facts) : PublishFrame(facts);
     }
 
     /** @copydoc UiAnimationRuntimeParticipant::OnFixedUpdate */
@@ -127,7 +128,7 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc UiAnimationRuntimeParticipant::Navigate */
-    Result<Ui::UiRouteOperationId> UiAnimationRuntimeParticipant::Navigate(Ui::UiRouteOperationRequest request) {
+    Result<Ui::UiRouteOperationId> UiAnimationRuntimeParticipant::Navigate(const Ui::UiRouteOperationRequest &request) {
         if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->stopped)
             return Result<Ui::UiRouteOperationId>::Failure(MakeError(Ui::UiErrors::AnimationLifecycleUnavailable));
         return storage_->owner.Navigate(request);

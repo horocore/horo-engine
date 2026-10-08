@@ -35,9 +35,9 @@ namespace Horo::Runtime::Ui {
         maximumOffsets.reserve(source.elementCapacity);
         viewports.reserve(source.elementCapacity);
         contents.reserve(source.elementCapacity);
-        candidateRecords.reserve(source.elementCapacity);
-        candidateClips.reserve(source.clipCapacity);
-        candidateScrolls.reserve(source.scrollCapacity);
+        candidate.records.reserve(source.elementCapacity);
+        candidate.clips.reserve(source.clipCapacity);
+        candidate.scrolls.reserve(source.scrollCapacity);
     }
 
     UiLayoutClipEngine::Storage::~Storage() {
@@ -108,8 +108,8 @@ namespace Horo::Runtime::Ui {
         maximumOffsets.assign(records.size(), {});
         viewports.resize(records.size());
         contents.resize(records.size());
-        candidateClips.clear();
-        candidateScrolls.clear();
+        candidate.clips.clear();
+        candidate.scrolls.clear();
 
         for (std::uint32_t index = 0; index < records.size(); ++index) {
             const auto &arrangement = records[index].arrangement;
@@ -138,11 +138,11 @@ namespace Horo::Runtime::Ui {
             if (x.HasError() || y.HasError())
                 return Failure(UiErrors::LayoutClipInvalid);
             offsets[index] = {x.Value(), y.Value()};
-            if (candidateScrolls.size() == descriptor.scrollCapacity)
+            if (candidate.scrolls.size() == descriptor.scrollCapacity)
                 return Failure(UiErrors::CapacityExceeded);
-            scrollIndexes[index] = static_cast<std::uint32_t>(candidateScrolls.size());
-            candidateScrolls.emplace_back(records[index].element, viewports[index], contents[index], offsets[index], minimumOffsets[index],
-                                          maximumOffsets[index]);
+            scrollIndexes[index] = static_cast<std::uint32_t>(candidate.scrolls.size());
+            candidate.scrolls.emplace_back(records[index].element, viewports[index], contents[index], offsets[index], minimumOffsets[index],
+                                           maximumOffsets[index]);
         }
         return Result<void>::Success();
     }
@@ -226,7 +226,7 @@ namespace Horo::Runtime::Ui {
         if (nextX.HasError() || nextY.HasError())
             return Failure(UiErrors::LayoutClipInvalid);
         offsets[scrollElement] = {nextX.Value(), nextY.Value()};
-        candidateScrolls[scrollIndexes[scrollElement]].offset = offsets[scrollElement];
+        candidate.scrolls[scrollIndexes[scrollElement]].offset = offsets[scrollElement];
         return Result<void>::Success();
     }
 
@@ -299,20 +299,20 @@ namespace Horo::Runtime::Ui {
         if (const auto overflow = descriptors[index].overflow;
             overflow != UiLayoutOverflowPolicy::Clip && overflow != UiLayoutOverflowPolicy::Scroll)
             return Result<void>::Success();
-        if (candidateClips.size() == descriptor.clipCapacity)
+        if (candidate.clips.size() == descriptor.clipCapacity)
             return Failure(UiErrors::CapacityExceeded);
         const auto clipRect = Translate(records[index].arrangement.contentBox, translations[index]);
         if (clipRect.HasError())
             return Result<void>::Failure(clipRect.ErrorValue());
-        ownClipIndexes[index] = static_cast<std::uint32_t>(candidateClips.size());
-        candidateClips.emplace_back(records[index].element, clipRect.Value(), clipIndexes[index]);
+        ownClipIndexes[index] = static_cast<std::uint32_t>(candidate.clips.size());
+        candidate.clips.emplace_back(records[index].element, clipRect.Value(), clipIndexes[index]);
         return Result<void>::Success();
     }
 
     Result<void> UiLayoutClipEngine::Storage::BuildScrollProjection(const std::uint32_t index) {
         if (scrollIndexes[index] == NoIndex)
             return Result<void>::Success();
-        auto &scroll = candidateScrolls[scrollIndexes[index]];
+        auto &scroll = candidate.scrolls[scrollIndexes[index]];
         const auto viewport = Translate(viewports[index], translations[index]);
         const auto content = Translate(contents[index], translations[index]);
         if (viewport.HasError() || content.HasError())
@@ -331,14 +331,14 @@ namespace Horo::Runtime::Ui {
             return clip;
         if (const auto scroll = BuildScrollProjection(index); scroll.HasError())
             return scroll;
-        candidateRecords.emplace_back(records[index].element, translations[index], clipIndexes[index], ownClipIndexes[index],
-                                      scrollIndexes[index]);
+        candidate.records.emplace_back(records[index].element, translations[index], clipIndexes[index], ownClipIndexes[index],
+                                       scrollIndexes[index]);
         return Result<void>::Success();
     }
 
     Result<void> UiLayoutClipEngine::Storage::BuildProjection(const std::span<const UiLayoutRecord> records,
                                                               const std::span<const UiLayoutClipDescriptor> descriptors) {
-        candidateRecords.clear();
+        candidate.records.clear();
         for (std::uint32_t index = 0; index < records.size(); ++index) {
             if (const auto record = BuildProjectionRecord(records, descriptors, index); record.HasError())
                 return record;
@@ -347,21 +347,21 @@ namespace Horo::Runtime::Ui {
     }
 
     Result<void> UiLayoutClipEngine::Storage::ValidateProjection(const std::size_t recordCount) const {
-        if (candidateRecords.size() != recordCount)
+        if (candidate.records.size() != recordCount)
             return Failure(UiErrors::LayoutClipInvalid);
-        for (std::uint32_t index = 0; index < candidateClips.size(); ++index) {
-            const auto &clip = candidateClips[index];
+        for (std::uint32_t index = 0; index < candidate.clips.size(); ++index) {
+            const auto &clip = candidate.clips[index];
             if (!clip.IsValid() || (clip.parent != NoIndex && clip.parent >= index))
                 return Failure(UiErrors::LayoutClipInvalid);
         }
-        for (const auto &scroll : candidateScrolls) {
+        for (const auto &scroll : candidate.scrolls) {
             if (!scroll.IsValid())
                 return Failure(UiErrors::LayoutClipInvalid);
         }
-        for (const auto &record : candidateRecords) {
-            if (!record.IsValid() || (record.clip != NoIndex && record.clip >= candidateClips.size()) ||
-                (record.ownClip != NoIndex && record.ownClip >= candidateClips.size()) ||
-                (record.scroll != NoIndex && record.scroll >= candidateScrolls.size()))
+        for (const auto &record : candidate.records) {
+            if (!record.IsValid() || (record.clip != NoIndex && record.clip >= candidate.clips.size()) ||
+                (record.ownClip != NoIndex && record.ownClip >= candidate.clips.size()) ||
+                (record.scroll != NoIndex && record.scroll >= candidate.scrolls.size()))
                 return Failure(UiErrors::LayoutClipInvalid);
         }
         return Result<void>::Success();
@@ -373,12 +373,12 @@ namespace Horo::Runtime::Ui {
         if (!slot)
             return Failure<std::shared_ptr<UiLayoutClipSnapshot::Storage>>(UiErrors::LayoutClipSnapshotStorageExhausted);
         slot->descriptor = {source.instance, source.canvas, source.document, source.sources, source.interaction};
-        slot->records.resize(candidateRecords.size());
-        std::ranges::copy(candidateRecords, slot->records.begin());
-        slot->clips.resize(candidateClips.size());
-        std::ranges::copy(candidateClips, slot->clips.begin());
-        slot->scrolls.resize(candidateScrolls.size());
-        std::ranges::copy(candidateScrolls, slot->scrolls.begin());
+        slot->records.resize(candidate.records.size());
+        std::ranges::copy(candidate.records, slot->records.begin());
+        slot->clips.resize(candidate.clips.size());
+        std::ranges::copy(candidate.clips, slot->clips.begin());
+        slot->scrolls.resize(candidate.scrolls.size());
+        std::ranges::copy(candidate.scrolls, slot->scrolls.begin());
         slot->recordLookup.resize(slot->records.size());
         for (std::uint32_t index = 0; index < slot->records.size(); ++index)
             slot->recordLookup[index] = index;
@@ -433,7 +433,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiLayoutClipEngine::Prepare */
     Result<UiLayoutClipEngine::PreparedUpdate> UiLayoutClipEngine::Prepare(const UiElementTree &tree, const UiLayoutSnapshot &layout,
-                                                                           const UiLayoutClipUpdateRequest &request) {
+                                                                           const UiLayoutClipUpdateRequest &request) const {
         if (!storage_ || storage_->lifecycle != UiLayoutClipEngineState::Active || storage_->prepared)
             return Failure<PreparedUpdate>(UiErrors::LayoutClipLifecycleUnavailable);
         const auto &source = layout.Descriptor();
@@ -546,9 +546,9 @@ namespace Horo::Runtime::Ui {
         storage_->ownClipIndexes.clear();
         storage_->scrollIndexes.clear();
         storage_->path.clear();
-        storage_->candidateRecords.clear();
-        storage_->candidateClips.clear();
-        storage_->candidateScrolls.clear();
+        storage_->candidate.records.clear();
+        storage_->candidate.clips.clear();
+        storage_->candidate.scrolls.clear();
         storage_->ReleaseCurrent();
     }
 

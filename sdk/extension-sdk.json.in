@@ -21,7 +21,7 @@
   },
   "compileDependencies": [],
   "supportedHosts": ["linux", "macos", "windows"],
-  "publicHeaders": ["include/Horo/Extensions/ExtensionAbi.h"],
+  "publicHeaders": ["include/Horo/Extensions/ExtensionAbi.h", "include/Horo/Extensions/EditorActivityAbi.h"],
   "schemas": ["share/horo/extension-sdk/extension-manifest-v1.schema.json"],
   "tools": [
     "bin/horo-extension-validate@CMAKE_EXECUTABLE_SUFFIX@",

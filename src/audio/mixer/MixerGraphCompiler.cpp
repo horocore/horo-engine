@@ -352,6 +352,16 @@ namespace Horo::Audio {
         return state_->identity;
     }
 
+    /** @copydoc MixerRenderPlan::SampleRate */
+    std::uint32_t MixerRenderPlan::SampleRate() const noexcept {
+        return state_->profile.sampleRate;
+    }
+
+    /** @copydoc MixerRenderPlan::MaximumFrames */
+    std::uint32_t MixerRenderPlan::MaximumFrames() const noexcept {
+        return state_->profile.maximumFrames;
+    }
+
     /** @copydoc MixerRenderPlan::Buses */
     std::span<const MixerCompiledBus> MixerRenderPlan::Buses() const noexcept {
         return state_->buses;

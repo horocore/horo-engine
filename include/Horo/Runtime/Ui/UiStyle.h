@@ -387,9 +387,9 @@ namespace Horo::Runtime::Ui {
         /** @brief Resolves a token to its immutable literal without consulting runtime state. */
         [[nodiscard]] Result<UiStyleValue> ResolveToken(UiStyleTokenReference tokenReference) const;
         /** @brief Closes new borrows while retaining no mutable publication state. */
-        [[nodiscard]] Result<void> BeginRetirement();
+        [[nodiscard]] Result<void> BeginRetirement() const;
         /** @brief Idempotently releases cooked tables and closes the registry. */
-        void Shutdown() noexcept;
+        void Shutdown() const noexcept;
         /** @brief Returns explicit registry lifecycle. @return Current state. */
         [[nodiscard]] RuntimeStyleRegistryState State() const noexcept;
 
@@ -627,7 +627,7 @@ namespace Horo::Runtime::Ui {
          * @return Reserved candidate, or typed failure leaving the current generation unchanged.
          */
         [[nodiscard]] Result<PreparedUpdate> Prepare(const UiElementTree &tree, const RuntimeStyleRegistry &registry,
-                                                     const UiStyleUpdateRequest &request);
+                                                     const UiStyleUpdateRequest &request) const;
         /**
          * @brief Revalidates and commits this resolver's exact outstanding candidate.
          * @param candidate Candidate consumed on success. @param tree Current tree. @param registry Current registry.

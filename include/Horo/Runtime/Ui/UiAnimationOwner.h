@@ -144,6 +144,12 @@ namespace Horo::Runtime::Ui {
         Restart
     };
 
+    /** @brief Borrowed synchronous reload admission; owns no runtime publication authority. */
+    struct UiAnimationReloadAdmission final {
+        UiAnimationReloadPolicy policy{UiAnimationReloadPolicy::Cancel};
+        UiStructuralCommitPoint point;
+    };
+
     /** @brief Copied reconciliation and terminal counts from one successful real asset publication. */
     struct UiAnimationReloadResult final {
         UiReloadReconciliation state;
@@ -201,16 +207,17 @@ namespace Horo::Runtime::Ui {
         /** @brief Reconciles a complete replacement through the existing sole asset publisher at a structural safe point.
          * @param replacement Detached verified new cooked closure and actual owners. @param allocator Its actual tree issuer.
          * @param registry New owned style registry. @param styles New unique style resolver. @param definition Inert authored bindings.
-         * @param policy Cancel closes old instances; Restart re-admits surviving nonblocking definitions from their start.
-         * @param point Explicit application structural commit boundary. @param cancellation Load ancestry.
+         * @param admission Explicit cancellation/restart policy and application structural commit boundary, borrowed until return.
+         * @param cancellation Load ancestry.
          * @return Copied real reconciliation or typed failure preserving old publication and cursors.
          * @pre Owner-thread load-time operation outside dispatch and any prepared candidate; no required gate is pending.
          * @post Old raw source/clock/timeline handles cannot admit commands. Old frames stay readable; new input waits for a receipt.
          */
         [[nodiscard]] Result<UiAnimationReloadResult> Reload(UiReloadGeneration replacement, UiElementSlotAllocator &allocator,
                                                              RuntimeStyleRegistry registry, UiStyleResolver styles,
-                                                             UiAnimationCanvasDefinition definition, UiAnimationReloadPolicy policy,
-                                                             UiStructuralCommitPoint point, const CancellationToken &cancellation = {});
+                                                             UiAnimationCanvasDefinition definition,
+                                                             const UiAnimationReloadAdmission &admission,
+                                                             const CancellationToken &cancellation = {});
         ~UiAnimationOwner();
         UiAnimationOwner(UiAnimationOwner &&) noexcept;
         UiAnimationOwner &operator=(UiAnimationOwner &&) noexcept;

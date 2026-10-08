@@ -32,6 +32,13 @@ static_assert(std::is_nothrow_move_constructible_v<UiAnimationRuntimeReload>);
 static_assert(!std::is_copy_constructible_v<UiAnimationRuntimeReload>);
 static_assert(std::is_member_function_pointer_v<decltype(&UiAnimationRuntimeParticipant::Reload)>);
 
+using NavigateSignature = Horo::Result<Horo::Runtime::Ui::UiRouteOperationId> (UiAnimationRuntimeParticipant::*)(
+    const Horo::Runtime::Ui::UiRouteOperationRequest &);
+static_assert(std::is_same_v<decltype(&UiAnimationRuntimeParticipant::Navigate), NavigateSignature>);
+static_assert(std::is_same_v<decltype(std::declval<const UiAnimationClockController &>().Seek(Horo::Runtime::Ui::UiAnimationClockId{},
+                                                                                              Horo::Runtime::Ui::UiDuration{})),
+                             Horo::Result<Horo::Runtime::Ui::UiAnimationClockId>>);
+
 int main() {
     const RuntimeDispatchSource absent;
     if (absent.BindingStatus() != RuntimeDispatchStatus::Invalid)

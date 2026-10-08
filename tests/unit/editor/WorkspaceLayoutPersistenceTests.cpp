@@ -1,10 +1,89 @@
+#include "../../support/AllocationProbe.h"
+#include "../../support/OwnedTestDirectory.h"
 #include "Horo/Editor/WorkspaceLayoutPersistence.h"
 #include "Horo/Editor/WorkspacePanelHost.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
+#include <format>
+#include <fstream>
+#include <new>
+#include <type_traits>
 
 using namespace Horo::Editor;
+
+static_assert(!std::is_copy_constructible_v<Horo::Tests::OwnedTestDirectory> &&
+              !std::is_move_constructible_v<Horo::Tests::OwnedTestDirectory>);
+static_assert(!std::is_copy_constructible_v<SplitNode> && std::is_nothrow_move_constructible_v<SplitNode>);
+static_assert(std::is_nothrow_move_constructible_v<LayoutNode> && std::is_nothrow_move_assignable_v<LayoutNode>);
+
+TEST_CASE("Split parsing releases every owned allocation when any allocation fails", "[unit][editor][persistence][ownership]") {
+    namespace Probe = Horo::Tests::AllocationProbe;
+    constexpr std::string_view json =
+        R"({"schemaVersion":3,"root":{"type":"split","id":"root","axis":"horizontal","ratio":0.5,"first":{"type":"panel","id":"first","panel":"first.panel"},"second":{"type":"panel","id":"second","panel":"second.panel"}}})";
+    REQUIRE(WorkspaceLayoutPersistence::Deserialize(json));
+    const auto before = Probe::Count();
+    {
+        static_cast<void>(WorkspaceLayoutPersistence::Deserialize(json));
+    }
+    const auto successfulAllocations = Probe::Count() - before;
+    REQUIRE(successfulAllocations >= 2);
+    for (std::size_t index = 0; index < successfulAllocations; ++index) {
+        const auto allocationsBefore = Probe::Count();
+        const auto freesBefore = Probe::FreeCount();
+        bool failed{};
+        {
+            const Probe::ScopedFailure failure{index};
+            try {
+                static_cast<void>(WorkspaceLayoutPersistence::Deserialize(json));
+            } catch (const std::bad_alloc &) {
+                failed = true;
+            }
+        }
+        const auto allocations = Probe::Count() - allocationsBefore;
+        const auto frees = Probe::FreeCount() - freesBefore;
+        CHECK(failed);
+        // Count includes the one failed request; all successful requests must have been freed.
+        CHECK(allocations == frees + 1);
+    }
+}
+
+TEST_CASE("Split children transfer exclusive ownership into the layout variant", "[unit][editor][persistence][ownership]") {
+    SplitNode split;
+    split.first = std::make_unique<LayoutNode>(PanelNode{"first", "first.panel"});
+    split.second = std::make_unique<LayoutNode>(PanelNode{"second", "second.panel"});
+    const auto *first = split.first.get();
+    const auto *second = split.second.get();
+    LayoutNode node{std::move(split)};
+    CHECK_FALSE(split.first);
+    CHECK_FALSE(split.second);
+    LayoutNode transferred{std::move(node)};
+    const auto &owned = std::get<SplitNode>(transferred.value);
+    CHECK(owned.first.get() == first);
+    CHECK(owned.second.get() == second);
+    const auto &released = std::get<SplitNode>(node.value);
+    CHECK_FALSE(released.first);
+    CHECK_FALSE(released.second);
+}
+
+TEST_CASE("File fixtures exclusively own independent directories and cleanup cannot erase a sibling", "[unit][editor][filesystem]") {
+    const Horo::Tests::OwnedTestDirectory survivor{"workspace fixture"};
+    const auto marker = survivor.Path() / "retained.json";
+    {
+        std::ofstream output{marker};
+        output << "retained";
+        REQUIRE(output.good());
+    }
+    std::filesystem::path retired;
+    {
+        const Horo::Tests::OwnedTestDirectory other{"workspace fixture"};
+        retired = other.Path();
+        REQUIRE(retired != survivor.Path());
+        REQUIRE(std::filesystem::is_directory(retired));
+    }
+    CHECK_FALSE(std::filesystem::exists(retired));
+    CHECK(std::filesystem::is_regular_file(marker));
+}
 
 TEST_CASE("Workspace Layout Persistence Tests", "[unit][editor]") {
     WorkspacePanelHost host;
@@ -27,7 +106,8 @@ TEST_CASE("Workspace Layout Persistence Tests", "[unit][editor]") {
     REQUIRE((!error.empty()));
     REQUIRE((!WorkspaceLayoutPersistence::Deserialize("not json", &error)));
 
-    const auto path = std::filesystem::temp_directory_path() / "horo_workspace_layout_test.json";
+    const Horo::Tests::OwnedTestDirectory directory{"workspace persistence"};
+    const auto path = directory.Path() / "horo_workspace_layout_test.json";
     REQUIRE((WorkspaceLayoutPersistence::Save(path, host.Layout(), &error)));
     REQUIRE((WorkspaceLayoutPersistence::Load(path, &error).has_value()));
     REQUIRE((host.RestoreLayout(path, &error)));
@@ -48,4 +128,79 @@ TEST_CASE("Workspace layout persistence migrates the former Content Browser host
     REQUIRE((stack != nullptr));
     REQUIRE((stack->tabs == std::vector<std::string>{"horo.global_dock"}));
     REQUIRE((stack->activeTab == "horo.global_dock"));
+}
+
+TEST_CASE("Workspace surface intent uses the existing layout envelope and rejects malformed state", "[unit][editor][Activity]") {
+    WorkspacePanelHost host;
+    host.Layout().surfaces = {{"fixture.activity", "fixture.package", "fixture.module", false, false, false, {1, 2, 3}}};
+    const auto encoded = WorkspaceLayoutPersistence::Serialize(host.Layout());
+    const auto restored = WorkspaceLayoutPersistence::Deserialize(encoded);
+    REQUIRE(restored);
+    CHECK(restored->surfaces == host.Layout().surfaces);
+    auto duplicate = host.Layout();
+    duplicate.surfaces.push_back(duplicate.surfaces.front());
+    CHECK_FALSE(WorkspaceLayoutPersistence::Deserialize(WorkspaceLayoutPersistence::Serialize(duplicate)));
+    auto invalid = host.Layout();
+    invalid.surfaces.front().focused = true;
+    CHECK_FALSE(WorkspaceLayoutPersistence::Deserialize(WorkspaceLayoutPersistence::Serialize(invalid)));
+    invalid = host.Layout();
+    invalid.surfaces.front().state.resize(8193);
+    CHECK_FALSE(WorkspaceLayoutPersistence::Deserialize(WorkspaceLayoutPersistence::Serialize(invalid)));
+    CHECK_FALSE(WorkspaceLayoutPersistence::Deserialize(encoded + "garbage"));
+}
+
+TEST_CASE("Workspace serialization accepts registry state bounds without unbounded surface allocation", "[unit][editor][Activity]") {
+    WorkspacePanelHost host;
+    for (unsigned index = 0; index < 512; ++index)
+        host.Layout().surfaces.push_back(
+            {std::format("fixture.surface.{}", index), "fixture.package", "fixture.module", false, false, true, {}});
+    for (unsigned index = 0; index < 128; ++index)
+        host.Layout().surfaces[index].state.resize(8192, 255);
+    const auto encoded = WorkspaceLayoutPersistence::Serialize(host.Layout());
+    REQUIRE(encoded.size() > 1024U * 1024U);
+    const auto restored = WorkspaceLayoutPersistence::Deserialize(encoded);
+    REQUIRE(restored);
+    CHECK(restored->surfaces == host.Layout().surfaces);
+    const Horo::Tests::OwnedTestDirectory directory{"bounded workspace persistence"};
+    const auto path = directory.Path() / "horo107 bounded workspace.json";
+    REQUIRE(WorkspaceLayoutPersistence::Save(path, host.Layout()));
+    host.Layout().surfaces[128].state.push_back(1);
+    CHECK(WorkspaceLayoutPersistence::Serialize(host.Layout()).empty());
+    CHECK_FALSE(WorkspaceLayoutPersistence::Save(path, host.Layout()));
+    REQUIRE(WorkspaceLayoutPersistence::Load(path));
+    CHECK(WorkspaceLayoutPersistence::Load(path)->surfaces == restored->surfaces);
+    std::filesystem::remove(path);
+    host.Layout().surfaces[128].state.clear();
+    host.Layout().surfaces.push_back({"fixture.overflow", "fixture.package", "fixture.module", false, false, true, {}});
+    CHECK(WorkspaceLayoutPersistence::Serialize(host.Layout()).empty());
+}
+
+TEST_CASE("Workspace activity placements migrate and reject malformed intent", "[editor][workspace][persistence]") {
+    WorkspaceLayout layout;
+    layout.root = LayoutNode{PanelNode{"root", "horo.viewport"}};
+    layout.surfaces.push_back({"fixture.activity",
+                               "fixture.package",
+                               "fixture.module",
+                               false,
+                               false,
+                               true,
+                               {},
+                               WorkspaceActivityPlacement{WorkspaceActivitySide::Bottom, 2, 511}});
+    const auto encoded = WorkspaceLayoutPersistence::Serialize(layout);
+    const auto decoded = WorkspaceLayoutPersistence::Deserialize(encoded);
+    REQUIRE(decoded.has_value());
+    CHECK(decoded->surfaces == layout.surfaces);
+    auto invalid = encoded;
+    const auto ordinal = invalid.find("\"order\":511");
+    REQUIRE(ordinal != std::string::npos);
+    invalid.replace(ordinal, std::string{"\"order\":511"}.size(), "\"order\":512");
+    CHECK_FALSE(WorkspaceLayoutPersistence::Deserialize(invalid).has_value());
+    layout.surfaces.front().activityPlacement->group = 3;
+    CHECK(WorkspaceLayoutPersistence::Serialize(layout).empty());
+    layout.surfaces.front().activityPlacement.reset();
+    auto legacy = WorkspaceLayoutPersistence::Serialize(layout);
+    legacy.replace(legacy.find("\"schemaVersion\":3"), std::string{"\"schemaVersion\":3"}.size(), "\"schemaVersion\":2");
+    const auto migrated = WorkspaceLayoutPersistence::Deserialize(legacy);
+    REQUIRE(migrated.has_value());
+    CHECK_FALSE(migrated->surfaces.front().activityPlacement.has_value());
 }

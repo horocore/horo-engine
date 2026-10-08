@@ -51,7 +51,7 @@ namespace Horo::Runtime {
             return RuntimeDispatchStatus::Invalid;
         if (storage_->owner != std::this_thread::get_id())
             return RuntimeDispatchStatus::WrongThread;
-        if (storage_->retired.load(std::memory_order_acquire))
+        if (storage_->retired.load())
             return RuntimeDispatchStatus::Retired;
         if (storage_->exhausted)
             return RuntimeDispatchStatus::Exhausted;
@@ -98,7 +98,7 @@ namespace Horo::Runtime {
             return RuntimeDispatchStatus::WrongThread;
         if (storage_.get() != expected.storage_.Get())
             return RuntimeDispatchStatus::ForeignSource;
-        if (storage_->retired.load(std::memory_order_acquire))
+        if (storage_->retired.load())
             return RuntimeDispatchStatus::Retired;
         if (!storage_->active || storage_->ordinal != ordinal_)
             return RuntimeDispatchStatus::Stale;

@@ -22,9 +22,11 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAnimationOwner::ReadCanvas */
     const UiReloadCanvas *UiAnimationOwner::ReadCanvas(const Storage &storage) noexcept {
-        const auto *generation = storage.candidate.admitted ? storage.candidate.source.Get()
-                                 : storage.currentFrame     ? storage.frames[*storage.currentFrame]->generation.Get()
-                                                            : nullptr;
+        const UiReloadGeneration *generation = nullptr;
+        if (storage.candidate.admitted)
+            generation = storage.candidate.source.Get();
+        else if (storage.currentFrame.has_value())
+            generation = storage.frames[*storage.currentFrame]->generation.Get();
         if (!generation)
             return nullptr;
         const auto canvases = generation->Canvases();

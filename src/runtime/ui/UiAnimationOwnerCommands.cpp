@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
 
 namespace Horo::Runtime::Ui {
     namespace {
@@ -56,7 +57,7 @@ namespace Horo::Runtime::Ui {
         // A new admitted definition explicitly replaces conflicting retained terminal fill; two sampled values must never
         // choose an implicit winner for the same property. Older immutable frame records keep their terminal evidence.
         for (auto &timeline : storage_->timelines) {
-            if (&timeline != &*free && timeline.occupied &&
+            if (&timeline != std::to_address(free) && timeline.occupied &&
                 (timeline.terminalIssued || timeline.cursor.sample.outcome != UiAnimationOutcome::None) &&
                 Overlaps(*definition, storage_->definition.animations[timeline.definition]))
                 timeline.occupied = false;

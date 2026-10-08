@@ -12,7 +12,7 @@ namespace Horo::Runtime::Ui::AnimationInternal {
         constexpr std::uint64_t Scale = std::numeric_limits<std::uint32_t>::max();
         const auto whole = static_cast<std::uint64_t>(duration) / Scale;
         const auto fraction = (static_cast<std::uint64_t>(duration) % Scale) * position;
-        return static_cast<std::int64_t>(whole * position + fraction / Scale + (fraction % Scale != 0));
+        return static_cast<std::int64_t>(whole * position + fraction / Scale + static_cast<std::uint64_t>(fraction % Scale != 0));
     }
 
     /** @brief Exact immutable publication correlation shared by bounded marker helpers. */
@@ -23,7 +23,7 @@ namespace Horo::Runtime::Ui::AnimationInternal {
     };
 
     /** @brief Copies one bounded interval's crossings; exact shared endpoints retain distinct authored marker/iteration identity. */
-    [[nodiscard]] inline Result<void> AppendIterationMarkers(const UiAnimationDefinition &definition, const MarkerPublication publication,
+    [[nodiscard]] inline Result<void> AppendIterationMarkers(const UiAnimationDefinition &definition, const MarkerPublication &publication,
                                                              const std::uint64_t iteration, const std::int64_t prior,
                                                              const std::int64_t next, std::vector<UiAnimationMarkerCrossing> &output) {
         const bool reverse = ReverseIteration(definition.time.direction, iteration);
@@ -41,7 +41,7 @@ namespace Horo::Runtime::Ui::AnimationInternal {
     }
 
     /** @brief Enumerates only admitted finite work; zero-duration tracks cross all markers once on their initial publication. */
-    [[nodiscard]] inline Result<void> AppendMarkers(const UiAnimationDefinition &definition, const MarkerPublication publication,
+    [[nodiscard]] inline Result<void> AppendMarkers(const UiAnimationDefinition &definition, const MarkerPublication &publication,
                                                     const PlaybackCursor &prior, const PlaybackCursor &next, const bool starting,
                                                     std::vector<UiAnimationMarkerCrossing> &output) {
         if (definition.markers.empty() || next.sample.outcome == UiAnimationOutcome::Cancelled ||

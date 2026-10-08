@@ -77,6 +77,21 @@ namespace Horo::Editor::Ui {
      */
     void ShowTooltip(const char *text, const Theme::Fonts *fonts = nullptr);
 
+    /** @brief Shared activity destination control; renderer handles remain editor-owned. */
+    struct ActivityButtonProps {
+        const char *id{"##Activity"};
+        const char *tooltip{""};
+        std::uintptr_t texture{};
+        ImVec2 size{40.0F, 30.0F};
+        bool active{};
+        bool enabled{true};
+        bool indicatorOnRight{};
+        std::uint32_t badgeCount{};
+    };
+
+    /** @brief Draws theme-backed hover, active, disabled, keyboard focus and bounded badge states. @return Activation intent only. */
+    [[nodiscard]] bool ActivityButton(const ActivityButtonProps &props, const Theme::Fonts &fonts);
+
     // ── Button props & primitive ─────────────────────────────────────────
 
     /** @brief Input contract for the shared editor button primitive. */

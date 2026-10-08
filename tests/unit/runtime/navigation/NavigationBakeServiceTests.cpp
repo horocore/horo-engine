@@ -3,6 +3,7 @@
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
 #include "NativePublicationFiles.h"
 #include "navigation/IncrementalBakeFixture.h"
+#include "navigation/NavigationContentPolicyFixture.h"
 #include "navigation/NavigationPublicationEntropy.h"
 
 #include <algorithm>
@@ -298,6 +299,50 @@ namespace Horo::Application {
         REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         CHECK(harness.service->Published()->reusedTiles == 4);
         CHECK(harness.builder->builds.load() == 6);
+    }
+
+    TEST_CASE("Owned project policy changes cannot join baking or alias promoted aggregate identity", "[navigation][content][policy]") {
+        BakeHarness harness;
+        const auto &fixture = harness.fixture;
+        REQUIRE(harness.config.sourceAuthority->UpdateCurrent(fixture.revisions, fixture.Observations()).HasValue());
+        const auto submit = [&](const std::uint64_t policy) {
+            auto result = harness.service->Submit({.input = fixture.Input(),
+                                                   .compatibility = fixture.compatibility,
+                                                   .tiles = fixture.Tiles(),
+                                                   .sources = fixture.Observations(),
+                                                   .projectProfile = ContentProfile(policy)});
+            REQUIRE(result.HasValue());
+            return result.Value();
+        };
+        harness.builder->pause.store(true);
+        const auto first = submit(17);
+        for (std::size_t iteration = 0; iteration < 2000 && !harness.builder->entered.load(); ++iteration)
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        REQUIRE(harness.builder->entered.load());
+        REQUIRE(submit(17) == first);
+        const auto changed = submit(18);
+        REQUIRE(changed != first);
+        harness.builder->pause.store(false);
+        REQUIRE(Terminal(*harness.service, harness.operations, first).state == OperationState::Cancelled);
+        REQUIRE(Terminal(*harness.service, harness.operations, changed).state == OperationState::Succeeded);
+        const auto before = harness.service->Published();
+        REQUIRE(before);
+        REQUIRE(before->tiles.provenance.has_value());
+        REQUIRE(before->tiles.provenance->projectProfile.has_value());
+        REQUIRE(before->tiles.provenance->projectProfile->MatchesAuthority(ContentProfile(18)));
+        const auto builds = harness.builder->builds.load();
+        REQUIRE(Terminal(*harness.service, harness.operations, submit(17)).state == OperationState::Succeeded);
+        const auto after = harness.service->Published();
+        REQUIRE(after);
+        REQUIRE(after->tiles.provenance.has_value());
+        REQUIRE(after->tiles.provenance->projectProfile.has_value());
+        REQUIRE(after->tiles.provenance->projectProfile->MatchesAuthority(ContentProfile(17)));
+        REQUIRE(harness.builder->builds.load() == builds);
+        REQUIRE(after->reusedTiles == before->tiles.tiles.size());
+        REQUIRE(after->generation.manifestDigest != before->generation.manifestDigest);
+        REQUIRE(after->tiles.tiles.size() == before->tiles.tiles.size());
+        for (std::size_t index = 0; index < after->tiles.tiles.size(); ++index)
+            REQUIRE(after->tiles.tiles[index]->ContentIdentity() == before->tiles.tiles[index]->ContentIdentity());
     }
 
     TEST_CASE("Latest request replaces pending work and shutdown cancels unadopted native baking") {

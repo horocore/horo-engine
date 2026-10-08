@@ -8,32 +8,33 @@ namespace Horo::Runtime::Ui::AnimationInternal {
     namespace {
         /** @brief Applies one closed field in canonical logical units; style validation rejects negative sizes and invalid constraints. */
         Result<void> ApplyField(UiLayoutStyle &style, const UiAnimationLayoutField field, const std::int32_t value) {
+            using enum UiAnimationLayoutField;
             switch (field) {
-                case UiAnimationLayoutField::Width:
+                case Width:
                     style.width = UiLength::Dip(value);
                     break;
-                case UiAnimationLayoutField::Height:
+                case Height:
                     style.height = UiLength::Dip(value);
                     break;
-                case UiAnimationLayoutField::MinimumWidth:
+                case MinimumWidth:
                     style.minimumWidth = UiLength::Dip(value);
                     break;
-                case UiAnimationLayoutField::MinimumHeight:
+                case MinimumHeight:
                     style.minimumHeight = UiLength::Dip(value);
                     break;
-                case UiAnimationLayoutField::MaximumWidth:
+                case MaximumWidth:
                     style.maximumWidth = UiLength::Dip(value);
                     break;
-                case UiAnimationLayoutField::MaximumHeight:
+                case MaximumHeight:
                     style.maximumHeight = UiLength::Dip(value);
                     break;
-                case UiAnimationLayoutField::OffsetLeft:
+                case OffsetLeft:
                     style.offsets.left = value;
                     break;
-                case UiAnimationLayoutField::OffsetTop:
+                case OffsetTop:
                     style.offsets.top = value;
                     break;
-                case UiAnimationLayoutField::Count:
+                case Count:
                     return Result<void>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
                 default:
                     return Result<void>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));

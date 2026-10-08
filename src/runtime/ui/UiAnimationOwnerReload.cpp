@@ -116,8 +116,11 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiAnimationOwner::Reload */
     Result<UiAnimationReloadResult> UiAnimationOwner::Reload(UiReloadGeneration replacement, UiElementSlotAllocator &allocator,
                                                              RuntimeStyleRegistry registry, UiStyleResolver styles,
-                                                             UiAnimationCanvasDefinition definition, const UiAnimationReloadPolicy policy,
-                                                             const UiStructuralCommitPoint point, const CancellationToken &cancellation) {
+                                                             UiAnimationCanvasDefinition definition,
+                                                             const UiAnimationReloadAdmission &admission,
+                                                             const CancellationToken &cancellation) {
+        const auto policy = admission.policy;
+        const auto point = admission.point;
         if (!storage_ || policy > UiAnimationReloadPolicy::Restart)
             return Result<UiAnimationReloadResult>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
         if (const auto admitted = AdmitCommand(*storage_); admitted.HasError())
@@ -141,7 +144,7 @@ namespace Horo::Runtime::Ui {
             return Result<UiAnimationReloadResult>::Failure(committed.ErrorValue());
         result.state = committed.Value();
         for (const auto &timeline : next.Value()->timelines)
-            result.restartedTimelines += timeline.occupied;
+            result.restartedTimelines += timeline.occupied ? 1U : 0U;
         storage_->stopped = true;
         if (storage_->resolver.State() == UiStyleResolverState::Active)
             (void)storage_->resolver.BeginRetirement();

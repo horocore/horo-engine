@@ -3,10 +3,12 @@
 #include "GameplayWorldComposition.h"
 #include "HeadlessNetworkServices.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsWorld.h"
 #include "PhysicsTestUtils.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <utility>
 
 namespace {
     using namespace Horo;
@@ -59,6 +61,60 @@ namespace {
         descriptor.filter.channel = PhysicsQueryChannelId::Parse("12345678-1234-4234-8234-123456789abc").Value();
         return {client.Identity(), world.PublishedTick().publicationRevision, descriptor};
     }
+#if HORO_TEST_PHYSICS_NATIVE
+    /** @brief Owns the Character world and typed evidence shared by the gameplay/scene integration test. */
+    struct FilteredCharacterFixture final {
+        std::unique_ptr<Horo::Character::CharacterWorld> character;
+        Horo::Character::CharacterControllerDescriptor descriptor;
+        CollisionLayerId layer;
+        PhysicsQueryFixture solid;
+        PhysicsQueryDescriptor query;
+    };
+
+    /** @brief Prepares a trigger before a solid obstacle and the equivalent bounded gameplay query. */
+    FilteredCharacterFixture PrepareFilteredCharacter(PhysicsWorld &physics) {
+        using namespace Horo::Character;
+        CharacterWorldSettingsDescriptor settings;
+        settings.capacities.maximumControllers = 1;
+        auto character = CharacterWorld::Prepare({1, physics.Identity(), 1, 1}, CharacterWorldSettings::Capture(settings).Value()).Value();
+        CharacterControllerDescriptor descriptor;
+        descriptor.sceneGeneration = 1;
+        descriptor.characterWorld = character->Descriptor().identity;
+        descriptor.physicsWorld = physics.Identity();
+        descriptor.capsule = {0.25F, 0.5F};
+        descriptor.collisionProfile = CollisionProfileId::Parse("22345678-1234-4234-8234-123456789abc").Value();
+        descriptor.queryChannel = PhysicsQueryChannelId::Parse("32345678-1234-4234-8234-123456789abc").Value();
+        descriptor.defaultMaterial = {Assets::AssetId::Parse("12345678-1234-4234-8234-123456789abc").Value(), 1,
+                                      PhysicsMaterialSlotId::FromValue(1)};
+        const auto layer = CollisionLayerId::Parse("42345678-1234-4234-8234-123456789abc").Value();
+        PhysicsQueryFixtureDescriptor fixture{.shape = PhysicsBoxShape{{0.5F, 0.5F, 0.5F}},
+                                              .pose = {.translation = {1, 0, 0}},
+                                              .layer = layer,
+                                              .profile = descriptor.collisionProfile,
+                                              .channel = descriptor.queryChannel,
+                                              .trigger = true};
+        REQUIRE(physics.CreateQueryFixture(fixture).HasValue());
+        fixture.trigger = false;
+        fixture.pose.translation = {2, 0, 0};
+        const auto solid = physics.CreateQueryFixture(fixture).Value();
+        PhysicsQueryDescriptor query{.world = physics.Identity(),
+                                     .sceneGeneration = 1,
+                                     .geometry = PhysicsCapsuleSweepQuery{descriptor.capsule, {}, {0, 1, 0}, {1, 0, 0}, 2},
+                                     .filter = {.channel = descriptor.queryChannel, .requiredLayer = layer, .blockingOnly = true},
+                                     .collection = PhysicsQueryCollection::All,
+                                     .maximumHitCount = 4};
+        return {std::move(character), descriptor, layer, solid, query};
+    }
+
+    /** @brief Captures the exact Character generations for one synchronous probe tick. */
+    Horo::Character::CharacterPhysicsQueryExpectations CharacterExpectations(const Horo::Character::CharacterWorld &character,
+                                                                             const std::uint64_t tick) {
+        const auto &owner = character.Descriptor();
+        return {owner.sceneGeneration,  owner.identity, owner.physicsWorld,           owner.collisionFilterGeneration,
+                owner.originGeneration, tick,           owner.physicsSnapshotRevision};
+    }
+#endif
+
 }  // namespace
 
 TEST_CASE("Unavailable editor and disabled host compositions inject stable PhysicsUnavailable into native and script execution",
@@ -99,6 +155,56 @@ TEST_CASE("Resolved disabled module policy rejects activation before native or s
 }
 
 #if HORO_TEST_PHYSICS_NATIVE
+TEST_CASE("Gameplay Scene and Character consume the same filtered canonical capsule evidence",
+          "[gameplay-physics][host][character-filter]") {
+    using namespace Horo::Character;
+    auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+    auto scene = Scene();
+    auto physics = World(*runtime, 1);
+    auto gameplay = GameplayWorldComposition::Create(*scene, physics.get(), 1, Native()).Value();
+    auto client = gameplay->PhysicsContext()->Acquire("game.tests", 7, 1).Value();
+    auto [character, descriptor, layer, solid, query] = PrepareFilteredCharacter(*physics);
+    auto controller = character->CreateController(descriptor).Value();
+    REQUIRE(character->Activate().HasValue());
+    CharacterPhysicsQueryAdapter adapter{*physics};
+    REQUIRE(character->SpawnController(controller, adapter.Context(CharacterExpectations(*character, 0))).HasValue());
+    std::array<PhysicsQueryHit, 4> hits{};
+    const auto observed = client.Submit({client.Identity(), physics->PublishedTick().publicationRevision, query}, hits);
+    REQUIRE(observed.HasValue());
+    REQUIRE(observed.Value().result.hitCount == 1);
+    REQUIRE(hits[0].body == solid.body);
+    CharacterMovementRequest movement{.controller = controller,
+                                      .tick = 1,
+                                      .sequence = 1,
+                                      .desiredVelocityMetersPerSecond = Math::Vec3{8, 0, 0},
+                                      .filterChange = CharacterCollisionSelectors{.requiredLayer = layer}};
+    REQUIRE(character->QueueMovementCommand(movement).HasValue());
+    REQUIRE(character
+                ->AdvanceFixedTick({.tick = 1,
+                                    .sceneGeneration = 1,
+                                    .fixedDelta = Duration::FromNanoseconds(250'000'000),
+                                    .query = adapter.Context(CharacterExpectations(*character, 1))})
+                .HasValue());
+    const auto snapshot = character->ControllerLocomotionSnapshot(controller).Value();
+    REQUIRE(snapshot.movement.contactCount == 1);
+    REQUIRE(snapshot.movement.contacts[0].body == solid.body);
+    REQUIRE(snapshot.transform.position.x > 1.0F);
+    REQUIRE(snapshot.transform.position.x < 1.26F);
+    Runtime::SceneCommandBuffer commands;
+    Math::Transform transform;
+    transform.translation = snapshot.transform.position;
+    const auto entity = *scene->View().Find({1});
+    commands.SetLocalTransform(entity, transform);
+    REQUIRE(scene->Commit(commands).HasValue());
+    REQUIRE(scene->View().Get(entity).Value().localTransform->translation == snapshot.transform.position);
+    gameplay->Shutdown();
+    character->Shutdown();
+    physics->Shutdown();
+    REQUIRE(character->ControllerTransform(controller).HasError());
+    Physics::Test::RequireError(client.Submit({client.Identity(), physics->PublishedTick().publicationRevision, query}, hits),
+                                PhysicsErrors::CapabilityRevoked);
+}
+
 TEST_CASE("Production gameplay composition injects exact native and script Physics permissions", "[gameplay-physics][host]") {
     auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
     for (const bool script : {false, true}) {

@@ -59,7 +59,7 @@ namespace Horo::Runtime {
          * @return Fresh never-reused incarnation; old handles reject immediately even if later frame preparation fails.
          * @note Seeking never invokes gameplay, audio or route lifecycle callbacks. Host simulation/presentation cannot seek.
          */
-        [[nodiscard]] Result<Ui::UiAnimationClockId> Seek(Ui::UiAnimationClockId clock, Ui::UiDuration position);
+        [[nodiscard]] Result<Ui::UiAnimationClockId> Seek(Ui::UiAnimationClockId clock, Ui::UiDuration position) const;
         /** @brief Changes explicit preview playback; test/manual clocks advance only through Step.
          * @param clock Exact current preview incarnation.
          * @param playing Whether admitted presentation duration contributes local preview time.
@@ -142,7 +142,7 @@ namespace Horo::Runtime {
         /** @brief Admits real screen navigation through the retained canvas transaction and required child timelines.
          * @param request Actual route catalog and stack guard. @return Owner-issued operation or typed refusal.
          */
-        [[nodiscard]] Result<Ui::UiRouteOperationId> Navigate(Ui::UiRouteOperationRequest request);
+        [[nodiscard]] Result<Ui::UiRouteOperationId> Navigate(const Ui::UiRouteOperationRequest &request);
         /** @brief Queues cancellation of the exact reserved route operation at the next aggregate cutoff.
          * @param operation Owner-issued operation. @param reason Typed cancellation. @return Admission or typed refusal.
          */

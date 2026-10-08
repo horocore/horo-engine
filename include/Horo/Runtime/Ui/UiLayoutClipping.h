@@ -228,7 +228,7 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Builds an inactive projection while rejecting competing updates immediately. @return Reserved candidate or failure. */
         [[nodiscard]] Result<PreparedUpdate> Prepare(const UiElementTree &tree, const UiLayoutSnapshot &layout,
-                                                     const UiLayoutClipUpdateRequest &request);
+                                                     const UiLayoutClipUpdateRequest &request) const;
         /** @brief Publishes an already revalidated candidate without allocation or callbacks. @return Immutable projection. */
         [[nodiscard]] UiLayoutClipSnapshot PublishValidated(PreparedUpdate &&candidate) noexcept;
         explicit UiLayoutClipEngine(std::shared_ptr<Storage> storage) noexcept;

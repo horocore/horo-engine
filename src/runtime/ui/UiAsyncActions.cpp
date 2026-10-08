@@ -2,6 +2,7 @@
 
 #include "Horo/Runtime/Ui/UiErrors.h"
 
+#include <algorithm>
 #include <atomic>
 #include <new>
 #include <thread>
@@ -371,10 +372,9 @@ namespace Horo::Runtime::Ui {
         const auto *const storage = StateStorage();
         if (!storage || storage->ownerThread != std::this_thread::get_id())
             return false;
-        for (const auto &record : storage->records)
-            if (record.use_count() != 1 || record->retained || record->snapshot.error)
-                return false;
-        return true;
+        return std::ranges::all_of(storage->records, [](const auto &record) {
+            return record.use_count() == 1 && !record->retained && !record->snapshot.error;
+        });
     }
 
     /** @copydoc UiAsyncActionStore::PrepareReplacementSource */
@@ -383,7 +383,7 @@ namespace Horo::Runtime::Ui {
         storage->owner = owner;
         storage->lastRequestSequence = previousRequest;
         storage->active = true;
-        for (auto &record : storage->records) {
+        for (const auto &record : storage->records) {
             record->snapshot = {};
             record->cancelled.store(false);
         }
@@ -395,7 +395,7 @@ namespace Horo::Runtime::Ui {
         if (!storage || storage->ownerThread != std::this_thread::get_id())
             return 0;
         std::size_t drained{};
-        for (auto &record : storage->records) {
+        for (const auto &record : storage->records) {
             if (record.use_count() == 1 && !record->retained && record->snapshot.error) {
                 record->snapshot.error.reset();
                 ++drained;

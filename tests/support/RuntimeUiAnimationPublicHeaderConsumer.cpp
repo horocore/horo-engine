@@ -44,6 +44,14 @@ static_assert(!std::is_copy_constructible_v<UiAnimationOwner::Prepared>);
 static_assert(std::is_nothrow_move_constructible_v<UiAnimationOwner::Prepared>);
 static_assert(std::is_nothrow_copy_constructible_v<UiAnimationFrameLease>);
 
+using ReloadSignature = Horo::Result<UiAnimationReloadResult> (UiAnimationOwner::*)(UiReloadGeneration, UiElementSlotAllocator &,
+                                                                                    RuntimeStyleRegistry, UiStyleResolver,
+                                                                                    UiAnimationCanvasDefinition,
+                                                                                    const UiAnimationReloadAdmission &,
+                                                                                    const Horo::CancellationToken &);
+static_assert(std::is_same_v<decltype(&UiAnimationOwner::Reload), ReloadSignature>);
+static_assert(std::is_same_v<decltype(std::declval<const RuntimeStyleRegistry &>().BeginRetirement()), Horo::Result<void>>);
+
 int main() {
     return UiPlaybackRate{}.IsValid() ? 0 : 1;
 }

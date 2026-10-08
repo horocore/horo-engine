@@ -45,8 +45,8 @@ namespace Horo::Runtime::Ui::AnimationInternal {
         const auto catalog = canvas.routes->Definitions();
         for (std::size_t index = 0; index < definition.routes.size(); ++index) {
             const auto &binding = definition.routes[index];
-            const auto prior = std::span(definition.routes).first(index);
-            if (!binding.route.IsValid() || !binding.root.IsValid() || (!binding.enter && !binding.exit) ||
+            if (const auto prior = std::span(definition.routes).first(index);
+                !binding.route.IsValid() || !binding.root.IsValid() || (!binding.enter && !binding.exit) ||
                 binding.maximumWait.nanoseconds <= 0 || std::ranges::find(catalog, binding.route, &UiRouteMetadata::id) == catalog.end() ||
                 std::ranges::find(prior, binding.route, &UiAnimationRouteBinding::route) != prior.end())
                 return Result<void>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
