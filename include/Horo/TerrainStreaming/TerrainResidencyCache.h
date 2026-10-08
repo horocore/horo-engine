@@ -145,8 +145,20 @@ namespace Horo::Terrain {
             std::optional<WorldStreaming::SharedAssetRetirement> retirement;
         };
 
+        /** @brief Only the validated Create path may issue this allocation key. */
+        class ConstructionKey final {
+            ConstructionKey() = default;
+            friend class TerrainResidencyCache;
+        };
+
+    public:
+        /** @brief Constructs prevalidated bounded storage through Create's private allocation key.
+         * @param owner Validated cache lifetime. @param authority Admitted borrowed WST authority.
+         * @param limits Validated finite metadata limits. @param key Private evidence of factory admission. */
         TerrainResidencyCache(TerrainResidencyOwnerId owner, WorldStreaming::StreamingFeatureBudgetReservations &authority,
-                              TerrainResidencyLimits limits);
+                              TerrainResidencyLimits limits, ConstructionKey key);
+
+    private:
         [[nodiscard]] Result<void> ValidateAdmission(const TerrainResidencyKey &key, TerrainResidencyRetention retention) const;
         [[nodiscard]] bool HasLease(const TerrainResidencyLease &lease) const noexcept;
         TerrainResidencyOwnerId owner_;

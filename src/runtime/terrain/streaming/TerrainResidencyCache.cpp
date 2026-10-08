@@ -16,8 +16,9 @@ namespace Horo::Terrain {
         return std::get<FoliageClusterId>(payload).IsValid();
     }
 
+    /** @copydoc TerrainResidencyCache::TerrainResidencyCache */
     TerrainResidencyCache::TerrainResidencyCache(TerrainResidencyOwnerId owner, WST::StreamingFeatureBudgetReservations &authority,
-                                                 TerrainResidencyLimits limits)
+                                                 TerrainResidencyLimits limits, ConstructionKey)
         : owner_(owner), authority_(authority), budgetOwner_(authority.Context().owner), limits_(limits) {
         entries_.reserve(limits.entries);
         leases_.reserve(limits.leases);
@@ -38,7 +39,7 @@ namespace Horo::Terrain {
         if (authority.State() != WST::StreamingSchedulerAdmissionState::Accepting)
             return Result<std::unique_ptr<TerrainResidencyCache>>::Failure(MakeError(TerrainErrors::LifecycleUnavailable));
         return Result<std::unique_ptr<TerrainResidencyCache>>::Success(
-            std::unique_ptr<TerrainResidencyCache>{new TerrainResidencyCache{owner, authority, limits}});
+            std::make_unique<TerrainResidencyCache>(owner, authority, limits, ConstructionKey{}));
     }
 
     /** @brief Validates local admission before touching the canonical WST authority. */
@@ -90,7 +91,7 @@ namespace Horo::Terrain {
         if (realized.HasError())
             return Result<TerrainResidencyLease>::Failure(realized.ErrorValue());
         TerrainResidencyLease lease{owner_, nextAccess_, key, retention, realized.Value()};
-        entries_.push_back({key, allocation, cost, lease.budget.charge, std::move(payload), nextAccess_++, 1, std::nullopt});
+        entries_.emplace_back(key, allocation, cost, lease.budget.charge, std::move(payload), nextAccess_++, 1, std::nullopt);
         leases_.push_back(lease);
         cpuBytes_ += cpu;
         return Result<TerrainResidencyLease>::Success(lease);
@@ -158,10 +159,11 @@ namespace Horo::Terrain {
     Result<void> TerrainResidencyCache::Release(const TerrainResidencyLease &lease) {
         if (!HasLease(lease))
             return Result<void>::Failure(MakeError(TerrainErrors::GenerationStale));
-        const bool lastReader = std::ranges::none_of(leases_, [&](const TerrainResidencyLease &other) {
+        if (const bool lastReader = std::ranges::none_of(leases_,
+                                                         [&](const TerrainResidencyLease &other) {
             return other.reader != lease.reader && other.budget == lease.budget;
         });
-        if (lastReader) {
+            lastReader) {
             const auto released = authority_.ReleaseShared(authority_.Context(), lease.budget);
             if (released.HasError())
                 return released;
@@ -192,8 +194,7 @@ namespace Horo::Terrain {
                 oldest->retirement = retiring.Value();
                 std::vector<std::uint8_t>{}.swap(oldest->payload);
             }
-            const auto retired = authority_.AcknowledgeSharedRetired(authority_.Context(), *oldest->retirement);
-            if (retired.HasError())
+            if (const auto retired = authority_.AcknowledgeSharedRetired(authority_.Context(), *oldest->retirement); retired.HasError())
                 return Result<TerrainResidencyEviction>::Failure(retired.ErrorValue());
             const auto bytes = oldest->cost.Value(WST::StreamingBudgetDimension::CpuResidentBytes).Value();
             cpuBytes_ -= bytes;
