@@ -41,8 +41,9 @@ namespace Horo::Runtime::Ui {
          * @brief Closes admission and retires process data only after every native/result lease drains.
          * @return Success, or typed storage-exhausted evidence while dependent owners are still alive.
          * @pre Called by the host at its shutdown safe point, never from frame execution.
+         * @details Retires shared runtime state while retaining this owner lease. Const does not permit concurrent shutdown.
          */
-        [[nodiscard]] Result<void> Shutdown();
+        [[nodiscard]] Result<void> Shutdown() const;
         /** @brief Checks admission. @return Whether new preparation is available. */
         [[nodiscard]] bool IsActive() const noexcept;
 

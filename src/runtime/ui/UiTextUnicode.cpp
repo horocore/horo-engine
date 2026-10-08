@@ -180,7 +180,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiTextUnicodeRuntime::Shutdown */
-    Result<void> UiTextUnicodeRuntime::Shutdown() {
+    Result<void> UiTextUnicodeRuntime::Shutdown() const {
         Close();
         if (!storage_ || !storage_->initialized)
             return Result<void>::Success();
@@ -370,7 +370,7 @@ namespace Horo::Runtime::Ui {
         try {
             if (const auto decoded = storage_->Decode(slot, text); decoded.HasError())
                 return Result<UiTextUnicodeAnalysis>::Failure(decoded.ErrorValue());
-            if (const auto prepared = storage_->Prepare(slot, locale, direction); prepared.HasError())
+            if (const auto prepared = Storage::Prepare(slot, locale, direction); prepared.HasError())
                 return Result<UiTextUnicodeAnalysis>::Failure(prepared.ErrorValue());
             slot.text.assign(text);
             slot.content = content;
