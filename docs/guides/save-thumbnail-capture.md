@@ -42,7 +42,10 @@ with the production `SaveArchiveContainerWriter`, and then crosses the existing
 storage commit gate before provider publication. Product/environment and client
 user/profile must match the supplied namespace binding. Required capture failure
 is rejected before worker/provider dispatch; preparation failure is NotCommitted.
-Optional omission clears the reference and builds a normal valid save. Catalog
+Optional omission clears the reference and builds a normal valid save. If optional
+presentation exceeds archive byte/entry or storage byte limits, preparation retries
+the logical archive without presentation; Required presentation still fails.
+The finalized catalog reference records whether the image was retained. Catalog
 metadata carries the exact final ArchiveContentHash; invalid display UTF-8 is
 omitted. No hashing, file I/O or waiting runs on the owner/render thread.
 

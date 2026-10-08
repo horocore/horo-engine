@@ -62,6 +62,18 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
+        /** @brief Preserves the logical archive when only an optional presentation attachment exceeds limits. */
+        [[nodiscard]] auto FinalizePresentationArchive(const SavePresentationArchiveInput &input, const SaveManifest &manifest,
+                                                       const std::vector<PreservedSaveChunk> &chunks,
+                                                       SaveSlotPublicationMetadata &publication) {
+            auto finalized = SaveArchiveContainerWriter::Write(input.header, manifest, chunks, input.version, input.limits);
+            if (finalized.HasError() && input.capture.artifact && input.capture.request->policy == SaveThumbnailPolicy::Optional) {
+                finalized = SaveArchiveContainerWriter::Write(input.header, input.manifest, input.chunks, input.version, input.limits);
+                publication.thumbnail.reset();
+            }
+            return finalized;
+        }
+
         /** @brief Admits only exact optional schema-1 raw records before selecting their payloads. */
         [[nodiscard]] bool ValidRecords(const ValidatedSaveArchive &archive, const SaveManifestParticipant &owner,
                                         const SaveThumbnailLimits &limits) {
@@ -102,7 +114,7 @@ namespace Horo::Runtime {
                     return chunk.entry.record;
                 });
             }
-            auto finalized = SaveArchiveContainerWriter::Write(input.header, manifest, chunks, input.version, input.limits);
+            auto finalized = FinalizePresentationArchive(input, manifest, chunks, publication);
             if (finalized.HasError())
                 return Return::Failure(finalized.ErrorValue());
             publication.archiveContent = finalized.Value().Summary().integrity.archiveContent;

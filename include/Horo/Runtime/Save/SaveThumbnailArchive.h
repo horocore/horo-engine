@@ -29,7 +29,8 @@ namespace Horo::Runtime {
 
     /** @brief Finalizes existing v1/v2 framing with optional raw presentation records and exact catalog metadata.
      * @param input Bounded owned logical input and terminal capture. Encoding/hashing runs on a worker.
-     * @return Finalized write or typed error before provider/commit admission. Omitted optional capture still builds a valid save.
+     * @return Finalized write or typed error before provider/commit admission. Optional presentation is omitted if only
+     * its attachment prevents the logical archive from satisfying the supplied limits; Required presentation still fails.
      * @details The reserved owner is optional, schema 1, and excluded from logical state/restore. Old readers preserve it
      * as unknown optional data; only an explicit sealed drop policy may omit it. No archive/container wire version changes.
      */

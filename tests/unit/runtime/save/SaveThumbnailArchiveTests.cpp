@@ -11,7 +11,8 @@ namespace Horo::Runtime {
         using namespace ArchiveReaderTest;
 
         /** @brief Produces detached logical input and terminal thumbnail evidence using production capture. */
-        [[nodiscard]] SavePresentationArchiveInput Input(const bool captured = true, const std::uint32_t version = 1) {
+        [[nodiscard]] SavePresentationArchiveInput Input(const bool captured = true, const std::uint32_t version = 1,
+                                                         const SaveThumbnailPolicy policy = SaveThumbnailPolicy::Optional) {
             auto fixture = MakeArchiveWithUnknown(false);
             auto archive = SaveArchiveReader{}.Read(fixture.bytes).Value();
             SavePresentationArchiveInput input{.header = archive.Header(),
@@ -29,6 +30,7 @@ namespace Horo::Runtime {
             SaveThumbnailRequest request{.slot = input.header.slot,
                                          .generation = input.header.slotGeneration,
                                          .thumbnail = Id<SaveThumbnailId>(6),
+                                         .policy = policy,
                                          .source = {.runtime = 1, .scene = 2, .view = 3, .frame = 10}};
             SaveThumbnailCapture capture;
             const auto serial =
@@ -126,6 +128,70 @@ namespace Horo::Runtime {
                 REQUIRE(std::ranges::count(unknown.Value().preserved, SaveThumbnailArchiveOwner(), [](const PreservedSaveChunk &chunk) {
                     return chunk.entry.owner;
                 }) == 2);
+            }
+        }
+
+        TEST_CASE("Optional presentation yields archive capacity to valid logical state", "[unit][save][thumbnail][archive]") {
+            for (const auto version : {1U, 2U}) {
+                const auto logical = PrepareSavePresentationWrite(Input(false, version)).Value();
+                for (const auto policy : {SaveThumbnailPolicy::Optional, SaveThumbnailPolicy::Required}) {
+                    for (const auto byteBudget : {false, true}) {
+                        auto input = Input(true, version, policy);
+                        if (byteBudget)
+                            input.limits.maximumArchiveBytes = logical.archive.bytes->size();
+                        else
+                            input.limits.maximumEntries = input.chunks.size() + 2;
+                        const auto prepared = PrepareSavePresentationWrite(input);
+                        if (policy == SaveThumbnailPolicy::Required) {
+                            REQUIRE(prepared.HasError());
+                            continue;
+                        }
+                        REQUIRE(prepared.HasValue());
+                        REQUIRE_FALSE(prepared.Value().metadata.publication.thumbnail);
+                        REQUIRE(prepared.Value().metadata.publication.canonicalState == input.manifest.canonicalState);
+                        REQUIRE(prepared.Value().metadata.publication.archiveContent == logical.metadata.publication.archiveContent);
+                        const auto archive = SaveArchiveReader{}.Read(prepared.Value().archive.bytes);
+                        REQUIRE(archive.HasValue());
+                        const auto thumbnail = ReadSaveThumbnail(archive.Value(), prepared.Value().metadata.publication);
+                        REQUIRE(thumbnail.HasValue());
+                        REQUIRE_FALSE(thumbnail.Value());
+                        if (byteBudget)
+                            --input.limits.maximumArchiveBytes;
+                        else
+                            --input.limits.maximumEntries;
+                        REQUIRE(PrepareSavePresentationWrite(input).HasError());
+                    }
+                }
+            }
+        }
+
+        TEST_CASE("Optional presentation yields storage byte capacity before the commit gate", "[unit][save][thumbnail][storage]") {
+            const auto logical = PrepareSavePresentationWrite(Input(false)).Value();
+            for (const auto policy : {SaveThumbnailPolicy::Optional, SaveThumbnailPolicy::Required}) {
+                JobSystem jobs({.workerCount = 1});
+                auto provider = std::make_shared<Provider>();
+                SaveStorageAdapter adapter(jobs, provider, {.maximumArchiveBytes = logical.archive.bytes->size()});
+                const auto admitted = adapter.SubmitPresentation(1, PresentationAddress(), Input(true, 1, policy));
+                REQUIRE(admitted.HasValue());
+                const auto terminal = Await(admitted.Value());
+                if (policy == SaveThumbnailPolicy::Required) {
+                    REQUIRE(terminal.state == SaveOperationState::Failed);
+                    REQUIRE(terminal.commit == SaveOperationCommitOutcome::NotCommitted);
+                    REQUIRE_FALSE(provider->Write());
+                    continue;
+                }
+                REQUIRE(terminal.state == SaveOperationState::Completed);
+                REQUIRE(terminal.commit == SaveOperationCommitOutcome::Committed);
+                const auto write = provider->Write();
+                REQUIRE(write);
+                REQUIRE_FALSE(write->metadata.publication.thumbnail);
+                REQUIRE(write->metadata.publication.archiveContent == logical.metadata.publication.archiveContent);
+                REQUIRE(write->archive.bytes->size() <= logical.archive.bytes->size());
+                const auto archive = SaveArchiveReader{}.Read(write->archive.bytes);
+                REQUIRE(archive.HasValue());
+                const auto thumbnail = ReadSaveThumbnail(archive.Value(), write->metadata.publication);
+                REQUIRE(thumbnail.HasValue());
+                REQUIRE_FALSE(thumbnail.Value());
             }
         }
 

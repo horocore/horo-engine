@@ -319,6 +319,7 @@ namespace Horo::Runtime {
             publication.thumbnail = input.capture.artifact ? std::optional{input.capture.artifact->Request().thumbnail} : std::nullopt;
             if (const auto valid = ValidateSaveThumbnailPublication(publication, input.capture); valid.HasError())
                 return Result<SaveStorageOperation>::Failure(valid.ErrorValue());
+            input.limits.maximumArchiveBytes = std::min(input.limits.maximumArchiveBytes, limits_.maximumArchiveBytes);
             auto owned = std::make_shared<const SavePresentationArchiveInput>(std::move(input));
             return SubmitRequest(operation, {.kind = SaveStorageOperationKind::Write, .source = std::move(address)}, cancellation, deadline,
                                  std::move(owned));
