@@ -61,7 +61,7 @@ namespace Horo::Runtime {
             REQUIRE(result.ErrorValue().code.Value() == descriptor.code.Value());
         }
 
-        TEST_CASE("Runtime Save diagnostics classify every canonical failure category", "[save][diagnostics]") {
+        TEST_CASE("Save command diagnostics classify typed admission rejections", "[save][diagnostics][commands]") {
             const std::array cases{
                 std::pair{&SaveErrors::CommandInvalid, SaveFailureCategory::Validation},
                 std::pair{&SaveErrors::CommandDenied, SaveFailureCategory::Lifecycle},
@@ -70,6 +70,17 @@ namespace Horo::Runtime {
                 std::pair{&SaveErrors::CommandTargetUnavailable, SaveFailureCategory::Validation},
                 std::pair{&SaveErrors::CommandIncompatible, SaveFailureCategory::Validation},
                 std::pair{&SaveErrors::CommandCooldown, SaveFailureCategory::Lifecycle},
+            };
+            for (const auto &[descriptor, expected] : cases) {
+                const auto record = Record(MakeError(*descriptor));
+                REQUIRE(record.HasValue());
+                CHECK(record.Value().Category() == expected);
+                CHECK(record.Value().Code().Value() == descriptor->code.Value());
+            }
+        }
+
+        TEST_CASE("Runtime Save diagnostics classify every canonical failure category", "[save][diagnostics]") {
+            const std::array cases{
                 std::pair{&SaveErrors::IdentityInvalid, SaveFailureCategory::Validation},
                 std::pair{&SaveErrors::VersionUnsupportedNewer, SaveFailureCategory::Compatibility},
                 std::pair{&SaveErrors::SaveRootUnavailable, SaveFailureCategory::Storage},
