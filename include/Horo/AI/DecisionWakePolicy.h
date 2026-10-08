@@ -57,7 +57,15 @@ namespace Horo::AI {
      * notifications here, then evaluates against one frozen snapshot. Worker producers must never call this object.
      */
     class DecisionWakePolicy final {
+        /** @brief Restricts construction to the validated subscription factory. */
+        class ConstructionKey final {
+            friend class DecisionWakePolicy;
+            ConstructionKey() = default;
+        };
+
     public:
+        /** @brief Creates factory-owned storage before subscription admission. @param key Factory-only construction authority. */
+        explicit DecisionWakePolicy(ConstructionKey key) noexcept;
         /**
          * @brief Validates finite metadata and subscribes each distinct compiled key at the owner safe point.
          * @param plan Immutable admitted decision bindings retained for the subscription lifetime.
@@ -142,13 +150,12 @@ namespace Horo::AI {
             bool enabled{true};
         };
 
-        DecisionWakePolicy() = default;
         /** @brief Resolves one admitted stable identity. @param node Persistent identity. @return Offset or node count. */
         [[nodiscard]] std::size_t Find(DecisionNodeId node) const noexcept;
         /** @brief Checks active blackboard/agent publication without copying a snapshot. @return Generation validity. */
         [[nodiscard]] bool Current() const noexcept;
         /** @brief Converts one already key-filtered notification to coalesced node causes. */
-        static void OnBlackboard(void *context, const BlackboardNotificationBatch &notification) noexcept;
+        static void OnBlackboard(Watch &watch, const BlackboardNotificationBatch &notification) noexcept;
         /** @brief Admits a bounded due-rule prefix and recomputes the next idle deadline. @param tick Fixed simulation time. */
         void AdmitPolling(std::uint64_t tick) noexcept;
         /** @brief Caches the earliest enabled non-exhausted cadence for constant-work idle admission. */

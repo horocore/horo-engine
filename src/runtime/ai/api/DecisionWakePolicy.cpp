@@ -5,6 +5,9 @@
 #include <new>
 
 namespace Horo::AI {
+    /** @copydoc DecisionWakePolicy::DecisionWakePolicy */
+    DecisionWakePolicy::DecisionWakePolicy(ConstructionKey) noexcept {}
+
     /** @copydoc DecisionWakeReasons::Any */
     bool DecisionWakeReasons::Any() const noexcept {
         return activation || blackboard || perception || task || polling || explicitRequest;
@@ -26,7 +29,7 @@ namespace Horo::AI {
             polling.size() > plan->Nodes().size() || perception.size() > DecisionAssetValidationHardLimits::NodesPerAsset)
             return Result<std::unique_ptr<DecisionWakePolicy>>::Failure(MakeError(AIErrors::DecisionAssetLimitExceeded));
         try {
-            auto policy = std::unique_ptr<DecisionWakePolicy>(new DecisionWakePolicy());
+            auto policy = std::make_unique<DecisionWakePolicy>(ConstructionKey{});
             policy->plan_ = std::move(plan);
             policy->blackboard_ = &blackboard;
             policy->binding_ = blackboard.Binding();
@@ -34,9 +37,13 @@ namespace Horo::AI {
             policy->cancellation_ = std::move(cancellation);
             if (const auto prepared = policy->Prepare(polling, perception); prepared.HasError())
                 return Result<std::unique_ptr<DecisionWakePolicy>>::Failure(prepared.ErrorValue());
+            // Only this ABI bridge restores the stable Watch owned until its observer token is removed.
+            const BlackboardObserverCallback callback = [](auto *context, const BlackboardNotificationBatch &notification) noexcept {
+                OnBlackboard(*static_cast<Watch *>(context), notification);
+            };
             for (auto &watch : policy->watches_) {
                 auto registered =
-                    blackboard.RegisterObserverAtBlackboardSync({policy->binding_.agent, observerOwner, watch.key, OnBlackboard, &watch});
+                    blackboard.RegisterObserverAtBlackboardSync({policy->binding_.agent, observerOwner, watch.key, callback, &watch});
                 if (registered.HasError())
                     return Result<std::unique_ptr<DecisionWakePolicy>>::Failure(registered.ErrorValue());
                 watch.token = std::move(registered).Value();
@@ -120,8 +127,7 @@ namespace Horo::AI {
     }
 
     /** @copydoc DecisionWakePolicy::OnBlackboard */
-    void DecisionWakePolicy::OnBlackboard(void *context, const BlackboardNotificationBatch &notification) noexcept {
-        auto &watch = *static_cast<Watch *>(context);
+    void DecisionWakePolicy::OnBlackboard(Watch &watch, const BlackboardNotificationBatch &notification) noexcept {
         if (!watch.owner->Current() || notification.Binding() != watch.owner->binding_)
             return;
         for (const auto node : watch.nodes)
