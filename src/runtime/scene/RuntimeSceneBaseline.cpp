@@ -94,34 +94,37 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeScene::BindBaselineReferences */
     Result<void> RuntimeScene::BindBaselineReferences(RuntimeSceneStorage &storage, const BaselineAttachment &baseline) const {
+        const auto bind = [this, &storage, &baseline](std::vector<ResolvedGroupPhysicsBodyReference> &references,
+                                                      const GroupPhysicsReferenceKind kind, const std::size_t occurrence,
+                                                      const PhysicsBodyReference source) {
+            const auto target = std::ranges::find_if(baseline.entities, [&storage, &source](const EntityId candidate) {
+                return storage.slots[candidate.index].authoredObject == source.object;
+            });
+            if (target == baseline.entities.end())
+                return Result<void>::Failure(MakeError(SceneErrors::BaselineInvalid));
+            if (const auto &body = storage.slots[target->index].components.rigidBody; !body || !body->enabled || body->body != source.body)
+                return Result<void>::Failure(MakeError(SceneErrors::BaselineInvalid));
+            references.push_back({kind, occurrence, {runtimeId_, *target}, source.body});
+            return Result<void>::Success();
+        };
         for (const auto entity : baseline.entities) {
             auto &slot = storage.slots[entity.index];
             std::vector<ResolvedGroupPhysicsBodyReference> references;
-            const auto bind = [&](const GroupPhysicsReferenceKind kind, const std::size_t occurrence, const PhysicsBodyReference source) {
-                const auto target = std::ranges::find_if(baseline.entities, [&](const EntityId candidate) {
-                    return storage.slots[candidate.index].authoredObject == source.object;
-                });
-                if (target == baseline.entities.end())
-                    return Result<void>::Failure(MakeError(SceneErrors::BaselineInvalid));
-                if (const auto &body = storage.slots[target->index].components.rigidBody;
-                    !body || !body->enabled || body->body != source.body)
-                    return Result<void>::Failure(MakeError(SceneErrors::BaselineInvalid));
-                references.push_back({kind, occurrence, {runtimeId_, *target}, source.body});
-                return Result<void>::Success();
-            };
             for (std::size_t index = 0; index < slot.components.colliders.size(); ++index) {
-                if (const auto valid = bind(GroupPhysicsReferenceKind::ColliderBody, index, slot.components.colliders[index].body);
+                if (const auto valid =
+                        bind(references, GroupPhysicsReferenceKind::ColliderBody, index, slot.components.colliders[index].body);
                     valid.HasError())
                     return valid;
             }
             for (std::size_t index = 0; index < slot.components.physicsConstraints.size(); ++index) {
                 const auto &constraint = slot.components.physicsConstraints[index];
-                if (const auto valid = bind(GroupPhysicsReferenceKind::ConstraintFirst, index, constraint.first.body); valid.HasError())
+                if (const auto valid = bind(references, GroupPhysicsReferenceKind::ConstraintFirst, index, constraint.first.body);
+                    valid.HasError())
                     return valid;
                 const auto *second = std::get_if<PhysicsConstraintBodyEndpoint>(&constraint.second);
                 if (!second)
                     continue;
-                if (const auto valid = bind(GroupPhysicsReferenceKind::ConstraintSecond, index, second->body); valid.HasError())
+                if (const auto valid = bind(references, GroupPhysicsReferenceKind::ConstraintSecond, index, second->body); valid.HasError())
                     return valid;
             }
             if (!references.empty())
