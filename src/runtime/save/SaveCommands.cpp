@@ -139,16 +139,17 @@ namespace Horo::Runtime {
 
     /** @copydoc SaveCommands::ValidateTarget */
     Result<void> SaveCommands::ValidateTarget(const SaveCommandTarget &target) const {
+        using enum SaveSlotKind;
         const auto *entry = Entry(host_->catalog, target.slot);
         if (Loads(target.kind)) {
             if (!entry)
                 return Result<void>::Failure(MakeError(SaveErrors::CommandTargetUnavailable));
-            if (target.kind == SaveCommandKind::QuickLoad && entry->publication.kind != SaveSlotKind::Quick)
+            if (target.kind == SaveCommandKind::QuickLoad && entry->publication.kind != Quick)
                 return Result<void>::Failure(MakeError(SaveErrors::CommandTargetUnavailable));
             return ValidateLoadAssessment(host_->assessments, target);
         }
-        const SaveSlotKind kind = target.kind == SaveCommandKind::QuickSave ? SaveSlotKind::Quick : SaveSlotKind::Manual;
-        if ((kind == SaveSlotKind::Manual && host_->quickSlot == target.slot) || (entry && entry->publication.kind != kind))
+        const SaveSlotKind kind = target.kind == SaveCommandKind::QuickSave ? Quick : Manual;
+        if ((kind == Manual && host_->quickSlot == target.slot) || (entry && entry->publication.kind != kind))
             return Result<void>::Failure(MakeError(SaveErrors::CommandTargetUnavailable));
         const auto count = std::ranges::count_if(host_->catalog.entries, [kind](const auto &candidate) {
             return candidate.publication.kind == kind;
