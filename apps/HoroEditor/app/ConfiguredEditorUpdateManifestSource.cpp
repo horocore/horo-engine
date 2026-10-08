@@ -138,8 +138,8 @@ namespace Horo::Editor {
         ManifestResponse response{std::move(handle), cancellation};
         if (curl == nullptr)
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
-        // Select the TLS floor before configuring any request option. libcurl expects a long here.
-        if (curl_easy_setopt(curl, CURLOPT_SSLVERSION, static_cast<long>(CURL_SSLVERSION_TLSv1_3)) != CURLE_OK)
+        // Select the TLS floor before any request option. The pinned libcurl supplies a long-valued flag.
+        if (curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK)
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
         if (!response.Configure(url, policy))
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
