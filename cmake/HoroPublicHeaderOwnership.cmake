@@ -809,6 +809,9 @@ horo_configure_target_header_boundary(HoroTerrainCook PUBLIC_HEADERS
     Horo/Terrain/FoliagePlacementCook.h
     Horo/Terrain/TerrainTileCook.h
 )
+horo_configure_target_header_boundary(HoroTerrainStreaming PUBLIC_HEADERS
+    Horo/TerrainStreaming/TerrainResidencyCache.h
+)
 horo_configure_target_header_boundary(HoroTerrainRuntime PUBLIC_HEADERS
     Horo/Terrain/TerrainAsyncJobs.h
 )

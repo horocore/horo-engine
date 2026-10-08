@@ -991,3 +991,28 @@ Required coverage includes:
 - [ADR-143](../../adr/143-terrain-foliage-scale-budgets-observability-and-feature-boundary.md):
   core/high-end scale, memory, streaming, cook, editor and headless gates, required
   observability and core-1.0 versus post-1.0 recipe qualification
+
+## Current TRF-002.6 Residency Integration
+
+The host-composed `HoroTerrainStreaming` adapter implements TerrainRuntime-owned
+neutral CPU residency using `TerrainResidencyCache`. It depends on TerrainApi and
+WorldStreaming directly, leaving the core Terrain API independent of the streaming
+integration. Accepted candidates must already have trusted manifest validation and
+WST peak admission. The cache transfers a new allocation's complete CPU charge
+through `RealizeShared`; exact cache hits resolve only an explicit reuse portion.
+
+Each exact runtime/content/capability/tile-or-cluster key owns one immutable prepared
+CPU buffer. Nonzero complete cost includes the owned buffer capacity; unknown cost
+and native/GPU cost cannot enter this CPU cache. Entry and consumer storage have
+finite preallocated limits. Every retention kind prevents eviction, including jobs,
+replacement candidates and snapshots. Cancellation and shutdown fence new admission
+without pretending readers have finished. Durable foliage state cannot be stored
+as disposable payloads.
+
+WST requests bounded pressure work toward a CPU charge target. Accepted access order
+provides deterministic local LRU selection among unleased entries; cache misses and
+failed admissions do not affect order. Unreachable targets preserve pinned entries
+and report pressure. Eviction destroys the owned buffer before acknowledging exact
+WST retirement, so old/new generations and unleased cache entries stay charged until
+actual release. This adapter owns no global scheduler, native lifecycle or cell
+commit, and performs no I/O or frame-hot allocations after construction.

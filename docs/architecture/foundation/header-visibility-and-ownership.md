@@ -1543,3 +1543,33 @@ public dependency now includes SceneCellPayload. This adapter dependency does no
 expose Physics-private/native types or add streaming dependencies to Physics kernels.
 Consumer coverage includes the SceneCellPayload and PhysicsSceneIntegration staged
 header surfaces. Migration is recorded in the cell attachment manifest guide.
+
+## TRF-002.6 Migration Notes
+
+`TerrainStreaming/TerrainResidencyCache.h` belongs exclusively to the new
+`HoroTerrainStreaming` (`HoroEngine::TerrainStreaming`) integration target.
+It joins Terrain identity contracts with the canonical World Streaming feature
+reservation authority. TerrainApi and TerrainRuntime retain their existing
+header dependencies; hosts opt into the integration target explicitly.
+
+There are no existing cache callers or serialized formats to migrate. Hosts issue
+a unique `TerrainResidencyOwnerId`, compose one address-stable WST authority, and
+reserve the candidate peak before allocating validated neutral CPU payloads.
+`Insert` transfers payload ownership only on success; `Acquire` takes an exact
+revision and explicit reuse peak portion. Every cell, worker, snapshot, replacement
+and consumer reader retains a bounded local lease until dependent work retires.
+Readers for the same exact WST cell consumer share one authority lease until the
+last local reader retires; their distinct local tokens prevent duplicate release.
+A repeated local reader uses zero reuse peak rather than consuming a peak twice. Metadata
+storage is preallocated at creation and belongs to host composition overhead;
+physical payload capacity is covered by the exact CPU charge. Other resource axes
+and durable foliage state remain with their own owners.
+
+Pressure handling calls bounded `EvictTo` with a WST-selected CPU target. The local
+LRU never changes cell demand or global priority. A pinned or work-limited result
+reports `targetReached == false`; the host routes remaining pressure to WST.
+Shutdown closes admission, preserves all readers and charges, then drains releases
+and eviction before destroying the cache or authority. Cancellation does not revoke
+accepted readers; exact old/new payload revisions coexist only within reserved
+peaks and retire independently. The public-header consumer verifies the target's
+staged dependency surface without broad source/include paths.
