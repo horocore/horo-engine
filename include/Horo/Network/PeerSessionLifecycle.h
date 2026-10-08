@@ -1,4 +1,5 @@
 #pragma once
+#include "Horo/Network/NetworkDebugger.h"
 
 /**
  * @file PeerSessionLifecycle.h
@@ -88,10 +89,12 @@ namespace Horo::Network {
          * @param sessionGeneration Non-zero gameplay session generation.
          * @param deadlines Ordered positive absolute deadlines and finite inactivity window.
          * @param metrics Optional owner-thread observer; host must keep it alive beyond this lifecycle.
+         * @param debugger Optional owner-thread diagnostics collector; host retains it beyond this lifecycle.
          * @return Prepared lifecycle or typed malformed failure.
          */
         [[nodiscard]] static Result<PeerSessionLifecycle> Create(ConnectionHandle connection, NetworkOperationGeneration sessionGeneration,
-                                                                 const PeerSessionDeadlines &deadlines, NetworkMetrics *metrics = nullptr);
+                                                                 const PeerSessionDeadlines &deadlines, NetworkMetrics *metrics = nullptr,
+                                                                 NetworkDebugger *debugger = nullptr);
 
         /** @brief Enters negotiation. @return Success or typed stale/state/timeout failure. */
         [[nodiscard]] Result<void> BeginNegotiation(ConnectionHandle connection, NetworkOperationGeneration sessionGeneration,
@@ -166,7 +169,7 @@ namespace Horo::Network {
 
     private:
         PeerSessionLifecycle(ConnectionHandle connection, NetworkOperationGeneration sessionGeneration,
-                             const PeerSessionDeadlines &deadlines, NetworkMetrics *metrics) noexcept;
+                             const PeerSessionDeadlines &deadlines, NetworkMetrics *metrics, NetworkDebugger *debugger) noexcept;
         [[nodiscard]] bool Owns(ConnectionHandle connection, NetworkOperationGeneration sessionGeneration) const noexcept;
         [[nodiscard]] Result<void> MutableOperation(ConnectionHandle connection, NetworkOperationGeneration sessionGeneration) const;
         [[nodiscard]] Result<void> PublishTerminal(PeerSessionTerminalKind kind, std::uint64_t nowTick,
@@ -186,5 +189,8 @@ namespace Horo::Network {
         CloseReasonId pendingCloseReason_{};
         PeerSessionState state_{PeerSessionState::Created};
         NetworkMetrics *metrics_{};
+        NetworkDebugger *debugger_{};
+        NetworkDiagnosticSource diagnosticSource_{};
+        void ObserveDiagnostic() const noexcept;
     };
 }  // namespace Horo::Network

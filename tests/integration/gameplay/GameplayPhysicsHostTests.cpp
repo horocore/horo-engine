@@ -349,4 +349,177 @@ TEST_CASE("World failure invalidates retained clients and batches while world st
     runtime.reset();
     jobs.Shutdown(ShutdownPolicy::Cancel);
 }
+
+namespace {
+    using namespace Horo::Character;
+
+    /** @brief Owns the production Gameplay capability and Character stance geometry for clearance tests. */
+    struct StanceClearanceFixture final {
+        std::unique_ptr<PhysicsRuntime> runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+        std::unique_ptr<Runtime::RuntimeScene> scene = Scene();
+        std::unique_ptr<PhysicsWorld> physics = World(*runtime, 1);
+        std::unique_ptr<GameplayWorldComposition> gameplay = GameplayWorldComposition::Create(*scene, physics.get(), 1, Native()).Value();
+        PhysicsQueryChannelId channel = PhysicsQueryChannelId::Parse("12345678-1234-4234-8234-123456789abc").Value();
+        CollisionProfileId profile = CollisionProfileId::Parse("12345678-1234-4234-8234-123456789abd").Value();
+        CollisionLayerId layer = CollisionLayerId::Parse("12345678-1234-4234-8234-123456789abc").Value();
+        PhysicsQueryFixture floor = Fixture(PhysicsBoxShape{{5, 0.25F, 5}}, {0, -0.27F, 0});
+        PhysicsQueryFixture ceiling = Fixture(PhysicsBoxShape{{5, 0.25F, 5}}, {0, 2.5F, 0});
+        std::unique_ptr<CharacterWorld> character =
+            CharacterWorld::Prepare({1, physics->Identity(), 1, 1, physics->PublishedTick().publicationRevision},
+                                    CharacterWorldSettings::Capture({}).Value())
+                .Value();
+        CharacterControllerHandle handle;
+
+        StanceClearanceFixture() {
+            CharacterControllerDescriptor descriptor;
+            descriptor.sceneGeneration = 1;
+            descriptor.characterWorld = character->Descriptor().identity;
+            descriptor.physicsWorld = physics->Identity();
+            descriptor.collisionRootPosition = {0, 1, 0};
+            descriptor.collisionProfile = profile;
+            descriptor.queryChannel = channel;
+            descriptor.crouchedCapsule = PhysicsCapsuleShape{0.5F, 0.25F};
+            descriptor.defaultMaterial = {Assets::AssetId::Parse("12345678-1234-4234-8234-123456789abc").Value(), 1,
+                                          PhysicsMaterialSlotId::FromValue(1)};
+            handle = character->CreateController(descriptor).Value();
+            REQUIRE(character->Activate().HasValue());
+            auto query = Clearance(0).Value();
+            const auto spawned = character->SpawnController(handle, query.Context());
+            if (spawned.HasError())
+                UNSCOPED_INFO(spawned.ErrorValue().message);
+            REQUIRE(spawned.HasValue());
+        }
+
+        PhysicsQueryFixture Fixture(const PhysicsQueryFixtureShape &shape, const Math::Vec3 position) {
+            return physics
+                ->CreateQueryFixture({.shape = shape,
+                                      .pose = {.translation = position, .rotation = Math::Quaternion::Identity()},
+                                      .layer = layer,
+                                      .profile = profile,
+                                      .channel = channel,
+                                      .response = PhysicsQueryFixtureResponse::Block})
+                .Value();
+        }
+
+        Result<CharacterClearanceQuery> Clearance(const std::uint64_t tick) {
+            const auto &world = character->Descriptor();
+            return gameplay->PhysicsContext()->AcquireCharacterClearance("game.tests", 7,
+                                                                         {world.sceneGeneration, world.identity, world.physicsWorld,
+                                                                          world.collisionFilterGeneration, world.originGeneration, tick,
+                                                                          physics->PublishedTick().publicationRevision});
+        }
+
+        Result<void> Advance(const std::uint64_t tick, const CharacterStanceIntent stance) {
+            REQUIRE(character->RefreshPhysicsSnapshot(physics->Identity(), physics->PublishedTick().publicationRevision).HasValue());
+            REQUIRE(character->QueueMovementCommand({.controller = handle, .tick = tick, .sequence = tick, .stance = stance}).HasValue());
+            auto query = Clearance(tick).Value();
+            const auto advanced = character->AdvanceFixedTick(
+                {.tick = tick, .sceneGeneration = 1, .fixedDelta = Duration::FromNanoseconds(16'666'667), .query = query.Context()});
+            if (advanced.HasError())
+                UNSCOPED_INFO(advanced.ErrorValue().message);
+            return advanced;
+        }
+
+        void ReplaceCeiling(const float height) {
+            REQUIRE(physics->DestroyQueryFixture(ceiling).HasValue());
+            ceiling = Fixture(PhysicsBoxShape{{5, 0.25F, 5}}, {0, height, 0});
+        }
+
+        void RequireRepeatedBlockedStand() {
+            for (std::uint64_t tick = 2; tick <= 8; ++tick) {
+                REQUIRE(Advance(tick, CharacterStanceIntent::Stand).HasValue());
+                const auto snapshot = character->ControllerLocomotionSnapshot(handle).Value();
+                REQUIRE(snapshot.movement.shapeChange->status == CharacterShapeChangeStatus::Blocked);
+                REQUIRE(snapshot.stance == CharacterStance::Crouched);
+                REQUIRE(snapshot.transform.position.y == 0.75F);
+            }
+        }
+
+        void RequireRetiredAttempt(CharacterClearanceQuery &retained) {
+            REQUIRE(
+                character->QueueMovementCommand({.controller = handle, .tick = 11, .sequence = 11, .stance = CharacterStanceIntent::Crouch})
+                    .HasValue());
+            REQUIRE(character
+                        ->AdvanceFixedTick({.tick = 11,
+                                            .sceneGeneration = 1,
+                                            .fixedDelta = Duration::FromNanoseconds(16'666'667),
+                                            .query = retained.Context()})
+                        .HasError());
+            REQUIRE(character->PublishedTick().completedTick == 10);
+            REQUIRE(character->ControllerTransform(handle).Value().position.y == 1.0F);
+            character->Shutdown();
+            gameplay->Shutdown();
+            if (physics->State() == PhysicsWorldState::ActiveSolver) {
+                REQUIRE(physics->DestroyQueryFixture(ceiling).HasValue());
+                REQUIRE(physics->DestroyQueryFixture(floor).HasValue());
+            }
+        }
+    };
+}  // namespace
+
+TEST_CASE("Gameplay-authorized canonical clearance preserves Character feet beneath a moving ceiling", "[gameplay-physics][host][stance]") {
+    StanceClearanceFixture fixture;
+    auto &character = fixture.character;
+    const auto handle = fixture.handle;
+    REQUIRE(fixture.Advance(1, CharacterStanceIntent::Crouch).HasValue());
+    REQUIRE(character->ControllerTransform(handle).Value().position.y == 0.75F);
+    fixture.ReplaceCeiling(1.85F);
+    fixture.RequireRepeatedBlockedStand();
+    fixture.ReplaceCeiling(2.5F);
+    REQUIRE(fixture.Advance(9, CharacterStanceIntent::Stand).HasValue());
+    REQUIRE(character->ControllerTransform(handle).Value().position.y == 1.0F);
+    REQUIRE(character->ControllerLocomotionSnapshot(handle).Value().stance == CharacterStance::Standing);
+    fixture.ReplaceCeiling(1.5F);
+    REQUIRE(fixture.Advance(10, CharacterStanceIntent::Crouch).HasValue());
+    REQUIRE(character->ControllerLocomotionSnapshot(handle).Value().movement.shapeChange->status == CharacterShapeChangeStatus::Blocked);
+    REQUIRE(character->ControllerTransform(handle).Value().position.y == 1.0F);
+    fixture.ReplaceCeiling(2.5F);
+    // A retained production adapter must fail before resized publication on retirement.
+    auto retained = fixture.Clearance(11).Value();
+    SECTION("module retirement") {
+        fixture.gameplay->Shutdown();
+    }
+    SECTION("Physics world shutdown") {
+        fixture.physics->Shutdown();
+    }
+    SECTION("stale Physics publication") {
+        REQUIRE(fixture.physics
+                    ->AdvanceFixedTick({.simulationTick = 2, .sceneGeneration = 1, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                    .HasValue());
+    }
+    fixture.RequireRetiredAttempt(retained);
+}
+
+TEST_CASE("Production Character clearance applies typed selectors before blocker reduction", "[gameplay-physics][host][stance]") {
+    StanceClearanceFixture fixture;
+    auto query = fixture.Clearance(1).Value();
+    const auto context = query.Context();
+    const auto &world = fixture.character->Descriptor();
+    Horo::Character::CharacterOverlapProbeRequest request{.controller = fixture.handle,
+                                                          .sceneGeneration = world.sceneGeneration,
+                                                          .characterWorld = world.identity,
+                                                          .physicsWorld = world.physicsWorld,
+                                                          .capsule = {0.5F, 0.5F},
+                                                          .position = {0, 1.85F, 0},
+                                                          .up = {0, 1, 0},
+                                                          .collisionProfile = fixture.profile,
+                                                          .queryChannel = fixture.channel};
+    const auto blocked = context.overlap(context.context, request);
+    REQUIRE(blocked.HasValue());
+    REQUIRE(blocked.Value().overlapCount == 1);
+    REQUIRE(blocked.Value().recoveryDisplacement == Math::Vec3{});
+    SECTION("layer selector") {
+        request.selectors.requiredLayer = CollisionLayerId::Parse("22345678-1234-4234-8234-123456789abc").Value();
+    }
+    SECTION("profile selector") {
+        request.selectors.requiredProfile = CollisionProfileId::Parse("22345678-1234-4234-8234-123456789abc").Value();
+    }
+    SECTION("excluded body") {
+        request.selectors.excludedBody = fixture.ceiling.body;
+    }
+    const auto filtered = context.overlap(context.context, request);
+    REQUIRE(filtered.HasValue());
+    REQUIRE(filtered.Value().overlapCount == 0);
+}
+
 #endif

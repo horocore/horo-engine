@@ -27,6 +27,17 @@ namespace Horo::Prefab {
         /** @brief Returns the pinned source publication context. @return Exact immutable resolution revision. */
         [[nodiscard]] const PrefabResolutionRevision &Revision() const noexcept;
 
+        /** @brief Checks retained runtime-preview evidence before replacing a scene generation.
+         * @param rootAsset Root identity captured by the preview owner.
+         * @param current Current immutable source resolver.
+         * @param changedAssets Complete publication identities since Revision(), including resource content changes.
+         * @param limits Bounded publication inspection policy.
+         * @return Success only for an unaffected graph; stale evidence never mutates this subtree or active leases.
+         */
+        [[nodiscard]] Result<void> ValidatePublication(Assets::AssetId rootAsset, const PrefabSourceResolverSnapshot &current,
+                                                       std::span<const Assets::AssetId> changedAssets,
+                                                       const PrefabLimitProfile &limits) const;
+
     private:
         friend Result<ExpandedPrefabSceneSubtree> ExpandPrefabSceneSubtree(const EffectivePrefabCandidate &, const PrefabSceneIdentityMap &,
                                                                            std::span<const PrefabRuntimeComponentProjection>,

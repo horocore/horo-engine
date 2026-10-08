@@ -76,6 +76,11 @@ namespace Horo::Audio {
                 return Storage(command.storage);
             }
 
+            /** @brief Validate the exact voice and retained generation without dereferencing either owner. */
+            bool operator()(const AudioPublishVoiceStateCommand &command) const noexcept {
+                return Handle(command.voice) && Storage(command.storage);
+            }
+
             /** @brief Validate the requested logical-release identity without reclaiming storage. */
             bool operator()(const AudioReleaseResourceCommand &command) const noexcept {
                 return Storage(command.storage);

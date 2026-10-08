@@ -90,6 +90,15 @@ namespace Horo::Audio {
          */
         [[nodiscard]] Result<void> Update(const AudioSpatialSource &source, const AudioSpatialListener *listener,
                                           const AudioStereoSpatialSettings &settings);
+        /** @brief Adopt a control-prepared numeric target on the exclusive render lane, without geometry evaluation or allocation.
+         * @param target Copied finite matrix and admitted pitch from PrepareAudioStereoSpatialTarget.
+         * @param smoothingFrames Bounded gain/pitch ramp, at most 16384 output samples.
+         * @param resetHistory Explicit source/stream discontinuity; ordinary route changes must preserve history.
+         * @return True on admission; rejection preserves all converter, matrix and ramp state.
+         * @pre The caller validates source/listener generations and owns this processor exclusively.
+         */
+        [[nodiscard]] bool ApplyPreparedTarget(const AudioStereoSpatialTarget &target, std::uint32_t smoothingFrames,
+                                               bool resetHistory) noexcept;
         /** @brief Read the last admitted target on the exclusive owner. @return Copied target. */
         [[nodiscard]] AudioStereoSpatialTarget Target() const noexcept;
         /** @brief Stream PCM into stereo with exact consumed/produced counts and bounded tail.

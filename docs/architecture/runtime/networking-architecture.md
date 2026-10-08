@@ -959,6 +959,54 @@ The new observer parameters on existing network factories default to null;
 existing callers keep their behavior and need no migration. Hosts opting in
 must enforce the documented owner and shutdown order.
 
+### Network debugger projection and capture
+
+`NetworkDebugger` is an opt-in `NetworkApi` diagnostics owner. Host composition
+stamps each generation with process, diagnostic session, runtime Scene identity
+and Scene activation generation. Source replacement requires a strictly newer
+process/session/Scene-generation tuple. Producer adapters cache that exact source
+when bound, so callbacks from retired owners cannot relabel old data as current.
+Peer-session evidence additionally carries the actual admitted session generation;
+transport connectivity alone never means gameplay admission.
+
+The collector owns fixed histories of 32 connection, replication, RPC, timing and
+interest records plus 256 metadata-only capture entries. Histories evict the oldest
+entry with saturating eviction counts; capture overflow drops the incoming entry
+and increments a saturating dropped count. Recording allocates nothing and retains
+no payload, endpoint, credential, player name or native diagnostics. Explicit
+provider provenance distinguishes deterministic in-memory measurements from native
+transport evidence. The collector never discovers or constructs a backend.
+
+`NetworkDebuggerService` in the dedicated `NetworkDebuggerApplication` target
+exposes narrow immutable query and typed capture-command capabilities. Only owner
+safe points publish a monotonically revisioned copy; readers cannot observe
+in-flight counters. A short mutex protects only published copies and an eight-slot
+source/revision-fenced command mailbox. Recording stays on the constructing thread;
+pause/resume/clear take effect when that owner next publishes, with no GUI-side
+optimistic mutation. Detached, disabled and stale evidence rejects commands.
+Freshness is assessed from the process monotonic clock, independently of paused
+simulation ticks.
+
+The editor Net pane receives those capabilities through `PanelContext`; it owns
+only search/view state and copied evidence. Controls use shared dock primitives;
+long text wraps at the semantic body size and the toolbar scrolls horizontally at
+narrow widths. Standalone editor Play publishes the actual cloned Scene as disabled
+and revokes publication on stop, failure and reload. Real transport events,
+committed mapping/capture reports, admitted RPC terminal totals and tick alignment
+are optional explicit producers. Missing interest/rollback producers remain
+unavailable rather than manufacturing preview values. The native reference product
+composes the measured transport and application bridge and revokes old Scene
+publication before travel; rebinding a traveled source requires a fresh explicit
+producer composition.
+
+This is an additive public contract. Existing producer factory/constructor calls
+retain behavior through default-null observer parameters. Opting-in hosts must own
+the debugger longer than each borrowed adapter, stop producers before releasing it,
+and explicitly bind a fresh source after replacement. New public headers belong to
+`NetworkApi` and `NetworkDebuggerApplication` respectively, with independent
+consumer coverage; no repository-wide include path or concrete backend dependency
+is added to either capability target.
+
 ## Testing and Verification Strategy
 
 The networking subsystem requires targeted automated verification:

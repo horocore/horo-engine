@@ -70,8 +70,9 @@ namespace Horo::Application::Internal {
         bool pending_{};
     };
 
-    NetworkProductHost::NetworkProductHost(ConstructionKey, std::unique_ptr<Runtime::RuntimeHost> runtime, ModeParticipant *mode) noexcept
-        : runtime_(std::move(runtime)), mode_(mode) {}
+    NetworkProductHost::NetworkProductHost(ConstructionKey, std::unique_ptr<Runtime::RuntimeHost> runtime, ModeParticipant *mode,
+                                           std::shared_ptr<NetworkDebuggerService> debugger) noexcept
+        : debugger_(std::move(debugger)), runtime_(std::move(runtime)), mode_(mode) {}
 
     NetworkProductHost::~NetworkProductHost() noexcept {
         Shutdown();
@@ -79,7 +80,8 @@ namespace Horo::Application::Internal {
 
     Result<std::unique_ptr<NetworkProductHost>> NetworkProductHost::Create(Clock &clock, const NetworkProductHostInputs &inputs,
                                                                            Network::NetworkModeFactories factories,
-                                                                           Network::NetworkTargetDiagnostic *diagnostic) {
+                                                                           Network::NetworkTargetDiagnostic *diagnostic,
+                                                                           std::shared_ptr<NetworkDebuggerService> debugger) {
         if (inputs.selection.role != Network::NetworkProjectRole::Standalone) {
             if (const auto complete = Network::RequireCompleteNetworkReplicationInventory(inputs.project); complete.HasError())
                 return Result<std::unique_ptr<NetworkProductHost>>::Failure(complete.ErrorValue());
@@ -106,20 +108,30 @@ namespace Horo::Application::Internal {
         if (auto added = runtime.Value()->AddParticipant(std::move(participant)); added.HasError())
             return Result<std::unique_ptr<NetworkProductHost>>::Failure(added.ErrorValue());
         return Result<std::unique_ptr<NetworkProductHost>>::Success(
-            std::make_unique<NetworkProductHost>(ConstructionKey{}, std::move(runtime).Value(), mode));
+            std::make_unique<NetworkProductHost>(ConstructionKey{}, std::move(runtime).Value(), mode, std::move(debugger)));
     }
 
     Result<void> NetworkProductHost::Startup() {
-        return runtime_->Startup();
+        auto started = runtime_->Startup();
+        if (debugger_ && started.HasValue())
+            (void)debugger_->Publish(debugger_->Producer().Source());
+        return started;
     }
 
     Result<void> NetworkProductHost::RunFrame() {
-        return runtime_->RunFrame();
+        auto advanced = runtime_->RunFrame();
+        if (debugger_ && advanced.HasValue())
+            (void)debugger_->Publish(debugger_->Producer().Source());
+        return advanced;
     }
 
     Result<void> NetworkProductHost::RequestTravel(const std::span<const Network::NetworkModeWorld> worlds,
                                                    const std::optional<Network::NetworkOperationGeneration> session) {
-        return mode_->RequestTravel(worlds, session);
+        auto requested = mode_->RequestTravel(worlds, session);
+        // Travel revokes the old scene publication before any replacement scene is exposed.
+        if (debugger_ && requested.HasValue())
+            debugger_->Producer().Detach();
+        return requested;
     }
 
     std::optional<Error> NetworkProductHost::TakeTravelFailure() {
@@ -144,6 +156,8 @@ namespace Horo::Application::Internal {
     }
 
     void NetworkProductHost::Shutdown() noexcept {
+        if (debugger_)
+            debugger_->Producer().Detach();
         if (runtime_ != nullptr)
             runtime_->Shutdown();
     }

@@ -71,7 +71,9 @@ namespace Horo::Audio {
         StealQuietest,
         Virtualize,
         RejectNew = Reject,
-        StealLowestPriority = StealQuietest,
+        StealLowestPriority = 5,
+        StealFurthest,
+        Replace,
     };
 
     /**

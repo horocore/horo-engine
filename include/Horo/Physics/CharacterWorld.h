@@ -26,7 +26,7 @@ namespace Horo::Character {
         [[nodiscard]] constexpr auto operator<=>(const CharacterWorldPreparationDescriptor &) const noexcept = default;
     };
 
-    /** @brief Immutable complete owner generations retained by one prepared Character world. */
+    /** @brief Fixed owner generations and the explicitly admitted current Physics query revision. */
     struct CharacterWorldDescriptor final {
         std::uint64_t sceneGeneration{};           /**< Exact scene generation that owns the world. */
         CharacterWorldId identity;                 /**< Internally issued, never-reused process-local generation. */
@@ -75,6 +75,15 @@ namespace Horo::Character {
          * @return Success, or CharacterErrors::InvalidState unless the world is prepared.
          */
         [[nodiscard]] Result<void> Activate();
+
+        /** @brief Admits the paired Physics world's current query publication between synchronous operations.
+         * @param world Exact paired Physics identity; another world cannot refresh this snapshot.
+         * @param revision Non-zero, monotonically advancing Physics publication revision captured by the host.
+         * @return Success, or a typed owner/lifecycle/stale-revision error without mutation.
+         * @pre Owner thread only; no tick or placement callback may be in progress. The host must
+         * capture the actual Physics revision. This does not acquire a capability or change controller state.
+         */
+        [[nodiscard]] Result<void> RefreshPhysicsSnapshot(Physics::PhysicsWorldId world, std::uint64_t revision);
 
         /**
          * @brief Installs one validated owned controller descriptor into bounded world storage.
@@ -164,7 +173,8 @@ namespace Horo::Character {
         void Shutdown() noexcept;
         /** @brief Returns the current lifecycle state. @return Prepared, Active, or Destroyed. */
         [[nodiscard]] CharacterWorldState State() const noexcept;
-        /** @brief Returns the immutable owner generations selected during preparation. @return Borrow valid for this world lifetime. */
+        /** @brief Returns fixed owner generations and the current admitted Physics revision. @return Owner-thread borrow;
+         * observe the revision again after RefreshPhysicsSnapshot. */
         [[nodiscard]] const CharacterWorldDescriptor &Descriptor() const noexcept;
         /** @brief Returns the immutable settings snapshot retained for this world lifetime. @return Borrow valid for this world lifetime.
          */

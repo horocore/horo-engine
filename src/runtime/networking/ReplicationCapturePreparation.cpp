@@ -106,13 +106,15 @@ namespace Horo::Network {
     /** @copydoc ReplicationStateCapture::Prepare */
     Result<std::unique_ptr<ReplicationStateCapture>> ReplicationStateCapture::Prepare(
         const ReplicationWorldCaptureRead &world, std::shared_ptr<const ReplicationSerializerRegistry> serializers,
-        const std::span<const ReplicationCaptureTarget> targets, const ReplicationCaptureLimits &limits) {
+        const std::span<const ReplicationCaptureTarget> targets, const ReplicationCaptureLimits &limits, NetworkDebugger *debugger) {
         if (!world.IsCurrent() || !serializers || !serializers->Schemas() || !ValidLimits(limits, targets.size()))
             return Result<std::unique_ptr<ReplicationStateCapture>>::Failure(MakeError(ReplicationCaptureErrors::Invalid));
         try {
             auto impl = std::make_unique<Impl>();
             impl->world = world.Descriptor();
             impl->limits = limits;
+            impl->debugger = debugger;
+            impl->diagnosticSource = debugger ? debugger->Source() : NetworkDiagnosticSource{};
             impl->serializers = std::move(serializers);
             impl->targets.reserve(targets.size());
             std::size_t preparedBytes{};

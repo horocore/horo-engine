@@ -72,6 +72,8 @@ namespace Horo::Network {
             std::size_t bytes{};
         };
 
+        NetworkDebugger *debugger{};
+        NetworkDiagnosticSource diagnosticSource{};
         std::uint64_t lastTick{};
         std::thread::id owner{std::this_thread::get_id()};
         bool capturing{};

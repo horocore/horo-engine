@@ -280,11 +280,13 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/Save/SaveSlotRecovery.h
     Horo/Runtime/Save/SaveStoragePolicy.h
     Horo/Runtime/Save/SaveOperation.h
+    Horo/Runtime/Save/SaveCommands.h
     Horo/Runtime/Save/SaveOperationArbiter.h
     Horo/Runtime/Save/SaveProjectPolicy.h
     Horo/Runtime/Save/SaveSafePointCoordinator.h
     Horo/Runtime/Save/SaveCaptureBarrier.h
     Horo/Runtime/Save/SaveAutosaveScheduler.h
+    Horo/Runtime/Save/SaveEventTriggers.h
     Horo/Runtime/Save/SaveTestCompositions.h
 )
 horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
@@ -318,6 +320,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiTextLayout.h
     Horo/Runtime/Ui/UiGlyphAtlas.h
     Horo/Runtime/Ui/UiStyle.h
+    Horo/Runtime/Ui/UiTheme.h
     Horo/Runtime/Ui/UiHitTesting.h
     Horo/Runtime/Ui/UiRenderSnapshot.h
     Horo/Runtime/Ui/UiRenderGeometry.h
@@ -328,7 +331,12 @@ horo_configure_target_header_boundary(HoroUiTemplateGraph PUBLIC_HEADERS
     Horo/UiTemplates/UiTemplateDependencyGraph.h
     Horo/UiTemplates/UiTemplateErrors.h
 )
+horo_configure_target_header_boundary(HoroNetworkDebuggerApplication PUBLIC_HEADERS
+    Horo/Application/NetworkDebugger.h
+)
+
 horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
+    Horo/Network/NetworkDebugger.h
     Horo/Network/MessageCodecRegistry.h
     Horo/Network/MessageDeliveryGate.h
     Horo/Network/MessageEnvelope.h
@@ -479,6 +487,7 @@ horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
     Horo/Audio/AudioIdentity.h
     Horo/Audio/MixerAssetSchema.h
     Horo/Audio/AudioConcurrencyGroup.h
+    Horo/Audio/AudioVoiceAdmission.h
     Horo/Audio/AudioVoiceStateMachine.h
     Horo/Audio/AudioVoiceControls.h
     Horo/Audio/AudioResamplerPlan.h
@@ -506,6 +515,9 @@ horo_configure_target_header_boundary(HoroAudioDsp PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroAudioPlayback PUBLIC_HEADERS
     Horo/Audio/AudioVoicePlayback.h
     Horo/Audio/AudioRepeatedPlayback.h
+)
+horo_configure_target_header_boundary(HoroAudioVoiceRender PUBLIC_HEADERS
+    Horo/Audio/AudioVoiceRenderRuntime.h
 )
 horo_configure_target_header_boundary(HoroAudioMemory PUBLIC_HEADERS
     Horo/Audio/AudioMemory.h
@@ -538,6 +550,7 @@ horo_configure_target_header_boundary(HoroPhysicsModel PUBLIC_HEADERS
     Horo/Runtime/Scene/PhysicsSceneComponents.h
 )
 horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
+    Horo/Physics/CharacterClearanceQuery.h
     Horo/Physics/CharacterCommandPipeline.h
     Horo/Physics/CharacterControllerContracts.h
     Horo/Physics/CharacterDiagnostics.h
@@ -592,6 +605,7 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/AITaskJobService.h
     Horo/AI/BehaviorTree.h
     Horo/AI/BehaviorTreeRuntime.h
+    Horo/AI/DecisionWakePolicy.h
     Horo/AI/BlackboardInstance.h
     Horo/AI/BlackboardSchema.h
     Horo/AI/DecisionAssetValidation.h
@@ -680,6 +694,9 @@ horo_configure_target_header_boundary(HoroDestructionApplication PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroDestructionReplication PUBLIC_HEADERS
     Horo/Destruction/DestructionReplication.h
+)
+horo_configure_target_header_boundary(HoroFractureDocument PUBLIC_HEADERS
+    Horo/Editor/FractureAssetDocument.h
 )
 horo_configure_target_header_boundary(HoroCinematicModel PUBLIC_HEADERS
     Horo/Cinematic/CurveSampling.h
@@ -773,6 +790,7 @@ horo_configure_target_header_boundary(HoroXRApi PUBLIC_HEADERS
     Horo/XR/XRViewRenderPlan.h
 )
 horo_configure_target_header_boundary(HoroXRRuntime PUBLIC_HEADERS
+    Horo/XR/XRProjectSettings.h
     Horo/XR/XRFakeRuntime.h
     Horo/XR/XRFeatureNegotiation.h
     Horo/XR/XRFrameLifecycle.h
@@ -802,6 +820,9 @@ horo_configure_target_header_boundary(HoroTerrainCook PUBLIC_HEADERS
     Horo/Terrain/FoliagePlacementCook.h
     Horo/Terrain/TerrainSourceArtifacts.h
     Horo/Terrain/TerrainTileCook.h
+)
+horo_configure_target_header_boundary(HoroTerrainStreaming PUBLIC_HEADERS
+    Horo/TerrainStreaming/TerrainResidencyCache.h
 )
 horo_configure_target_header_boundary(HoroTerrainRuntime PUBLIC_HEADERS
     Horo/Terrain/TerrainAsyncJobs.h
@@ -905,6 +926,8 @@ horo_configure_target_header_boundary(HoroPrefabCookHost PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
     Horo/Runtime/Render/MotionHistory.h
     Horo/Runtime/Render/MotionHistoryErrors.h
+    Horo/Runtime/Render/PipelinePreparation.h
+    Horo/Runtime/Render/PipelinePreparationErrors.h
     Horo/Runtime/Render/PipelineCache.h
     Horo/Runtime/Render/PipelineCacheErrors.h
     Horo/Runtime/Render/Mesh.h

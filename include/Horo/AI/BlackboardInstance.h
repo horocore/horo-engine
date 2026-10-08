@@ -267,6 +267,11 @@ namespace Horo::AI {
             return active_;
         }
 
+        /** @brief Returns the current owner-thread publication fence without allocating a snapshot. @return Exact instance binding. */
+        [[nodiscard]] const BlackboardInstanceBinding &Binding() const noexcept {
+            return binding_;
+        }
+
         BlackboardInstance(const BlackboardInstance &) = delete;
         BlackboardInstance &operator=(const BlackboardInstance &) = delete;
 

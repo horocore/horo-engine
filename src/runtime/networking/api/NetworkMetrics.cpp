@@ -1,5 +1,7 @@
 #include "Horo/Network/NetworkMetrics.h"
 
+#include "Horo/Network/NetworkDebugger.h"
+
 #include <limits>
 
 namespace Horo::Network {
@@ -10,8 +12,13 @@ namespace Horo::Network {
     }  // namespace
 
     /** @copydoc NetworkMetrics::NetworkMetrics */
-    NetworkMetrics::NetworkMetrics(const std::uint64_t generation, const bool enabled)
-        : ownerThread_(std::this_thread::get_id()), admission_(std::make_shared<std::atomic<bool>>(enabled && generation != 0)) {
+    NetworkMetrics::NetworkMetrics(const std::uint64_t generation, const bool enabled, NetworkDebugger *debugger)
+        : debugger_(debugger), ownerThread_(std::this_thread::get_id()),
+          admission_(std::make_shared<std::atomic<bool>>(enabled && generation != 0)) {
+        if (debugger_) {
+            const auto source = debugger_->Source();
+            diagnosticSource_ = {source.process, source.session, source.scene, source.sceneGeneration};
+        }
         current_.ownerGeneration = generation;
         current_.enabled = enabled && generation != 0;
         published_ = current_;
@@ -89,6 +96,9 @@ namespace Horo::Network {
         if (!Known(kind))
             return Invalid();
         AddSaturating(current_.replication[static_cast<std::size_t>(kind)], count, current_.saturated);
+        if (debugger_)
+            (void)debugger_->Observe({diagnosticSource_[0], diagnosticSource_[1], diagnosticSource_[2], diagnosticSource_[3]},
+                                     NetworkReplicationRecord{current_.replication[0], current_.replication[1]});
         return true;
     }
 
