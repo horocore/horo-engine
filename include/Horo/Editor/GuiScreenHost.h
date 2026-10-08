@@ -20,6 +20,10 @@
 #include <variant>
 #include <vector>
 
+namespace Horo::Security {
+    class NativeArtifactGate;
+}
+
 namespace Horo {
     class EngineDataBus;
     class NativeDialogs;
@@ -33,6 +37,7 @@ namespace Horo::Extensions {
     class ExtensionInventory;
     class ExtensionMarketplaceService;
     class ExtensionManager;
+    class EditorActivityHost;
 }  // namespace Horo::Extensions
 
 namespace Horo::Editor {
@@ -58,36 +63,40 @@ namespace Horo::Editor {
     };
 
     /**
+     * @brief Application composition for the screen host, with explicit borrowed services and transferred values.
+     * @details References and optional service pointers remain application-owned and must outlive the host.
+     * Registry values are transferred into the host. The shared artifact gate retains verification authority;
+     * an absent gate leaves native package admission fail closed. No registration occurs while constructing this value.
+     */
+    struct GuiScreenHostComposition {
+        EditorModalHost &modalHost;
+        EditorSettingsService &settingsService;
+        LocalizationService &localization;
+        EngineDataBus &engineEvents;
+        ProjectCreationService &creationService;
+        JobSystem &jobs;
+        Input::InputRouter &inputRouter;
+        const RendererAvailabilitySnapshot &rendererAvailability;
+        ScreenRegistry screenRegistry;
+        WorkspacePanelRegistry workspacePanelRegistry;
+        std::uintptr_t logoTexture{}; /**< Renderer-owned identity borrowed by the host. */
+        Extensions::ExtensionInventory *extensionInventory{};
+        Extensions::ExtensionMarketplaceService *extensionMarketplace{};
+        NativeDialogs *nativeDialogs{};
+        std::shared_ptr<const Security::NativeArtifactGate> extensionArtifactGate;
+    };
+
+    /**
      * @brief Coordinates top-level screens, route transitions, and leave guards.
      */
     class GuiScreenHost {  // NOSONAR(cpp:S1820, cpp:S1448)
     public:
         /**
-         * @brief Constructs the screen host with required application service references.
-         * @param context Immutable GUI theme, localization, and event context.
-         * @param modalHost Root modal lifecycle owner.
-         * @param settingsService Committed editor-settings authority.
-         * @param localization Active editor localization service.
-         * @param engineEvents Engine-wide event bus.
-         * @param creationService Project creation operation service.
-         * @param jobs Application job system borrowed by screen-owned background work.
-         * @param inputRouter Application input-context router.
-         * @param rendererAvailability Immutable renderer availability projection.
-         * @param screenRegistry Registered top-level screen factories.
-         * @param workspacePanelRegistry Registered workspace panel factories.
-         * @param logoTexture Optional renderer-owned editor logo texture.
-         * @param extensionInventory Optional installed-extension inventory.
-         * @param extensionMarketplace Optional extension marketplace service.
-         * @param nativeDialogs Optional host-owned file picker for editor workflows.
+         * @brief Constructs the screen host from one explicit application composition.
+         * @param context Immutable GUI context borrowed until host destruction.
+         * @param composition Service borrows and owned registry/verification inputs; all borrowed services must outlive the host.
          */
-        explicit GuiScreenHost(const EditorGuiContext &context, EditorModalHost &modalHost,  // NOSONAR(cpp:S107) Service aggregate
-                               EditorSettingsService &settingsService, LocalizationService &localization, EngineDataBus &engineEvents,
-                               ProjectCreationService &creationService, JobSystem &jobs, Input::InputRouter &inputRouter,
-                               const RendererAvailabilitySnapshot &rendererAvailability, ScreenRegistry screenRegistry,
-                               WorkspacePanelRegistry workspacePanelRegistry, std::uintptr_t logoTexture = 0,
-                               Extensions::ExtensionInventory *extensionInventory = nullptr,
-                               Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr,
-                               NativeDialogs *nativeDialogs = nullptr);
+        explicit GuiScreenHost(const EditorGuiContext &context, GuiScreenHostComposition composition);
 
         ~GuiScreenHost();
 
@@ -195,6 +204,12 @@ namespace Horo::Editor {
         [[nodiscard]] const EditorStatusItemRegistry &StatusItems() const noexcept;
 
     private:
+        /** @brief Registers the already-initialized host and borrowed application services without activating native packages. */
+        void RegisterApplicationServices(const GuiScreenHostComposition &composition);
+        /** @brief Creates and activates extension/importer owners in their existing rollback and destruction order. */
+        void InitializeExtensions(JobSystem &jobs, std::shared_ptr<const Security::NativeArtifactGate> artifactGate);
+        /** @brief Publishes initial status items after extension composition and status-bar ownership are established. */
+        void InitializeStatusItems(const RendererAvailabilitySnapshot &rendererAvailability);
         Result<void> ExecuteLeaveCheckAndCommit(const LeaveTarget &target);
         Result<void> CommitApplicationClose();
         void FlushPendingNavigation();
@@ -223,6 +238,7 @@ namespace Horo::Editor {
 
         JobSystem m_importJobs{JobSystemConfig{.workerCount = 1}};
         std::unique_ptr<Assets::AssetImporterCatalog> importerCatalogCandidate_;
+        std::shared_ptr<Extensions::EditorActivityHost> editorActivityHost_;
         std::unique_ptr<Extensions::ExtensionManager> extensionManager_;
         std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> importerCatalog_;
 

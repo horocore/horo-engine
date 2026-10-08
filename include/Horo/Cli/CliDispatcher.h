@@ -220,8 +220,15 @@ namespace Horo::Cli {
     };
 
     /** @brief Presentation-independent result returned by an application command adapter. */
+    /** @brief One failed item in a completed batch, retaining its canonical application error. */
+    struct CliPartialFailure final {
+        std::string item; /**< Safe stable item identity, never credentials or raw input. */
+        Error error;      /**< Original typed failure, translated using the same registry as terminal errors. */
+    };
+
     struct CliCommandResult final {
-        std::vector<CliResultField> fields; /**< Bounded output fields in deterministic schema order. */
+        std::vector<CliResultField> fields;             /**< Bounded output fields in deterministic schema order. */
+        std::vector<CliPartialFailure> partialFailures; /**< Failed items; non-empty means a structurally partial result. */
     };
 
     /** @brief Hard bounds retained by one dispatcher and enforced around every adapter call. */

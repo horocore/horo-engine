@@ -60,7 +60,8 @@ namespace Horo::Cli {
         [[nodiscard]] bool SameDescriptorSchema(const CliCommandDescriptor &left, const CliCommandDescriptor &right) noexcept {
             return SameVector(left.options, right.options, SameOption) && SameVector(left.positionals, right.positionals, SamePositional) &&
                    SameVector(left.requiredCapabilities, right.requiredCapabilities, SameCapability) && left.output.id == right.output.id &&
-                   left.output.version == right.output.version && left.output.formats == right.output.formats;
+                   left.output.version == right.output.version && left.output.formats == right.output.formats &&
+                   left.output.progressRecords == right.output.progressRecords;
         }
 
         [[nodiscard]] bool SameDescriptorExecution(const CliCommandDescriptor &left, const CliCommandDescriptor &right) noexcept {
@@ -189,8 +190,17 @@ namespace Horo::Cli {
             return Result<const CliCommandDescriptor *>::Success(accepted);
         }
 
+        /** @brief Validates bounded scalar payloads independently of record identity. */
+        [[nodiscard]] std::optional<Error> ValidateResultValue(const CliResultValue &value, const CliExecutionLimits &limits) {
+            if (const auto *text = std::get_if<std::string>(&value); text != nullptr && text->size() > limits.maximumResultTextBytes)
+                return MakeError(CliErrors::ExecutionCapacityExceeded);
+            if (const auto *number = std::get_if<double>(&value); number != nullptr && !std::isfinite(*number))
+                return MakeError(CliErrors::ExecutionContextInvalid);
+            return std::nullopt;
+        }
+
         [[nodiscard]] std::optional<Error> ValidateResult(const CliCommandResult &result, const CliExecutionLimits &limits) {
-            if (result.fields.size() > limits.maximumResultFields)
+            if (result.fields.size() > limits.maximumResultFields || result.partialFailures.size() > limits.maximumResultFields)
                 return MakeError(CliErrors::ExecutionCapacityExceeded);
 
             std::unordered_set<std::string_view> names;
@@ -198,10 +208,12 @@ namespace Horo::Cli {
             for (const CliResultField &field : result.fields) {
                 if (!TextWithin(field.name, limits.maximumResultTextBytes) || !names.insert(field.name).second)
                     return MakeError(CliErrors::ExecutionContextInvalid);
-                if (const auto *text = std::get_if<std::string>(&field.value);
-                    text != nullptr && text->size() > limits.maximumResultTextBytes)
-                    return MakeError(CliErrors::ExecutionCapacityExceeded);
-                if (const auto *number = std::get_if<double>(&field.value); number != nullptr && !std::isfinite(*number))
+                if (const auto error = ValidateResultValue(field.value, limits))
+                    return error;
+            }
+            names.clear();
+            for (const auto &failure : result.partialFailures) {
+                if (!TextWithin(failure.item, limits.maximumResultTextBytes) || !names.insert(failure.item).second)
                     return MakeError(CliErrors::ExecutionContextInvalid);
             }
             return std::nullopt;

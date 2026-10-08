@@ -5,6 +5,7 @@
  */
 
 #include "Horo/Application/NavigationBakeDiagnostics.h"
+#include "Horo/Application/NavigationBakeSourceAuthority.h"
 #include "Horo/Assets/AssetCookOutput.h"
 #include "Horo/Navigation/NavigationBakeJobs.h"
 #include "Horo/Navigation/NavigationTileArtifact.h"
@@ -24,6 +25,10 @@ namespace Horo::Application {
         Assets::AssetCookLimits cookLimits;
         std::size_t maximumTiles{1024};
         std::size_t maximumCandidateBytes{64U * 1024U * 1024U};
+        std::shared_ptr<NavigationBakeSourceAuthority>
+            sourceAuthority; /**< Required current-source authority; shared with host mutations. */
+        Duration writerWaitTimeout{Duration::FromMilliseconds(30'000)}; /**< Background-only bounded lock contention deadline. */
+        std::function<Result<Assets::AssetId>()> newOperationId; /**< Required host-composed operation UUID generator using OS entropy. */
         std::shared_ptr<NavigationBakeDiagnostics>
             diagnostics; /**< Project-owned retained output/history consumer shared by bake entry points. */
     };
@@ -37,6 +42,7 @@ namespace Horo::Application {
         CancellationToken cancellation;
         std::vector<NavigationDiagnosticSource>
             diagnosticSources; /**< Host-resolved authored ownership for the captured source observations. */
+        std::optional<Navigation::NavigationProjectProfile> projectProfile; /**< Owned release policy; omission remains non-release only. */
     };
 
     /** @brief Last successfully published immutable generation; retained readers survive subsequent submissions. */
@@ -46,6 +52,15 @@ namespace Horo::Application {
         std::size_t rebuiltTiles{};
         std::size_t reusedTiles{};
     };
+
+    /** @brief Resolves a verified complete definition artifact through the sole AssetCook current pointer.
+     * @param config Host-chosen definition/type/target namespace and hard bounds; no builder is invoked.
+     * @return Immutable decoded publication lease, or typed missing/corrupt/target/format failure.
+     * @note Retained content is owned in memory and immutable generation files are retained across replacement.
+     * Runtime/editor hosts pass these verified tiles into their ordinary provider activation transaction.
+     */
+    [[nodiscard]] Result<std::shared_ptr<const NavigationBakePublication>> ResolveNavigationBakePublication(
+        const NavigationBakeServiceConfig &config);
 
     namespace NavigationBakeDetail {
         struct ServiceState;

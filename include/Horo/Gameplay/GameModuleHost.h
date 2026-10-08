@@ -6,6 +6,8 @@
  */
 
 #include "Horo/Gameplay/GameModule.h"
+#include "Horo/Gameplay/PersistenceInstallation.h"
+#include "Horo/Gameplay/SaveGameplayPersistence.h"
 
 #include <filesystem>
 #include <memory>
@@ -53,6 +55,20 @@ namespace Horo::Gameplay {
         [[nodiscard]] const SystemRegistry &Systems() const noexcept;
         /** @brief Returns frozen native replication registrations and generation-safe lease acquisition. */
         [[nodiscard]] const ReplicationRegistrationRegistry &Replication() const noexcept;
+        /** @brief Acquires one declared durable adapter while exact-generation runtime admission remains open.
+         * @param participant Stable identity registered through GameRegistrationContext::persistence.
+         * @return Pinned adapter for explicit SaveParticipationClient registration, or typed missing/retiring error.
+         * @pre Called by the runtime owner at a quiescent composition boundary.
+         */
+        [[nodiscard]] Result<std::shared_ptr<Runtime::GameplayPersistenceAdapter>> AcquirePersistence(
+            const Runtime::SaveParticipantId &participant) const;
+        /** @brief Acquires unforgeable installed-content evidence from an actual frozen persistence registration.
+         * @pre The runtime owner serializes acquisition and subsequent owner-thread admission with this module's reload/shutdown.
+         * @param participant Exact registered durable owner.
+         * @return Generation-pinned installation, or typed missing/revoked admission failure; no callback is invoked.
+         */
+        [[nodiscard]] Result<Runtime::GameplayPersistenceInstallation> AcquireInstalledPersistence(
+            const Runtime::SaveParticipantId &participant) const;
         /** @brief Returns frozen event callbacks; acquisition pins this exact native module generation. */
         [[nodiscard]] const GameEventRegistry &Events() const noexcept;
         /** @brief Returns active project-scoped services in provider-first order. */
@@ -61,6 +77,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] std::span<const GameplayCapabilityId> Capabilities() const noexcept;
         /** @brief Returns the cancellation token revoked before module shutdown or replacement. */
         [[nodiscard]] CancellationToken Cancellation() const noexcept;
+        /** @brief Returns this module generation's explicit Physics binding, if composed by the host. */
+        [[nodiscard]] std::shared_ptr<const GameplayPhysicsContext> PhysicsContext() const noexcept;
         /**
          * @brief Cancels and quiesces module-owned work, captures state, and stops callbacks before unload.
          * @return Bounded module snapshot only when the generation proves it is safe to unload.
@@ -88,6 +106,11 @@ namespace Horo::Gameplay {
          * @param hostCapabilities Capabilities composed by the owning headless or graphical host.
          */
         explicit GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities = {});
+        /** @brief Creates a loader bound to one explicitly admitted module and play world.
+         * @param hostCapabilities Inert host grants used by registration validation.
+         * @param physics Exact per-module binding, revoked before module shutdown; cannot be reused after retirement.
+         */
+        GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics);
         /**
          * @brief Loads and starts one gameplay candidate after complete compatibility validation.
          * @param libraryPath Absolute dynamic-library artifact path.
@@ -113,5 +136,6 @@ namespace Horo::Gameplay {
 
     private:
         std::vector<GameplayCapabilityId> hostCapabilities_;
+        std::shared_ptr<GameplayPhysicsContext> physics_;
     };
 }  // namespace Horo::Gameplay

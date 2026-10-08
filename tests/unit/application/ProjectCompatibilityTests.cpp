@@ -1,4 +1,5 @@
 #include "Horo/Application/ProjectCompatibility.h"
+#include "Horo/Application/ProjectSourceDocument.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -15,7 +16,8 @@ namespace {
     public:
         TemporaryProject() {
             const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-            root_ = std::filesystem::temp_directory_path() / ("horo-compatibility-" + std::to_string(stamp));
+            root_ = std::filesystem::temp_directory_path() / std::filesystem::path(u8"horo compatibility İstanbul-");
+            root_ += std::to_string(stamp);
             std::filesystem::create_directories(root_ / ".horo");
         }
 
@@ -92,6 +94,117 @@ namespace {
         auto registry = ReleaseCompatibilityRegistry::Create(decisions);
         REQUIRE((registry.HasValue()));
         return std::move(registry).Value();
+    }
+
+    std::string WithExtraKeys(std::string document, const std::size_t count) {
+        std::string members;
+        for (std::size_t index = 0; index < count; ++index)
+            members += ",\"extra" + std::to_string(index) + "\":0";
+        document.insert(document.rfind('}'), members);
+        return document;
+    }
+
+    void RequireMetadataError(const std::string &document, const std::string_view code) {
+        const auto decoded = DecodeProjectSourceDocument(document);
+        REQUIRE(decoded.HasError());
+        REQUIRE(decoded.ErrorValue().code.Value() == code);
+    }
+
+    TEST_CASE("Metadata profile requires exact registered release and persistent contract", "[unit][application][source-profile]") {
+        const auto &registry = BuiltInReleaseCompatibilityRegistry();
+        const auto *current = registry.Find({Version("0.2.0")});
+        const auto *legacy = registry.Find({Version("0.1.0")});
+        REQUIRE(current != nullptr);
+        REQUIRE(legacy != nullptr);
+        REQUIRE(DecodeProjectSourceDocument(WithExtraKeys(Metadata("0.2.0", current->persistentContract), 256)).HasValue());
+        RequireMetadataError(WithExtraKeys(Metadata("0.2.0", legacy->persistentContract), 256), "project.metadata.limit_exceeded");
+        RequireMetadataError(WithExtraKeys(Metadata("0.2.0", Hash('a')), 256), "project.metadata.limit_exceeded");
+        for (const auto version : {"0.1.0", "0.2.1", "0.3.0", "forged"})
+            RequireMetadataError(WithExtraKeys(Metadata(version, current->persistentContract), 256), "project.metadata.limit_exceeded");
+    }
+
+    TEST_CASE("Legacy metadata retains size key depth and duplicate diagnostic precedence", "[unit][application][source-profile]") {
+        std::string oversized = Metadata("0.1.0", Hash('a'));
+        oversized.insert(oversized.rfind('}'), ",\"projectId\":\"duplicate\"");
+        oversized.append(64U * 1024U, ' ');
+        RequireMetadataError(oversized, "project.metadata.size_invalid");
+        RequireMetadataError(std::string(64U * 1024U + 1U, 'x'), "project.metadata.size_invalid");
+        RequireMetadataError(WithExtraKeys(Metadata("0.1.0", Hash('a')), 256), "project.metadata.limit_exceeded");
+        auto nested = Metadata("0.1.0", Hash('a'));
+        nested.insert(nested.rfind('}'), ",\"nested\":" + std::string(17, '[') + "0" + std::string(17, ']'));
+        RequireMetadataError(nested, "project.metadata.limit_exceeded");
+        auto duplicate = Metadata("0.1.0", Hash('a'));
+        duplicate.insert(duplicate.rfind('}'), ",\"projectId\":\"duplicate\"");
+        RequireMetadataError(duplicate, "project.metadata.duplicate_key");
+    }
+
+    TEST_CASE("Registered metadata profile stays finite without changing value limits", "[unit][application][source-profile]") {
+        const auto *current = BuiltInReleaseCompatibilityRegistry().Find({Version("0.2.0")});
+        REQUIRE(current != nullptr);
+        const auto metadata = Metadata("0.2.0", current->persistentContract);
+        auto expanded = metadata;
+        expanded.append(64U * 1024U, ' ');
+        REQUIRE(DecodeProjectSourceDocument(expanded).HasValue());
+        auto nested = metadata;
+        nested.insert(nested.rfind('}'), ",\"nested\":" + std::string(17, '[') + "0" + std::string(17, ']'));
+        REQUIRE(DecodeProjectSourceDocument(nested).HasValue());
+        nested = metadata;
+        nested.insert(nested.rfind('}'), ",\"nested\":" + std::string(33, '[') + "0" + std::string(33, ']'));
+        RequireMetadataError(nested, "project.metadata.limit_exceeded");
+        RequireMetadataError(WithExtraKeys(metadata, 32768), "project.metadata.limit_exceeded");
+        RequireMetadataError(metadata + std::string(1024U * 1024U, ' '), "project.metadata.size_invalid");
+        auto longValue = metadata;
+        longValue.insert(longValue.rfind('}'), ",\"extra\":\"" + std::string(8193, 'x') + "\"");
+        RequireMetadataError(longValue, "project.metadata.limit_exceeded");
+    }
+
+    TEST_CASE("Project source loader confines physical metadata to explicit project root", "[unit][application][source-profile]") {
+        TemporaryProject project;
+        project.Write(Metadata("0.1.0", Hash('a')));
+        REQUIRE(LoadProjectSourceDocument(project.Root()).HasValue());
+        TemporaryProject external;
+        external.Write(Metadata("0.1.0", Hash('a')));
+        std::filesystem::remove(project.Root() / ".horo/project.json");
+        std::error_code error;
+        std::filesystem::create_symlink(external.Root() / ".horo/project.json", project.Root() / ".horo/project.json", error);
+        if (error) {
+            SKIP("Host does not permit symlink creation: " << error.message());
+        }
+        const auto escaped = LoadProjectSourceDocument(project.Root());
+        REQUIRE(escaped.HasError());
+        REQUIRE(escaped.ErrorValue().code.Value() == "project.metadata.read_failed");
+        REQUIRE(LoadProjectSourceDocument(external.Root()).HasValue());
+    }
+
+    TEST_CASE("Metadata profile authority is independent of root member ordering and rejects ambiguous markers",
+              "[unit][application][source-profile]") {
+        const auto *decision = BuiltInReleaseCompatibilityRegistry().Find({Version("0.2.0")});
+        REQUIRE(decision != nullptr);
+        const auto metadata = Metadata("0.2.0", decision->persistentContract);
+        const auto withAuthorityLast = [&](const std::size_t count) {
+            auto prefix = WithExtraKeys("{\"payload\":0}", count);
+            prefix.back() = ',';
+            return prefix + metadata.substr(1);
+        };
+        REQUIRE(DecodeProjectSourceDocument(withAuthorityLast(256)).HasValue());
+        REQUIRE(DecodeProjectSourceDocument("{\"payload\":0," + std::string(64U * 1024U, ' ') + metadata.substr(1)).HasValue());
+        RequireMetadataError(withAuthorityLast(32768), "project.metadata.limit_exceeded");
+        for (const auto marker : {"\"horoVersion\":0", "\"persistentContract\":[]", "\"horoVersion\":\"0.1.0\""}) {
+            auto duplicate = metadata;
+            duplicate.insert(duplicate.rfind('}'), "," + std::string{marker});
+            RequireMetadataError(duplicate, "project.metadata.duplicate_key");
+        }
+        auto wrongType = metadata;
+        const auto release = wrongType.find("\"0.2.0\"");
+        REQUIRE(release != std::string::npos);
+        wrongType.replace(release, 7, "[\"0.2.0\"]");
+        RequireMetadataError(WithExtraKeys(wrongType, 256), "project.metadata.limit_exceeded");
+        wrongType = metadata;
+        const auto contract = "\"" + FormatPersistentContractHash(decision->persistentContract) + "\"";
+        const auto contractPosition = wrongType.find(contract);
+        REQUIRE(contractPosition != std::string::npos);
+        wrongType.replace(contractPosition, contract.size(), "{}");
+        RequireMetadataError(WithExtraKeys(wrongType, 256), "project.metadata.limit_exceeded");
     }
 
     TEST_CASE("Sem Ver Is Canonical And Ordered", "[unit][application]") {

@@ -44,18 +44,31 @@ namespace Horo::Gameplay {
          */
         [[nodiscard]] static Result<std::unique_ptr<BehaviorRuntime>> Create(Runtime::RuntimeScene &scene, const BehaviorRegistry &registry,
                                                                              BehaviorRuntimeLimits limits = {});
+        /** @brief Activates callbacks with an explicitly permitted Physics context for this exact scene.
+         * @param scene Runtime scene that outlives the runner.
+         * @param registry Frozen module registry.
+         * @param limits Admission budgets.
+         * @param physics Host-admitted module/world binding; revoked before shutdown callbacks.
+         * @return Active runner or typed foreign-scene/activation error without partial clients.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<BehaviorRuntime>> Create(Runtime::RuntimeScene &scene, const BehaviorRegistry &registry,
+                                                                             BehaviorRuntimeLimits limits,
+                                                                             std::shared_ptr<const GameplayPhysicsContext> physics);
         ~BehaviorRuntime();
         BehaviorRuntime(const BehaviorRuntime &) = delete;
         BehaviorRuntime &operator=(const BehaviorRuntime &) = delete;
 
-        /** @brief Delivers queued events/input, runs one deterministic tick, and commits mutations. */
-        [[nodiscard]] Result<void> FixedUpdate(std::span<const GameplayInputAction> input, FixedDeltaTime delta);
-        /** @brief Runs presentation-only callbacks without committing simulation mutation. */
-        void PresentationUpdate(FrameDeltaTime delta);
-        /** @brief Enables or disables one attachment with exact lifecycle transitions. */
-        [[nodiscard]] Result<void> SetEnabled(BehaviorInstanceId instance, bool enabled);
+        /** @brief Delivers queued events/input, runs one deterministic tick, and commits mutations.
+         * @param input Current tick input. @param delta Validated fixed step. @return Success or a lifecycle/callback error. */
+        [[nodiscard]] Result<void> FixedUpdate(std::span<const GameplayInputAction> input, FixedDeltaTime delta) const;
+        /** @brief Runs presentation-only callbacks without committing simulation mutation.
+         * @param delta Current presentation frame delta. */
+        void PresentationUpdate(FrameDeltaTime delta) const;
+        /** @brief Enables or disables one attachment with exact lifecycle transitions.
+         * @param instance Exact attachment identity. @param enabled Desired enablement. @return Success or a typed failure. */
+        [[nodiscard]] Result<void> SetEnabled(BehaviorInstanceId instance, bool enabled) const;
         /** @brief Runs disable/destroy and releases every module-owned instance exactly once. */
-        void Shutdown() noexcept;
+        void Shutdown() const noexcept;
         /**
          * @brief Captures runtime-only state for every instance before shutdown.
          * @return Complete bounded snapshot or a typed failure that leaves this runtime active.
@@ -66,13 +79,23 @@ namespace Horo::Gameplay {
          * @param snapshot State matched by stable behavior instance and type identity.
          * @return Success or a typed mismatch/restore failure.
          */
-        [[nodiscard]] Result<void> RestoreReloadSnapshot(const BehaviorRuntimeReloadSnapshot &snapshot);
+        [[nodiscard]] Result<void> RestoreReloadSnapshot(const BehaviorRuntimeReloadSnapshot &snapshot) const;
         /** @brief Reports the number of constructed scene-scoped instances. */
         [[nodiscard]] std::size_t InstanceCount() const noexcept;
+        /**
+         * @brief Creates the Gameplay owner for Scene's aggregate group transaction.
+         * @details Preparation validates and reserves attachment metadata without calling factories.
+         * Existing instances are preserved. Construction and disable/destroy notifications run only
+         * after aggregate publication; a callback fault does not roll back committed entities.
+         * The runner and its frozen registry must outlive the participant and all its candidates.
+         * All preparation, publication, callbacks and destruction use the runner's owner lane.
+         * @return Application-owned participant, explicitly registered before Scene service startup.
+         */
+        [[nodiscard]] std::unique_ptr<Runtime::SceneStructuralParticipant> MakeStructuralParticipant();
 
     private:
         struct Impl;
-        explicit BehaviorRuntime(std::unique_ptr<Impl> impl) noexcept;
-        std::unique_ptr<Impl> impl_;
+        explicit BehaviorRuntime(std::shared_ptr<Impl> impl) noexcept;
+        std::shared_ptr<Impl> impl_;
     };
 }  // namespace Horo::Gameplay

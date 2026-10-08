@@ -239,6 +239,9 @@ dependency direction in [System Design](./foundation/system-design.md).
 - [Runtime UI Layout Units and Measure-Arrange](../adr/074-runtime-ui-layout-units-and-measure-arrange.md):
   logical units, constraint precedence, anchors, intrinsic/flex/grid sizing,
   deterministic two-phase layout, overflow, rounding, and compatibility.
+- [Responsive Presentation Profiles](./runtime/responsive-presentation-profiles.md):
+  proposed bounded typed layout variants, deterministic aspect/form-factor/input/
+  split-view selection, base fallback, attachment lifecycle and source/cook migration.
 - [Runtime UI Font Asset, Family and Fallback](../adr/075-runtime-ui-font-asset-family-and-fallback.md):
   font source/face/family identity, deterministic matching and fallback, cook
   dependencies, platform discovery, missing coverage, and runtime lifetime.

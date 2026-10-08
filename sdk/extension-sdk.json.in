@@ -21,7 +21,7 @@
   },
   "compileDependencies": [],
   "supportedHosts": ["linux", "macos", "windows"],
-  "publicHeaders": ["include/Horo/Extensions/ExtensionAbi.h"],
+  "publicHeaders": ["include/Horo/Extensions/ExtensionAbi.h", "include/Horo/Extensions/EditorActivityAbi.h"],
   "schemas": ["share/horo/extension-sdk/extension-manifest-v1.schema.json"],
   "tools": [
     "bin/horo-extension-validate@CMAKE_EXECUTABLE_SUFFIX@",
@@ -31,6 +31,8 @@
     "bin/horo-extension-author-ci.py"
   ],
   "ciTemplate": "share/horo/extension-sdk/ci/extension-author-ci.yml",
+  "compatibilityMatrix": "share/horo/extension-sdk/CompatibilityMatrix.json",
+  "migrationGuide": "share/horo/extension-sdk/MigrationGuide.md",
   "entryPoints": [
     "horo_extension_query",
     "horo_extension_load",

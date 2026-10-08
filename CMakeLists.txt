@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-set(HORO_ENGINE_VERSION "0.1.0")
+set(HORO_ENGINE_VERSION "0.2.0")
 
 project(HoroEngine VERSION ${HORO_ENGINE_VERSION} LANGUAGES CXX C)
 
@@ -17,11 +17,11 @@ if(NOT HORO_GIT_REVISION_RESULT EQUAL 0 OR HORO_SOURCE_REVISION STREQUAL "")
 endif()
 
 set(HORO_GAMEPLAY_SDK_FINGERPRINT
-    "horo-${HORO_ENGINE_VERSION}-gameplay-sdk7-${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}"
+    "horo-${HORO_ENGINE_VERSION}-gameplay-sdk9-${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}"
 )
 set(HORO_EXTENSION_SDK_VERSION "${HORO_ENGINE_VERSION}")
 set(HORO_EXTENSION_ABI_MAJOR_VERSION 1)
-set(HORO_EXTENSION_ABI_PUBLISHED_MINOR 3)
+set(HORO_EXTENSION_ABI_PUBLISHED_MINOR 4)
 set(HORO_EXTENSION_ABI_MIN_HOST_MINOR 0)
 set(HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE 2)
 
@@ -57,6 +57,7 @@ option(HORO_BUILD_PHYSICS_NATIVE "Build the private CanonicalV1 Physics solver" 
 option(HORO_BUILD_NAVIGATION_RECAST_DETOUR "Build the default grounded navigation query provider" ON)
 option(HORO_BUILD_AUDIO_SDL3 "Build the SDL3 portability/reference audio backend" ${HORO_BUILD_EDITOR_GUI})
 option(HORO_BUILD_NETWORK_GNS "Build the optional production GameNetworkingSockets transport" OFF)
+option(HORO_BUILD_XR_OPENXR "Build the optional privately dispatched OpenXR session backend" OFF)
 
 if(HORO_ENABLE_IMGUI_UI_TESTS AND NOT BUILD_TESTING)
     message(FATAL_ERROR "HORO_ENABLE_IMGUI_UI_TESTS requires BUILD_TESTING=ON")
@@ -103,10 +104,32 @@ set(HORO_GAMEPLAY_SDK_PACKAGE_DIR "${CMAKE_BINARY_DIR}/sdk/gameplay" CACHE INTER
 file(MAKE_DIRECTORY "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}")
 set_target_properties(HoroFoundation PROPERTIES EXPORT_NAME Foundation POSITION_INDEPENDENT_CODE ON)
 set_target_properties(HoroNetworkApi PROPERTIES EXPORT_NAME NetworkApi POSITION_INDEPENDENT_CODE ON)
+set_target_properties(HoroSaveApi PROPERTIES EXPORT_NAME SaveApi POSITION_INDEPENDENT_CODE ON)
 set_target_properties(HoroGameplayApi PROPERTIES EXPORT_NAME GameplayApi POSITION_INDEPENDENT_CODE ON)
-export(TARGETS HoroFoundation HoroNetworkApi HoroGameplayApi
+export(TARGETS HoroFoundation HoroNetworkApi HoroSaveApi HoroGameplayApi
        NAMESPACE HoroEngine::
        FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayTargets.cmake")
+# Physics is an explicit SDK component. The minimal gameplay export remains solver-free;
+# opting in exports the reviewed private static-link closure, never repository-wide includes.
+set(HORO_GAMEPLAY_PHYSICS_SDK_TARGETS HoroGameplayPhysicsIntegration HoroPhysics HoroPhysicsModel HoroAssets HoroRuntime
+    HoroThirdPartyUfbx miniz utf8proc nlohmann_json)
+if(TARGET Jolt)
+    list(APPEND HORO_GAMEPLAY_PHYSICS_SDK_TARGETS Jolt)
+endif()
+set_target_properties(HoroGameplayPhysicsIntegration PROPERTIES EXPORT_NAME GameplayPhysicsIntegration)
+set_target_properties(HoroPhysics PROPERTIES EXPORT_NAME Physics)
+set_target_properties(HoroPhysicsModel PROPERTIES EXPORT_NAME PhysicsModel)
+set_target_properties(HoroAssets PROPERTIES EXPORT_NAME Assets)
+set_target_properties(HoroRuntime PROPERTIES EXPORT_NAME Runtime)
+foreach(target IN LISTS HORO_GAMEPLAY_PHYSICS_SDK_TARGETS)
+    get_target_property(target_type ${target} TYPE)
+    if(target_type STREQUAL "STATIC_LIBRARY")
+        set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+endforeach()
+export(TARGETS ${HORO_GAMEPLAY_PHYSICS_SDK_TARGETS}
+       NAMESPACE HoroEngine::
+       FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayPhysicsTargets.cmake")
 configure_package_config_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/HoroEngineGameplayConfig.cmake.in"
     "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayConfig.cmake"

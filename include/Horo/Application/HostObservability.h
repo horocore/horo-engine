@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -44,10 +45,17 @@ namespace Horo::Application {
         std::uintmax_t maxInputBytes{64U * 1024U * 1024U};         /**< Aggregate uncompressed input bound. */
     };
 
+    /** @brief Capture-free host contribution evaluated only during explicit export after log flush.
+     * @details Inputs are the session's retained JSONL files, never discovered subsystem state. Providers must bound
+     * row/byte work and return a canonical privacy-reviewed metadata pair. They own no independent event store.
+     */
+    using HostDiagnosticSummaryProvider = Result<std::pair<std::string, std::string>> (*)(std::span<const std::filesystem::path>);
+
     /** @brief Typed process-level configuration shared by graphical and headless hosts. */
     struct HostObservabilityConfiguration {
-        Log::LoggerConfiguration logging;   /**< Queue, filtering, local persistence, and optional sink policy. */
-        HostObservabilityIdentity identity; /**< Safe process/build/project identity. */
+        Log::LoggerConfiguration logging;                     /**< Queue, filtering, local persistence, and optional sink policy. */
+        HostObservabilityIdentity identity;                   /**< Safe process/build/project identity. */
+        std::vector<HostDiagnosticSummaryProvider> summaries; /**< At most eight explicit capture-free summary contributions. */
     };
 
     /** @brief RAII owner of the process observability lifecycle and support-bundle composition. */

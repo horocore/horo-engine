@@ -281,6 +281,18 @@ namespace Horo::Runtime::Ui {
         bool defaultActionPending{}; /**< True only while ApplyDefault/SuppressDefault must resolve the route outcome. */
     };
 
+    /** @brief Opaque copied actual control state used to reject a prepared reload after owner mutation. */
+    class UiControlReloadStamp final {
+    private:
+        friend class UiControlStateMachine;
+        UiControlState state_;
+        UiControlDescriptor descriptor_;
+        UiActionText editStartText_;
+        std::uint64_t sequence_{};
+        std::uint64_t tick_{};
+        bool pending_{};
+    };
+
     /** @brief Preallocated owner-thread state machine for one typed interactive control. */
     class UiControlStateMachine final {
     public:
@@ -346,6 +358,26 @@ namespace Horo::Runtime::Ui {
          * @note The caller fences provider outcome ownership before calling; this operation performs no allocation.
          */
         [[nodiscard]] Result<void> ReconcileValue(const UiActionValue &value);
+
+        /**
+         * @brief Preserves compatible logical form state from an actual old owner during private reload preparation.
+         * @param source Read-only old control, lifetime-pinned by the generation being reconciled.
+         * @param preserveFocus Whether the replacement focus owner admitted this authored element.
+         * @return True when kind, stable action/arguments, scope and new value constraints agree; false leaves the
+         * replacement's authored initial state unchanged. Lifecycle failures are typed errors.
+         * @post Copies values and compatible text edit draft/cancel baseline. Clears press, repeat, pending actions,
+         * async operation projections and input ordering; no old runtime handle or native IME state migrates.
+         * @pre Both owners are active and owner-thread serialized; the caller proves the same authored element and type.
+         */
+        [[nodiscard]] Result<bool> ReconcileReload(const UiControlStateMachine &source, bool preserveFocus);
+        /** @brief Copies current logical/transient source evidence without allocation.
+         * @return Opaque exact stamp or lifecycle failure; no handle or callback is retained.
+         */
+        [[nodiscard]] Result<UiControlReloadStamp> CaptureReloadStamp() const;
+        /** @brief Compares actual state, draft baseline, ordering and pending decision with copied preparation evidence.
+         * @param stamp Owner-copied previous evidence. @return True only while active and unchanged.
+         */
+        [[nodiscard]] bool MatchesReloadStamp(const UiControlReloadStamp &stamp) const noexcept;
 
         /**
          * @brief Changes availability at an owner safe point and cancels transient interaction state when disabling.

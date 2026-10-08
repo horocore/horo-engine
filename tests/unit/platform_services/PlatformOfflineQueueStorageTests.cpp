@@ -5,9 +5,11 @@
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <latch>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -33,6 +35,8 @@ namespace {
             name += "-" + std::to_string(stamp);
             root = std::filesystem::temp_directory_path() / name;
             std::filesystem::create_directories(root);
+            // Native publication authority requires canonical spelling, including macOS /var aliases.
+            root = std::filesystem::canonical(root);
         }
 
         ~TemporaryRoot() {
@@ -149,7 +153,11 @@ namespace {
                                                        const std::filesystem::path &destination) override {
             const auto attempt = replacementAttempts_.fetch_add(1);
             if (attempt == 0) {
-                replacing_.count_down();
+                {
+                    std::lock_guard lock(replacementMutex_);
+                    replacementReached_ = true;
+                }
+                replacing_.notify_all();
                 continueReplacement_.wait();
             } else if (!releaseRequested_.load()) {
                 return Horo::Result<void>::Failure(Horo::MakeError(kInjectedFailure));
@@ -165,8 +173,20 @@ namespace {
             return native_.SyncDirectory(path);
         }
 
-        void WaitUntilReplace() {
-            replacing_.wait();
+        [[nodiscard]] bool WaitUntilReplace() {
+            std::unique_lock lock(replacementMutex_);
+            static_cast<void>(replacing_.wait_for(lock, std::chrono::seconds{5}, [this] {
+                return replacementReached_ || publicationFinished_;
+            }));
+            return replacementReached_;
+        }
+
+        void NotifyPublicationFinished() {
+            {
+                std::lock_guard lock(replacementMutex_);
+                publicationFinished_ = true;
+            }
+            replacing_.notify_all();
         }
 
         void ContinueReplacement() {
@@ -180,7 +200,11 @@ namespace {
 
     private:
         Horo::NativeDurableFileSystem native_;
-        std::latch replacing_{1};
+        // Publisher writes and the owner observes this predicate only under replacementMutex_.
+        std::mutex replacementMutex_;
+        std::condition_variable replacing_;
+        bool replacementReached_{};
+        bool publicationFinished_{};
         std::latch continueReplacement_{1};
         std::atomic_size_t replacementAttempts_{};
         std::atomic_bool releaseRequested_{};
@@ -347,9 +371,19 @@ namespace {
         std::optional<Horo::Result<void>> competingResult;
         std::thread firstPublisher([&] {
             firstResult.emplace(store.Publish(partition, first));
+            files.NotifyPublicationFinished();
         });
 
-        files.WaitUntilReplace();
+        if (const bool reachedReplacement = files.WaitUntilReplace(); !reachedReplacement) {
+            files.ContinueReplacement();
+            firstPublisher.join();
+            REQUIRE(firstResult.has_value());
+            if (firstResult->HasError()) {
+                const auto &error = firstResult->ErrorValue();
+                INFO(error.domain.Value() << "/" << error.code.Value() << ": " << error.message);
+            }
+            REQUIRE(reachedReplacement);
+        }
         std::thread competingPublisher([&] {
             competingResult.emplace(store.Publish(partition, second));
         });
@@ -368,6 +402,30 @@ namespace {
         CHECK(firstSnapshot.Value() == first);
         REQUIRE(store.Publish(partition, second).HasValue());
         CHECK(store.Load(partition).Value() == second);
+    }
+
+    TEST_CASE("Offline queue storage concurrency fixture wakes after an early publication failure",
+              "[platform-services][offline][storage][atomic]") {
+        TemporaryRoot temporary;
+        BlockingReplaceDurableFileSystem files;
+        const auto created = PlatformOfflineQueueStorage::Create(files, temporary.root);
+        REQUIRE(created.HasValue());
+        auto store = std::move(created).Value();
+        const auto invalid = Record(0, 11, 1, "invalid-identity");
+        std::optional<Horo::Result<void>> result;
+        std::thread publisher([&] {
+            result.emplace(store.Publish(Partition(11), std::span{&invalid, 1}));
+            files.NotifyPublicationFinished();
+        });
+        const bool reachedReplacement = files.WaitUntilReplace();
+        files.ContinueReplacement();
+        publisher.join();
+
+        CHECK_FALSE(reachedReplacement);
+        REQUIRE(result.has_value());
+        REQUIRE(result->HasError());
+        CHECK(result->ErrorValue().code.Value() == "platform.offline.invalid_record");
+        CHECK(files.ReplacementAttempts() == 0);
     }
 
     TEST_CASE("Offline queue storage preserves non-ASCII native root paths", "[platform-services][offline][storage][paths]") {

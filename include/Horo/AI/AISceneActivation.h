@@ -96,6 +96,7 @@ namespace Horo::AI {
 
     namespace Detail {
         struct AiSceneRuntimeState;
+        class AiSceneStructuralParticipant;
         struct AiSceneRestoreState;
     }  // namespace Detail
 
@@ -139,13 +140,19 @@ namespace Horo::AI {
          * @param publicationToken Monotonic token fencing this candidate's publication.
          */
         AiSceneActivationCandidate(AiSceneRuntime &runtime, AiSceneActivationBinding binding,
-                                   std::unique_ptr<Detail::AiSceneRuntimeState> state, std::uint64_t publicationToken) noexcept;
+                                   std::shared_ptr<Detail::AiSceneRuntimeState> state, std::uint64_t publicationToken) noexcept;
 
         AiSceneActivationCandidate(const AiSceneActivationCandidate &) = delete;
         AiSceneActivationCandidate &operator=(const AiSceneActivationCandidate &) = delete;
 
         /** @copydoc Runtime::SceneActivationCandidate::ValidatePublication */
         [[nodiscard]] Result<void> ValidatePublication() const override;
+
+        /** @copydoc Runtime::SceneActivationCandidate::CanonicalDatasetProjection */
+        [[nodiscard]] Runtime::SceneCanonicalDatasetProjection CanonicalDatasetProjection() const noexcept override {
+            return Runtime::SceneCanonicalDatasetProjection::Absent;
+        }
+
         /** @copydoc Runtime::SceneActivationCandidate::Publish */
         void Publish() noexcept override;
         /** @copydoc Runtime::SceneActivationCandidate::Shutdown */
@@ -159,7 +166,7 @@ namespace Horo::AI {
     private:
         AiSceneRuntime *runtime_{};
         AiSceneActivationBinding binding_;
-        std::unique_ptr<Detail::AiSceneRuntimeState> state_;
+        std::shared_ptr<Detail::AiSceneRuntimeState> state_;
         std::uint64_t publicationToken_{};
         bool published_{};
     };
@@ -243,21 +250,21 @@ namespace Horo::AI {
          * @param taskDefinition Persistent task identity.
          * @return Generation-fenced task handle or a typed lifecycle/capacity error.
          */
-        [[nodiscard]] Result<TaskHandle> StartTaskAtSafePoint(AgentHandle agent, TaskId taskDefinition);
+        [[nodiscard]] Result<TaskHandle> StartTaskAtSafePoint(AgentHandle agent, TaskId taskDefinition) const;
 
         /**
          * @brief Disables one agent, cancelling its task before revoking its capabilities and blackboard.
          * @param agent Exact active agent handle.
          * @return Success or a typed malformed/stale/shutdown error.
          */
-        [[nodiscard]] Result<void> DisableAtSafePoint(AgentHandle agent);
+        [[nodiscard]] Result<void> DisableAtSafePoint(AgentHandle agent) const;
 
         /**
          * @brief Retires the agent owned by one destroyed runtime entity generation.
          * @param owner Exact RuntimeScene entity reference.
          * @return Number retired or a typed malformed/stale/shutdown error.
          */
-        [[nodiscard]] Result<std::size_t> RetireOwnerAtSafePoint(Runtime::EntityRef owner);
+        [[nodiscard]] Result<std::size_t> RetireOwnerAtSafePoint(Runtime::EntityRef owner) const;
 
         /** @brief Captures an immutable value snapshot of the active publication. */
         [[nodiscard]] Result<AiSceneSnapshot> Snapshot() const;
@@ -269,6 +276,15 @@ namespace Horo::AI {
         /** @brief Cancels owned work and closes admission; retained external snapshots remain valid. */
         void BeginShutdown() noexcept;
 
+        /** @brief Creates an explicit owner-lane adapter for atomic entity-group additions and retirement.
+         * @param descriptors Immutable controller catalog copied into the owned adapter.
+         * @return Adapter borrowing this runtime, which must outlive the Scene service using it.
+         * @details Preparation never replaces existing agents/tasks. Detached candidates retain their publication
+         * across shutdown and reject publication after any owner mutation. Public C++ consumers must rebuild.
+         */
+        [[nodiscard]] std::unique_ptr<Runtime::SceneStructuralParticipant> MakeStructuralParticipant(
+            std::span<const AiControllerDescriptor> descriptors);
+
         /** @brief Reports whether the runtime rejects new activation and safe-point operations. */
         [[nodiscard]] constexpr bool IsShutdown() const noexcept {
             return shutdown_;
@@ -276,17 +292,18 @@ namespace Horo::AI {
 
     private:
         friend class AiSceneActivationCandidate;
+        friend class Detail::AiSceneStructuralParticipant;
 
         explicit AiSceneRuntime(AiSceneRuntimeSettings settings) noexcept;
 
         [[nodiscard]] Result<void> ValidateCandidate(const AiSceneActivationBinding &binding) const;
-        [[nodiscard]] bool PublishCandidate(std::unique_ptr<Detail::AiSceneRuntimeState> &state, const AiSceneActivationBinding &binding,
+        [[nodiscard]] bool PublishCandidate(std::shared_ptr<Detail::AiSceneRuntimeState> &state, const AiSceneActivationBinding &binding,
                                             std::uint64_t publicationToken) noexcept;
         void ShutdownState(Detail::AiSceneRuntimeState &state) const noexcept;
         void RetirePublication(std::uint64_t publicationToken) noexcept;
 
         AiSceneRuntimeSettings settings_;
-        std::unique_ptr<Detail::AiSceneRuntimeState> active_;
+        std::shared_ptr<Detail::AiSceneRuntimeState> active_;
         std::uint64_t nextPublicationToken_{1};
         std::uint64_t activePublicationToken_{};
         bool shutdown_{};

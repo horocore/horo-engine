@@ -1,5 +1,6 @@
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/ReplicationRegistration.h"
+#include "Horo/Network/NetworkErrors.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -132,4 +133,50 @@ TEST_CASE("gameplay modules without replicated state freeze without publishing a
     REQUIRE(registry.Freeze({}, {}, {}).HasValue());
     REQUIRE(registry.IsFrozen());
     RequireGameplayError(registry.Acquire(), GameplayErrors::InvalidReplicationRegistration);
+}
+
+TEST_CASE("native registration order and component display rename preserve canonical declarations", "[unit][gameplay][replication]") {
+    const std::array originalComponents{Component()};
+    auto renamedComponents = originalComponents;
+    renamedComponents.front().displayName = "Renamed presentation";
+    renamedComponents.front().category = "Different editor category";
+    ReplicationRegistrationRegistry original{"game.tests"};
+    ReplicationRegistrationRegistry renamed{"game.tests"};
+    const auto first = Registration(originalComponents.front().typeId, 1);
+    auto second = Registration(originalComponents.front().typeId, 2);
+    second.serializers = first.serializers;  // One exact codec adapter is shared by both schema contributions.
+    REQUIRE(original.Register(second).HasValue());
+    REQUIRE(original.Register(first).HasValue());
+    REQUIRE(renamed.Register(first).HasValue());
+    REQUIRE(renamed.Register(second).HasValue());
+    REQUIRE(original.Freeze(originalComponents, {}, {}).HasValue());
+    REQUIRE(renamed.Freeze(renamedComponents, {}, {}).HasValue());
+    const auto before = original.Acquire().Value();
+    const auto after = renamed.Acquire().Value();
+    CHECK(before.Descriptors()->Fingerprint() == after.Descriptors()->Fingerprint());
+    REQUIRE(after.Registrations().size() == 2);
+    CHECK(after.Registrations().front().schema == ReplicationSchemaId::Create(1).Value());
+    CHECK(after.Registrations().back().schema == ReplicationSchemaId::Create(2).Value());
+    for (const auto &binding : after.Registrations()) {
+        CHECK(after.Serializers().Encode(binding.schema, FieldId::Create(1).Value(), 4.5).Value() ==
+              before.Serializers().Encode(binding.schema, FieldId::Create(1).Value(), 4.5).Value());
+    }
+}
+
+TEST_CASE("native declaration qualification never publishes missing or conflicting codec code", "[unit][gameplay][replication]") {
+    const std::array components{Component()};
+    ReplicationRegistrationRegistry registry{"game.tests"};
+    SECTION("declared field codec has no exact adapter") {
+        auto declaration = Registration(components.front().typeId);
+        declaration.schema.fields.front().codec = ReplicationCodecId::Create(2).Value();
+        REQUIRE(registry.Register(std::move(declaration)).HasValue());
+        RequireGameplayError(registry.Freeze(components, {}, {}), NetworkErrors::ReplicationSerializerUnknown);
+    }
+    SECTION("two schema contributions claim the same codec with different adapters") {
+        REQUIRE(registry.Register(Registration(components.front().typeId, 1)).HasValue());
+        REQUIRE(registry.Register(Registration(components.front().typeId, 2)).HasValue());
+        RequireGameplayError(registry.Freeze(components, {}, {}), NetworkErrors::ReplicationSerializerConflict);
+    }
+    CHECK_FALSE(registry.IsFrozen());
+    CHECK(registry.Acquire().HasError());
 }

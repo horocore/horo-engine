@@ -690,7 +690,11 @@ def run_check(
 
 def _is_formattable(path: Path) -> bool:
     """Return true if path is a repository C++ source and not third-party."""
-    return path.suffix in _CPP_EXTENSIONS and not any(part in _EXCLUDED_PATH_PARTS for part in path.parts)
+    try:
+        relative = path.relative_to(REPOSITORY_ROOT) if path.is_absolute() else path
+    except ValueError:
+        return False
+    return relative.suffix in _CPP_EXTENSIONS and not any(part in _EXCLUDED_PATH_PARTS for part in relative.parts)
 
 
 def _collect_format_candidates(files: Sequence[str] | None, staged: bool) -> list[Path]:

@@ -98,6 +98,7 @@ LoadLibrary
   -> validate manifest identity, complete registrations, diagnostics, and lifecycle callbacks
   -> CreateGameModule
   -> Register components, systems, services, game-owned asset types, and native replication bindings
+  -> Register explicitly durable behavior-instance, module-global, service and session state
   -> freeze every registration transaction
   -> create project services in provider-first order
   -> Start
@@ -151,6 +152,7 @@ struct GameRegistrationContext {
     InputActionRegistry& inputActions;
     AssetTypeRegistry& assetTypes;
     ReplicationRegistrationRegistry& replication;
+    PersistenceRegistrationRegistry& persistence;
     SettingsRegistry& settings;
     RuntimeCommandRegistry& commands;
     RuntimeDiagnostics& diagnostics;
@@ -449,6 +451,18 @@ scene-scoped services are created before dependent scene instances and destroyed
 after dependent behaviors, systems, and jobs are drained.
 
 ## Canonical Runtime Persistence
+
+SDK boundary 8 introduced both `GameRegistrationContext::events` and
+`GameRegistrationContext::persistence`; boundary-7 event-only and persistence-only
+layouts require a rebuild and are rejected before activation. Registration
+copies inert canonical metadata and exact-generation runtime sources; freeze
+resolves behavior/service ownership before `Start` and invokes no state callback.
+The host explicitly calls `LoadedGameModule::AcquirePersistence` and registers the
+pinned adapter through `SaveParticipationClient`. Acquired adapters and restore
+receipts prevent module retirement; reload closes new acquisition first.
+Authoring fields and native reload snapshots do not register durable state.
+See [migration guidance](../../guides/gameplay-persistence-migration.md) for the
+required native-module rebuild and the SaveApi/GameplayRuntime header boundaries.
 
 Gameplay modules contribute runtime-save state only through the subsystem-owned
 `CanonicalStateParticipantDescriptor` and `ICanonicalStateAdapter` contract in

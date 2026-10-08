@@ -322,6 +322,17 @@ Screen-space UI is resolved after world rendering unless a render graph pass
 explicitly composes it earlier. World-space UI produces normal render instances
 and participates in visibility and depth policy declared by the canvas.
 
+## Responsive Presentation Profiles
+
+[Responsive Presentation Profiles](responsive-presentation-profiles.md) is the
+single proposed decision source for constraints plus finite typed layout variants,
+deterministic aspect/form-factor/input/split-view selection and neutral fallback.
+It owns that decision's limits, per-attachment publication, errors and source/cook
+migration; this document does not duplicate its selector or precedence rules.
+Profiles preserve the existing semantic tree and ownership and supply effective
+layout styles to the ordinary layout engine. The proposal does not claim profile
+selection or the complete RuntimeUiService is implemented on current main.
+
 ## Element Tree And Layout
 
 UI content is a retained tree:
@@ -1264,3 +1275,25 @@ Required tests cover:
   that are separate from runtime UI.
 - [Editor Modal Host](../editor/editor-modal-host.md): HoroEditor modal system,
   separate from game menus.
+
+## Typed asset generation reload
+
+`UiHotReload` is owned by `HoroEngine::RuntimeUi`. It prepares complete real
+Assets closures and actual canvas owners privately, reconciles compatible stable
+IDs, then publishes one whole generation at the ADR-073 owner safe point. Actual
+source changes invalidate a prepared candidate; rejected loads/candidates keep
+the last good generation. Compatible text edit drafts retain their Cancel
+baseline, while pressed/native IME/capture/pending action state is reset.
+
+Publication closes bounded owner admission without invoking an external binding
+write authority. Explicit load-time retirement collection abandons reservations
+once while retaining authority/module/dependency pins until lease drain. Raw
+modal/route handles use never-reused allocator-backed namespaces and EVER-issued
+incarnations; retired history remains burned. Render/input consumers retain the
+whole generation lease and check its current-publication fence. Presentation
+eligibility requires a successful receipt for the replacement interaction.
+
+See [the host migration and lifetime contract](../../guides/runtime-ui-hot-reload-migration.md).
+This implements the typed RuntimeUi backend responsibility; the aggregate
+RuntimeUiService and host semantic-scope registry remain separate composition
+work. No concrete backend or host scope rebind is selected by reload.

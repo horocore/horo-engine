@@ -57,6 +57,29 @@ namespace Horo::WorldStreaming {
             Assets::AssetRegistrySnapshot registry{Registry(ids)};
         };
 
+        /** @brief Exact release fixture shared by package admission, lifecycle and replacement regressions. */
+        struct PackageRequestFixture final {
+            RequestFixture cell;
+            Assets::AssetChunkId base{Assets::AssetChunkId::Parse("base").Value()};
+            Assets::AssetChunkId optional{Assets::AssetChunkId::Parse("optional").Value()};
+            std::array<Assets::AssetChunkDefinition, 2>
+                definitions{Assets::AssetChunkDefinition{base, Assets::AssetChunkKind::Base, {Asset(4), Asset(5)}, {}, 0, {}},
+                            Assets::AssetChunkDefinition{optional, Assets::AssetChunkKind::Optional, {Asset(6)}, {base}, 1, {}}};
+            Assets::AssetChunkPlan plan{Assets::AssetChunkPlan::Create(definitions).Value()};
+            WorldPackageAssignmentBinding binding{IdentityFrom<WorldPackageAssignmentId>(1),
+                                                  IdentityFrom<WorldPackageAssignmentRevision>(1), Operation().fence.epoch};
+            WorldPackageChunkAssignment assignment{
+                WorldPackageChunkAssignment::Create(cell.manifest, plan, binding, Hash(20), {3, 2, 3, 8}).Value()};
+            WorldPackageAvailabilityRevision revision{IdentityFrom<WorldPackageAvailabilityRevision>(1)};
+            WorldPackageContentContext context{binding, revision, WorldPackageContentLifecycle::Active};
+            std::array<WorldPackageChunkAvailability, 2> installedStates{WorldPackageChunkAvailability{base,
+                                                                                                       WorldPackageChunkState::Installed},
+                                                                         WorldPackageChunkAvailability{optional,
+                                                                                                       WorldPackageChunkState::Installed}};
+            WorldPackageAvailabilitySnapshot installed{
+                WorldPackageAvailabilitySnapshot::Create(assignment, revision, installedStates).Value()};
+        };
+
         class LoadHarness final {
         public:
             LoadHarness(const Assets::IAssetProvider &provider, const std::size_t workers, const std::size_t maximumOutstanding = 128)
@@ -82,12 +105,16 @@ namespace Horo::WorldStreaming {
                 std::this_thread::yield();
         }
 
-        class BlockingProvider final : public Assets::IAssetProvider {
+        /** @brief Keeps successful existence checks identical across delayed-load lifecycle fixtures. */
+        class KnownAssetProvider : public Assets::IAssetProvider {
         public:
-            Result<bool> Exists(Assets::AssetId, const CancellationToken &) const override {
+            Result<bool> Exists(Assets::AssetId, const CancellationToken &) const final {
                 return Result<bool>::Success(true);
             }
+        };
 
+        class BlockingProvider final : public KnownAssetProvider {
+        public:
             Result<std::vector<std::uint8_t>> Load(Assets::AssetId, const CancellationToken &cancellation) const override {
                 entered.store(true);
                 while (!cancellation.IsCancellationRequested())
@@ -164,6 +191,23 @@ namespace Horo::WorldStreaming {
         REQUIRE(result.ErrorValue().code.Value() == "asset.load.queue_full");
     }
 
+    TEST_CASE("Cell asset request preserves provider failure precedence after cancellation",
+              "[unit][world_streaming][asset_request][failure][cancellation]") {
+        RequestFixture fixture;
+        Assets::MemoryAssetProvider provider;
+        provider.Insert(Asset(4), {4});
+        provider.Insert(Asset(6), {6});
+        LoadHarness loads{provider, 1};
+        auto request = Submit(loads, fixture).Value();
+        WaitTerminal(request);
+        REQUIRE(request.State() == StreamingCellAssetRequestState::Failed);
+        REQUIRE(request.RequestCancel().HasValue());
+        REQUIRE(request.State() == StreamingCellAssetRequestState::Failed);
+        const auto result = request.TakeResult();
+        REQUIRE(result.HasError());
+        REQUIRE(result.ErrorValue().code.Value() != WorldStreamingErrors::CellAssetRequestCancelled.code.Value());
+    }
+
     TEST_CASE("Cell asset request propagates cancellation to every child", "[unit][world_streaming][asset_request][cancellation]") {
         RequestFixture fixture;
         BlockingProvider provider;
@@ -203,12 +247,8 @@ namespace Horo::WorldStreaming {
     }
 
     namespace {
-        class DelayedProvider final : public Assets::IAssetProvider {
+        class DelayedProvider final : public KnownAssetProvider {
         public:
-            Result<bool> Exists(Assets::AssetId, const CancellationToken &) const override {
-                return Result<bool>::Success(true);
-            }
-
             Result<std::vector<std::uint8_t>> Load(Assets::AssetId, const CancellationToken &) const override {
                 entered.store(true);
                 while (!release.load())
@@ -219,6 +259,15 @@ namespace Horo::WorldStreaming {
             mutable std::atomic<bool> entered{};
             mutable std::atomic<bool> release{};
         };
+
+        /** @brief Simulates successive owner frames while actual uncancellable reads drain in the regression. */
+        Result<StreamingCellOperation> PollNextFrame(StreamingCellDirectionOwner &owner, const StreamingSchedulerAdmissionLedger &scheduler,
+                                                     std::uint64_t &frame) {
+            auto budget = StreamingOwnerFrameBudget::Create({scheduler.Owner(), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                                             IdentityFrom<StreamingOwnerFrameId>(++frame), 2000000, 1})
+                              .Value();
+            return owner.PollRetirement(budget, 0);
+        }
 
         class AssetRetirementParticipant final : public IStreamingCellRetirementParticipant {
         public:
@@ -242,6 +291,10 @@ namespace Horo::WorldStreaming {
             }
 
             void BeginRetirement() noexcept override {}
+
+            std::uint64_t MaximumRetirementNanoseconds() const noexcept override {
+                return 1000000;
+            }
 
             Result<std::optional<StreamingCellRetirementAcknowledgement>> PollRetirement() override {
                 if (!request_)
@@ -281,6 +334,7 @@ namespace Horo::WorldStreaming {
         LoadHarness loads{provider, 1};
         ReleaseRead release{provider};
         auto scheduler = RetirementScheduler();
+        std::uint64_t frame{};
         const auto operation = StreamingCellOperation::Create(CandidateTestSupport::Operation(), StreamingCellOperationKind::Load).Value();
         std::vector<std::unique_ptr<IStreamingCellRetirementParticipant>> participants;
         bool published{};
@@ -303,7 +357,7 @@ namespace Horo::WorldStreaming {
                     .UpdateDemand(operation.Handle(), IdentityFrom<StreamingCellDemandRevision>(1),
                                   IdentityFrom<StreamingCellDemandRevision>(2), StreamingDesiredResidency::Unloaded)
                     .HasValue());
-        REQUIRE(owner.PollRetirement().Value().State() == StreamingCellOperationState::Retiring);
+        REQUIRE(PollNextFrame(owner, scheduler, frame).Value().State() == StreamingCellOperationState::Retiring);
         REQUIRE(scheduler.ReservedCapacityUnits() == 5);
         REQUIRE(owner
                     .UpdateDemand(operation.Handle(), IdentityFrom<StreamingCellDemandRevision>(2),
@@ -312,7 +366,7 @@ namespace Horo::WorldStreaming {
         provider.release.store(true);
         const auto drainDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
         while (!owner.Operation().IsTerminal() && std::chrono::steady_clock::now() < drainDeadline) {
-            REQUIRE(owner.PollRetirement().HasValue());
+            REQUIRE(PollNextFrame(owner, scheduler, frame).HasValue());
             std::this_thread::yield();
         }
         REQUIRE(owner.Operation().IsTerminal());
@@ -320,5 +374,80 @@ namespace Horo::WorldStreaming {
         REQUIRE(scheduler.ReservedCapacityUnits() == 0);
         REQUIRE(owner.RequiresFreshAttempt());
         REQUIRE_FALSE(published);
+    }
+
+    TEST_CASE("Packaged cell reads reject missing content before any child admission",
+              "[unit][world_streaming][asset_request][package_chunk]") {
+        PackageRequestFixture package;
+        auto states = package.installedStates;
+        states[1].state = WorldPackageChunkState::Downloadable;
+        const auto missing = WorldPackageAvailabilitySnapshot::Create(package.assignment, package.revision, states).Value();
+        BlockingProvider blocked;
+        LoadHarness loads{blocked, 1};
+        RequireError(RequestStreamingCellAssets(loads.Service(), package.cell.registry, package.cell.manifest, package.cell.candidate,
+                                                AssetRequestContext(), {package.assignment, missing, package.context}),
+                     WorldStreamingErrors::PackageChunkContentMissing);
+        REQUIRE_FALSE(blocked.entered.load());
+    }
+
+    TEST_CASE("Packaged cell reads preserve ordinary request cancellation and shutdown admission",
+              "[unit][world_streaming][asset_request][package_chunk]") {
+        PackageRequestFixture package;
+        Assets::MemoryAssetProvider provider;
+        for (const auto id : package.cell.ids)
+            provider.Insert(id, {1});
+        LoadHarness loads{provider, 1};
+        auto context = package.context;
+        context.lifecycle = WorldPackageContentLifecycle::Closed;
+        RequireError(RequestStreamingCellAssets(loads.Service(), package.cell.registry, package.cell.manifest, package.cell.candidate,
+                                                AssetRequestContext(), {package.assignment, package.installed, context}),
+                     WorldStreamingErrors::PackageChunkLifecycleUnavailable);
+        auto admitted = RequestStreamingCellAssets(loads.Service(), package.cell.registry, package.cell.manifest, package.cell.candidate,
+                                                   AssetRequestContext(), {package.assignment, package.installed, package.context});
+        REQUIRE(admitted.HasValue());
+        auto request = std::move(admitted).Value();
+        WaitTerminal(request);
+        REQUIRE(request.RequestCancel().HasValue());
+        RequireError(request.TakeResult(), WorldStreamingErrors::CellAssetRequestCancelled);
+        auto success = RequestStreamingCellAssets(loads.Service(), package.cell.registry, package.cell.manifest, package.cell.candidate,
+                                                  AssetRequestContext(), {package.assignment, package.installed, package.context})
+                           .Value();
+        WaitTerminal(success);
+        REQUIRE(success.TakeResult().Value().assets.size() == 3);
+    }
+
+    TEST_CASE("Packaged cell reads reject replaced epochs and exact artifact metadata",
+              "[unit][world_streaming][asset_request][package_chunk]") {
+        PackageRequestFixture package;
+        Assets::MemoryAssetProvider provider;
+        LoadHarness loads{provider, 1};
+        auto foreignBinding = package.binding;
+        foreignBinding.epoch = IdentityFrom<PartitionEpoch>(2);
+        const auto foreign =
+            WorldPackageChunkAssignment::Create(package.cell.manifest, package.plan, foreignBinding, Hash(20), {3, 2, 3, 8}).Value();
+        const auto foreignSnapshot = WorldPackageAvailabilitySnapshot::Create(foreign, package.revision, package.installedStates).Value();
+        RequireError(RequestStreamingCellAssets(loads.Service(), package.cell.registry, package.cell.manifest, package.cell.candidate,
+                                                AssetRequestContext(),
+                                                {foreign,
+                                                 foreignSnapshot,
+                                                 {foreignBinding, package.revision, WorldPackageContentLifecycle::Active}}),
+                     WorldStreamingErrors::PackageChunkStale);
+        const auto &descriptor = package.cell.manifest.Descriptor();
+        auto cloned = WorldPartitionDescriptor::Create(descriptor.Version(), descriptor.Partition(), descriptor.Bounds(), descriptor.Grid(),
+                                                       descriptor.Layers(), descriptor.Cells(), {2, 4, 16})
+                          .Value();
+        std::vector<CookedWorldCellManifestCandidate> changedCells;
+        for (std::size_t index{}; index < package.cell.manifest.Cells().size(); ++index) {
+            const auto &cell = package.cell.manifest.Cells()[index];
+            changedCells.push_back({cell.cell, cell.uncompressedSize, cell.compressedSize, cell.payloadCrc32,
+                                    index == 0 ? Hash(30) : cell.artifactHash, package.cell.manifest.HardDependencies(index)});
+        }
+        const auto changedManifest = CookedWorldIndexManifest::Create(std::move(cloned), changedCells, {4, 4, 4, 256, 256}).Value();
+        const auto changed =
+            WorldPackageChunkAssignment::Create(changedManifest, package.plan, package.binding, Hash(20), {3, 2, 3, 8}).Value();
+        const auto changedSnapshot = WorldPackageAvailabilitySnapshot::Create(changed, package.revision, package.installedStates).Value();
+        RequireError(RequestStreamingCellAssets(loads.Service(), package.cell.registry, package.cell.manifest, package.cell.candidate,
+                                                AssetRequestContext(), {changed, changedSnapshot, package.context}),
+                     WorldStreamingErrors::PackageChunkStale);
     }
 }  // namespace Horo::WorldStreaming

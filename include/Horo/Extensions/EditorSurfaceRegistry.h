@@ -6,6 +6,8 @@
  */
 
 #include "Horo/Extensions/EditorSurfaceContext.h"
+#include "Horo/Extensions/EditorUiForm.h"
+#include "Horo/Extensions/ExtensionRetirement.h"
 #include "Horo/Foundation/Result.h"
 
 #include <atomic>
@@ -37,6 +39,14 @@ namespace Horo::Extensions {
         Missing,
     };
 
+    /** @brief Durable user placement of an activity; provider declarations remain immutable. */
+    struct EditorActivityPlacement final {
+        EditorActivitySide side{EditorActivitySide::Left};
+        std::uint8_t group{};
+        std::int32_t order{}; /**< Nonnegative insertion ordinal for a user override. */
+        bool operator==(const EditorActivityPlacement &) const noexcept = default;
+    };
+
     /** @brief Bounded presentation state persisted for one surface contribution. */
     struct EditorSurfaceWorkspaceEntry final {
         std::string surfaceId;
@@ -44,11 +54,13 @@ namespace Horo::Extensions {
         bool open{};
         bool focused{};
         std::vector<std::uint8_t> opaqueState;
+        bool activityVisible{true}; /**< Host presentation preference; provider badges are never persisted. */
+        std::optional<EditorActivityPlacement> activityPlacement;
     };
 
     /** @brief Versioned workspace presentation state owned by the editor host. */
     struct EditorSurfaceWorkspaceState final {
-        std::uint32_t schemaVersion{1};
+        std::uint32_t schemaVersion{2};
         std::vector<EditorSurfaceWorkspaceEntry> surfaces;
     };
 
@@ -80,8 +92,8 @@ namespace Horo::Extensions {
 
         /** @brief Returns whether the request changed the host-owned state. */
         [[nodiscard]] bool Changed() const noexcept {
-            return kind == EditorSurfaceOperationKind::Opened || kind == EditorSurfaceOperationKind::Focused ||
-                   kind == EditorSurfaceOperationKind::Closed;
+            using enum EditorSurfaceOperationKind;
+            return kind == Opened || kind == Focused || kind == Closed;
         }
     };
 
@@ -99,6 +111,8 @@ namespace Horo::Extensions {
         bool open{};
         bool focused{};
         std::vector<std::uint8_t> opaqueState;
+        EditorActivityPresentation activity;
+        std::optional<EditorUiForm> form; /**< Validated copied panel content, without provider callbacks. */
     };
 
     /**
@@ -117,6 +131,15 @@ namespace Horo::Extensions {
 
         /** @brief Withdraws this exact contribution and preserves its bounded presentation state. */
         void Reset() const noexcept;
+        /**
+         * @brief Binds this real surface publication to its verified module retirement owner.
+         * @param retirement Verified owning module's retirement controller.
+         * @return True when revocation is registered; false for invalid, retired or already bound ownership.
+         * @details Failure before work admission leaves the registration unchanged. Failure after creating
+         * the revocation adapter withdraws publication through the adapter's RAII cleanup.
+         * @throws std::bad_alloc Allocation failure; any constructed revocation adapter still withdraws publication.
+         */
+        [[nodiscard]] bool AttachRetirement(const std::shared_ptr<ExtensionRetirement> &retirement);
         /** @brief Reports whether this contribution remains published in the registry. */
         [[nodiscard]] bool IsRegistered() const noexcept;
         /** @brief Returns the stable contribution identity, or an empty view after move. */
@@ -134,6 +157,7 @@ namespace Horo::Extensions {
 
         mutable std::weak_ptr<EditorSurfaceRegistryState> registry_;
         mutable std::shared_ptr<EditorSurfaceState> surface_;
+        mutable std::shared_ptr<ExtensionExecutableLease> retirementLease_;
     };
 
     /**
@@ -144,7 +168,7 @@ namespace Horo::Extensions {
      */
     class EditorSurfaceRegistry final {
     public:
-        static constexpr std::uint32_t WorkspaceSchemaVersion = 1;
+        static constexpr std::uint32_t WorkspaceSchemaVersion = 2;
 
         explicit EditorSurfaceRegistry(const EditorSurfaceRegistryLimits &limits = {});
         ~EditorSurfaceRegistry() noexcept;
@@ -160,6 +184,53 @@ namespace Horo::Extensions {
          * @note Registration copies no executable callback and never invokes provider code.
          */
         [[nodiscard]] Result<EditorSurfaceRegistration> Register(EditorSurfaceContextRegistration context) const;
+
+        /**
+         * @brief Publishes a copied validated form for one active panel generation.
+         * @param provider Exact provider activation; stale generations fail closed.
+         * @param surfaceId Registered panel identity.
+         * @param form Bounded declarative standard-component content.
+         * @return Success or a typed validation, ownership, revocation or shutdown error.
+         */
+        [[nodiscard]] Result<void> PublishForm(const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId,
+                                               EditorUiForm form) const;
+        /**
+         * @brief Changes bounded activity visibility, admission and badge presentation.
+         * @param provider Exact provider activation; stale generations fail closed.
+         * @param surfaceId Registered activity identity.
+         * @param presentation Copied semantic state; no provider callback runs.
+         * @return Success or a typed ownership, revocation or shutdown error.
+         */
+        [[nodiscard]] Result<void> PublishActivity(const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId,
+                                                   EditorActivityPresentation presentation) const;
+
+        /**
+         * @brief Changes the durable host-owned visibility preference independently of provider presentation.
+         * @param surfaceId Registered activity identity.
+         * @param visible User workspace visibility intent.
+         * @return Success or a typed unknown, wrong-kind or shutdown error; hiding closes the paired drawer.
+         */
+        [[nodiscard]] Result<void> SetActivityVisibility(std::string_view surfaceId, bool visible) const;
+
+        /**
+         * @brief Toggles a live activity destination and its drawer, replacing the previous destination on the same side.
+         * @param provider Exact provider activation observed by the host projection.
+         * @param surfaceId Registered activity identity.
+         * @return Opened or Closed, or a typed stale, disabled, missing or shutdown failure without mutation.
+         */
+        [[nodiscard]] Result<EditorSurfaceOperation> ToggleActivity(const EditorSurfaceProviderIdentity &provider,
+                                                                    std::string_view surfaceId) const;
+
+        /**
+         * @brief Moves a live activity to a bounded insertion slot, preserving user placement across provider reloads.
+         * @param provider Exact observed provider generation.
+         * @param surfaceId Registered activity identity.
+         * @param destination Side, group and insertion ordinal in the current group (including hidden activities).
+         * @return Success or a typed stale, unavailable, wrong-kind or invalid-slot failure without mutation.
+         * @details Moving an open destination to an occupied side closes the previous paired destination atomically.
+         */
+        [[nodiscard]] Result<void> MoveActivity(const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId,
+                                                EditorActivityPlacement destination) const;
 
         /** @brief Opens and focuses an active registered surface. */
         [[nodiscard]] Result<EditorSurfaceOperation> Open(std::string_view surfaceId) const;
@@ -199,6 +270,9 @@ namespace Horo::Extensions {
         [[nodiscard]] EditorSurfaceWorkspaceState Save() const;
         /** @brief Returns deterministic copied snapshots in contribution-ID order. */
         [[nodiscard]] std::vector<EditorSurfaceSnapshot> Snapshot() const;
+
+        /** @brief Returns the publication revision for owner-lane projection caches; no forms or strings are copied. */
+        [[nodiscard]] std::uint64_t Revision() const noexcept;
 
         /** @brief Closes admission and withdraws every registered surface without invoking provider code. */
         void BeginShutdown() const noexcept;

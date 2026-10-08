@@ -243,20 +243,68 @@ namespace {
     }
 
     TEST_CASE("Queued Job Keeps Submission Configuration After Caller Advances", "[unit][foundation][jobs][configuration]") {
-        Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 1, .maxRetainedTerminalJobs = 1}};
+        Horo::JobSystemConfig config{.workerCount = 0, .maxQueuedJobs = 1, .maxRetainedTerminalJobs = 1};
+        Horo::JobSystem jobs{config};
+        config.maxQueuedJobs = 0;
         Horo::ConfigurationSnapshot active = BuildConfiguration(23);
         Horo::ConfigurationRevision observed{};
-        auto submitted = jobs.SubmitContext({.configuration = active}, [&](const Horo::JobExecutionContext &context) {
+        Horo::JobDescriptor descriptor{.operationId = Horo::OperationId{42}, .configuration = active};
+        auto submitted = jobs.SubmitContext(descriptor, [&](const Horo::JobExecutionContext &context) {
             observed = context.Configuration()->Revision();
             return Horo::Result<void>::Success();
         });
         REQUIRE(submitted.HasValue());
         active = BuildConfiguration(24);
+        descriptor = {.operationId = Horo::OperationId{99}, .configuration = active, .priority = Horo::JobPriority::Background};
         REQUIRE(submitted.Value()
                     .Wait({.waitPolicy = Horo::WaitPolicy::MainThreadPumpAllowed, .timeout = Horo::Duration::FromMilliseconds(100)})
                     .HasValue());
         REQUIRE(observed == 23);
         REQUIRE(submitted.Value().Snapshot()->configurationRevision == 23);
+        REQUIRE(submitted.Value().Snapshot()->operationId == Horo::OperationId{42});
+        jobs.Shutdown(Horo::ShutdownPolicy::Drain);
+    }
+
+    TEST_CASE("SubmitResult Owns Borrowed Descriptor Before Caller Mutation And Destruction",
+              "[unit][foundation][jobs][configuration][lifetime]") {
+        Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 1}};
+        Horo::CancellationSource parent;
+        Horo::CancellationSource replacementParent;
+        std::optional<Horo::JobHandle> handle;
+        bool executed{};
+        {
+            Horo::JobDescriptor descriptor{.parentCancellation = parent.Token(),
+                                           .operationId = Horo::OperationId{42},
+                                           .configuration = BuildConfiguration(23)};
+            auto submitted = jobs.SubmitResult(descriptor, [&executed](const Horo::CancellationToken &) {
+                executed = true;
+                return Horo::Result<void>::Success();
+            });
+            REQUIRE(submitted.HasValue());
+            REQUIRE(descriptor.configuration->Revision() == 23);
+            handle.emplace(std::move(submitted).Value());
+            descriptor = {.parentCancellation = replacementParent.Token(),
+                          .operationId = Horo::OperationId{99},
+                          .configuration = BuildConfiguration(24)};
+        }
+        SECTION("replacement metadata and cancellation cannot affect accepted work") {
+            replacementParent.RequestCancellation();
+            REQUIRE(handle->Wait({.waitPolicy = Horo::WaitPolicy::MainThreadPumpAllowed, .timeout = Horo::Duration::FromMilliseconds(100)})
+                        .HasValue());
+            CHECK(executed);
+        }
+        SECTION("original cancellation ancestry remains owned after descriptor destruction") {
+            parent.RequestCancellation();
+            const auto waited =
+                handle->Wait({.waitPolicy = Horo::WaitPolicy::MainThreadPumpAllowed, .timeout = Horo::Duration::FromMilliseconds(100)});
+            REQUIRE(waited.HasError());
+            CHECK(Horo::IsJobCancelled(waited.ErrorValue()));
+            CHECK_FALSE(executed);
+        }
+        const auto snapshot = handle->Snapshot();
+        REQUIRE(snapshot.has_value());
+        CHECK(snapshot->configurationRevision == 23);
+        CHECK(snapshot->operationId == Horo::OperationId{42});
         jobs.Shutdown(Horo::ShutdownPolicy::Drain);
     }
 
@@ -387,6 +435,10 @@ namespace {
         });
         REQUIRE((completed.HasValue()));
         REQUIRE((completed.Value().Wait().HasValue()));
+        // Terminal publication precedes capture destruction so destructors may safely reenter Wait().
+        const auto releaseDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!completedProbe.expired() && std::chrono::steady_clock::now() < releaseDeadline)
+            std::this_thread::yield();
         REQUIRE((completedProbe.expired()));
 
         Horo::JobSystem queuedJobs{Horo::JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 1}};
@@ -1135,3 +1187,73 @@ namespace {
         jobs.Shutdown(Horo::ShutdownPolicy::Drain);
     }
 }  // namespace
+
+TEST_CASE("Isolated diagnostic snapshots preserve nesting job propagation and worker reuse", "[unit][foundation][jobs][context][privacy]") {
+    using namespace Horo;
+    Log::LogContextSnapshot retained;
+    {
+        Log::LogContext ambient{"account.id", "private-account", "path", "/private/context/path"};
+        {
+            Log::ScopedLogContext isolated{Log::LogContextSnapshot::Isolated({{"save.operation", "41"}})};
+            {
+                Log::LogContext nested{"safe.phase", "capture"};
+                retained = Log::CaptureLogContext();
+                REQUIRE(retained.IsIsolationBoundary());
+                REQUIRE(retained.Fields().size() == 2);
+                REQUIRE_FALSE(HasContextField(retained, "account.id", "private-account"));
+            }
+            REQUIRE(Log::CaptureLogContext().Fields().size() == 1);
+        }
+        REQUIRE_FALSE(Log::CaptureLogContext().IsIsolationBoundary());
+        REQUIRE(HasContextField(Log::CaptureLogContext(), "account.id", "private-account"));
+    }
+    JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 4}};
+    std::atomic<bool> exact{};
+    std::atomic<bool> leaked{};
+    {
+        Log::LogContext otherAmbient{"display.name", "private-display"};
+        Log::ScopedLogContext binding{retained.With("safe.phase", "restore")};
+        auto submitted = jobs.Submit({}, [&exact](const CancellationToken &) {
+            const auto snapshot = Log::CaptureLogContext();
+            exact.store(snapshot.IsIsolationBoundary() && snapshot.Fields().size() == 2 &&
+                        HasContextField(snapshot, "save.operation", "41") && HasContextField(snapshot, "safe.phase", "restore"));
+        });
+        REQUIRE(submitted.HasValue());
+        REQUIRE(submitted.Value().Wait().HasValue());
+    }
+    auto reused = jobs.Submit({}, [&leaked](const CancellationToken &) {
+        leaked.store(Log::CaptureLogContext().IsIsolationBoundary() || !Log::CaptureLogContext().Fields().empty());
+    });
+    REQUIRE(reused.HasValue());
+    REQUIRE(reused.Value().Wait().HasValue());
+    jobs.Shutdown(ShutdownPolicy::Drain);
+    REQUIRE(exact.load());
+    REQUIRE_FALSE(leaked.load());
+}
+
+TEST_CASE("Cancelled isolated queued work releases context without contaminating replacement work",
+          "[unit][foundation][jobs][context][privacy][cancel]") {
+    using namespace Horo;
+    JobSystem jobs{JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 1}};
+    bool called{};
+    std::optional<JobHandle> cancelled;
+    {
+        Log::ScopedLogContext binding{Log::LogContextSnapshot::Isolated({{"save.operation", "51"}})};
+        auto submitted = jobs.Submit({}, [&called](const CancellationToken &) {
+            called = true;
+        });
+        REQUIRE(submitted.HasValue());
+        cancelled.emplace(std::move(submitted).Value());
+    }
+    REQUIRE(cancelled->RequestCancel().HasValue());
+    bool clean{};
+    auto replacement = jobs.Submit({}, [&clean](const CancellationToken &) {
+        clean = Log::CaptureLogContext().Fields().empty() && !Log::CaptureLogContext().IsIsolationBoundary();
+    });
+    REQUIRE(replacement.HasValue());
+    REQUIRE(
+        replacement.Value().Wait({.waitPolicy = WaitPolicy::MainThreadPumpAllowed, .timeout = Duration::FromMilliseconds(100)}).HasValue());
+    jobs.Shutdown(ShutdownPolicy::Cancel);
+    REQUIRE_FALSE(called);
+    REQUIRE(clean);
+}

@@ -18,6 +18,7 @@ namespace Horo::Navigation {
             AssetCookTargetId target;
             NavigationAssetBackendFactory factory;
             NavigationAssetSceneLimits limits;
+            std::optional<std::vector<NavMeshAssetContentExpectation>> content;
             std::shared_ptr<NavigationAssetWorldAccounting> accounting{std::make_shared<NavigationAssetWorldAccounting>()};
             std::shared_ptr<NavigationWorldLifecycle> active;
             std::shared_ptr<const std::vector<NavigationAssetProvenance>> provenance;
@@ -98,6 +99,11 @@ namespace Horo::Navigation {
                 return Result<void>::Success();
             }
 
+            /** @brief The prepared navigation root owns runtime navigation state, not a persistent-world dataset identity. */
+            Runtime::SceneCanonicalDatasetProjection CanonicalDatasetProjection() const noexcept override {
+                return Runtime::SceneCanonicalDatasetProjection::Absent;
+            }
+
             void Publish() noexcept override {
                 state_->active = world_;
                 state_->provenance = provenance_;
@@ -142,9 +148,16 @@ namespace Horo::Navigation {
             const auto resolved = scene.FindAsset(id);
             if (!resolved || !resolved->type)
                 return Result<std::size_t>::Failure(MakeError(NavigationErrors::NoNavigationData));
+            const NavMeshAssetContentExpectation *expectation = nullptr;
+            if (state.content) {
+                const auto found = std::ranges::find(*state.content, id, &NavMeshAssetContentExpectation::id);
+                if (found == state.content->end())
+                    return Result<std::size_t>::Failure(MakeError(NavigationErrors::NoNavigationData));
+                expectation = std::to_address(found);
+            }
             const Assets::AssetDependency metadata{id, *resolved->type};
-            auto loaded =
-                LoadNavMeshAsset(metadata, scene.AssetRegistryRevision(), resolved->bytes, state.target, *state.cache, state.limits.assets);
+            auto loaded = LoadNavMeshAsset(metadata, scene.AssetRegistryRevision(), resolved->bytes, state.target, *state.cache,
+                                           state.limits.assets, expectation);
             if (loaded.HasError())
                 return Result<std::size_t>::Failure(loaded.ErrorValue());
             assets.push_back(std::move(loaded).Value());
@@ -177,6 +190,39 @@ namespace Horo::Navigation {
             return Result<void>::Success();
         }
 
+        /** @brief Required packaged NavMesh content cannot be bypassed by an empty surface projection. */
+        [[nodiscard]] Result<void> ValidateRequiredCoverage(const Runtime::RuntimeSceneDefinition &definition,
+                                                            const Runtime::RuntimeSceneView scene, Detail::NavigationAssetSceneState &state,
+                                                            std::vector<LoadedNavMeshAsset> &assets,
+                                                            const std::span<const NavigationLoadedSurface> surfaces) {
+            for (const auto &dependency : definition.AssetDependencies()) {
+                if (dependency.expectedType.Value() != Assets::NavMeshAssetTypeName)
+                    continue;
+                if (const auto resolved = ResolveAsset(dependency.id, scene, state, assets); resolved.HasError())
+                    return Result<void>::Failure(resolved.ErrorValue());
+                if (std::ranges::none_of(surfaces, [&dependency](const auto &surface) {
+                    return surface.definition == dependency.id;
+                }))
+                    return Result<void>::Failure(MakeError(NavigationErrors::SceneSurfaceMissing));
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Enabled grounded agents require an eligible declared partition in the same packaged Scene world. */
+        [[nodiscard]] Result<void> ValidateAgentCoverage(const Runtime::RuntimeSceneDefinition &definition,
+                                                         const std::span<const NavigationLoadedSurface> surfaces) {
+            for (const auto &entity : definition.Entities()) {
+                if (!entity.components.navigationAgent || !entity.components.navigationAgent->enabled)
+                    continue;
+                const auto profile = entity.components.navigationAgent->profile;
+                if (std::ranges::none_of(surfaces, [profile](const auto &surface) {
+                    return surface.partition && surface.partition->profile == profile;
+                }))
+                    return Result<void>::Failure(MakeError(NavigationErrors::SceneSurfaceMissing));
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Retired query-pinned worlds consume the same finite provider budget as the active world. */
         [[nodiscard]] Result<std::size_t> AvailableProviderBudget(const Detail::NavigationAssetSceneState &state) {
             const auto retainedBytes = state.accounting->providerBytes.load();
@@ -186,10 +232,10 @@ namespace Horo::Navigation {
             return Result<std::size_t>::Success(state.limits.maximumReservedProviderBytes - retainedBytes);
         }
 
-        /** @brief Close preparation on invalid host bounds or absent explicit composition. */
-        [[nodiscard]] bool ValidState(const Detail::NavigationAssetSceneState &state) noexcept {
-            return !state.closed && static_cast<bool>(state.factory) && state.limits.maximumLiveWorlds > 0 &&
-                   state.limits.maximumLiveWorlds <= 64 && state.limits.maximumReservedProviderBytes > 0;
+        /** @brief Close preparation on shutdown or invalid host bounds, independently of provider availability. */
+        [[nodiscard]] bool ValidPreparationBounds(const Detail::NavigationAssetSceneState &state) noexcept {
+            return !state.closed && state.limits.maximumLiveWorlds > 0 && state.limits.maximumLiveWorlds <= 64 &&
+                   state.limits.maximumReservedProviderBytes > 0;
         }
 
         /** @brief Transfer preparation byte pins into the unique backend lifetime owner. */
@@ -218,6 +264,15 @@ namespace Horo::Navigation {
                 prepared.Value().reservedProviderBytes > available) {
                 return Result<std::shared_ptr<NavigationWorldLifecycle>>::Failure(MakeError(NavigationErrors::CapacityExceeded));
             }
+            const auto capabilities = prepared.Value().backend->Capabilities();
+            for (const auto &asset : assets) {
+                if (!asset.contentProvenance || !asset.contentProvenance->projectProfile)
+                    continue;
+                const auto admitted =
+                    AdmitNavigationProjectProfile(*asset.contentProvenance->projectProfile, capabilities, capabilities.revision);
+                if (admitted.HasError())
+                    return Result<std::shared_ptr<NavigationWorldLifecycle>>::Failure(admitted.ErrorValue());
+            }
             auto bytes = TakeTilePins(assets);
             auto backend = std::make_unique<PinnedAssetBackend>(std::move(prepared).Value(), std::move(bytes), state.accounting,
                                                                 std::move(provenance));
@@ -234,15 +289,15 @@ namespace Horo::Navigation {
     }  // namespace
 
     /** @copydoc NavigationAssetSceneActivationParticipant::NavigationAssetSceneActivationParticipant */
-    NavigationAssetSceneActivationParticipant::NavigationAssetSceneActivationParticipant(Assets::AssetPayloadCache &cache,
-                                                                                         AssetCookTargetId target,
-                                                                                         NavigationAssetBackendFactory factory,
-                                                                                         const NavigationAssetSceneLimits &limits)
+    NavigationAssetSceneActivationParticipant::NavigationAssetSceneActivationParticipant(
+        Assets::AssetPayloadCache &cache, AssetCookTargetId target, NavigationAssetBackendFactory factory,
+        const NavigationAssetSceneLimits &limits, std::optional<std::vector<NavMeshAssetContentExpectation>> content)
         : state_(std::make_shared<Detail::NavigationAssetSceneState>()) {
         state_->cache = &cache;
         state_->target = std::move(target);
         state_->factory = std::move(factory);
         state_->limits = limits;
+        state_->content = std::move(content);
     }
 
     /** @copydoc NavigationAssetSceneActivationParticipant::~NavigationAssetSceneActivationParticipant */
@@ -253,9 +308,13 @@ namespace Horo::Navigation {
     /** @copydoc NavigationAssetSceneActivationParticipant::Prepare */
     Result<std::unique_ptr<Runtime::SceneActivationCandidate>> NavigationAssetSceneActivationParticipant::Prepare(
         const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView scene) {
-        if (!ValidState(*state_)) {
+        if (!ValidPreparationBounds(*state_)) {
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(NavigationErrors::CapacityExceeded));
         }
+        // Legacy composition keeps its existing immediate unavailable diagnostic. Strict package composition
+        // first validates whether enabled authored navigation requires a provider; inert empty Scenes do not.
+        if (!state_->factory && !state_->content.has_value())
+            return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(NavigationErrors::CapabilityUnavailable));
         const auto descriptor = Descriptor(scene);
         if (descriptor.HasError())
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(descriptor.ErrorValue());
@@ -264,6 +323,12 @@ namespace Horo::Navigation {
             std::vector<NavigationLoadedSurface> surfaces;
             if (const auto selected = SelectSurfaces(definition, scene, *state_, assets, surfaces); selected.HasError())
                 return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(selected.ErrorValue());
+            if (state_->content) {
+                if (const auto required = ValidateRequiredCoverage(definition, scene, *state_, assets, surfaces); required.HasError())
+                    return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(required.ErrorValue());
+                if (const auto coverage = ValidateAgentCoverage(definition, surfaces); coverage.HasError())
+                    return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(coverage.ErrorValue());
+            }
             auto provenance = std::make_shared<std::vector<NavigationAssetProvenance>>();
             provenance->reserve(assets.size());
             for (const auto &asset : assets) {
@@ -272,6 +337,9 @@ namespace Horo::Navigation {
             }
             std::shared_ptr<NavigationWorldLifecycle> world;
             if (!surfaces.empty()) {
+                if (!state_->factory)
+                    return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(
+                        MakeError(NavigationErrors::CapabilityUnavailable));
                 auto prepared = PrepareWorld(descriptor.Value(), surfaces, assets, *state_, provenance);
                 if (prepared.HasError())
                     return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(prepared.ErrorValue());

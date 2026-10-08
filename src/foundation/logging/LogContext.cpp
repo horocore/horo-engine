@@ -20,7 +20,12 @@ namespace Horo::Log {
          * can grow without invalidating existing indices.
          */
         struct MdcStack {
-            std::vector<std::vector<MdcField>> frames;
+            struct Frame {
+                std::vector<MdcField> fields;
+                bool isolated{};
+            };
+
+            std::vector<Frame> frames;
         };
 
         MdcStack &MdcState() {
@@ -28,10 +33,10 @@ namespace Horo::Log {
             return state;
         }
 
-        std::size_t PushContextFrame(std::vector<MdcField> fields) {
+        std::size_t PushContextFrame(std::vector<MdcField> fields, const bool isolated = false) {
             auto &state = MdcState();
             const std::size_t index = state.frames.size();
-            state.frames.push_back(std::move(fields));
+            state.frames.emplace_back(std::move(fields), isolated);
             return index;
         }
 
@@ -47,6 +52,18 @@ namespace Horo::Log {
     /** @copydoc LogContextSnapshot::LogContextSnapshot */
     LogContextSnapshot::LogContextSnapshot(std::vector<MdcField> fields) : fields_(std::move(fields)) {}
 
+    /** @copydoc LogContextSnapshot::Isolated */
+    LogContextSnapshot LogContextSnapshot::Isolated(std::vector<MdcField> fields) {
+        LogContextSnapshot snapshot{std::move(fields)};
+        snapshot.isolated_ = true;
+        return snapshot;
+    }
+
+    /** @copydoc LogContextSnapshot::IsIsolationBoundary */
+    bool LogContextSnapshot::IsIsolationBoundary() const noexcept {
+        return isolated_;
+    }
+
     /** @copydoc LogContextSnapshot::Fields */
     std::span<const MdcField> LogContextSnapshot::Fields() const noexcept {
         return fields_;
@@ -59,7 +76,7 @@ namespace Horo::Log {
             derived.emplace_back(std::move(key), std::move(value));
         else
             existing->second = std::move(value);
-        return LogContextSnapshot{std::move(derived)};
+        return isolated_ ? Isolated(std::move(derived)) : LogContextSnapshot{std::move(derived)};
     }
 
     std::size_t LogContext::PushFrame(std::vector<MdcField> fields) {
@@ -72,7 +89,7 @@ namespace Horo::Log {
 
     /** @copydoc ScopedLogContext::ScopedLogContext */
     ScopedLogContext::ScopedLogContext(const LogContextSnapshot &snapshot)
-        : frameIndex_(PushContextFrame({snapshot.Fields().begin(), snapshot.Fields().end()})) {}
+        : frameIndex_(PushContextFrame({snapshot.Fields().begin(), snapshot.Fields().end()}, snapshot.IsIsolationBoundary())) {}
 
     /** @copydoc ScopedLogContext::~ScopedLogContext */
     ScopedLogContext::~ScopedLogContext() {
@@ -88,7 +105,9 @@ namespace Horo::Log {
         std::vector<MdcField> merged;
         merged.reserve(8);  // typical small field count
         for (const auto &frame : frames) {
-            for (const auto &field : frame) {
+            if (frame.isolated)
+                merged.clear();
+            for (const auto &field : frame.fields) {
                 const auto it = std::ranges::find_if(merged, [&](const MdcField &f) {
                     return f.first == field.first;
                 });
@@ -107,6 +126,9 @@ namespace Horo::Log {
 
     /** @copydoc CaptureLogContext */
     LogContextSnapshot CaptureLogContext() {
-        return LogContextSnapshot{GetMdcFields()};
+        const bool isolated = std::ranges::any_of(MdcState().frames, [](const auto &frame) {
+            return frame.isolated;
+        });
+        return isolated ? LogContextSnapshot::Isolated(GetMdcFields()) : LogContextSnapshot{GetMdcFields()};
     }
 }  // namespace Horo::Log

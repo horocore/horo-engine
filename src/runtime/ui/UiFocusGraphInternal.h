@@ -80,10 +80,10 @@ namespace Horo::Runtime::Ui {
             UiElementHandle rootHandle;
             UiElementId defaultFocus;
             UiFocusModalScopePolicy policy{UiFocusModalScopePolicy::InclusiveTrap};
-            std::uint32_t generation{1};
+            std::uint32_t generation{};
         };
 
-        explicit Storage(const UiFocusGraphDescriptor &value) : descriptor(value) {
+        explicit Storage(const UiFocusGraphDescriptor &value) : descriptor(value), lastModalIncarnation(value.previousModalIncarnation) {
             nodes.reserve(value.nodeCapacity);
             modalSlots.resize(value.modalCapacity);
             restorations.resize(value.restorationCapacity);
@@ -185,7 +185,7 @@ namespace Horo::Runtime::Ui {
             return FirstAllowed();
         }
 
-        [[nodiscard]] std::optional<std::size_t> ResolveRestoration(const RestorationEntry &entry) const noexcept {
+        [[nodiscard]] std::optional<std::size_t> ResolveSavedOrAncestor(const RestorationEntry &entry) const noexcept {
             if (const auto saved = ResolveAllowed(entry.focused); saved.has_value())
                 return saved;
 
@@ -195,6 +195,13 @@ namespace Horo::Runtime::Ui {
                         return ancestor;
                 }
             }
+
+            return std::nullopt;
+        }
+
+        [[nodiscard]] std::optional<std::size_t> ResolveRestoration(const RestorationEntry &entry) const noexcept {
+            if (const auto restored = ResolveSavedOrAncestor(entry); restored.has_value())
+                return restored;
 
             if (descriptor.recovery != UiFocusRecoveryPolicy::FirstFocusable && descriptor.recovery != UiFocusRecoveryPolicy::Clear) {
                 if (const auto modalDefault = ActiveModalDefault(); modalDefault.has_value())
@@ -208,14 +215,8 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] std::optional<std::size_t> ResolveReload(const RestorationEntry &entry) const noexcept {
-            if (const auto saved = ResolveAllowed(entry.focused); saved.has_value())
-                return saved;
-            if (descriptor.recovery == UiFocusRecoveryPolicy::AncestorThenDefaultThenFirst) {
-                for (std::uint32_t index = 0; index < entry.ancestorCount; ++index) {
-                    if (const auto ancestor = ResolveAllowed(entry.ancestors[index]); ancestor.has_value())
-                        return ancestor;
-                }
-            }
+            if (const auto restored = ResolveSavedOrAncestor(entry); restored.has_value())
+                return restored;
             return ResolveInitial();
         }
 
@@ -365,6 +366,7 @@ namespace Horo::Runtime::Ui {
         std::vector<ModalSlot> modalSlots;
         std::vector<RestorationEntry> restorations;
         std::optional<std::size_t> focusedIndex;
+        std::uint32_t lastModalIncarnation{};
         std::uint32_t modalDepth{};
         std::uint32_t restorationDepth{};
         UiFocusGraphState lifecycle{UiFocusGraphState::Active};

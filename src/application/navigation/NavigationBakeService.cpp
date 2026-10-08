@@ -8,12 +8,33 @@ namespace Horo::Application {
     using namespace NavigationBakeDetail;
 
     namespace {
+        /** @brief Validates injected host composition and canonical-root prerequisites. */
+        [[nodiscard]] bool ValidHostConfig(const NavigationBakeServiceConfig &config) {
+            return config.definition.IsValid() && !config.artifactType.Value().empty() && config.target.IsValid() && config.builder &&
+                   config.files && config.sourceAuthority && config.newOperationId && config.writerWaitTimeout.ToNanoseconds() > 0;
+        }
+
+        /** @brief Rejects unusable storage paths before admission or staging. */
+        [[nodiscard]] bool ValidStorageConfig(const NavigationBakeServiceConfig &config) {
+            return !config.cacheRoot.empty() && config.cacheRoot.is_absolute() && !config.targetRoot.empty() &&
+                   config.targetRoot.is_absolute();
+        }
+
+        /** @brief Enforces both portable artifact ceilings and the caller's cook limit. */
+        [[nodiscard]] bool ValidCapacityConfig(const NavigationBakeServiceConfig &config) {
+            return config.maximumTiles > 0 && config.maximumTiles <= NavMeshArtifactLimits::MaximumTiles &&
+                   config.maximumCandidateBytes > 0 && config.maximumCandidateBytes <= config.cookLimits.maximumArtifactBytes &&
+                   config.maximumCandidateBytes <= NavMeshArtifactLimits::MaximumOwnedBytes;
+        }
+
         /** @brief Validates complete sorted tile coverage and immutable capture freshness before admission. */
         [[nodiscard]] Result<void> ValidateRequest(const NavigationBakeRequest &request, const std::size_t maximumTiles) {
             if (!request.input || request.tiles.empty() || request.tiles.size() > maximumTiles ||
                 !std::ranges::is_sorted(request.tiles, {}, &NavigationBakeTile::key) ||
                 std::ranges::adjacent_find(request.tiles, {}, &NavigationBakeTile::key) != request.tiles.end())
                 return Result<void>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+            if (request.projectProfile && request.projectProfile->Revision() != request.input->Revisions().projectProfile)
+                return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
             if (request.cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
             if (request.diagnosticSources.size() > NavigationSourceGeometryLimits::MaximumContributions ||
@@ -31,17 +52,34 @@ namespace Horo::Application {
                                                       request.sources);
         }
 
+        /** @brief Compares captured project authority without substituting preview settings or defaults. */
+        [[nodiscard]] bool SameProjectProfile(const std::optional<Navigation::NavigationProjectProfile> &left,
+                                              const std::optional<Navigation::NavigationProjectProfile> &right) {
+            if (left.has_value() != right.has_value())
+                return false;
+            return !left || left->MatchesAuthority(*right);
+        }
+
         /** @brief Joins only identical uncancelled captures with the same complete layout and source observations. */
         [[nodiscard]] bool IdenticalRequest(const std::shared_ptr<Attempt> &existing, const NavigationBakeRequest &request) {
             if (!existing || existing->cancellation->Token().IsCancellationRequested() ||
                 existing->request.input->Fingerprint() != request.input->Fingerprint() ||
-                existing->request.compatibility != request.compatibility || existing->request.sources != request.sources ||
-                existing->request.diagnosticSources != request.diagnosticSources || existing->request.tiles.size() != request.tiles.size())
+                existing->request.compatibility != request.compatibility ||
+                !SameProjectProfile(existing->request.projectProfile, request.projectProfile) ||
+                existing->request.sources != request.sources || existing->request.diagnosticSources != request.diagnosticSources ||
+                existing->request.tiles.size() != request.tiles.size())
                 return false;
             return std::ranges::equal(existing->request.tiles, request.tiles, [](const auto &a, const auto &b) {
                 return a.key == b.key && a.bounds.minimum == b.bounds.minimum && a.bounds.maximum == b.bounds.maximum &&
                        a.tileSizeMeters == b.tileSizeMeters;
             });
+        }
+
+        /** @brief Only an unfinished active operation can own a coalesced request. */
+        [[nodiscard]] bool CanJoinActive(const NavigationBakeJobHandle &job, const std::shared_ptr<Attempt> &attempt,
+                                         const NavigationBakeRequest &request) {
+            const auto snapshot = job.Snapshot();
+            return IdenticalRequest(attempt, request) && snapshot && !snapshot->IsTerminal();
         }
     }  // namespace
 
@@ -64,16 +102,12 @@ namespace Horo::Application {
     /** @copydoc NavigationBakeService::Create */
     Result<std::unique_ptr<NavigationBakeService>> NavigationBakeService::Create(NavigationBakeServiceConfig config,
                                                                                  OperationStore &operations, JobSystem &jobs) {
-        if (!config.definition.IsValid() || config.artifactType.Value().empty() || !config.target.IsValid() || !config.builder ||
-            !config.files || config.cacheRoot.empty() || !config.cacheRoot.is_absolute() || config.targetRoot.empty() ||
-            !config.targetRoot.is_absolute() || config.maximumTiles == 0 || config.maximumTiles > NavMeshArtifactLimits::MaximumTiles ||
-            config.maximumCandidateBytes == 0 || config.maximumCandidateBytes > config.cookLimits.maximumArtifactBytes ||
-            config.maximumCandidateBytes > NavMeshArtifactLimits::MaximumOwnedBytes || !config.tileLimits.IsValid() ||
-            (config.diagnostics && !config.diagnostics->Owns(config.definition)))
+        if (jobs.WorkerCount() < 2 || !ValidHostConfig(config) || !ValidStorageConfig(config) || !ValidCapacityConfig(config) ||
+            !config.tileLimits.IsValid() || (config.diagnostics && !config.diagnostics->Owns(config.definition)))
             return Result<std::unique_ptr<NavigationBakeService>>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
         std::error_code error;
-        config.targetRoot = std::filesystem::weakly_canonical(config.targetRoot, error);
-        if (error)
+        if (const auto canonical = std::filesystem::weakly_canonical(config.targetRoot, error);
+            error || canonical != config.targetRoot.lexically_normal())
             return Result<std::unique_ptr<NavigationBakeService>>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
         auto state = std::make_shared<ServiceState>();
         state->config = std::move(config);
@@ -97,10 +131,14 @@ namespace Horo::Application {
             return Result<OperationId>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
         if (const auto valid = ValidateRequest(request, state_->config.maximumTiles); valid.HasError())
             return Result<OperationId>::Failure(valid.ErrorValue());
+        // Admission never waits on a background pointer adoption. Keep this guard until desired-generation mutation.
+        auto admittedSource = state_->config.sourceAuthority->TryAcquirePublication(*request.input, request.cancellation);
+        if (admittedSource.HasError())
+            return Result<OperationId>::Failure(admittedSource.ErrorValue());
+        std::optional<NavigationBakeSourceLease> sourceLease{std::move(admittedSource).Value()};
         if (IdenticalRequest(pending_, request))
             return Result<OperationId>::Success(pending_->operation);
-        if (const auto activeSnapshot = activeJob_.Snapshot();
-            IdenticalRequest(active_, request) && activeSnapshot && !activeSnapshot->IsTerminal())
+        if (CanJoinActive(activeJob_, active_, request))
             return Result<OperationId>::Success(active_->operation);
         auto attempt = std::make_shared<Attempt>();
         attempt->request = std::move(request);
@@ -129,13 +167,17 @@ namespace Horo::Application {
         if (active_)
             active_->cancellation->RequestCancellation();
         pending_ = std::move(attempt);
+        sourceLease.reset();
         Pump();
         return Result<OperationId>::Success(*id);
     }
 
     /** @copydoc NavigationBakeService::Invalidate */
     void NavigationBakeService::Invalidate() noexcept {
-        state_->desired.store(0);
+        auto desired = state_->desired.load();
+        while ((desired & Adopted) == 0 && !state_->desired.compare_exchange_weak(desired, 0)) {
+            // Retry with the observed generation until invalidation succeeds or adoption owns the barrier.
+        }
         CancelPending(operations_, pending_);
         pending_.reset();
         if (active_)

@@ -44,6 +44,7 @@ namespace Horo::Extensions {
         std::weak_ptr<BackendServiceRegistryState> registry;
         std::uint64_t registrationSequence{};
         bool retirementQueued{};
+        bool retirementAttached{};  // Protected by mutex; binding precedes the first executable call.
     };
 
     struct BackendServiceRegistryState final {
@@ -414,6 +415,63 @@ namespace Horo::Extensions {
     /** @copydoc BackendServiceRegistration::IsRegistered */
     bool BackendServiceRegistration::IsRegistered() const noexcept {
         return provider_ != nullptr && provider_->registered.load(std::memory_order_acquire);
+    }
+
+    namespace {
+        /** @brief Preserves the original service code owner while reporting its extension-level lifetime. */
+        struct RetirementBackendCode final {
+            BackendServiceCodeLease previous;
+            std::shared_ptr<ExtensionExecutableLease> retirement;
+        };
+
+        /** @brief Connects actual backend cancellation/drain/quarantine to package retirement. */
+        class BackendRetirementPublication final : public IExtensionRetirementContribution {
+        public:
+            BackendRetirementPublication(BackendServiceRegistration registration, std::shared_ptr<ExtensionRetirement> retirement)
+                : registration_(std::move(registration)), retirement_(std::move(retirement)) {}
+
+            void Revoke() noexcept override {
+                if (registration_.Reset() == BackendServiceRetirementDisposition::RestartRequired)
+                    retirement_->RequireRestart();
+            }
+
+        private:
+            BackendServiceRegistration registration_;
+            std::shared_ptr<ExtensionRetirement> retirement_;
+        };
+    }  // namespace
+
+    /** @copydoc BackendServiceRegistration::AttachRetirement */
+    bool BackendServiceRegistration::AttachRetirement(const std::shared_ptr<ExtensionRetirement> &retirement) const {
+        if (!retirement || !IsRegistered())
+            return false;
+        if (std::this_thread::get_id() != provider_->ownerThread)
+            return false;
+        const auto &descriptor = provider_->descriptor;
+        std::shared_ptr<void> service;
+        BackendServiceCodeLease previous = BackendServiceCodeLease::Retain(std::shared_ptr<const void>{});
+        {
+            std::scoped_lock lock{provider_->mutex};
+            if (provider_->retirementAttached || provider_->activeCalls != 0 ||
+                provider_->lifecycle != BackendServiceProviderLifecycle::Active)
+                return false;
+            service = provider_->implementation.service;
+            previous = provider_->implementation.codeLease;
+        }
+        auto lease = retirement->Acquire(descriptor.provider.moduleId, ExtensionLeaseKind::HostService, descriptor.serviceId.value,
+                                         std::move(service));
+        if (!lease)
+            return false;
+        auto code = std::make_shared<RetirementBackendCode>(std::move(previous), std::move(lease));
+        auto publication = std::make_shared<BackendRetirementPublication>(BackendServiceRegistration{registry_, provider_}, retirement);
+        {
+            std::scoped_lock lock{provider_->mutex};
+            if (provider_->activeCalls != 0 || provider_->lifecycle != BackendServiceProviderLifecycle::Active)
+                return false;
+            provider_->implementation.codeLease = BackendServiceCodeLease::Retain(std::move(code));
+            provider_->retirementAttached = true;
+        }
+        return retirement->RegisterContribution(descriptor.provider.moduleId, std::move(publication));
     }
 
     BackendServiceImportBinding::BackendServiceImportBinding(std::shared_ptr<BackendServiceProviderState> provider,

@@ -21,10 +21,13 @@ configure_file(
 foreach(source_file IN ITEMS
         LICENSE
         include/Horo/Extensions/ExtensionAbi.h
+        include/Horo/Extensions/EditorActivityAbi.h
         scripts/scaffold_extension.py
         scripts/bootstrap_extension_ci.py
         scripts/run_extension_author_ci.py
         sdk/ExtensionSdkREADME.md.in
+        sdk/CompatibilityMatrix.json.in
+        sdk/MigrationGuide.md.in
         sdk/ci/extension-author-ci.yml
         sdk/ci/extension-ci.lock.json.in
         sdk/extension-sdk.json.in
@@ -77,6 +80,7 @@ set(expected_files
     bin/horo-extension-author-ci.py
     bin/horo-scaffold-extension.py
     include/Horo/Extensions/ExtensionAbi.h
+    include/Horo/Extensions/EditorActivityAbi.h
     lib/cmake/HoroEngineExtensionSdk/HoroEngineExtensionSdkConfig.cmake
     lib/cmake/HoroEngineExtensionSdk/HoroEngineExtensionSdkConfigVersion.cmake
     share/horo/extension-sdk/ci/bootstrap.py
@@ -84,6 +88,9 @@ set(expected_files
     share/horo/extension-sdk/ci/extension-ci.lock.json
     share/horo/extension-sdk/extension-manifest-v1.schema.json
     share/horo/extension-sdk/extension-sdk.json)
+list(APPEND expected_files
+    share/horo/extension-sdk/CompatibilityMatrix.json
+    share/horo/extension-sdk/MigrationGuide.md)
 list(SORT expected_files)
 
 if(NOT staged_files STREQUAL expected_files)

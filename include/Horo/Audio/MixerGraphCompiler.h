@@ -7,6 +7,7 @@
 #include "Horo/Audio/AudioCommandStaging.h"
 #include "Horo/Audio/AudioDSPNode.h"
 #include "Horo/Audio/MixerAssetSchema.h"
+#include "Horo/Audio/MixerSnapshot.h"
 
 #include <memory>
 #include <optional>
@@ -91,6 +92,10 @@ namespace Horo::Audio {
         MixerRenderPlan &operator=(const MixerRenderPlan &) = delete;
         /** @brief Return the pinned compilation identity. @return Immutable identity. */
         [[nodiscard]] const MixerPlanIdentity &Identity() const noexcept;
+        /** @brief Read immutable admitted mix rate on control. @return Frames per second. */
+        [[nodiscard]] std::uint32_t SampleRate() const noexcept;
+        /** @brief Read immutable admitted callback block bound on control. @return Maximum frames per block. */
+        [[nodiscard]] std::uint32_t MaximumFrames() const noexcept;
         /** @brief Return canonical topological buses. @return Borrow valid through plan retirement. */
         [[nodiscard]] std::span<const MixerCompiledBus> Buses() const noexcept;
         /** @brief Return destination-grouped, stable-route-ID ordered edges. @return Immutable route table. */
@@ -99,6 +104,15 @@ namespace Horo::Audio {
         [[nodiscard]] std::optional<std::uint32_t> ResolveBus(AudioBusId id) const noexcept;
         /** @brief Return charged aligned sample/state/scratch bytes. @return Complete private byte reservation. */
         [[nodiscard]] std::size_t StorageBytes() const noexcept;
+
+        /** @brief Freeze exact bus/send linear-gain and DSP parameter projections before publication.
+         * @param bindings Host descriptors already bound into a sealed automation engine. Bus/send gain uses parameter ID 1,
+         * linear amplitude units and range [0,16]; DSP IDs/ranges belong to the compiled node descriptor.
+         * @return Success or typed identity/range/work/memory failure without mutation.
+         * Initial values must match compiled defaults. Only one successful binding is allowed on an unpublished plan.
+         * Runtime/epoch/generation ownership is exact; graph replacement requires a new plan and new automation owner.
+         */
+        [[nodiscard]] Result<void> BindAutomation(std::span<const AudioAutomationParameter> bindings);
 
         struct ConstructionKey; /**< Factory-only construction authority, not an activation capability. */
         struct State;
@@ -154,6 +168,7 @@ namespace Horo::Audio {
         std::uint64_t generation{};
         std::uint64_t acknowledgedSequence{};
         bool commandRejected{}; /**< Independent command failure does not hide a simultaneous render fault. */
+        MixerSnapshotStatus snapshotStatus{MixerSnapshotStatus::Ok}; /**< Optional snapshot admission, independent of rendered signal. */
     };
 
     /** @brief Exact epoch and retained command producer composed by the Audio control owner. */
@@ -162,6 +177,17 @@ namespace Horo::Audio {
         AudioMemoryPoolId storageIdentity;
         MixerCompileProfile profile;
         std::size_t maximumRetainedBytes{MaximumAudioMemoryBytes}; /**< Combined backing bytes for active and pending plans. */
+    };
+
+    /** @brief Borrowed same-callback automation and at most one retained snapshot dispatched inside this block.
+     * Clock names the first rendered sample; snapshot target must fall inside this block in that exact epoch.
+     * The host retains all owners/sidecars through completed-block acknowledgement. No callbacks or registry lookup occur.
+     */
+    struct MixerAutomationRenderContext final {
+        AudioParameterAutomation &automation;
+        AudioSampleClock clock;
+        MixerSnapshotTransitions *transitions{};
+        const PreparedMixerSnapshot *snapshot{};
     };
 
     /** @brief Two-slot generation owner with existing command transport and complete-block acknowledgement.
@@ -200,6 +226,18 @@ namespace Horo::Audio {
          */
         [[nodiscard]] MixerRenderResult Render(const AudioCommandScope &scope, const AudioCommandRecord *swap,
                                                std::span<const MixerVoiceInput> voices, const AudioPlanarBlockView &output) noexcept;
+        /** @brief Render actual prepared bus/send/DSP projections at each sample, with atomic scheduled snapshot admission.
+         * @param scope Exact runtime/scene epoch. @param swap Optional normal graph publication record.
+         * @param voices Prepared voice outputs. @param output Admitted complete output block.
+         * @param automation Same-callback sealed owner and first-sample clock, optionally one retained snapshot.
+         * @return Rendered signal or full silence on invalid binding/clock/DSP fault; snapshot rejection is reported independently
+         * and preserves the prior accepted trajectory. Public plan descriptors remain immutable.
+         * Per-sample DSP calls use aligned prepared taps at sample zero and descriptor-admitted one-frame blocks;
+         * voice source offsets and output destinations advance through the caller's block. Ordinary Render remains unchanged.
+         */
+        [[nodiscard]] MixerRenderResult RenderAutomated(const AudioCommandScope &scope, const AudioCommandRecord *swap,
+                                                        std::span<const MixerVoiceInput> voices, const AudioPlanarBlockView &output,
+                                                        const MixerAutomationRenderContext &automation) noexcept;
         /** @brief Acquire completed-block facts and reclaim an acknowledged replaced generation on control.
          * @return Latest complete-block acknowledgement. Queue consumption alone never authorizes reclamation.
          */
@@ -224,6 +262,10 @@ namespace Horo::Audio {
         MixerGraphRuntime(ConstructionKey, std::unique_ptr<State> state);
 
     private:
+        /** @brief Share generation adoption and complete-block acknowledgement across admitted render paths. */
+        [[nodiscard]] MixerRenderResult RenderCore(const AudioCommandScope &scope, const AudioCommandRecord *swap,
+                                                   std::span<const MixerVoiceInput> voices, const AudioPlanarBlockView &output,
+                                                   const MixerAutomationRenderContext *automation) noexcept;
         std::unique_ptr<State> state_;
     };
 }  // namespace Horo::Audio

@@ -383,7 +383,7 @@ namespace Horo::Cinematic {
         const SequenceFrameScratch scratch{std::span<SequenceSampledValue>{}, occurrences, std::span<SequenceFrameCameraCutRequest>{}};
         const std::array events{SequenceFrameEventKey{TrackId{1, 1}, KeyframeId{1, 1}, 2, true}};
         std::size_t delivered{};
-        const SequenceFrameHooks hooks{BorrowedCallbackContext{&delivered}, CountEvent, nullptr, nullptr};
+        const SequenceFrameHooks hooks{BorrowedCallbackContext{&delivered}, CountEvent, {}, nullptr};
         constexpr std::uint32_t cycles = 512;
         for (std::uint32_t generation = 1; generation <= cycles; ++generation) {
             const auto handle = Handle(200, generation);

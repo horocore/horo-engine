@@ -67,6 +67,43 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## GAI-002.4 Sight Integration Boundary
+
+`HoroEngine::AISightIntegration` solely owns the additive public
+`Horo/AI/PerceptionSight.h` contract and depends on `AISceneIntegration` and
+`Physics`. Core `HoroAI` and `RuntimeScene` gain no Physics dependency. No private
+Physics header or native solver type is exposed. `PerceptionSpatialBroadphase.h`
+remains owned by `AISceneIntegration`; its additive `ListenerPosition` accessor
+supplies the exact frozen position used for candidate gathering. Existing callers
+need no signature migration. Opt-in host wiring and lifecycle migration are
+documented in the sight section of
+[Navigation and AI Architecture](../runtime/navigation-and-ai-architecture.md).
+Generated `HoroAISightIntegrationPublicHeaderConsumer` and
+`HoroAISceneIntegrationPublicHeaderConsumer` compile each staged public header;
+`HoroAISightTests` consumes only declared public dependencies.
+
+## AUD-002.8 Streaming Service Boundary
+
+`HoroEngine::AudioApi` owns the additive `Horo/Audio/AudioStreamingService.h`
+contract. Decoder/source providers migrate their callback state to Foundation's
+type-checked `BorrowedCallbackContext`; the reason, affected callers and unchanged
+ownership obligations are recorded in
+[the migration guide](../../guides/audio-streaming-provider-migration.md).
+Hosts opting into package streaming supply a retained cooked-generation opener,
+the process JobSystem, exact decoder facts and explicit budgets. The service
+does not select packages or a device. Its sole callback port is borrowed by one
+render epoch and detached before control retires the stream. The generated
+`HoroAudioApi` public-header consumer checks the staged header and its declared
+Foundation/Assets dependencies.
+
+The existing `HoroEngine::AudioCook` header `AudioCooker.h` additionally owns
+`MakeCookedAudioStreamSource`. The host explicitly binds an immutable bounded
+cooked provider and retains no mutable publication pointer. The adapter verifies
+AST and Audio schemas on a worker and owns decoded-generation payload lifetime.
+There is no AudioApi-to-AudioCook dependency or source-import fallback. Existing
+cook callers need no migration; generated AudioCook public-header consumers and
+filesystem/archive streaming regressions cover the additive composition route.
+
 ## PLS-002.5 Product Composition Boundary
 
 `HoroEngine::PlatformServices` owns the additive
@@ -1480,3 +1517,29 @@ scoped projections and evaluate group constraints before reserving voices; no
 implicit group registry or source-policy override is introduced. The ownership
 registry stages this header and the generated `HoroAudioApi` public-header
 consumer compiles it using only declared Foundation/Assets dependencies.
+
+CLI-001.4 adds `CliOutputPresenter.h` to `HoroCliHost` ownership and deliberately
+adds the lower-level `HoroHostErrors` public dependency for its typed translator.
+`DiagnosticBundleErrorDomain()` remains in the existing Foundation-owned
+`DiagnosticBundle.h`; no header promotion or broad private include path is used.
+Consumers rebuild for additive CLI output metadata and partial-result fields.
+The generated CLI/Foundation header consumers and
+`HoroCliOutputPublicHeaderConsumer` verify staged visibility and explicit registry
+construction without ambient registration or application activation.
+
+CLI result presentation consumes inert diagnostic-bundle error metadata defined in
+`HoroFoundation`'s private `DiagnosticBundleErrors.cpp`; descriptor addresses refer
+to the original Foundation-owned error identities. Registration remains explicit
+at the application root. Generated command help is a target-private presentation
+translation unit in `HoroCliHost`, sharing the admitted registry metadata.
+
+## Cell attachment manifest adapters
+
+`CellAttachmentManifest.h` is owned by `HoroWorldStreaming` and uses its existing
+Assets dependency for stable cooked references. `SceneCellAttachments.h` belongs to
+`HoroSceneCellPayload` and joins those values to the existing Scene aggregate contract.
+`PhysicsCellAttachments.h` is owned by `HoroPhysicsSceneIntegration`, whose explicit
+public dependency now includes SceneCellPayload. This adapter dependency does not
+expose Physics-private/native types or add streaming dependencies to Physics kernels.
+Consumer coverage includes the SceneCellPayload and PhysicsSceneIntegration staged
+header surfaces. Migration is recorded in the cell attachment manifest guide.

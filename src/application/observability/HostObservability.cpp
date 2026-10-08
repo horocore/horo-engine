@@ -1,5 +1,6 @@
 #include "Horo/Application/HostObservability.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdlib>
@@ -65,6 +66,41 @@ namespace Horo::Application {
                 metadata.emplace_back(key, value);
         }
 
+        /** @brief Adds the configured host identity to the bundle metadata. */
+        void AppendHostIdentity(std::vector<std::pair<std::string, std::string>> &metadata,
+                                const HostObservabilityConfiguration &configuration) {
+            const HostObservabilityIdentity &identity = configuration.identity;
+            AppendMetadata(metadata, "application.name", configuration.logging.hostName);
+            AppendMetadata(metadata, "application.version", configuration.logging.hostVersion);
+            AppendMetadata(metadata, "process.role", identity.processRole);
+            AppendMetadata(metadata, "engine.version", identity.engineVersion);
+            AppendMetadata(metadata, "build.configuration", identity.buildConfiguration);
+            AppendMetadata(metadata, "source.revision", identity.sourceRevision);
+            AppendMetadata(metadata, "os.name", OperatingSystemName());
+            AppendMetadata(metadata, "cpu.architecture", ArchitectureName());
+            AppendMetadata(metadata, "renderer.backend", identity.rendererBackend);
+            AppendMetadata(metadata, "device.name", identity.deviceName);
+            AppendMetadata(metadata, "project.id", identity.projectId);
+            AppendMetadata(metadata, "project.version", identity.projectVersion);
+        }
+
+        /** @brief Appends bounded host-registered summaries from retained log entries. */
+        [[nodiscard]] Result<void> AppendConfiguredSummaries(Diagnostics::DiagnosticBundleRequest &bundle,
+                                                             const std::span<const HostDiagnosticSummaryProvider> providers) {
+            std::vector<std::filesystem::path> retainedLogs;
+            for (const auto &entry : bundle.entries) {
+                if (entry.archivePath.parent_path() == "logs")
+                    retainedLogs.push_back(entry.sourcePath);
+            }
+            for (const auto provider : providers) {
+                auto summary = provider(retainedLogs);
+                if (summary.HasError())
+                    return Result<void>::Failure(summary.ErrorValue());
+                bundle.metadata.push_back(std::move(summary).Value());
+            }
+            return Result<void>::Success();
+        }
+
         void AppendOptionalEntry(std::vector<Diagnostics::DiagnosticBundleEntry> &entries, const std::optional<HostDiagnosticFile> &file) {
             if (file.has_value())
                 entries.push_back(
@@ -74,6 +110,10 @@ namespace Horo::Application {
 
     /** @copydoc HostObservabilitySession::Start */
     std::unique_ptr<HostObservabilitySession> HostObservabilitySession::Start(HostObservabilityConfiguration configuration) {
+        if (configuration.summaries.size() > 8 || std::ranges::any_of(configuration.summaries, [](const auto provider) {
+            return provider == nullptr;
+        }))
+            return nullptr;
         if (bool expected = false; !HostSessionActive().compare_exchange_strong(expected, true))
             return nullptr;
         configuration.logging.logDirectory = ResolveLogDirectory(configuration.logging.logDirectory);
@@ -122,19 +162,7 @@ namespace Horo::Application {
         bundle.outputPath = request.outputPath;
         bundle.maxInputBytes = request.maxInputBytes;
         bundle.metadata = request.metadata;
-        const HostObservabilityIdentity &identity = configuration_.identity;
-        AppendMetadata(bundle.metadata, "application.name", configuration_.logging.hostName);
-        AppendMetadata(bundle.metadata, "application.version", configuration_.logging.hostVersion);
-        AppendMetadata(bundle.metadata, "process.role", identity.processRole);
-        AppendMetadata(bundle.metadata, "engine.version", identity.engineVersion);
-        AppendMetadata(bundle.metadata, "build.configuration", identity.buildConfiguration);
-        AppendMetadata(bundle.metadata, "source.revision", identity.sourceRevision);
-        AppendMetadata(bundle.metadata, "os.name", OperatingSystemName());
-        AppendMetadata(bundle.metadata, "cpu.architecture", ArchitectureName());
-        AppendMetadata(bundle.metadata, "renderer.backend", identity.rendererBackend);
-        AppendMetadata(bundle.metadata, "device.name", identity.deviceName);
-        AppendMetadata(bundle.metadata, "project.id", identity.projectId);
-        AppendMetadata(bundle.metadata, "project.version", identity.projectVersion);
+        AppendHostIdentity(bundle.metadata, configuration_);
 
         const std::filesystem::path &directory = configuration_.logging.logDirectory;
         const std::string &baseName = configuration_.logging.baseName;
@@ -165,6 +193,8 @@ namespace Horo::Application {
                                   .archivePath = "metadata/shutdown.json",
                                   .optional = true,
                                   .redactSensitiveText = true});
+        if (const auto summaries = AppendConfiguredSummaries(bundle, configuration_.summaries); summaries.HasError())
+            return Result<Diagnostics::DiagnosticBundleSummary>::Failure(summaries.ErrorValue());
         AppendOptionalEntry(bundle.entries, request.crashMetadata);
         AppendOptionalEntry(bundle.entries, request.configuration);
         AppendOptionalEntry(bundle.entries, request.packageSummary);

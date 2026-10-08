@@ -112,16 +112,27 @@ typed incompatibility. Runtime state never writes back to SceneDocument/cooked a
 `SavedSceneBootstrapDescriptor` is the typed admission record for that first step. It
 binds logical world/base-scene identity, persisted cooked asset type evidence, exact scene
 definition/revision/content digest, an optional stable authored spawn anchor, and
-slot-generation/source-world transition provenance. Preparation converts the saved
-base-scene UUID bytes directly to `AssetId`, resolves only an immutable
-`AssetRegistrySnapshot`, and returns an owned `PreparedSavedSceneBootstrap`; source
-or metadata paths are not accepted as inputs. The host supplies the authoritative
-scene asset type separately, so an untrusted save cannot approve a different registry
-record by changing its own expected-type field. Missing content, type/revision/digest
-changes, and missing spawn anchors reject before the existing
-`RuntimeSceneService::QueuePreparation` path receives work. Successful preparation
-owns the immutable authored defaults that later participant restore applies overrides
-to; publication remains at the normal scene lifecycle commit boundary.
+slot-generation/source-world transition provenance. Content reconciliation converts
+the saved base-scene UUID bytes directly to `AssetId` and admits its actual
+provider-loaded cooked envelope from an immutable verified mounted selection.
+`AssetRegistrySnapshot` authoring presence is not installed cooked availability.
+Preparation requires privately issued `ReconciledSaveContent` and an explicit host
+decoder receiving the admitted owned envelope. The host supplies the authoritative
+scene asset type separately; changing a save's expected type cannot approve another
+cooked type. Missing required content, type/revision/digest changes, unsupported
+decoders and missing spawn anchors reject before world preparation. Admission is
+revalidated before the existing Scene queue and aggregate transfer. Successful
+preparation owns authored defaults; publication remains at the normal lifecycle
+commit boundary. Shipping cooked-scene decoder and aggregate application save
+composition are not supplied by this backend contract.
+
+Content-aware queueing issues a private Scene-owned retained publication receipt.
+Only the actual aggregate transfer supplies its SceneRuntimeId and dataset projection;
+ordinary same-definition scenes cannot bind that receipt. Native installation evidence
+is privately issued by the actual loaded module and pins its immutable declaration,
+adapter and revocable native generation. Owner-thread admission precedes callbacks;
+accepted safe-point captures instead seal immutable source/composition facts so
+worker serialization never reads live Scene or installation controls.
 
 The Horo Scene adapter owns persistent entity existence, authored/spawn identity,
 tombstones, hierarchy/ownership, stable reference remaps and explicitly assigned core
@@ -202,6 +213,24 @@ revokes client admission and unregisters that generation's live bindings; immuta
 registry snapshots continue to pin their exact adapter leases until detached work
 retires. Retaining a client across reload therefore grants neither stale callbacks
 nor registry authority.
+
+`Horo/Gameplay/PersistenceSource.h` is the project SDK callback contract;
+`Horo/Gameplay/SaveGameplayPersistence.h` supplies the explicit runtime-only
+behavior-instance, module-global, service and session binding. Each owner declares
+one stable canonical participant/record, schema, module version and bounded payload.
+The binding captures owned bytes at the safe point and creates an inactive staged
+restore receipt. Exact compatibility is checked before publication; the receipt
+pins its module generation through retirement. See the
+[gameplay persistence migration guide](../../guides/gameplay-persistence-migration.md).
+Native module registration exposes this opt-in declaration through
+`GameRegistrationContext::persistence`; freeze resolves generated behavior and
+service identities before module startup. Explicit host composition acquires an
+adapter from `LoadedGameModule::AcquirePersistence` and registers it through the
+participation client. Adapter acquisition closes with native reload admission;
+retained registry snapshots and staged receipts prevent code unload. The exported
+SDK's canonical identity/error/participant declarations belong to Foundation-only
+`SaveApi`; archive and restore execution remain in Runtime, with gameplay adapters
+in GameplayRuntime.
 
 Gameplay save/load requests contain only an opaque `SaveGameSlotId` and typed policy
 mode. The injected application operation host resolves the active namespace, project
@@ -522,7 +551,15 @@ codec inventory declares supported levels 1–9 and no dictionary capability. Wr
 policy retains metadata and small/ineffective chunks raw, with explicit required
 codec failure rather than silent fallback. Per-chunk stored and decoded lengths,
 expansion ratio and total decode work are checked before output allocation. Unknown
-required codec IDs fail as a typed compatibility error. The reader verifies the finalized envelope
+required codec IDs fail as a typed compatibility error. Only container v2 with
+semantic save schema 2 may retain an unsupported codec on a chunk whose actual
+manifest owner is optional. Metadata, v1, schema 1 and required owners still reject
+unsupported codecs. The public directory validator remains supported-codec-only;
+this exception is issued by the bounded reader after parsing the actual manifest.
+Unsupported selection always fails without decoding. Content admission additionally
+requires the authenticated canonical layout to classify that chunk as opaque and
+verify the exact stored bytes; structural retention alone grants no activation or
+semantic compatibility authority. The reader verifies the finalized envelope
 hash first, then uses the existing metadata and chunk-directory validators and
 returns only an immutable detached view. Selected chunks now return owned decoded
 bytes (including v1 raw selections) rather than a borrowed archive span; callers
@@ -853,6 +890,14 @@ commit gate: its own readiness cannot trigger early automatic scene activation w
 a required gameplay participant is still Pending. A host lacking that integration
 rejects composite restore rather than applying the scene first.
 
+`SceneRestoreBundle` supplies the Scene-owned implementation through
+`QueuePreparationWithRestore`. It uses the original staged restore transaction's
+scoped aggregate publication gate. Archive/session composition supplies validated
+source receipts and live generation authority; reference-bearing prepared owners
+consume the resolved context after all identity allocation and state application.
+The [reference-fixup migration](../../migrations/HORO-1437_restore_reference_fixups.md)
+records the owning targets, compatibility behavior, bounds and required regressions.
+
 At CommitDeferredLifecycleChanges, under the exclusive owner mutation boundary,
 revalidate the operation cancellation gate, expected session/scene incarnation,
 source/archive and participant/asset registry revisions, and all Prepared acknowledgements.
@@ -978,6 +1023,39 @@ logical-slot and `SlotGenerationId` values. Display names and timestamps never s
 codecs, resolve assets, establish causality or participate in logical-state identity.
 The header also records the producing `ProductSaveCompatibilityVersion` as policy
 provenance, never as a participant codec selector.
+
+### Content-aware semantic schema 2
+
+The content reconciliation writer emits semantic `SaveSchemaVersion` 2 while
+preserving container versions 1/2 and independent participant versions. Its canonical
+root keeps domain `HoroSave.CanonicalState.v1` and encodes explicit UInt32 version 2,
+stable project/world/base-scene UUIDs, a dataset sequence qualified by real prepared
+composition, and sorted owner/schema/record tuples. The implemented no-dataset path
+requires privately sealed `Absent` projections and rejects unqualified or unmapped
+PersistentWorld owners before publication; unrelated Gameplay/SlotPlayer owners
+remain supported. Schema 1 is admitted only by explicit trusted legacy policy and
+its hash is never reused after a changed capture.
+
+A compatible cooked substitution changes physical installation resolution only.
+The original logical base-scene/asset identity and expected source digest remain
+in the required declaration and accepted capture header. Every later admission
+reapplies the explicit typed project mapping against the actual provider envelope;
+capture does not silently migrate persistent identities. Declared schema-1 inputs
+also enforce this policy rather than bypassing it through legacy baseline lookup.
+
+Required owner `horo.save.scene.canonical.v2`, participant schema 1, reserved record
+`2d576609-77ae-4fb2-bf4a-9e7b63cbc002` stores complete version-1 canonical layout.
+Every directory record appears once, including the layout itself as Known. Tag 1
+hashes exact supported canonical payload bytes. Tag 2 hashes a closed tuple of codec,
+stored/decoded lengths, alignment, decoded digest and exact stored bytes without
+asserting decoded semantics. Required owners cannot be opaque. The authenticated
+layout persists across releases recognizing an optional owner or codec; that
+recognition alone cannot reinterpret its stored representation. Required content
+requirements remain separately decoded and reconciled, so opaque tags cannot bypass
+module/content admission. Missing/duplicate/extra/conflicting/version-mismatched
+layout or a source canonical hash mismatch rejects before host callbacks.
+The exact bounded wire tuples, ordering, reserved declaration identity and caller
+migration are defined in [the content reconciliation contract](../../migrations/HORO-1439_content_reconciliation.md).
 
 The inert SaveMigrationRegistry has three distinct step kinds:
 
@@ -1503,6 +1581,51 @@ raw callback reaches a destroyed session and no worker is detached from freed st
 A commit already past its gate finishes or reports Unknown and leaves recovery data;
 shutdown must not relabel it Cancelled or discard a potentially committed archive.
 
+## Save Observability Contribution
+
+Hosts explicitly create `SaveTelemetryRegistration` after process observability
+startup and retire every Save producer before destroying that owner. Descriptors
+remain inert; feature code neither discovers services nor installs sinks.
+`SaveStageObservation` uses the existing Foundation dispatcher, bounded metric
+series and privacy-safe structured logs. Disabled/unregistered scopes return
+before clocks, context capture, formatting or allocation. Evidence collection
+that scans bounded owner state is gated by `IsActive` as well.
+
+The closed stage taxonomy is capture, encode, migrate, commit, restore, sync,
+queue, recovery and participant. Stage outcomes, duration, byte count, retries,
+dropped work and queue depth are observational; authoritative typed Results,
+commit knowledge and completion callbacks retain their existing behavior.
+Failed stages use common logging WARN delivery, including its bounded emergency
+reporting when the normal queue rejects a record. Save never adds producer retries,
+flushes or drain waits. Low-severity logs, spans and metrics retain the Foundation
+best-effort/drop accounting contract. Operation terminal records are attempted
+once after the lifecycle lock is released, including cancellation, abandonment
+and shutdown. Optional observation exceptions use the common bounded emergency
+logger with fixed text and no private context. They do not invent a duration
+for work that never ran. Metrics use only stage/outcome dimensions. Correlation
+uses safe numeric operation and parent IDs in an isolated diagnostic snapshot;
+paths, display names, accounts, payloads and raw provider/error text are excluded.
+JobSystem and retained PlatformRequest contexts preserve this snapshot boundary.
+
+Current production hooks cover participant capture, archive finalization,
+migration execution, slot commit/recovery, staged restore preparation, arbiter
+admission and storage jobs. The sync event contract is available for explicit
+application/profile coordinator work and is tested across platform request
+completion. This tree has cloud revision/request contracts but no live
+CloudSaveCoordinator transfer/retry implementation; live cloud transfer timing,
+retry and completion instrumentation remains unproven until that owner exists.
+Local storage work is never labelled successful cloud synchronization.
+
+Application host composition accepts at most eight capture-free diagnostic summary
+providers. During user-requested export, after flushing the existing log dispatcher,
+the Save provider derives `save.summary` from the host's retained canonical JSONL
+inputs. It creates no second event store. Input work is bounded to 32 sources,
+2,048 rows, 4,096 bytes per row and 8 MiB total; malformed, partial, oversized or
+missing input is represented explicitly. Only closed stage/outcome names and
+validated unsigned aggregates enter the summary; raw rows and source paths are
+never copied. The summary describes retained observations, not lifetime totals;
+queue/dispatcher drops and retention can limit evidence.
+
 ## Qualification And Implementation Status
 
 The following are required implementation tests, not test suites delivered by this
@@ -1592,3 +1715,14 @@ and regression coverage.
 - [ADR-115](../../adr/115-cloud-save-authority-revision-and-conflict-policy.md): Local/cloud authority, provider CAS revisions, offline lineage and conflict preservation.
 - [ADR-116](../../adr/116-save-data-threat-model-and-trust-policy.md): Save-source trust classification, bounded admission, tool capabilities, credentials and profile policy.
 - [Application Security](../security/application-security.md): Trust and untrusted-input boundaries.
+
+Schema-2 opaque preservation uses `ValidatedSaveSceneCanonicalPreservation`, an
+owned, non-fabricable Save authority minted only after authenticating the entire
+required canonical layout and state hash. Borrowed-reader storage is rejected;
+accepted proof values pin immutable archive backing. Raw hash/copy work is charged
+on the shared reader ledger before materialization. Owner recognition in a later
+release never grants a decoder for an authenticated Opaque record. Required and
+Known records keep actual supported decode/hash verification; the generic reader
+inspection and round-trip APIs remain strict. Content reconciliation and re-save
+use the same qualified source/candidate path and compare exact stored bytes and
+directory metadata. This path never permits dropping retained optional records.

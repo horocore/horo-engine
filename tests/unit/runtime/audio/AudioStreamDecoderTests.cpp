@@ -28,10 +28,13 @@ namespace Horo::Audio {
             std::uint32_t seekCalls{};
             std::uint32_t releases{};
 
-            static Result<AudioStreamDecodeProgress> Decode(void *context, const std::uint64_t firstFrame,
+            static Result<AudioStreamDecodeProgress> Decode(const BorrowedCallbackContext &context, const std::uint64_t firstFrame,
                                                             const std::span<AudioSample> output, const std::span<std::byte> scratch,
                                                             const std::atomic<bool> &cancelled) {
-                auto &self = *static_cast<FakeProvider *>(context);
+                auto *resolved = context.Get<FakeProvider>();
+                if (resolved == nullptr)
+                    return Result<AudioStreamDecodeProgress>::Failure(MakeError(AudioStreamDecoderErrors::Invalid));
+                auto &self = *resolved;
                 ++self.decodeCalls;
                 self.lastFirstFrame = firstFrame;
                 if (scratch.size() != 16 || cancelled.load())
@@ -52,8 +55,11 @@ namespace Horo::Audio {
                 return Result<AudioStreamDecodeProgress>::Success({frames, firstFrame + frames == 5});
             }
 
-            static Result<void> Seek(void *context, const std::uint64_t target, const std::atomic<bool> &) {
-                auto &self = *static_cast<FakeProvider *>(context);
+            static Result<void> Seek(const BorrowedCallbackContext &context, const std::uint64_t target, const std::atomic<bool> &) {
+                auto *resolved = context.Get<FakeProvider>();
+                if (resolved == nullptr)
+                    return Result<void>::Failure(MakeError(AudioStreamDecoderErrors::Invalid));
+                auto &self = *resolved;
                 ++self.seekCalls;
                 self.lastSeek = target;
                 if (self.behavior == Behavior::ThrowNonStd)
@@ -63,8 +69,9 @@ namespace Horo::Audio {
                 return Result<void>::Success();
             }
 
-            static void Release(void *context) noexcept {
-                ++static_cast<FakeProvider *>(context)->releases;
+            static void Release(const BorrowedCallbackContext &context) noexcept {
+                if (auto *resolved = context.Get<FakeProvider>(); resolved != nullptr)
+                    ++resolved->releases;
             }
         };
 
@@ -73,7 +80,8 @@ namespace Horo::Audio {
         }
 
         AudioStreamDecoderProvider Provider(FakeProvider &fake, const bool seekable = true) {
-            return {&fake, &FakeProvider::Decode, seekable ? &FakeProvider::Seek : nullptr, &FakeProvider::Release};
+            return {BorrowedCallbackContext{&fake}, &FakeProvider::Decode, seekable ? &FakeProvider::Seek : nullptr,
+                    &FakeProvider::Release};
         }
 
         template <typename T> void RequireCode(const Result<T> &result, const ErrorCodeDescriptor &descriptor) {
@@ -141,6 +149,38 @@ namespace Horo::Audio {
         limits.maximumFrames = 5;
         RequireCode(AudioStreamDecoder::Create(invalid, Provider(fake), limits), AudioStreamDecoderErrors::CapacityExceeded);
         RequireCode(AudioStreamDecoder::Create(Spec(), Provider(fake, false)), AudioStreamDecoderErrors::Invalid);
+        auto emptyContext = Provider(fake);
+        emptyContext.context = {};
+        RequireCode(AudioStreamDecoder::Create(Spec(), emptyContext), AudioStreamDecoderErrors::Invalid);
+        CHECK(fake.releases == 0);
+    }
+
+    TEST_CASE("Runtime stream decoder rejects mismatched borrowed state before provider access", "[unit][audio][stream_decoder]") {
+        std::uint32_t foreignState{73};
+        FakeProvider fake;
+        auto provider = Provider(fake);
+        const auto allocationsBefore = Tests::AllocationProbe::Count();
+        provider.context = BorrowedCallbackContext{&foreignState};
+        CHECK(Tests::AllocationProbe::Count() == allocationsBefore);
+        std::array<AudioSample, 4> output{};
+        std::array<std::byte, 16> scratch{};
+        std::atomic<bool> cancelled{};
+        RequireCode(provider.decode(provider.context, 0, output, scratch, cancelled), AudioStreamDecoderErrors::Invalid);
+        RequireCode(provider.seek(provider.context, 0, cancelled), AudioStreamDecoderErrors::Invalid);
+        provider.release(provider.context);
+        CHECK(foreignState == 73);
+        CHECK(fake.decodeCalls == 0);
+        CHECK(fake.seekCalls == 0);
+        CHECK(fake.releases == 0);
+
+        auto created = AudioStreamDecoder::Create(Spec(), provider);
+        REQUIRE(created.HasValue());
+        auto decoder = std::move(created).Value();
+        RequireCode(decoder.Decode(output, scratch, 2), AudioStreamDecoderErrors::Invalid);
+        CHECK(decoder.State() == AudioStreamDecoderState::Failed);
+        CHECK(decoder.CursorFrame() == 0);
+        decoder.Close();
+        CHECK(foreignState == 73);
         CHECK(fake.releases == 0);
     }
 

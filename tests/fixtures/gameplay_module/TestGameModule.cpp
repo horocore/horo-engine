@@ -5,11 +5,16 @@
 #include "Horo/Gameplay/GameServiceRegistry.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/NativeBehavior.h"
+#include "Horo/Gameplay/PersistenceRegistration.h"
 #include "Horo/Gameplay/ReplicationRegistration.h"
 #include "Horo/Gameplay/SystemRegistry.h"
 #include "gameplay/GameAssetTestSupport.h"
+#if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
+#include "Horo/Gameplay/GameplayPhysicsContext.h"
+#endif
 
 #include <algorithm>
+#include <format>
 
 using namespace Horo;
 using namespace Horo::Gameplay;
@@ -39,6 +44,63 @@ public:
 HORO_BEHAVIOR(MoveBehavior, "game.tests.dynamic_mover")
 
 namespace {
+    class DurableCandidate final : public IPreparedPersistenceState {
+    public:
+        DurableCandidate(std::vector<std::byte> &active, std::vector<std::byte> candidate)
+            : active_(active), candidate_(std::move(candidate)) {}
+
+        void Publish() noexcept override {
+            active_.swap(candidate_);
+        }
+
+    private:
+        std::vector<std::byte> &active_;
+        std::vector<std::byte> candidate_;
+    };
+
+    class DurableSource final : public IPersistenceSource {
+    public:
+        Result<std::vector<std::byte>> CaptureRuntimeState(std::uint64_t) const override {
+            return Result<std::vector<std::byte>>::Success(active_);
+        }
+
+        Result<std::unique_ptr<IPreparedPersistenceState>> PrepareRuntimeState(std::span<const std::byte> bytes) override {
+            return Result<std::unique_ptr<IPreparedPersistenceState>>::Success(
+                std::make_unique<DurableCandidate>(active_, std::vector<std::byte>{bytes.begin(), bytes.end()}));
+        }
+
+    private:
+        std::vector<std::byte> active_{std::byte{0x31}};
+    };
+
+    Result<void> RegisterDurableState(GameRegistrationContext &context) {
+        using namespace Horo::Runtime;
+        for (std::uint8_t index = 0; index < 4; ++index) {
+            GameplayPersistenceDescriptor descriptor;
+            descriptor.participant.participant = SaveParticipantId::Parse(std::format("game.tests.durable{}", index)).Value();
+            descriptor.participant.schemaVersion = ParticipantSchemaVersion::Create(1).Value();
+            descriptor.participant.scope = index == 3 ? SaveParticipantScope::SlotPlayer : SaveParticipantScope::RuntimeScene;
+            descriptor.participant.roles = SaveParticipantRole::Capture | SaveParticipantRole::Restore;
+            descriptor.participant.limits = {128, 1, 4};
+            SaveIdentityDetail::Bytes record{};
+            record.back() = index + 1;
+            descriptor.record = SaveRecordId::FromBytes(record).Value();
+            descriptor.participant.ownedRecords = {descriptor.record};
+            descriptor.owner = static_cast<GameplayPersistenceOwner>(index);
+            descriptor.moduleId = SaveParticipantId::Parse("game.tests").Value();
+            descriptor.moduleVersion = 1;
+            PersistenceOwnerIdentity owner;
+            if (index == 0)
+                owner = BehaviorTypeId::Parse("game.tests.dynamic_mover").Value();
+            else if (index == 2)
+                owner = GameplayServiceId::Parse("game.tests.session_service").Value();
+            if (auto registered = context.persistence.Register({descriptor, owner, std::make_shared<DurableSource>()});
+                registered.HasError())
+                return registered;
+        }
+        return Result<void>::Success();
+    }
+
     class TestProjectService final : public IGameplayService {
     public:
         Result<void> Start(const GameplayServiceContext &context) override {
@@ -191,10 +253,23 @@ namespace {
                     },
                 .factory = {.create = &CreateTestGameplaySystem, .destroy = &DestroyTestGameplaySystem},
             };
-            return context.systems.Register(std::move(system));
+            if (auto registered = context.systems.Register(std::move(system)); registered.HasError())
+                return registered;
+            return RegisterDurableState(context);
         }
 
         Result<void> Start(GameRuntimeContext &context) override {
+#if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
+            if (!context.physics)
+                return Result<void>::Failure(MakeError(GameplayErrors::PhysicsUnavailable));
+            const auto &binding = context.physics->Binding();
+            const auto physics = context.physics->Acquire("game.tests", binding.scene, binding.sceneGeneration);
+            if (binding.permissionGranted && binding.moduleEnabled && physics.HasError() &&
+                physics.ErrorValue().code.Value() != GameplayErrors::PhysicsUnavailable.code.Value())
+                return Result<void>::Failure(physics.ErrorValue());
+            if (!binding.permissionGranted && physics.HasValue())
+                return Result<void>::Failure(MakeError(GameplayErrors::PhysicsPermissionDenied));
+#endif
             const GameplayServiceId service = GameplayServiceId::Parse("game.tests.session_service").Value();
             const GameplayCapabilityId capability = GameplayCapabilityId::Parse("game.tests.session.read").Value();
             if (context.cancellation.IsCancellationRequested() ||

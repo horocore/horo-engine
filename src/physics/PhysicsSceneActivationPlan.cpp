@@ -128,16 +128,6 @@ namespace Horo::Physics::Detail {
             return Result<PhysicsPose>::Success(result);
         }
 
-        [[nodiscard]] Result<PhysicsPose> ToBodyPhysicsPose(const Math::Transform &transform) {
-            if (!Math::NearlyEqual(transform.scale, Math::Vec3{1.0F, 1.0F, 1.0F}))
-                return Result<PhysicsPose>::Failure(
-                    MakeError(PhysicsErrors::OperationUnsupported, "Physics body transforms require unit world scale."));
-            PhysicsPose result{transform.translation, transform.rotation};
-            if (const Result<void> valid = ValidatePhysicsPose(result); valid.HasError())
-                return Result<PhysicsPose>::Failure(valid.ErrorValue());
-            return Result<PhysicsPose>::Success(result);
-        }
-
         [[nodiscard]] PhysicsMassPolicy ToPhysicsMassPolicy(const Runtime::AuthoredPhysicsMassPolicy &mass) {
             return std::visit([]<typename Mass>(const Mass &value) -> PhysicsMassPolicy {
                 using MassType = std::decay_t<Mass>;
@@ -391,6 +381,17 @@ namespace Horo::Physics::Detail {
             return Result<void>::Success();
         }
     }  // namespace
+
+    /** @copydoc ToBodyPhysicsPose */
+    Result<PhysicsPose> ToBodyPhysicsPose(const Math::Transform &transform) {
+        if (!Math::NearlyEqual(transform.scale, Math::Vec3{1.0F, 1.0F, 1.0F}))
+            return Result<PhysicsPose>::Failure(
+                MakeError(PhysicsErrors::OperationUnsupported, "Physics body transforms require unit world scale."));
+        PhysicsPose result{transform.translation, transform.rotation};
+        if (const Result<void> valid = ValidatePhysicsPose(result); valid.HasError())
+            return Result<PhysicsPose>::Failure(valid.ErrorValue());
+        return Result<PhysicsPose>::Success(result);
+    }
 
     /** @copydoc BuildPhysicsScenePlan */
     Result<PhysicsScenePlan> BuildPhysicsScenePlan(const Runtime::RuntimeSceneDefinition &definition,

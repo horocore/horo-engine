@@ -5,8 +5,10 @@
  * @brief Deterministic staged restore preparation, rollback, and aggregate activation.
  */
 
+#include "Horo/Runtime/Save/SaveErrors.h"
 #include "Horo/Runtime/Save/SaveOperation.h"
 #include "Horo/Runtime/Save/SaveParticipantRegistry.h"
+#include "Horo/Runtime/Save/SaveRestoreReferenceContext.h"
 
 #include <compare>
 #include <cstddef>
@@ -150,6 +152,19 @@ namespace Horo::Runtime {
          * @return Success or a typed reference-resolution failure.
          */
         [[nodiscard]] virtual Result<void> FixupReferences(const ICanonicalRestoreDependencyLookup &dependencies) = 0;
+
+        /** @brief Resolves this schema's stable results after every participant has allocated and applied its candidate.
+         * @param dependencies Already prepared declared owner dependencies.
+         * @param references Exact participant-filtered reference results.
+         * @return Success or a typed required/unsupported reference failure before activation.
+         * @details Legacy receipts delegate only when their schema declares zero references.
+         */
+        [[nodiscard]] virtual Result<void> FixupReferences(const ICanonicalRestoreDependencyLookup &dependencies,
+                                                           const SaveRestoreReferenceView &references) {
+            return references.references.empty() ? FixupReferences(dependencies)
+                                                 : Result<void>::Failure(MakeError(SaveErrors::RestoreAdapterContractInvalid));
+        }
+
         /** @brief Publishes the fully prepared candidate through a bounded no-fail ownership transfer. */
         virtual void PublishPrepared() noexcept = 0;
         /** @brief Releases inactive candidate state; repeated calls must be harmless. */
@@ -157,6 +172,42 @@ namespace Horo::Runtime {
 
     protected:
         IStagedRestoreParticipant() = default;
+    };
+
+    /**
+     * @brief Host-owned transfer of the remaining aggregate roots at the restore commit gate.
+     * @details The owner validates and reserves every root before calling Activate. Publication must
+     *          only transfer prepared ownership, without allocation, observers, provider work or failure.
+     *          The object and every borrowed authority must outlive the synchronous Activate call.
+     */
+    class IStagedRestoreAggregatePublication {
+    public:
+        virtual ~IStagedRestoreAggregatePublication() = default;
+        /** @brief Transfers the prepared aggregate roots before operation completion becomes observable. */
+        virtual void PublishPrepared() noexcept = 0;
+
+    protected:
+        IStagedRestoreAggregatePublication() = default;
+    };
+
+    /** @brief Immutable prepared owner evidence available only after every state-application phase succeeds. */
+    struct StagedRestorePreparedParticipant final {
+        StagedRestoreParticipantRequirement requirement;
+        const ICanonicalRestorePreparedState *state{}; /**< Call-scoped candidate projection; never retained by a resolver. */
+    };
+
+    /** @brief Operation-owned host composition resolving references after allocation and before owner fixups. */
+    class IStagedRestoreReferenceResolver {
+    public:
+        virtual ~IStagedRestoreReferenceResolver() = default;
+        /** @brief Builds exact immutable results against the complete unpublished aggregate.
+         * @param context Original operation and owning generations.
+         * @param participants Every applied owner projection in canonical identity order.
+         * @return Owned bounded context or a typed pre-publication failure.
+         * @details Resolver ownership pins every borrowed authority until transaction retirement.
+         */
+        [[nodiscard]] virtual Result<SaveRestoreReferenceContext> Resolve(
+            const StagedRestoreContext &context, std::span<const StagedRestorePreparedParticipant> participants) = 0;
     };
 
     /** @brief Move-only aggregate that stages every restore owner and publishes exactly once. */
@@ -192,6 +243,11 @@ namespace Horo::Runtime {
          * @post Failure rolls every receipt back in reverse restore-plan order and terminalizes the load operation once.
          */
         [[nodiscard]] Result<void> Prepare();
+        /** @brief Binds one owned resolver before preparation starts.
+         * @param resolver Non-null operation-owned aggregate resolver with exact lifetime pins.
+         * @return Success or typed duplicate/late/invalid binding failure without replacing another resolver.
+         */
+        [[nodiscard]] Result<void> SetReferenceResolver(std::unique_ptr<IStagedRestoreReferenceResolver> resolver);
 
         /**
          * @brief Publishes the complete prepared bundle through no-fail ownership transfers.
@@ -200,6 +256,16 @@ namespace Horo::Runtime {
          * @pre Called only under the host's exclusive lifecycle commit boundary; no reader may observe intermediate transfers.
          */
         [[nodiscard]] Result<void> Activate(StagedRestoreActivationEvidence evidence);
+
+        /**
+         * @brief Publishes participant and host aggregate roots behind the same operation commit gate.
+         * @param evidence Exact current registry, session, and active Scene generations.
+         * @param aggregate Validated host-owned no-fail root transfer.
+         * @return Success, or a typed failure before any participant or aggregate root is published.
+         * @pre The host has validated all aggregate candidates under its exclusive lifecycle boundary.
+         * @post Aggregate publication precedes the terminal operation result and completion observers.
+         */
+        [[nodiscard]] Result<void> Activate(StagedRestoreActivationEvidence evidence, IStagedRestoreAggregatePublication &aggregate);
 
         /** @brief Fails and rolls back an unpublished transaction with the supplied typed cause. @param error Terminal cause. */
         void Rollback(Error error);
@@ -225,6 +291,11 @@ namespace Horo::Runtime {
         void Record(StagedRestorePhase phase, StagedRestoreEventOutcome outcome) noexcept;
         void Record(StagedRestorePhase phase, StagedRestoreEventOutcome outcome, std::size_t participantIndex) noexcept;
         void RollbackCandidates() noexcept;
+        /** @brief Advances the private candidates through preparation without publication. */
+        [[nodiscard]] Result<void> PrepareCandidates();
+        /** @brief Runs one participant phase and preserves failure rollback and progress. */
+        [[nodiscard]] Result<void> PrepareParticipant(StagedRestorePhase phase, std::size_t participantIndex, std::size_t visiblePlanLength,
+                                                      std::uint64_t &completedUnits, std::uint64_t totalUnits);
         [[nodiscard]] Result<void> PublishPreparationProgress(std::uint64_t completedUnits, std::uint64_t totalUnits,
                                                               StagedRestorePhase phase, std::size_t participantIndex);
         [[nodiscard]] Result<void> RunPreparationStep(StagedRestorePhase phase, std::size_t participantIndex, std::size_t visiblePlanLength,
@@ -232,12 +303,16 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> RunIdentityPhase(StagedRestorePhase phase, std::uint64_t &completedUnits, std::uint64_t totalUnits);
         [[nodiscard]] Result<void> RunRestorePlanPhase(StagedRestorePhase phase, std::uint64_t &completedUnits, std::uint64_t totalUnits);
         [[nodiscard]] Result<void> EnterReadyToActivate();
+        /** @brief Resolves the complete applied aggregate before any owner fixup callback runs. */
+        [[nodiscard]] Result<void> ResolveReferences();
         [[nodiscard]] Result<void> FailUnpublished(Error error);
         [[nodiscard]] Result<void> FailPreparation(Error error, StagedRestorePhase phase, std::size_t participantIndex);
 
         StagedRestoreContext context_;
         SaveOperationController operation_;
         SaveParticipantRegistrySnapshot participants_;
+        std::unique_ptr<IStagedRestoreReferenceResolver> referenceResolver_;
+        SaveRestoreReferenceContext references_;
         std::vector<std::unique_ptr<IStagedRestoreParticipant>> staged_;
         std::vector<StagedRestoreParticipantRequirement> requirements_;
         std::vector<std::size_t> restorePlan_;

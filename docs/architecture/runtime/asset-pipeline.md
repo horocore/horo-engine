@@ -905,6 +905,52 @@ leases. It cannot invoke import/cook work or substitute a fallback shape. The Sh
 domain does not create a parallel asset ID, scheduler, cache, package lock or
 publication authority.
 
+#### Collision cooker contribution (PHY-002.9)
+
+`MakePhysicsCollisionCookerContribution` produces inert catalog metadata and an
+immutable Physics strategy. Host composition supplies an explicit registered
+collision type, Assets target, complete Physics target digest and retained
+`IPhysicsCollisionSourceImporter`. The importer consumes invocation-scoped source
+bytes and returns owned normalized geometry with one persistent subresource. Its
+version/settings identity must bind every normalization, repair and default-cook
+policy; it must bound parsing and support concurrent cooperative cancellation.
+The contribution dispatches convex hull, static triangle mesh and heightfield
+sources to the existing qualified cookers. Foreign file formats require a concrete
+host-selected importer; compound and analytic authoring are deliberately outside
+this asset-derived contribution. Collision is never inferred from render assets.
+
+The version-1 `PCA1` logical payload wraps the qualified geometry artifact with
+kind, persistent subresource, inner cook-key/payload/Physics-target digests,
+original source-byte digest and import configuration digest. These last two are
+separate from the normalized geometry digest. Assets owns the outer envelope,
+CacheKeyV1, paths, cache admission and generation publication. Fresh and reused
+payloads pass the same source-free domain loaders; cache reuse never calls the
+importer. Runtime consumers inspect the logical payload and pin its bytes while
+resolving the returned exact inner descriptor/payload. Required collision failure
+retains the prior published generation.
+
+Migration is additive: existing cooker contributions remain unchanged.
+`CookSourceView::sourceContext` adds optional invocation-scoped diagnostic evidence
+and is excluded from cache identity and payload bytes. Consumers rebuild for the
+new public layout. Physics owns its new public header; generated per-header
+consumer coverage validates its declared Assets/Foundation dependencies. Generic
+Build Output failure records now preserve owned domain messages and typed findings,
+including line/column on the host-resolved source path, and distinguish cancellation
+from failures. Physics cancellation retains its stable cause through the shared job
+cancellation result. The contribution installs no ambient service, worker pool or
+runtime fallback.
+
+The Physics strategy contains importer exceptions at its exception-free cook
+boundary, including direct invocations outside Assets jobs. Runtime errors retain
+`physics.shape_cook.source_invalid` and allocation failures retain
+`physics.shape_cook.limit_exceeded`. Other importer exceptions now return the
+registered `physics.shape_cook.importer_failed` instead of escaping to the generic
+Assets `asset.cook.cooker_failed` fallback. Callers filtering that generic code for
+collision imports must migrate to the Physics code. Standard exception detail,
+source links, Failed classification and last-good generation preservation remain
+unchanged. Error allocation after memory exhaustion may be fatal, as allowed by
+the engine exception policy; the boundary does not promise allocation-free recovery.
+
 ### Destruction Domain Source And Cook Boundary
 
 [ADR-145](../../adr/145-destruction-source-chunk-geometry-collision-and-cook-ownership.md)
@@ -1414,6 +1460,23 @@ longer needed. This enables level streaming and memory budgeting.
 
 See [Release Architecture](../release/release.md) for packaging, signing, and verification
 details.
+
+The implemented `AssetArchiveProvider` retains member IDs and types from its sole
+bounded archive parser and validates one owned cook target against every envelope.
+`Members()` exposes an immutable AssetId-sorted span for exactly the visible assets;
+`Target()` borrows that owned target. Neither accessor reparses bytes, loads payloads,
+selects a backend or authenticates a package. Borrowed metadata expires when the
+provider is moved, assigned or destroyed. `OpenSelected` filters both loading and
+inspection through the same dependency-closed visible membership, so unmounted
+assets cannot appear in inspection. Application package admission may use these
+facts to prove domain-specific manifest closure without reversing Assets dependencies.
+
+This is an additive source contract in the existing `HoroAssets` header
+ownership, with a provider layout change requiring consumer rebuilds. Archive wire
+format v1, stable AssetIds, cooked envelopes and mount policies are unchanged.
+The metadata allocation is admission-time and bounded by `maximumAssets`; the
+validated target is stored once rather than copied into every member.
+
 
 ## Runtime Loading
 

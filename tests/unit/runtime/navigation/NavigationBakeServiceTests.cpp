@@ -1,7 +1,10 @@
 #include "Horo/Application/NavigationBakeService.h"
 #include "Horo/Assets/AssetCookTransaction.h"
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
+#include "NativePublicationFiles.h"
 #include "navigation/IncrementalBakeFixture.h"
+#include "navigation/NavigationContentPolicyFixture.h"
+#include "navigation/NavigationPublicationEntropy.h"
 
 #include <algorithm>
 #include <atomic>
@@ -10,6 +13,7 @@
 #include <format>
 #include <fstream>
 #include <limits>
+#include <string_view>
 #include <thread>
 
 namespace Horo::Application {
@@ -57,25 +61,18 @@ namespace Horo::Application {
         };
 
         /** @brief Native durable writer with fault injection at the current-pointer barrier. */
-        class ControlledFiles final : public DurableFileSystem {
+        class ControlledFiles final : public Horo::TestSupport::NativePublicationFiles {
         public:
-            NativeDurableFileSystem native;
             std::atomic<bool> failReplacement{};
             std::atomic<bool> failAfterReplacement{};
             std::atomic<bool> holdCurrent{};
             std::atomic<bool> currentStaged{};
 
-            Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path, std::string_view owner) override {
-                return native.TryAcquireExclusive(path, owner);
-            }
-
-            Result<std::uint64_t> AvailableBytes(const std::filesystem::path &path) const override {
-                return native.AvailableBytes(path);
-            }
-
             Result<void> WriteDurable(const std::filesystem::path &path, std::span<const std::byte> bytes) override {
                 auto written = native.WriteDurable(path, bytes);
-                if (path.filename().string().starts_with("current.json.tmp.")) {
+                if (const std::string_view content{reinterpret_cast<const char *>(bytes.data()), bytes.size()};
+                    (path.filename() == "current.json" || path.filename().string().starts_with("current.json.tmp.")) &&
+                    content.find("generationPath") != std::string_view::npos) {
                     currentStaged.store(true);
                     while (holdCurrent.load())
                         std::this_thread::yield();
@@ -83,26 +80,15 @@ namespace Horo::Application {
                 return written;
             }
 
-            Result<void> CopyDurable(const std::filesystem::path &source, const std::filesystem::path &destination) override {
-                return native.CopyDurable(source, destination);
-            }
-
-            Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override {
+            Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
+                                              AtomicFileReplacementReceipt &receipt) override {
                 const bool current = destination.filename() == "current.json";
                 if (current && failReplacement.load())
                     return Result<void>::Failure(MakeError(NavigationErrors::BakeInputFailed));
-                auto replaced = native.AtomicReplace(prepared, destination);
+                auto replaced = native.AtomicReplaceTracked(prepared, destination, receipt);
                 if (current && replaced.HasValue() && failAfterReplacement.load())
                     return Result<void>::Failure(MakeError(NavigationErrors::BakeInputFailed));
                 return replaced;
-            }
-
-            Result<void> RemoveDurable(const std::filesystem::path &path) override {
-                return native.RemoveDurable(path);
-            }
-
-            Result<void> SyncDirectory(const std::filesystem::path &path) override {
-                return native.SyncDirectory(path);
             }
         };
 
@@ -120,7 +106,10 @@ namespace Horo::Application {
                                .maximumTemporaryBytes = 128U * 1024U * 1024U,
                                .maximumWorkItems = 8,
                                .maximumWorkUnits = 1024ULL * 1024ULL * 1024ULL,
-                               .childDrainTimeout = Duration::FromMilliseconds(2000)}};
+                               .childDrainTimeout = Duration::FromMilliseconds(2000)},
+                    .sourceAuthority = std::make_shared<NavigationBakeSourceAuthority>(),
+                    .writerWaitTimeout = Duration::FromMilliseconds(30),
+                    .newOperationId = TestSupport::NewPublicationOperationId};
         }
 
         /** @brief Shared owner order keeps operation storage and job execution alive beyond the service facade. */
@@ -143,13 +132,25 @@ namespace Horo::Application {
         /** @brief Seeds a valid existing generation whose portable filename predates canonical asset-ID naming. */
         void PublishLegacyArtifact(const BakeHarness &harness, const Assets::AssetCookManifestEntry &entry,
                                    const std::vector<std::uint8_t> &artifact) {
-            const auto lock = harness.config.files->TryAcquireExclusive(harness.config.targetRoot / ".cook-writer.lock", "legacy fixture");
+            NativeDurableFileSystem files;
+            const auto lock = files.TryAcquireExclusive(harness.config.targetRoot / ".cook-writer.lock", "legacy fixture");
             REQUIRE(lock.HasValue());
-            const std::array entries{entry};
-            const std::array artifacts{artifact};
-            REQUIRE(Assets::PublishCookGeneration(harness.config.targetRoot, harness.config.target, entries, artifacts,
-                                                  harness.config.cookLimits, {.files = harness.config.files.get()})
-                        .HasValue());
+            const auto manifest = std::format(
+                R"({{"schemaVersion":1,"target":"{}","artifacts":[{{"assetId":"{}","assetType":"{}","artifact":"{}","artifactHash":"{}"}}]}})",
+                harness.config.target.Value(), entry.assetId.ToString(), entry.assetType.Value(), entry.artifactFile,
+                FormatSha256(entry.artifactHash));
+            const auto manifestBytes = std::as_bytes(std::span{manifest.data(), manifest.size()});
+            const auto manifestHex = FormatSha256(ComputeSha256(manifestBytes)).substr(7);
+            const auto generationPath = "generations/" + manifestHex;
+            const auto generationRoot = harness.config.targetRoot / generationPath;
+            REQUIRE(files.WriteDurable(generationRoot / entry.artifactFile, std::as_bytes(std::span{artifact})).HasValue());
+            REQUIRE(files.WriteDurable(generationRoot / "manifest.json", manifestBytes).HasValue());
+            const auto current =
+                std::format(R"({{"schemaVersion":1,"target":"{}","manifestDigest":"{}","generationPath":"{}","artifactCount":"1"}})",
+                            harness.config.target.Value(), manifestHex, generationPath);
+            const auto prepared = harness.config.targetRoot / "legacy-current.json";
+            REQUIRE(files.WriteDurable(prepared, std::as_bytes(std::span{current.data(), current.size()})).HasValue());
+            REQUIRE(files.AtomicReplace(prepared, harness.config.targetRoot / "current.json").HasValue());
         }
 
         [[nodiscard]] OperationRecord Terminal(NavigationBakeService &service, const OperationStore &operations, OperationId id) {
@@ -165,7 +166,10 @@ namespace Horo::Application {
             return {};
         }
 
-        [[nodiscard]] OperationId Submit(NavigationBakeService &service, const IncrementalBakeFixture &fixture) {
+        [[nodiscard]] OperationId Submit(BakeHarness &harness) {
+            auto &service = *harness.service;
+            const auto &fixture = harness.fixture;
+            REQUIRE(harness.config.sourceAuthority->UpdateCurrent(fixture.revisions, fixture.Observations()).HasValue());
             auto id = service.Submit({.input = fixture.Input(),
                                       .compatibility = fixture.compatibility,
                                       .tiles = fixture.Tiles(),
@@ -234,8 +238,7 @@ namespace Horo::Application {
     TEST_CASE("Incremental admission rejects invalid native ceilings before scheduling with either cold or warm cache") {
         BakeHarness harness;
         if (GENERATE(false, true))
-            REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
-                    OperationState::Succeeded);
+            REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         const auto before = harness.service->Published();
         const auto reject = [&harness](auto field, const auto value) {
             auto config = harness.config;
@@ -265,15 +268,13 @@ namespace Horo::Application {
 
     TEST_CASE("Incremental production cook rebuilds both sides of an edited border and reuses remote content identities") {
         BakeHarness harness;
-        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
-                OperationState::Succeeded);
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         const auto before = harness.service->Published();
         REQUIRE(before);
         REQUIRE(before->rebuiltTiles == 4);
         REQUIRE(Query(before->tiles).Value().status == NavigationPathStatus::Reachable);
         harness.fixture.ExcludeBorder();
-        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
-                OperationState::Succeeded);
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         const auto after = harness.service->Published();
         REQUIRE(after);
         CHECK(after->rebuiltTiles == 2);
@@ -295,24 +296,67 @@ namespace Horo::Application {
         CHECK(Query(restored.Value()).Value().status != NavigationPathStatus::Reachable);
         harness.service->Close();
         harness.service = NavigationBakeService::Create(harness.config, harness.operations, harness.jobs).Value();
-        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
-                OperationState::Succeeded);
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         CHECK(harness.service->Published()->reusedTiles == 4);
         CHECK(harness.builder->builds.load() == 6);
+    }
+
+    TEST_CASE("Owned project policy changes cannot join baking or alias promoted aggregate identity", "[navigation][content][policy]") {
+        BakeHarness harness;
+        const auto &fixture = harness.fixture;
+        REQUIRE(harness.config.sourceAuthority->UpdateCurrent(fixture.revisions, fixture.Observations()).HasValue());
+        const auto submit = [&](const std::uint64_t policy) {
+            auto result = harness.service->Submit({.input = fixture.Input(),
+                                                   .compatibility = fixture.compatibility,
+                                                   .tiles = fixture.Tiles(),
+                                                   .sources = fixture.Observations(),
+                                                   .projectProfile = ContentProfile(policy)});
+            REQUIRE(result.HasValue());
+            return result.Value();
+        };
+        harness.builder->pause.store(true);
+        const auto first = submit(17);
+        for (std::size_t iteration = 0; iteration < 2000 && !harness.builder->entered.load(); ++iteration)
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        REQUIRE(harness.builder->entered.load());
+        REQUIRE(submit(17) == first);
+        const auto changed = submit(18);
+        REQUIRE(changed != first);
+        harness.builder->pause.store(false);
+        REQUIRE(Terminal(*harness.service, harness.operations, first).state == OperationState::Cancelled);
+        REQUIRE(Terminal(*harness.service, harness.operations, changed).state == OperationState::Succeeded);
+        const auto before = harness.service->Published();
+        REQUIRE(before);
+        REQUIRE(before->tiles.provenance.has_value());
+        REQUIRE(before->tiles.provenance->projectProfile.has_value());
+        REQUIRE(before->tiles.provenance->projectProfile->MatchesAuthority(ContentProfile(18)));
+        const auto builds = harness.builder->builds.load();
+        REQUIRE(Terminal(*harness.service, harness.operations, submit(17)).state == OperationState::Succeeded);
+        const auto after = harness.service->Published();
+        REQUIRE(after);
+        REQUIRE(after->tiles.provenance.has_value());
+        REQUIRE(after->tiles.provenance->projectProfile.has_value());
+        REQUIRE(after->tiles.provenance->projectProfile->MatchesAuthority(ContentProfile(17)));
+        REQUIRE(harness.builder->builds.load() == builds);
+        REQUIRE(after->reusedTiles == before->tiles.tiles.size());
+        REQUIRE(after->generation.manifestDigest != before->generation.manifestDigest);
+        REQUIRE(after->tiles.tiles.size() == before->tiles.tiles.size());
+        for (std::size_t index = 0; index < after->tiles.tiles.size(); ++index)
+            REQUIRE(after->tiles.tiles[index]->ContentIdentity() == before->tiles.tiles[index]->ContentIdentity());
     }
 
     TEST_CASE("Latest request replaces pending work and shutdown cancels unadopted native baking") {
         BakeHarness harness;
         harness.builder->pause.store(true);
-        const auto first = Submit(*harness.service, harness.fixture);
+        const auto first = Submit(harness);
         for (std::size_t i = 0; i < 2000 && !harness.builder->entered.load(); ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         REQUIRE(harness.builder->entered.load());
-        CHECK(Submit(*harness.service, harness.fixture) == first);
+        CHECK(Submit(harness) == first);
         harness.fixture.ExcludeBorder();
-        const auto second = Submit(*harness.service, harness.fixture);
+        const auto second = Submit(harness);
         harness.fixture.ExcludeBorder(16);
-        const auto third = Submit(*harness.service, harness.fixture);
+        const auto third = Submit(harness);
         harness.builder->pause.store(false);
         CHECK(Terminal(*harness.service, harness.operations, first).state == OperationState::Cancelled);
         CHECK(Terminal(*harness.service, harness.operations, second).state == OperationState::Cancelled);
@@ -321,7 +365,7 @@ namespace Horo::Application {
         harness.builder->pause.store(true);
         harness.builder->entered.store(false);
         harness.fixture.compatibility.provider = Digest(80);
-        const auto closing = Submit(*harness.service, harness.fixture);
+        const auto closing = Submit(harness);
         for (std::size_t i = 0; i < 2000 && !harness.builder->entered.load(); ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         REQUIRE(harness.builder->entered.load());
@@ -336,15 +380,14 @@ namespace Horo::Application {
 
     TEST_CASE("Malformed current authority fails incremental publication and preserves the last valid lease") {
         BakeHarness harness;
-        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
-                OperationState::Succeeded);
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         const auto before = harness.service->Published();
         {
             std::ofstream current(harness.config.targetRoot / "current.json", std::ios::trunc);
             current << "invalid";
         }
         harness.fixture.ExcludeBorder();
-        CHECK(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state == OperationState::Failed);
+        CHECK(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Failed);
         CHECK(harness.service->Published() == before);
         CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).HasError());
     }
@@ -352,13 +395,12 @@ namespace Horo::Application {
     TEST_CASE("Source invalidation and replacement failure preserve current while post-rename failure reports committed truth") {
         auto files = std::make_shared<ControlledFiles>();
         BakeHarness harness(files);
-        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
-                OperationState::Succeeded);
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         const auto before = harness.service->Published();
         harness.fixture.ExcludeBorder();
         files->holdCurrent.store(true);
         files->currentStaged.store(false);
-        const auto stale = Submit(*harness.service, harness.fixture);
+        const auto stale = Submit(harness);
         for (std::size_t i = 0; i < 2000 && !files->currentStaged.load(); ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         const bool staged = files->currentStaged.load();
@@ -369,13 +411,12 @@ namespace Horo::Application {
         CHECK(harness.service->Published() == before);
         CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value().manifestDigest == before->generation.manifestDigest);
         files->failReplacement.store(true);
-        CHECK(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state == OperationState::Failed);
+        CHECK(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Failed);
         CHECK(harness.service->Published() == before);
         CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value().manifestDigest == before->generation.manifestDigest);
         files->failReplacement.store(false);
         files->failAfterReplacement.store(true);
-        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
-                OperationState::Succeeded);
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         REQUIRE(harness.service->Published()->generation.durabilityError);
         CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value().manifestDigest ==
               harness.service->Published()->generation.manifestDigest);
@@ -383,11 +424,9 @@ namespace Horo::Application {
 
     TEST_CASE("Production cache reuse rejects valid foreign source envelopes and unchanged producer digests cannot hide edits") {
         BakeHarness harness;
-        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
-                OperationState::Succeeded);
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         harness.fixture.vertices.front().y = 0.2F;
-        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
-                OperationState::Succeeded);
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         CHECK(harness.service->Published()->rebuiltTiles == 2);
         CHECK(harness.service->Published()->reusedTiles == 2);
         const auto before = harness.service->Published();
@@ -407,7 +446,7 @@ namespace Horo::Application {
             output.write(reinterpret_cast<const char *>(encoded.data()), static_cast<std::streamsize>(encoded.size()));
         }
         harness.service = NavigationBakeService::Create(harness.config, harness.operations, harness.jobs).Value();
-        CHECK(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state == OperationState::Failed);
+        CHECK(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Failed);
         CHECK_FALSE(harness.service->Published());
         CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value().manifestDigest == before->generation.manifestDigest);
     }
@@ -432,21 +471,18 @@ namespace Horo::Application {
         PublishLegacyArtifact(harness, other, artifact);
         const auto legacy = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value();
         REQUIRE(Assets::ReadCookGenerationContents(legacy, harness.config.maximumCandidateBytes).HasValue());
-        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
-                OperationState::Succeeded);
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         const auto before = harness.service->Published();
         harness.fixture.ExcludeBorder();
         {
             auto lock = harness.config.files->TryAcquireExclusive(harness.config.targetRoot / ".cook-writer.lock", "competing test writer");
             REQUIRE(lock.HasValue());
-            CHECK(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
-                  OperationState::Failed);
+            CHECK(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Failed);
             CHECK(harness.service->Published() == before);
             CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value().manifestDigest ==
                   before->generation.manifestDigest);
         }
-        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
-                OperationState::Succeeded);
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         const auto current = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value();
         const auto read = Assets::ReadCookGenerationContents(current, harness.config.maximumCandidateBytes);
         REQUIRE(read.HasValue());
@@ -461,28 +497,25 @@ namespace Horo::Application {
 
     TEST_CASE("Artifact replacement rejects a noncanonical filename without changing the current authority") {
         BakeHarness harness;
-        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
-                OperationState::Succeeded);
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         const auto before = harness.service->Published();
         const auto contents = Assets::ReadCookGenerationContents(before->generation, harness.config.maximumCandidateBytes).Value();
         auto entry = contents.entries.front();
         entry.artifactFile = "foreign.cooked";
         CHECK(Assets::PublishCookArtifactReplacement(harness.config.targetRoot, harness.config.target, entry, contents.artifacts.front(),
                                                      harness.config.maximumCandidateBytes, harness.config.cookLimits,
-                                                     {.files = harness.config.files.get()})
+                                                     {.files = harness.config.files.get(), .newOperationId = harness.config.newOperationId})
                   .HasError());
         CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value().manifestDigest == before->generation.manifestDigest);
     }
 
     TEST_CASE("Removing all walkable geometry publishes a complete empty tile closure without retaining old topology") {
         BakeHarness harness;
-        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
-                OperationState::Succeeded);
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         const auto before = harness.service->Published();
         harness.fixture.ExcludeBorder();
         harness.fixture.modifiers.front().localBounds = {{-1, -1, -1}, {33, 3, 9}};
-        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
-                OperationState::Succeeded);
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         const auto after = harness.service->Published();
         REQUIRE(after->tiles.tiles.size() == 4);
         CHECK(after->rebuiltTiles == 4);

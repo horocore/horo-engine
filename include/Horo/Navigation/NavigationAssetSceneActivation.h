@@ -65,6 +65,7 @@ namespace Horo::Navigation {
      * construction preserves the prior world. Publication swaps an already finalized lifecycle; old candidate
      * Shutdown revokes only its own world. Existing NavigationWorldReadLease pins its backend and immutable tile
      * allocations across cache eviction, replacement and shutdown; revoked work must obey lease cancellation.
+     * An absent explicit host factory reports CapabilityUnavailable; factory failures preserve their original typed error.
      */
     class NavigationAssetSceneActivationParticipant final : public Runtime::SceneActivationParticipant {
     public:
@@ -74,9 +75,12 @@ namespace Horo::Navigation {
          * @param cache Owner-thread cache; must outlive the participant and candidate preparation.
          * @param target Exact runtime cook target.
          * @param factory Fully initialized provider constructor, without backend discovery.
-         * @param limits Finite positive live-world/provider and asset bounds. */
+         * @param limits Finite positive live-world/provider and asset bounds.
+         * @param content Optional owned release expectations. Presence requires an exact entry for each Scene NavMesh asset;
+         * empty or missing entries never permit legacy fallback. The host obtains these from verified package evidence. */
         NavigationAssetSceneActivationParticipant(Assets::AssetPayloadCache &cache, AssetCookTargetId target,
-                                                  NavigationAssetBackendFactory factory, const NavigationAssetSceneLimits &limits = {});
+                                                  NavigationAssetBackendFactory factory, const NavigationAssetSceneLimits &limits = {},
+                                                  std::optional<std::vector<NavMeshAssetContentExpectation>> content = std::nullopt);
         /** @brief Revoke active work without waiting; worker leases keep storage safe. */
         ~NavigationAssetSceneActivationParticipant() override;
         /** @copydoc Runtime::SceneActivationParticipant::Prepare */

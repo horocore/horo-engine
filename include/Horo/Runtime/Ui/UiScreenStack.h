@@ -202,6 +202,7 @@ namespace Horo::Runtime::Ui {
         UiRouteStackId stack;
         std::span<const UiRouteMetadata> definitions;
         std::uint32_t maximumRoutes{};
+        std::uint32_t previousRouteIncarnation{}; /**< Initial EVER-issued route high-water mark within the never-reused stack slot. */
 
         /** @brief Validates ownership, route definitions, and finite storage bounds. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -318,8 +319,13 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] UiRouteStackId Stack() const noexcept;
         /** @brief Returns the current committed revision. @return Monotonic stack revision. */
         [[nodiscard]] UiRouteStackRevision Revision() const noexcept;
+        /** @brief Returns the incarnation high-water mark including popped/replaced route instances. @return Last issued value. */
+        [[nodiscard]] std::uint32_t LastIssuedRouteIncarnation() const noexcept;
         /** @brief Returns the current lifecycle state. */
         [[nodiscard]] UiScreenStackState State() const noexcept;
+        /** @brief Checks admission can close outside any held navigation transaction. @return Active and not transaction-busy. */
+        [[nodiscard]] bool CanRetire() const noexcept;
+
         /** @brief Returns the current route count. @return Bounded live instance count. */
         [[nodiscard]] std::size_t Size() const noexcept;
         /** @brief Reports whether no route instances are committed. */
@@ -328,6 +334,9 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] std::optional<UiRouteInstance> Top() const;
         /** @brief Returns the immutable stack in bottom-to-top order. */
         [[nodiscard]] std::span<const UiRouteInstance> Routes() const noexcept;
+        /** @brief Borrows the actual copied route catalog for typed composition validation. @return Immutable definitions. */
+        [[nodiscard]] std::span<const UiRouteMetadata> Definitions() const noexcept;
+
         /** @brief Creates a guard against the current stack revision and top instance. */
         [[nodiscard]] Result<UiRouteStackGuard> Guard() const;
 

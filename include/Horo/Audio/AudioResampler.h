@@ -82,6 +82,15 @@ namespace Horo::Audio {
          * No concurrent Process, Reset, move or destruction is permitted. Destroy/reassign only off the callback after quiescence.
          */
         [[nodiscard]] AudioResamplerProgress Process(AudioResamplerInput input, AudioResamplerOutput output) noexcept;
+        /**
+         * @brief Change explicit low-cost Linear clip pitch without allocating or discarding fractional history.
+         * @param pitch Finite source-speed multiplier in [0.125,8], with rate-adjusted step in [1/64,64].
+         * @param rampFrames Linear output-sample ramp, at most 16384; zero applies immediately.
+         * @return True on admission; false preserves all state. Sinc/device plans and moved owners reject.
+         * @details This unfiltered mode makes no anti-aliasing guarantee. Each produced sample advances
+         * the ramp; input starvation and zero-capacity calls freeze it. Reset restores the prepared pitch.
+         */
+        [[nodiscard]] bool SetLinearPitch(double pitch, std::uint32_t rampFrames = 0) noexcept;
         /** @brief Clear history, phase and end state without allocation; moved-from objects remain inert. */
         void Reset() noexcept;
         /** @brief Read the immutable admitted plan on the exclusive owner. @return Plan or null for a moved owner. */

@@ -42,9 +42,11 @@ namespace Horo::Assets::AssetErrors {
 namespace Horo::Assets::CookErrors {
     extern const ErrorCodeDescriptor UnsupportedFormat;
     extern const ErrorCodeDescriptor MalformedArtifact;
+    extern const ErrorCodeDescriptor NotPublished;
     extern const ErrorCodeDescriptor TooLarge;
     extern const ErrorCodeDescriptor HashMismatch;
     extern const ErrorCodeDescriptor CookerMissing;
+    extern const ErrorCodeDescriptor CookerFailed;
     extern const ErrorCodeDescriptor DuplicateCooker;
     extern const ErrorCodeDescriptor CatalogSealed;
     extern const ErrorCodeDescriptor Cancelled;

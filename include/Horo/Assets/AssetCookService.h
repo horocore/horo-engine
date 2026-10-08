@@ -7,6 +7,7 @@
 
 #include "Horo/Assets/AssetCook.h"
 #include "Horo/Assets/AssetCookCache.h"
+#include "Horo/Assets/AssetCookInputSnapshot.h"
 #include "Horo/Assets/AssetCookOutput.h"
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Assets/CookCatalog.h"
@@ -25,19 +26,46 @@
 
 namespace Horo::Assets {
 
+    /** @brief Validated unpublished resource envelope, borrowed only until the dependent-catalog callback returns. */
+    struct AssetCookCandidateArtifactView final {
+        AssetCookDependencyIdentity identity;
+        std::span<const std::uint8_t> envelope;
+    };
+
+    /** @brief Immutable generic resource-before-dependent composition inside a single joined cook/publication. */
+    struct AssetCookDependentPhase final {
+        std::vector<AssetId> resourceIds; /**< Unique first-phase registry IDs; bounded by maximumAssets. */
+        std::function<Result<std::shared_ptr<const CookerCatalogSnapshot>>(std::span<const AssetCookCandidateArtifactView>,
+                                                                           const CancellationToken &)>
+            makeCatalog; /**< Synchronous control-thread callback after first-phase jobs join. Views refer to the exact
+                          envelopes retained for final publication, not a previous generation/cache directory.
+                          Returned strategies own all retained evidence. Remaining V2 keys automatically bind these hashes.
+                          No intermediate generation is published; cancellation/failure discards the entire candidate. */
+    };
+
     /**
      * @brief All inputs needed to run one cook operation.
      */
     struct AssetCookRequest {
-        std::filesystem::path sourceRoot;            /**< Project source root for resolving relative source paths. */
-        std::filesystem::path cacheRoot;             /**< Cache root directory for immutable artifact cache. */
-        std::filesystem::path cookedRoot;            /**< Target root for generation publication. */
-        AssetRegistrySnapshot registry;              /**< Pinned immutable registry snapshot. */
-        AssetCookTargetId target;                    /**< Cook target to produce artifacts for. */
-        AssetCookLimits limits;                      /**< Bounded size and concurrency limits. */
-        BuildOutputStore *buildOutputStore{nullptr}; /**< Optional typed per-asset cook output authority. */
-        OperationStore *operationStore{nullptr};     /**< Optional user-facing operation authority. */
-        std::function<void()> requestCancel;         /**< Cooperative cancellation request paired with the supplied token. */
+        std::filesystem::path sourceRoot;                    /**< Project source root for resolving relative source paths. */
+        std::filesystem::path cacheRoot;                     /**< Cache root directory for immutable artifact cache. */
+        std::filesystem::path cookedRoot;                    /**< Target root for generation publication. */
+        AssetRegistrySnapshot registry;                      /**< Pinned immutable registry snapshot. */
+        AssetCookTargetId target;                            /**< Cook target to produce artifacts for. */
+        AssetCookLimits limits;                              /**< Bounded size and concurrency limits. */
+        BuildOutputStore *buildOutputStore{nullptr};         /**< Optional typed per-asset cook output authority. */
+        OperationStore *operationStore{nullptr};             /**< Optional user-facing operation authority. */
+        std::function<void()> requestCancel;                 /**< Cooperative cancellation request paired with the supplied token. */
+        std::shared_ptr<DurableFileSystem> publicationFiles; /**< Required host-owned durable writer and common native lock capability. */
+        std::function<Result<AssetId>()> newPublicationOperationId;    /**< Required host entropy source for unique publication staging. */
+        std::shared_ptr<const AssetCookInputSnapshot> pinnedInputs;    /**< Optional real-file capture: selected registry records
+                                                                      must match it; complete captured closure participates in V2 keys.
+                                                                      Host retains project read authority through publication. */
+        std::function<Result<void>()> validateHostInputs;              /**< Optional synchronous host compatibility/package/reload fence,
+                                                                       called before work and immediately before pointer replacement.
+                                                                       Captures must outlive this joined Cook invocation. */
+        std::shared_ptr<const AssetCookDependentPhase> dependentPhase; /**< Optional bounded generic extension; requires pinnedInputs.
+                                                                      Does not select prefab roots, templates or providers. */
     };
 
     /**
@@ -71,6 +99,9 @@ namespace Horo::Assets {
          * @param request Cook operation inputs.
          * @param cancellation Parent operation cancellation token.
          * @return Published generation report, or a typed error (missing cooker, read failure, etc.).
+         * @pre publicationFiles and newPublicationOperationId are supplied by the host, including for an empty registry.
+         * @post Recovery, full-inventory replacement and success adoption hold the common .cook-writer.lock.
+         * @post Cancellation before pointer replacement preserves the old generation; committed output remains successful.
          */
         [[nodiscard]] Result<AssetCookReport> Cook(const AssetCookRequest &request, const CancellationToken &cancellation);
 

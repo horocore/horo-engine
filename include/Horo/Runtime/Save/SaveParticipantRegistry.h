@@ -115,6 +115,12 @@ namespace Horo::Runtime {
         [[nodiscard]] auto operator<=>(const CanonicalStateParticipantDescriptor &) const noexcept = default;
     };
 
+    /** @brief Checks local canonical descriptor invariants without registration or adapter callbacks.
+     * @param descriptor Owned metadata to validate.
+     * @return Success or typed metadata/allocation failure; cross-owner graph checks remain composition-owned.
+     */
+    [[nodiscard]] Result<void> ValidateCanonicalStateParticipantDescriptor(const CanonicalStateParticipantDescriptor &descriptor);
+
     /**
      * @brief Polymorphic lifetime anchor for a host-bound canonical state adapter.
      *

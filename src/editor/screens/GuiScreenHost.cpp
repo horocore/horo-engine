@@ -7,6 +7,8 @@
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Editor/ProjectCreationService.h"
 #include "Horo/Editor/SettingsModal.h"
+#include "Horo/Extensions/EditorActivityAbi.h"
+#include "Horo/Extensions/EditorActivityHost.h"
 #include "Horo/Extensions/ExtensionInventory.h"
 #include "Horo/Extensions/ExtensionManager.h"
 #include "Horo/Extensions/ExtensionMarketplace.h"
@@ -79,28 +81,33 @@ namespace Horo::Editor {
 
     }  // namespace
 
-    GuiScreenHost::GuiScreenHost(const EditorGuiContext &context, EditorModalHost &modalHost,  // NOSONAR(cpp:S107)
-                                 EditorSettingsService &settingsService, LocalizationService &localization, EngineDataBus &engineEvents,
-                                 ProjectCreationService &creationService, JobSystem &jobs, Input::InputRouter &inputRouter,
-                                 const RendererAvailabilitySnapshot &rendererAvailability, ScreenRegistry screenRegistry,
-                                 WorkspacePanelRegistry workspacePanelRegistry, std::uintptr_t logoTexture,
-                                 Extensions::ExtensionInventory *extensionInventory,
-                                 Extensions::ExtensionMarketplaceService *extensionMarketplace, NativeDialogs *nativeDialogs)
+    /** @copydoc GuiScreenHost::GuiScreenHost */
+    GuiScreenHost::GuiScreenHost(const EditorGuiContext &context, GuiScreenHostComposition composition)
+        : context_(&context), modalHost_(&composition.modalHost), inputRouter_(&composition.inputRouter),
+          settingsService_(&composition.settingsService), localization_(&composition.localization),
+          engineEvents_(&composition.engineEvents), logoTexture_(composition.logoTexture),
+          extensionInventory_(composition.extensionInventory), extensionMarketplace_(composition.extensionMarketplace),
+          nativeDialogs_(composition.nativeDialogs), screenRegistry_(std::move(composition.screenRegistry)),
+          workspacePanelRegistry_(std::move(composition.workspacePanelRegistry)) {
+        RegisterApplicationServices(composition);
+        InitializeExtensions(composition.jobs, std::move(composition.extensionArtifactGate));
+        statusBar_ = std::make_unique<EditorStatusBar>(context, statusItemRegistry_);
+        activeStatusPanelIds_.reserve(16);
+        InitializeStatusItems(composition.rendererAvailability);
+    }
 
-        : context_(&context), modalHost_(&modalHost), inputRouter_(&inputRouter), settingsService_(&settingsService),
-          localization_(&localization), engineEvents_(&engineEvents), logoTexture_(logoTexture), extensionInventory_(extensionInventory),
-          extensionMarketplace_(extensionMarketplace), nativeDialogs_(nativeDialogs), screenRegistry_(std::move(screenRegistry)),
-          workspacePanelRegistry_(std::move(workspacePanelRegistry)) {
+    /** @copydoc GuiScreenHost::RegisterApplicationServices */
+    void GuiScreenHost::RegisterApplicationServices(const GuiScreenHostComposition &composition) {
         services_.Register(*this);
-        services_.RegisterConst(context);
-        services_.Register(modalHost);
-        services_.Register(settingsService);
-        services_.Register(localization);
-        services_.Register(engineEvents);
-        services_.Register(creationService);
-        services_.Register(jobs);
-        services_.Register(inputRouter);
-        services_.RegisterConst(rendererAvailability);
+        services_.RegisterConst(*context_);
+        services_.Register(composition.modalHost);
+        services_.Register(composition.settingsService);
+        services_.Register(composition.localization);
+        services_.Register(composition.engineEvents);
+        services_.Register(composition.creationService);
+        services_.Register(composition.jobs);
+        services_.Register(composition.inputRouter);
+        services_.RegisterConst(composition.rendererAvailability);
         services_.Register(logoTexture_);
         services_.Register<ScreenRegistry>(screenRegistry_);
         services_.Register<WorkspacePanelRegistry>(workspacePanelRegistry_);
@@ -109,8 +116,18 @@ namespace Horo::Editor {
             services_.Register<Extensions::ExtensionInventory>(*extensionInventory_);
         if (extensionMarketplace_ != nullptr)
             services_.Register<Extensions::ExtensionMarketplaceService>(*extensionMarketplace_);
+    }
+
+    /** @copydoc GuiScreenHost::InitializeExtensions */
+    void GuiScreenHost::InitializeExtensions(JobSystem &jobs, std::shared_ptr<const Security::NativeArtifactGate> artifactGate) {
         importerCatalogCandidate_ = std::make_unique<Assets::AssetImporterCatalog>();
-        extensionManager_ = std::make_unique<Extensions::ExtensionManager>(importerCatalogCandidate_.get());
+        editorActivityHost_ = std::make_shared<Extensions::EditorActivityHost>(jobs);
+        services_.Register<Extensions::EditorActivityHost>(*editorActivityHost_);
+        extensionManager_ =
+            std::make_unique<Extensions::ExtensionManager>(importerCatalogCandidate_.get(), Extensions::ExtensionHostProfile::Interactive,
+                                                           std::vector<std::string>{HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                                                           std::move(artifactGate), Extensions::ExtensionManager::NativeLibraryLoader{},
+                                                           Extensions::ExtensionPlatformProviderCommit{}, editorActivityHost_);
         ActivateBuiltInImporters(*importerCatalogCandidate_, extensionInventory_);
         if (extensionInventory_ != nullptr)
             ActivateUserExtensions(*extensionManager_, *extensionInventory_);
@@ -121,9 +138,10 @@ namespace Horo::Editor {
             importerCatalog_ = std::make_shared<const Assets::AssetImporterCatalogSnapshot>();
         }
         services_.RegisterConst<Assets::AssetImporterCatalogSnapshot>(*importerCatalog_);
-        statusBar_ = std::make_unique<EditorStatusBar>(context, statusItemRegistry_);
-        activeStatusPanelIds_.reserve(16);
+    }
 
+    /** @copydoc GuiScreenHost::InitializeStatusItems */
+    void GuiScreenHost::InitializeStatusItems(const RendererAvailabilitySnapshot &rendererAvailability) {
         static_cast<void>(
             statusItemRegistry_.Register(EditorStatusItemDescriptor{.id = "horo.status.navigation",
                                                                     .labelKey = "status.navigation.label",
@@ -131,7 +149,7 @@ namespace Horo::Editor {
                                                                     .priority = 70,
                                                                     .order = 30,
                                                                     .maxWidth = 96.0F},
-                                         EditorStatusItemContent{.value = localization.Get("editor", "status.navigation.idle")}));
+                                         EditorStatusItemContent{.value = localization_->Get("editor", "status.navigation.idle")}));
         static_cast<void>(
             statusItemRegistry_.Register(EditorStatusItemDescriptor{.id = "horo.status.backend",
                                                                     .alignment = EditorStatusBarAlignment::Right,
@@ -143,24 +161,26 @@ namespace Horo::Editor {
                                              .label = rendererAvailability.Find(rendererAvailability.ActiveBackendId()) != nullptr
                                                           ? rendererAvailability.Find(rendererAvailability.ActiveBackendId())->displayName
                                                           : std::string{rendererAvailability.ActiveBackendId()}}));
-        static_cast<void>(statusItemRegistry_.Register(EditorStatusItemDescriptor{.id = "horo.status.document",
-                                                                                  .alignment = EditorStatusBarAlignment::Left,
-                                                                                  .priority = 100,
-                                                                                  .order = 0,
-                                                                                  .maxWidth = 140.0F,
-                                                                                  .presentation = EditorStatusItemPresentation::Pill},
-                                                       EditorStatusItemContent{.iconResourceId = "horo.status.document",
-                                                                               .label = localization.Get("editor", "status.document.saved"),
-                                                                               .tone = EditorStatusItemTone::Success,
-                                                                               .available = false}));
-        static_cast<void>(statusItemRegistry_.Register(EditorStatusItemDescriptor{.id = "horo.status.selection",
-                                                                                  .labelKey = "status.selection.label",
-                                                                                  .alignment = EditorStatusBarAlignment::Left,
-                                                                                  .priority = 80,
-                                                                                  .order = 10,
-                                                                                  .maxWidth = 112.0F},
-                                                       EditorStatusItemContent{.value = localization.Get("editor", "status.selection.none"),
-                                                                               .available = false}));
+        static_cast<void>(
+            statusItemRegistry_.Register(EditorStatusItemDescriptor{.id = "horo.status.document",
+                                                                    .alignment = EditorStatusBarAlignment::Left,
+                                                                    .priority = 100,
+                                                                    .order = 0,
+                                                                    .maxWidth = 140.0F,
+                                                                    .presentation = EditorStatusItemPresentation::Pill},
+                                         EditorStatusItemContent{.iconResourceId = "horo.status.document",
+                                                                 .label = localization_->Get("editor", "status.document.saved"),
+                                                                 .tone = EditorStatusItemTone::Success,
+                                                                 .available = false}));
+        static_cast<void>(
+            statusItemRegistry_.Register(EditorStatusItemDescriptor{.id = "horo.status.selection",
+                                                                    .labelKey = "status.selection.label",
+                                                                    .alignment = EditorStatusBarAlignment::Left,
+                                                                    .priority = 80,
+                                                                    .order = 10,
+                                                                    .maxWidth = 112.0F},
+                                         EditorStatusItemContent{.value = localization_->Get("editor", "status.selection.none"),
+                                                                 .available = false}));
     }
 
     GuiScreenHost::~GuiScreenHost() {
@@ -202,6 +222,10 @@ namespace Horo::Editor {
             activeScreen_->OnLeave();
             activeScreen_.reset();
         }
+        if (editorActivityHost_)
+            editorActivityHost_->BeginShutdown();
+        if (extensionManager_)
+            extensionManager_->UnloadAll();
         services_.Clear();
     }
 
@@ -407,6 +431,8 @@ namespace Horo::Editor {
     void GuiScreenHost::OnUpdate(float dt) {
         if (!shutdown_ && context_ != nullptr && context_->updates != nullptr)
             context_->updates->Poll();
+        if (editorActivityHost_)
+            editorActivityHost_->Update();
         if (localization_ != nullptr) {
             static_cast<void>(
                 statusItemRegistry_.Update("horo.status.navigation",

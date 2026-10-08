@@ -1,6 +1,8 @@
+#include "GameplayWorldComposition.h"
 #include "HeadlessNetworkServices.h"
 #include "Horo/Network/DeterministicTransport.h"
 #include "Horo/Network/NetworkModeComposition.h"
+#include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "NetworkProductHost.h"
 #include "NetworkTestUtils.h"
@@ -22,6 +24,8 @@ namespace Horo::Network {
 
     namespace {
         struct ProductOwners final {
+            std::size_t factoryCalls{};
+            std::size_t sceneFactoryCalls{};
             std::size_t constructedTransport{};
             std::size_t localPlayers{};
         };
@@ -104,6 +108,7 @@ namespace Horo::Network {
             NetworkModeFactories factories;
             for (auto &factory : factories.services) {
                 factory = [owners](const NetworkModeServiceRequest request) -> Result<std::unique_ptr<INetworkModeService>> {
+                    ++owners->factoryCalls;
                     return Result<std::unique_ptr<INetworkModeService>>::Success(std::make_unique<ProductService>(owners, request));
                 };
             }
@@ -242,7 +247,7 @@ namespace Horo::Network {
         [[nodiscard]] Result<std::unique_ptr<Application::Internal::NetworkProductHost>> Product(
             Clock &clock, const NetworkProjectRole mode, const std::span<const NetworkModeWorld> worlds,
             const NetworkModePresentation presentation, const std::shared_ptr<ProductOwners> &owners,
-            const bool omitRoleFromPackage = false) {
+            const bool omitRoleFromPackage = false, const bool unknownReplicationInventory = false) {
             auto input = DefaultNetworkProjectSettings(Id<NetworkProjectSettingsId>(10)).Value();
             input.supportedRoles = NetworkProjectRoleSet::Standalone | NetworkProjectRoleSet::Client | NetworkProjectRoleSet::ListenServer |
                                    NetworkProjectRoleSet::DedicatedServer;
@@ -250,6 +255,8 @@ namespace Horo::Network {
             input.transport.capabilities.requiredDelivery[static_cast<std::size_t>(DeliveryPolicy::ReliableOrdered)] = true;
             input.transport.capabilities.requiredChannels = 2;
             input.transport.capabilities.requiredMaximumMessageBytes = 1024;
+            if (unknownReplicationInventory)
+                input.replication.completeness = NetworkReplicationInventoryCompleteness::Unknown;
             const auto project = NetworkProjectSettings::Create(input);
             REQUIRE(project.HasValue());
             const auto facts = ProductFacts(project.Value(), mode, omitRoleFromPackage);
@@ -262,6 +269,11 @@ namespace Horo::Network {
             auto factories = Application::Internal::ComposeHeadlessNetworkServices(std::make_shared<const Runtime::RuntimeSceneDefinition>(
                                                                                        std::move(definition).Value()),
                                                                                    ProductFactories(owners));
+            auto &sceneFactory = factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Scene)];
+            sceneFactory = [owners, original = std::move(sceneFactory)](const NetworkModeServiceRequest &request) {
+                ++owners->sceneFactoryCalls;
+                return original(request);
+            };
             return Application::Internal::NetworkProductHost::Create(clock,
                                                                      {project.Value(), facts.product, facts.inventory, facts.host,
                                                                       facts.requirements, facts.selection, 6, worlds, presentation},
@@ -311,39 +323,58 @@ namespace Horo::Network {
             CHECK_FALSE(host.Role(worlds[0].kind, worlds[0].scene).HasValue());
             CHECK(host.Role(replacement[0].kind, replacement[0].scene).HasValue());
         }
+
+        /** @brief Construct the exact independently routed world set used by each concrete product mode. */
+        std::size_t ProductWorlds(const NetworkProjectRole mode, std::array<NetworkModeWorld, 2> &worlds) {
+            switch (mode) {
+                case NetworkProjectRole::Standalone:
+                    worlds[0] = World(NetworkModeWorldKind::Standalone, 1);
+                    return 1;
+                case NetworkProjectRole::Client:
+                    worlds[0] = World(NetworkModeWorldKind::Client, 2);
+                    return 1;
+                case NetworkProjectRole::ListenServer:
+                    worlds[0] = World(NetworkModeWorldKind::AuthorityServer, 3, 10);
+                    worlds[1] = World(NetworkModeWorldKind::Client, 4);
+                    return 2;
+                case NetworkProjectRole::DedicatedServer:
+                    worlds[0] = World(NetworkModeWorldKind::AuthorityServer, 5, 11);
+                    return 1;
+                case NetworkProjectRole::Count:
+                    FAIL("Invalid closed network mode");
+            }
+            return 0;
+        }
+
+        /** @brief Require failed canonical startup to publish no partial roles when the solver is not installed. */
+        void VerifyUnavailableRoles(const Application::Internal::NetworkProductHost &host, const std::span<const NetworkModeWorld> worlds) {
+            for (const auto &world : worlds)
+                CHECK(host.Role(world.kind, world.scene).HasError());
+        }
     }  // namespace
 
-    TEST_CASE("Concrete headless product compositions reuse Scene and canonical Physics across all four modes",
+    TEST_CASE("Concrete headless product compositions honor canonical Physics availability across all four modes",
               "[integration][network][mode][headless]") {
         for (const auto mode : {NetworkProjectRole::Standalone, NetworkProjectRole::Client, NetworkProjectRole::ListenServer,
                                 NetworkProjectRole::DedicatedServer}) {
             DeterministicClock clock;
             std::array<NetworkModeWorld, 2> worlds{};
-            std::size_t count = 1;
-            switch (mode) {
-                case NetworkProjectRole::Standalone:
-                    worlds[0] = World(NetworkModeWorldKind::Standalone, 1);
-                    break;
-                case NetworkProjectRole::Client:
-                    worlds[0] = World(NetworkModeWorldKind::Client, 2);
-                    break;
-                case NetworkProjectRole::ListenServer:
-                    worlds[0] = World(NetworkModeWorldKind::AuthorityServer, 3, 10);
-                    worlds[1] = World(NetworkModeWorldKind::Client, 4);
-                    count = 2;
-                    break;
-                case NetworkProjectRole::DedicatedServer:
-                    worlds[0] = World(NetworkModeWorldKind::AuthorityServer, 5, 11);
-                    break;
-                case NetworkProjectRole::Count:
-                    FAIL("Invalid closed network mode");
-            }
+            const auto count = ProductWorlds(mode, worlds);
             const auto owners = std::make_shared<ProductOwners>();
             auto created = Product(clock, mode, {worlds.data(), count},
                                    {.localPlayer = mode == NetworkProjectRole::Client || mode == NetworkProjectRole::ListenServer}, owners);
             REQUIRE(created.HasValue());
             auto host = std::move(created).Value();
-            REQUIRE(host->Startup().HasValue());
+            const auto started = host->Startup();
+            INFO((started.HasError() ? started.ErrorValue().message : "Startup succeeded"));
+            if constexpr (!HORO_TEST_PHYSICS_NATIVE) {
+                REQUIRE(started.HasError());
+                CHECK(started.ErrorValue().code.Value() == Physics::PhysicsErrors::CapabilityUnavailable.code.Value());
+                VerifyUnavailableRoles(*host, {worlds.data(), count});
+                host->Shutdown();
+                continue;
+            }
+            REQUIRE(started.HasValue());
             REQUIRE(host->RunFrame().HasValue());
             clock.Advance(Duration::FromNanoseconds(16'666'667));
             REQUIRE(host->RunFrame().HasValue());
@@ -360,6 +391,40 @@ namespace Horo::Network {
         }
     }
 
+    TEST_CASE("Product launch rejects unknown authored replication inventory before client or server publication",
+              "[integration][network][mode][inventory]") {
+        for (const auto mode : {NetworkProjectRole::Client, NetworkProjectRole::ListenServer, NetworkProjectRole::DedicatedServer}) {
+            DeterministicClock clock;
+            std::array<NetworkModeWorld, 2> worlds{};
+            const auto count = ProductWorlds(mode, worlds);
+            const auto owners = std::make_shared<ProductOwners>();
+            const auto created = Product(clock, mode, {worlds.data(), count}, {}, owners, false, true);
+            REQUIRE(created.HasError());
+            REQUIRE(created.ErrorValue().diagnostics.front().code.Value() == "replication.inventory.incomplete");
+            REQUIRE(owners->factoryCalls == 0);
+            REQUIRE(owners->sceneFactoryCalls == 0);
+            REQUIRE(owners->constructedTransport == 0);
+            REQUIRE(owners->localPlayers == 0);
+        }
+        DeterministicClock clock;
+        const std::array worlds{World(NetworkModeWorldKind::Standalone, 1)};
+        const auto owners = std::make_shared<ProductOwners>();
+        auto offline = Product(clock, NetworkProjectRole::Standalone, worlds, {}, owners, false, true);
+        REQUIRE(offline.HasValue());
+        const auto started = offline.Value()->Startup();
+        INFO((started.HasError() ? started.ErrorValue().message : "Startup succeeded"));
+        if constexpr (HORO_TEST_PHYSICS_NATIVE) {
+            REQUIRE(started.HasValue());
+            REQUIRE(offline.Value()->Role(worlds.front().kind, worlds.front().scene).HasValue());
+        } else {
+            REQUIRE(started.HasError());
+            REQUIRE(started.ErrorValue().code.Value() == Physics::PhysicsErrors::CapabilityUnavailable.code.Value());
+            VerifyUnavailableRoles(*offline.Value(), worlds);
+        }
+        REQUIRE(owners->sceneFactoryCalls == 1);
+        offline.Value()->Shutdown();
+    }
+
     TEST_CASE("Product launch rejects a declared mode absent from actual package inventory before factories",
               "[integration][network][mode][package]") {
         DeterministicClock clock;
@@ -370,3 +435,11 @@ namespace Horo::Network {
         CHECK(owners->constructedTransport == 0);
     }
 }  // namespace Horo::Network
+
+namespace {
+    template <typename Slot>
+    concept BorrowableGameplaySlot =
+        requires(Slot &&slot) { Horo::Application::Internal::MakeGameplayStructuralParticipant(std::forward<Slot>(slot)); };
+    static_assert(BorrowableGameplaySlot<Horo::Application::Internal::GameplayWorldComposition *&>);
+    static_assert(!BorrowableGameplaySlot<Horo::Application::Internal::GameplayWorldComposition *>);
+}  // namespace

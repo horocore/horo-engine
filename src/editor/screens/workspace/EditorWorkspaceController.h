@@ -2,6 +2,7 @@
 
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Assets/AssetPreviewService.h"
+#include "Horo/Cinematic/CameraCutRuntime.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorEngineEventBridge.h"
 #include "Horo/Editor/NotificationService.h"
@@ -58,7 +59,21 @@ namespace Horo::Editor {
         EditorWorkspaceController(const std::filesystem::path &projectRoot, Runtime::RuntimeSceneService &runtimeScene,
                                   const Assets::AssetRegistrySnapshot &assetRegistry = {},
                                   const EditorWorkspaceDependencies &dependencies = {});
-        ~EditorWorkspaceController() = default;
+        ~EditorWorkspaceController();
+
+        /** @brief Starts a camera-only authored preview using the same runtime hard-cut composition as a packaged view.
+         * @param activation Owned camera-only plan and player descriptor. @param cuts Required camera bindings/end policy.
+         * @param view Host-issued generation-safe preview view. @return Success or typed admission failure. */
+        [[nodiscard]] Result<void> StartCameraCutPreview(Cinematic::SequencePlaybackActivation activation,
+                                                         const Cinematic::CameraCutActivation &cuts, Runtime::CameraViewContextId view);
+        /** @brief Advances the preview with exact owner-clock ticks before viewport extraction.
+         * @param delta Non-negative exact timeline delta. @return Success or typed runtime/binding failure. */
+        [[nodiscard]] Result<void> AdvanceCameraCutPreview(Cinematic::SequenceTime delta);
+        /** @brief Seeks without event traversal and immediately re-extracts the final camera.
+         * @param position Exact authored timeline target. @return Success or typed seek/binding failure. */
+        [[nodiscard]] Result<void> SeekCameraCutPreview(Cinematic::SequenceTime position);
+        /** @brief Releases preview authority at the owner boundary and restores the current authoring camera. */
+        void StopCameraCutPreview();
 
         [[nodiscard]] const EditorWorkspaceViewModel &ViewModel() const noexcept {
             return m_viewModel;
@@ -180,6 +195,17 @@ namespace Horo::Editor {
         Runtime::PrimitiveMeshCache m_primitiveMeshCache;
         EditorAssetMeshCache m_assetMeshCache;
         EditorViewportSceneSnapshot m_viewportScene;
+
+        struct CameraPreviewState final {
+            Cinematic::CinematicRuntimeService runtime;
+            Runtime::CameraService camera;
+            std::optional<Cinematic::CinematicCameraPlayback> playback;
+            std::vector<Cinematic::SequenceFrameCameraCutRequest> crossings;
+            std::uint64_t frame{};
+            CameraPreviewState(Cinematic::CinematicRuntimeService &&runtimeValue, Runtime::CameraService &&cameraValue);
+        };
+
+        std::unique_ptr<CameraPreviewState> m_cameraPreview;
         std::uint64_t m_viewportSceneRevision{};
         bool m_assetPlacementPreviewActive{false};
         std::optional<SceneDocumentSnapshot> m_deferredRuntimeSnapshot;
@@ -329,6 +355,7 @@ namespace Horo::Editor {
         void RefreshPlayStateProjection();
         [[nodiscard]] EditorViewportCamera ResolvePlayViewportCamera(const Runtime::RuntimeSceneView &runtimeView) const;
         void ExtractPlayViewportScene();
+        [[nodiscard]] Result<EditorViewportCamera> ResolveCameraCutPreview(Runtime::RuntimeSceneView scene);
         void HandleCreatePrimitive(Runtime::PrimitiveId primitive, std::optional<SceneObjectId> parent);
         [[nodiscard]] bool ApplyAssetViewportPlacement(const AssetSceneDropRequest &request, const Math::Aabb &localBounds,
                                                        Math::Transform &localTransform, bool publishFailure = true) const;

@@ -26,6 +26,13 @@ namespace Horo::Log {
          * @param fields Owned ordered diagnostic fields.
          */
         explicit LogContextSnapshot(std::vector<MdcField> fields);
+        /** @brief Creates a privacy boundary that excludes ambient fields when rebound, including in worker jobs.
+         * @param fields Owned allowlisted context; callers must classify these values before construction.
+         * @return Snapshot retaining only these fields and any explicit inner context while bound.
+         */
+        [[nodiscard]] static LogContextSnapshot Isolated(std::vector<MdcField> fields);
+        /** @brief Returns whether rebinding this snapshot hides outer ambient context. @return Privacy-boundary state. */
+        [[nodiscard]] bool IsIsolationBoundary() const noexcept;
 
         /**
          * @brief Returns the immutable ordered context fields.
@@ -43,6 +50,7 @@ namespace Horo::Log {
 
     private:
         std::vector<MdcField> fields_;
+        bool isolated_{};
     };
 
     /**

@@ -8,6 +8,30 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::WorldStreaming::WorldStreamingErrors {
+    /** @brief Owner-frame facts or unit cost are malformed. */
+    extern const ErrorCodeDescriptor OwnerFrameInvalid;
+    /** @brief Owner-frame admission names another scheduler or a backwards clock sample. */
+    extern const ErrorCodeDescriptor OwnerFrameStale;
+    /** @brief One indivisible unit exceeds the complete frame target. */
+    extern const ErrorCodeDescriptor OwnerFrameCapacityExceeded;
+    /** @brief Publication is prepared but the shared owner frame cannot admit its complete unit yet. */
+    extern const ErrorCodeDescriptor OwnerFrameDeferred;
+
+    /** @brief Package assignment or complete availability facts are malformed. */
+    extern const ErrorCodeDescriptor PackageChunkInvalid;
+    /** @brief A package-content lifecycle or availability state is unsupported. */
+    extern const ErrorCodeDescriptor PackageChunkUnsupported;
+    /** @brief Package content names a foreign or superseded release publication. */
+    extern const ErrorCodeDescriptor PackageChunkStale;
+    /** @brief Complete package assignment exceeds mandatory storage ceilings. */
+    extern const ErrorCodeDescriptor PackageChunkCapacityExceeded;
+    /** @brief A cooked cell artifact has no declared release chunk membership. */
+    extern const ErrorCodeDescriptor PackageChunkUnassigned;
+    /** @brief Package content admission is cancelled or closed. */
+    extern const ErrorCodeDescriptor PackageChunkLifecycleUnavailable;
+    /** @brief Required cell content is not completely verified and mounted. */
+    extern const ErrorCodeDescriptor PackageChunkContentMissing;
+
     /** @brief A direction owner, demand revision or participant set is malformed. */
     extern const ErrorCodeDescriptor CellDirectionInvalid;
     /** @brief A demand or direction command is unsupported. */
@@ -513,4 +537,16 @@ namespace Horo::WorldStreaming::WorldStreamingErrors {
     extern const ErrorCodeDescriptor FairQueueIdentityConflict;
     /** @brief Pending admission is closed by shutdown. */
     extern const ErrorCodeDescriptor FairQueueLifecycleUnavailable;
+    /** @brief Eviction policy, authority or candidate facts are malformed. */
+    extern const ErrorCodeDescriptor EvictionPolicyInvalid;
+    /** @brief Eviction contract version or enum is unsupported. */
+    extern const ErrorCodeDescriptor EvictionPolicyUnsupported;
+    /** @brief Eviction facts name a replaced owner, policy or authority snapshot. */
+    extern const ErrorCodeDescriptor EvictionPolicyStale;
+    /** @brief Eviction snapshot exceeds policy or output capacity. */
+    extern const ErrorCodeDescriptor EvictionPolicyCapacityExceeded;
+    /** @brief Eviction snapshot repeats a canonical cell identity. */
+    extern const ErrorCodeDescriptor EvictionPolicyIdentityConflict;
+    /** @brief Eviction selection admission is cancelling or closed. */
+    extern const ErrorCodeDescriptor EvictionPolicyLifecycleUnavailable;
 }  // namespace Horo::WorldStreaming::WorldStreamingErrors

@@ -27,6 +27,7 @@ namespace Horo::Gameplay {
             std::unique_ptr<SystemRegistry> systems;
             std::unique_ptr<ReplicationRegistrationRegistry> replication;
             std::unique_ptr<GameEventRegistry> events;
+            std::unique_ptr<PersistenceRegistrationRegistry> persistence;
         };
 
         struct GenerationLeaseBinding {
@@ -71,6 +72,7 @@ namespace Horo::Gameplay {
         Detail::NativeRegistries registries;
         std::unique_ptr<GameplayServiceRuntime> projectServices;
         GameRuntimeContext runtimeContext;
+        std::shared_ptr<GameplayPhysicsContext> physics;
         IGameModule *gameplayModule{};
         DestroyGameModuleFunction destroy{};
         std::string moduleId;

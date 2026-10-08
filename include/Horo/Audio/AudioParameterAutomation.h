@@ -88,6 +88,18 @@ namespace Horo::Audio {
      */
     [[nodiscard]] bool IsValidAudioAutomationRequest(const AudioParameterAutomationRequest &request) noexcept;
 
+    class AudioParameterAutomation;
+
+    /** @brief Opaque sealed-table selector borrowed only while its exact engine remains alive.
+     * No pointer is dereferenced by the selector; only the originating engine may read it.
+     * Close invalidates every selector. Do not retain across engine destruction or reconstruct an engine at its address.
+     */
+    class AudioAutomationValueSelector final {
+        friend class AudioParameterAutomation;
+        const AudioParameterAutomation *owner_{};
+        std::size_t index_{MaximumAudioAutomationParameters};
+    };
+
     /**
      * @brief Single-owner bounded automation state; prepare off-callback, then transfer exclusively to callback.
      * No method allocates, locks, invokes clients or accesses a registry. The host owns physical bindings and
@@ -138,6 +150,37 @@ namespace Horo::Audio {
         /** @brief Copy the current exact-binding value without host lookup. @param address Exact target.
          * @param value Assigned only on Ok. @return Ok, MissingParameter or Closed. */
         [[nodiscard]] AudioAutomationStatus Value(const AudioParameterAddress &address, float &value) const noexcept;
+        /** @brief Resolve a sealed exact binding once before a render block, without allocation.
+         * @param address Exact immutable target. @param selector Assigned only on success; borrow ends at Close/destruction.
+         * @return False for unsealed, closed or missing bindings.
+         */
+        [[nodiscard]] bool ResolveValue(const AudioParameterAddress &address, AudioAutomationValueSelector &selector) const noexcept;
+        /** @brief Read one pre-resolved sealed binding in constant time on the exclusive owner thread.
+         * @param selector Borrow from this live engine. @param value Assigned only on Ok.
+         * @return Ok, MissingParameter for another engine/default selector, or Closed.
+         */
+        [[nodiscard]] AudioAutomationStatus Value(const AudioAutomationValueSelector &selector, float &value) const noexcept;
+        /** @brief Observe whether this exact request still owns a queued or active trajectory.
+         * @param requestId Previously admitted nonzero identity. @return False after completion, replacement, cancellation or Close.
+         * Only the exclusive engine owner may query; this does not expose physical target liveness.
+         */
+        [[nodiscard]] bool HasRequest(std::uint64_t requestId) const noexcept;
+
+        /** @brief Borrow the current exact sample clock on the exclusive owner thread. @return Current epoch and sample. */
+        [[nodiscard]] const AudioSampleClock &CurrentClock() const noexcept {
+            return clock_;
+        }
+
+        /** @brief Read the retained scene binding on the exclusive owner thread. @return Exact scene context. */
+        [[nodiscard]] AudioSceneContextHandle SceneContext() const noexcept {
+            return scene_;
+        }
+
+        /** @brief Copy an immutable sealed binding for explicit host composition.
+         * @param address Exact prepared identity. @param binding Assigned only on success.
+         * @return False for closed, unsealed or missing bindings; no physical registry is consulted.
+         */
+        [[nodiscard]] bool Binding(const AudioParameterAddress &address, AudioAutomationParameter &binding) const noexcept;
         /** @brief Close admission and discard pending/active automation; retain no external references. */
         void Close() noexcept;
 

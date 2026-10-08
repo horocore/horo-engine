@@ -102,21 +102,35 @@ namespace Horo::Extensions::ManifestValidation {
         });
     }
 
-    [[nodiscard]] inline bool IsCanonicalId(const std::string_view value, const std::size_t maximumBytes) {
+    /** @brief Applies the owning identity grammar independently to each bounded dotted segment. */
+    template <typename SegmentPredicate>
+    [[nodiscard]] inline bool IsCanonicalDottedName(const std::string_view value, const std::size_t maximumBytes,
+                                                    const SegmentPredicate &validSegment) {
         if (value.empty() || value.size() > maximumBytes)
             return false;
         std::size_t start = 0;
         while (start <= value.size()) {
             const std::size_t end = value.find('.', start);
-            if (const std::string_view segment = value.substr(start, end == std::string_view::npos ? value.size() - start : end - start);
-                !IsCanonicalIdSegment(segment)) {
+            if (const auto segment = value.substr(start, end == std::string_view::npos ? value.size() - start : end - start);
+                !validSegment(segment))
                 return false;
-            }
             if (end == std::string_view::npos)
                 return true;
             start = end + 1;
         }
         return false;
+    }
+
+    [[nodiscard]] inline bool IsCanonicalId(const std::string_view value, const std::size_t maximumBytes) {
+        return IsCanonicalDottedName(value, maximumBytes, IsCanonicalIdSegment);
+    }
+
+    /** @brief Validates extension-point names independently of package and capability identity grammar. */
+    [[nodiscard]] inline bool IsCanonicalContributionType(const std::string_view value, const std::size_t maximumBytes) {
+        return IsCanonicalDottedName(value, maximumBytes, [](const std::string_view segment) {
+            return !segment.empty() && IsAsciiLower(static_cast<unsigned char>(segment.front())) && segment.back() != '_' &&
+                   segment.back() != '-' && std::ranges::all_of(segment, IsCanonicalTokenCharacter);
+        });
     }
 
     [[nodiscard]] inline bool IsCanonicalToken(const std::string_view value, const std::size_t maximumBytes) {

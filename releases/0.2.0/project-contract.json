@@ -1,0 +1,70 @@
+{
+  "horoVersion": "0.2.0",
+  "documents": {
+    ".horo/project.json": {
+      "strictJsonBounds": {"maximumBytes": 1048576, "maximumDepth": 32, "maximumKeys": 32768, "maximumKeyBytes": 128, "maximumStringBytes": 8192, "profileAuthority": "exact_registered_release_and_persistent_contract"},
+      "required": ["horoVersion", "persistentContract", "projectId", "name", "projectVersion", "createdAt", "settings"],
+      "optional": ["compatibilityProof", "migrationHistoryHead"],
+      "settingsRequired": ["assetCompression", "renderBackend", "textureCompression"],
+      "settingsOptional": ["network"],
+      "network": {
+        "family": "project.settings.network",
+        "codec": "Horo::Network::ParseNetworkProjectSettings",
+        "portableContractVersion": 3,
+        "maximumDocumentBytes": 65536,
+        "required": ["contractVersion", "settings", "revision", "supportedRoles", "defaultRole", "profile", "protocol", "transport", "defaultEndpoint", "credentialRequirementId", "replication"],
+        "unknownKeys": "reject",
+        "duplicateKeys": "reject",
+        "replication": {
+          "required": ["completeness", "declarations"],
+          "completeness": {"0": "legacy_unknown", "1": "authored_complete"},
+          "maximumSchemas": 64,
+          "maximumOwnerIdentityBytes": 64,
+          "maximumFieldsAndTombstonesPerSchema": 128,
+          "maximumDefaultBytesPerField": 512,
+          "maximumTotalDefaultBytes": 8192,
+          "declarationRequired": ["requirement", "schema"],
+          "schemaRequired": ["id", "owner", "version", "compatibility", "fields", "tombstones"],
+          "compatibilityRequired": ["minimum", "maximum"],
+          "versionRequired": ["major", "minor"],
+          "versionComponentBits": 16,
+          "fieldRequired": ["id", "valueType", "codec", "introducedVersion", "condition", "requirement", "writePolicy", "limits", "canonicalDefault", "customCondition"],
+          "limitsRequired": ["maximumEncodedBytes", "maximumElementCount"],
+          "limitBits": 32,
+          "canonicalDefault": "nullable_lowercase_hex",
+          "ordering": "schema_then_field_identity_ascending",
+          "absentLegacyInventory": "unknown_never_complete_empty"
+        }
+      }
+    },
+    "core.navmesh.definition": {
+      "family": "navigation.definition",
+      "sourceExtension": ".horoasset",
+      "identityAuthority": "asset_registry_sidecar",
+      "envelope": "HNAV",
+      "envelopeVersion": [1, 1],
+      "requiredRecordType": "0x4e41564445463031",
+      "payloadVersion": [1, 0],
+      "codec": "Horo::Navigation::DecodeNavigationDefinitionRecord",
+      "payloadByteOrder": "little_endian",
+      "payloadFields": ["coordinates.system:u32", "coordinates.metersPerUnit:f32", "tiles.tileSizeCells:u32", "tiles.maximumTiles:u32", "scope:u32", "profiles:table", "areas:table", "filters:table"],
+      "profileFields": ["id:u64", "name:utf8_u32_bytes", "radius:f32", "height:f32", "slope:f32", "stepHeight:f32", "cellSize:f32", "cellHeight:f32", "minimumRegionSize:f32"],
+      "areaFields": ["id:u64", "sourceKind:u32", "sourceId:u64", "cost:f32", "flags:u64"],
+      "filterFields": ["id:u64", "sourceKind:u32", "sourceId:u64", "includedFlags:u64", "excludedFlags:u64", "overrides:table"],
+      "overrideFields": ["areaId:u64", "cost:f32"],
+      "tableCountBits": 32,
+      "maximumProfiles": 64,
+      "maximumAreas": 256,
+      "maximumFilters": 256,
+      "maximumOverridesPerFilter": 256,
+      "maximumProfileNameBytes": 256,
+      "maximumTileSizeCells": 4096,
+      "maximumTiles": 65536,
+      "maximumRecordBytes": 1048576,
+      "unknownRequiredRecords": "reject",
+      "unknownOptionalRecords": "preserve_inert",
+      "legacyPayloadInterpretation": "never_inferred",
+      "generatedData": "invalidate_rebuild_never_source_migrate"
+    }
+  }
+}

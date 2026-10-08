@@ -2,11 +2,23 @@
 #include "NavigationBakeInternal.h"
 
 #include <algorithm>
+#include <chrono>
+#include <thread>
 
 namespace Horo::Application::NavigationBakeDetail {
     using namespace Horo::Navigation;
 
     namespace {
+        const ErrorCodeDescriptor WriterTimedOut{
+            .domain = ErrorDomainId{"horo.navigation"},
+            .code = ErrorCode{"navigation.bake.writer_timed_out"},
+            .defaultSeverity = ErrorSeverity::Warning,
+            .summary = "Navigation publication timed out waiting for the cooked workspace writer.",
+            .remediationHint = "Retry after the cooperating writer completes; do not delete its lock or staging files.",
+            .retryable = true,
+            .userActionable = false,
+        };
+
         template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &code) {
             return Result<T>::Failure(MakeError(code));
         }
@@ -74,6 +86,8 @@ namespace Horo::Application::NavigationBakeDetail {
         [[nodiscard]] Result<void> Gather(const ServiceState &state, Attempt &attempt, const CancellationToken &cancel) {
             attempt.candidate = std::make_shared<NavigationBakePublication>();
             attempt.candidate->tiles.inputFingerprint = attempt.request.input->Fingerprint();
+            attempt.candidate->tiles.provenance =
+                NavigationCookedContentProvenance{attempt.request.compatibility, attempt.request.projectProfile};
             std::size_t bytes{};
             for (const auto &tile : attempt.request.tiles) {
                 auto prepared = PrepareNavigationBakeTile(*attempt.request.input, tile, attempt.request.compatibility, cancel,
@@ -206,31 +220,84 @@ namespace Horo::Application::NavigationBakeDetail {
             return Result<void>::Success();
         }
 
+        /** @brief Revalidates actual authoritative evidence while waiting for the common writer. */
+        [[nodiscard]] Result<void> EligiblePublication(const ServiceState &state, const Attempt &attempt, const CancellationToken &cancel) {
+            if (cancel.IsCancellationRequested())
+                return Failure<void>(NavigationErrors::BakeInputCancelled);
+            if (state.desired.load() != attempt.generation)
+                return Failure<void>(NavigationErrors::BakeInputStale);
+            if (auto current = state.config.sourceAuthority->TryAcquirePublication(*attempt.request.input, cancel); current.HasError())
+                return Result<void>::Failure(current.ErrorValue());
+            return Result<void>::Success();
+        }
+
+        /** @brief Holds current-source authority through the irreversible selector replacement and live adoption. */
+        [[nodiscard]] Result<void> AcquireAdoption(ServiceState &state, const Attempt &attempt, const CancellationToken &cancel,
+                                                   std::optional<NavigationBakeSourceLease> &sourceLease) {
+            if (cancel.IsCancellationRequested())
+                return Failure<void>(NavigationErrors::BakeInputCancelled);
+            auto current = state.config.sourceAuthority->TryAcquirePublication(*attempt.request.input, cancel);
+            if (current.HasError())
+                return Result<void>::Failure(current.ErrorValue());
+            sourceLease.emplace(std::move(current).Value());
+            if (auto expected = attempt.generation; !state.desired.compare_exchange_strong(expected, attempt.generation | Adopted))
+                return Failure<void>(NavigationErrors::BakeInputStale);
+            return Result<void>::Success();
+        }
+
+        /** @brief Projects committed disk truth without permitting diagnostic allocation failure to lose live adoption. */
+        void AdoptCommitted(ServiceState &state, Attempt &attempt, const Assets::AssetCookGeneration &generation,
+                            Error &lostDurabilityDiagnostic) noexcept {
+            attempt.publicationReceipt->RecordCommitted();
+            try {
+                attempt.candidate->generation.durabilityError = generation.durabilityError;
+            } catch (...) {
+                attempt.candidate->generation.durabilityError = std::move(lostDurabilityDiagnostic);
+            }
+            state.publication.Store(std::move(attempt.candidate));
+        }
+
         /** @brief Stages durably, adopts the latest capture at one CAS barrier, then replaces current.json last. */
         [[nodiscard]] Result<void> Publish(const std::shared_ptr<ServiceState> &state, Attempt &attempt, const CancellationToken &cancel) {
             const auto &config = state->config;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::nanoseconds(config.writerWaitTimeout.ToNanoseconds());
+            std::optional<NavigationBakeSourceLease> sourceLease;
+            auto lostDurabilityDiagnostic =
+                MakeError(NavigationErrors::ProviderFailed,
+                          "Publication committed; durability is unknown and its diagnostic could not be retained.");
+            const auto eligible = [&attempt, state, cancel] {
+                return EligiblePublication(*state, attempt, cancel);
+            };
             const Assets::AssetCookManifestEntry entry{.assetId = config.definition,
                                                        .assetType = config.artifactType,
                                                        .artifactFile = config.definition.ToString() + ".cooked",
                                                        .artifactHash = ComputeSha256(std::as_bytes(std::span{attempt.envelope}))};
-            auto published =
-                Assets::PublishCookArtifactReplacement(config.targetRoot, config.target, entry, std::move(attempt.envelope),
-                                                       config.maximumCandidateBytes, config.cookLimits,
-                                                       {.files = config.files.get(), .beforeCommit = [&attempt, state, cancel] {
-                if (cancel.IsCancellationRequested())
-                    return Failure<void>(NavigationErrors::BakeInputCancelled);
-                if (auto fresh = attempt.request.input->ValidatePublication(attempt.request.input->Revisions().requestGeneration,
-                                                                            attempt.request.input->Revisions(), attempt.request.sources);
-                    fresh.HasError())
+            const Assets::AssetCookPublicationPolicy
+                policy{.files = config.files.get(), .beforeCommit = [&attempt, &sourceLease, state, cancel] {
+                return AcquireAdoption(*state, attempt, cancel, sourceLease);
+            }, .waitingForWriter = [eligible, deadline] {
+                if (auto fresh = eligible(); fresh.HasError())
                     return fresh;
-                if (auto expected = attempt.generation; !state->desired.compare_exchange_strong(expected, attempt.generation | Adopted))
-                    return Failure<void>(NavigationErrors::BakeInputStale);
+                if (std::chrono::steady_clock::now() >= deadline)
+                    return Failure<void>(WriterTimedOut);
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
                 return Result<void>::Success();
-            }});
-            if (published.HasError())
+            }, .afterWriterAcquired = eligible, .prepareCommit = [&attempt](const Assets::AssetCookGeneration &generation) {
+                attempt.candidate->generation = generation;
+                return Result<void>::Success();
+            }, .afterCommit = [&attempt, state, &lostDurabilityDiagnostic](const Assets::AssetCookGeneration &generation) noexcept {
+                AdoptCommitted(*state, attempt, generation, lostDurabilityDiagnostic);
+            }, .newOperationId = config.newOperationId};
+            if (auto published =
+                    Assets::PublishCookArtifactReplacement(config.targetRoot, config.target, entry, std::move(attempt.envelope),
+                                                           config.maximumCandidateBytes, config.cookLimits, policy);
+                published.HasError()) {
+                if (!attempt.publicationReceipt->IsCommitted()) {
+                    auto expected = attempt.generation | Adopted;
+                    state->desired.compare_exchange_strong(expected, attempt.generation);
+                }
                 return Result<void>::Failure(published.ErrorValue());
-            attempt.candidate->generation = std::move(published).Value();
-            state->publication.Store(std::move(attempt.candidate));
+            }
             return Result<void>::Success();
         }
     }  // namespace
@@ -244,6 +311,7 @@ namespace Horo::Application::NavigationBakeDetail {
                                                .budget = state->config.budget,
                                                .parentCancellation = attempt->cancellation->Token(),
                                                .queuedOperation = attempt->operation,
+                                               .publicationReceipt = attempt->publicationReceipt,
                                                .observe = [diagnostics = state->config.diagnostics](const auto &snapshot) noexcept {
             ObserveBake(diagnostics, snapshot);
         }};

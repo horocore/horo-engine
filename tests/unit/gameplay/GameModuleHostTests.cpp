@@ -1,126 +1,59 @@
-#include "GameplayModuleTestSupport.h"
-#include "GameplayRuntimeTestSupport.h"
-#include "Horo/Gameplay/BehaviorRuntime.h"
-#include "Horo/Gameplay/ComponentRegistry.h"
-#include "Horo/Gameplay/GameAssetTypeRegistry.h"
-#include "Horo/Gameplay/GameModuleHost.h"
-#include "Horo/Gameplay/GameplayErrors.h"
-#include "Horo/Gameplay/GameplayRegistrationRuntime.h"
-#include "Horo/Gameplay/ReplicationRegistration.h"
+#include "GameModuleHostTestHelpers.h"
 
-#include <catch2/catch_test_macros.hpp>
-#include <filesystem>
+using namespace Horo;
+using namespace Horo::Gameplay;
+using namespace Horo::Runtime;
+using namespace Horo::Gameplay::HostTest;
 
-namespace {
-    using namespace Horo;
-    using namespace Horo::Gameplay;
+TEST_CASE("loaded gameplay declarations participate in durable capture and aggregate restore", "[unit][gameplay][save]") {
     using namespace Horo::Runtime;
-
-    GameModuleLoadExpectation Expectation() {
-        return {
-            .moduleId = "game.tests",
-            .buildFingerprint = CurrentGameplayBuildFingerprint(),
-            .descriptorRevision = Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH),
-        };
-    }
-
-    IGameModule *CreateTestModule() noexcept {
-        return nullptr;
-    }
-
-    void DestroyTestModule(IGameModule *) noexcept {}
-
-    IBehaviorInstance *CreateTestBehavior(void *) {
-        return nullptr;
-    }
-
-    void DestroyTestBehavior(void *, IBehaviorInstance *) noexcept {}
-
-    class RestartRequiredModule final : public IGameModule {
-    public:
-        Result<void> Register(GameRegistrationContext &) override {
-            return Result<void>::Success();
-        }
-
-        Result<void> Start(GameRuntimeContext &) override {
-            return Result<void>::Success();
-        }
-
-        void Stop(GameRuntimeContext &) noexcept override {}
-    };
-
-    struct ValidBundleStorage {
-        BehaviorDescriptor behavior;
-        GeneratedBehaviorFactoryBinding binding;
-        GeneratedGameplayDescriptorBundle bundle;
-
-        ValidBundleStorage() {
-            behavior.typeId = BehaviorTypeId::Parse("game.tests.valid").Value();
-            binding = {
-                .typeId = behavior.typeId,
-                .factory = {.userData = nullptr, .create = &CreateTestBehavior, .destroy = &DestroyTestBehavior},
-            };
-            bundle = {
-                .structSize = sizeof(GeneratedGameplayDescriptorBundle),
-                .schemaVersion = GameplayDescriptorBundleSchemaVersion,
-                .sdkBoundaryVersion = GameplaySdkBoundaryVersion,
-                .moduleId = "game.tests",
-                .buildFingerprint = CurrentGameplayBuildFingerprint().data(),
-                .descriptorRevision = 7,
-                .behaviors = &behavior,
-                .behaviorCount = 1,
-                .nativeFactoryBindings = &binding,
-                .nativeFactoryBindingCount = 1,
-                .diagnostics = nullptr,
-                .diagnosticCount = 0,
-                .lifecycle = {.create = &CreateTestModule, .destroy = &DestroyTestModule},
-            };
-        }
-    };
-
-    RuntimeSceneDefinition Definition() {
-        return Tests::SingleBehaviorSceneDefinition(SceneDefinitionId{3}, SceneDefinitionRevision{1}, SceneObjectId{1},
-                                                    BehaviorInstanceId{1}, BehaviorTypeId::Parse("game.tests.dynamic_mover").Value());
-    }
-
-    template <typename Value> void RequireRestartRequired(const Result<Value> &result) {
-        REQUIRE(result.HasError());
-        CHECK(result.ErrorValue().code.Value() == GameplayErrors::GameplayReloadRestartRequired.code.Value());
-    }
-
-    template <typename CreateRuntime, typename ExerciseRuntime>
-    void CheckGenerationLease(CreateRuntime createRuntime, ExerciseRuntime exerciseRuntime) {
-        GameModuleHost host;
-        auto moduleResult = host.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
-        REQUIRE(moduleResult.HasValue());
-        std::unique_ptr<LoadedGameModule> loaded = std::move(moduleResult).Value();
-        auto created = createRuntime(*loaded);
-        REQUIRE(created.HasValue());
-        auto runtime = std::move(created).Value();
-
-        RequireRestartRequired(loaded->PrepareReload());
-        const auto rejected = createRuntime(*loaded);
-        RequireRestartRequired(rejected);
-
-        loaded.reset();
-        CHECK(exerciseRuntime(*runtime).HasValue());
-        runtime->Shutdown();
-    }
-
-    void RequireFrozenRegistries(const LoadedGameModule &loaded) {
-        REQUIRE(loaded.Registry().IsFrozen());
-        REQUIRE(loaded.Components().IsFrozen());
-        REQUIRE(loaded.Components().Descriptors().size() == 1);
-        REQUIRE(loaded.Components().Descriptors().front().typeId.Value() == "game.tests.movement_settings");
-        REQUIRE(loaded.AssetTypes().IsFrozen());
-        REQUIRE(loaded.AssetTypes().Registrations().size() == 1);
-        REQUIRE(loaded.AssetTypes().Registrations().front().descriptor.typeId.Value() == "game.tests.quest_definition");
-        REQUIRE(loaded.Services().IsFrozen());
-        REQUIRE(loaded.Services().Registrations().size() == 1);
-        REQUIRE(loaded.Systems().IsFrozen());
-        REQUIRE(loaded.Systems().Registrations().size() == 1);
-    }
-}  // namespace
+    GameModuleHost moduleHost;
+    auto loadedResult = moduleHost.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
+    REQUIRE(loadedResult.HasValue());
+    auto loaded = std::move(loadedResult).Value();
+    auto event = loaded->Events().Acquire(90, 1, 91, 1, loaded->Cancellation());
+    REQUIRE(event.HasValue());
+    CanonicalStateParticipantRegistry registry;
+    NoSaveOperations operations;
+    auto participationResult =
+        SaveParticipationHost::Create(1436, {.captureParticipants = true, .restoreParticipants = true}, registry, operations);
+    REQUIRE(participationResult.HasValue());
+    auto participation = std::move(participationResult).Value();
+    const auto adapters = RegisterDurableParticipants(*loaded, participation.Client());
+    auto installed = RequireNativeInstallation(*loaded, adapters.front());
+    auto participants = registry.Snapshot().Value();
+    auto snapshot = CaptureDurableParticipants(participants);
+    REQUIRE(snapshot.Records().size() == 4);
+    auto receipts = StageDurableParticipants(adapters, snapshot);
+    RequireRestartRequired(loaded->PrepareReload());
+    CHECK_FALSE(installed.Value().CanUse());
+    CHECK(installed.Value().AcquireAdapter() == nullptr);
+    CHECK(loaded->AcquireInstalledPersistence(adapters.front()->Descriptor().participant.participant).HasError());
+    RequireRestartRequired(loaded->AcquirePersistence(adapters.front()->Descriptor().participant.participant));
+    CHECK(loaded->Events().Acquire(90, 1, 91, 1, loaded->Cancellation()).HasError());
+    CHECK(event.Value()->Invoke({}) == GameplayEventOutcome::CapabilityUnavailable);
+    REQUIRE(participation.Close().HasValue());
+    loaded.reset();
+    auto operation = CreateSaveOperation({.operation = 1436, .kind = SaveOperationKind::Load, .maximumCompletionCallbacks = 4}).Value();
+    auto created = StagedRestoreTransaction::Create({.operation = 1436,
+                                                     .registryGeneration = participants.Generation(),
+                                                     .sessionGeneration = 1,
+                                                     .sceneIncarnation = 1,
+                                                     .maximumParticipants = 4},
+                                                    std::move(operation), participants, std::move(receipts));
+    REQUIRE(created.HasValue());
+    auto transaction = std::move(created).Value();
+    REQUIRE(transaction.Prepare().HasValue());
+    REQUIRE(
+        transaction.Activate({.registryGeneration = participants.Generation(), .sessionGeneration = 1, .sceneIncarnation = 1}).HasValue());
+    auto restoredCapture = RuntimeSaveCaptureBuilder::Create(snapshot.Provenance(), participants).Value();
+    REQUIRE(restoredCapture.CaptureParticipants().HasValue());
+    auto restored = restoredCapture.Seal().Value();
+    for (const auto &record : restored.Records())
+        CHECK(record.Segment(0).back() == std::byte{0x42});
+    for (const auto &record : snapshot.Records())
+        CHECK(record.Segment(0).back() == std::byte{0x31});
+}
 
 TEST_CASE("game module host validates fingerprint and keeps factories alive through behavior shutdown") {
     GameModuleHost host;
@@ -262,6 +195,31 @@ TEST_CASE("generated gameplay bundle validation rejects incompatible identity be
     REQUIRE(mismatch.ErrorValue().code.Value() == GameplayErrors::IncompatibleGameModule.code.Value());
 }
 
+TEST_CASE("persistence SDK boundary rejects previous native registration layouts before activation", "[unit][gameplay][sdk]") {
+    ValidBundleStorage storage;
+    const GameModuleLoadExpectation expected{
+        .moduleId = "game.tests",
+        .buildFingerprint = CurrentGameplayBuildFingerprint(),
+        .descriptorRevision = 7,
+    };
+    GameModuleDescriptor descriptor{
+        .moduleId = "game.tests",
+        .buildFingerprint = CurrentGameplayBuildFingerprint().data(),
+    };
+    REQUIRE(ValidateGameModuleDescriptor(descriptor, expected).HasValue());
+    REQUIRE(ValidateGeneratedGameplayDescriptorBundle(storage.bundle, expected).HasValue());
+    for (const std::uint32_t previousLayout : {6U, 7U}) {
+        descriptor.sdkBoundaryVersion = previousLayout;
+        storage.bundle.sdkBoundaryVersion = previousLayout;
+        const auto oldModule = ValidateGameModuleDescriptor(descriptor, expected);
+        const auto oldBundle = ValidateGeneratedGameplayDescriptorBundle(storage.bundle, expected);
+        REQUIRE(oldModule.HasError());
+        REQUIRE(oldBundle.HasError());
+        CHECK(oldModule.ErrorValue().code.Value() == GameplayErrors::IncompatibleGameModule.code.Value());
+        CHECK(oldBundle.ErrorValue().code.Value() == GameplayErrors::InvalidGeneratedDescriptorBundle.code.Value());
+    }
+}
+
 TEST_CASE("generated gameplay bundle validation rejects incomplete bindings and bounded diagnostics") {
     ValidBundleStorage storage;
     const GameModuleLoadExpectation expected{
@@ -305,4 +263,35 @@ TEST_CASE("event registration SDK rejects prior generation descriptors and bundl
     const auto bundle = ValidateGeneratedGameplayDescriptorBundle(storage.bundle, expected);
     REQUIRE(bundle.HasError());
     CHECK(bundle.ErrorValue().code.Value() == GameplayErrors::InvalidGeneratedDescriptorBundle.code.Value());
+}
+
+TEST_CASE("native module restart after releasing generation leases preserves replication semantics") {
+    GameModuleHost host;
+    const auto schema = Network::ReplicationSchemaId::Create(1001).Value();
+    const auto field = Network::FieldId::Create(1).Value();
+    Sha256Digest fingerprint;
+    Network::ReplicationEncodedValue encodedEvidence;
+    GameplayReplicationOwner owner;
+    {
+        auto first = host.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
+        REQUIRE(first.HasValue());
+        std::unique_ptr<LoadedGameModule> loaded = std::move(first).Value();
+        auto prior = loaded->Replication().Acquire();
+        REQUIRE(prior.HasValue());
+        fingerprint = prior.Value().Descriptors()->Fingerprint();
+        const auto encoded = prior.Value().Serializers().Encode(schema, field, 3.5);
+        REQUIRE(encoded.HasValue());
+        encodedEvidence = encoded.Value();
+        owner = prior.Value().Registrations().front().owner;
+        RequireRestartRequired(loaded->PrepareReload());
+        loaded.reset();
+        CHECK(prior.Value().Serializers().Encode(schema, field, 3.5).Value() == encodedEvidence);
+    }  // Every old native generation lease is released before restart; only copied inert evidence remains.
+    auto replacement = host.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
+    REQUIRE(replacement.HasValue());
+    auto current = replacement.Value()->Replication().Acquire();
+    REQUIRE(current.HasValue());
+    CHECK(current.Value().Descriptors()->Fingerprint() == fingerprint);
+    CHECK(current.Value().Serializers().Encode(schema, field, 3.5).Value() == encodedEvidence);
+    CHECK(current.Value().Registrations().front().owner == owner);
 }

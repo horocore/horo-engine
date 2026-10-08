@@ -1,0 +1,176 @@
+# Horo SDK compatibility and migration — edition 1
+
+This guide ships with extension SDK **@HORO_EXTENSION_SDK_VERSION@**, engine
+**@HORO_ENGINE_VERSION@**, source revision **@HORO_SOURCE_REVISION@**. Read it and
+the sibling [machine-readable matrix](CompatibilityMatrix.json) directly from
+an extracted SDK archive; no engine source checkout or network connection is
+needed. The edition versions this document format, not the native ABI.
+
+## Select an exact snapshot
+
+The engine is in development. Several incompatible gameplay snapshots use the
+same `0.1.0` engine/extension SDK version. A version string is not a release
+attestation or a unique archive identity. Preserve the engine revision, SDK ZIP
+SHA-256, platform, toolchain/configuration and generated descriptor revision.
+`unknown` revision means provenance is unavailable, not verified compatibility.
+An SDK built before this guide existed must be identified from its retained
+archive/provenance; do not assign it the current snapshot's contracts.
+
+| Contract in this archive | Version / admission |
+|---|---|
+| Engine and extension SDK | @HORO_ENGINE_VERSION@ / @HORO_EXTENSION_SDK_VERSION@; revision @HORO_SOURCE_REVISION@ |
+| External native host ABI | `horo-extension` @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_MIN_HOST_MINOR@ inclusive to @HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE@.0 exclusive; declarations through @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_PUBLISHED_MINOR@ |
+| Extension descriptor | `extension.json`, schema 1 |
+| Package manifest | `horo-package.toml`, schema 1; owns package identity/dependencies |
+| Gameplay C++ boundary in this engine snapshot | Native boundary 9 / `gameplay-sdk9`; separate exact-fingerprint build-tree SDK |
+| Author CI platform profiles | Linux x64, macOS arm64, macOS x64, Windows x64 |
+
+The external extension range does not imply that every table/capability works on
+every host in that range. Require the minor and callbacks actually used. Platform
+profiles are supported build/test routes, not a claim that release archives exist
+or that this snapshot has passed every platform. The extension SDK has no engine
+library link dependency; native libraries still require matching OS/architecture
+and their own private dependency/toolchain compatibility. No Android, mobile,
+cross-architecture, or generic C++ binary compatibility is promised here.
+
+## External C ABI 1.0 → 1.1
+
+The major stays 1. Load/unload entry points and the original host-table prefix
+remain supported. The optional inert `horo_extension_query` negotiates minimum
+host minor, required functions and table size before load. Missing query means
+legacy minor 0, never an inferred modern profile. Modules needing negotiation
+should add the query and also check requirements in load for older hosts.
+
+Source migration: include the packaged `Horo/Extensions/ExtensionAbi.h` through
+`HoroEngine::ExtensionSdk`. Status/setting wire tags use the public `uint32_t`
+typedefs rather than compiler-sized enum tags; replace explicitly spelled old
+enum tags with those typedef names and rebuild. Nonstandard short-enum binaries
+are outside the compatibility promise. Never transfer STL, exceptions, allocators
+or C++ deletion across this boundary. A non-null importer context needs its
+module destroy callback; failed registration leaves ownership with the module.
+After accepted registration, host-owned leases keep the originating code alive.
+
+An existing binary using the original compliant C prefix does not need a rebuild
+merely because the host minor increased. A changed source/wire representation or
+new required callback does. Rollback: retain the old exact SDK/header and binary,
+remove new-minor requirements/features, then validate against the older host;
+do not relabel a new-minor binary as legacy.
+
+## External C ABI 1.1 → 1.2 → 1.3
+
+Minor 2 adds platform-service provider registration. Minor 3 adds the provider
+operation lifecycle; neither changes the major or earlier host prefixes.
+Version-1 provider descriptors must retain the original prefix size:
+`offsetof(HoroPlatformServicesProviderDescriptor, operations)`. Replacing it with
+new-header `sizeof` would advertise an unimplemented tail.
+
+To use operations, require host minor 3, use provider descriptor version 2 and its
+full size, and provide a non-null, exact-version-1 `HoroPlatformProviderOperations`
+table. Rebuild that provider. Old factory-only providers can still load but the
+operation host reports `platform.lifecycle.unsupported_profile`; loading is not
+operation availability. Providers map completion codes to
+`HoroPlatformProviderResultCode`, not private SDK codes; unknown values become
+Unknown. This semantic fix does not change the completion layout. Failure
+payloads must not contain private error text, credentials or account identifiers.
+
+The module retains its native code/candidate and must close ingress and drain
+before retire/destroy. BUSY is retried on the owner lane; cancellation is not proof
+of drain. Rollback to a 1.2 host needs the old factory-only binary and original
+descriptor prefix, with operation-dependent features disabled. Rollback to a 1.1
+host also removes platform-provider contributions. Do not silently fall back to a
+different provider or fabricate a successful service start.
+
+## Gameplay SDK8 → SDK9 (native boundary 8 → 9)
+
+This is a **breaking C++ layout/vtable and fingerprint change**, not extension
+host ABI 1.4. `GameRuntimeContext` gains an injected Physics context and the
+behavior backend gains its accessor. Rebuild every native gameplay module and
+generated descriptor bundle with the same engine, compiler, platform and
+configuration. Old boundaries/fingerprints are rejected before factory entry.
+The separate gameplay SDK remains a build-tree export, not a relocatable installed
+SDK supplied by this archive. This guide needs no checkout to read; producing a
+gameplay module still needs that separate matching SDK.
+
+Replacement access: include `Horo/Gameplay/GameplayPhysicsContext.h` through
+`HoroEngine::GameplayPhysicsIntegration` and opt into the `Physics` component of
+`HoroEngineGameplay`. Acquire the injected holder with its exact module, Scene ID
+and activation generation. It returns `PhysicsQueryEventCapability`, not a world
+pointer/native solver. Missing/denied context stays explicitly unavailable;
+existing loader call expressions do not implicitly activate Physics. Lua's private
+`ctx.physics.acquire()` returns a capability or `nil, {domain, code}`. Editor Play
+Physics composition remains unavailable in this snapshot; SDK9 does not promise
+editor Physics activation. Native Start/Stop, behavior/Lua adapters, headless
+composition and external module projects must agree on the new boundary.
+
+Rollback: stop the host and restore the complete SDK8 engine, matching module
+binaries and descriptor bundles, project backup and locks. Rebuilding SDK9 source
+against SDK8 requires removing the Physics-context/accessor use and its component
+link; never load an SDK9 module into SDK8 by changing a manifest/fingerprint.
+
+## Retirement source API migration in this snapshot
+
+Host integrations use `ExtensionManager::RetireExtension`, inspect its attributed
+retirement report, and call `FinalizeRetirements` only after admitted work has drained
+on the owner lane. Registries can attach the typed retirement owner to actual
+callback/job/resource/UI/service publications. Manager move operations were
+removed: own it at a stable address (for example, `std::unique_ptr`) instead of
+move-assigning into a live manager. This is a host C++ source change; the external
+C ABI entry-point version is unchanged. Rebuild host consumers using that API.
+
+Retirement withdraws publications and rejects later retained-snapshot calls while
+admitted work pins provider/dependency code. BUSY, off-lane or surviving-work
+teardown can report `RestartRequired` and retain native code for the process
+lifetime; this is deliberately not leak-free unload or `Complete`. The manager's
+1024-entry bound is per manager, not globally bounded across failed recreation.
+Disable/update/remove remain restart-default. Rollback requires a stopped host
+and the previous coherent host/package set; never force-unload retained code.
+
+## Offline upgrade and rollback checklist
+
+1. Retain the previous engine artifact/revision, SDK ZIP/digest, package binaries,
+   lock, configuration and project backup outside the candidate staging area.
+2. Read the candidate archive's matrix and this version-specific guide. Compare
+   major/minor/table requirements, schema, platform and gameplay fingerprint.
+3. Update the author project's SDK lock with exact archive URLs and SHA-256 for
+   each selected platform. An archive already retained locally can be inspected
+   offline; the supplied CI bootstrap downloads pinned archives and is not an
+   offline restore tool. No placeholder digest is a release attestation.
+4. Rebuild only the affected contracts described above, then run the packaged
+   manifest validator and trusted-native conformance harness before packaging.
+   They do not grant trust or prove full package lifecycle activation.
+5. Stop the old host, stage the coherent candidate and obtain explicit local
+   trust approval for its exact identity. Restart and check real functionality.
+6. On failure, stop again, restore the retained coherent set and project backup,
+   re-evaluate trust and restart. Preserve failure diagnostics. This is a manual
+   safe rollback procedure, not an invented transactional package-upgrade API.
+
+Do not infer compatibility from “latest”, load order, successful compilation,
+archive integrity alone, or a version string shared by development snapshots.
+
+## External C ABI 1.3 → 1.4 editor activities
+
+Minor 4 appends `registerEditorActivity`; the 1.3 host prefix ends at
+`offsetof(HoroExtensionHostApi, registerEditorActivity)`. Old modules retain their
+prefix sizes and negotiate independently. Activity modules require minor 4 and
+`HORO_EXTENSION_REQUIRES_EDITOR_ACTIVITY`, include `EditorActivityAbi.h`, declare
+exact `editor.activity_item` and `editor.panel` claims and require the host
+`editor.activity` capability. Headless and uncomposed editor hosts reject the
+request explicitly. The generic conformance tool has no editor publication host;
+its rejection of this required profile is expected and does not prove GUI support.
+
+Session version 1 advertises a finite node mask for standard text, label, action,
+stack and group form nodes. Other standard controls need a later explicitly
+negotiated transport. A package never supplies a draw callback or renderer handle.
+Snapshots strictly increase revision and are copied synchronously on the owner
+lane. Semantic actions run through the application job system with cancellation
+and module-code leases; their borrowed result sink is valid only during that call.
+Discard the session before module unload. Package icon resources use the bounded
+static SVG profile documented in the engine migration guide.
+
+The shared activity header keeps its C11 typedef spellings and exposes the same
+struct names directly to C++ consumers; its action callback uses an equivalent
+C++ type alias. These declaration-only differences do not alter transport layout,
+numeric constants, callback signatures, or version negotiation. No package data
+migration is required. Both the strict C11 consumer and C++ public-header consumer
+check the append-only host prefix and callback contracts; the relocated installed
+SDK consumer remains the packaging compatibility check.

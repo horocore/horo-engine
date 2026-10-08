@@ -435,7 +435,7 @@ namespace Horo::Physics {
             return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
         if (impl_->state == PhysicsWorldState::ActiveNull)
             return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
-        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping)
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping || Detail::HasPendingCanonicalSceneBodies(impl_->native))
             return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::InvalidState));
         if (const Result<void> valid = ValidatePhysicsQueryFixtureDescriptor(fixture, impl_->identity); valid.HasError())
             return Result<PhysicsQueryFixture>::Failure(valid.ErrorValue());
@@ -453,7 +453,7 @@ namespace Horo::Physics {
             return Result<void>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
         if (impl_->state == PhysicsWorldState::ActiveNull)
             return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
-        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping)
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping || Detail::HasPendingCanonicalSceneBodies(impl_->native))
             return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
         if (const auto body = ValidatePhysicsHandleOwner(fixture.body, impl_->identity); body.HasError())
             return body;
@@ -487,6 +487,8 @@ namespace Horo::Physics {
     Result<void> PhysicsWorld::AdvanceFixedTick(const PhysicsFixedTickInput &input) {
         if (const auto admitted = CheckTickAdmission(*impl_, input); admitted.HasError())
             return admitted;
+        if (Detail::HasPendingCanonicalSceneBodies(impl_->native))
+            return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState, "Scene group preparation must complete before stepping."));
 
         impl_->containment.quarantined.clear();
         if (const auto contained = Detail::ContainNonFiniteBodies(*impl_, input, impl_->containment.quarantined, false);

@@ -264,6 +264,16 @@ namespace Horo::Assets {
          */
         void Reset();
 
+        /**
+         * @brief Withdraws one package from future catalog snapshots during owner-lane shutdown.
+         * @param packageId Exact package identity; unrelated contributions remain published.
+         * @return False when replacement snapshot allocation fails; publication remains unchanged for restart-only recovery.
+         * @details Existing immutable snapshots retain their adapters. The extension owner must close their
+         * execution admission before withdrawal and retain code until all admitted work releases its leases.
+         * This terminal withdrawal does not unseal the catalog or authorize hot replacement.
+         */
+        [[nodiscard]] bool WithdrawPackage(std::string_view packageId) noexcept;
+
     private:
         struct State;
         std::unique_ptr<State> state_;

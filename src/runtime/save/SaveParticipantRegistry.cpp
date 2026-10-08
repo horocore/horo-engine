@@ -296,6 +296,15 @@ namespace Horo::Runtime {
         }
     }  // namespace
 
+    /** @copydoc ValidateCanonicalStateParticipantDescriptor */
+    Result<void> ValidateCanonicalStateParticipantDescriptor(const CanonicalStateParticipantDescriptor &descriptor) {
+        try {
+            return ValidateDescriptor(descriptor);
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(SaveErrors::ParticipantRegistryAllocationFailed));
+        }
+    }
+
     SaveParticipantBinding::SaveParticipantBinding(CanonicalStateParticipantDescriptor descriptor,
                                                    std::shared_ptr<const ICanonicalStateAdapter> adapter)
         : descriptor_(std::move(descriptor)), adapter_(std::move(adapter)) {}
@@ -366,7 +375,7 @@ namespace Horo::Runtime {
                 return Result<SaveParticipantRegistration>::Failure(nextGeneration.ErrorValue());
             if (adapter == nullptr)
                 return Result<SaveParticipantRegistration>::Failure(MakeError(SaveErrors::ParticipantAdapterMissing));
-            if (const Result<void> valid = ValidateDescriptor(descriptor); valid.HasError())
+            if (const Result<void> valid = ValidateCanonicalStateParticipantDescriptor(descriptor); valid.HasError())
                 return Result<SaveParticipantRegistration>::Failure(valid.ErrorValue());
             if (bindings_.size() >= MaximumSaveParticipantCount)
                 return Result<SaveParticipantRegistration>::Failure(MakeError(SaveErrors::ParticipantRegistryCapacityExceeded));

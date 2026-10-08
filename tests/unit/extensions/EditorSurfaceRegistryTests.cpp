@@ -1,4 +1,4 @@
-#include "Horo/Extensions/EditorSurfaceRegistry.h"
+#include "EditorSurfaceRegistryTestSupport.h"
 
 #include <algorithm>
 #include <array>
@@ -9,98 +9,30 @@
 #include <vector>
 
 namespace Horo::Extensions::Tests {
-    namespace {
-        [[nodiscard]] EditorSurfaceContextDescriptor ContextDescriptor(
-            const std::string &id = "com.example.tools.inspector", const EditorSurfaceKind kind = EditorSurfaceKind::Tab,
-            const EditorSurfacePersistence persistence = EditorSurfacePersistence::Workspace) {
-            return EditorSurfaceContextDescriptor{
-                .surface =
-                    EditorSurfaceDescriptor{
-                        .id = id,
-                        .kind = kind,
-                        .labelLocalizationKey = "editor.tools.inspector.label",
-                        .tooltipLocalizationKey = "editor.tools.inspector.tooltip",
-                        .placement = EditorSurfacePlacement{EditorSurfacePlacementKind::Workspace, "bottom.tools", 20},
-                        .persistence = persistence,
-                        .openByDefault = false,
-                        .provider = EditorSurfaceProviderIdentity{"com.example.tools", "com.example.tools.editor", 4},
-                    },
-            };
-        }
+    using namespace RegistrySupport;
 
-        [[nodiscard]] ExtensionCapabilityAdmission Admission() {
-            const ExtensionAdmissionPolicy policy{
-                .revision = 7,
-                .knownPermissions = {},
-                .approvedPermissions = {},
-                .availableCapabilities = {},
-            };
-            const ExtensionAdmissionRequest request{
-                .extensionId = "com.example.tools",
-                .moduleId = "com.example.tools.editor",
-                .activationGeneration = 4,
-                .capabilities = {},
-            };
-            auto admission = ExtensionCapabilityAdmission::Evaluate(request, policy);
-            REQUIRE(admission.HasValue());
-            return std::move(admission).Value();
-        }
-
-        [[nodiscard]] EditorSurfaceRegistration RegisterSurface(EditorSurfaceRegistry &registry, EditorSurfaceContextProvider &provider,
-                                                                ExtensionCapabilityAdmission &admission,
-                                                                EditorSurfaceContextDescriptor descriptor = ContextDescriptor()) {
-            auto attached = provider.Attach(std::move(descriptor), admission.ActivationLease());
-            REQUIRE(attached.HasValue());
-            auto registration = registry.Register(std::move(attached).Value());
-            REQUIRE(registration.HasValue());
-            return std::move(registration).Value();
-        }
-
-        void RequireErrorCode(const auto &result, const std::string &code) {
-            REQUIRE(result.HasError());
-            CHECK(result.ErrorValue().code.Value() == code);
-        }
-
-        [[nodiscard]] EditorSurfaceProviderKey Provider() {
-            return EditorSurfaceProviderKey{"com.example.tools", "com.example.tools.editor"};
-        }
-
-        [[nodiscard]] const EditorSurfaceSnapshot *FindSnapshot(const std::vector<EditorSurfaceSnapshot> &snapshots,
-                                                                const std::string_view id) {
-            const auto found = std::ranges::find_if(snapshots, [id](const EditorSurfaceSnapshot &snapshot) {
-                return snapshot.descriptor.id == id;
-            });
-            return found == snapshots.end() ? nullptr : &*found;
-        }
-
-        struct PersistenceSurfaces final {
-            EditorSurfaceRegistration workspace;
-            EditorSurfaceRegistration session;
-            EditorSurfaceRegistration project;
-        };
-
-        [[nodiscard]] PersistenceSurfaces RegisterPersistenceSurfaces(EditorSurfaceRegistry &registry,
-                                                                      EditorSurfaceContextProvider &provider,
-                                                                      ExtensionCapabilityAdmission &admission) {
-            return {
-                .workspace = RegisterSurface(registry, provider, admission,
-                                             ContextDescriptor("com.example.tools.workspace", EditorSurfaceKind::Tab,
-                                                               EditorSurfacePersistence::Workspace)),
-                .session = RegisterSurface(registry, provider, admission,
-                                           ContextDescriptor("com.example.tools.session", EditorSurfaceKind::Tab,
-                                                             EditorSurfacePersistence::Session)),
-                .project = RegisterSurface(registry, provider, admission,
-                                           ContextDescriptor("com.example.tools.project", EditorSurfaceKind::Tab,
-                                                             EditorSurfacePersistence::Project)),
-            };
-        }
-
-        void OpenWithOpaqueState(EditorSurfaceRegistry &registry, const std::string_view id, const std::uint8_t value) {
-            REQUIRE(registry.Open(id).HasValue());
-            const std::array<std::uint8_t, 1> state{value};
-            REQUIRE(registry.SetOpaqueState(id, state).HasValue());
-        }
-    }  // namespace
+    TEST_CASE("Extension retirement withdraws a real editor surface while retaining its executable owner",
+              "[Extensions][EditorSurface][Retirement]") {
+        auto admission = Admission();
+        EditorSurfaceContextProvider provider;
+        EditorSurfaceRegistry registry;
+        auto registration = RegisterSurface(registry, provider, admission);
+        auto retirement = std::make_shared<ExtensionRetirement>("com.example.tools", std::vector<std::string>{"com.example.tools.editor"});
+        auto code = std::make_shared<int>(0);
+        REQUIRE(retirement->BindModuleCode("com.example.tools.editor", code));
+        REQUIRE(registration.AttachRetirement(retirement));
+        CHECK_FALSE(registration.AttachRetirement(retirement));
+        REQUIRE(registry.Open(registration.Id()).HasValue());
+        const auto report = retirement->BeginRetirement();
+        CHECK_FALSE(registration.IsRegistered());
+        CHECK(registry.Open("com.example.tools.inspector").HasError());
+        REQUIRE(report.outstanding.size() == 1);
+        CHECK(report.outstanding.front().kind == ExtensionLeaseKind::UiSurface);
+        CHECK(report.outstanding.front().subject == "com.example.tools.inspector");
+        CHECK_FALSE(retirement->IsDrained());
+        registration.Reset();
+        CHECK(retirement->IsDrained());
+    }
 
     TEST_CASE("External editor surfaces open focus close and restore deterministically", "[Extensions][EditorSurface][Registry]") {
         auto admission = Admission();

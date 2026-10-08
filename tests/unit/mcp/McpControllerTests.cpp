@@ -2,6 +2,7 @@
 #include "Horo/Mcp/McpErrors.h"
 #include "Horo/Mcp/McpInProcessAdapter.h"
 #include "Horo/Mcp/McpLocalTransport.h"
+#include "McpAuthorizationTestSupport.h"
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
@@ -105,23 +106,22 @@ namespace {
                                                 {"properties", {{"ok", {{"type", "boolean"}}}}},
                                                 {"required", {"ok"}},
                                                 {"additionalProperties", false}},
-                               .effect = McpToolEffect::Mutation},
+                               .effect = McpToolEffect::Query},
                 .adapter = adapter,
                 .owner = owner};
     }
 
     std::shared_ptr<McpController> Controller(const std::shared_ptr<IMcpToolAdapter> &adapter, McpControllerLimits limits = {},
                                               McpOwnerContext owner = McpOwnerContext::Editor) {
-        auto registry = std::make_shared<McpToolRegistry>();
+        auto registry = std::make_shared<McpToolRegistry>(Test::Authorization());
         REQUIRE(registry->Publish({Tool(adapter, owner)}).HasValue());
-        auto created = McpController::Create(registry, limits);
+        auto created = McpController::Create(registry, limits, Test::Authorization());
         REQUIRE(created.HasValue());
         return std::move(created).Value();
     }
 
     McpRequestContext Context(std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + std::chrono::minutes{1}) {
-        McpRequestContext context;
-        context.session = {1, 1};
+        McpRequestContext context = Test::Context();
         context.deadline = deadline;
         return context;
     }
@@ -185,8 +185,7 @@ TEST_CASE("MCP pending and active budgets reject excess without invoking adapter
 TEST_CASE("MCP rejects a stale registry revision before queuing owner work", "[mcp][controller]") {
     auto adapter = std::make_shared<Adapter>();
     auto controller = Controller(adapter);
-    auto context = Context();
-    context.registryRevision = 99;
+    auto context = Test::Context({.clientIdentity = "test-client", .registryRevision = 99});
     const auto result = controller->Dispatch(Call(), context);
     REQUIRE(result.HasError());
     CHECK(result.ErrorValue().code.Value() == McpErrors::RegistryRevisionStale.code.Value());
@@ -275,7 +274,7 @@ TEST_CASE("MCP progress is bounded and terminal results ignore late callbacks", 
     const auto id = accepted.Value()["operationId"].get<std::uint64_t>();
     const auto final = Get(*controller, context, id);
     CHECK(final["progress"] == 0.5);
-    CHECK(final["phase"] == "building");
+    CHECK(final["phase"] == "");  // Free-text progress is not a credential-safe presentation contract.
     saved.ReportProgress(0.9, "late");
     CHECK(Get(*controller, context, id) == final);
 }
@@ -415,9 +414,9 @@ TEST_CASE("MCP error data retains typed causes while redacting private details",
 TEST_CASE("local and embedded MCP adapters share queued execution and request cancellation", "[mcp][controller]") {
     auto adapter = std::make_shared<Adapter>();
     auto controller = Controller(adapter);
-    auto manager = McpSessionManager::Create(controller);
+    auto manager = McpSessionManager::Create(controller, {}, Test::Authorization());
     REQUIRE(manager.HasValue());
-    const McpSessionAdmission admission{.clientIdentity = "test-client", .registryRevision = 1};
+    const McpSessionAdmission admission = Test::Authenticate({.clientIdentity = "test-client", .registryRevision = 1});
     auto embedded = McpInProcessAdapter::Start(manager.Value(), admission);
     auto local = McpLocalTransport::Start(manager.Value(), admission);
     REQUIRE(embedded.HasValue());

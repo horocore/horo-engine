@@ -1,3 +1,4 @@
+#include "../support/BenchmarkAllocationProbe.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Telemetry/Telemetry.h"
 
@@ -12,45 +13,20 @@
 #include <thread>
 #include <vector>
 
-namespace {
-    thread_local bool g_trackAllocations{};
-    thread_local std::size_t g_trackedAllocations{};
+using Horo::Tests::BenchmarkAllocationProbe::AllocationState;
 
+namespace {
     class NullSink final : public Horo::Telemetry::ISink {
     public:
-        void Export(const Horo::Telemetry::Record &, const Horo::Telemetry::InstrumentDescriptor *) override {}
+        void Export(const Horo::Telemetry::Record &, const Horo::Telemetry::InstrumentDescriptor *) override {
+            // This fixture deliberately discards records; it measures producer behavior only.
+        }
 
-        void Flush() override {}
+        void Flush() override {
+            // This fixture retains no records to flush.
+        }
     };
 }  // namespace
-
-void *operator new(const std::size_t size) {
-    if (g_trackAllocations)
-        ++g_trackedAllocations;
-    if (void *memory = std::malloc(size); memory != nullptr)
-        return memory;
-    throw std::bad_alloc{};
-}
-
-void *operator new[](const std::size_t size) {
-    return ::operator new(size);
-}
-
-void operator delete(void *memory) noexcept {
-    std::free(memory);
-}
-
-void operator delete[](void *memory) noexcept {
-    std::free(memory);
-}
-
-void operator delete(void *memory, std::size_t) noexcept {
-    std::free(memory);
-}
-
-void operator delete[](void *memory, std::size_t) noexcept {
-    std::free(memory);
-}
 
 int main() {
     constexpr std::size_t kIterations = 100'000;
@@ -71,29 +47,29 @@ int main() {
         instrument.WithDimensions(std::array{Horo::Telemetry::DimensionValue{.key = "backend", .value = "null"}});
     const Horo::Telemetry::Statistics metricBefore = Horo::Telemetry::Runtime::GetStatistics();
 
-    g_trackedAllocations = 0;
-    g_trackAllocations = true;
+    AllocationState().trackedAllocations = 0;
+    AllocationState().trackAllocations = true;
     const auto startedAt = std::chrono::steady_clock::now();
     for (std::size_t iteration = 0; iteration < kIterations; ++iteration)
         counter.Add();
     const auto elapsed = std::chrono::steady_clock::now() - startedAt;
-    g_trackAllocations = false;
+    AllocationState().trackAllocations = false;
 
     const Horo::Telemetry::Statistics metricAfter = Horo::Telemetry::Runtime::GetStatistics();
-    const std::size_t metricAllocations = g_trackedAllocations;
+    const std::size_t metricAllocations = AllocationState().trackedAllocations;
     const auto metricNanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
 
     Horo::Log::Logger::SetLevel(Horo::Log::Level::Info);
     const Horo::Telemetry::Statistics loggingBefore = Horo::Telemetry::Runtime::GetStatistics();
-    g_trackedAllocations = 0;
-    g_trackAllocations = true;
+    AllocationState().trackedAllocations = 0;
+    AllocationState().trackAllocations = true;
     const auto loggingStartedAt = std::chrono::steady_clock::now();
     for (std::size_t iteration = 0; iteration < kIterations; ++iteration)
         Horo::Log::Logger::Write("bench.log", Horo::Log::Level::Info, "record");
     const auto loggingElapsed = std::chrono::steady_clock::now() - loggingStartedAt;
-    g_trackAllocations = false;
+    AllocationState().trackAllocations = false;
     const Horo::Telemetry::Statistics loggingAfter = Horo::Telemetry::Runtime::GetStatistics();
-    const std::size_t loggingAllocations = g_trackedAllocations;
+    const std::size_t loggingAllocations = AllocationState().trackedAllocations;
 
     const Horo::Telemetry::Statistics concurrentBefore = Horo::Telemetry::Runtime::GetStatistics();
     std::vector<std::thread> producers;
@@ -111,14 +87,14 @@ int main() {
     const Horo::Telemetry::Statistics concurrentAfter = Horo::Telemetry::Runtime::GetStatistics();
 
     Horo::Log::Logger::SetLevel(Horo::Log::Level::Off);
-    g_trackedAllocations = 0;
-    g_trackAllocations = true;
+    AllocationState().trackedAllocations = 0;
+    AllocationState().trackAllocations = true;
     const auto disabledLoggingStartedAt = std::chrono::steady_clock::now();
     for (std::size_t iteration = 0; iteration < kIterations; ++iteration)
         HORO_LOG_DEBUG("bench.log", "disabled");
     const auto disabledLoggingElapsed = std::chrono::steady_clock::now() - disabledLoggingStartedAt;
-    g_trackAllocations = false;
-    const std::size_t disabledLoggingAllocations = g_trackedAllocations;
+    AllocationState().trackAllocations = false;
+    const std::size_t disabledLoggingAllocations = AllocationState().trackedAllocations;
 
     const bool flushed = Horo::Telemetry::Runtime::Flush();
     const bool shutdown = Horo::Telemetry::Runtime::Shutdown();

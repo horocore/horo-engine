@@ -4,6 +4,7 @@
  * @brief Explicit canonical/null Physics runtime ownership and detached world lifecycle.
  */
 
+#include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Physics/PhysicsBodyDescriptor.h"
 #include "Horo/Physics/PhysicsCapabilities.h"
@@ -22,6 +23,8 @@
 #include <optional>
 #include <span>
 #include <utility>
+#include <variant>
+#include <vector>
 
 namespace Horo {
     class JobSystem;
@@ -68,6 +71,7 @@ namespace Horo::Physics {
     };
 
     class PhysicsWorld;
+    class PhysicsSceneBodyPreparation;
     class PhysicsSceneActivationCandidate;
     struct PhysicsWorldContainmentTestAccess;
 
@@ -104,6 +108,81 @@ namespace Horo::Physics {
         PhysicsInitialBodyActivity initialActivity{PhysicsInitialBodyActivity::Awake};
         /**< Moving bodies start awake by default. Sleeping requires zero velocities and world sleeping enabled. */
         std::uint64_t sceneEntity{}; /**< Stable authored scene object identity, or zero for direct world admission. */
+    };
+
+    /** @brief One collider shape owned by a detached group; compounds reference earlier shape entries only. */
+    struct PhysicsSceneGroupShape final {
+        struct Child final {
+            std::uint32_t shape{}; /**< Earlier entry in the same group, never a native handle. */
+            PhysicsPose localPose;
+        };
+
+        std::variant<PhysicsShapeDescriptor, std::vector<Child>> geometry;
+    };
+
+    /** @brief Detached body policy with a group-local shape reference resolved during preparation. */
+    struct PhysicsSceneGroupBody final {
+        PhysicsSceneBodyDescriptor descriptor;
+        std::uint32_t shape{}; /**< Entry in the group's shape array; descriptor.body.shape is replaced. */
+    };
+
+    /** @brief Owner-lane detached native body group, cancelled automatically if never published.
+     * @details Destruction, validation and publication stay on the Physics owner lane, between joined
+     * fixed steps. World shutdown invalidates retained preparations and aborts their native storage
+     * before deleting the solver. Reserved handles are not active body bindings until publication.
+     */
+    class PhysicsSceneBodyPreparation final {
+        struct Impl;
+
+    public:
+        /** @brief Checked construction authority held only by the owning Physics world. */
+        class ConstructionKey final {
+            friend class PhysicsWorld;
+            ConstructionKey() = default;
+        };
+
+        /** @brief Constructs checked detached state. @param key Factory authority. @param impl Owned preparation state. */
+        PhysicsSceneBodyPreparation(ConstructionKey key, std::unique_ptr<Impl> impl) noexcept;
+        ~PhysicsSceneBodyPreparation();
+        PhysicsSceneBodyPreparation(const PhysicsSceneBodyPreparation &) = delete;
+        PhysicsSceneBodyPreparation &operator=(const PhysicsSceneBodyPreparation &) = delete;
+        /** @brief Returns reserved handles in descriptor order; no active-world ownership is transferred. */
+        [[nodiscard]] std::span<const BodyHandle> Handles() const noexcept;
+        /** @brief Returns reserved group shape identities in input order, unpublished until aggregate commit. */
+        [[nodiscard]] std::span<const ShapeHandle> Shapes() const noexcept;
+        /** @brief Returns reserved constraint identities in the order successfully prepared. */
+        [[nodiscard]] std::span<const ConstraintHandle> Constraints() const noexcept;
+        /** @brief Prepares retirement without mutating active native storage.
+         * @param bodies Exact resident bodies to retire, including their attached constraints and owned root shapes.
+         * @param shapes Exact collider shapes whose Scene owners are being removed.
+         * @param constraints Exact constraints whose Scene owners are being removed.
+         * @return Success or typed failure; abort preserves every resident resource.
+         * @details Call once before PrepareConstraints. Retirement publishes before additions at the same no-fail fence.
+         */
+        [[nodiscard]] Result<void> PrepareRetirement(std::span<const BodyHandle> bodies, std::span<const ShapeHandle> shapes,
+                                                     std::span<const ConstraintHandle> constraints) const;
+        /** @brief Returns the complete retirement closure, including constraints attached to retiring bodies. */
+        [[nodiscard]] std::span<const ConstraintHandle> RetiredConstraints() const noexcept;
+        /** @brief Prepares constraints referencing reserved group bodies or resident world bodies.
+         * @param descriptors Complete world-scoped typed anchor/policy requests.
+         * @return Success or failure leaving every staged constraint unpublished; destruction rolls back the group.
+         * @details Call once, on the owner lane before final validation. No fixed step or public binding observes
+         * the private native capacity preparation. Constraint teardown precedes detached body teardown.
+         */
+        [[nodiscard]] Result<void> PrepareConstraints(std::span<const PhysicsConstraintDescriptor> descriptors) const;
+        /** @brief Rechecks exact world, lifecycle and publication revision after every Scene owner has prepared.
+         * @return Success or stale/affinity/lifecycle failure before any new body is exposed.
+         */
+        [[nodiscard]] Result<void> ValidatePublication() const;
+        /** @brief Publishes the validated prepared group at Scene's final drained commit fence.
+         * @pre ValidatePublication succeeded and no owner state changed since that check.
+         * @details No allocation, project callback or failure is permitted at this step.
+         */
+        void Publish() noexcept;
+
+    private:
+        friend class PhysicsWorld;
+        std::unique_ptr<Impl> impl_;
     };
 
     /** @brief Owner-thread reconciliation of retained policy against current native body evidence. */
@@ -164,13 +243,17 @@ namespace Horo::Physics {
          */
         [[nodiscard]] PhysicsCapabilitySupport Capability(PhysicsCapability capability) const noexcept;
 
+        /** @brief Issues one never-reused process-runtime world identity for explicit host activation.
+         * @return Fresh non-zero identity or typed affinity, unavailable or exhaustion failure.
+         * @pre Called on the runtime owner thread before publishing a world candidate.
+         * @details Consumes the identity even when later candidate preparation fails.
+         */
+        [[nodiscard]] Result<PhysicsWorldId> IssueWorldIdentity();
+
     private:
         friend class PhysicsWorld;
         friend class PhysicsSceneActivationParticipant;
         struct Impl;
-
-        /** @brief Issues one never-reused process-runtime world identity, consuming it even if later preparation fails. */
-        [[nodiscard]] Result<PhysicsWorldId> IssueWorldIdentity();
 
         /** @brief Retains the successfully prepared process owner. @param impl Owned shared runtime state. */
         explicit PhysicsRuntime(std::shared_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
@@ -289,6 +372,24 @@ namespace Horo::Physics {
          * @post Partial native state remains owned by this world and is released on any later activation failure.
          */
         [[nodiscard]] Result<BodyHandle> CreateSceneBody(const PhysicsSceneBodyDescriptor &descriptor) const;
+        /** @brief Prepares up to 256 real native bodies without adding them to the active solver.
+         * @param descriptors Complete descriptors referencing this world's already admitted immutable shapes.
+         * @return Detached owner-lane preparation or typed rejection preserving resident bodies and query publication.
+         * @details Only one unpublished group is admitted per world. Stepping and direct body admission
+         * remain closed until publication or rollback. Scene owns final catalog/cancellation fencing.
+         */
+        [[nodiscard]] Result<std::unique_ptr<PhysicsSceneBodyPreparation>> PrepareSceneBodies(
+            std::span<const PhysicsSceneBodyDescriptor> descriptors) const;
+        /** @brief Prepares owned analytic/compound shapes and native bodies as one rollback-safe group.
+         * @param shapes Ordered shape DAG, bounded to 1024 entries; compounds reference earlier entries.
+         * @param bodies Up to 256 body policies referencing those shapes.
+         * @return Detached preparation owning all new shapes/bodies or a typed error refunding native capacity.
+         * @details Rollback does not rewind handle identities. Preparation never removes resident resources.
+         * Empty shape/body spans support constraint-only or retirement-only transactions; PrepareRetirement
+         * explicitly stages any resident removal for the enclosing aggregate publication fence.
+         */
+        [[nodiscard]] Result<std::unique_ptr<PhysicsSceneBodyPreparation>> PrepareSceneGroup(
+            std::span<const PhysicsSceneGroupShape> shapes, std::span<const PhysicsSceneGroupBody> bodies) const;
         /**
          * @brief Stages one fixed, distance, hinge or slider constraint after its body endpoints are resident.
          * @param descriptor World-scoped body anchors and typed constraint policy.
@@ -326,6 +427,12 @@ namespace Horo::Physics {
          * @note The caller chooses who receives this capability; Physics applies no module policy.
          */
         [[nodiscard]] Result<PhysicsQueryEventCapability> IssueQueryEventCapability();
+        /** @brief Issues the same Physics capability with an additional host-owned revocation fence.
+         * @param revocation Token revoked before client/module/scene teardown; Physics applies no permission policy.
+         * @return Exact world capability, or a typed revoked, unavailable, affinity or capacity error.
+         * @note Retained copies observe cancellation before borrowing the world. The token retains no world.
+         */
+        [[nodiscard]] Result<PhysicsQueryEventCapability> IssueQueryEventCapability(const CancellationToken &revocation);
         /** @brief Revokes every copy of one issued capability before its client or world retires.
          * @param capability Capability issued by this exact world.
          * @return Success, or a typed foreign/stale identity or owner-thread error.
@@ -364,6 +471,7 @@ namespace Horo::Physics {
     private:
         friend struct PhysicsWorldContainmentTestAccess;
         friend class PhysicsSceneActivationCandidate;
+        friend class PhysicsSceneBodyPreparation;
         friend class PhysicsRuntime;
         friend class PhysicsQueryEventCapability;
         struct Impl;

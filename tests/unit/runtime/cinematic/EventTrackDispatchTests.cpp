@@ -145,7 +145,7 @@ namespace Horo::Cinematic {
         auto cursor = MakeSequenceFrameCursor(snapshot, SequenceCursorResetPolicy::EmitCurrentBoundary).Value();
         std::array<SequenceFrameEventOccurrence, 4> events{};
         const SequenceFrameScratch scratch{{}, events, {}};
-        const SequenceFrameHooks hooks{BorrowedCallbackContext{&dispatcher}, CinematicEventDispatcher::StageHook, nullptr, nullptr};
+        const SequenceFrameHooks hooks{BorrowedCallbackContext{&dispatcher}, CinematicEventDispatcher::StageHook, {}, nullptr};
 
         REQUIRE(dispatcher.BeginTick(3).HasValue());
         auto evaluated = evaluation.Evaluate(snapshot, 3, cursor, scratch, hooks);

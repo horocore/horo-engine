@@ -1,5 +1,6 @@
 #include "GameModuleHostDetail.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Gameplay/GameplayPhysicsContext.h"
 
 #include <algorithm>
 #include <system_error>
@@ -71,13 +72,15 @@ namespace Horo::Gameplay {
         registries.systems = std::make_unique<SystemRegistry>(moduleId);
         registries.replication = std::make_unique<ReplicationRegistrationRegistry>(moduleId);
         registries.events = std::make_unique<GameEventRegistry>();
+        registries.persistence = std::make_unique<PersistenceRegistrationRegistry>(moduleId);
         GameRegistrationContext registration{moduleId,
                                              *registries.components,
                                              *registries.systems,
                                              *registries.services,
                                              *registries.assetTypes,
                                              *registries.replication,
-                                             *registries.events};
+                                             *registries.events,
+                                             *registries.persistence};
         if (Result<void> registered = InvokeRegister(*gameplayModule, registration); registered.HasError())
             return registered;
         if (Result<void> frozen = registries.components->Freeze(); frozen.HasError())
@@ -96,6 +99,10 @@ namespace Horo::Gameplay {
             return frozen;
         Detail::GenerationLeaseBinding::Bind(*registries.registry, *registries.systems, weak_from_this(), runtimeLeaseAdmission);
         Detail::GenerationLeaseBinding::Bind(*registries.replication, weak_from_this(), runtimeLeaseAdmission);
+        if (Result<void> frozen =
+                registries.persistence->Freeze(registries.registry->Registrations(), registries.services->Registrations());
+            frozen.HasError())
+            return frozen;
         registries.events->Freeze();
         Detail::GenerationLeaseBinding::Bind(*registries.events, weak_from_this(), runtimeLeaseAdmission);
 
@@ -104,6 +111,7 @@ namespace Horo::Gameplay {
             return Result<void>::Failure(activated.ErrorValue());
         projectServices = std::move(activated).Value();
         runtimeContext = {projectServices->Cancellation(), projectServices->ActiveServices(), projectServices->Capabilities()};
+        runtimeContext.physics = physics;
         startAttempted = true;
         return InvokeStart(*gameplayModule, runtimeContext);
     }
@@ -112,6 +120,8 @@ namespace Horo::Gameplay {
         if (reloadPrepared || gameplayModule == nullptr || projectServices == nullptr)
             return Result<GameModuleReloadSnapshot>::Failure(MakeError(GameplayErrors::GameplayReloadRestartRequired));
         projectServices->RequestCancellation();
+        if (physics)
+            physics->Revoke();
         auto snapshot = InvokePrepareReload(*gameplayModule, runtimeContext);
         if (snapshot.HasError())
             return Result<GameModuleReloadSnapshot>::Failure(snapshot.ErrorValue());
@@ -138,6 +148,8 @@ namespace Horo::Gameplay {
         if (shutdown)
             return;
         shutdown = true;
+        if (physics)
+            physics->Revoke();
         if (projectServices)
             projectServices->RequestCancellation();
         if (gameplayModule != nullptr && startAttempted)
@@ -146,6 +158,7 @@ namespace Horo::Gameplay {
         registries.assetTypes.reset();
         registries.replication.reset();
         registries.events.reset();
+        registries.persistence.reset();
         if (gameplayModule != nullptr) {
             destroy(gameplayModule);
             gameplayModule = nullptr;

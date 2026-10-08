@@ -21,6 +21,10 @@ namespace Horo::Character {
 }
 
 namespace Horo::Physics {
+    namespace Detail {
+        struct PhysicsStructuralRegistration;
+        struct PhysicsStructuralState;
+    }  // namespace Detail
 
     /** @brief Exact collision-filter and local-origin evidence captured for one scene candidate. */
     struct PhysicsSceneActivationEvidence final {
@@ -100,6 +104,8 @@ namespace Horo::Physics {
             std::vector<PhysicsSceneBodyBinding> bodyBindings;
             std::vector<PhysicsSceneShapeBinding> shapeBindings;
             std::vector<PhysicsSceneConstraintBinding> constraintBindings;
+            std::shared_ptr<Detail::PhysicsStructuralRegistration> structuralRegistration;
+            std::shared_ptr<Detail::PhysicsStructuralState> structuralState;
         };
 
     public:
@@ -110,6 +116,14 @@ namespace Horo::Physics {
 
         /** @copydoc Runtime::SceneActivationCandidate::ValidatePublication */
         [[nodiscard]] Result<void> ValidatePublication() const override;
+
+        /** @copydoc Runtime::SceneActivationCandidate::CanonicalDatasetProjection */
+        [[nodiscard]] Runtime::SceneCanonicalDatasetProjection CanonicalDatasetProjection() const noexcept override {
+            return Runtime::SceneCanonicalDatasetProjection::Absent;
+        }
+
+        /** @copydoc Runtime::SceneActivationCandidate::Publish */
+        void Publish() noexcept override;
         /** @copydoc Runtime::SceneActivationCandidate::Shutdown */
         void Shutdown() noexcept override;
 
@@ -129,6 +143,22 @@ namespace Horo::Physics {
         /** @brief Resolves an authored constraint binding without allocating. */
         [[nodiscard]] std::optional<ConstraintHandle> FindConstraint(Runtime::SceneObjectId object,
                                                                      Runtime::PhysicsConstraintSlotId constraint) const noexcept;
+        /** @brief Resolves a published structural body by exact runtime Scene/slot/generation.
+         * @param entity Generation-qualified owner, never a template-local or fabricated authored identity.
+         * @param body Exact body slot on that owner.
+         * @return Binding or none after retirement, shutdown, stale authority or on a foreign thread.
+         */
+        [[nodiscard]] std::optional<BodyHandle> FindRuntimeBody(Runtime::EntityRef entity, Runtime::PhysicsBodySlotId body) const noexcept;
+        /** @brief Resolves a published structural collider under the same owner-lane lifetime contract as FindRuntimeBody.
+         * @param entity Exact runtime owner. @param collider Exact collider slot. @return Current binding or none.
+         */
+        [[nodiscard]] std::optional<ShapeHandle> FindRuntimeShape(Runtime::EntityRef entity,
+                                                                  Runtime::PhysicsColliderSlotId collider) const noexcept;
+        /** @brief Resolves a published structural constraint under the same owner-lane lifetime contract as FindRuntimeBody.
+         * @param entity Exact runtime owner. @param constraint Exact constraint slot. @return Current binding or none.
+         */
+        [[nodiscard]] std::optional<ConstraintHandle> FindRuntimeConstraint(Runtime::EntityRef entity,
+                                                                            Runtime::PhysicsConstraintSlotId constraint) const noexcept;
 
     private:
         friend struct PhysicsSceneContainmentTestAccess;
@@ -149,6 +179,8 @@ namespace Horo::Physics {
         std::vector<PhysicsSceneBodyBinding> bodyBindings_;
         std::vector<PhysicsSceneShapeBinding> shapeBindings_;
         std::vector<PhysicsSceneConstraintBinding> constraintBindings_;
+        std::shared_ptr<Detail::PhysicsStructuralRegistration> structuralRegistration_;
+        std::shared_ptr<Detail::PhysicsStructuralState> structuralState_;
     };
 
     /** @brief Prepares and retires paired Physics and Character worlds through RuntimeScene's aggregate boundary. */
@@ -164,11 +196,18 @@ namespace Horo::Physics {
         /** @copydoc Runtime::SceneActivationParticipant::Prepare */
         [[nodiscard]] Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneDefinition &definition,
                                                                                          Runtime::RuntimeSceneView scene) override;
+        /** @brief Creates the structural adapter for this explicit activation owner before Scene startup.
+         * @return Owned adapter following the exact published world selected by this participant.
+         * @details The participant, runtime and authority outlive the Scene service. Registration does not
+         * activate or select a backend; whole-Scene publication installs the owner state. C++ consumers must rebuild.
+         */
+        [[nodiscard]] std::unique_ptr<Runtime::SceneStructuralParticipant> MakeStructuralParticipant();
 
     private:
         PhysicsRuntime *runtime_{};
         PhysicsSceneActivationAuthority *authority_{};
         PhysicsSceneActivationSettings settings_;
+        std::shared_ptr<Detail::PhysicsStructuralRegistration> structuralRegistration_;
     };
 
     /**

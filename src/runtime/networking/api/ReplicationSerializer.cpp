@@ -46,7 +46,7 @@ namespace Horo::Network {
         }
 
         [[nodiscard]] auto EntryKey(const ReplicationSerializerDescriptor &descriptor) noexcept {
-            return std::tuple{descriptor.owner.value, descriptor.valueType.Value(), descriptor.codec.Value()};
+            return std::tuple{std::string_view{descriptor.owner.value}, descriptor.valueType.Value(), descriptor.codec.Value()};
         }
 
         [[nodiscard]] ReplicationValueKind KindOf(const ReplicationRuntimeValue &value) noexcept {
@@ -94,7 +94,7 @@ namespace Horo::Network {
         }
 
         [[nodiscard]] auto AdapterKey(const ModuleId &owner, const ReplicationFieldDescriptor &field) {
-            return std::tuple{owner.value, field.valueType.Value(), field.codec.Value()};
+            return std::tuple{std::string_view{owner.value}, field.valueType.Value(), field.codec.Value()};
         }
 
         [[nodiscard]] bool FieldFitsAdapter(const ReplicationFieldDescriptor &field,
@@ -411,6 +411,15 @@ namespace Horo::Network {
         } catch (const std::bad_alloc &) {
             return Fail<bool>(NetworkErrors::ReplicationSerializerCapacityExceeded);
         }
+    }
+
+    /** @copydoc ReplicationSerializerRegistry::DescriptorFor */
+    Result<const ReplicationSerializerDescriptor *> ReplicationSerializerRegistry::DescriptorFor(const ReplicationSchemaId schema,
+                                                                                                 const FieldId field) const {
+        const auto binding = Resolve(schema, field);
+        if (binding.HasError())
+            return Result<const ReplicationSerializerDescriptor *>::Failure(binding.ErrorValue());
+        return Result<const ReplicationSerializerDescriptor *>::Success(&binding.Value().entry->descriptor);
     }
 
     /** @copydoc ReplicationSerializerRegistry::Schemas */

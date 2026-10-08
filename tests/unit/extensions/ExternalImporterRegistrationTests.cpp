@@ -3,7 +3,10 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <future>
 #include <span>
+#include <stdexcept>
 
 namespace Horo::Extensions::Tests {
     namespace {
@@ -16,12 +19,42 @@ namespace Horo::Extensions::Tests {
             bool emptyOutput{};
             bool inputMatched{};
             bool throwOnDestroy{};
+            std::promise<void> *entered{};
+            std::shared_future<void> release;
         };
 
         struct ProgressCapture final {
             std::uint64_t completed{};
             std::uint64_t total{};
             std::string message;
+        };
+
+        /** @brief Always releases a blocked callback before its async future is destroyed, including fatal assertions. */
+        class CallbackReleaseGuard final {
+        public:
+            explicit CallbackReleaseGuard(std::promise<void> &release) noexcept : release_(release) {}
+
+            ~CallbackReleaseGuard() {
+                Release();
+            }
+
+            CallbackReleaseGuard(const CallbackReleaseGuard &) = delete;
+            CallbackReleaseGuard &operator=(const CallbackReleaseGuard &) = delete;
+
+            void Release() noexcept {
+                if (released_)
+                    return;
+                released_ = true;
+                try {
+                    release_.set_value();
+                } catch (const std::future_error &) {
+                    // The valid, unmoved promise is either fulfilled here or already fulfilled.
+                }
+            }
+
+        private:
+            std::promise<void> &release_;
+            bool released_{};
         };
 
         void CaptureProgress(void *context,  // NOSONAR(cpp:S5008) The extension ABI requires an opaque callback context.
@@ -52,12 +85,21 @@ namespace Horo::Extensions::Tests {
                    MatchesCompleteSettings(request);
         }
 
+        /** @brief Holds an already admitted callback at the ABI boundary for retirement assertions. */
+        void WaitForAdmittedCallback(ImportInvocationState &state) {
+            if (state.entered) {
+                state.entered->set_value();
+                state.release.wait();
+            }
+        }
+
         HoroExtensionStatus InvokeCompleteImporter(
             void *context,  // NOSONAR(cpp:S5008) The extension ABI requires an opaque importer context.
             const HoroAssetImportRequest *request, HoroAssetImportResponse *response) {
             auto &state = *static_cast<ImportInvocationState *>(context);
             state.invoked = true;
             state.inputMatched = request != nullptr && MatchesCompleteRequest(*request);
+            WaitForAdmittedCallback(state);
             if (state.cancelDuringCall) {
                 state.cancellation->RequestCancellation();
                 return request->cancellation.isCancellationRequested(request->cancellation.context) != 0 ? HORO_EXTENSION_ERROR_CANCELLED
@@ -261,6 +303,24 @@ namespace Horo::Extensions::Tests {
         }
     };
 
+    TEST_CASE("Blocked callback release guard survives exception unwinding", "[Extensions][ABI][Retirement]") {
+        std::promise<void> release;
+        const auto released = release.get_future().share();
+        std::promise<void> completed;
+        auto completion = completed.get_future();
+        try {
+            auto worker = std::async(std::launch::async, [&completed, released] {
+                released.wait();
+                completed.set_value();
+            });
+            CallbackReleaseGuard releaseGuard{release};
+            throw std::runtime_error{"simulate assertion/report unwinding"};
+        } catch (const std::runtime_error &) {
+            CHECK(completion.wait_for(std::chrono::seconds{0}) == std::future_status::ready);
+        }
+        completion.get();
+    }
+
     TEST_CASE_METHOD(RegistrationFixture, "Importer context transfers only after successful registration", "[Extensions][ABI]") {
         REQUIRE(RegisterExternalAssetImporter(&session, &descriptor) == HORO_EXTENSION_SUCCESS);
         REQUIRE(session.contributions.size() == 1);
@@ -358,6 +418,56 @@ namespace Horo::Extensions::Tests {
         CheckProgressExceptionContainment(*fixture.session.contributions.front().strategy, source);
         CheckBoundedInputAndEmptyOutput(*fixture.session.contributions.front().strategy, fixture.invocation, source);
         CheckCancellationAndTeardown(fixture.session, fixture.invocation, fixture.cancellation, source);
+    }
+
+    TEST_CASE("Retained importer rejects new work after withdrawal while an admitted ABI call completes", "[Extensions][ABI][Retirement]") {
+        CompleteImporterFixture fixture;
+        auto retirement = std::make_shared<ExtensionRetirement>(fixture.manifest.id, std::vector<std::string>{fixture.owner.id});
+        fixture.session.lifetime = std::make_shared<ExtensionModuleLifetime>();
+        const std::weak_ptr<ExtensionModuleLifetime> executableCode = fixture.session.lifetime;
+        REQUIRE(retirement->BindModuleCode(fixture.owner.id, fixture.session.lifetime));
+        fixture.session.retirement = retirement;
+        REQUIRE(RegisterExternalAssetImporter(&fixture.session, &fixture.descriptor) == HORO_EXTENSION_SUCCESS);
+        Assets::AssetImporterCatalog catalog;
+        REQUIRE(catalog.Register(std::move(fixture.session.contributions.front())).HasValue());
+        fixture.session.contributions.clear();
+        auto published = catalog.Publish();
+        REQUIRE(published.HasValue());
+        auto snapshot = std::move(published).Value();
+        auto importer = snapshot->FindById("com.example.complete")->strategy;
+        std::promise<void> entered;
+        auto began = entered.get_future();
+        std::promise<void> release;
+        fixture.invocation.entered = &entered;
+        fixture.invocation.release = release.get_future().share();
+        auto admitted = std::async(std::launch::async, [importer] {
+            return importer->Import(Assets::AssetImportInput{.sourceExtension = "raw"}, {});
+        });
+        CallbackReleaseGuard releaseGuard{release};
+        began.get();
+        fixture.session.lifetime.reset();
+        retirement->CloseAdmission();
+        REQUIRE(catalog.WithdrawPackage(fixture.manifest.id));
+        const auto report = retirement->Inspect();
+        CHECK(report.disposition == ExtensionRetirementDisposition::Draining);
+        CHECK(std::ranges::any_of(report.outstanding, [](const auto &work) {
+            return work.kind == ExtensionLeaseKind::Callback;
+        }));
+        const auto rejected = importer->Import(Assets::AssetImportInput{.sourceExtension = "raw"}, {});
+        CHECK(rejected.HasError());
+        CHECK(fixture.invocation.destroyed == 0);
+        CHECK_FALSE(executableCode.expired());
+        releaseGuard.Release();
+        REQUIRE(admitted.get().HasValue());
+        const auto completed = retirement->Inspect();
+        CHECK(std::ranges::none_of(completed.outstanding, [](const auto &work) {
+            return work.kind == ExtensionLeaseKind::Callback;
+        }));
+        snapshot.reset();
+        importer.reset();
+        CHECK(fixture.invocation.destroyed == 1);
+        CHECK(executableCode.expired());
+        CHECK(retirement->IsDrained());
     }
 
     TEST_CASE("External importer lifetime follows catalog snapshots and contains destroy exceptions", "[Extensions][ABI][Assets]") {

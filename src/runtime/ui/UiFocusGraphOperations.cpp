@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Ui/UiElementTree.h"
 #include "UiFocusGraphInternal.h"
 
 namespace Horo::Runtime::Ui {
@@ -48,13 +49,39 @@ namespace Horo::Runtime::Ui {
         return storage_ ? storage_->lifecycle : UiFocusGraphState::Stopped;
     }
 
+    /** @copydoc UiFocusGraph::ValidateOwner */
+    Result<void> UiFocusGraph::ValidateOwner(const UiElementTree &tree) const {
+        if (!storage_ || storage_->lifecycle != UiFocusGraphState::Active || tree.State() != UiElementTreeState::Active)
+            return FocusGraphDetail::Failure(UiErrors::FocusLifecycleUnavailable);
+        if (const auto &owner = storage_->descriptor.owner;
+            owner.instance != tree.Instance() || owner.canvas != tree.Canvas() || owner.document != tree.SourceDocument() ||
+            owner.documentRevision != tree.SourceDocumentRevision() || owner.treeRevision != tree.Revision())
+            return FocusGraphDetail::Failure(UiErrors::RevisionStale);
+        for (const auto &node : storage_->nodes) {
+            const auto record = tree.Get(node.descriptor.element);
+            if (record.HasError() || record.Value().id != node.descriptor.id)
+                return FocusGraphDetail::Failure(UiErrors::HandleStale);
+            const auto parent = record.Value().parent.IsValid() ? tree.Get(record.Value().parent) : tree.Root();
+            if (record.Value().parent.IsValid() != node.descriptor.parent.IsValid() ||
+                (node.descriptor.parent.IsValid() && (parent.HasError() || parent.Value().id != node.descriptor.parent)))
+                return FocusGraphDetail::Failure(UiErrors::HandleStale);
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiFocusGraph::LastIssuedModalIncarnation */
+    std::uint32_t UiFocusGraph::LastIssuedModalIncarnation() const noexcept {
+        return storage_ ? storage_->lastModalIncarnation : 0;
+    }
+
     /** @copydoc UiFocusGraph::Snapshot */
     Result<UiFocusSnapshot> UiFocusGraph::Snapshot() const {
         if (!storage_ || storage_->lifecycle != UiFocusGraphState::Active)
             return Failure<UiFocusSnapshot>(UiErrors::FocusLifecycleUnavailable);
         const std::optional<UiFocusModalId> modal =
             storage_->modalDepth == 0 ? std::nullopt
-                                      : std::optional<UiFocusModalId>{{storage_->descriptor.owner.instance.ownership, storage_->modalDepth,
+                                      : std::optional<UiFocusModalId>{{storage_->descriptor.owner.instance.ownership,
+                                                                       storage_->modalSlots[storage_->modalDepth - 1].rootHandle.slot,
                                                                        storage_->modalSlots[storage_->modalDepth - 1].generation}};
         const auto root = storage_->modalDepth == 0
                               ? std::optional<UiFocusTarget>{}
@@ -140,10 +167,6 @@ namespace Horo::Runtime::Ui {
                     break;
                 }
                 modal.rootHandle = storage_->nodes[rootIndex].descriptor.element;
-            }
-            for (std::uint32_t index = retainedModalDepth; index < oldModalDepth; ++index) {
-                Storage::ModalSlot &modal = storage_->modalSlots[index];
-                modal.generation = modal.generation == std::numeric_limits<std::uint32_t>::max() ? 0 : modal.generation + 1;
             }
             storage_->modalDepth = retainedModalDepth;
             storage_->restorationDepth = std::min(storage_->restorationDepth, retainedModalDepth);
@@ -254,7 +277,7 @@ namespace Horo::Runtime::Ui {
             return Failure<UiFocusModalActivation>(UiErrors::FocusSourceStale);
 
         Storage::ModalSlot &slot = storage_->modalSlots[storage_->modalDepth];
-        if (slot.generation == 0 || slot.generation == std::numeric_limits<std::uint32_t>::max())
+        if (storage_->lastModalIncarnation == std::numeric_limits<std::uint32_t>::max())
             return Failure<UiFocusModalActivation>(UiErrors::GenerationExhausted);
 
         const auto previous = storage_->CurrentTarget();
@@ -262,6 +285,7 @@ namespace Horo::Runtime::Ui {
         storage_->CollectPath(storage_->focusedIndex, restoration);
         storage_->restorations[storage_->restorationDepth++] = restoration;
 
+        slot.generation = ++storage_->lastModalIncarnation;
         slot.root = rootId;
         slot.rootHandle = descriptor.root;
         slot.defaultFocus = descriptor.defaultFocus;
@@ -269,7 +293,7 @@ namespace Horo::Runtime::Ui {
         ++storage_->modalDepth;
         storage_->focusedIndex = storage_->ResolveInitial();
 
-        const UiFocusModalId id{storage_->descriptor.owner.instance.ownership, storage_->modalDepth, slot.generation};
+        const UiFocusModalId id{storage_->descriptor.owner.instance.ownership, slot.rootHandle.slot, slot.generation};
         return Result<UiFocusModalActivation>::Success(
             UiFocusModalActivation{id, storage_->BuildChange(previous, UiFocusChangeReason::ModalOpened)});
     }
@@ -279,17 +303,14 @@ namespace Horo::Runtime::Ui {
         if (!storage_ || storage_->lifecycle != UiFocusGraphState::Active)
             return Failure<UiFocusChange>(UiErrors::FocusLifecycleUnavailable);
         if (!modal.IsValid() || modal.ownership != storage_->descriptor.owner.instance.ownership || storage_->modalDepth == 0 ||
-            modal.slot != storage_->modalDepth || modal.generation != storage_->modalSlots[storage_->modalDepth - 1].generation)
+            modal.slot != storage_->modalSlots[storage_->modalDepth - 1].rootHandle.slot ||
+            modal.generation != storage_->modalSlots[storage_->modalDepth - 1].generation)
             return Failure<UiFocusChange>(UiErrors::FocusModalStale);
 
-        Storage::ModalSlot &slot = storage_->modalSlots[storage_->modalDepth - 1];
-        if (slot.generation == std::numeric_limits<std::uint32_t>::max())
-            return Failure<UiFocusChange>(UiErrors::GenerationExhausted);
         const auto previous = storage_->CurrentTarget();
         const Storage::RestorationEntry restoration = storage_->restorations[storage_->restorationDepth - 1];
         --storage_->modalDepth;
         --storage_->restorationDepth;
-        ++slot.generation;
         storage_->focusedIndex = storage_->ResolveRestoration(restoration);
         return Result<UiFocusChange>::Success(storage_->BuildChange(previous, UiFocusChangeReason::ModalClosed));
     }

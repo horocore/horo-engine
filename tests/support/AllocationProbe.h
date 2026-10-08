@@ -3,6 +3,28 @@
 #include <cstddef>
 
 namespace Horo::Tests::AllocationProbe {
+    /** @brief Ordinary/aligned C++ allocation requests in one owner-thread measurement window; not peak resident memory. */
+    struct Measurement final {
+        std::size_t requests{};
+        std::size_t requestedBytes{};
+        std::size_t largestRequest{};
+    };
+
+    /** @brief Non-allocating scoped observer; excludes other threads and direct C/native allocations. */
+    class ScopedMeasurement final {
+    public:
+        ScopedMeasurement() noexcept;
+        ~ScopedMeasurement();
+        ScopedMeasurement(const ScopedMeasurement &) = delete;
+        ScopedMeasurement &operator=(const ScopedMeasurement &) = delete;
+        /** @brief Copies observed requests without allocating. @return Count, cumulative bytes and largest request. */
+        [[nodiscard]] Measurement Snapshot() const noexcept;
+
+    private:
+        Measurement measurement_{};
+        Measurement *previous_{};
+    };
+
     /** @brief Non-allocating observer called immediately before an injected failure is thrown. */
     using FailureObserver = void (*)(std::size_t byteCount) noexcept;
 

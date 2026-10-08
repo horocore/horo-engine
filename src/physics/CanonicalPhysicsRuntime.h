@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -22,6 +23,35 @@
 
 namespace Horo::Physics::Detail {
     class PhysicsEventProjection;
+    struct CanonicalSceneBodyBatchState;
+
+    /** @brief Move-only unpublished native batch; destruction aborts on the Physics owner lane. */
+    class CanonicalSceneBodyBatch final {
+    public:
+        explicit CanonicalSceneBodyBatch(std::shared_ptr<CanonicalSceneBodyBatchState> state) noexcept;
+        ~CanonicalSceneBodyBatch();
+        CanonicalSceneBodyBatch(CanonicalSceneBodyBatch &&) noexcept;
+        CanonicalSceneBodyBatch &operator=(CanonicalSceneBodyBatch &&) noexcept;
+        CanonicalSceneBodyBatch(const CanonicalSceneBodyBatch &) = delete;
+        CanonicalSceneBodyBatch &operator=(const CanonicalSceneBodyBatch &) = delete;
+        /** @brief Returns reserved Horo identities in descriptor order, not resident bodies. */
+        [[nodiscard]] std::span<const BodyHandle> Handles() const noexcept;
+        [[nodiscard]] std::span<const ShapeHandle> Shapes() const noexcept;
+        [[nodiscard]] std::span<const ConstraintHandle> Constraints() const noexcept;
+        [[nodiscard]] std::span<const ConstraintHandle> RetiredConstraints() const noexcept;
+        [[nodiscard]] Result<void> PrepareRetirement(std::span<const BodyHandle> bodies, std::span<const ShapeHandle> shapes,
+                                                     std::span<const ConstraintHandle> constraints) const;
+        [[nodiscard]] Result<void> PrepareConstraints(std::span<const PhysicsConstraintDescriptor> descriptors) const;
+        /** @brief Tests retained pending ownership without dereferencing a destroyed world. */
+        [[nodiscard]] bool IsPending() const noexcept;
+        /** @brief Rechecks native lifetime and exact pending ownership before aggregate publication. */
+        [[nodiscard]] Result<void> ValidatePublication() const;
+        /** @brief Publishes a validated fully prepared batch without further allocation. */
+        void Publish() const noexcept;
+
+    private:
+        std::shared_ptr<CanonicalSceneBodyBatchState> state_;
+    };
 
     /** @brief Private deterministic rollback probe; production entry points use None. */
     enum class CanonicalFailurePoint : std::uint8_t {
@@ -154,6 +184,20 @@ namespace Horo::Physics::Detail {
     /** @brief Admits one scene body after its shape has been staged. */
     [[nodiscard]] Result<BodyHandle> CreateCanonicalSceneBody(CanonicalWorldHandle world, PhysicsWorldId owner,
                                                               const PhysicsSceneBodyDescriptor &descriptor);
+    /** @brief Allocates detached native bodies and prepares broadphase insertion without exposing new solver state.
+     * @param world Borrowed native owner, which cancels the batch before world teardown.
+     * @param owner Exact public world identity.
+     * @param descriptors Complete nonempty body group, at most 256, referring to already owned shapes.
+     * @return Unpublished RAII batch or typed failure with old resident state unchanged.
+     */
+    [[nodiscard]] Result<CanonicalSceneBodyBatch> PrepareCanonicalSceneBodies(CanonicalWorldHandle world, PhysicsWorldId owner,
+                                                                              std::span<const PhysicsSceneBodyDescriptor> descriptors,
+                                                                              std::span<const PhysicsSceneGroupShape> shapes = {},
+                                                                              std::span<const PhysicsSceneGroupBody> groupBodies = {});
+    /** @brief Reports a live unpublished body batch; stepping/direct body admission must wait for its owner transaction. */
+    [[nodiscard]] bool HasPendingCanonicalSceneBodies(CanonicalWorldHandle world) noexcept;
+    /** @brief Aborts unpublished native bodies before native-world destruction; retained wrappers become stale. */
+    void CancelPendingCanonicalSceneBodies(CanonicalWorldHandle world) noexcept;
     /** @brief Validates one resident body replacement before queue admission or any tick mutation. */
     [[nodiscard]] Result<PhysicsBodyDescriptor> ResolveCanonicalBodyMutation(CanonicalWorldHandle world, PhysicsWorldId owner,
                                                                              const PhysicsBodyMutation &mutation);

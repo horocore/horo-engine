@@ -101,6 +101,24 @@ jobs:
       - name: Setup build tools
         uses: ./.github/actions/setup-build-tools
 
+      # Native publication requires a canonical parent. macOS TMPDIR may contain
+      # /var aliases; establish the host temp root before tools and tests use it.
+      - name: Canonicalize macOS temporary directory
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          import pathlib
+          import tempfile
+
+          root = pathlib.Path(tempfile.gettempdir()).resolve(strict=True)
+          if not root.is_dir() or "\n" in str(root) or "\r" in str(root):
+              raise RuntimeError("The temporary directory must be an existing canonical directory")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              environment.write(f"TMPDIR={root}\n")
+          PYTHON
+
       - name: Restore dependency and compiler caches
         id: cache
         uses: ./.github/actions/restore-native-cache
@@ -127,6 +145,13 @@ jobs:
       - name: Build Release audio checks
         id: release_build
         run: cmake --build --preset ci-audio-release
+
+      # MSVC Debug container moves may allocate iterator proxies inside noexcept.
+      # Keep the complete admission/callback allocation sweep mandatory in Release.
+      - name: Build Windows Release MCP allocation qualification
+        id: mcp_release_build
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.release_build.outcome == 'success' }}
+        run: cmake --build --preset ci-audio-release --target HoroMcpSessionTests
 
       - name: Configure navigation without Recast Detour
         if: runner.os == 'Linux'
@@ -157,6 +182,22 @@ jobs:
         if: ${{ !cancelled() && runner.os == 'Linux' && needs.tooling.outputs.network == 'true' && steps.cache.outcome == 'success' }}
         run: cmake --preset ci-network-disabled
 
+      # This opt-in private backend qualification runs on every platform in the
+      # existing matrix. Injected native dispatch is not physical-device evidence.
+      - name: Configure OpenXR native lifecycle qualification
+        id: xr_configure
+        if: ${{ !cancelled() && steps.cache.outcome == 'success' }}
+        run: cmake --preset ci-xr-openxr
+
+      - name: Build OpenXR lifecycle and header boundaries
+        id: xr_build
+        if: ${{ !cancelled() && steps.xr_configure.outcome == 'success' }}
+        run: cmake --build --preset ci-xr-openxr
+
+      - name: Verify OpenXR omitted target graph
+        if: ${{ !cancelled() && steps.cache.outcome == 'success' }}
+        run: cmake --preset ci-xr-disabled
+
       - name: Checkpoint main build caches
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
         continue-on-error: true
@@ -165,7 +206,7 @@ jobs:
           compiler-key: ${{ steps.cache.outputs.compiler-key }}
           dependency-key: ${{ steps.cache.outputs.dependency-key }}
           dependency-hit: ${{ steps.cache.outputs.dependency-hit }}
-          dependency-ready: ${{ needs.tooling.outputs.network != 'true' || steps.network_configure.outcome == 'success' }}
+          dependency-ready: ${{ steps.xr_configure.outcome == 'success' && (needs.tooling.outputs.network != 'true' || steps.network_configure.outcome == 'success') }}
 
       - name: Prepare Windows mixer allocation diagnostics
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
@@ -180,6 +221,13 @@ jobs:
         if: ${{ !cancelled() && steps.release_build.outcome == 'success' }}
         run: ctest --preset ci-audio-release
 
+      - name: Test Windows Release MCP allocation qualification
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
+        run: >-
+          ctest --test-dir build/ci-audio-release --parallel 1 --output-on-failure
+          --no-tests=error --timeout 120 -R '^HoroMcpSessionTests::'
+          --output-junit build/ci-audio-release/mcp-ctest.xml
+
       - name: Test navigation without Recast Detour
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.navigation_build.outcome == 'success' }}
         run: ctest --preset ci-navigation-null
@@ -188,11 +236,17 @@ jobs:
         if: ${{ !cancelled() && steps.network_build.outcome == 'success' }}
         run: ctest --preset ci-network-gns
 
+      - name: Test OpenXR rollback replacement and shutdown
+        if: ${{ !cancelled() && steps.xr_build.outcome == 'success' }}
+        run: ctest --preset ci-xr-openxr
+
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: test-results-${{ runner.os }}
-          path: build/ci*/ctest.xml
+          path: |
+            build/ci*/ctest.xml
+            build/ci-audio-release/mcp-ctest.xml
           if-no-files-found: warn
           retention-days: 14

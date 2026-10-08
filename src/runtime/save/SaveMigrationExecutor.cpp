@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Save/SaveTelemetry.h"
 #include "SaveMigrationInternal.h"
 
 #include <new>
@@ -385,31 +386,39 @@ namespace Horo::Runtime {
                     MigrationError(SaveErrors::MigrationPlanInvalid, "Migration plan does not bind to its supplied source or limits."));
             return ValidateState(source, limits);
         }
+
+        /** @brief Executes and validates a bounded migration candidate without publishing it. */
+        Result<SaveMigrationCandidate> MigrateCandidate(const SaveMigrationSource &source, const SaveMigrationPlan &plan,
+                                                        const SaveMigrationLimits &limits) {
+            try {
+                if (const auto binding = ValidatePlanBinding(source, plan, limits); binding.HasError())
+                    return Result<SaveMigrationCandidate>::Failure(binding.ErrorValue());
+                std::uint64_t workUsed = 0;
+                if (auto charged = ChargeWork(workUsed, CandidateBytes(source), limits); charged.HasError())
+                    return Result<SaveMigrationCandidate>::Failure(charged.ErrorValue());
+                SaveMigrationCandidate current = source;
+                for (const SaveMigrationDefinition &definition : plan.definitions) {
+                    auto transformed = ExecuteStep(std::move(current), definition, limits, workUsed);
+                    if (transformed.HasError())
+                        return Result<SaveMigrationCandidate>::Failure(transformed.ErrorValue());
+                    current = std::move(transformed).Value();
+                }
+                ApplyTargetComposition(current, plan);
+                if (const auto finalValidation = ValidateFinalCandidate(current, plan, limits); finalValidation.HasError())
+                    return Result<SaveMigrationCandidate>::Failure(finalValidation.ErrorValue());
+                if (const auto protectedUnknown = VerifyProtectedUnknown(source, current, plan); protectedUnknown.HasError())
+                    return Result<SaveMigrationCandidate>::Failure(protectedUnknown.ErrorValue());
+                return Result<SaveMigrationCandidate>::Success(std::move(current));
+            } catch (const std::bad_alloc &) {
+                return Result<SaveMigrationCandidate>::Failure(MigrationError(SaveErrors::MigrationAllocationFailed));
+            }
+        }
     }  // namespace
 
     Result<SaveMigrationCandidate> SaveMigrationExecutor::Migrate(const SaveMigrationSource &source, const SaveMigrationPlan &plan,
                                                                   const SaveMigrationLimits &limits) {
-        try {
-            if (const auto binding = ValidatePlanBinding(source, plan, limits); binding.HasError())
-                return Result<SaveMigrationCandidate>::Failure(binding.ErrorValue());
-            std::uint64_t workUsed = 0;
-            if (auto charged = ChargeWork(workUsed, CandidateBytes(source), limits); charged.HasError())
-                return Result<SaveMigrationCandidate>::Failure(charged.ErrorValue());
-            SaveMigrationCandidate current = source;
-            for (const SaveMigrationDefinition &definition : plan.definitions) {
-                auto transformed = ExecuteStep(std::move(current), definition, limits, workUsed);
-                if (transformed.HasError())
-                    return Result<SaveMigrationCandidate>::Failure(transformed.ErrorValue());
-                current = std::move(transformed).Value();
-            }
-            ApplyTargetComposition(current, plan);
-            if (const auto finalValidation = ValidateFinalCandidate(current, plan, limits); finalValidation.HasError())
-                return Result<SaveMigrationCandidate>::Failure(finalValidation.ErrorValue());
-            if (const auto protectedUnknown = VerifyProtectedUnknown(source, current, plan); protectedUnknown.HasError())
-                return Result<SaveMigrationCandidate>::Failure(protectedUnknown.ErrorValue());
-            return Result<SaveMigrationCandidate>::Success(std::move(current));
-        } catch (const std::bad_alloc &) {
-            return Result<SaveMigrationCandidate>::Failure(MigrationError(SaveErrors::MigrationAllocationFailed));
-        }
+        return ObserveSaveStage(SaveTelemetryStage::Migrate, 0, [&source, &plan, &limits] {
+            return MigrateCandidate(source, plan, limits);
+        }, {});
     }
 }  // namespace Horo::Runtime

@@ -1015,6 +1015,31 @@ a project needs broadcast-style auto-ducking.
 
 ## Voice Model
 
+### AUD-003.8 immutable callback voice state
+
+`HoroEngine::AudioVoiceRender` owns the host-composed `AudioVoiceRenderRuntime`
+boundary over AudioPlayback and AudioMixer. Control captures source/listener
+values and resolves the bus against an immutable mixer generation; the callback
+retains only numeric targets, identities, prepared processing storage and owned
+PCM/stream access. Neither lane discovers a scene, asset provider or backend.
+
+Two bounded slots retain one current and at most one pending state. The ordinary
+FIFO carries `AudioPublishVoiceStateCommand`; complete route/state generations
+never coalesce. Existing adjacent unpublished gain commands remain coalescible,
+without crossing voice controls, unload/reset or resource-lifetime barriers.
+The callback returns an exact graph-generation mixer input. Control may reclaim
+replaced state only after its publication decision and completed-block evidence
+following the mixer's last sample access, not after command consumption.
+
+Resident playback copies its PCM before publication. Streaming owns a sole
+retirement-pinned render port and retains the service; attempted retirement while
+pinned rejects without freeing its ring. Conversion keeps unconsumed PCM and
+renders bounded silence on starvation. Port release, processing destruction and
+worker cancellation remain on detached control after native callback stop/join.
+Shared pins do not permit concurrent mutation of the canonical voice registry.
+See [the adoption guide](../../guides/audio-voice-render-state-migration.md) for
+host dispatcher ordering, explicit budgets and affected public consumers.
+
 ### AUD-003.3 resident playback controls
 
 `HoroEngine::AudioPlayback` owns `AudioVoicePlayback`, the resident PCM execution
@@ -1180,6 +1205,99 @@ acoustic-material contribution, zones and environment sends are the AUD-006 M5 â
 1.0 environmental baseline; rooms/portals, diffraction, baked/geometric
 propagation and advanced reflections are AUD-014 Post-1.0.
 
+### Core stereo processing
+
+`CoreStereoSpatialRenderer.h` belongs exclusively to `HoroAudioDsp`; it consumes
+`HoroAudioApi`'s copied spatial snapshots without reversing the RuntimeScene
+extraction dependency. Hosts prepare one processor per source/selected-listener
+pair and transfer updates at an exclusive quiescent boundary. Listener weighting,
+voice lifecycle, loop feeding, provider/profile resolution and bus accumulation
+remain host responsibilities. The processor provides real streaming mono/stereo
+PCM-to-stereo output; it does not select or register a backend/provider.
+
+Control-side `PrepareAudioStereoSpatialTarget` computes an inspectable matrix and
+pitch. Distances are metres; linear, inverse and inverse-square curves normalize
+to unity at the positive minimum and zero at the greater maximum, with clamping
+outside. Source cones use negative-Z forward and full apex angles, interpolating
+linearly between inner unity gain and outer gain. Coincident sources center and
+ignore cone/Doppler direction. Panning projects the normalized listener-to-source
+vector onto listener-local +X and uses equal-power mono gains. Stereo width
+positions left/right sub-sources on either side of that pan; width zero folds to
+mono with half-amplitude channel contributions, width one preserves centered
+stereo. Spread reduces both sub-source directions toward center. Listener weights
+are applied by the owning output mix, not twice inside each source processor.
+
+Doppler uses `(c + listenerRadialVelocity)/(c + sourceRadialVelocity)`. Scaled radial
+velocities clamp to +/-90 percent of speed of sound, and authored pitch times
+Doppler clamps to [0.125,8]. Discontinuous motion, changed teleport revisions or
+new complete source/listener identities suppress Doppler. Teleports immediately
+restore authored pitch; gains/panning retain the admitted output-sample ramp.
+Changed identities reset stream history and initialize gains immediately. Ordinary
+updates preserve phase/history and ramp pitch and matrix by produced samples;
+starvation and zero-capacity calls do not advance smoothing.
+
+The explicit baseline uses `AudioResamplerQuality::Linear`, including source-to-mix
+rate conversion exactly once. `AudioResampler::SetLinearPitch` changes only Linear
+ClipToMix plans, preserves fractional history, rejects invalid rate/pitch products
+transactionally and resets to the admitted descriptor pitch on Reset. This mode
+is unfiltered and makes no anti-aliasing promise. Sinc plans retain their existing
+prepared-coefficient pitch contract; device converters cannot apply voice pitch.
+Processing performs bounded work with prepared storage, copies no caller spans,
+reports exact consumed/produced counts and retains the existing bounded EOF tail.
+
+Migration is additive: existing spatial frames, scene/sound schemas, playback
+owners and Sinc callers retain their contracts. Hosts opting into core stereo
+provide explicit distance/cone/spread/width policy, reserve coefficients at Create,
+retain unconsumed input/end markers, route output to their normal stereo bus and
+stop applying pitch/rate conversion a second time. No persisted defaults are
+silently changed. The new header is covered by the DSP public consumer target.
+Reference scenes verify attenuation, listener rotation, cone transitions, rendered
+spread/width, actual Doppler PCM, teleport limits, block partition invariance,
+malformed-input rejection, bounded EOF and callback allocation/free counts.
+
+### Spatial scene extraction and listener policy
+
+`AudioSpatialModel.h` belongs to `HoroAudioApi`. `AudioSceneExtraction.h` belongs
+only to `HoroRuntimeScene`, which explicitly depends on the Audio value contract.
+An `AudioListenerComponent` is typed authored RuntimeScene data; it does not
+implicitly activate a camera, audio device or backend. Editor listener authoring
+remains the AUD-009 authoring surface. Existing source documents and sound schemas
+retain their representation; the listener addition is an additive runtime contract.
+
+The exclusive control owner calls `AudioSceneExtractor::Capture` with a current
+Scene view, an Audio-owned scene context, a strictly increasing sequence and a
+finite positive update interval. RuntimeScene entities, local transforms and
+parent links are read only during extraction. The returned value owns source
+references/playback defaults and listener/motion data; it contains no ECS reference,
+borrowed component, provider or native object. The host transfers the frame at an
+explicit quiescent ownership boundary and the callback consumes it as immutable
+values. No concurrent publication, automatic backend activation or AudioFrontend
+ownership is implied.
+
+Positions include all parent transforms and scale. Orientations compose normalized
+proper rotations, deliberately excluding scale/reflection/shear. Velocity is metres
+per second, supplied explicitly in world space or derived from successive world
+positions. First samples, changed context/entity generation, changed per-object
+discontinuity revisions and global discontinuities set previous equal to current
+and velocity to zero. The host marks teleport, tracking loss, reparenting or authority
+replacement with a changed revision (or the global flag for an affected hierarchy).
+History retains unselected listeners, and disabled/destroyed objects are removed.
+Scene replacement requires a fresh non-reused Audio scene-context generation.
+
+Listener selection is explicit. `Primary` selects highest priority, breaking ties
+by the lowest complete spatial identity. `PerView` makes the same choice independently
+for each exact view and orders results by view; global view 0 never becomes an
+implicit fallback. `WeightedAll` retains every enabled authored listener in identity
+order. Selected weights are normalized; an empty set remains explicitly empty.
+Authored views are 0..16 and weights must be finite and positive.
+
+Capture is bounded to 256 sources, 16 authored listeners before selection, 4096
+Scene slots, 64 ancestor nodes per object and 272 unique motion overrides. Valid
+capture performs no heap allocation or I/O. Rejected stale, malformed or over-capacity
+input leaves sequence and history unchanged. Shutdown permanently closes the owner.
+The new headers have single target ownership and generated consumer coverage; no
+public repository-wide include path is introduced.
+
 ### Occlusion Provider Interface
 
 Occlusion, obstruction, and diffraction are not computed by the audio runtime.
@@ -1322,6 +1440,62 @@ Dialogue starts
   -> SFX   -3 dB over 250 ms
   -> Voice unchanged
 ```
+
+### AUD-004.9 bounded mixer snapshots
+
+`HoroEngine::AudioMixer` owns `MixerSnapshot.h`. A version-one named snapshot
+contains a stable mixer asset reference and at most eight stable bus, send or DSP
+parameter references with finite model-unit targets. Names are presentation only.
+The fixed little-endian `MSNP` version-one codec persists only these values;
+runtime generations, clock timestamps, precedence and editor solo/debug state are
+excluded. Decode admits exact framing and bounded counts before reading records,
+rejects unsupported versions, duplicates and trailing fields, and publishes no
+partial asset. The codec is an additive snapshot format, not a MixerAsset schema
+change. Hosts own catalog resolution and storage.
+
+Control resolves every reference against its prepared live automation binding
+set, pinning exact runtime and graph generations. `PreparedMixerSnapshot` retains
+one ordinary `ScheduledAudioCommandBatch` plus transition ID and priority metadata.
+The host uses `MakeScheduledAudioBatchCommand` and existing staging/SPSC transport,
+retains the whole sidecar through callback acknowledgement, and resolves that exact
+storage on dispatch. Applying its batch directly bypasses snapshot precedence and
+is not a snapshot dispatch. At the exact target sample, the callback first advances
+its sealed automation engine, then dispatches to `MixerSnapshotTransitions::Apply`.
+Late, stale, closed or capacity-rejected work remains the host's reconciliation
+responsibility; neither preparation nor queue publication proves application.
+
+One callback owns the transition controller and borrowed automation engine. Higher
+priority wins while any owned trajectory remains pending/active; equal-priority
+later IDs replace. This is whole-preset precedence, not per-bus stacking or automatic
+restoration. Replacement atomically cancels the old group's remaining requests and
+admits every new target via `ApplyBatch`; the eight-target ceiling reserves room
+for eight cancellations within the existing sixteen-command batch limit. All
+ranges, continuity limits, request ordering and capacity are rechecked transactionally.
+Failure preserves previous trajectories and both identity sequences. Completed
+groups release precedence. Explicit cancellation holds current values; unrelated
+future requests remain queued. Cancelled/completed IDs cannot be replayed. Matching
+unload/reset closes the borrowed engine through its existing normal FIFO path.
+
+Control binds exact descriptors through `MixerRenderPlan::BindAutomation` before
+publication. This freezes projections into callback-exclusive bus/send gain and
+DSP value/target cells, separate from immutable compiled descriptors. Binding
+storage and worst-case per-sample engine/DAG dispatch are charged to the compile
+profile; failed admission leaves the plan unchanged. Published plans cannot be
+rebound, and stale graph generations never acquire replacement cells.
+
+`MixerGraphRuntime::RenderAutomated` validates the complete clock, scene and sealed
+binding table before advancement, resolves opaque engine-owned value selectors
+once per block, then projects every target before rendering each sample. The
+optional retained sidecar admits atomically at its interior start sample; rejection
+reports separately and the previous trajectories continue rendering. Aligned
+sample-zero scratch taps preserve DSP alignment while voice reads use the actual
+source offset. The existing DSP process contract accepts any positive frame count
+up to its prepared maximum; strategies retain state across one-frame calls, with
+normal bypass, fault and retirement handling. This path makes no speed claim.
+Static `Render` preserves ordinary block processing. Actual compiled-graph tests
+cover bus, send and real core gain output, block partition invariance, stale bindings,
+failed admission, immutable metadata and zero callback allocation/deallocation.
+Dedicated editor authoring UI remains AUD-009's responsibility.
 
 Advanced adaptive music and procedural modulation remain package or extension
 features. Adaptive-music product delivery is AUD-015 Post-1.0; the 1.0 core
@@ -1648,8 +1822,121 @@ cancellation concurrently. Provider failure or inconsistent progress discards th
 candidate block and closes admission. The host joins worker work before releasing
 the provider, and only the Audio control owner publishes prepared blocks or ring
 generations at the ADR-062 boundary. This contract neither performs file I/O nor
-invokes a codec from the callback; concrete codec providers and stream-ring
-publication are separate integration work.
+invokes a codec from the callback. `AudioStreamingService` owns bounded stream
+slots and preallocated decode/ring storage. The host supplies a package-generation
+opener keyed by a published `AssetId`; worker jobs open that generation, validate
+its exact decoder facts, and serially fill each ring. Control `Pump` schedules
+bounded jobs by declared priority until the lookahead is met. A single-consumer
+callback port reads only published frames and writes ADR-063 planar output,
+filling missing frames with positive-zero silence. The host detaches a callback
+port before retiring its stream generation; retirement cancels and joins worker
+work before releasing the decoder, package lease, and ring. Source providers
+honor worker cancellation and bounded I/O. Package selection and publication
+remain in Assets without authoring-file fallback.
+
+`MakeCookedAudioStreamSource` in the existing AudioCook contribution target supplies
+the concrete adapter for a host-pinned `FilesystemAssetProvider` or verified
+`AssetArchiveProvider`. Opening occurs inside the fill job and validates the AST
+envelope's identity, type, target and integrity followed by the existing Audio
+cooked inspector. The initial cooked codec is seekable little-endian PCM; the
+worker converts bounded blocks without invoking the source importer. Other cooked
+codecs remain explicit unsupported combinations. The provider must enforce its
+declared per-artifact ceiling before allocating. Stream admission reserves three
+times that ceiling for load, envelope and inspection peak memory in addition to
+ring/decode/scratch storage. This adapter retains the complete bounded cooked
+payload, not a file-range streaming cache. The archive/provider generation itself
+is host-owned and budgeted separately. Hosts link AudioCook explicitly for this
+adapter; AudioApi does not gain a dependency on cook/import code.
+
+One release/acquire cursor publication contains both the produced frame count and
+its terminal marker. The callback cannot observe final data without the matching
+EOF fact. Control retains original worker errors until retirement and projects
+coalesced underrun deltas at a caller-supplied sample-frame interval. Shutdown
+closes admission before cancellation; a join timeout retains storage and permits
+only retirement/shutdown retry. External decoder code is pinned by the source's
+owner lease through decoder destruction. Fixed owner/slot metadata and allocator
+overhead are outside payload byte reservations; no wall-time deadline qualification
+is implied by the deterministic storage and frame limits.
+
+The existing Foundation job boundary contains source-opener exceptions, including
+non-standard exceptions. A worker-owned return marker is read only after terminal
+job synchronization: an opener that did not return produces `audio.stream.read_failed`
+on control with the original scheduler error retained as its typed cause. An opener
+that returned a typed failure retains that failure unchanged. Cause construction
+and diagnostics stay on control; callbacks still only render available frames or
+positive-zero silence.
+
+Decoder publication and cancellation use a separate cross-atomic SC handshake;
+the ring retains its release/acquire guarantees within SC operations. Let P be the worker's SC
+`publishedDecoder` store, A its subsequent SC parent-token load, C control's SC
+cancellation request, and L control's subsequent SC decoder-pointer load. The
+Foundation token walks the job's immutable parent chain using SC loads. If A
+missed C and L missed P, the SC total order would require P < A < C < L < P,
+which is impossible. An already-cancelled child token also takes the worker's
+Cancel branch. Consequently either control calls the published decoder's Cancel,
+or the worker calls Cancel before entering Decode. A provider already blocked in
+Decode observes the decoder's private cancellation flag; it need not poll the
+parent token. These pointer operations happen only on control/worker lanes and
+remain lock-free. The pointer and decoder are retained until worker join, and
+callback ports must already be detached before reclamation. This proof relies on
+Foundation's SC cancellation contract; changing it requires reviewing this
+handshake, not just stress-testing one architecture.
+
+Streaming memory ownership and ordering audit:
+
+| State | Writer / reader | Required ordering and lifetime |
+|---|---|---|
+| Ring samples and combined producer/EOF cursor | Serialized fill worker / sole callback | Worker copies samples before its release publication; callback acquire-loads that exact cursor before reading. Partial reads advance only by available frames, so EOF never hides pending final samples. |
+| Consumer cursor and ring reuse | Sole callback / serialized fill worker | Callback finishes sample reads before release-storing consumption; worker acquire-loads consumption before overwriting reclaimed frames. Control occupancy is a bounded observational snapshot, not an allocation/reclamation authority. |
+| Stop and diagnostic counters | Control or sole callback / control and callback | SC stop publication retains release/acquire visibility. Counters have one callback writer and SC observational reads and writes; counter updates publish no ring storage or rich errors. |
+| Decoder pointer and cancellation | Worker and control | The SC handshake above applies; cooked PCM polls the session's SC private cancellation flag only on the worker, not the callback. |
+| Errors, decoder destruction and source lease | Control after terminal JobSystem synchronization | Rich errors never cross the callback; a missing/nonterminal completion snapshot retains storage. Retire requires host callback detachment and a bounded worker join before decoder release. Shutdown closes admission before stopping all streams and retains failed-join streams for retry. |
+
+Worker, control and callback streaming operations use explicit sequential
+consistency as a conservative policy. The worker's combined producer/EOF SC
+store retains release publication to the callback's SC load; its SC
+consumer-cursor load retains acquisition from the callback's SC store before
+ring reuse. The worker's own producer read
+and its stop checks are also SC. Control lookahead selection, stop publication,
+occupancy/diagnostic snapshots and underrun-report reads are SC observations,
+not coherent multi-atomic snapshots or reclamation authority. Their prior
+release/acquire guarantees are strengthened, not replaced by a new protocol.
+All atomics remain subject to the lock-free static assertions. The ten callback
+operations in Render/RecordUnderrun now use SC while retaining the same bounded
+access count. Decoder publication/cancellation, single-consumer ownership, the
+exact terminal cursor and bounded join retain their existing contracts. This
+policy does not establish a previously missing happens-before edge or claim
+unchanged timing; SC stores may add barriers on every participating lane.
+Device deadline qualification still requires measurements under the host's
+admitted workload and contention; functional stress tests do not prove latency.
+
+The public source factory remains ownership-taking by value, then moves that
+source through private construction without extra shared-lease copies. Const
+service access returns only const stream state; issuing the sole render port and
+advancing report cursors require mutable control access. `AudioStreamDecoderProvider`
+and `AudioStreamPackageSource` use Foundation's `BorrowedCallbackContext`, with
+exact private-type resolution in every operation before dereference or I/O.
+An empty context is rejected at admission; a mismatched type returns a typed
+operation error, and release must not destroy foreign state. This context adds
+no allocation, virtual dispatch or lifetime ownership. Decoder release
+responsibility still transfers only on successful admission, once after worker
+completion; the source's object and code lease remain pinned through that release.
+These in-process callbacks are not a native extension ABI. Provider construction
+and type resolution must remain within the same compiled provider identity.
+See [the callback-context migration](../../guides/audio-streaming-provider-migration.md)
+for changed signatures, affected callers and rejection/ownership coverage.
+
+The service's allocation constructor is publicly declared only to permit
+`std::make_unique`, but takes a private, non-aggregate `ConstructionKey` whose
+default constructor is accessible only to the service. `Create` validates source
+and limits before originating that key. The service remains final; neither
+ordinary construction nor an empty-brace key can bypass admission. Public-header
+consumer assertions compile this boundary independently of test-private headers.
+This follows the existing RuntimeHost/McpController factory authority pattern,
+without making invalid source/limits publicly constructible. Existing host callers
+continue using `Create` with ownership-taking source transfer; no caller migration
+or competing unchecked construction API is introduced. Allocation failures remain
+translated by Create, with partially constructed lease/slot members unwound by RAII.
 
 Underrun behavior:
 
@@ -1665,6 +1952,18 @@ decoded resident clips. Per-platform cook settings may override compression,
 sample rate, channel layout, and streaming thresholds.
 
 ## Editor Tooling
+
+`MixerAssetDocument` in `HoroEngine::EditorServices` is the editor owner of
+validated mixer authoring state, typed bus/route/effect transactions and bounded
+semantic undo/redo history. It reuses `MixerAssetSchema` validation/migration from
+AudioApi; Audio has no Editor dependency. Source snapshots are immutable owned
+captures correlated to host-issued document identity and monotonic revision.
+Dirty state follows semantic saved-state identity, while reload fences old
+captures and clears history. Source I/O, workspace routing and derived Audio
+compilation/publication remain explicit host/application operations. The document
+creates no device/backend and retains no preview, scene or callback state. See
+[Mixer document commands](../../guides/mixer-document-commands.md) for the additive
+consumer contract, lifecycle and migration path.
 
 [AUD-009](https://github.com/HoroCore/horo-engine/issues/615) delivers these
 workflows for M5 â€” 1.0. Middleware/procedural/capture-specific authoring surfaces

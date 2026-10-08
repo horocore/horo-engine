@@ -1,5 +1,7 @@
 #include "GameModuleHostDetail.h"
 #include "Horo/Gameplay/GameModuleHost.h"
+#include "Horo/Gameplay/GameplayPhysicsContext.h"
+#include "Horo/Runtime/Save/SaveErrors.h"
 
 #include <utility>
 
@@ -73,6 +75,36 @@ namespace Horo::Gameplay {
         return *impl_->registries.events;
     }
 
+    /** @copydoc LoadedGameModule::AcquirePersistence */
+    Result<std::shared_ptr<Runtime::GameplayPersistenceAdapter>> LoadedGameModule::AcquirePersistence(
+        const Runtime::SaveParticipantId &participant) const {
+        if (!impl_->runtimeLeaseAdmission.load(std::memory_order_acquire))
+            return Result<std::shared_ptr<Runtime::GameplayPersistenceAdapter>>::Failure(
+                MakeError(GameplayErrors::GameplayReloadRestartRequired));
+        for (const auto &registration : impl_->registries.persistence->registrations_) {
+            if (registration.descriptor.participant.participant == participant)
+                return Runtime::GameplayPersistenceAdapter::Create(registration.descriptor, registration.source, impl_);
+        }
+        return Result<std::shared_ptr<Runtime::GameplayPersistenceAdapter>>::Failure(
+            MakeError(Runtime::SaveErrors::ParticipantAdapterMissing));
+    }
+
+    /** @copydoc LoadedGameModule::AcquireInstalledPersistence */
+    Result<Runtime::GameplayPersistenceInstallation> LoadedGameModule::AcquireInstalledPersistence(
+        const Runtime::SaveParticipantId &participant) const {
+        auto adapter = AcquirePersistence(participant);
+        if (adapter.HasError())
+            return Result<Runtime::GameplayPersistenceInstallation>::Failure(adapter.ErrorValue());
+        std::shared_ptr<const std::atomic_bool> admission{impl_, &impl_->runtimeLeaseAdmission};
+        auto ownedAdapter = std::move(adapter).Value();
+        std::shared_ptr<const Runtime::GameplayPersistenceDescriptor> descriptor{ownedAdapter, &ownedAdapter->Descriptor()};
+        Runtime::GameplayPersistenceInstallation receipt{std::move(descriptor), std::move(ownedAdapter), std::move(admission),
+                                                         Cancellation()};
+        if (!receipt.CanUse())
+            return Result<Runtime::GameplayPersistenceInstallation>::Failure(MakeError(GameplayErrors::GameplayReloadRestartRequired));
+        return Result<Runtime::GameplayPersistenceInstallation>::Success(std::move(receipt));
+    }
+
     /** @copydoc LoadedGameModule::ActiveServices */
     std::span<const GameplayServiceId> LoadedGameModule::ActiveServices() const noexcept {
         return impl_->runtimeContext.activeServices;
@@ -88,9 +120,16 @@ namespace Horo::Gameplay {
         return impl_->runtimeContext.cancellation;
     }
 
+    /** @copydoc LoadedGameModule::PhysicsContext */
+    std::shared_ptr<const GameplayPhysicsContext> LoadedGameModule::PhysicsContext() const noexcept {
+        return impl_->physics;
+    }
+
     /** @copydoc LoadedGameModule::PrepareReload */
     Result<GameModuleReloadSnapshot> LoadedGameModule::PrepareReload() {  // NOSONAR(cpp:S5817) Mutates generation lifecycle.
         impl_->runtimeLeaseAdmission.store(false, std::memory_order_release);
+        if (impl_->physics)
+            impl_->physics->Revoke();
         if (impl_.use_count() != 1)
             return Result<GameModuleReloadSnapshot>::Failure(
                 MakeError(GameplayErrors::GameplayReloadRestartRequired, "A module-generation runtime is still active."));
@@ -105,4 +144,8 @@ namespace Horo::Gameplay {
 
     /** @copydoc GameModuleHost::GameModuleHost */
     GameModuleHost::GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities) : hostCapabilities_(std::move(hostCapabilities)) {}
+
+    /** @copydoc GameModuleHost::GameModuleHost */
+    GameModuleHost::GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics)
+        : hostCapabilities_(std::move(hostCapabilities)), physics_(std::move(physics)) {}
 }  // namespace Horo::Gameplay

@@ -3,8 +3,10 @@
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
 #include "Horo/Navigation/NavigationAssetSceneActivation.h"
 #include "Horo/Navigation/NavigationRuntimeQueues.h"
+#include "PublicationOperationId.h"
 #include "navigation/IncrementalBakeFixture.h"
 #include "navigation/NavMeshAssetTestFixtures.h"
+#include "navigation/NavigationContentPolicyFixture.h"
 #include "navigation/NavigationRuntimeTestFixtures.h"
 
 #include <algorithm>
@@ -21,19 +23,26 @@ namespace Horo::Navigation {
     namespace {
         /** @brief Execute the authoritative native producer and read its durable published generation. */
         [[nodiscard]] std::vector<std::uint8_t> BakeCanonicalContent(const std::filesystem::path &projectRoot) {
+            const auto canonicalRoot = std::filesystem::canonical(projectRoot);
             TestSupport::IncrementalBakeFixture input;
             OperationStore operations{8, 16};
             JobSystem bakeJobs{{.workerCount = 2, .maxQueuedJobs = 16, .maxRetainedTerminalJobs = 32}};
             Application::NavigationBakeServiceConfig config{.definition = Asset(),
                                                             .artifactType = Type(),
                                                             .target = Target(),
-                                                            .cacheRoot = projectRoot / "tile-cache",
-                                                            .targetRoot = projectRoot / "cook-output",
+                                                            .cacheRoot = canonicalRoot / "tile-cache",
+                                                            .targetRoot = canonicalRoot / "cook-output",
                                                             .builder = CreateRecastDetourNavigationMeshBuilder().Value(),
                                                             .files = std::make_shared<NativeDurableFileSystem>(),
                                                             .budget = {1, 1024ULL * 1024ULL * 1024ULL, 128U * 1024U * 1024U, 8,
-                                                                       1024ULL * 1024ULL * 1024ULL, Duration::FromMilliseconds(2000)}};
-            auto bake = Application::NavigationBakeService::Create(config, operations, bakeJobs).Value();
+                                                                       1024ULL * 1024ULL * 1024ULL, Duration::FromMilliseconds(2000)},
+                                                            .sourceAuthority =
+                                                                std::make_shared<Application::NavigationBakeSourceAuthority>(),
+                                                            .newOperationId = Horo::TestSupport::NewPublicationOperationId};
+            REQUIRE(config.sourceAuthority->UpdateCurrent(input.revisions, input.Observations()).HasValue());
+            auto created = Application::NavigationBakeService::Create(config, operations, bakeJobs);
+            REQUIRE(created.HasValue());
+            auto bake = std::move(created).Value();
             REQUIRE(bake->Submit({.input = input.Input(),
                                   .compatibility = input.compatibility,
                                   .tiles = input.Tiles(),
@@ -63,11 +72,11 @@ namespace Horo::Navigation {
         provider.Insert(Asset(), cooked);
         auto cache = std::move(Assets::AssetPayloadCache::Create(8, 4096)).Value();
         CancellationSource cancellation;
-        auto first = LoadNavMeshAsset(registry.Snapshot(), provider, Asset(), Target(), *cache, cancellation.Token());
+        auto first = LoadNavMeshAsset({registry.Snapshot(), provider}, Asset(), Target(), *cache, cancellation.Token());
         REQUIRE(first.HasValue());
         const auto envelope = Assets::DecodeCookedArtifact(cooked);
         provider.Insert(Asset(true), Envelope(envelope.Value().payload, Asset(true)));
-        auto second = LoadNavMeshAsset(registry.Snapshot(), provider, Asset(true), Target(), *cache, cancellation.Token());
+        auto second = LoadNavMeshAsset({registry.Snapshot(), provider}, Asset(true), Target(), *cache, cancellation.Token());
         REQUIRE(second.HasValue());
         REQUIRE(first.Value().tileBytes.front().SharesAllocationWith(second.Value().tileBytes.front()));
         REQUIRE(cache->Snapshot().residentEntries == 1);
@@ -77,7 +86,7 @@ namespace Horo::Navigation {
         REQUIRE(first.Value().cacheKeyDigest == envelope.Value().cacheKeyDigest);
         REQUIRE(first.Value().partitions.front().surface == Id<SurfaceId>(101));
         cancellation.RequestCancellation();
-        REQUIRE(LoadNavMeshAsset(registry.Snapshot(), provider, Asset(), Target(), *cache, cancellation.Token()).HasError());
+        REQUIRE(LoadNavMeshAsset({registry.Snapshot(), provider}, Asset(), Target(), *cache, cancellation.Token()).HasError());
     }
 
     TEST_CASE("Scene activation pins real Detour queries through eviction replacement and shutdown",
@@ -91,7 +100,7 @@ namespace Horo::Navigation {
         REQUIRE(harness.participant->ActiveAssetProvenance().front().id == Asset());
         REQUIRE(harness.participant->ActiveAssetProvenance().front().registryRevision == harness.registry.Snapshot().Revision());
         const auto charged = harness.cache->Snapshot().retainedPayloadBytes;
-        const auto digest = std::move(LoadNavMeshAsset(harness.registry.Snapshot(), harness.provider, Asset(), Target(), *harness.cache,
+        const auto digest = std::move(LoadNavMeshAsset({harness.registry.Snapshot(), harness.provider}, Asset(), Target(), *harness.cache,
                                                        harness.cancellation.Token()))
                                 .Value()
                                 .tileBytes.front()
@@ -277,8 +286,8 @@ namespace Horo::Navigation {
         Assets::FilesystemAssetProvider filesystem{project.directory};
         auto cache = std::move(Assets::AssetPayloadCache::Create(8, 4096)).Value();
         CancellationSource cancellation;
-        auto editor = LoadNavMeshAsset(registry.Snapshot(), filesystem, Asset(), Target(), *cache, cancellation.Token());
-        auto packaged = LoadNavMeshAsset(registry.Snapshot(), archive, Asset(), Target(), *cache, cancellation.Token());
+        auto editor = LoadNavMeshAsset({registry.Snapshot(), filesystem}, Asset(), Target(), *cache, cancellation.Token());
+        auto packaged = LoadNavMeshAsset({registry.Snapshot(), archive}, Asset(), Target(), *cache, cancellation.Token());
         REQUIRE(editor.HasValue());
         REQUIRE(packaged.HasValue());
         REQUIRE(editor.Value().id == packaged.Value().id);
@@ -434,5 +443,49 @@ namespace Horo::Navigation {
         REQUIRE(stale.HasError());
         REQUIRE(stale.ErrorValue().code.Value() == NavigationErrors::StaleSnapshot.code.Value());
         REQUIRE(harness.participant->Acquire().Value().Descriptor() == current.Descriptor());
+    }
+
+    TEST_CASE("Warm immutable tile cache cannot satisfy changed or revoked release expectations",
+              "[unit][navigation][navmesh_asset][content][cache]") {
+        auto cache = Assets::AssetPayloadCache::Create(8, 16384);
+        REQUIRE(cache.HasValue());
+        const auto set = TestSupport::EmptyContent();
+        const auto bytes = TestSupport::ContentEnvelope(set, Asset(), Target());
+        REQUIRE(set.provenance.has_value());
+        REQUIRE(set.provenance->projectProfile.has_value());
+        NavMeshAssetContentExpectation expected{Asset(), ComputeSha256(std::as_bytes(std::span{bytes})), set.provenance->compatibility,
+                                                *set.provenance->projectProfile};
+        const Assets::AssetDependency metadata{Asset(), Type()};
+        auto first = LoadNavMeshAsset(metadata, {1}, bytes, Target(), *cache.Value(), {}, &expected);
+        REQUIRE(first.HasValue());
+        REQUIRE(!first.Value().tileBytes.empty());
+        const auto resident = cache.Value()->Snapshot().residentEntries;
+        auto stale = expected;
+        stale.projectProfile = TestSupport::ContentProfile(18);
+        TestSupport::RequireError(LoadNavMeshAsset(metadata, {1}, bytes, Target(), *cache.Value(), {}, &stale),
+                                  NavigationErrors::NavMeshArtifactCorrupt);
+        CHECK(cache.Value()->Snapshot().residentEntries == resident);
+        stale = expected;
+        stale.compatibility.provider = Digest(99);
+        TestSupport::RequireError(LoadNavMeshAsset(metadata, {1}, bytes, Target(), *cache.Value(), {}, &stale),
+                                  NavigationErrors::NavMeshArtifactCorrupt);
+        CHECK(cache.Value()->Snapshot().residentEntries == resident);
+        stale = expected;
+        stale.id = Asset(true);
+        TestSupport::RequireError(LoadNavMeshAsset(metadata, {1}, bytes, Target(), *cache.Value(), {}, &stale),
+                                  NavigationErrors::NavMeshArtifactCorrupt);
+        CHECK(cache.Value()->Snapshot().residentEntries == resident);
+        auto changed = set;
+        changed.provenance->projectProfile = TestSupport::ContentProfile(18);
+        const auto changedBytes = TestSupport::ContentEnvelope(changed, Asset(), Target());
+        NavMeshAssetContentExpectation changedExpectation{Asset(), ComputeSha256(std::as_bytes(std::span{changedBytes})),
+                                                          changed.provenance->compatibility, *changed.provenance->projectProfile};
+        auto second = LoadNavMeshAsset(metadata, {1}, changedBytes, Target(), *cache.Value(), {}, &changedExpectation);
+        REQUIRE(second.HasValue());
+        REQUIRE(!second.Value().tileBytes.empty());
+        CHECK(first.Value().tileBytes.front().SharesAllocationWith(second.Value().tileBytes.front()));
+        CHECK(first.Value().cookedContentDigest != second.Value().cookedContentDigest);
+        CHECK_FALSE(first.Value().contentProvenance->projectProfile->MatchesAuthority(*second.Value().contentProvenance->projectProfile));
+        CHECK(cache.Value()->Snapshot().residentEntries == resident);
     }
 }  // namespace Horo::Navigation

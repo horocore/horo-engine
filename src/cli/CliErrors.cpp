@@ -1,5 +1,7 @@
 #include "Horo/Cli/CliErrors.h"
 
+#include <array>
+
 namespace Horo::Cli::CliErrors {
     namespace {
         const ErrorDomainId CliDomain{"horo.cli"};
@@ -184,4 +186,68 @@ namespace Horo::Cli::CliErrors {
                                                         .remediationHint = "Reduce progress or result output to the documented limit.",
                                                         .retryable = false,
                                                         .userActionable = true};
+    const ErrorCodeDescriptor HostFailure{.domain = CliDomain,
+                                          .code = ErrorCode{"cli.host_failure"},
+                                          .defaultSeverity = ErrorSeverity::Error,
+                                          .summary = "CLI host failed before completing the invocation.",
+                                          .remediationHint = "Inspect local diagnostics and retry the invocation.",
+                                          .retryable = false,
+                                          .userActionable = false};
+
+    namespace {
+        /** @brief Builds inert parser metadata with the original shared severity and remediation. */
+        ErrorCodeDescriptor ParserDiagnostic(const char *identity, const char *summary) {
+            return {.domain = CliDomain,
+                    .code = ErrorCode{identity},
+                    .defaultSeverity = ErrorSeverity::Error,
+                    .summary = summary,
+                    .remediationHint = "Check the declared command grammar."};
+        }
+
+        /** @brief Original parser diagnostic identities registered for canonical cross-host translation. */
+        const std::array<ErrorCodeDescriptor, 11> ParserDiagnosticDescriptors{{
+            ParserDiagnostic("cli.configuration_value_incompatible", "Configured value is incompatible with the command option."),
+            ParserDiagnostic("cli.option_required", "Required option is missing."),
+            ParserDiagnostic("cli.option_source_conflict", "Command option sources conflict."),
+            ParserDiagnostic("cli.option_unknown", "Unknown option."),
+            ParserDiagnostic("cli.option_value_invalid", "Option value is invalid."),
+            ParserDiagnostic("cli.option_value_missing", "Option requires a value."),
+            ParserDiagnostic("cli.path_normalization_failed", "Path input could not be normalized safely."),
+            ParserDiagnostic("cli.path_normalizer_unavailable", "Path input requires the host path-normalization adapter."),
+            ParserDiagnostic("cli.positional_required", "Required positional input is missing."),
+            ParserDiagnostic("cli.positional_unexpected", "Unexpected positional input."),
+            ParserDiagnostic("cli.stdin_malformed", "Standard input is malformed."),
+        }};
+    }  // namespace
+
+    /** @copydoc ErrorDomain */
+    ModuleErrorDomainDescriptor ErrorDomain() {
+        ModuleErrorDomainDescriptor domain{.id = CliDomain,
+                                           .descriptors = {&DescriptorInvalid,
+                                                           &RegistryCapacityExceeded,
+                                                           &CommandPathDuplicate,
+                                                           &OptionNameDuplicate,
+                                                           &OptionSchemaIncompatible,
+                                                           &OutputSchemaIncompatible,
+                                                           &CapabilityUnauthorized,
+                                                           &HostUnsupported,
+                                                           &ContractVersionIncompatible,
+                                                           &ParserPolicyInvalid,
+                                                           &CommandUnknown,
+                                                           &ParseFailed,
+                                                           &InputModeUnsupported,
+                                                           &InputCapacityExceeded,
+                                                           &InteractiveInputUnavailable,
+                                                           &DispatchRegistrationInvalid,
+                                                           &CommandUnavailable,
+                                                           &SideEffectUnauthorized,
+                                                           &ExecutionContextInvalid,
+                                                           &ExecutionCancelled,
+                                                           &ExecutionTimedOut,
+                                                           &ExecutionCapacityExceeded,
+                                                           &HostFailure}};
+        for (const auto &descriptor : ParserDiagnosticDescriptors)
+            domain.descriptors.push_back(&descriptor);
+        return domain;
+    }
 }  // namespace Horo::Cli::CliErrors

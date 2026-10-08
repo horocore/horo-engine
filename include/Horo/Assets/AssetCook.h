@@ -55,4 +55,9 @@ namespace Horo::Assets {
      * @param limits Size bounds checked during decoding.
      * @return Verified artifact or a typed malformed/hash-mismatch/unsupported error. */
     [[nodiscard]] Result<AssetCookArtifact> DecodeCookedArtifact(std::span<const std::uint8_t> bytes, const AssetCookLimits &limits = {});
+    /** @brief Decodes an immutable byte lease without aliasing it as an integer buffer.
+     * @param bytes Encoded artifact bytes. @param limits Size bounds checked during decoding.
+     * @return Verified artifact or a typed malformed/hash-mismatch/unsupported error.
+     */
+    [[nodiscard]] Result<AssetCookArtifact> DecodeCookedArtifactBytes(std::span<const std::byte> bytes, const AssetCookLimits &limits = {});
 }  // namespace Horo::Assets

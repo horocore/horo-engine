@@ -77,6 +77,7 @@ namespace Horo::Extensions::Discovery {
         std::string packageId;
         std::string rootId;
         std::filesystem::path relativePath;
+        std::vector<std::string> providerPackageIds; /**< Already resolved package-provider identities; empty for independent packages. */
     };
 
     /** @brief Canonical package location retaining the source identity for downstream diagnostics. */
@@ -85,6 +86,7 @@ namespace Horo::Extensions::Discovery {
         std::string rootId;
         std::filesystem::path canonicalPath;
         RootKind kind;
+        std::vector<std::string> providerPackageIds; /**< Copied package-authority dependency order inputs, not manifest inference. */
     };
 
     /** @brief Discovery snapshot; packages are ordered by package ID, never filesystem enumeration. */

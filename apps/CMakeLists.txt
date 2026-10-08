@@ -10,18 +10,25 @@ target_link_libraries(HoroHostModuleComposition PUBLIC HoroEngine::Foundation Ho
 add_library(HoroNetworkProductHost STATIC
     common/NetworkProductHost.cpp
     common/HeadlessNetworkServices.cpp
+    common/GameplayWorldComposition.cpp
 )
 target_compile_features(HoroNetworkProductHost PUBLIC cxx_std_20)
 target_include_directories(HoroNetworkProductHost PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/common)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime HoroEngine::RuntimeScene
-    HoroEngine::Physics HoroEngine::Runtime)
+    HoroEngine::Physics HoroEngine::Runtime HoroEngine::GameplayModuleHost HoroEngine::GameplayLua
+    HoroEngine::GameplayPhysicsIntegration)
 
 # The terminal/headless composition remains available without GUI or GPU targets.
 add_executable(horo-engine
     horo-engine/main.cpp
+    horo-engine/cli_host/CliHost.cpp
+    horo-engine/cli_host/CliHostCommands.cpp
     horo-engine/NetworkProductLaunch.cpp
 )
 target_compile_features(horo-engine PRIVATE cxx_std_20)
+if(MINGW)
+    target_link_options(horo-engine PRIVATE -municode)
+endif()
 target_compile_definitions(horo-engine PRIVATE
     HORO_ENGINE_VERSION_STRING="${PROJECT_VERSION}"
     HORO_BUILD_CONFIGURATION="$<CONFIG>"
@@ -29,7 +36,10 @@ target_compile_definitions(horo-engine PRIVATE
     HORO_PRODUCT_HAS_GNS=$<BOOL:${HORO_BUILD_NETWORK_GNS}>
 )
 target_link_libraries(horo-engine PRIVATE HoroEngine::Application HoroEngine::Extensions HoroHostModuleComposition
-    HoroNetworkProductHost)
+    HoroNetworkProductHost
+    HoroEngine::Runtime
+    HoroEngine::CliHost
+)
 if(HORO_BUILD_NETWORK_GNS)
     target_link_libraries(horo-engine PRIVATE HoroEngine::NetworkTransportGNS)
 endif()

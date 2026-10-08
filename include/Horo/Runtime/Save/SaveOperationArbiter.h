@@ -136,6 +136,11 @@ namespace Horo::Runtime {
          * @return Success only when cancellation publishes the immutable terminal result.
          */
         [[nodiscard]] Result<void> ObserveCancellation(OperationId operation);
+        /** @brief Polls caller, parent and deadline cancellation while active work awaits a safe point.
+         * @param operation Active identity. @return True when cancellation terminalized it, false otherwise, or invalid identity.
+         * Preserves the winning cancellation reason; never crosses a commit gate or waits for work.
+         */
+        [[nodiscard]] Result<bool> PollCancellation(OperationId operation);
         /** @brief Copies one retained immutable projection. @param operation Identity. @return Empty for unknown/acknowledged identity. */
         [[nodiscard]] std::optional<SaveArbiterSnapshot> Snapshot(OperationId operation) const;
         /** @brief Releases one terminal retained record. @param operation Identity. @return True only when terminal state was erased. */
