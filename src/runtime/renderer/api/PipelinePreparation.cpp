@@ -32,17 +32,17 @@ namespace Horo::Render {
                 if (manifest.pipelines[previous].key == entry.key)
                     return false;
             }
-            if (!entry.fallback)
+            if (!entry.fallback.has_value())
                 return true;
             if (entry.required || *entry.fallback >= manifest.pipelines.size() || *entry.fallback == index)
                 return false;
             const auto &fallback = manifest.pipelines[*entry.fallback];
-            return fallback.cookedArtifactAvailable && !fallback.fallback;
+            return fallback.cookedArtifactAvailable && !fallback.fallback.has_value();
         }
     }  // namespace
 
     /** @copydoc PipelinePreparation::PipelinePreparation */
-    PipelinePreparation::PipelinePreparation(PipelineUsageManifest manifest, PipelinePreparationBudget budget,
+    PipelinePreparation::PipelinePreparation(PipelineUsageManifest manifest, const PipelinePreparationBudget &budget,
                                              CancellationToken cancellation)
         : manifest_(std::move(manifest)), budget_(budget), entries_(manifest_.pipelines.size()), cancellation_(std::move(cancellation)) {
         for (std::size_t index = 0; index < entries_.size(); ++index) {
@@ -53,7 +53,7 @@ namespace Horo::Render {
 
     /** @copydoc PipelinePreparation::Prepare */
     Result<PipelinePreparation> PipelinePreparation::Prepare(PipelineUsageManifest manifest, const PipelineCompilationMode mode,
-                                                             PipelinePreparationBudget budget, CancellationToken cancellation) {
+                                                             const PipelinePreparationBudget &budget, CancellationToken cancellation) {
         if (cancellation.IsCancellationRequested())
             return Result<PipelinePreparation>::Failure(MakeError(PipelinePreparationErrors::Cancelled));
         if (!ValidBudget(budget))
@@ -76,6 +76,7 @@ namespace Horo::Render {
 
     /** @copydoc PipelinePreparation::Dispatch */
     Result<std::vector<PipelinePreparationWork>> PipelinePreparation::Dispatch() {
+        using enum State;
         if (cancellation_.IsCancellationRequested())
             Close();
         if (closed_ || cancellation_.IsCancellationRequested())
@@ -90,18 +91,17 @@ namespace Horo::Render {
             work.reserve(count);
             for (std::size_t index = 0; index < entries_.size() && work.size() < count; ++index) {
                 const auto state = entries_[index].state;
-                if (state == State::SourcePending || state == State::NativePending)
-                    work.push_back({manifest_.generation, index, manifest_.pipelines[index].key,
-                                    state == State::SourcePending ? PipelinePreparationAction::CompileSource
-                                                                  : PipelinePreparationAction::RealizeCooked});
+                if (state == SourcePending || state == NativePending)
+                    work.emplace_back(manifest_.generation, index, manifest_.pipelines[index].key,
+                                      state == SourcePending ? PipelinePreparationAction::CompileSource
+                                                             : PipelinePreparationAction::RealizeCooked);
             }
         } catch (const std::bad_alloc &) {
             return Result<std::vector<PipelinePreparationWork>>::Failure(MakeError(PipelinePreparationErrors::AllocationFailed));
         }
         // Publish admission only after the whole batch allocation succeeds.
         for (const auto &item : work)
-            entries_[item.index].state =
-                item.action == PipelinePreparationAction::CompileSource ? State::SourceInFlight : State::NativeInFlight;
+            entries_[item.index].state = item.action == PipelinePreparationAction::CompileSource ? SourceInFlight : NativeInFlight;
         inFlight_ += work.size();
         return Result<std::vector<PipelinePreparationWork>>::Success(std::move(work));
     }
@@ -109,6 +109,7 @@ namespace Horo::Render {
     /** @copydoc PipelinePreparation::Complete */
     Result<void> PipelinePreparation::Complete(const PipelinePreparationWork &work, Result<void> outcome,
                                                const std::uint64_t durationMicroseconds) {
+        using enum State;
         if (closed_ || cancellation_.IsCancellationRequested())
             return Result<void>::Failure(MakeError(cancellation_.IsCancellationRequested() ? PipelinePreparationErrors::Cancelled
                                                                                            : PipelinePreparationErrors::Closed));
@@ -116,8 +117,8 @@ namespace Horo::Render {
             (work.action != PipelinePreparationAction::CompileSource && work.action != PipelinePreparationAction::RealizeCooked))
             return Result<void>::Failure(MakeError(PipelinePreparationErrors::StaleCompletion));
         auto &entry = entries_[work.index];
-        const auto expected = work.action == PipelinePreparationAction::CompileSource ? State::SourceInFlight : State::NativeInFlight;
-        if (entry.state != expected)
+        if (const auto expected = work.action == PipelinePreparationAction::CompileSource ? SourceInFlight : NativeInFlight;
+            entry.state != expected)
             return Result<void>::Failure(MakeError(PipelinePreparationErrors::StaleCompletion));
         --inFlight_;
         SaturatingAdd(metrics_.completedWork, 1);
@@ -127,10 +128,10 @@ namespace Horo::Render {
             SaturatingAdd(metrics_.hitches, 1);
         if (outcome.HasError()) {
             entry.error = std::move(outcome).ErrorValue();
-            entry.state = State::Failed;
+            entry.state = Failed;
             SaturatingAdd(metrics_.failedWork, 1);
         } else {
-            entry.state = work.action == PipelinePreparationAction::CompileSource ? State::NativePending : State::Ready;
+            entry.state = work.action == PipelinePreparationAction::CompileSource ? NativePending : Ready;
         }
         return Result<void>::Success();
     }
@@ -144,8 +145,7 @@ namespace Horo::Render {
             return Result<PipelineBindingSelection>::Failure(MakeError(PipelinePreparationErrors::InvalidManifest));
         if (entries_[index].state == State::Ready)
             return Result<PipelineBindingSelection>::Success({manifest_.pipelines[index].key, false});
-        const auto fallback = manifest_.pipelines[index].fallback;
-        if (fallback && entries_[*fallback].state == State::Ready) {
+        if (const auto fallback = manifest_.pipelines[index].fallback; fallback.has_value() && entries_[*fallback].state == State::Ready) {
             SaturatingAdd(metrics_.fallbackBindings, 1);
             return Result<PipelineBindingSelection>::Success({manifest_.pipelines[*fallback].key, true});
         }

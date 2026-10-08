@@ -92,12 +92,12 @@ namespace Horo::Render {
          * @brief Validates and owns one finite usage manifest without ambient side effects.
          * @param manifest Exact admitted entries and host operation generation.
          * @param mode Explicit packaged or development source-compilation policy.
-         * @param budget Finite storage, concurrency and estimated dispatch-time envelope.
+         * @param budget Borrowed finite storage, concurrency and dispatch envelope; copied into owned state during this call.
          * @param cancellation Immutable host operation token observed by admission, completion and binding.
          * @return Owned coordinator or typed manifest/policy/allocation failure.
          */
         [[nodiscard]] static Result<PipelinePreparation> Prepare(PipelineUsageManifest manifest, PipelineCompilationMode mode,
-                                                                 PipelinePreparationBudget budget = {},
+                                                                 const PipelinePreparationBudget &budget = {},
                                                                  CancellationToken cancellation = {});
         /**
          * @brief Admits a bounded batch; an empty batch means no eligible work or full concurrency capacity.
@@ -141,7 +141,7 @@ namespace Horo::Render {
         };
 
         /** @brief Initializes validated load-time storage and the initial source/native stages. */
-        PipelinePreparation(PipelineUsageManifest manifest, PipelinePreparationBudget budget, CancellationToken cancellation);
+        PipelinePreparation(PipelineUsageManifest manifest, const PipelinePreparationBudget &budget, CancellationToken cancellation);
         PipelineUsageManifest manifest_;
         PipelinePreparationBudget budget_;
         std::vector<Entry> entries_;

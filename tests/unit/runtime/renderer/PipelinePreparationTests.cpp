@@ -20,7 +20,7 @@ namespace {
     }
 
     PipelinePreparation Plan(std::vector<PipelineUsage> usages, const PipelineCompilationMode mode = PipelineCompilationMode::Packaged,
-                             const PipelinePreparationBudget budget = {}, Horo::CancellationToken cancellation = {}) {
+                             const PipelinePreparationBudget &budget = {}, Horo::CancellationToken cancellation = {}) {
         auto plan = PipelinePreparation::Prepare({17, std::move(usages)}, mode, budget, std::move(cancellation));
         REQUIRE(plan.HasValue());
         return std::move(plan).Value();
