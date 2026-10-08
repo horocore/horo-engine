@@ -413,6 +413,25 @@ Step down:
 - if a valid ground is found, snap to it
 - preserve momentum if the drop is significant
 
+The CHR-002.4 implementation uses `maximumStepHeightMeters` as the maximum
+physical rise and downward snap, excluding the maintained skin gap. A zero limit
+disables ascent and drop snapping while retaining touching-floor classification.
+A blocked lower-capsule contact first verifies touching walkable support, then
+casts upward, forward and downward. Eligibility covers the authored maximum rise
+as well as the lower hemisphere; the final actual surface elevation still must fit
+the height limit. A rounded capsule edge can certify the nearest contact against a
+walkable point no farther than one capsule radius ahead only if a bounded forward
+cast is clear and the point has the same body, shape, subshape and surface plane.
+Lookahead supplies only that plane normal; it never extends the requested horizontal
+endpoint or changes the actual contact point/distance. Missing, steep, foreign or
+non-coplanar support rejects the step. A complete step already owns its checked
+support, so ordinary post-movement snap cannot overwrite it with the rounded-edge
+collision normal. The complete actual landing capsule must pass overlap clearance. Rejected candidates leave ordinary movement
+unchanged; rounded lower contacts cannot manufacture uphill projection after a
+failed step. All casts and clearance probes consume the shared fixed-tick query
+budget and propagate malformed evidence, capacity and lifecycle failure before
+publication. No native Character controller or unbounded retry participates.
+
 Step behavior is configurable:
 
 - `maxStepHeight`
