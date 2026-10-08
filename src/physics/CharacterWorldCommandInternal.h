@@ -35,11 +35,18 @@ namespace Horo::Character::Detail {
             return Result<void>::Failure(MakeError(CharacterErrors::HandleStale));
         if (request.tick <= impl.closedTick.load() || request.sequence <= impl.closedSequences[slot])
             return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
+        if (request.filterChange) {
+            if (const auto valid = ValidateCharacterCollisionSelectors(*request.filterChange, impl.descriptor.physicsWorld);
+                valid.HasError())
+                return valid;
+        }
         const auto record = impl.controllers.Resolve(request.controller);
         if (record.HasError())
             return Result<void>::Failure(record.ErrorValue());
-        if (!record.Value()->spawned && (request.shapeChange.has_value() || request.stance != CharacterStanceIntent::Keep))
-            return Result<void>::Failure(MakeError(CharacterErrors::InvalidState, "Shape changes require a spawned controller."));
+        if (!record.Value()->spawned &&
+            (request.shapeChange.has_value() || request.stance != CharacterStanceIntent::Keep || request.filterChange.has_value()))
+            return Result<void>::Failure(
+                MakeError(CharacterErrors::InvalidState, "Shape and filter changes require a spawned controller."));
         if (record.Value()->reservedTeleportTick == request.tick || record.Value()->lastTeleportTick == request.tick)
             return Result<void>::Failure(
                 MakeError(CharacterErrors::CommandOrderInvalid, "Move and teleport cannot target one Character tick."));
@@ -180,12 +187,13 @@ namespace Horo::Character::Detail {
     [[nodiscard]] Result<CharacterMovementResult> ResolveMovementResult(auto &impl, const CharacterMovementRequest &command,
                                                                         const CharacterTransformPublication &previous,
                                                                         const CharacterFixedTickInput &input,
-                                                                        const CharacterControllerDescriptor &descriptor) {
+                                                                        const CharacterControllerDescriptor &descriptor,
+                                                                        const Math::Vec3 previousGravityVelocity) {
         Result<CharacterMovementResult> resolved = [&]() -> Result<CharacterMovementResult> {
             if (input.observer.movementResult)
                 return input.observer.movementResult(input.observer.context, command, previous);
             if (input.query.sweep)
-                return BuildCapsuleSweepMovementResult(impl, command, previous, input, descriptor);
+                return BuildCapsuleSweepMovementResult(impl, command, previous, input, descriptor, previousGravityVelocity);
             return BuildBaselineMovementResult(impl, command, previous, input);
         }();
         if (resolved.HasError())
@@ -202,27 +210,41 @@ namespace Horo::Character::Detail {
         return FinalizeMovementResult(impl, std::move(result), previous.position);
     }
 
+    /** @brief Copied committed movement inputs; no borrow into controller storage escapes its lock. */
+    struct CharacterControllerMotionInput final {
+        CharacterTransformPublication publication;
+        Physics::PhysicsCapsuleShape capsule;
+        CharacterStance stance{CharacterStance::Standing};
+        Math::Vec3 gravityVelocity{};
+    };
+
     /** @brief Stages shape clearance and resolves movement with the candidate capsule before any publication. */
     [[nodiscard]] Result<CharacterMovementResult> ResolveControllerMovement(auto &impl, const CharacterMovementRequest &command,
                                                                             const CharacterFixedTickInput &input,
-                                                                            const CharacterTransformPublication &previous,
-                                                                            CharacterControllerDescriptor descriptor,
-                                                                            Physics::PhysicsCapsuleShape capsule,
-                                                                            const CharacterStance stance) {
+                                                                            const CharacterControllerMotionInput &previous,
+                                                                            CharacterControllerDescriptor descriptor) {
+        Physics::PhysicsCapsuleShape capsule = previous.capsule;
+        if (command.filterChange)
+            descriptor.selectors = *command.filterChange;
         std::optional<CharacterShapeChangeResult> shapeChange;
         bool geometryChanged{};
+        auto candidate = previous.publication;
         if (command.shapeChange.has_value() || command.stance != CharacterStanceIntent::Keep) {
-            const auto shape = ResolveShapeChange(impl, command, input, previous, descriptor, capsule, stance);
+            const auto shape = ResolveShapeChange(impl, command, input, previous.publication, descriptor, capsule, previous.stance);
             if (shape.HasError())
                 return Result<CharacterMovementResult>::Failure(shape.ErrorValue());
             shapeChange = shape.Value();
             geometryChanged = !SameCapsule(capsule, shapeChange->effectiveCapsule);
+            if (geometryChanged)
+                candidate.position =
+                    BottomPreservingPosition(previous.publication.position, descriptor.up, capsule, shapeChange->effectiveCapsule);
             capsule = shapeChange->effectiveCapsule;
         }
         descriptor.capsule = capsule;
         // The crouch profile is authored against standing geometry, not the temporary query capsule.
         descriptor.crouchedCapsule.reset();
-        const auto resolved = ResolveMovementResult(impl, command, previous, input, descriptor);
+        const auto resolved =
+            ResolveMovementResult(impl, command, candidate, input, descriptor, geometryChanged ? Math::Vec3{} : previous.gravityVelocity);
         if (resolved.HasError())
             return Result<CharacterMovementResult>::Failure(resolved.ErrorValue());
         CharacterMovementResult movement = std::move(resolved).Value();
@@ -230,7 +252,7 @@ namespace Horo::Character::Detail {
         if (geometryChanged && !input.query.sweep) {
             ClearGroundEvidence(movement, descriptor.up);
         }
-        return Result<CharacterMovementResult>::Success(std::move(movement));
+        return FinalizeMovementResult(impl, std::move(movement), previous.publication.position);
     }
 
     /** @brief Identifies the final replacement for one controller in sorted command scratch. */
@@ -261,6 +283,7 @@ namespace Horo::Character::Detail {
                                                         CharacterTransformAuthority::CharacterController};
         CharacterLocomotionSnapshot snapshot{command.controller, input.tick,     nextStateRevision, movement,
                                              publication,        record.capsule, record.stance};
+        snapshot.selectors = command.filterChange.value_or(record.descriptor.selectors);
         if (movement.shapeChange.has_value()) {
             snapshot.capsule = movement.shapeChange->effectiveCapsule;
             snapshot.stance = movement.shapeChange->effectiveStance;
@@ -278,10 +301,8 @@ namespace Horo::Character::Detail {
             const CharacterMovementRequest &command = impl.fastPath.CommandScratch()[index];
             if (!IsFinalCommand(impl.fastPath.CommandScratch(), index))
                 continue;
-            CharacterTransformPublication previous;
+            CharacterControllerMotionInput previous;
             CharacterControllerDescriptor descriptor;
-            Physics::PhysicsCapsuleShape capsule;
-            CharacterStance stance{};
             bool spawned{};
             {
                 const auto registryLock = impl.synchronization.LockRegistry();
@@ -289,17 +310,19 @@ namespace Horo::Character::Detail {
                 if (record.HasError())
                     return Result<std::uint32_t>::Failure(record.ErrorValue());
                 descriptor = record.Value()->descriptor;
-                previous = record.Value()->publication;
+                previous.publication = record.Value()->publication;
+                if (record.Value()->locomotion.has_value())
+                    previous.gravityVelocity = record.Value()->locomotion->movement.gravityVelocityMetersPerSecond;
                 spawned = record.Value()->spawned;
-                capsule = record.Value()->capsule;
-                stance = record.Value()->stance;
+                previous.capsule = record.Value()->capsule;
+                previous.stance = record.Value()->stance;
             }
             if (input.observer.movement)
                 input.observer.movement(input.observer.context, command);
             if (impl.state.load() != CharacterWorldState::Active)
                 return Result<std::uint32_t>::Failure(MakeError(CharacterErrors::InvalidState));
             if (spawned) {
-                const auto resolved = ResolveControllerMovement(impl, command, input, previous, descriptor, capsule, stance);
+                const auto resolved = ResolveControllerMovement(impl, command, input, previous, descriptor);
                 if (resolved.HasError())
                     return Result<std::uint32_t>::Failure(resolved.ErrorValue());
                 CharacterMovementResult movement = std::move(resolved).Value();
@@ -357,6 +380,8 @@ namespace Horo::Character::Detail {
         if (snapshot.HasError())
             return Result<void>::Failure(snapshot.ErrorValue());
         CharacterLocomotionSnapshot committed = std::move(snapshot).Value();
+        if (command.filterChange)
+            record.Value()->descriptor.selectors = *command.filterChange;
         record.Value()->capsule = committed.capsule;
         record.Value()->stance = committed.stance;
         record.Value()->publication = committed.transform;

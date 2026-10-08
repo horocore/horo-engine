@@ -1,6 +1,7 @@
 #include "Horo/Physics/PhysicsQuery.h"
 
 #include "Horo/Physics/PhysicsErrors.h"
+#include "Horo/Physics/PhysicsWorldSettings.h"
 
 #include <algorithm>
 #include <cmath>
@@ -47,6 +48,30 @@ namespace Horo::Physics {
             return ValidatePhysicsPose(query.pose);
         }
 
+        /** @brief Validates transient capsule dimensions, owned up basis and local position before native construction. */
+        [[nodiscard]] Result<void> ValidateGeometry(const PhysicsCapsuleOverlapQuery &query, const PhysicsWorldId) {
+            if (const auto shape = ValidatePhysicsShapeDescriptor(PhysicsShapeDescriptor{query.capsule}); shape.HasError())
+                return shape;
+            if (!Math::IsFinite(query.position) || !IsUnitDirection(query.up) ||
+                std::abs(query.position.x) > MaximumPhysicsLocalHalfExtentMeters ||
+                std::abs(query.position.y) > MaximumPhysicsLocalHalfExtentMeters ||
+                std::abs(query.position.z) > MaximumPhysicsLocalHalfExtentMeters ||
+                static_cast<double>(query.capsule.radiusMeters) + query.capsule.cylindricalHalfHeightMeters >
+                    MaximumPhysicsLocalHalfExtentMeters)
+                return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates bounded inline capsule motion. */
+        [[nodiscard]] Result<void> ValidateGeometry(const PhysicsCapsuleSweepQuery &query, const PhysicsWorldId world) {
+            if (const auto capsule = ValidateGeometry(PhysicsCapsuleOverlapQuery{query.capsule, query.position, query.up}, world);
+                capsule.HasError())
+                return capsule;
+            if (!IsUnitDirection(query.direction) || !std::isfinite(query.maximumDistanceMeters) || query.maximumDistanceMeters <= 0)
+                return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
+            return Result<void>::Success();
+        }
+
         /** @brief Validates one point in the active origin frame. */
         [[nodiscard]] Result<void> ValidateGeometry(const PhysicsPointQuery &query, const PhysicsWorldId) {
             if (!Math::IsFinite(query.point))
@@ -88,6 +113,8 @@ namespace Horo::Physics {
                 return ray->maximumDistanceMeters;
             if (const auto *sweep = std::get_if<PhysicsSweepQuery>(&geometry))
                 return sweep->maximumDistanceMeters;
+            if (const auto *capsule = std::get_if<PhysicsCapsuleSweepQuery>(&geometry))
+                return capsule->maximumDistanceMeters;
             return std::nullopt;
         }
 
@@ -144,6 +171,9 @@ namespace Horo::Physics {
                 return body;
             if (const auto shape = ValidatePhysicsHandleOwner(hit.shape, descriptor.world); shape.HasError())
                 return shape;
+            if ((descriptor.filter.blockingOnly && hit.response != PhysicsQueryResponse::Block) ||
+                (descriptor.filter.excludedBody && hit.body == *descriptor.filter.excludedBody))
+                return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Hit violates the admitted movement filter."));
             if (!hit.layer.IsValid() || !hit.profile.IsValid() || hit.channel != descriptor.filter.channel)
                 return Result<void>::Failure(
                     MakeError(PhysicsErrors::DescriptorInvalid, "Hit filter identity evidence is incomplete or mismatched."));
@@ -275,6 +305,8 @@ namespace Horo::Physics {
 
     /** @copydoc ValidatePhysicsQueryHit */
     Result<void> ValidatePhysicsQueryHit(const PhysicsQueryHit &hit, const PhysicsQueryDescriptor &descriptor) {
+        if (!std::isfinite(hit.penetrationDepthMeters) || hit.penetrationDepthMeters < 0)
+            return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
         if (const auto identity = ValidateHitIdentity(hit, descriptor); identity.HasError())
             return identity;
         if (hit.filterSchemaGeneration == 0)
@@ -302,12 +334,12 @@ namespace Horo::Physics {
         const auto rightSubshape = SubshapeValue(right);
         const auto leftNormal = NormalKey(left);
         const auto rightNormal = NormalKey(right);
-        const auto leftKey =
-            std::tie(left.distanceMeters, leftResponse, left.body.slot.index, left.body.slot.generation, left.shape.slot.index,
-                     left.shape.slot.generation, leftSubshape, left.position.x, left.position.y, left.position.z, leftNormal);
-        const auto rightKey =
-            std::tie(right.distanceMeters, rightResponse, right.body.slot.index, right.body.slot.generation, right.shape.slot.index,
-                     right.shape.slot.generation, rightSubshape, right.position.x, right.position.y, right.position.z, rightNormal);
+        const auto leftKey = std::tie(left.distanceMeters, leftResponse, left.body.slot.index, left.body.slot.generation,
+                                      left.shape.slot.index, left.shape.slot.generation, leftSubshape, left.position.x, left.position.y,
+                                      left.position.z, leftNormal, left.penetrationDepthMeters);
+        const auto rightKey = std::tie(right.distanceMeters, rightResponse, right.body.slot.index, right.body.slot.generation,
+                                       right.shape.slot.index, right.shape.slot.generation, rightSubshape, right.position.x,
+                                       right.position.y, right.position.z, rightNormal, right.penetrationDepthMeters);
         if (const auto ordering = leftKey <=> rightKey; ordering != 0)
             return ordering < 0;
         if (left.material.has_value() != right.material.has_value())

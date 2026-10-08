@@ -29,18 +29,24 @@ def targets(name: str) -> set[str]:
 
 def test_windows_group_preserves_every_previously_built_target() -> None:
     assert targets("HORO_CI_WINDOWS_TARGETS") == targets("HORO_CI_AUDIO_TARGETS") | {
+        "HoroNetworkDebuggerTests", "HoroNetworkDebuggerPublicHeaderConsumer",
+        "HoroTerrainAuthoringTests", "HoroTerrainAuthoringPublicHeaderConsumer",
         "HoroCliCommandRegistryTests", "HoroPlatformTests", "HoroUpdateZipPackageProducerTests",
         "HoroCliOutputPublicHeaderConsumer", "HoroCliProductionOutputContract",
+        "HoroCliMcpServeTests",
         "HoroVfxApiTests", "HoroCinematicModelTests", "HoroCinematicRuntimeTests",
+        "HoroFractureDocumentTests", "HoroFractureDocumentPublicHeaderConsumer",
         "HoroCinematicPropertyIntegrationTests", "HoroCinematicModelPublicHeaderConsumer",
         "HoroCinematicRuntimePublicHeaderConsumer", "HoroEditorServicesPublicHeaderConsumer",
         "HoroCameraCutRuntimeTests", "HoroCameraCutPublicHeaderConsumer",
         "HoroPrefabTests", "HoroPrefabSceneExpansionTests", "HoroPrefabSceneExpansionContractConsumer",
         "HoroAssetRegistryTests", "HoroInputTests", "HoroInputSdlTests", "HoroRuntimeUiInputTests",
         "HoroInputPublicHeaderConsumer", "HoroExtensionManagerTests", "HoroMcpSessionTests",
+        "HoroEditorActivityBoundaryTests", "HoroExtensionsPublicHeaderConsumer",
         "HoroMcpSessionPublicHeaderConsumer", "HoroRuntimeSaveRootResolverTests",
         "HoroRuntimeSaveFilesystemLockTests", "HoroRuntimeSaveSlotCommitTransactionTests",
-        "HoroRuntimePublicHeaderConsumer",
+        "HoroRuntimePublicHeaderConsumer", "HoroMixerDocumentTests",
+        "HoroRuntimeSaveEventTriggersTests", "HoroSaveEventTriggersPublicHeaderConsumer",
     }
     for workflow in ("prefab-foundation-windows", "extension-abi-windows", "mcp-session-windows", "save-path-windows"):
         assert not (ROOT / f".github/workflows/{workflow}.yml").exists()
@@ -65,6 +71,19 @@ def test_windows_suites_run_independently_and_remain_blocking() -> None:
                  "HoroExtensionManagerTests", "HoroExtensionAbiConformanceCliSupported",
                  "HoroExtensionAbiConformanceCliIncompatible", "HoroExtensionAbiConformanceCliRequiresModule"):
         assert name in SUITES
+
+
+def test_fracture_consumer_extends_the_owned_header_boundary_target() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    ownership = (ROOT / "cmake/HoroPublicHeaderOwnership.cmake").read_text(encoding="utf-8")
+    target = "HoroFractureDocumentPublicHeaderConsumer"
+    assert "horo_configure_target_header_boundary(HoroFractureDocument PUBLIC_HEADERS" in ownership
+    assert tests_cmake.index("horo_add_public_header_consumer_targets()") < tests_cmake.index(f"target_sources({target}")
+    assert tests_cmake.count(f"target_sources({target}") == 1
+    assert f"add_executable({target}" not in tests_cmake
+    assert f"add_library({target}" not in tests_cmake
+    assert f"add_test(NAME {target}" not in tests_cmake
+    assert target in targets("HORO_CI_WINDOWS_TARGETS")
 
 
 def test_audio_keeps_both_modes_and_all_platforms() -> None:
@@ -118,3 +137,9 @@ def test_required_checks_and_sdl_composition_are_preserved() -> None:
     assert "actions/checkout" not in cleanup
     assert "contents: read" not in cleanup
     assert "await cancelClosedPrRuns" in cleanup
+
+
+def test_installed_manifest_source_keeps_sonar_coverage() -> None:
+    collector = (ROOT / ".github/scripts/collect_sonar_coverage.sh").read_text(encoding="utf-8")
+    assert '"$workspace/apps/HoroEditor/app/ConfiguredEditorUpdateManifestSource.cpp"' in collector
+    assert "HoroConfiguredEditorUpdateBackendTests" in targets("HORO_SONAR_EDITOR_TARGETS")

@@ -25,6 +25,10 @@ namespace Horo::Extensions {
         EditorSurfaceDescriptor descriptor;
         EditorSurfaceProviderKey provider;
         std::vector<std::uint8_t> opaqueState;
+        bool activityUserVisible{true};
+        std::optional<EditorActivityPlacement> activityPlacement;
+        EditorActivityPresentation activity;
+        std::optional<EditorUiForm> form;
         bool desiredOpen{};
         bool desiredFocused{};
         std::atomic_bool registered{true};
@@ -48,6 +52,7 @@ namespace Horo::Extensions {
         std::vector<std::shared_ptr<EditorSurfaceState>> surfaces;
         std::vector<PendingSurfaceState> pending;
         std::vector<ProviderStatusEntry> providers;
+        std::uint64_t revision{1};
         bool shutdown{};
         EditorSurfaceRegistryMutex mutex;
 
@@ -57,6 +62,7 @@ namespace Horo::Extensions {
     };
 
     namespace EditorSurfaceRegistryInternal {
+        [[nodiscard]] EditorActivityPlacement ActivityPlacementOf(const EditorSurfaceState &surface) noexcept;
         [[nodiscard]] bool IsValidProviderKey(const EditorSurfaceProviderKey &provider);
         [[nodiscard]] EditorSurfaceProviderKey ProviderKey(const EditorSurfaceProviderIdentity &provider);
         [[nodiscard]] EditorSurfaceProviderKey ProviderKey(const EditorSurfaceDescriptor &descriptor);

@@ -8,26 +8,33 @@ namespace Horo::Network {
     namespace {
         class MeasuringConsumer final : public INetworkTransportEventConsumer {
         public:
-            MeasuringConsumer(INetworkTransportEventConsumer &consumer, NetworkMetrics &metrics) noexcept
-                : consumer_(consumer), metrics_(metrics) {}
+            MeasuringConsumer(INetworkTransportEventConsumer &consumer, NetworkMetrics &metrics, NetworkDebugger *debugger,
+                              const NetworkDiagnosticSource &source) noexcept
+                : consumer_(consumer), metrics_(metrics), debugger_(debugger), source_(source) {}
 
             void Consume(NetworkTransportEvent event) noexcept override {
                 if (event.kind == NetworkTransportEventKind::PacketReceived)
                     (void)metrics_.RecordMessage(NetworkMetricDirection::Received, NetworkMetricCategory::Transport, event.payload.size());
                 if (event.kind == NetworkTransportEventKind::Failed)
                     (void)metrics_.RecordFailure(NetworkMetricFailure::Transport);
+                if (debugger_ && event.connection.IsValid())
+                    (void)debugger_->Observe(source_, NetworkConnectionRecord{event.connection, event.kind, event.payload.size()});
                 consumer_.Consume(std::move(event));
             }
 
         private:
             INetworkTransportEventConsumer &consumer_;
             NetworkMetrics &metrics_;
+            NetworkDebugger *debugger_;
+            NetworkDiagnosticSource source_;
         };
     }  // namespace
 
     /** @copydoc NetworkMetricTransport::NetworkMetricTransport */
-    NetworkMetricTransport::NetworkMetricTransport(std::unique_ptr<INetworkTransport> backend, NetworkMetrics &metrics) noexcept
-        : backend_(std::move(backend)), metrics_(metrics) {}
+    NetworkMetricTransport::NetworkMetricTransport(std::unique_ptr<INetworkTransport> backend, NetworkMetrics &metrics,
+                                                   NetworkDebugger *debugger) noexcept
+        : backend_(std::move(backend)), metrics_(metrics), debugger_(debugger),
+          source_(debugger ? debugger->Source() : NetworkDiagnosticSource{}) {}
 
     /** @copydoc NetworkMetricTransport::Initialize */
     Result<void> NetworkMetricTransport::Initialize(const NetworkTransportConfig &config) {
@@ -81,7 +88,7 @@ namespace Horo::Network {
 
     /** @copydoc NetworkMetricTransport::PollEvents */
     Result<std::size_t> NetworkMetricTransport::PollEvents(INetworkTransportEventConsumer &consumer) {
-        MeasuringConsumer measuring{consumer, metrics_};
+        MeasuringConsumer measuring{consumer, metrics_, debugger_, source_};
         auto result = backend_->PollEvents(measuring);
         if (result.HasError())
             (void)metrics_.RecordFailure(NetworkMetricFailure::Transport);

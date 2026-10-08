@@ -14,6 +14,11 @@ namespace Horo::Runtime {
         return scene_ != nullptr && structuralRevision_ == scene_->structuralRevision_;
     }
 
+    /** @copydoc RuntimeSceneView::StructuralRevision */
+    std::uint64_t RuntimeSceneView::StructuralRevision() const noexcept {
+        return IsCurrent() ? structuralRevision_ : 0;
+    }
+
     /** @copydoc RuntimeSceneView::RuntimeId */
     SceneRuntimeId RuntimeSceneView::RuntimeId() const noexcept {
         return scene_ ? scene_->runtimeId_ : SceneRuntimeId{};
@@ -59,6 +64,21 @@ namespace Horo::Runtime {
                                      : std::span<const ResolvedGroupPhysicsBodyReference>{},
                                  value.groupResources ? std::span<const RuntimeGroupAssetLease>{*value.groupResources}
                                                       : std::span<const RuntimeGroupAssetLease>{}};
+    }
+
+    /** @copydoc RuntimeSceneView::FindBaseline */
+    std::optional<SceneBaselineAttachmentView> RuntimeSceneView::FindBaseline(const SceneDefinitionId id) const noexcept {
+        if (!IsCurrent())
+            return std::nullopt;
+        const auto found = std::ranges::find(scene_->storage_.baselines, id, &RuntimeScene::BaselineAttachment::id);
+        if (found == scene_->storage_.baselines.end())
+            return std::nullopt;
+        return SceneBaselineAttachmentView{found->id, found->revision, found->entities, *found->resources, found->ownership.get()};
+    }
+
+    /** @copydoc RuntimeSceneView::BaselineCount */
+    std::size_t RuntimeSceneView::BaselineCount() const noexcept {
+        return IsCurrent() ? scene_->storage_.baselines.size() : 0;
     }
 
     /** @copydoc RuntimeSceneView::Find */

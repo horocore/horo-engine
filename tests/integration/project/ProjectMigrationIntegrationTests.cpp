@@ -1,5 +1,6 @@
 #include "../../support/project/ProjectMigrationFailingFilesystem.h"
 #include "Horo/Application/ProjectCompatibility.h"
+#include "Horo/Application/ProjectMigrationCatalog.h"
 #include "Horo/Editor/ProjectMigrationTransaction.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Editor/ProjectOpenService.h"
@@ -11,8 +12,12 @@
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <condition_variable>
 #include <fstream>
 #include <iterator>
+#include <memory>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <vector>
 
@@ -25,21 +30,81 @@ namespace {
     constexpr auto ProductionDefinitionId = "core.project_settings.compression_defaults";
     constexpr auto AuthoringDefinitionId = "core.authoring.navigation_network";
 
+    /** @brief Parks the owned dispatcher after JSONL flush, outside ingestion locks, until capture ends. */
+    class MigrationDispatchGate final : public Telemetry::ISink {
+    public:
+        void Export(const Telemetry::Record &, const Telemetry::InstrumentDescriptor *) override {
+            // JSONL remains the sole capture authority; this sink controls only dispatcher scheduling.
+        }
+
+        void Flush() override {
+            std::unique_lock lock(mutex_);
+            paused_ = true;
+            changed_.notify_all();
+            if (!changed_.wait_for(lock, std::chrono::seconds{60}, [this] {
+                return released_;
+            }))
+                expired_ = true;
+        }
+
+        /** @brief Acknowledges actual periodic dispatch entry; no startup-record admission or timing assumption is needed. */
+        [[nodiscard]] bool WaitUntilPaused() {
+            std::unique_lock lock(mutex_);
+            return changed_.wait_for(lock, std::chrono::seconds{5}, [this] {
+                return paused_;
+            }) && !expired_;
+        }
+
+        /** @brief Releases present and future flush calls, including assertion-unwind teardown. */
+        [[nodiscard]] bool Release() {
+            std::lock_guard lock(mutex_);
+            released_ = true;
+            changed_.notify_all();
+            return !expired_;
+        }
+
+    private:
+        std::mutex mutex_;
+        std::condition_variable changed_;
+        bool paused_{};
+        bool released_{};
+        bool expired_{};
+    };
+
+    /** @brief Owns logger lifetime and a bounded queue-lock-free capture window; never replaces persisted evidence. */
     class MigrationLogCapture final {
     public:
         explicit MigrationLogCapture(const std::filesystem::path &root) : path_(root / "migration-integration-test.jsonl") {
             Log::Logger::Shutdown();
-            Log::Logger::Init(root.string(), "migration-integration-test");
+            Log::LoggerConfiguration configuration{.logDirectory = root,
+                                                   .baseName = "migration-integration-test",
+                                                   .sinkFlushInterval = std::chrono::milliseconds{1},
+                                                   .additionalSinks = {gate_}};
+            ready_ = Log::Logger::Init(configuration) && gate_->WaitUntilPaused();
             Log::Logger::SetLevel(Log::Level::Debug);
+            initialDrops_ = Log::Logger::Statistics().droppedRecords;
         }
 
+        MigrationLogCapture(const MigrationLogCapture &) = delete;
+        MigrationLogCapture &operator=(const MigrationLogCapture &) = delete;
+        MigrationLogCapture(MigrationLogCapture &&) = delete;
+        MigrationLogCapture &operator=(MigrationLogCapture &&) = delete;
+
         ~MigrationLogCapture() {
+            static_cast<void>(gate_->Release());
             static_cast<void>(Log::Logger::Flush());
             Log::Logger::Shutdown();
         }
 
+        [[nodiscard]] bool Ready() const noexcept {
+            return ready_;
+        }
+
         [[nodiscard]] std::vector<nlohmann::json> Records() const {
-            static_cast<void>(Log::Logger::Flush());
+            REQUIRE(ready_);
+            REQUIRE(gate_->Release());
+            REQUIRE(Log::Logger::Flush());
+            REQUIRE(Log::Logger::Statistics().droppedRecords == initialDrops_);
             std::ifstream input(path_, std::ios::binary);
             REQUIRE((input.good()));
             std::vector<nlohmann::json> records;
@@ -51,6 +116,9 @@ namespace {
 
     private:
         std::filesystem::path path_;
+        const std::shared_ptr<MigrationDispatchGate> gate_{std::make_shared<MigrationDispatchGate>()};
+        bool ready_{};
+        std::uint64_t initialDrops_{};
     };
 
     [[nodiscard]] bool HasLogCategory(const std::vector<nlohmann::json> &records, const std::string_view category) {
@@ -117,6 +185,18 @@ namespace {
         return PumpProjectOpenToTerminal(backend.service, started.Value().Id());
     }
 
+    /** @brief Leave a failed publication pending and return its recovery operation identity. */
+    [[nodiscard]] std::string PreparePendingMigration(const ProjectMigrationTestFixture &project,
+                                                      MigrationFailure::FailingFilesystem &files, const std::string &originalRoot) {
+        BackendProjectOpen backend(&files);
+        REQUIRE(OpenProject(backend, project).outcome != ProjectOpenOutcome::ReadyToActivate);
+        REQUIRE(project.ReadProjectBytes() == originalRoot);
+        const auto recovery = backend.transactions.InspectPendingRecovery(project.Root());
+        REQUIRE(recovery.action == MigrationRecoveryAction::ResumePublish);
+        REQUIRE(recovery.operationId.has_value());
+        return *recovery.operationId;
+    }
+
     void VerifyMigratedPrefabDocuments(const ProjectMigrationTestFixture &project) {
         const auto prefab = ReadJson(project.Root() / "assets/prefabs/player.prefab");
         REQUIRE((prefab.at("projectVersion") == "0.1.0"));
@@ -126,6 +206,28 @@ namespace {
         const auto scene = ReadJson(project.Root() / "assets/scenes/main.horo");
         REQUIRE((scene.at("prefabInstances").front().at("sourceAsset") == "00112233-4455-6677-8899-aabbccddeeff"));
         REQUIRE_FALSE((scene.at("prefabInstances").front().contains("sourcePath")));
+    }
+
+    /** @brief Verify the recorded definition identities and immutable catalog hash. */
+    void VerifyMigrationReceipt(const ProjectMigrationTestFixture &project) {
+        const auto history = project.ReadHistoryJson();
+        REQUIRE((history.at("receipts").size() == 1));
+        REQUIRE((history.at("receipts").front().at("definitions").size() == 2));
+        REQUIRE((history.at("receipts").front().at("definitions").front().at("id") == ProductionDefinitionId));
+        REQUIRE((history.at("receipts").front().at("definitions").back().at("id") == AuthoringDefinitionId));
+        const auto catalog = BuildBuiltInProjectMigrationCatalog();
+        REQUIRE(catalog.HasValue());
+        const auto definition = std::ranges::find(catalog.Value(), std::string{ProductionDefinitionId}, [](const auto &entry) {
+            return entry.id.value;
+        });
+        REQUIRE(definition != catalog.Value().end());
+        constexpr std::string_view digits = "0123456789abcdef";
+        std::string definitionHash = "sha256:";
+        for (const auto byte : definition->hash.bytes) {
+            definitionHash.push_back(digits[byte >> 4]);
+            definitionHash.push_back(digits[byte & 15]);
+        }
+        REQUIRE(history.at("receipts").front().at("definitions").front().at("hash") == definitionHash);
     }
 
     void VerifyMigrationLogs(const std::vector<nlohmann::json> &records, const ProjectMigrationTestFixture &project,
@@ -179,6 +281,7 @@ TEST_CASE("Legacy 0.0.1 project migrates through immutable 0.1.0 to 0.2.0 throug
     REQUIRE((ComputeTestSha256("abc") == "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
     ProjectMigrationTestFixture project;
     MigrationLogCapture logs(project.LogRoot());
+    REQUIRE(logs.Ready());
     BackendProjectOpen backend;
 
     const auto preflight = backend.preflight.Inspect(project.Root());
@@ -206,11 +309,7 @@ TEST_CASE("Legacy 0.0.1 project migrates through immutable 0.1.0 to 0.2.0 throug
 
     VerifyMigratedPrefabDocuments(project);
 
-    const auto history = project.ReadHistoryJson();
-    REQUIRE((history.at("receipts").size() == 1));
-    REQUIRE((history.at("receipts").front().at("definitions").size() == 2));
-    REQUIRE((history.at("receipts").front().at("definitions").front().at("id") == ProductionDefinitionId));
-    REQUIRE((history.at("receipts").front().at("definitions").back().at("id") == AuthoringDefinitionId));
+    VerifyMigrationReceipt(project);
 
     const auto activeMigrationRoot = project.Root() / ".horo/local/migration";
     REQUIRE((!std::filesystem::exists(activeMigrationRoot) || std::filesystem::is_empty(activeMigrationRoot)));
@@ -234,6 +333,7 @@ TEST_CASE("Legacy 0.0.1 project migrates through immutable 0.1.0 to 0.2.0 throug
 TEST_CASE("Invalid legacy project fails without authoritative mutation", "[integration][project][migration]") {
     ProjectMigrationTestFixture project;
     MigrationLogCapture logs(project.LogRoot());
+    REQUIRE(logs.Ready());
     auto invalid = project.ReadProjectJson();
     invalid["settings"]["assetCompression"] = "brotli";
     {
@@ -336,17 +436,15 @@ TEST_CASE("0.2 production migration recovery survives host restart without rewri
     const auto scenePath = project.Root() / "assets/scenes/main.horo";
     const auto originalPrefab = ReadBytes(prefabPath);
     const auto originalScene = ReadBytes(scenePath);
+    const auto sidecarPath = project.Root() / "assets/prefabs/player.prefab.horo";
+    const auto originalSidecar = ReadBytes(sidecarPath);
+    // Derived registry/cook generations belong to their hosts and must not enter authored migration publication.
+    const auto registryPath = project.Root() / ".horo/cache/registry.snapshot";
+    std::filesystem::create_directories(registryPath.parent_path());
+    WriteText(registryPath, "prior-valid-registry-generation");
+    const auto registry = ReadBytes(registryPath);
     MigrationFailure::FailingFilesystem files(project.Root());
-    std::string operation;
-    {
-        BackendProjectOpen backend(&files);
-        REQUIRE(OpenProject(backend, project).outcome != ProjectOpenOutcome::ReadyToActivate);
-        REQUIRE(project.ReadProjectBytes() == originalRoot);
-        const auto recovery = backend.transactions.InspectPendingRecovery(project.Root());
-        REQUIRE(recovery.action == MigrationRecoveryAction::ResumePublish);
-        REQUIRE(recovery.operationId.has_value());
-        operation = *recovery.operationId;
-    }
+    const auto operation = PreparePendingMigration(project, files, originalRoot);
     const auto recoverAfterRestart = [&](const MigrationRecoveryAction expectedAction) {
         files.failRoot = false;
         BackendProjectOpen restarted(&files);
@@ -356,6 +454,8 @@ TEST_CASE("0.2 production migration recovery survives host restart without rewri
     };
     SECTION("resume verified target after restart") {
         recoverAfterRestart(MigrationRecoveryAction::ResumePublish);
+        REQUIRE(ReadBytes(sidecarPath) == originalSidecar);
+        REQUIRE(ReadBytes(registryPath) == registry);
         REQUIRE(project.ReadProjectJson()["horoVersion"] == "0.2.0");
         REQUIRE(project.ReadProjectJson()["migrationHistoryHead"] == ComputeTestSha256(project.ReadHistoryBytes()));
         REQUIRE(project.ReadHistoryJson()["receipts"].front()["definitions"].back()["id"] == AuthoringDefinitionId);
@@ -368,6 +468,8 @@ TEST_CASE("0.2 production migration recovery survives host restart without rewri
         REQUIRE(project.ReadProjectBytes() == originalRoot);
         REQUIRE(ReadBytes(prefabPath) == originalPrefab);
         REQUIRE(ReadBytes(scenePath) == originalScene);
+        REQUIRE(ReadBytes(sidecarPath) == originalSidecar);
+        REQUIRE(ReadBytes(registryPath) == registry);
         REQUIRE_FALSE(std::filesystem::exists(project.Root() / ".horo/migration_history.json"));
     }
 }

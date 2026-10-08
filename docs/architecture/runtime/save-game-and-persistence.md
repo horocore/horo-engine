@@ -112,16 +112,27 @@ typed incompatibility. Runtime state never writes back to SceneDocument/cooked a
 `SavedSceneBootstrapDescriptor` is the typed admission record for that first step. It
 binds logical world/base-scene identity, persisted cooked asset type evidence, exact scene
 definition/revision/content digest, an optional stable authored spawn anchor, and
-slot-generation/source-world transition provenance. Preparation converts the saved
-base-scene UUID bytes directly to `AssetId`, resolves only an immutable
-`AssetRegistrySnapshot`, and returns an owned `PreparedSavedSceneBootstrap`; source
-or metadata paths are not accepted as inputs. The host supplies the authoritative
-scene asset type separately, so an untrusted save cannot approve a different registry
-record by changing its own expected-type field. Missing content, type/revision/digest
-changes, and missing spawn anchors reject before the existing
-`RuntimeSceneService::QueuePreparation` path receives work. Successful preparation
-owns the immutable authored defaults that later participant restore applies overrides
-to; publication remains at the normal scene lifecycle commit boundary.
+slot-generation/source-world transition provenance. Content reconciliation converts
+the saved base-scene UUID bytes directly to `AssetId` and admits its actual
+provider-loaded cooked envelope from an immutable verified mounted selection.
+`AssetRegistrySnapshot` authoring presence is not installed cooked availability.
+Preparation requires privately issued `ReconciledSaveContent` and an explicit host
+decoder receiving the admitted owned envelope. The host supplies the authoritative
+scene asset type separately; changing a save's expected type cannot approve another
+cooked type. Missing required content, type/revision/digest changes, unsupported
+decoders and missing spawn anchors reject before world preparation. Admission is
+revalidated before the existing Scene queue and aggregate transfer. Successful
+preparation owns authored defaults; publication remains at the normal lifecycle
+commit boundary. Shipping cooked-scene decoder and aggregate application save
+composition are not supplied by this backend contract.
+
+Content-aware queueing issues a private Scene-owned retained publication receipt.
+Only the actual aggregate transfer supplies its SceneRuntimeId and dataset projection;
+ordinary same-definition scenes cannot bind that receipt. Native installation evidence
+is privately issued by the actual loaded module and pins its immutable declaration,
+adapter and revocable native generation. Owner-thread admission precedes callbacks;
+accepted safe-point captures instead seal immutable source/composition facts so
+worker serialization never reads live Scene or installation controls.
 
 The Horo Scene adapter owns persistent entity existence, authored/spawn identity,
 tombstones, hierarchy/ownership, stable reference remaps and explicitly assigned core
@@ -323,6 +334,48 @@ can take priority but cannot silently clear pending autosave. Stop/session repla
 invalidates the old intent; the host reports cancellation or explicitly schedules a
 new-session checkpoint. Autosave ring rotation advances only after durable success;
 a failed save never consumes the last good ring entry.
+
+`SaveEventTriggers` is the additive owner-thread event adapter for SAV-005.6.
+A host copies an immutable allowlist of at most 64 product-issued trigger IDs,
+typed payload requirements, Auto/Checkpoint modes, safe logical targets and
+Continue/Block transition-failure policy. Publishers supply only an ID, monotonic
+sequence, generation and a bounded gameplay/milestone/project/transition payload;
+paths and target selection are absent from that contract. Registrations cannot
+publish Manual/Quick slots or bypass namespace, catalog capacity, generation CAS,
+product eligibility, cooldown or confirmation policy. A fixed registered target
+is chosen by the host's catalog policy; ring selection/rotation remains a separate
+host responsibility and advances only on durable success. Recompose registrations
+at a quiescent session boundary to change allowed targets.
+
+One pending intent survives competing arbiter work. Equivalent rapid events
+coalesce only when cooked policy permits it and return the original effective
+correlation; distinct busy intents are explicitly rejected rather than silently
+lost or queued without bound. Receipts retain one effective event per registration;
+older monotonic sequences cannot replay work. Callers keep the returned handle for
+terminal observation after the bounded receipt is replaced. Cooldown is shared by
+all triggers for a mode, so a second publisher cannot bypass it.
+
+BeforeTransition payloads capture the exact source scene/registry incarnation;
+the transition owner waits asynchronously for durable completion before applying
+the scene change. AfterTransition payloads capture the activated destination and
+hold transition finalization; Block denotes an explicit failure state and never
+an automatic rollback. Either failure or cancellation applies the registered
+Continue/Block policy and preserves its original typed cause. No timer-time state
+or live scene pointer is retained. A transition to the wrong incarnation before
+capture fails visibly. Session replacement closes and recreates the dispatcher.
+
+Migration for event publishers: replace direct storage calls with Submit, retain
+the effective correlation, and poll Receipt/DecideSaveTransition. Host composition
+calls CommitAtSafePoint only inside CommitDeferredLifecycleChanges and forwards
+its immutable handoff with the existing handle. The adapter reserves the existing
+safe-point coordinator's exact-generation capture fence. The host capture executor
+polls cancellation, calls Revalidate under its mutation lease, uses the existing
+capture barrier, and advances the arbiter to Encoding only after a coherent cut.
+Workers receive the same correlation and expected generation; the host enforces
+storage CAS, publication, terminal acknowledgement and lifecycle-fence retirement.
+Close admission on the owner before destroying dependencies; admitted workers
+remain host-owned. There is no independent event bus, operation store or worker
+pipeline, and timer/manual producer contracts are unchanged.
 
 The host registers capture and restore publication **inside**
 CommitDeferredLifecycleChanges, after pending structural changes are resolved and
@@ -540,7 +593,15 @@ codec inventory declares supported levels 1–9 and no dictionary capability. Wr
 policy retains metadata and small/ineffective chunks raw, with explicit required
 codec failure rather than silent fallback. Per-chunk stored and decoded lengths,
 expansion ratio and total decode work are checked before output allocation. Unknown
-required codec IDs fail as a typed compatibility error. The reader verifies the finalized envelope
+required codec IDs fail as a typed compatibility error. Only container v2 with
+semantic save schema 2 may retain an unsupported codec on a chunk whose actual
+manifest owner is optional. Metadata, v1, schema 1 and required owners still reject
+unsupported codecs. The public directory validator remains supported-codec-only;
+this exception is issued by the bounded reader after parsing the actual manifest.
+Unsupported selection always fails without decoding. Content admission additionally
+requires the authenticated canonical layout to classify that chunk as opaque and
+verify the exact stored bytes; structural retention alone grants no activation or
+semantic compatibility authority. The reader verifies the finalized envelope
 hash first, then uses the existing metadata and chunk-directory validators and
 returns only an immutable detached view. Selected chunks now return owned decoded
 bytes (including v1 raw selections) rather than a borrowed archive span; callers
@@ -871,6 +932,14 @@ commit gate: its own readiness cannot trigger early automatic scene activation w
 a required gameplay participant is still Pending. A host lacking that integration
 rejects composite restore rather than applying the scene first.
 
+`SceneRestoreBundle` supplies the Scene-owned implementation through
+`QueuePreparationWithRestore`. It uses the original staged restore transaction's
+scoped aggregate publication gate. Archive/session composition supplies validated
+source receipts and live generation authority; reference-bearing prepared owners
+consume the resolved context after all identity allocation and state application.
+The [reference-fixup migration](../../migrations/HORO-1437_restore_reference_fixups.md)
+records the owning targets, compatibility behavior, bounds and required regressions.
+
 At CommitDeferredLifecycleChanges, under the exclusive owner mutation boundary,
 revalidate the operation cancellation gate, expected session/scene incarnation,
 source/archive and participant/asset registry revisions, and all Prepared acknowledgements.
@@ -996,6 +1065,39 @@ logical-slot and `SlotGenerationId` values. Display names and timestamps never s
 codecs, resolve assets, establish causality or participate in logical-state identity.
 The header also records the producing `ProductSaveCompatibilityVersion` as policy
 provenance, never as a participant codec selector.
+
+### Content-aware semantic schema 2
+
+The content reconciliation writer emits semantic `SaveSchemaVersion` 2 while
+preserving container versions 1/2 and independent participant versions. Its canonical
+root keeps domain `HoroSave.CanonicalState.v1` and encodes explicit UInt32 version 2,
+stable project/world/base-scene UUIDs, a dataset sequence qualified by real prepared
+composition, and sorted owner/schema/record tuples. The implemented no-dataset path
+requires privately sealed `Absent` projections and rejects unqualified or unmapped
+PersistentWorld owners before publication; unrelated Gameplay/SlotPlayer owners
+remain supported. Schema 1 is admitted only by explicit trusted legacy policy and
+its hash is never reused after a changed capture.
+
+A compatible cooked substitution changes physical installation resolution only.
+The original logical base-scene/asset identity and expected source digest remain
+in the required declaration and accepted capture header. Every later admission
+reapplies the explicit typed project mapping against the actual provider envelope;
+capture does not silently migrate persistent identities. Declared schema-1 inputs
+also enforce this policy rather than bypassing it through legacy baseline lookup.
+
+Required owner `horo.save.scene.canonical.v2`, participant schema 1, reserved record
+`2d576609-77ae-4fb2-bf4a-9e7b63cbc002` stores complete version-1 canonical layout.
+Every directory record appears once, including the layout itself as Known. Tag 1
+hashes exact supported canonical payload bytes. Tag 2 hashes a closed tuple of codec,
+stored/decoded lengths, alignment, decoded digest and exact stored bytes without
+asserting decoded semantics. Required owners cannot be opaque. The authenticated
+layout persists across releases recognizing an optional owner or codec; that
+recognition alone cannot reinterpret its stored representation. Required content
+requirements remain separately decoded and reconciled, so opaque tags cannot bypass
+module/content admission. Missing/duplicate/extra/conflicting/version-mismatched
+layout or a source canonical hash mismatch rejects before host callbacks.
+The exact bounded wire tuples, ordering, reserved declaration identity and caller
+migration are defined in [the content reconciliation contract](../../migrations/HORO-1439_content_reconciliation.md).
 
 The inert SaveMigrationRegistry has three distinct step kinds:
 
@@ -1240,6 +1342,46 @@ its mutation lease; a view check alone is never commit authority. The public hea
 is owned by `HoroRuntime` in the header-ownership registry. Existing catalog/storage
 callers need no migration; presentation adapters should replace retained catalog or
 storage objects with this immutable view and command preconditions.
+
+### Manual, quick-save and load command admission
+
+`SaveCommands` is the owner-thread gameplay/script command adapter over the existing
+session `SaveOperationArbiter`. The host supplies trusted namespace binding, runtime
+revision/activity/authority, cooked product policy, a bounded catalog and exact-generation
+compatibility/integrity assessments. Requests cannot supply those authority facts.
+Manual save and slot load name opaque slots and capture their exact generation;
+all requests carry namespace/binding, catalog and runtime revisions. Rejected admission
+leaves the arbiter unchanged. Loading requires a Direct or MigrationAvailable assessment
+and Verified or VerificationRequired integrity; archive verification and migration are
+still mandatory in the existing load pipeline.
+
+Cooked Quick policy already requires ReplaceSingle with one retained logical slot.
+Both quick commands resolve the host's reserved `quickSlot`, independent of timestamps,
+display names or catalog ordering. A missing quick generation permits quick save and
+rejects quick load. Manual save cannot write the reserved quick slot or reclassify
+another slot kind, and new manual slots must fit the cooked category capacity.
+
+Confirmation returns a typed exact target and no operation handle. UI adapters own
+prompt wording and interaction. A confirmed retry preserves the original revisions
+and expected target generation; it cannot follow an overwrite or namespace/session
+change. At most one nonterminal user command is retained: identical repeated input
+returns its original handle and cancellation/deadline, while other user requests or
+existing arbiter work return `save.operation.in_progress`. Product cooldown is measured
+from admission using the host's monotonic clock and never accumulates delayed requests.
+
+The host calls `Revalidate` under its mutation lease before dispatch/capture/load and
+publication, then carries the exact expected generation into the existing slot CAS.
+Changed authority, eligibility, binding, revision, kind or assessment rejects dispatch;
+the host publishes the failure/cancellation through the arbiter. This adapter does no
+I/O, capture, callbacks, worker scheduling or blocking. The host still owns barrier,
+archive, storage, restore, shutdown and terminal acknowledgement. Close the command
+adapter before settling the shared arbiter. Borrowed host facts/arbiter outlive the
+adapter; recreate it for a replacement runtime session.
+
+The public header is assigned to `HoroRuntime` with a dedicated public-header consumer.
+This additive command contract changes no archive format or existing storage/capture API;
+new adapters should submit typed commands rather than admitting arbitrary user intents
+directly to the arbiter. Existing host producers retain their explicit composition path.
 
 ### Physical mapping and safety
 
@@ -1655,3 +1797,14 @@ and regression coverage.
 - [ADR-115](../../adr/115-cloud-save-authority-revision-and-conflict-policy.md): Local/cloud authority, provider CAS revisions, offline lineage and conflict preservation.
 - [ADR-116](../../adr/116-save-data-threat-model-and-trust-policy.md): Save-source trust classification, bounded admission, tool capabilities, credentials and profile policy.
 - [Application Security](../security/application-security.md): Trust and untrusted-input boundaries.
+
+Schema-2 opaque preservation uses `ValidatedSaveSceneCanonicalPreservation`, an
+owned, non-fabricable Save authority minted only after authenticating the entire
+required canonical layout and state hash. Borrowed-reader storage is rejected;
+accepted proof values pin immutable archive backing. Raw hash/copy work is charged
+on the shared reader ledger before materialization. Owner recognition in a later
+release never grants a decoder for an authenticated Opaque record. Required and
+Known records keep actual supported decode/hash verification; the generic reader
+inspection and round-trip APIs remain strict. Content reconciliation and re-save
+use the same qualified source/candidate path and compare exact stored bytes and
+directory metadata. This path never permits dropping retained optional records.

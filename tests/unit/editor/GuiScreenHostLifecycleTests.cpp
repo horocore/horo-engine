@@ -1,19 +1,32 @@
+#include "EditorActivityPackageSupport.h"
 #include "Horo/Editor/EditorConfiguration.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorModalHost.h"
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorSettingsStore.h"
+#include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Editor/ProjectCreationService.h"
+#include "Horo/Editor/SettingsModal.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
+#include "Horo/Extensions/EditorActivityHost.h"
+#include "Horo/Extensions/ExtensionInventory.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "SecurityTestSupport.h"
 #include "editor/project_model/RendererAvailability.h"
+#include "editor/update/UpdateExperienceSession.h"
 
+#include <algorithm>
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+#include <chrono>
 #include <memory>
+#include <thread>
+#include <type_traits>
 
 namespace Horo::Editor::Theme {
     struct Fonts;
@@ -33,6 +46,11 @@ namespace {
     public:
         explicit RecordingScreen(ScreenStats &stats) : stats_(stats) {}
 
+        RecordingScreen(const RecordingScreen &) = delete;
+        RecordingScreen &operator=(const RecordingScreen &) = delete;
+        RecordingScreen(RecordingScreen &&) = delete;
+        RecordingScreen &operator=(RecordingScreen &&) = delete;
+
         ~RecordingScreen() override {
             ++stats_.destructions;
         }
@@ -46,9 +64,13 @@ namespace {
             return Result<void>::Success();
         }
 
-        void OnUpdate(float) override {}
+        void OnUpdate(float) override {
+            // Lifecycle-only screen: it owns no frame-updated model.
+        }
 
-        void Draw(const GuiContentRegion &) override {}
+        void Draw(const GuiContentRegion &) override {
+            // This shutdown fixture intentionally submits no graphical controls.
+        }
 
         [[nodiscard]] LeaveDecision CanLeave(const LeaveTarget &) const override {
             return {.disposition = LeaveDisposition::Allow, .requirement = std::nullopt};
@@ -66,7 +88,94 @@ namespace {
         ScreenStats &stats_;
     };
 
-    void ShutdownAndCheckGuiScreenHost(GuiScreenHost &host, ScreenStats &stats, JobSystem &jobs) {
+    /** @brief Holds discovery until settings closes, then counts host-owned preparation and activation. */
+    class BackgroundUpdateBackend final : public IEditorUpdateBackend {
+    public:
+        std::atomic<bool> checkStarted{false};
+        std::atomic<bool> releaseCheck{false};
+        std::atomic<unsigned> preparations{0U};
+        unsigned activations{};
+
+        Result<std::optional<EditorUpdateOffer>> Check(const EditorUpdateChannel &, const CancellationToken cancellation) override {
+            checkStarted = true;
+            while (!releaseCheck && !cancellation.IsCancellationRequested())
+                std::this_thread::yield();
+            if (cancellation.IsCancellationRequested())
+                return Result<std::optional<EditorUpdateOffer>>::Failure(JobCancelled().ErrorValue());
+            return Result<std::optional<EditorUpdateOffer>>::Success(EditorUpdateOffer{"0.4.2", {}, {}, true});
+        }
+
+        Result<void> Prepare(const EditorUpdateOffer &, CancellationToken,
+                             const std::function<void(EditorUpdatePhase, std::uint64_t, std::uint64_t)> &) override {
+            ++preparations;
+            return Result<void>::Success();
+        }
+
+        Result<void> Activate(CancellationToken) override {
+            ++activations;
+            return Result<void>::Success();
+        }
+
+        Result<void> Rollback(CancellationToken) override {
+            return Result<void>::Success();
+        }
+    };
+
+    /** @brief Uses host updates only after actual modal closure; no draw or direct session polling is involved. */
+    void CheckUpdatesAfterSettingsClose(GuiScreenHost &host, EditorModalHost &modals, EditorGuiContext &gui,
+                                        EditorSettingsService &settings, JobSystem &jobs) {
+        BackgroundUpdateBackend backend;
+        UpdateExperienceSession session{jobs, backend};
+
+        struct UpdateBinding final {
+            EditorGuiContext &gui;
+            UpdateExperienceSession *previous;
+
+            explicit UpdateBinding(EditorGuiContext &context) : gui(context), previous(context.updates) {}
+
+            UpdateBinding(const UpdateBinding &) = delete;
+            UpdateBinding &operator=(const UpdateBinding &) = delete;
+            UpdateBinding(UpdateBinding &&) = delete;
+            UpdateBinding &operator=(UpdateBinding &&) = delete;
+
+            ~UpdateBinding() {
+                gui.updates = previous;
+            }
+        } binding{gui};
+
+        gui.updates = &session;
+        session.SetAutomaticDownload(true);
+        session.SetInstallOnExit(true);
+        REQUIRE(modals.OpenRoot(std::make_unique<SettingsModal>(gui, settings, 0)).HasValue());
+        modals.OnUpdate(0.0F);
+        REQUIRE(session.CheckNow());
+        const auto startDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+        while (!backend.checkStarted && std::chrono::steady_clock::now() < startDeadline)
+            std::this_thread::yield();
+        REQUIRE(backend.checkStarted);
+        REQUIRE(modals.RequestClose(ModalId{SettingsModal::kModalId}, ModalCloseReason::Cancelled).HasValue());
+        modals.OnUpdate(0.0F);
+        REQUIRE_FALSE(modals.HasOpenModal());
+        CHECK(session.Snapshot().canCancel);
+        backend.releaseCheck = true;
+        const auto completionDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+        while (session.Snapshot().phase != EditorUpdatePhase::RestartRequired && std::chrono::steady_clock::now() < completionDeadline) {
+            host.OnUpdate(0.0F);
+            std::this_thread::yield();
+        }
+        REQUIRE(session.Snapshot().phase == EditorUpdatePhase::RestartRequired);
+        CHECK(backend.preparations == 1U);
+        host.OnUpdate(0.0F);
+        CHECK(backend.preparations == 1U);
+        const auto handoff = session.ActivateOnExit();
+        REQUIRE(handoff.HasValue());
+        CHECK(handoff.Value());
+        CHECK(backend.activations == 1U);
+        CHECK_FALSE(session.ActivateOnExit().Value());
+        CHECK(backend.activations == 1U);
+    }
+
+    void ShutdownAndCheckGuiScreenHost(GuiScreenHost &host, const ScreenStats &stats, const JobSystem &jobs) {
         host.Shutdown();
         REQUIRE((host.IsShutdown()));
         REQUIRE((stats.leaves == 1));
@@ -83,6 +192,93 @@ namespace {
         jobs.Shutdown(ShutdownPolicy::Cancel);
     }
 
+    /** @brief Checks that composition keeps application services borrowed and publishes the host-owned screen registry. */
+    void CheckApplicationServiceBorrows(const GuiScreenHost &host, const JobSystem &jobs, const Input::InputRouter &input,
+                                        const EditorModalHost &modals, const EditorSettingsService &settings) {
+        REQUIRE((&host.Services().Get<JobSystem>() == &jobs));
+        REQUIRE((&host.Services().Get<Input::InputRouter>() == &input));
+        REQUIRE((&host.Services().Get<EditorModalHost>() == &modals));
+        REQUIRE((&host.Services().Get<EditorSettingsService>() == &settings));
+        REQUIRE((&host.Services().Get<ScreenRegistry>() == &host.Screens()));
+    }
+
+    void CheckInventoryActivityShutdown(GuiScreenHost &host, const Extensions::ExtensionInventory &inventory, const bool admitted) {
+        auto &activities = host.Services().Get<Extensions::EditorActivityHost>();
+        activities.Update();
+        const auto entry =
+            std::ranges::find(inventory.Entries(), std::string{"fixture.package"}, &Extensions::ExtensionInventoryEntry::packageId);
+        REQUIRE(entry != inventory.Entries().end());
+        CHECK(entry->runtimeActive == admitted);
+        if (admitted) {
+            REQUIRE(activities.Prepared().size() == 1);
+            const auto provider = activities.Prepared().front().surface.descriptor.provider;
+            REQUIRE(activities.Registry().ToggleActivity(provider, "fixture.activity").HasValue());
+            activities.Update();
+            CHECK(activities.Prepared().front().surface.focused);
+        } else {
+            CHECK(activities.Prepared().empty());
+            CHECK(entry->activationFailure.reason == Extensions::ExtensionActivationFailureReason::HostLoadFailed);
+            CHECK_FALSE(entry->loadError.empty());
+        }
+        const auto &registry = activities.Registry();  // Host retains the activity authority until its destructor.
+        host.Shutdown();
+        CHECK(host.Services().Empty());
+        CHECK(registry.Snapshot().empty());
+        CHECK(registry.MoveActivity({"fixture.package", "fixture.module", 1}, "fixture.activity", {}).HasError());
+    }
+
+    Extensions::ExtensionInventory InstallActivityInventory(const std::filesystem::path &root, const std::filesystem::path &package) {
+        Extensions::ExtensionInventory inventory{root};
+        REQUIRE(inventory.InstallFromDirectory(package).HasValue());
+        REQUIRE(inventory.SetEnabled("fixture.package", true).HasValue());
+        REQUIRE(inventory.SetTrusted("fixture.package", true).HasValue());
+        return inventory;
+    }
+
+    static_assert(!std::is_copy_constructible_v<RecordingScreen> && !std::is_move_constructible_v<RecordingScreen>);
+
+    TEST_CASE("GUI inventory activation uses explicit artifact authority and revokes package surfaces on shutdown",
+              "[unit][editor][Activity][ABI]") {
+        Horo::Tests::EditorActivityPackage package;
+        const Horo::Tests::OwnedTestDirectory inventoryDirectory{"horo107 GUI inventory"};
+        const auto &installRoot = inventoryDirectory.Path();
+
+        auto inventory = InstallActivityInventory(installRoot, package.root);
+        EngineDataBus engineEvents;
+        EditorDataBus editorEvents;
+        Input::InputRouter input;
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8}};
+        ProjectCreationService creation{jobs, engineEvents};
+        LocalizationService localization{LocaleTag{"en-US"}};
+        ConfigurationService configuration = CreateEditorConfigurationService(DefaultEditorSettings());
+        EditorSettingsService settings{DefaultEditorSettings(), configuration, editorEvents, localization};
+        EditorModalHost modals{editorEvents, input};
+        const Theme::Fonts fonts{};
+        ThemeContext theme{fonts};
+        EditorSettingsSnapshot settingsSnapshot = settings.Snapshot();
+        EditorGuiContext gui{engineEvents, editorEvents, localization, theme, settingsSnapshot};
+        RendererAvailabilitySnapshot renderers{{RendererBackendAvailability{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}},
+                                               "opengl"};
+        std::shared_ptr<const Security::NativeArtifactGate> gate;
+        const bool admitted = GENERATE(false, true);
+        if (admitted)
+            gate = Horo::Tests::CreateAcceptingArtifactGate();
+        GuiScreenHost host{gui, GuiScreenHostComposition{.modalHost = modals,
+                                                         .settingsService = settings,
+                                                         .localization = localization,
+                                                         .engineEvents = engineEvents,
+                                                         .creationService = creation,
+                                                         .jobs = jobs,
+                                                         .inputRouter = input,
+                                                         .rendererAvailability = renderers,
+                                                         .screenRegistry = {},
+                                                         .workspacePanelRegistry = {},
+                                                         .extensionInventory = &inventory,
+                                                         .extensionArtifactGate = std::move(gate)}};
+        CheckInventoryActivityShutdown(host, inventory, admitted);
+        jobs.Shutdown(ShutdownPolicy::Cancel);
+    }
+
     TEST_CASE("Gui Screen Host Registers Core Status And Shuts Down Safely", "[unit][editor]") {
         EngineDataBus engineEvents;
         EditorDataBus editorEvents;
@@ -93,7 +289,7 @@ namespace {
         ConfigurationService configuration = CreateEditorConfigurationService(DefaultEditorSettings());
         EditorSettingsService settings{DefaultEditorSettings(), configuration, editorEvents, localization};
         EditorModalHost modals{editorEvents, input};
-        const Theme::Fonts &fonts = *reinterpret_cast<const Theme::Fonts *>(static_cast<std::uintptr_t>(1));
+        const Theme::Fonts fonts{};
         ThemeContext theme{fonts};
         EditorSettingsSnapshot settingsSnapshot = settings.Snapshot();
         EditorGuiContext gui{engineEvents, editorEvents, localization, theme, settingsSnapshot};
@@ -106,11 +302,19 @@ namespace {
         });
         WorkspacePanelRegistry panels;
 
-        GuiScreenHost host{gui,  modals, settings,  localization,       engineEvents,     creation,
-                           jobs, input,  renderers, std::move(screens), std::move(panels)};
+        GuiScreenHost host{gui, GuiScreenHostComposition{.modalHost = modals,
+                                                         .settingsService = settings,
+                                                         .localization = localization,
+                                                         .engineEvents = engineEvents,
+                                                         .creationService = creation,
+                                                         .jobs = jobs,
+                                                         .inputRouter = input,
+                                                         .rendererAvailability = renderers,
+                                                         .screenRegistry = std::move(screens),
+                                                         .workspacePanelRegistry = std::move(panels)}};
         REQUIRE((host.StatusItems().Find("horo.status.backend") != nullptr));
         REQUIRE((host.StatusItems().Find("horo.status.cpu") == nullptr));
-        REQUIRE((&host.Services().Get<JobSystem>() == &jobs));
+        CheckApplicationServiceBorrows(host, jobs, input, modals, settings);
         REQUIRE((stats.enters == 0));
         REQUIRE((host.Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}).HasError()));
         host.Services().Register(stats);
@@ -123,6 +327,9 @@ namespace {
         REQUIRE((invalidRoute.ErrorValue().domain.Value() == "horo.editor.screens"));
         REQUIRE((invalidRoute.ErrorValue().code.Value() == "navigation.invalid_route_parameters"));
 
+        SECTION("Closed settings does not stop discovery, automatic download, or install-on-exit") {
+            CheckUpdatesAfterSettingsClose(host, modals, gui, settings, jobs);
+        }
         ShutdownAndCheckGuiScreenHost(host, stats, jobs);
     }
 

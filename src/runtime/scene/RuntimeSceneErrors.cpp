@@ -6,6 +6,17 @@ namespace Horo::Runtime::SceneErrors {
         constexpr auto kError = ErrorSeverity::Error;
     }  // namespace
 
+    const ErrorCodeDescriptor BaselineInvalid{kDomain, ErrorCode{"scene.baseline.invalid"}, kError,
+                                              "The baseline ownership request is invalid.",
+                                              "Supply positive limits and exact prepared resources and owner evidence."};
+    const ErrorCodeDescriptor BaselineStale{kDomain, ErrorCode{"scene.baseline.stale"}, kError, "The baseline ownership revision changed.",
+                                            "Capture the exact active baseline before retrying."};
+    const ErrorCodeDescriptor BaselineCapacityExceeded{kDomain, ErrorCode{"scene.baseline.capacity_exceeded"}, kError,
+                                                       "The aggregate baseline capacity was exceeded.",
+                                                       "Retire unneeded cells or revise the explicit resident budget."};
+    const ErrorCodeDescriptor BaselineUnsupported{kDomain, ErrorCode{"scene.baseline.unsupported"}, kError,
+                                                  "The baseline requires an unavailable structural provider.",
+                                                  "Compose a supported owner before attaching this baseline."};
     const ErrorCodeDescriptor InvalidDefinition{kDomain, ErrorCode{"scene.definition.invalid"}, kError,
                                                 "The runtime scene definition is invalid.",
                                                 "Correct the typed authoring data before activation."};
@@ -63,6 +74,10 @@ namespace Horo::Runtime::SceneErrors {
     const ErrorCodeDescriptor StructuralCommitFailed{kDomain, ErrorCode{"scene.structural.commit_failed"}, kError,
                                                      "The structural command batch could not be committed.",
                                                      "Correct the command batch and retry."};
+    const ErrorCodeDescriptor SaveBootstrapDatasetUnsupported{kDomain, ErrorCode{"scene.save_bootstrap.dataset_unsupported"}, kError,
+                                                              "The prepared owner has no qualified persistent dataset projection."};
+    const ErrorCodeDescriptor SaveBootstrapDecoderUnavailable{kDomain, ErrorCode{"scene.save_bootstrap.decoder_unavailable"}, kError,
+                                                              "The host has no decoder for the installed cooked scene format."};
     const ErrorCodeDescriptor SaveBootstrapInvalid{kDomain, ErrorCode{"scene.save_bootstrap.invalid"}, kError,
                                                    "The saved-scene bootstrap requirements are invalid.",
                                                    "Provide complete typed world, scene, content, spawn, and transition evidence."};

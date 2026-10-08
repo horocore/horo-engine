@@ -72,6 +72,35 @@ TEST_CASE("Request lifecycle rejects illegal transitions and keeps first termina
     CHECK_FALSE(snapshot.Value().terminal->HasError());
 }
 
+TEST_CASE("Provider completions by identity retain request type generation and exactly-once fencing",
+          "[platform-services][request][completion]") {
+    PlatformRequestStore store({.generation = {19}});
+    auto request = Admit<int>(store);
+    REQUIRE(store.MarkRunning(request).HasValue());
+
+    const auto id = request.Id();
+    const auto generation = request.Generation();
+    REQUIRE(store.CompleteSuccess<int>(id, generation, 31).Value() == PlatformRequestMutation::Applied);
+    CHECK(store.CompleteSuccess<int>(id, generation, 47).Value() == PlatformRequestMutation::Unchanged);
+    CHECK(store.CompleteFailure<int>(id, generation, TestFailure()).Value() == PlatformRequestMutation::Unchanged);
+    CHECK(store.CompleteSuccess<double>(id, generation, 2.5).HasError());
+    CHECK(store.CompleteSuccess<int>(id, PlatformRequestGeneration{20}, 53).HasError());
+
+    const auto snapshot = store.Query(request);
+    REQUIRE(snapshot.HasValue());
+    REQUIRE(snapshot.Value().terminal.has_value());
+    REQUIRE(snapshot.Value().terminal->Value() != nullptr);
+    CHECK(*snapshot.Value().terminal->Value() == 31);
+
+    auto voidRequest = Admit<void>(store);
+    REQUIRE(store.MarkRunning(voidRequest).HasValue());
+    REQUIRE(store.RequestCancel<void>(voidRequest.Id(), voidRequest.Generation()).Value() == PlatformRequestMutation::Applied);
+    REQUIRE(store.CompleteCancelled<void>(voidRequest.Id(), voidRequest.Generation(), MakeError(RequestErrors::Cancelled)).Value() ==
+            PlatformRequestMutation::Applied);
+    CHECK(store.CompleteSuccess(voidRequest.Id(), voidRequest.Generation()).Value() == PlatformRequestMutation::Unchanged);
+    CHECK(store.Query(voidRequest).Value().state == PlatformRequestState::Cancelled);
+}
+
 TEST_CASE("Terminal state and typed error identity publish atomically", "[platform-services][request]") {
     PlatformRequestStore store;
     auto timedOut = Admit<int>(store);

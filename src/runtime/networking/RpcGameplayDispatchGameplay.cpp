@@ -146,6 +146,9 @@ namespace Horo::Network {
                 ++report.invoked;
             }
         }
+        if (debugger_)
+            (void)debugger_->Observe(diagnosticSource_,
+                                     NetworkRpcRecord{terminals_.accepted, terminals_.succeeded, terminals_.failed, terminals_.cancelled});
         return Result<RpcDispatchReport>::Success(std::move(report));
     }
 

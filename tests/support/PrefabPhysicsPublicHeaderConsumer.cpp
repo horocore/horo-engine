@@ -1,3 +1,4 @@
+#include "Horo/Physics/PhysicsCellAttachments.h"
 #include "Horo/Physics/PhysicsSceneActivation.h"
 #include "Horo/Physics/PhysicsWorld.h"
 

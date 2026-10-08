@@ -351,12 +351,51 @@ If no valid ground is found, the character is airborne.
 Slopes within `slopeLimitDegrees` are walkable. Slopes above the limit block
 movement unless the character is sliding down.
 
-Options:
+The runtime descriptor owns `preserveHorizontalSpeedOnSlopes` (default true)
+and typed `CharacterSteepSlopePolicy::{Stop, Slide}` (default Stop). Walkable
+blocking normals lift remaining displacement along the descriptor's `up` axis,
+preserving its entire horizontal vector rather than normalizing an orthogonal
+projection. Golden ramp qualification allows 0.001 m/s error in each horizontal
+velocity component, including the exact slope-limit boundary. The normal cosine
+classification tolerance is 0.00001. Normals effectively perpendicular to `up`
+never enter the division used by ramp lifting.
 
-- `preventSlidingOnWalkableSlopes` — apply counter-force along slope normal
-- `slideDownSteepSlopes` — apply gravity along the steep surface
-- `preserveHorizontalSpeedOnSlopes` — adjust velocity to maintain requested
-  ground-plane speed
+Non-walkable upward-facing normals remove horizontal motion into the steep face
+before resolving any downward component. This cannot create ascent from horizontal
+intent; contour and downhill travel remain available. Conflicting simultaneous
+planes fail closed when a later projection violates an earlier blocking plane.
+No speed restoration scales a wall-clipped vector back through an obstacle.
+
+Stop adds no automatic surface drift. Slide uses the committed Character-owned
+`gravityVelocityMetersPerSecond` from the locomotion snapshot, distinct from
+caller-owned desired velocity and displacement-derived achieved velocity. It
+projects prior gravity velocity and descriptor gravity onto the steep face,
+computes `nextVelocity = priorVelocity + tangentGravity * fixedDelta`, and sweeps
+`0.5 * (priorVelocity + nextVelocity) * fixedDelta`. Repeated ticks retain actual
+acceleration; unobstructed planar reference cases agree across equal-duration
+fixed-tick partitions within 0.00001 m and 0.00001 m/s. This continuation is
+observable, finite-validated, staged with the movement result and committed only
+with the whole tick, following ADR-092. It introduces no separate slide accumulator.
+
+Slide starts only when the nearest downward blocking evidence is steep and within
+skin width. Upward tangent gravity cannot produce a climb. Any blocking slide sweep resets gravity continuation, so obstructed displacement
+cannot accumulate pressure independently of the contact-retention capacity. Motion
+still slides against the canonical blocking normals. Continuation also resets on
+walkable support, lost steep evidence, Stop, jump/upward commands, actual capsule
+change, and teleport. Failed
+ticks preserve the prior snapshot and gravity continuation. Ordinary airborne
+free-fall and jump integration belong to CHR-002.5; they must compose this same
+Character-owned velocity field rather than introducing another state authority.
+
+Slide displacement uses the same collision sweeps and remaining movement-iteration
+budget, including for sub-minimum ordinary movement distances. Zero ordinary
+movement consumes no movement iteration. A required slide with no remaining
+movement iterations rejects the entire candidate tick with `CapacityExceeded`,
+which preserves the committed state. The shared query budget includes both support
+probes. A steep surface does not publish grounded or
+platform support, and the reducer never snaps through the nearest steep face to a
+deeper walkable surface. Failed queries or shutdown discard all candidate motion
+before publication.
 
 ## Step Handling
 
@@ -373,6 +412,25 @@ Step down:
 - after horizontal movement, sweep down by `stepOffset`
 - if a valid ground is found, snap to it
 - preserve momentum if the drop is significant
+
+The CHR-002.4 implementation uses `maximumStepHeightMeters` as the maximum
+physical rise and downward snap, excluding the maintained skin gap. A zero limit
+disables ascent and drop snapping while retaining touching-floor classification.
+A blocked lower-capsule contact first verifies touching walkable support, then
+casts upward, forward and downward. Eligibility covers the authored maximum rise
+as well as the lower hemisphere; the final actual surface elevation still must fit
+the height limit. A rounded capsule edge can certify the nearest contact against a
+walkable point no farther than one capsule radius ahead only if a bounded forward
+cast is clear and the point has the same body, shape, subshape and surface plane.
+Lookahead supplies only that plane normal; it never extends the requested horizontal
+endpoint or changes the actual contact point/distance. Missing, steep, foreign or
+non-coplanar support rejects the step. A complete step already owns its checked
+support, so ordinary post-movement snap cannot overwrite it with the rounded-edge
+collision normal. The complete actual landing capsule must pass overlap clearance. Rejected candidates leave ordinary movement
+unchanged; rounded lower contacts cannot manufacture uphill projection after a
+failed step. All casts and clearance probes consume the shared fixed-tick query
+budget and propagate malformed evidence, capacity and lifecycle failure before
+publication. No native Character controller or unbounded retry participates.
 
 Step behavior is configurable:
 
@@ -576,6 +634,43 @@ typed selectors under ADR-086. Collider profiles answer that channel with
 identity. Trigger inclusion is explicit. Trigger enter/exit events remain owned by
 the gameplay volume/Physics event contract, not controller surface events.
 
+### Implemented bounded collision selectors
+
+`CharacterCollisionSelectors` intersects the descriptor's stable query channel with
+at most one required layer, one required profile and one excluded body identity.
+Every spawn recovery, teleport clearance, shape clearance, movement sweep and
+floor/snap probe receives the same owned selectors. Character physical probes
+exclude triggers and query `Overlap` responses before collection and recovery;
+trigger evidence from a custom sweep adapter is also ineligible for contact and
+ground reduction. Sweep hits copy typed layer/profile evidence when selected;
+missing or malformed evidence fails closed, while valid mismatches and excluded
+body identities cannot block or become ground. Ignored channel responses are
+absent from the query inventory.
+
+`CharacterMovementRequest::filterChange` replaces the complete selector value for
+its addressed tick. The final replacement command selected at command closure
+supplies the filter for that tick's shape and movement probes. Only successful
+atomic tick publication persists it to the controller policy. Admission, future
+commands and failed ticks cannot change the committed filter. An explicit empty
+value clears selectors; absence retains them. Teleports use the last committed
+filter. Changes require a spawned controller and obey command capacity, sequence,
+world-generation and shutdown validation.
+
+`CharacterPhysicsQueryAdapter` borrows one explicitly selected Physics world on
+its owner thread. It maps probes to inline analytic capsule queries, using fixed
+world-owned native collector storage and stack capsule geometry. It admits only
+blocking, non-trigger fixtures before reduction, preserves typed query errors and
+fails rather than silently accepting over-capacity evidence. Recovery chooses the
+first positive penetration in Physics' canonical hit ordering and then re-probes
+under Character's iteration/displacement budget.
+
+The adapter currently uses the supported canonical immediate-query fixture
+inventory. Authored scene/cooked collider query projection and immutable Physics
+snapshot execution retain their documented unsupported status; this change does
+not infer collision layers or query responses from a scene collision profile.
+Application composition may use the adapter with Scene's transform command buffer
+and the existing Gameplay Physics capability; no native API enters those contracts.
+
 ## Dynamic-Body Visibility And Push
 
 Query visibility, Character-to-body push and body-to-Character reaction are
@@ -630,9 +725,17 @@ crouch profile, malformed dimensions or out-of-envelope capsule publishes `Inval
 This replaces the former accepted-but-unused stance intent; callers that request
 crouch must provide the descriptor profile and current overlap adapter.
 
-The collision root is the capsule center and stays fixed during instantaneous
-resize. Every different candidate geometry, including shrink, uses one exact-tick
-overlap probe without depenetration. An overlap publishes `Blocked` and keeps the
+The collision root remains the capsule center. Instantaneous resize shifts that
+center by `up * (newHalfHeight + newRadius - oldHalfHeight - oldRadius)` so the
+bottom point stays fixed. This deliberately replaces CHR-003.1's center-fixed
+contract for named stances and explicit shape replacements. Existing callers keep
+the same request schema but must use the committed center publication rather than
+assuming resize leaves the transform unchanged. The bounded movement envelope
+includes the center shift and subsequent movement; achieved velocity excludes the
+resize offset. The shifted candidate must be finite and inside the local-origin
+and per-tick displacement bounds before Physics is called.
+Every different candidate geometry, including shrink, uses one exact-tick
+overlap probe at that shifted center without depenetration. An overlap publishes `Blocked` and keeps the
 prior geometry/stance; a clear candidate publishes `Applied`. Query errors retain
 their original typed cause and fail the attempted tick. Identity, authored descriptor,
 step policy and heading are preserved. The effective capsule and stance live in the
@@ -643,6 +746,27 @@ Without a movement sweep, applied resize detaches support and requires grounding
 revalidation; the sweep path resolves support against the new geometry immediately.
 Shape clearance and movement/ground sweeps share the immutable per-tick query
 budget; exhausting it aborts the attempt before another adapter call.
+Production clearance uses `PhysicsCapsuleOverlapQuery` through a host-admitted
+`PhysicsQueryEventCapability`. The Physics-owned `CharacterClearanceQuery` captures
+exact world/scene, Character generation, fixed tick, origin/filter generations and
+Physics publication revision. `GameplayPhysicsContext::AcquireCharacterClearance`
+uses the same module permission and cancellation fence as ordinary Physics clients.
+The host prepares Character with the actual Physics publication revision and calls
+`RefreshPhysicsSnapshot` with the paired world identity and current publication
+between operations after Physics ticks or fixture changes. This owner-thread,
+monotonic update changes no owner generation, settings or controller state and is
+forbidden during tick/placement callbacks. Query contexts never adopt their own
+revision implicitly; retained contexts remain subject to exact snapshot checks.
+Its borrowed context is valid only while the captured adapter remains stationary
+and alive for the synchronous owner-thread operation. There is no retained
+`PhysicsWorld` pointer, resident Character collider or callback allocation. Canonical
+Physics constructs the analytic query capsule on the stack, aligns it to the owned
+up axis and uses the existing bounded collectors and channel/selector filtering.
+A blocker returns presence with zero recovery displacement: resize never invokes
+depenetration. Spawn recovery still requires its separate non-zero recovery vector.
+Overlap-only/trigger contacts do not block clearance. Native collector overflow,
+stale publication, world retirement and module revocation preserve typed failures
+and abort the attempted Character tick before publication.
 Queue capacity, replacement, generation and shutdown rules are the movement rules.
 No transition is retried implicitly on a later tick.
 

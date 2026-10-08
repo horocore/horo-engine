@@ -117,6 +117,12 @@ namespace Horo::Physics {
 
         /** @copydoc Runtime::SceneActivationCandidate::ValidatePublication */
         [[nodiscard]] Result<void> ValidatePublication() const override;
+
+        /** @copydoc Runtime::SceneActivationCandidate::CanonicalDatasetProjection */
+        [[nodiscard]] Runtime::SceneCanonicalDatasetProjection CanonicalDatasetProjection() const noexcept override {
+            return Runtime::SceneCanonicalDatasetProjection::Absent;
+        }
+
         /** @copydoc Runtime::SceneActivationCandidate::Publish */
         void Publish() noexcept override;
         /** @copydoc Runtime::SceneActivationCandidate::Shutdown */

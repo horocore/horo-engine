@@ -1,4 +1,5 @@
 #pragma once
+#include "Horo/Network/NetworkDebugger.h"
 
 /** @file ReplicationStateCapture.h
  * @brief Prepared authoritative capture of committed owner state into immutable bounded snapshots.
@@ -44,6 +45,10 @@ namespace Horo::Network {
         [[nodiscard]] bool IsCurrent() const noexcept;
         /** @brief Returns exact source occurrence. @return Owned mapping provenance. */
         [[nodiscard]] const NetworkObjectMappingEntry &Object() const noexcept;
+        /** @brief Returns pinned capture-world identity for downstream generation fencing.
+         * @return Immutable capture read; consult IsCurrent before its descriptor.
+         */
+        [[nodiscard]] const ReplicationWorldCaptureRead &World() const noexcept;
         /** @brief Returns committed capture tick. @return Positive owner simulation tick. */
         [[nodiscard]] std::uint64_t SimulationTick() const noexcept;
         /** @brief Returns owner source revision. @return Positive committed source revision. */
@@ -188,11 +193,13 @@ namespace Horo::Network {
          * @param serializers Exact immutable descriptor/codec generation.
          * @param targets Complete explicit owner bindings.
          * @param limits Finite storage and reconciliation bounds.
+         * @param debugger Optional owner-thread collector retained by the host through capture destruction.
          * @return Prepared coordinator or a typed error without publication.
          */
         [[nodiscard]] static Result<std::unique_ptr<ReplicationStateCapture>> Prepare(
             const ReplicationWorldCaptureRead &world, std::shared_ptr<const ReplicationSerializerRegistry> serializers,
-            std::span<const ReplicationCaptureTarget> targets, const ReplicationCaptureLimits &limits = {});
+            std::span<const ReplicationCaptureTarget> targets, const ReplicationCaptureLimits &limits = {},
+            NetworkDebugger *debugger = nullptr);
         ~ReplicationStateCapture();
         ReplicationStateCapture(const ReplicationStateCapture &) = delete;
         ReplicationStateCapture &operator=(const ReplicationStateCapture &) = delete;

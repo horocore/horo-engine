@@ -246,7 +246,10 @@ namespace Horo::PlatformServices {
         [[nodiscard]] virtual Result<PlatformRequestHandle<void>> UnlockAchievement(AchievementUnlockRequest request) = 0;
     };
 
-    /** @brief Leaderboard and persistent-stat request surface. */
+    /**
+     * @brief Leaderboard and persistent-stat request surface.
+     * @details Page/window queries borrow their arguments only for the call; providers copy any query retained for asynchronous work.
+     */
     class ILeaderboardStatService {
     public:
         virtual ~ILeaderboardStatService() = default;
@@ -255,15 +258,15 @@ namespace Horo::PlatformServices {
         /** @brief Queries one bounded ranked page. @param query Explicit offset and page size. @return Admitted page request or typed
          * failure. */
         [[nodiscard]] virtual Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryRankedLeaderboard(
-            LeaderboardRankedQuery query) = 0;
+            const LeaderboardRankedQuery &query) = 0;
         /** @brief Queries a bounded window around the current subject. @param query Explicit before/after limits. @return Admitted window
          * request or typed failure. */
         [[nodiscard]] virtual Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>> QueryLeaderboardAroundSubject(
-            LeaderboardAroundSubjectQuery query) = 0;
+            const LeaderboardAroundSubjectQuery &query) = 0;
         /** @brief Queries one bounded page of the current subject's friends. @param query Explicit offset and page size. @return Admitted
          * page request or typed failure. */
         [[nodiscard]] virtual Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryFriendsLeaderboard(
-            LeaderboardFriendsQuery query) = 0;
+            const LeaderboardFriendsQuery &query) = 0;
         /** @brief Writes one stat value. @param request Owned stat intent. @return Admitted request handle or typed failure. */
         [[nodiscard]] virtual Result<PlatformRequestHandle<void>> WriteStat(StatWriteRequest request) = 0;
     };
@@ -297,7 +300,7 @@ namespace Horo::PlatformServices {
 
         /**
          * @brief Executes one conditional atomic write at the selected provider's commit point.
-         * @param request Complete exact intent retained through provider-operation retirement.
+         * @param request Owned complete exact intent transferred into the provider operation; move it into retained storage.
          * @return Admitted mutation or UnsupportedCapability.
          * @pre Admission requires advertised ConditionalAtomicObject and durable mutation-ID deduplication.
          * @post The provider compares absence or exact revision and publishes all bytes at one indivisible commit point. A competing
@@ -308,19 +311,19 @@ namespace Horo::PlatformServices {
          *       ValidateCloudWriteCompletion must pass before a success enters the request store. Cancel, timeout, and shutdown after
          *       commit may have begun retain an unknown remote outcome for coordinator reconciliation, never a fabricated success.
          */
-        [[nodiscard]] virtual Result<PlatformRequestHandle<CloudMutationResult>> WriteCloudObject(CloudBlobWriteRequest) {
+        [[nodiscard]] virtual Result<PlatformRequestHandle<CloudMutationResult>> WriteCloudObject(CloudBlobWriteRequest &&) {
             return Result<PlatformRequestHandle<CloudMutationResult>>::Failure(MakeError(CloudObjectErrors::UnsupportedCapability));
         }
 
         /**
          * @brief Executes one atomic revision-matched delete at the selected provider's commit point.
-         * @param request Exact key, revision and durable mutation identity.
+         * @param request Owned exact key, revision and durable mutation identity; move into retained operation storage.
          * @return Admitted mutation or UnsupportedCapability.
          * @post A stale revision returns PreconditionFailed without deleting a newer object. Exact replay returns the original outcome
          *       and evidence without a second commit; cross-operation ID reuse returns IdempotencyConflict. ValidateCloudDeleteCompletion
          *       must pass before success publication. Cancellation and shutdown preserve ambiguous remote outcomes for reconciliation.
          */
-        [[nodiscard]] virtual Result<PlatformRequestHandle<CloudMutationResult>> DeleteCloudObject(CloudBlobDeleteRequest) {
+        [[nodiscard]] virtual Result<PlatformRequestHandle<CloudMutationResult>> DeleteCloudObject(CloudBlobDeleteRequest &&) {
             return Result<PlatformRequestHandle<CloudMutationResult>>::Failure(MakeError(CloudObjectErrors::UnsupportedCapability));
         }
 

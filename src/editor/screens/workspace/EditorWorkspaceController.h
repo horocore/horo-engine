@@ -52,6 +52,7 @@ namespace Horo::Editor {
         Application::GameplayBuildEnvironment gameplayBuildEnvironment{};
         const ILocalizationService *localization{};
         EngineDataBus *engineEvents{};
+        Application::NetworkDebuggerService *networkDebugger{};
     };
 
     class EditorWorkspaceController {  // NOSONAR(cpp:S1820, cpp:S1448) Authoritative workspace controller

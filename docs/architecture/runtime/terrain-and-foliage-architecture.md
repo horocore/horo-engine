@@ -361,15 +361,9 @@ tile rebuild capability; the 1.0 runtime baseline returns
 
 Terrain materials are blended per-vertex using weight layers:
 
-```cpp
-struct TerrainMaterialLayer {
-    AssetId  diffuseTexture;
-    AssetId  normalTexture;
-    AssetId  maskTexture;     // R=metallic, G=roughness, B=ambient occlusion
-    float    uvScale;
-    AssetId  materialFunction; // optional material-function graph reference
-};
-```
+The typed `TerrainMaterialLayer` contract below references a material-domain asset;
+its textures, material function and standard PBR semantics are resolved by that
+material authority. UV scale belongs to the ordered terrain layer.
 
 Terrain authoring/cook owns layer order, weight/hole encodings, material-function
 references and required blend semantics. Material/Shader cook validates those semantics
@@ -379,6 +373,61 @@ required features and effective limits; the backend realizes it without changing
 hole or blend meaning. Height-, slope- and noise-based transitions are permitted only
 when declared by the material graph and cooked permutation contract. TRF-003.2 freezes
 the exact layer limit, key and blend rules.
+
+### TRF-003.2 material layer and blend contract
+
+`HoroEngine::TerrainApi` owns `TerrainMaterialLayerSet`, a fixed ordered set of
+one to sixteen distinct semantic layer IDs, material-asset references and positive
+UV repeat scales in thousandths. Material assets own their texture/function semantics;
+Terrain never reparses material properties. Baseline/Standard/High/Ultra admit at most
+4/8/12/16 layers, with project limits able to lower each ceiling. Excess required
+layers return `LimitExceeded`; admission does not truncate or change their meaning.
+Unused layer records retain their default value.
+
+`NormalizeTerrainMaterialWeights` is the single UNORM16 normalization operation used
+by source import and material consumers. It divides with 64-bit integer arithmetic,
+then assigns missing units by largest remainder, preferring earlier semantic layers
+on ties. Every admitted sample totals exactly 65535. Empty, oversized and all-zero
+source samples fail. `ValidateTerrainMaterialWeights` rejects mismatched counts,
+non-zero unused slots, illegal/empty tile masks and weights on excluded layers.
+
+`HoroEngine::TerrainRender` owns the material integration contract and depends on
+TerrainApi and RenderApi. Neither of those lower targets gains a reverse dependency.
+`BlendTerrainPbrSamples` specifies linear weighted albedo, metallic, roughness,
+occlusion, opacity and emitted radiance after per-layer UV-scaled sampling. Normals
+share one tangent frame and are normalized after the weighted sum; malformed or
+degenerate normals fail. This allocation-free reference defines shader/cook parity;
+height, slope and noise transitions require a future explicitly versioned blend recipe.
+
+The finite shader model declares seven exact bits: `TERRAIN_LAYER_BIT_0` through
+`TERRAIN_LAYER_BIT_3` encode layer count minus one, `TERRAIN_HOLES` preserves hole
+coverage independently of alpha classification, and `TERRAIN_ALPHA_BIT_0`/`_1`
+encode the exact Standard PBR alpha mode. At most 128 masks may be declared; only
+explicit admitted masks resolve. Shader identity, pass, neutral vertex-layout compatibility and cook target remain
+part of the shared `ShaderPermutationKey`; the exact artifact identity carries the
+cooked source revision.
+UV scale and scalar material values are runtime parameters. Runtime specialization
+values are preserved separately from the compile key.
+
+`PrepareTerrainMaterialBinding` composes actual `PrepareStandardPbrMaterial` packing
+for every resolved ordered layer and `ResolveShaderPermutation` for the exact terrain
+shader. It requires a non-empty bounded cooked artifact with its expected artifact key,
+a valid renderer pipeline handle, a manifest-declared exact target and consistent
+reflection schema/backend. Failures preserve the original typed PBR/shader error and
+never select another shader or silently lower a layer's quality. A layer's explicitly
+authored PBR quality alternate remains legal, independently of the Terrain tier.
+
+The application owns `TerrainMaterialBindingOwner` and publishes at its render safe
+point. Publication checks the exact captured terrain/content/residency/mutation/
+capability/configuration and renderer generation, plus the prior publication number.
+Invalid, stale, cancelled and allocation-failed replacement preserves the old snapshot.
+Shutdown closes admission; already-issued immutable CPU snapshots remain valid. The
+host must retain exact GPU/artifact leases until queued frames retire; this CPU owner
+neither destroys GPU resources nor waits for them. Tile extraction/upload and draw
+submission belong to TRF-003.3, rather than this material admission operation.
+
+See [terrain material composition migration](../../guides/terrain-material-composition-migration.md)
+for target ownership and host adoption.
 
 ## Foliage System
 
@@ -942,3 +991,28 @@ Required coverage includes:
 - [ADR-143](../../adr/143-terrain-foliage-scale-budgets-observability-and-feature-boundary.md):
   core/high-end scale, memory, streaming, cook, editor and headless gates, required
   observability and core-1.0 versus post-1.0 recipe qualification
+
+## Current TRF-002.6 Residency Integration
+
+The host-composed `HoroTerrainStreaming` adapter implements TerrainRuntime-owned
+neutral CPU residency using `TerrainResidencyCache`. It depends on TerrainApi and
+WorldStreaming directly, leaving the core Terrain API independent of the streaming
+integration. Accepted candidates must already have trusted manifest validation and
+WST peak admission. The cache transfers a new allocation's complete CPU charge
+through `RealizeShared`; exact cache hits resolve only an explicit reuse portion.
+
+Each exact runtime/content/capability/tile-or-cluster key owns one immutable prepared
+CPU buffer. Nonzero complete cost includes the owned buffer capacity; unknown cost
+and native/GPU cost cannot enter this CPU cache. Entry and consumer storage have
+finite preallocated limits. Every retention kind prevents eviction, including jobs,
+replacement candidates and snapshots. Cancellation and shutdown fence new admission
+without pretending readers have finished. Durable foliage state cannot be stored
+as disposable payloads.
+
+WST requests bounded pressure work toward a CPU charge target. Accepted access order
+provides deterministic local LRU selection among unleased entries; cache misses and
+failed admissions do not affect order. Unreachable targets preserve pinned entries
+and report pressure. Eviction destroys the owned buffer before acknowledging exact
+WST retirement, so old/new generations and unleased cache entries stay charged until
+actual release. This adapter owns no global scheduler, native lifecycle or cell
+commit, and performs no I/O or frame-hot allocations after construction.

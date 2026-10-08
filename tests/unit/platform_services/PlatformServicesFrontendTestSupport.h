@@ -82,18 +82,18 @@ namespace Horo::PlatformServices {
                 return Admit<void>(PlatformServiceKind::LeaderboardsAndStats);
             }
 
-            Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryRankedLeaderboard(LeaderboardRankedQuery query) override {
+            Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryRankedLeaderboard(const LeaderboardRankedQuery &query) override {
                 lastRankedQuery = query;
                 return Admit<LeaderboardEntriesPage>(PlatformServiceKind::LeaderboardsAndStats);
             }
 
             Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>> QueryLeaderboardAroundSubject(
-                LeaderboardAroundSubjectQuery query) override {
+                const LeaderboardAroundSubjectQuery &query) override {
                 lastAroundSubjectQuery = query;
                 return Admit<LeaderboardAroundSubjectResult>(PlatformServiceKind::LeaderboardsAndStats);
             }
 
-            Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryFriendsLeaderboard(LeaderboardFriendsQuery query) override {
+            Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryFriendsLeaderboard(const LeaderboardFriendsQuery &query) override {
                 lastFriendsLeaderboardQuery = query;
                 return Admit<LeaderboardEntriesPage>(PlatformServiceKind::LeaderboardsAndStats);
             }
@@ -114,11 +114,11 @@ namespace Horo::PlatformServices {
                 return Admit<CloudBlobReadResult>(PlatformServiceKind::Cloud);
             }
 
-            Result<PlatformRequestHandle<CloudMutationResult>> WriteCloudObject(CloudBlobWriteRequest) override {
+            Result<PlatformRequestHandle<CloudMutationResult>> WriteCloudObject(CloudBlobWriteRequest &&) override {
                 return Admit<CloudMutationResult>(PlatformServiceKind::Cloud);
             }
 
-            Result<PlatformRequestHandle<CloudMutationResult>> DeleteCloudObject(CloudBlobDeleteRequest) override {
+            Result<PlatformRequestHandle<CloudMutationResult>> DeleteCloudObject(CloudBlobDeleteRequest &&) override {
                 return Admit<CloudMutationResult>(PlatformServiceKind::Cloud);
             }
 

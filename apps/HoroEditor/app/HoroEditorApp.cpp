@@ -3,6 +3,7 @@
 #include "EditorUserStateMigration.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/HostObservability.h"
+#include "Horo/Application/NetworkDebugger.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Editor/DefaultScreenFactories.h"
@@ -1184,21 +1185,24 @@ namespace Horo::Editor {
             Extensions::ExtensionMarketplaceService extensionMarketplace{p.background.jobs, extensionInventory,
                                                                          Extensions::ExtensionMarketplaceService::DefaultRegistryUrl()};
             PfdNativeDialogs nativeDialogs;
+            Application::NetworkDebuggerService networkDebugger;
             GuiScreenHost screenHost{guiContext,
-                                     p.modalHost,
-                                     p.settings,
-                                     p.localization,
-                                     p.engineEvents,
-                                     p.projectCreationService,
-                                     p.background.jobs,
-                                     p.inputRouter,
-                                     p.rendererAvailability,
-                                     std::move(screenRegistry),
-                                     std::move(workspacePanelRegistry),
-                                     (std::uintptr_t)(void *)(intptr_t)p.textures.logo,
-                                     extensionInventoryRefresh.HasValue() ? &extensionInventory : nullptr,
-                                     extensionInventoryRefresh.HasValue() ? &extensionMarketplace : nullptr,
-                                     &nativeDialogs};
+                                     GuiScreenHostComposition{.modalHost = p.modalHost,
+                                                              .settingsService = p.settings,
+                                                              .localization = p.localization,
+                                                              .engineEvents = p.engineEvents,
+                                                              .creationService = p.projectCreationService,
+                                                              .jobs = p.background.jobs,
+                                                              .inputRouter = p.inputRouter,
+                                                              .rendererAvailability = p.rendererAvailability,
+                                                              .screenRegistry = std::move(screenRegistry),
+                                                              .workspacePanelRegistry = std::move(workspacePanelRegistry),
+                                                              .logoTexture = (std::uintptr_t)(void *)(intptr_t)p.textures.logo,
+                                                              .extensionInventory =
+                                                                  extensionInventoryRefresh.HasValue() ? &extensionInventory : nullptr,
+                                                              .extensionMarketplace =
+                                                                  extensionInventoryRefresh.HasValue() ? &extensionMarketplace : nullptr,
+                                                              .nativeDialogs = &nativeDialogs}};
             screenHost.Services().Register<IEditorViewportRenderer>(p.presentation.viewportRenderer);
             screenHost.Services().Register<IEditorGuiRenderer>(p.presentation.guiRenderer);
             screenHost.Services().Register<EditorViewportSceneState>(viewportSceneState);
@@ -1215,6 +1219,9 @@ namespace Horo::Editor {
             screenHost.Services().Register<OperationStore>(p.operationServices.operationStore);
             screenHost.Services().RegisterConst<IOperationQuery>(p.operationServices.operationStore);
             screenHost.Services().Register<IOperationControl>(p.operationServices.operationStore);
+            screenHost.Services().Register<Application::NetworkDebuggerService>(networkDebugger);
+            screenHost.Services().RegisterConst<Application::INetworkDebuggerQuery>(networkDebugger);
+            screenHost.Services().Register<Application::INetworkDebuggerControl>(networkDebugger);
             if (const auto started = screenHost.Start(std::move(p.initialRoute)); started.HasError()) {
                 LOG_ERROR("editor.screens", "Initial screen startup failed: %s", started.ErrorValue().message.c_str());
                 screenHost.RequestFatalShutdown();

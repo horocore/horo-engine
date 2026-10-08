@@ -1,14 +1,22 @@
+#include "Horo/Extensions/EditorActivityAbi.h"
 #include "Horo/Extensions/ExtensionAbi.h"
 
 #include <stddef.h>
 
 _Static_assert(HORO_EXTENSION_ABI_VERSION == 1, "Unexpected extension ABI major");
-_Static_assert(HORO_EXTENSION_ABI_MINOR_VERSION == 3, "Unexpected extension ABI minor");
+_Static_assert(HORO_EXTENSION_ABI_MINOR_VERSION == 4, "Unexpected extension ABI minor");
 _Static_assert(HORO_EXTENSION_SDK_ABI_MAJOR == HORO_EXTENSION_ABI_VERSION, "SDK metadata and ABI header major versions disagree");
 _Static_assert(HORO_EXTENSION_SDK_ABI_MIN_HOST_MINOR == 0, "Unexpected oldest supported host minor");
 _Static_assert(HORO_EXTENSION_SDK_ABI_PUBLISHED_MINOR == HORO_EXTENSION_ABI_MINOR_VERSION,
                "SDK metadata and ABI header minor versions disagree");
 _Static_assert(HORO_EXTENSION_SDK_ABI_MAX_HOST_MAJOR_EXCLUSIVE == 2, "Unexpected next incompatible host ABI major");
+_Static_assert(offsetof(HoroExtensionHostApi, registerEditorActivity) ==
+                   offsetof(HoroExtensionHostApi, registerPlatformServicesProvider) + sizeof(HoroRegisterPlatformServicesProviderFunc),
+               "Installed SDK preserves the legacy host prefix");
+_Static_assert(_Generic((HoroRegisterEditorActivityFunc)0,
+                   HoroExtensionStatus (*)(void *, const struct HoroEditorActivityDescriptor *, struct HoroEditorActivitySessionApi *): 1,
+                   default: 0),
+               "Installed C11 callback alias retains its source contract");
 
 HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_query(HoroExtensionRequirements *requirements) {
     if (requirements == NULL || requirements->structSize < sizeof(*requirements))

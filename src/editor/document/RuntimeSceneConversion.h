@@ -7,6 +7,7 @@
 
 #include "Horo/Prefab/PrefabSourceResolver.h"
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
+#include "Horo/Scene/SceneRuntimeConversion.h"
 #include "editor/document/SceneDocument.h"
 
 #include <optional>
@@ -24,24 +25,10 @@ namespace Horo::Editor {
                                                                                         Runtime::SceneDefinitionId sceneId);
 
     /** @brief One immutable editor projection of an authored prefab placement. */
-    struct ScenePrefabInstanceProjection final {
-        ScenePrefabInstance authored;
-        std::optional<Prefab::EffectivePrefabCandidate> expanded;
-        std::optional<Error> failure;
-
-        /** @brief Reports whether this placement is retained for repair but not runtime-valid. */
-        [[nodiscard]] bool IsBroken() const noexcept {
-            return failure.has_value();
-        }
-    };
+    using ScenePrefabInstanceProjection = SceneSource::ScenePrefabInstanceProjection;
 
     /** @brief Complete detached prefab projection for one scene-document snapshot. */
-    struct ScenePrefabProjection final {
-        std::vector<ScenePrefabInstanceProjection> instances;
-
-        /** @brief Reports whether any authored placement failed required expansion. */
-        [[nodiscard]] bool HasBrokenInstances() const noexcept;
-    };
+    using ScenePrefabProjection = SceneSource::ScenePrefabProjection;
 
     /**
      * @brief Resolves every authored placement into a repairable immutable editor projection.
@@ -53,6 +40,31 @@ namespace Horo::Editor {
     [[nodiscard]] Result<ScenePrefabProjection> BuildScenePrefabProjection(const SceneDocumentSnapshot &document,
                                                                            const Prefab::PrefabSourceResolverSnapshot &resolver,
                                                                            const Prefab::PrefabLimitProfile &limits);
+
+    /**
+     * @brief Marks only affected retained editor previews stale at the publication boundary.
+     * @param projection Owner-thread preview entries; old candidates remain available for repair/display.
+     * @param current Current immutable resolver publication.
+     * @param changedAssets Complete intervening publication identities, including ordinary resource changes.
+     * @param limits Bounded revision inspection policy.
+     * @note Staleness is sticky until BuildScenePrefabProjection produces a fresh complete candidate. Failed inspection
+     * never reports synchronization. Authored state, document history and cached immutable evidence are unchanged.
+     */
+    using SceneSource::InvalidateScenePrefabProjection;
+
+    /**
+     * @brief Converts a retained editor preview only after checking its authoring and source evidence.
+     * @param document Current immutable authoring snapshot.
+     * @param sceneId Runtime scene identity.
+     * @param projection Retained preview; stale/broken/incomplete entries reject the entire conversion.
+     * @param resolver Current immutable source publication.
+     * @param limits Bounded conversion and publication policy.
+     * @return Complete detached runtime definition or typed failure, preserving the previous active scene.
+     * @note InvalidateScenePrefabProjection must consume intervening resource publications before this call.
+     */
+    [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> ConvertScenePrefabProjectionToRuntime(
+        const SceneDocumentSnapshot &document, Runtime::SceneDefinitionId sceneId, const ScenePrefabProjection &projection,
+        const Prefab::PrefabSourceResolverSnapshot &resolver, const Prefab::PrefabLimitProfile &limits);
 
     /**
      * @brief Converts authored scene content and all required prefab candidates transactionally.

@@ -84,6 +84,8 @@ namespace Horo::AI {
             CHECK(result.Value().candidates[1].entity == Entity(view, 3));
             CHECK(result.Value().examinedSources < sources.size());
             CHECK(published.Value()->Query(query).Value().candidates[0].entity == result.Value().candidates[0].entity);
+            CHECK(published.Value()->ListenerPosition(listener.entity).Value() == listener.position);
+            ExpectError(published.Value()->ListenerPosition(sources[0].entity), AIErrors::PerceptionSpatialListenerMissing);
         }
 
         TEST_CASE("Perception broadphase applies range layer affiliation and both sense declarations", "[unit][ai][perception][spatial]") {
@@ -191,7 +193,7 @@ namespace Horo::AI {
             REQUIRE(result.HasValue());
             CHECK(result.Value().count == 0);
             CHECK(result.Value().examinedSources == 0);
-            std::vector<PerceptionSpatialSource> overLimit(PerceptionSpatialLimits::Sources + 1, source);
+            std::vector overLimit(PerceptionSpatialLimits::Sources + 1, source);
             ExpectError(broadphase.Publish(view, 2, std::span{&listener, 1}, overLimit), AIErrors::PerceptionSpatialLimitExceeded);
             CHECK(broadphase.Current() == snapshot.Value());
         }
@@ -213,6 +215,8 @@ namespace Horo::AI {
             firstScene.reset();
             CHECK(second.Value()->Scene() == secondView.RuntimeId());
             CHECK(first.Value()->Query(SightQuery(firstListener.entity)).Value().count == 1);
+            CHECK(first.Value()->ListenerPosition(firstListener.entity).Value() == firstListener.position);
+            ExpectError(second.Value()->ListenerPosition(firstListener.entity), AIErrors::PerceptionSpatialInvalid);
             ExpectError(second.Value()->Query(SightQuery(firstListener.entity)), AIErrors::PerceptionSpatialInvalid);
         }
     }  // namespace
