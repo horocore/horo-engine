@@ -65,7 +65,7 @@ namespace Horo::Runtime::Ui::TextShapingDetail {
                 if (scalar == evidence.end() || scalar->byteStart != cluster.byteStart)
                     return Failure(UiErrors::TextInputInvalid);
                 cluster.bidiLevel = scalar->level;
-                cluster.direction = (cluster.bidiLevel & 1U) != 0 ? UiTextDirection::RightToLeft : UiTextDirection::LeftToRight;
+                cluster.direction = (cluster.bidiLevel % 2U) != 0 ? UiTextDirection::RightToLeft : UiTextDirection::LeftToRight;
             }
             if (cluster.hardBreak) {
                 cluster.faceIndex = 0;

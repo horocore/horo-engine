@@ -20,20 +20,29 @@
 namespace Horo::Runtime::Ui {
     namespace {
         using TextShapingDetail::Failure;
-        // This mutex protects only explicit process-runtime creation/final retirement.
-        // No paragraph, shaping, line-layout or immutable query takes it.
-        std::mutex runtimeMutex;
         enum class RuntimeAdmission {
             Uninitialized,
             Active,
             Retired
         };
-        RuntimeAdmission runtimeAdmission{RuntimeAdmission::Uninitialized};
+
+        struct ProcessRuntimeState {
+            // Serializes explicit creation/final retirement; text queries never take this mutex.
+            std::mutex mutex;
+            RuntimeAdmission admission{RuntimeAdmission::Uninitialized};
+        };
+
+        /** @brief Retains process admission state independently of any host/result lease. */
+        ProcessRuntimeState &ProcessState() noexcept {
+            static ProcessRuntimeState state;
+            return state;
+        }
+
         constexpr std::size_t DataBytes = 33'107'248;
         constexpr std::string_view DataDigest = "sha256:a3d49eacd189624769dc77457c6aa1789a89219fb217a6d87d5b076c269aaf1f";
 
         struct alignas(16) DataBlock {
-            std::byte bytes[16];
+            std::array<std::byte, 16> bytes;
         };
 
         struct BidiDeleter {
@@ -51,14 +60,14 @@ namespace Horo::Runtime::Ui {
         using BidiOwner = std::unique_ptr<UBiDi, BidiDeleter>;
         using BreakOwner = std::unique_ptr<UBreakIterator, BreakDeleter>;
 
-        /** @brief Owns registration rollback while the caller already holds runtimeMutex. */
+        /** @brief Owns registration rollback while the caller already holds the process admission mutex. */
         struct InitializationRollback final {
             bool handedOff{};
 
             ~InitializationRollback() {
                 if (!handedOff) {
                     u_cleanup();
-                    runtimeAdmission = RuntimeAdmission::Retired;
+                    ProcessState().admission = RuntimeAdmission::Retired;
                 }
             }
 
@@ -90,6 +99,7 @@ namespace Horo::Runtime::Ui {
                 if (U_FAILURE(status) || !iterator)
                     return false;
                 for (auto boundary = ubrk_first(iterator.get()); boundary != UBRK_DONE; boundary = ubrk_next(iterator.get())) {
+                    // Traverse every boundary so packaged dictionary engines are resident before frame-hot queries.
                 }
             }
             return true;
@@ -98,7 +108,7 @@ namespace Horo::Runtime::Ui {
 
     struct UiTextUnicodeRuntime::Storage final {
         static std::shared_ptr<Storage> processLease;
-        std::unique_ptr<DataBlock[]> data;
+        std::vector<DataBlock> data;
         std::atomic<bool> active{true};
         bool initialized{};
     };
@@ -110,16 +120,16 @@ namespace Horo::Runtime::Ui {
         if (std::endian::native != std::endian::little || data.size() != DataBytes)
             return Failure<UiTextUnicodeRuntime>(UiErrors::PayloadInvalid);
         try {
-            const auto expected = ParseSha256(DataDigest);
-            if (expected.HasError() || ComputeSha256(data) != expected.Value())
+            if (const auto expected = ParseSha256(DataDigest); expected.HasError() || ComputeSha256(data) != expected.Value())
                 return Failure<UiTextUnicodeRuntime>(UiErrors::PayloadInvalid);
-            const std::lock_guard lock(runtimeMutex);
-            if (runtimeAdmission != RuntimeAdmission::Uninitialized)
+            auto &process = ProcessState();
+            const std::lock_guard lock(process.mutex);
+            if (process.admission != RuntimeAdmission::Uninitialized)
                 return Failure<UiTextUnicodeRuntime>(UiErrors::TextLifecycleUnavailable);
             auto storage = std::make_shared<Storage>();
             constexpr auto blockCount = (DataBytes + sizeof(DataBlock) - 1) / sizeof(DataBlock);
-            storage->data = std::make_unique<DataBlock[]>(blockCount);
-            const auto destination = std::as_writable_bytes(std::span(storage->data.get(), blockCount));
+            storage->data.resize(blockCount);
+            const auto destination = std::as_writable_bytes(std::span(storage->data));
             if (destination.size() < data.size())
                 return Failure<UiTextUnicodeRuntime>(UiErrors::PayloadInvalid);
             std::ranges::copy(data, destination.first(data.size()).begin());
@@ -127,7 +137,7 @@ namespace Horo::Runtime::Ui {
             // unwinds cleanup before copied bytes, then releases the outer lock.
             InitializationRollback rollback;
             UErrorCode status = U_ZERO_ERROR;
-            udata_setCommonData(storage->data.get(), &status);
+            udata_setCommonData(storage->data.data(), &status);
             if (U_SUCCESS(status))
                 u_init(&status);
             if (U_FAILURE(status) || !WarmDictionaryData()) {
@@ -136,7 +146,7 @@ namespace Horo::Runtime::Ui {
             auto result = Result<UiTextUnicodeRuntime>::Success(UiTextUnicodeRuntime{storage});
             storage->initialized = true;
             Storage::processLease = storage;
-            runtimeAdmission = RuntimeAdmission::Active;
+            process.admission = RuntimeAdmission::Active;
             rollback.handedOff = true;
             return result;
         } catch (const std::bad_alloc &) {
@@ -160,7 +170,7 @@ namespace Horo::Runtime::Ui {
         return *this;
     }
 
-    void UiTextUnicodeRuntime::Close() noexcept {
+    void UiTextUnicodeRuntime::Close() const noexcept {
         if (storage_)
             storage_->active.store(false);
     }
@@ -174,14 +184,15 @@ namespace Horo::Runtime::Ui {
         Close();
         if (!storage_ || !storage_->initialized)
             return Result<void>::Success();
-        const std::lock_guard lock(runtimeMutex);
+        auto &process = ProcessState();
+        const std::lock_guard lock(process.mutex);
         // One host lease plus one process pin. Analyzer/analysis leases keep the
         // pin alive until the host retries; their destructors never reset ICU.
         if (storage_.use_count() != 2)
             return Failure(UiErrors::TextShapeStorageExhausted);
         u_cleanup();
         storage_->initialized = false;
-        runtimeAdmission = RuntimeAdmission::Retired;
+        ProcessState().admission = RuntimeAdmission::Retired;
         Storage::processLease.reset();
         return Result<void>::Success();
     }
@@ -239,20 +250,20 @@ namespace Horo::Runtime::Ui {
         /** @brief Validates that a native break offset ends one complete decoded scalar. */
         static UiTextUnicodeScalar *ScalarEndingAt(UiTextUnicodeAnalysis::Storage &slot, const std::int32_t boundary) noexcept {
             const auto found =
-                std::lower_bound(slot.scalars.begin(), slot.scalars.end(), boundary, [](const auto &scalar, const auto offset) {
-                return scalar.utf16End < static_cast<std::uint32_t>(offset);
-            });
-            return found != slot.scalars.end() && found->utf16End == static_cast<std::uint32_t>(boundary) ? &*found : nullptr;
+                std::ranges::lower_bound(slot.scalars, static_cast<std::uint32_t>(boundary), {}, &UiTextUnicodeScalar::utf16End);
+            return found != slot.scalars.end() && found->utf16End == static_cast<std::uint32_t>(boundary) ? std::to_address(found)
+                                                                                                          : nullptr;
         }
 
-        Result<void> Prepare(UiTextUnicodeAnalysis::Storage &slot, const UiTextLanguage locale, const UiTextParagraphDirection direction) {
+        static Result<void> Prepare(UiTextUnicodeAnalysis::Storage &slot, const UiTextLanguage &locale,
+                                    const UiTextParagraphDirection direction) {
             // Validate the same explicit locale for empty and nonempty content;
             // an empty candidate must not publish a tag ICU cannot consume.
             UErrorCode status = U_ZERO_ERROR;
-            char localeName[ULOC_FULLNAME_CAPACITY]{};
+            std::array<char, ULOC_FULLNAME_CAPACITY> localeName{};
             std::int32_t parsed{};
             const std::string language(locale.View());
-            uloc_forLanguageTag(language.c_str(), localeName, ULOC_FULLNAME_CAPACITY, &parsed, &status);
+            uloc_forLanguageTag(language.c_str(), localeName.data(), static_cast<std::int32_t>(localeName.size()), &parsed, &status);
             if (U_FAILURE(status) || parsed != static_cast<std::int32_t>(language.size()))
                 return Failure(UiErrors::LocaleInvalid);
             if (slot.utf16.empty())
@@ -271,17 +282,20 @@ namespace Horo::Runtime::Ui {
                 ubrk_open(UBRK_CHARACTER, "root", slot.utf16.data(), static_cast<std::int32_t>(slot.utf16.size()), &status));
             if (U_FAILURE(status) || !graphemes)
                 return Failure(UiErrors::TextShapeInvalid);
-            for (auto boundary = ubrk_first(graphemes.get()); (boundary = ubrk_next(graphemes.get())) != UBRK_DONE;) {
+            (void)ubrk_first(graphemes.get());
+            for (auto boundary = ubrk_next(graphemes.get()); boundary != UBRK_DONE; boundary = ubrk_next(graphemes.get())) {
                 auto *found = ScalarEndingAt(slot, boundary);
                 if (found == nullptr)
                     return Failure(UiErrors::TextShapeInvalid);
                 found->graphemeEnd = true;
             }
 
-            BreakOwner breaks(ubrk_open(UBRK_LINE, localeName, slot.utf16.data(), static_cast<std::int32_t>(slot.utf16.size()), &status));
+            BreakOwner breaks(
+                ubrk_open(UBRK_LINE, localeName.data(), slot.utf16.data(), static_cast<std::int32_t>(slot.utf16.size()), &status));
             if (U_FAILURE(status) || !breaks)
                 return Failure(UiErrors::TextShapeInvalid);
-            for (auto boundary = ubrk_first(breaks.get()); (boundary = ubrk_next(breaks.get())) != UBRK_DONE;) {
+            (void)ubrk_first(breaks.get());
+            for (auto boundary = ubrk_next(breaks.get()); boundary != UBRK_DONE; boundary = ubrk_next(breaks.get())) {
                 auto *found = ScalarEndingAt(slot, boundary);
                 if (found == nullptr)
                     return Failure(UiErrors::TextShapeInvalid);
@@ -336,15 +350,15 @@ namespace Horo::Runtime::Ui {
     UiTextUnicodeAnalyzer &UiTextUnicodeAnalyzer::operator=(UiTextUnicodeAnalyzer &&other) noexcept = default;
 
     Result<UiTextUnicodeAnalysis> UiTextUnicodeAnalyzer::Analyze(const std::string_view text, const UiTextContentRevision content,
-                                                                 const UiTextLanguage locale, const UiTextParagraphDirection direction) {
+                                                                 const UiTextLanguage &locale, const UiTextParagraphDirection direction) {
         if (!storage_ || !storage_->active || !storage_->runtime->active.load())
             return Failure<UiTextUnicodeAnalysis>(UiErrors::TextLifecycleUnavailable);
         if (!content.IsValid() || locale.IsAuto() || direction >= UiTextParagraphDirection::Count)
             return Failure<UiTextUnicodeAnalysis>(UiErrors::TextInputInvalid);
         if (text.size() > storage_->limits.maxInputBytes)
             return Failure<UiTextUnicodeAnalysis>(UiErrors::CapacityExceeded);
-        const auto &cached = storage_->cached;
-        if (cached && cached->text == text && cached->content == content && cached->locale == locale && cached->direction == direction)
+        if (const auto &cached = storage_->cached;
+            cached && cached->text == text && cached->content == content && cached->locale == locale && cached->direction == direction)
             return Result<UiTextUnicodeAnalysis>::Success(UiTextUnicodeAnalysis{cached});
         const auto free = std::ranges::find_if(storage_->slots, [](const auto &slot) {
             return slot.use_count() == 1;

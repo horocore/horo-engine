@@ -403,8 +403,8 @@ namespace Horo::Runtime::Ui {
                         continue;
                     if (sourceClusters.size() >= descriptor.limits.maxClusters)
                         return Failure(UiErrors::CapacityExceeded);
-                    sourceClusters.push_back({first, index + 1, scalars[first].byteStart, scalars[index].byteEnd, 0, UiTextScript::Auto(),
-                                              UiTextDirection::LeftToRight, false});
+                    sourceClusters.emplace_back(first, index + 1, scalars[first].byteStart, scalars[index].byteEnd, 0, UiTextScript::Auto(),
+                                                UiTextDirection::LeftToRight, false);
                     first = index + 1;
                 }
                 if (first != scalars.size())

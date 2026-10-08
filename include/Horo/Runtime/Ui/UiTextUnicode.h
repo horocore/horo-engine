@@ -35,8 +35,8 @@ namespace Horo::Runtime::Ui {
         UiTextUnicodeRuntime &operator=(UiTextUnicodeRuntime &&other) noexcept;
         UiTextUnicodeRuntime(const UiTextUnicodeRuntime &) = delete;
         UiTextUnicodeRuntime &operator=(const UiTextUnicodeRuntime &) = delete;
-        /** @brief Closes preparation admission without resetting global Unicode state. */
-        void Close() noexcept;
+        /** @brief Closes shared preparation admission while retaining this owner lease and global Unicode state. */
+        void Close() const noexcept;
         /**
          * @brief Closes admission and retires process data only after every native/result lease drains.
          * @return Success, or typed storage-exhausted evidence while dependent owners are still alive.
@@ -120,12 +120,12 @@ namespace Horo::Runtime::Ui {
          * @brief Prepares Unicode bidi and locale break evidence, or retains the exact last cached candidate.
          * @param text UTF-8 source, never reordered in place.
          * @param content Exact nonzero content revision.
-         * @param locale Explicit non-Auto normalized language tag, never the process locale.
+         * @param locale Explicit non-Auto normalized tag borrowed for this call and copied into the owned result cache.
          * @param direction Paragraph base direction policy.
          * @return Immutable result or typed input, capacity, slot, native, or lifecycle failure.
          */
-        [[nodiscard]] Result<UiTextUnicodeAnalysis> Analyze(std::string_view text, UiTextContentRevision content, UiTextLanguage locale,
-                                                            UiTextParagraphDirection direction);
+        [[nodiscard]] Result<UiTextUnicodeAnalysis> Analyze(std::string_view text, UiTextContentRevision content,
+                                                            const UiTextLanguage &locale, UiTextParagraphDirection direction);
         /**
          * @brief Applies Unicode line-specific reset and reordering after wrapping.
          * @param analysis Exact prepared source lease from this analyzer.

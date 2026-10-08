@@ -156,7 +156,7 @@ namespace Horo::Runtime::Ui {
                                  state.lineIndex,
                                  {static_cast<std::int32_t>(clusterOrigin), state.lineOrigin.y},
                                  scaledClusterAdvances[clusterIndex],
-                                 (lineLevel & 1U) != 0});
+                                 (lineLevel % 2U) != 0});
         if (cluster.breakOpportunity == UiTextBreakOpportunity::Optional && state.gapIndex < state.optionalGaps) {
             const auto addition = state.justifyExtra + (state.justifyRemainder-- > 0 ? 1 : 0);
             state.cursor += addition;
@@ -183,12 +183,11 @@ namespace Horo::Runtime::Ui {
                 const auto clusterIndex = static_cast<std::uint32_t>(std::prev(upper) - clusters.begin());
                 if (clusterIndex < state.start || clusterIndex >= end || scalar.byteEnd > clusters[clusterIndex].byteEnd)
                     return Failure(UiErrors::TextLayoutInputInvalid);
-                if (clusterIndex != previous) {
-                    if (const auto appended = AppendSourceCluster(request, slot, clusterIndex, state, visualLevels[index]);
-                        appended.HasError())
-                        return appended;
-                    previous = clusterIndex;
-                }
+                if (clusterIndex == previous)
+                    continue;
+                if (const auto appended = AppendSourceCluster(request, slot, clusterIndex, state, visualLevels[index]); appended.HasError())
+                    return appended;
+                previous = clusterIndex;
             }
             return Result<void>::Success();
         }
@@ -320,8 +319,8 @@ namespace Horo::Runtime::Ui {
         }
         if (const auto appended = AppendSourceRange(request, slot, window.end, state); appended.HasError())
             return appended;
-        const auto sourceEnd = linePlans[state.lineIndex].firstCluster + linePlans[state.lineIndex].clusterCount;
-        if (linePlans[state.lineIndex].hardBreak && window.end < sourceEnd) {
+        if (const auto sourceEnd = linePlans[state.lineIndex].firstCluster + linePlans[state.lineIndex].clusterCount;
+            linePlans[state.lineIndex].hardBreak && window.end < sourceEnd) {
             const auto &hardBreak = request.shaped.clusters[sourceEnd - 1];
             slot.clusters.push_back({sourceEnd - 1,
                                      hardBreak.byteStart,
@@ -329,7 +328,7 @@ namespace Horo::Runtime::Ui {
                                      state.lineIndex,
                                      {static_cast<std::int32_t>(state.cursor), state.lineOrigin.y},
                                      0,
-                                     (hardBreak.bidiLevel & 1U) != 0});
+                                     (hardBreak.bidiLevel % 2U) != 0});
         }
         if (window.ellipsis && !leadingEllipsis) {
             if (const auto appended =

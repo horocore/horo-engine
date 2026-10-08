@@ -12,12 +12,12 @@ namespace Horo::Runtime::Ui {
         const auto &cluster = shape.Clusters()[clusterIndex];
         const auto evidence = unicode.Scalars();
         const auto beginning = std::ranges::lower_bound(evidence, cluster.byteStart, {}, &UiTextUnicodeScalar::byteStart);
-        const auto ending = std::ranges::lower_bound(evidence, cluster.byteEnd, {}, &UiTextUnicodeScalar::byteEnd);
-        if (beginning == evidence.end() || ending == evidence.end() || beginning->byteStart != cluster.byteStart ||
+        if (const auto ending = std::ranges::lower_bound(evidence, cluster.byteEnd, {}, &UiTextUnicodeScalar::byteEnd);
+            beginning == evidence.end() || ending == evidence.end() || beginning->byteStart != cluster.byteStart ||
             ending->byteEnd != cluster.byteEnd || beginning->level != cluster.bidiLevel || ending->breakAfter != cluster.breakAfter)
             return Failure(UiErrors::TextLayoutSourceStale);
         const auto first = static_cast<std::uint32_t>(preparedGlyphs.size());
-        const auto direction = (cluster.bidiLevel & 1U) != 0 ? UiTextFlowDirection::RightToLeft : UiTextFlowDirection::LeftToRight;
+        const auto direction = (cluster.bidiLevel % 2U) != 0 ? UiTextFlowDirection::RightToLeft : UiTextFlowDirection::LeftToRight;
         for (std::uint32_t offset = 0; offset < cluster.glyphCount; ++offset) {
             const auto &glyph = shape.Glyphs()[cluster.firstGlyph + offset];
             if (glyph.advance.x < 0 || glyph.advance.y != 0)
@@ -30,15 +30,17 @@ namespace Horo::Runtime::Ui {
             else {
                 if (preparedRuns.size() >= descriptor.limits.runs)
                     return Failure(UiErrors::TextLayoutCapacityExceeded);
-                preparedRuns.push_back({face.Value(), static_cast<std::uint32_t>(preparedGlyphs.size()), 1, direction});
+                preparedRuns.emplace_back(face.Value(), static_cast<std::uint32_t>(preparedGlyphs.size()), 1, direction);
             }
             preparedGlyphs.push_back({glyph.glyph, glyph.offset, glyph.advance});
         }
-        const auto opportunity = cluster.breakAfter == UiTextUnicodeBreak::Mandatory  ? UiTextBreakOpportunity::Mandatory
-                                 : cluster.breakAfter == UiTextUnicodeBreak::Optional ? UiTextBreakOpportunity::Optional
-                                                                                      : UiTextBreakOpportunity::None;
-        preparedClusters.push_back({cluster.byteStart, cluster.byteEnd, cluster.glyphCount == 0 ? NoUiTextLayoutCluster : first,
-                                    cluster.glyphCount, cluster.advance, opportunity, cluster.bidiLevel});
+        auto opportunity = UiTextBreakOpportunity::None;
+        if (cluster.breakAfter == UiTextUnicodeBreak::Mandatory)
+            opportunity = UiTextBreakOpportunity::Mandatory;
+        else if (cluster.breakAfter == UiTextUnicodeBreak::Optional)
+            opportunity = UiTextBreakOpportunity::Optional;
+        preparedClusters.emplace_back(cluster.byteStart, cluster.byteEnd, cluster.glyphCount == 0 ? NoUiTextLayoutCluster : first,
+                                      cluster.glyphCount, cluster.advance, opportunity, cluster.bidiLevel);
         return Result<void>::Success();
     }
 
@@ -52,8 +54,8 @@ namespace Horo::Runtime::Ui {
             shape.Descriptor().language != unicode.Locale() || shape.Descriptor().ownership != request.source.instance.ownership ||
             shape.Descriptor().content.Value() != request.source.revisions.content.Value())
             return Failure<UiTextLayoutResult>(UiErrors::TextLayoutSourceStale);
-        const auto &limits = storage_->descriptor.limits;
-        if (shape.Text().size() > limits.sourceBytes || shape.Clusters().size() > limits.clusters || shape.Glyphs().size() > limits.glyphs)
+        if (const auto &limits = storage_->descriptor.limits;
+            shape.Text().size() > limits.sourceBytes || shape.Clusters().size() > limits.clusters || shape.Glyphs().size() > limits.glyphs)
             return Failure<UiTextLayoutResult>(UiErrors::TextLayoutCapacityExceeded);
         auto &runs = storage_->preparedRuns;
         auto &glyphs = storage_->preparedGlyphs;
