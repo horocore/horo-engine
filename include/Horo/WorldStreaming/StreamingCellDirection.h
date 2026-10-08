@@ -44,6 +44,10 @@ namespace Horo::WorldStreaming {
         [[nodiscard]] virtual StreamingCellActivationRequirement Requirement() const noexcept = 0;
         /** @brief Returns immutable attempt fence. @return Exact operation identity. */
         [[nodiscard]] virtual StreamingCellOperationHandle Operation() const noexcept = 0;
+        /** @brief Returns a positive immutable upper bound for one cleanup step. @return Nanoseconds for BeginRetirement plus
+         *          one PollRetirement and, on acknowledgement, adapter destruction and scheduler finalization. Heavy cleanup must be
+         * resumable inside PollRetirement or asynchronously scheduled on its native owner, never deferred to the adapter destructor. */
+        [[nodiscard]] virtual std::uint64_t MaximumRetirementNanoseconds() const noexcept = 0;
         /** @brief Revokes new access and publication immediately; does not claim cleanup. */
         virtual void RevokeAccess() noexcept = 0;
         /** @brief Starts idempotent asynchronous cleanup once its dependency predecessors have retired. */
@@ -114,10 +118,13 @@ namespace Horo::WorldStreaming {
         /**
          * @brief Publishes an activation using the current canonical snapshot, then completes the operation once.
          * @param transaction Complete prepared activation receipt set. @param point Current host safe point.
-         * @return Success or the preserved activation/scheduler error. Interrupted attempts roll back prepared receipts.
+         * @param budget Unique shared owner-frame budget. @param elapsedNanoseconds Monotonic elapsed owner-service time.
+         * @return Success or the preserved activation/scheduler error. Frame deferral retains the attempt and its scheduler charge;
+         *          interrupted attempts revoke/transfer prepared resources to retirement.
          */
         [[nodiscard]] Result<void> CommitActivation(StreamingCellActivationTransaction &transaction,
-                                                    StreamingCellActivationCommitPoint point);
+                                                    StreamingCellActivationCommitPoint point, StreamingOwnerFrameBudget &budget,
+                                                    std::uint64_t elapsedNanoseconds);
         /**
          * @brief Closes further demand updates and requests cancellation, failure, replacement or shutdown.
          * @param expected Exact operation/fence. @param reason Cancel, Fail, Replace or Shutdown.
@@ -126,9 +133,14 @@ namespace Horo::WorldStreaming {
         [[nodiscard]] Result<void> Interrupt(const StreamingCellOperationHandle &expected, StreamingCellOperationTransition reason);
         /**
          * @brief Polls retirement in the host-validated dependency order and releases the exact scheduler charge only after all ack.
+         * @param budget Unique shared budget also used by activation and every other retiring attempt.
+         * @param elapsedNanoseconds Monotonic elapsed owner-service time sampled immediately before this call.
          * @return Current operation snapshot or a preserved poll/stale acknowledgement error; errors retain every pending owner/charge.
+         * @details Starts at most one bounded participant step per call. Pending/error steps consume their charge; frame deferral
+         *          invokes no callbacks. Acknowledged adapters are destroyed inside that step, so finalization does not batch destruction.
+         *          Dependency order, partial progress and reservations survive subsequent frames, moves, cancellation and shutdown.
          */
-        [[nodiscard]] Result<StreamingCellOperation> PollRetirement();
+        [[nodiscard]] Result<StreamingCellOperation> PollRetirement(StreamingOwnerFrameBudget &budget, std::uint64_t elapsedNanoseconds);
         /**
          * @brief Transfers successful resources to their resident/active owner.
          * @return Complete participant ownership, or typed lifecycle failure before successful terminal completion.

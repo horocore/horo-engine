@@ -48,7 +48,7 @@ namespace Horo::Extensions::Tests {
         REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasError());
 
         descriptor = ValidDescriptor();
-        descriptor.requiredCapabilities.push_back({"editor.asset_query"});
+        descriptor.requiredCapabilities.emplace_back("editor.asset_query");
         REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasError());
 
         descriptor = ValidDescriptor();
@@ -60,7 +60,7 @@ namespace Horo::Extensions::Tests {
         auto descriptor = ValidDescriptor();
         EditorSurfaceDescriptorLimits limits;
         limits.maximumCapabilities = 1;
-        descriptor.requiredCapabilities.push_back({"editor.log.read"});
+        descriptor.requiredCapabilities.emplace_back("editor.log.read");
         REQUIRE(ValidateEditorSurfaceDescriptor(descriptor, limits).HasError());
 
         descriptor = ValidDescriptor();
@@ -77,17 +77,18 @@ namespace Horo::Extensions::Tests {
     }
 
     TEST_CASE("Editor surface descriptors validate separated event requests", "[Extensions][EditorSurface][DataBus]") {
+        using enum Horo::EditorEventKind;
         auto descriptor = ValidDescriptor();
-        descriptor.requestedEditorEvents = {Horo::EditorEventKind::AssetImported, Horo::EditorEventKind::MetricsChanged};
-        descriptor.requestedProcessEvents = {Horo::EditorEventKind::ProjectOpened};
+        descriptor.requestedEditorEvents = {AssetImported, MetricsChanged};
+        descriptor.requestedProcessEvents = {ProjectOpened};
         REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasValue());
 
-        descriptor.requestedEditorEvents.push_back(Horo::EditorEventKind::AssetImported);
+        descriptor.requestedEditorEvents.push_back(AssetImported);
         REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasError());
 
         descriptor = ValidDescriptor();
-        descriptor.requestedEditorEvents = {Horo::EditorEventKind::AssetImported};
-        descriptor.requestedProcessEvents = {Horo::EditorEventKind::AssetImported};
+        descriptor.requestedEditorEvents = {AssetImported};
+        descriptor.requestedProcessEvents = {AssetImported};
         REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasError());
 
         descriptor = ValidDescriptor();
@@ -97,8 +98,30 @@ namespace Horo::Extensions::Tests {
         descriptor = ValidDescriptor();
         EditorSurfaceDescriptorLimits limits;
         limits.maximumEditorEvents = 1;
-        descriptor.requestedEditorEvents = {Horo::EditorEventKind::AssetImported, Horo::EditorEventKind::MetricsChanged};
+        descriptor.requestedEditorEvents = {AssetImported, MetricsChanged};
         REQUIRE(ValidateEditorSurfaceDescriptor(descriptor, limits).HasError());
+    }
+
+    TEST_CASE("Activity descriptors require bounded typed drawer placement", "[Extensions][EditorSurface][Activity]") {
+        auto descriptor = ValidDescriptor();
+        descriptor.kind = EditorSurfaceKind::ActivityItem;
+        descriptor.placement.kind = EditorSurfacePlacementKind::ActivityBar;
+        REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasError());
+        descriptor.activity = EditorActivityDestination{EditorActivitySide::Bottom, 2, "com.example.tools.drawer", "icons/tools.svg"};
+        REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasValue());
+        descriptor.activity->group = 3;
+        REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasError());
+        descriptor.activity->group = 0;
+        descriptor.activity->iconResource = "../tools.svg";
+        REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasError());
+        descriptor.activity->iconResource = "C:\\tools.svg";
+        REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasError());
+        descriptor.activity->iconResource = "icons/tools.svg";
+        descriptor.activity->drawerId.clear();
+        REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasError());
+        descriptor = ValidDescriptor();
+        descriptor.activity = EditorActivityDestination{EditorActivitySide::Left, 0, "com.example.tools.drawer", "icons/tools.svg"};
+        REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasError());
     }
 
     TEST_CASE("Editor surface descriptors accept every typed placement mapping", "[Extensions][EditorSurface]") {
@@ -129,6 +152,9 @@ namespace Horo::Extensions::Tests {
             descriptor.kind = test.kind;
             descriptor.placement.kind = test.placement;
             descriptor.persistence = test.persistence;
+            if (test.kind == EditorSurfaceKind::ActivityItem)
+                descriptor.activity =
+                    EditorActivityDestination{EditorActivitySide::Right, 0, "com.example.tools.drawer", "icons/tools.svg"};
             CHECK(ValidateEditorSurfaceDescriptor(descriptor).HasValue());
         }
     }

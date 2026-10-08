@@ -1,5 +1,6 @@
 #include "Horo/Mcp/McpErrors.h"
 #include "Horo/Mcp/McpToolRegistry.h"
+#include "McpAuthorizationTestSupport.h"
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
@@ -63,9 +64,7 @@ namespace {
     }
 
     [[nodiscard]] McpRequestContext Context(std::vector<std::string> capabilities = {}) {
-        McpRequestContext context;
-        context.capabilities = std::move(capabilities);
-        return context;
+        return Test::Context({.clientIdentity = "registry-client", .capabilities = std::move(capabilities)});
     }
 
     [[nodiscard]] std::string Code(const Error &error) {
@@ -74,7 +73,7 @@ namespace {
 }  // namespace
 
 TEST_CASE("MCP registry publishes deterministic capability-filtered discovery", "[unit][mcp][registry]") {
-    McpToolRegistry registry;
+    McpToolRegistry registry{Test::Authorization()};
     const auto adapter = std::make_shared<CountingAdapter>();
     REQUIRE(registry.Read()->Generation() == 0);
     const std::vector<std::string> hostCapabilities{"project.read"};
@@ -93,7 +92,7 @@ TEST_CASE("MCP registry publishes deterministic capability-filtered discovery", 
 }
 
 TEST_CASE("MCP registry requires an explicit owner context", "[unit][mcp][registry]") {
-    McpToolRegistry registry;
+    McpToolRegistry registry{Test::Authorization()};
     auto registration = Tool("build.start", std::make_shared<CountingAdapter>());
     registration.owner = McpOwnerContext::Unspecified;
     const auto result = registry.Publish({std::move(registration)});
@@ -103,7 +102,7 @@ TEST_CASE("MCP registry requires an explicit owner context", "[unit][mcp][regist
 }
 
 TEST_CASE("MCP schema and capability admission precedes every application adapter call", "[unit][mcp][registry]") {
-    McpToolRegistry registry;
+    McpToolRegistry registry{Test::Authorization()};
     const auto adapter = std::make_shared<CountingAdapter>();
     const std::vector<std::string> hostCapabilities{"project.read"};
     REQUIRE(registry.Publish({Tool("project.query", adapter, {"project.read"})}, hostCapabilities).HasValue());
@@ -129,7 +128,7 @@ TEST_CASE("MCP schema and capability admission precedes every application adapte
 }
 
 TEST_CASE("MCP registry rejects malformed, duplicate, unavailable and incompatible candidates atomically", "[unit][mcp][registry]") {
-    McpToolRegistry registry;
+    McpToolRegistry registry{Test::Authorization()};
     const auto adapter = std::make_shared<CountingAdapter>();
     REQUIRE(registry.Publish({Tool("alpha.query", adapter)}).HasValue());
     const auto original = registry.Read();
@@ -174,7 +173,7 @@ TEST_CASE("MCP registry rejects malformed, duplicate, unavailable and incompatib
 }
 
 TEST_CASE("MCP registry retains old reader and adapter lifetimes across replacement", "[unit][mcp][registry]") {
-    McpToolRegistry registry;
+    McpToolRegistry registry{Test::Authorization()};
     auto first = std::make_shared<CountingAdapter>();
     REQUIRE(registry.Publish({Tool("alpha.query", first)}).HasValue());
     const auto old = registry.Read();
@@ -194,7 +193,7 @@ TEST_CASE("MCP registry retains old reader and adapter lifetimes across replacem
 }
 
 TEST_CASE("MCP registry treats required capabilities as a canonical set across replacement", "[unit][mcp][registry]") {
-    McpToolRegistry registry;
+    McpToolRegistry registry{Test::Authorization()};
     const auto adapter = std::make_shared<CountingAdapter>();
     const std::vector<std::string> hostCapabilities{"project.write", "project.read"};
     REQUIRE(registry.Publish({Tool("project.query", adapter, {"project.write", "project.read"})}, hostCapabilities).HasValue());
@@ -210,7 +209,7 @@ TEST_CASE("MCP registry treats required capabilities as a canonical set across r
 }
 
 TEST_CASE("MCP registry enforces input and output budgets without leaking malformed results", "[unit][mcp][registry]") {
-    McpToolRegistry registry;
+    McpToolRegistry registry{Test::Authorization()};
     const auto adapter = std::make_shared<CountingAdapter>(nlohmann::json{{"accepted", "wrong"}});
     auto entry = Tool("bounded.query", adapter);
     entry.descriptor.bounds.maximumInputBytes = 32;
@@ -227,7 +226,7 @@ TEST_CASE("MCP registry enforces input and output budgets without leaking malfor
 }
 
 TEST_CASE("MCP registry rejects malformed metadata and unsupported schema constructs", "[unit][mcp][registry]") {
-    McpToolRegistry registry;
+    McpToolRegistry registry{Test::Authorization()};
     const auto adapter = std::make_shared<CountingAdapter>();
     auto entry = Tool("valid.query", adapter);
     const auto reject = [&registry](McpToolRegistration invalid) {
@@ -279,7 +278,7 @@ TEST_CASE("MCP registry rejects malformed metadata and unsupported schema constr
 }
 
 TEST_CASE("MCP nested schema validates arrays enums string limits and finite numeric inputs", "[unit][mcp][registry]") {
-    McpToolRegistry registry;
+    McpToolRegistry registry{Test::Authorization()};
     const auto adapter = std::make_shared<CountingAdapter>();
     auto entry = Tool("nested.query", adapter);
     entry.descriptor.inputSchema = {{"type", "object"},
@@ -305,7 +304,7 @@ TEST_CASE("MCP nested schema validates arrays enums string limits and finite num
 }
 
 TEST_CASE("MCP schema matching preserves primitive types bounds and open object members", "[unit][mcp][registry]") {
-    McpToolRegistry registry;
+    McpToolRegistry registry{Test::Authorization()};
     const auto adapter = std::make_shared<CountingAdapter>();
     auto entry = Tool("primitive.query", adapter);
     entry.descriptor.inputSchema = {{"type", "object"},
@@ -336,7 +335,7 @@ TEST_CASE("MCP schema matching preserves primitive types bounds and open object 
 }
 
 TEST_CASE("MCP registry rejects malformed UTF-8 arguments before application invocation", "[unit][mcp][registry]") {
-    McpToolRegistry registry;
+    McpToolRegistry registry{Test::Authorization()};
     const auto adapter = std::make_shared<CountingAdapter>();
     auto entry = Tool("text.query", adapter);
     entry.descriptor.inputSchema = {{"type", "string"}};
@@ -351,14 +350,14 @@ TEST_CASE("MCP snapshots retain adapters after registry teardown and translate a
     std::shared_ptr<const McpToolSnapshot> retained;
     const auto adapter = std::make_shared<CountingAdapter>();
     {
-        McpToolRegistry registry;
+        McpToolRegistry registry{Test::Authorization()};
         REQUIRE(registry.Publish({Tool("retained.query", adapter)}).HasValue());
         retained = registry.Read();
     }
     REQUIRE(retained->Invoke({"retained.query"}, {{"count", 1}}, Context()).HasValue());
     CHECK(adapter->calls == 1);
 
-    McpToolRegistry registry;
+    McpToolRegistry registry{Test::Authorization()};
     REQUIRE(registry.Publish({Tool("throws.query", std::make_shared<ThrowingAdapter>())}).HasValue());
     const auto result = registry.Read()->Invoke({"throws.query"}, {{"count", 1}}, Context());
     REQUIRE(result.HasError());
@@ -371,7 +370,7 @@ TEST_CASE("MCP snapshots retain adapters after registry teardown and translate a
 }
 
 TEST_CASE("MCP candidate publication is all-or-nothing across concurrent snapshot readers", "[unit][mcp][registry]") {
-    McpToolRegistry registry;
+    McpToolRegistry registry{Test::Authorization()};
     const auto adapter = std::make_shared<CountingAdapter>();
     REQUIRE(registry.Publish({Tool("first.query", adapter)}).HasValue());
     std::atomic<bool> invalidObservation{};

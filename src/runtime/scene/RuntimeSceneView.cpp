@@ -14,6 +14,11 @@ namespace Horo::Runtime {
         return scene_ != nullptr && structuralRevision_ == scene_->structuralRevision_;
     }
 
+    /** @copydoc RuntimeSceneView::StructuralRevision */
+    std::uint64_t RuntimeSceneView::StructuralRevision() const noexcept {
+        return IsCurrent() ? structuralRevision_ : 0;
+    }
+
     /** @copydoc RuntimeSceneView::RuntimeId */
     SceneRuntimeId RuntimeSceneView::RuntimeId() const noexcept {
         return scene_ ? scene_->runtimeId_ : SceneRuntimeId{};

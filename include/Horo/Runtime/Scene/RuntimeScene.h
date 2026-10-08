@@ -56,12 +56,29 @@ namespace Horo::Runtime {
         virtual void Rollback() noexcept = 0;
     };
 
+    /** @brief Prepared-owner declaration of persistent dataset participation; runtime/backend world handles are not dataset IDs. */
+    enum class SceneCanonicalDatasetProjection : std::uint8_t {
+        Unqualified,
+        Absent,
+        PersistentWorld
+    };
+    /** @brief Finite admission bound for one aggregate Scene preparation. */
+    inline constexpr std::size_t MaximumSceneActivationParticipants = 256;
+
     /** @brief Detached subsystem state prepared for one aggregate runtime-scene candidate. */
     class SceneActivationCandidate {
     public:
         virtual ~SceneActivationCandidate() = default;
         /** @brief Revalidates authoritative evidence immediately before aggregate publication. */
         [[nodiscard]] virtual Result<void> ValidatePublication() const = 0;
+
+        /** @brief Projects persistent dataset ownership from the actual prepared root, without activation or allocation.
+         * @return Absent only when this owner contains no persistent dataset; legacy owners remain Unqualified.
+         * @details PersistentWorld requires an actual typed dataset mapping before content-aware canonical capture is admitted.
+         */
+        [[nodiscard]] virtual SceneCanonicalDatasetProjection CanonicalDatasetProjection() const noexcept {
+            return SceneCanonicalDatasetProjection::Unqualified;
+        }
 
         /** @brief Installs fully validated state after every aggregate participant has passed validation.
          * @details Implementations must not fail, allocate, or perform provider work in this call. */
@@ -80,6 +97,15 @@ namespace Horo::Runtime {
          * @details Must not mutate state, allocate resources or perform I/O. Referenced authorities must outlive the pending operation.
          */
         [[nodiscard]] virtual Result<void> ValidatePublication() const = 0;
+
+        /** @brief Revalidates the actual prepared aggregate's sealed canonical dataset projection before publication.
+         * @param projection Projection gathered by Scene from the actual prepared roots at load time.
+         * @return Success or typed unsupported composition; ordinary legacy predicates retain their existing behavior.
+         */
+        [[nodiscard]] virtual Result<void> ValidatePreparedComposition(SceneCanonicalDatasetProjection projection) const {
+            (void)projection;
+            return Result<void>::Success();
+        }
     };
 
     /** @brief Host-injected subsystem participating in aggregate runtime-scene publication. */
@@ -104,6 +130,47 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] constexpr auto operator<=>(const SceneRuntimeId &) const noexcept = default;
+    };
+
+    namespace ScenePublicationDetail {
+        struct State;
+    }
+    /** @brief Terminal disposition of the exact Scene-owned queue operation. */
+    enum class ScenePublicationStatus : std::uint8_t {
+        Pending,
+        Published,
+        Rejected,
+        Cancelled
+    };
+
+    /** @brief Value-only observation; only a published receipt has a nonzero scene and revision. */
+    struct ScenePublicationSnapshot final {
+        ScenePublicationStatus status{ScenePublicationStatus::Pending};
+        SceneRuntimeId scene;
+        std::uint64_t structuralRevision{};
+        SceneCanonicalDatasetProjection datasets{SceneCanonicalDatasetProjection::Unqualified};
+    };
+
+    /** @brief Retained observer issued only by actual Scene queue admission, never a caller-provided identity assertion.
+     * @details All access occurs on the queue owner thread. The observer retains no SceneView and survives service retirement.
+     */
+    class ScenePublicationReceipt final {
+    public:
+        ScenePublicationReceipt(const ScenePublicationReceipt &) noexcept = default;
+        ScenePublicationReceipt &operator=(const ScenePublicationReceipt &) noexcept = default;
+        ScenePublicationReceipt(ScenePublicationReceipt &&) noexcept = default;
+        ScenePublicationReceipt &operator=(ScenePublicationReceipt &&) noexcept = default;
+        /** @brief Observes the exact admitted operation on its owner thread.
+         * @return Pending/terminal evidence, or typed wrong-thread/moved/ordinary queue error. Published identities are Scene-issued.
+         */
+        [[nodiscard]] Result<ScenePublicationSnapshot> Snapshot() const;
+
+    private:
+        friend class RuntimeSceneService;
+
+        explicit ScenePublicationReceipt(std::shared_ptr<ScenePublicationDetail::State> state) noexcept : state_(std::move(state)) {}
+
+        std::shared_ptr<ScenePublicationDetail::State> state_;
     };
 
     /** @brief Generation-checked entity slot identity within one runtime scene. */
@@ -348,6 +415,10 @@ namespace Horo::Runtime {
         RuntimeSceneView() = default;
         /** @brief Reports whether this borrow still observes the structural revision captured at acquisition. */
         [[nodiscard]] bool IsCurrent() const noexcept;
+        /** @brief Returns the exact committed structural revision captured by this current view.
+         * @return Non-zero revision when current, or zero for an empty/stale view; the scene owner must remain alive.
+         */
+        [[nodiscard]] std::uint64_t StructuralRevision() const noexcept;
         /** @brief Returns the owning runtime identity. */
         [[nodiscard]] SceneRuntimeId RuntimeId() const noexcept;
         /** @brief Returns the logical definition identity. */
@@ -476,12 +547,12 @@ namespace Horo::Runtime {
          * @param definition Immutable complete runtime definition consumed by this operation.
          * @param publicationCheck Optional predicate retained through preparation and revalidated before aggregate publication.
          * @param config Generation retirement policy.
-         * @return Typed admission result; deferred validation failures preserve the active scene and reach TakeOperationError().
+         * @return Owned receipt for a nonnull check; deferred failures preserve the active scene and reach TakeOperationError().
+         * Ordinary null-check preparation succeeds with an unobservable receipt; QueuePreparation preserves its void result.
          * @details Existing cancellation, replacement and shutdown paths retire the predicate with the pending operation.
          */
-        [[nodiscard]] Result<void> QueuePreparationWithPublicationCheck(RuntimeSceneDefinition definition,
-                                                                        std::unique_ptr<ScenePublicationCheck> publicationCheck,
-                                                                        RuntimeSceneConfig config = {});
+        [[nodiscard]] Result<ScenePublicationReceipt> QueuePreparationWithPublicationCheck(
+            RuntimeSceneDefinition definition, std::unique_ptr<ScenePublicationCheck> publicationCheck, RuntimeSceneConfig config = {});
         /** @brief Queues a composite save restore through the existing exclusive Scene admission path.
          * @param definition Validated compatible immutable authored defaults.
          * @param restore Non-null owned restore composition, retained through pending preparation/rollback.
@@ -540,6 +611,7 @@ namespace Horo::Runtime {
 
             std::unique_ptr<RuntimeScene> scene;
             std::vector<std::unique_ptr<SceneActivationCandidate>> candidates;
+            SceneCanonicalDatasetProjection datasets{SceneCanonicalDatasetProjection::Absent};
             std::unique_ptr<SceneAggregateRestore> restore; /**< Pins committed identity/fixup/module roots until Scene retirement. */
         };
 
@@ -564,6 +636,8 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> PublishPendingAggregate();
         /** @brief Records rejection and retires unpublished candidates while retaining the authority through cleanup. */
         void RejectPendingPublication(Error error);
+        /** @brief Retires only an unpublished queue receipt; already published identities remain immutable. */
+        void RetirePublicationReceipt(ScenePublicationStatus status) noexcept;
 
         SceneAggregate active_;
         SceneAggregate pending_;
@@ -571,6 +645,7 @@ namespace Horo::Runtime {
         std::vector<std::unique_ptr<SceneStructuralParticipant>> structuralParticipants_;
         std::unique_ptr<Preparation> preparation_;
         std::unique_ptr<ScenePublicationCheck> publicationCheck_;
+        std::shared_ptr<ScenePublicationDetail::State> publicationReceipt_;
         std::unique_ptr<SceneAggregateRestore> aggregateRestore_;
         std::optional<SceneCommandBuffer> structuralCommands_;
         std::optional<StructuralCommitResult> structuralResult_;
