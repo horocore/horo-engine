@@ -27,14 +27,18 @@ namespace Horo::AI {
                 auto instance = BlackboardInstance::Create({agent, schema->Identity(), schema->Version(), 1, 1}, schema);
                 REQUIRE(instance.HasValue());
                 blackboard = std::move(instance).Value();
-                DecisionAssetDescriptor asset{.asset = MakeIdentity<DecisionGraphAssetId>(100), .blackboardSchema = schema->Identity()};
+                DecisionAssetDescriptor asset{.asset = MakeIdentity<DecisionGraphAssetId>(100),
+                                              .blackboardSchema = schema->Identity(),
+                                              .source = Source()};
                 for (const auto id : {3U, 1U, 2U})
                     asset.nodes.push_back({.id = Id(id),
                                            .type = MakeIdentity<DecisionNodeTypeId>(101),
-                                           .requirements = {{.key = MakeIdentity<BlackboardKeyId>(id == 3 ? 20 : 10)}}});
+                                           .requirements = {{.key = MakeIdentity<BlackboardKeyId>(id == 3 ? 20 : 10), .source = Source()}},
+                                           .source = Source()});
                 const std::array descriptors{
                     DecisionNodeDescriptor{.type = MakeIdentity<DecisionNodeTypeId>(101),
-                                           .origin = {DecisionDescriptorSourceKind::Native, MakeIdentity<DecisionProviderId>(501), 1}}};
+                                           .origin = {DecisionDescriptorSourceKind::Native, MakeIdentity<DecisionProviderId>(501), 1},
+                                           .source = Source()}};
                 auto compiled = DecisionAssetCompiler::Compile(asset, {}, descriptors, std::array{schema});
                 REQUIRE(compiled.HasValue());
                 REQUIRE(compiled.Value().IsValid());
