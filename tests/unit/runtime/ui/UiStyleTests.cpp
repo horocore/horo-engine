@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <cstdint>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -146,6 +147,189 @@ namespace Horo::Runtime::Ui {
             REQUIRE(result.ErrorValue().code.Value() == expected.code.Value());
         }
 
+        TEST_CASE("The style geometry counter used by publication rejects exhaustion without wrapping", "[runtime_ui][style][geometry]") {
+            const auto maximum = Rev<UiStyleGeometryRevision>(std::numeric_limits<std::uint64_t>::max());
+            const auto exhausted = maximum.Next();
+            RequireError(exhausted, UiErrors::GenerationExhausted);
+            REQUIRE(maximum.Value() == std::numeric_limits<std::uint64_t>::max());
+        }
+
+        TEST_CASE("Style geometry fences retain observation-only and paint-only publications", "[runtime_ui][style][geometry]") {
+            auto registryResult = RuntimeStyleRegistry::Create(Definition(), Rev<RuntimeStyleGeneration>(1));
+            REQUIRE(registryResult.HasValue());
+            auto registry = std::move(registryResult).Value();
+            auto tree = MakeTree();
+            const auto root = tree.Root().Value().handle;
+            const auto child = tree.Find(Stable<UiElementId>(2)).Value();
+            std::array samples{UiStyleAnimationSample{Property(3), UiStyleValue{Color(0.3F, 0.4F, 0.5F)}}};
+            std::array elements{UiStyleElementInput{root, Asset(10), {}, {}, {}, {}, {}, samples},
+                                UiStyleElementInput{child, Asset(10), {}, {}, {}, {}, {}}};
+            auto resolver = MakeResolver();
+            const auto first = resolver.Update(tree, registry, {Sources(), elements});
+            REQUIRE(first.HasValue());
+            REQUIRE(first.Value().Descriptor().geometry == Rev<UiStyleGeometryRevision>(1));
+            samples[0].value = Color(0.9F, 0.4F, 0.5F);
+            const auto painted = resolver.Update(tree, registry, {Sources(2), elements});
+            REQUIRE(painted.HasValue());
+            REQUIRE(painted.Value().Descriptor().publication == Rev<UiStylePublicationRevision>(2));
+            REQUIRE(painted.Value().Descriptor().sources.interaction == Rev<UiInteractionRevision>(2));
+            REQUIRE(painted.Value().Descriptor().geometry == first.Value().Descriptor().geometry);
+            samples[0] = {Property(2), UiStyleValue{UiStyleDimension{9}}};
+            const auto measured = resolver.Update(tree, registry, {Sources(2), elements});
+            REQUIRE(measured.HasValue());
+            REQUIRE(measured.Value().Descriptor().geometry == Rev<UiStyleGeometryRevision>(2));
+        }
+
+        TEST_CASE("Style geometry effects include declared hit testing and accessibility", "[runtime_ui][style][geometry]") {
+            auto definition = Definition();
+            SECTION("hit testing") {
+                definition.properties[2].effects.hitTest = true;
+            }
+            SECTION("accessibility eligibility") {
+                definition.properties[2].effects.accessibility = true;
+            }
+            auto registryResult = RuntimeStyleRegistry::Create(std::move(definition), Rev<RuntimeStyleGeneration>(1));
+            REQUIRE(registryResult.HasValue());
+            auto registry = std::move(registryResult).Value();
+            auto tree = MakeTree();
+            const auto root = tree.Root().Value().handle;
+            const auto child = tree.Find(Stable<UiElementId>(2)).Value();
+            std::array samples{UiStyleAnimationSample{Property(3), UiStyleValue{Color(0.3F, 0.4F, 0.5F)}}};
+            std::array elements{UiStyleElementInput{root, Asset(10), {}, {}, {}, {}, {}, samples},
+                                UiStyleElementInput{child, Asset(10), {}, {}, {}, {}, {}}};
+            auto resolver = MakeResolver();
+            const auto first = resolver.Update(tree, registry, {Sources(), elements});
+            REQUIRE(first.HasValue());
+            samples[0].value = Color(0.9F, 0.4F, 0.5F);
+            const auto changed = resolver.Update(tree, registry, {Sources(), elements});
+            REQUIRE(changed.HasValue());
+            REQUIRE(changed.Value().Descriptor().geometry == Rev<UiStyleGeometryRevision>(2));
+        }
+
+        TEST_CASE("Style geometry fences retain equal effective values across provenance changes", "[runtime_ui][style][geometry]") {
+            auto registryResult = RuntimeStyleRegistry::Create(Definition(), Rev<RuntimeStyleGeneration>(1));
+            REQUIRE(registryResult.HasValue());
+            auto registry = std::move(registryResult).Value();
+            auto tree = MakeTree();
+            const auto root = tree.Root().Value().handle;
+            const auto child = tree.Find(Stable<UiElementId>(2)).Value();
+            std::array elements{UiStyleElementInput{root, Asset(10), {}, {}, {}, {}, {}},
+                                UiStyleElementInput{child, Asset(10), {}, {}, {}, {}, {}}};
+            auto resolver = MakeResolver();
+            const auto first = resolver.Update(tree, registry, {Sources(), elements});
+            REQUIRE(first.HasValue());
+            const std::array overrides{Assignment(Property(2), UiStyleValue{UiStyleDimension{0}})};
+            elements[0].inlineProperties = overrides;
+            const auto observed = resolver.Update(tree, registry, {Sources(2), elements});
+            REQUIRE(observed.HasValue());
+            REQUIRE(observed.Value().Descriptor().publication != first.Value().Descriptor().publication);
+            REQUIRE(observed.Value().Descriptor().geometry == first.Value().Descriptor().geometry);
+            const auto *value = FindProperty(observed.Value(), root, Property(2));
+            REQUIRE(value != nullptr);
+            REQUIRE(value->provenance.origin == UiStyleOrigin::Inline);
+        }
+
+        TEST_CASE("Style geometry fences include inherited effective values and registry semantics", "[runtime_ui][style][geometry]") {
+            auto definition = Definition();
+            definition.properties[1].inheritsToChildren = true;
+            definition.assets[0].states.push_back({UiVisualStateMask{UiVisualState::Pressed},
+                                                   {},
+                                                   UiStateLayer::Validation,
+                                                   {Assignment(Property(2), UiStyleValue{UiStyleDimension{17}})}});
+            auto registryResult = RuntimeStyleRegistry::Create(definition, Rev<RuntimeStyleGeneration>(1));
+            REQUIRE(registryResult.HasValue());
+            auto registry = std::move(registryResult).Value();
+            auto tree = MakeTree();
+            const auto root = tree.Root().Value().handle;
+            const auto child = tree.Find(Stable<UiElementId>(2)).Value();
+            std::array elements{UiStyleElementInput{root, Asset(10), {}, {}, {}, {}, {}},
+                                UiStyleElementInput{child, Asset(10), {}, {}, {}, {}, {}}};
+            auto resolver = MakeResolver();
+            const auto first = resolver.Update(tree, registry, {Sources(), elements});
+            REQUIRE(first.HasValue());
+            elements[0].state = UiVisualStateMask{UiVisualState::Pressed};
+            const auto inherited = resolver.Update(tree, registry, {Sources(), elements});
+            REQUIRE(inherited.HasValue());
+            const auto *value = FindProperty(inherited.Value(), child, Property(2));
+            REQUIRE(value != nullptr);
+            REQUIRE(std::get<UiStyleDimension>(value->value).value == 17);
+            REQUIRE(value->provenance.origin == UiStyleOrigin::Inherited);
+            REQUIRE(inherited.Value().Descriptor().geometry == Rev<UiStyleGeometryRevision>(2));
+            auto replacementResult = RuntimeStyleRegistry::Create(std::move(definition), Rev<RuntimeStyleGeneration>(2));
+            REQUIRE(replacementResult.HasValue());
+            auto replacement = std::move(replacementResult).Value();
+            auto sources = Sources();
+            sources.registry = replacement.Generation();
+            const auto changedRegistry = resolver.Update(tree, replacement, {sources, elements});
+            REQUIRE(changedRegistry.HasValue());
+            REQUIRE(changedRegistry.Value().Descriptor().geometry == Rev<UiStyleGeometryRevision>(3));
+        }
+
+        TEST_CASE("Runtime style samples animation after visual state while preserving policy authority",
+                  "[runtime_ui][style][animation]") {
+            auto registryResult = RuntimeStyleRegistry::Create(Definition(), Rev<RuntimeStyleGeneration>(1));
+            REQUIRE(registryResult.HasValue());
+            auto registry = std::move(registryResult).Value();
+            auto tree = MakeTree();
+            const auto root = tree.Root().Value().handle;
+            const auto child = tree.Find(Stable<UiElementId>(2)).Value();
+            const std::array classes{UiStyleClassReference{Asset(10), Class(21)}};
+            std::array samples{UiStyleAnimationSample{Property(3), UiStyleValue{Color(0.3F, 0.4F, 0.5F)}}};
+            std::array
+                elements{UiStyleElementInput{root, Asset(10), {}, classes, {}, {}, UiVisualStateMask{UiVisualState::Disabled}, samples},
+                         UiStyleElementInput{child, Asset(10), {}, {}, {}, {}, {}}};
+            auto resolver = MakeResolver();
+            auto first = resolver.Update(tree, registry, {Sources(), elements});
+            REQUIRE(first.HasValue());
+            const auto *animated = FindProperty(first.Value(), root, Property(3));
+            REQUIRE(animated != nullptr);
+            REQUIRE(std::get<UiStyleColor>(animated->value).red == 0.3F);
+            REQUIRE(animated->provenance.origin == UiStyleOrigin::Animation);
+
+            samples[0].value = Color(0.6F, 0.4F, 0.5F);
+            auto second = resolver.Update(tree, registry, {Sources(), elements});
+            REQUIRE(second.HasValue());
+            REQUIRE(second.Value().Descriptor().publication == Rev<UiStylePublicationRevision>(2));
+            const auto *updated = FindProperty(second.Value(), root, Property(3));
+            REQUIRE(updated != nullptr);
+            REQUIRE(std::get<UiStyleColor>(updated->value).red == 0.6F);
+            REQUIRE(std::get<UiStyleColor>(animated->value).red == 0.3F);
+
+            const std::array policy{Assignment(Property(3), UiStyleValue{Color(1.0F, 1.0F, 0.0F)})};
+            elements[0].policyProperties = policy;
+            auto policyResult = resolver.Update(tree, registry, {Sources(), elements});
+            REQUIRE(policyResult.HasValue());
+            const auto *resolvedPolicy = FindProperty(policyResult.Value(), root, Property(3));
+            REQUIRE(resolvedPolicy != nullptr);
+            REQUIRE(resolvedPolicy->provenance.origin == UiStyleOrigin::AccessibilityPolicy);
+            REQUIRE(std::get<UiStyleColor>(resolvedPolicy->value).red == 1.0F);
+        }
+
+        TEST_CASE("Runtime style rejects malformed sampled animations without publishing", "[runtime_ui][style][animation]") {
+            auto registryResult = RuntimeStyleRegistry::Create(Definition(), Rev<RuntimeStyleGeneration>(1));
+            REQUIRE(registryResult.HasValue());
+            auto registry = std::move(registryResult).Value();
+            auto tree = MakeTree();
+            const auto root = tree.Root().Value().handle;
+            const auto child = tree.Find(Stable<UiElementId>(2)).Value();
+            std::array samples{UiStyleAnimationSample{Property(4), UiStyleValue{UiStyleScalar{0.5F}}},
+                               UiStyleAnimationSample{Property(4), UiStyleValue{UiStyleScalar{0.7F}}}};
+            std::array elements{UiStyleElementInput{root, Asset(10), {}, {}, {}, {}, {}, samples},
+                                UiStyleElementInput{child, Asset(10), {}, {}, {}, {}, {}}};
+            auto resolver = MakeResolver();
+            RequireError(resolver.Update(tree, registry, {Sources(), elements}), UiErrors::StyleInvalid);
+            elements[0].animation = std::span<const UiStyleAnimationSample>{samples}.first(1);
+            samples[0].value = UiStyleScalar{2.0F};
+            RequireError(resolver.Update(tree, registry, {Sources(), elements}), UiErrors::StyleTypeMismatch);
+            samples[0].value = UiStyleScalar{0.5F};
+            samples[0].property = Property(99);
+            RequireError(resolver.Update(tree, registry, {Sources(), elements}), UiErrors::StyleReferenceInvalid);
+            samples[0].property = Property(4);
+            auto valid = resolver.Update(tree, registry, {Sources(), elements});
+            REQUIRE(valid.HasValue());
+            REQUIRE(valid.Value().Descriptor().publication == Rev<UiStylePublicationRevision>(1));
+        }
+
         TEST_CASE("Runtime style registry resolves exact token categories and precedence", "[runtime_ui][style]") {
             auto registryResult = RuntimeStyleRegistry::Create(Definition(), Rev<RuntimeStyleGeneration>(1));
             REQUIRE(registryResult.HasValue());
@@ -184,6 +368,85 @@ namespace Horo::Runtime::Ui {
             REQUIRE(border != nullptr);
             REQUIRE(std::get<UiStyleColor>(border->value).green == 0.8F);
             REQUIRE(snapshot.Descriptor().publication == Rev<UiStylePublicationRevision>(1));
+        }
+
+        TEST_CASE("Prepared styles reserve scratch and abandon without exposing target values", "[runtime_ui][style][prepare]") {
+            auto tree = MakeTree();
+            const auto root = tree.Root().Value().handle;
+            const auto child = tree.Find(Stable<UiElementId>(2)).Value();
+            auto registryResult = RuntimeStyleRegistry::Create(Definition(), Rev<RuntimeStyleGeneration>(1));
+            REQUIRE(registryResult.HasValue());
+            auto registry = std::move(registryResult).Value();
+            auto resolver = MakeResolver();
+            const std::array classes{UiStyleClassReference{Asset(10), Class(21)}};
+            std::array<UiStyleElementInput, 2> elements{
+                {{root, Asset(10), {}, classes, {}, {}, {}}, {child, Asset(10), {}, {}, {}, {}, {}}}};
+            auto first = resolver.Update(tree, registry, {Sources(), elements});
+            REQUIRE(first.HasValue());
+            auto old = std::move(first).Value();
+            elements[0].state = UiVisualStateMask{UiVisualState::Disabled};
+            auto prepared = resolver.Prepare(tree, registry, {Sources(2), elements});
+            REQUIRE(prepared.HasValue());
+            auto candidate = std::move(prepared).Value();
+            REQUIRE(candidate.Candidate().Descriptor().publication == Rev<UiStylePublicationRevision>(2));
+            const auto *targetBorder = FindProperty(candidate.Candidate(), root, Property(3));
+            const auto *oldBorder = FindProperty(old, root, Property(3));
+            REQUIRE(targetBorder != nullptr);
+            REQUIRE(oldBorder != nullptr);
+            REQUIRE(std::get<UiStyleColor>(targetBorder->value).green == 0.8F);
+            REQUIRE(std::get<UiStyleColor>(oldBorder->value).green == 1.0F);
+            RequireError(resolver.Update(tree, registry, {Sources(2), elements}), UiErrors::StyleCandidateBusy);
+            RequireError(resolver.Invalidate({root, Sources().tree, UiStyleInvalidationKind::Paint}), UiErrors::StyleCandidateBusy);
+            candidate.Abandon();
+            candidate.Abandon();
+            auto next = resolver.Update(tree, registry, {Sources(2), elements});
+            REQUIRE(next.HasValue());
+            REQUIRE(next.Value().Descriptor().publication == Rev<UiStylePublicationRevision>(2));
+            REQUIRE(old.Descriptor().publication == Rev<UiStylePublicationRevision>(1));
+        }
+
+        TEST_CASE("Prepared styles reject foreign owners even when public revision fields collide", "[runtime_ui][style][prepare]") {
+            auto tree = MakeTree();
+            auto foreignTree = MakeTree();
+            auto registryResult = RuntimeStyleRegistry::Create(Definition(), Rev<RuntimeStyleGeneration>(1));
+            auto foreignResult = RuntimeStyleRegistry::Create(Definition(), Rev<RuntimeStyleGeneration>(1));
+            REQUIRE(registryResult.HasValue());
+            REQUIRE(foreignResult.HasValue());
+            auto registry = std::move(registryResult).Value();
+            auto foreignRegistry = std::move(foreignResult).Value();
+            const std::array<UiStyleElementInput, 2> elements{{{tree.Root().Value().handle, Asset(10), {}, {}, {}, {}, {}},
+                                                               {tree.Find(Stable<UiElementId>(2)).Value(), Asset(10), {}, {}, {}, {}, {}}}};
+            auto resolver = MakeResolver();
+            auto prepared = resolver.Prepare(tree, registry, {Sources(), elements});
+            REQUIRE(prepared.HasValue());
+            auto candidate = std::move(prepared).Value();
+            RequireError(candidate.CanPublish(foreignTree, registry), UiErrors::StyleSourceStale);
+            RequireError(candidate.CanPublish(tree, foreignRegistry), UiErrors::StyleSourceStale);
+            REQUIRE(candidate.CanPublish(tree, registry).HasValue());
+            auto moved = std::move(candidate);
+            RequireError(candidate.CanPublish(tree, registry), UiErrors::StyleLifecycleUnavailable);
+            REQUIRE(resolver.Commit(std::move(moved), tree, registry).HasValue());
+        }
+
+        TEST_CASE("Prepared style pins survive owner destruction but publication admission closes", "[runtime_ui][style][prepare]") {
+            auto tree = MakeTree();
+            auto registryResult = RuntimeStyleRegistry::Create(Definition(), Rev<RuntimeStyleGeneration>(1));
+            REQUIRE(registryResult.HasValue());
+            auto registry = std::move(registryResult).Value();
+            const std::array<UiStyleElementInput, 2> elements{{{tree.Root().Value().handle, Asset(10), {}, {}, {}, {}, {}},
+                                                               {tree.Find(Stable<UiElementId>(2)).Value(), Asset(10), {}, {}, {}, {}, {}}}};
+            std::optional<UiStyleResolver::PreparedUpdate> candidate;
+            {
+                auto resolver = MakeResolver();
+                auto prepared = resolver.Prepare(tree, registry, {Sources(), elements});
+                REQUIRE(prepared.HasValue());
+                candidate.emplace(std::move(prepared).Value());
+                REQUIRE(resolver.BeginRetirement().HasValue());
+                RequireError(candidate->CanPublish(tree, registry), UiErrors::StyleLifecycleUnavailable);
+            }
+            REQUIRE(candidate->Candidate().Records().size() == 2);
+            RequireError(candidate->CanPublish(tree, registry), UiErrors::StyleLifecycleUnavailable);
+            candidate->Abandon();
         }
 
         TEST_CASE("Runtime style registry rejects token cycles and category mismatch", "[runtime_ui][style][failure]") {

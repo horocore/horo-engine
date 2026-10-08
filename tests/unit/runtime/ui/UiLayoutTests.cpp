@@ -217,6 +217,88 @@ namespace Horo::Runtime::Ui {
             evaluator.ResetCounts();
         }
 
+        TEST_CASE("Prepared layout abandonment and evaluator failure preserve the last-good publication", "[runtime_ui][layout][prepare]") {
+            auto tree = Tree();
+            auto engine = Engine();
+            CountingEvaluator evaluator;
+            auto first = engine.Update(tree, Request(evaluator));
+            REQUIRE(first.HasValue());
+            auto old = std::move(first).Value();
+            auto prepared = engine.Prepare(tree, Request(evaluator, 2));
+            REQUIRE(prepared.HasValue());
+            auto candidate = std::move(prepared).Value();
+            REQUIRE(candidate.Candidate().Descriptor().interaction == Rev<UiInteractionRevision>(2));
+            RequireError(engine.Update(tree, Request(evaluator, 2)), UiErrors::LayoutCandidateBusy);
+            candidate.Abandon();
+            candidate.Abandon();
+            evaluator.failMeasure = true;
+            RequireError(engine.Prepare(tree, Request(evaluator, 2)), UiErrors::LayoutInvalid);
+            REQUIRE(old.Descriptor().interaction == Rev<UiInteractionRevision>(1));
+            evaluator.failMeasure = false;
+            auto next = engine.Update(tree, Request(evaluator, 2));
+            REQUIRE(next.HasValue());
+            REQUIRE(next.Value().Descriptor().interaction == Rev<UiInteractionRevision>(2));
+        }
+
+        TEST_CASE("Layout evaluator reentrancy rejects competing updates and safely closes admission", "[runtime_ui][layout][prepare]") {
+            class ReentrantEvaluator final : public CountingEvaluator {
+            public:
+                UiLayoutEngine *engine{};
+                UiElementTree *tree{};
+                bool shutdown{};
+                mutable bool observed{};
+
+                Result<UiLayoutMeasurement> Measure(const UiLayoutMeasureRequest &input) const override {
+                    if (!observed) {
+                        observed = true;
+                        const auto competing = engine->Update(*tree, Request(*this));
+                        RequireError(competing, UiErrors::LayoutCandidateBusy);
+                        if (shutdown)
+                            engine->Shutdown();
+                    }
+                    return CountingEvaluator::Measure(input);
+                }
+            };
+
+            auto tree = Tree();
+            auto engine = Engine();
+            ReentrantEvaluator evaluator;
+            evaluator.engine = &engine;
+            evaluator.tree = &tree;
+            SECTION("successful preparation retains its reservation") {
+                auto prepared = engine.Prepare(tree, Request(evaluator));
+                REQUIRE(prepared.HasValue());
+                REQUIRE(evaluator.observed);
+                auto candidate = std::move(prepared).Value();
+                REQUIRE(engine.Commit(std::move(candidate), tree).HasValue());
+            }
+            SECTION("shutdown during evaluation rejects publication") {
+                evaluator.shutdown = true;
+                RequireError(engine.Prepare(tree, Request(evaluator)), UiErrors::LayoutLifecycleUnavailable);
+                REQUIRE(evaluator.observed);
+                REQUIRE(engine.State() == UiLayoutEngineState::Stopped);
+                REQUIRE(engine.IsDrained());
+            }
+        }
+
+        TEST_CASE("Prepared layout rejects colliding foreign issuers and remains readable after shutdown",
+                  "[runtime_ui][layout][prepare]") {
+            auto tree = Tree();
+            auto foreignTree = Tree();
+            auto engine = Engine();
+            CountingEvaluator evaluator;
+            auto prepared = engine.Prepare(tree, Request(evaluator));
+            REQUIRE(prepared.HasValue());
+            auto candidate = std::move(prepared).Value();
+            RequireError(candidate.CanPublish(foreignTree), UiErrors::LayoutSourceStale);
+            REQUIRE(candidate.CanPublish(tree).HasValue());
+            engine.Shutdown();
+            RequireError(candidate.CanPublish(tree), UiErrors::LayoutLifecycleUnavailable);
+            REQUIRE(candidate.Candidate().Records().size() == 4);
+            candidate.Abandon();
+            REQUIRE(engine.IsDrained());
+        }
+
         TEST_CASE("Incremental layout publishes immutable authored-order geometry", "[runtime_ui][layout]") {
             auto tree = Tree();
             auto engine = Engine();

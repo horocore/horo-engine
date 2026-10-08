@@ -31,9 +31,13 @@ namespace Horo::Runtime::Ui {
                commands <= MaximumUiStructuralCommands;
     }
 
+    /** @brief Immutable identity retained by all namespaces reserved by one actual owner allocator. */
+    struct UiElementSlotRange::Authority final {};
+
     /** @copydoc UiElementSlotRange::UiElementSlotRange */
-    UiElementSlotRange::UiElementSlotRange(const std::uint32_t firstSlot, const std::uint32_t slotCount) noexcept
-        : firstSlot_(firstSlot), slotCount_(slotCount) {}
+    UiElementSlotRange::UiElementSlotRange(const std::uint32_t firstSlot, const std::uint32_t slotCount,
+                                           std::shared_ptr<const Authority> authority) noexcept
+        : firstSlot_(firstSlot), slotCount_(slotCount), authority_(std::move(authority)) {}
 
     /** @copydoc UiElementSlotRange::FirstSlot */
     std::uint32_t UiElementSlotRange::FirstSlot() const noexcept {
@@ -50,17 +54,24 @@ namespace Horo::Runtime::Ui {
                                                                   const std::uint32_t previousIssuedSlot) {
         if (!ownership.IsValid())
             return Failure<UiElementSlotAllocator>(UiErrors::OwnershipGenerationInvalid);
-        UiElementSlotAllocator allocator{ownership};
-        allocator.nextSlot_ = std::uint64_t(previousIssuedSlot) + 1;
-        return Result<UiElementSlotAllocator>::Success(std::move(allocator));
+        try {
+            UiElementSlotAllocator allocator{ownership, std::make_shared<UiElementSlotRange::Authority>()};
+            allocator.nextSlot_ = std::uint64_t(previousIssuedSlot) + 1;
+            return Result<UiElementSlotAllocator>::Success(std::move(allocator));
+        } catch (const std::bad_alloc &) {
+            return Failure<UiElementSlotAllocator>(UiErrors::CapacityExceeded);
+        }
     }
 
     /** @copydoc UiElementSlotAllocator::UiElementSlotAllocator */
-    UiElementSlotAllocator::UiElementSlotAllocator(const UiOwnershipGeneration ownership) noexcept : ownership_(ownership) {}
+    UiElementSlotAllocator::UiElementSlotAllocator(const UiOwnershipGeneration ownership,
+                                                   std::shared_ptr<const UiElementSlotRange::Authority> authority) noexcept
+        : ownership_(ownership), authority_(std::move(authority)) {}
 
     /** @copydoc UiElementSlotAllocator::UiElementSlotAllocator */
     UiElementSlotAllocator::UiElementSlotAllocator(UiElementSlotAllocator &&other) noexcept
-        : ownership_(std::exchange(other.ownership_, {})), nextSlot_(std::exchange(other.nextSlot_, 1)) {}
+        : ownership_(std::exchange(other.ownership_, {})), nextSlot_(std::exchange(other.nextSlot_, 1)),
+          authority_(std::move(other.authority_)) {}
 
     /** @copydoc UiElementSlotAllocator::Ownership */
     UiOwnershipGeneration UiElementSlotAllocator::Ownership() const noexcept {
@@ -78,7 +89,7 @@ namespace Horo::Runtime::Ui {
             return Failure<UiElementSlotRange>(UiErrors::GenerationExhausted);
         const auto firstSlot = static_cast<std::uint32_t>(nextSlot_);
         nextSlot_ += slotCount;
-        return Result<UiElementSlotRange>::Success(UiElementSlotRange{firstSlot, slotCount});
+        return Result<UiElementSlotRange>::Success(UiElementSlotRange{firstSlot, slotCount, authority_});
     }
 
     /** @copydoc UiStructuralCommandBuffer::Create */
@@ -446,6 +457,17 @@ namespace Horo::Runtime::Ui {
     UiElementTree::UiElementTree(UiElementTree &&) noexcept = default;
     /** @copydoc UiElementTree::operator= */
     UiElementTree &UiElementTree::operator=(UiElementTree &&) noexcept = default;
+
+    /** @copydoc UiElementTree::IssuerPin */
+    std::shared_ptr<const void> UiElementTree::IssuerPin() const noexcept {
+        return state_ ? state_->elementSlots.authority_ : nullptr;
+    }
+
+    /** @copydoc UiElementTree::WasIssuedBy */
+    bool UiElementTree::WasIssuedBy(const UiElementSlotAllocator &allocator) const noexcept {
+        return state_ && allocator.ownership_.IsValid() && state_->descriptor.instance.ownership == allocator.ownership_ &&
+               state_->elementSlots.authority_ == allocator.authority_;
+    }
 
     /** @copydoc UiElementTree::State */
     UiElementTreeState UiElementTree::State() const noexcept {

@@ -655,7 +655,43 @@ namespace Horo::Runtime::Ui {
 
     /** @brief Sole mutable cache and transactional publisher for one runtime canvas layout. */
     class UiLayoutEngine final {
+        struct Storage;
+
     public:
+        /**
+         * @brief Move-only copied layout candidate reserving the sole owner's bounded scratch state.
+         * @details No evaluator or request span is retained. Destruction or Abandon releases admission without publication.
+         * Source-tree replacement, retirement, and shutdown invalidate commit while the copied snapshot remains readable.
+         */
+        class PreparedUpdate final {
+        public:
+            ~PreparedUpdate();
+            PreparedUpdate(PreparedUpdate &&) noexcept;
+            PreparedUpdate &operator=(PreparedUpdate &&) noexcept;
+            PreparedUpdate(const PreparedUpdate &) = delete;
+            PreparedUpdate &operator=(const PreparedUpdate &) = delete;
+            /** @brief Cancels this reservation exactly once without publishing. */
+            void Abandon() noexcept;
+            /** @brief Borrows the immutable evaluated candidate. @return Snapshot. @pre Candidate has not been moved or abandoned. */
+            [[nodiscard]] const UiLayoutSnapshot &Candidate() const noexcept;
+            /** @brief Revalidates the actual current tree owner. @param tree Active tree. @return Publication admission. */
+            [[nodiscard]] Result<void> CanPublish(const UiElementTree &tree) const;
+
+        private:
+            friend class UiLayoutEngine;
+            friend class UiAnimationOwner;
+            PreparedUpdate(std::shared_ptr<Storage> owner, UiLayoutSnapshot snapshot, bool changes, const UiElementTree &tree,
+                           const UiLayoutUpdateRequest &request) noexcept;
+            std::shared_ptr<Storage> owner_;
+            std::optional<UiLayoutSnapshot> snapshot_;
+            std::shared_ptr<const void> treeIssuer_;
+            UiElementHandle root_;
+            UiLayoutConstraints rootConstraints_;
+            UiLogicalRect rootContent_;
+            UiCanvasScaleFactor fontScale_;
+            bool changes_{};
+        };
+
         /** @brief Preallocates one exact canvas cache and immutable storage ring.
          * @param descriptor Exact owner identities and lifetime capacities.
          * @return Active engine or typed identity/capacity failure.
@@ -673,7 +709,7 @@ namespace Horo::Runtime::Ui {
          * @param invalidation Exact tree revision, element, and work strength.
          * @return Success or typed validation/capacity/lifecycle failure.
          */
-        [[nodiscard]] Result<void> Invalidate(const UiLayoutInvalidation &invalidation);
+        [[nodiscard]] Result<void> Invalidate(const UiLayoutInvalidation &invalidation) const;
         /**
          * @brief Atomically queues exact-tree invalidations for binding/content publication.
          * @param tree Active retained tree owned by this layout engine.
@@ -681,26 +717,42 @@ namespace Horo::Runtime::Ui {
          * @return Success or typed owner/revision/capacity/lifecycle failure, leaving the queue unchanged on failure.
          * @pre Serialized on the Runtime UI owner thread before Update; no allocation occurs.
          */
-        [[nodiscard]] Result<void> InvalidateBatch(const UiElementTree &tree, std::span<const UiLayoutInvalidation> invalidations);
+        [[nodiscard]] Result<void> InvalidateBatch(const UiElementTree &tree, std::span<const UiLayoutInvalidation> invalidations) const;
+        /**
+         * @brief Evaluates a candidate without changing the published layout generation.
+         * @param tree Actual active tree. @param request Synchronous source and evaluator inputs, borrowed only here.
+         * @return Reserved copied snapshot, or typed failure preserving last-good state.
+         */
+        [[nodiscard]] Result<PreparedUpdate> Prepare(const UiElementTree &tree, const UiLayoutUpdateRequest &request) const;
+        /**
+         * @brief Revalidates and publishes this owner's outstanding candidate.
+         * @param candidate Candidate consumed on success. @param tree Actual current tree.
+         * @return Published lease, or typed failure leaving the last-good generation unchanged.
+         */
+        [[nodiscard]] Result<UiLayoutSnapshot> Commit(PreparedUpdate &&candidate, const UiElementTree &tree) const;
         /** @brief Evaluates dirty work and atomically publishes a complete immutable generation.
          * @param tree Exact active retained tree.
          * @param request Coherent source revisions, root geometry, and synchronous evaluator.
          * @return New snapshot, the retained current snapshot for a no-op, or typed failure preserving last-good state.
          * @pre Serialized on the Runtime UI owner thread during VariableUpdate.
          */
-        [[nodiscard]] Result<UiLayoutSnapshot> Update(const UiElementTree &tree, const UiLayoutUpdateRequest &request);
+        [[nodiscard]] Result<UiLayoutSnapshot> Update(const UiElementTree &tree, const UiLayoutUpdateRequest &request) const;
         /** @brief Closes new update/invalidation admission while preserving leased snapshots. @return Success or lifecycle failure. */
-        [[nodiscard]] Result<void> BeginRetirement();
+        [[nodiscard]] Result<void> BeginRetirement() const;
         /** @brief Idempotently stops the engine and releases mutable caches and its active lease. */
-        void Shutdown() noexcept;
+        void Shutdown() const noexcept;
         /** @brief Returns the explicit admission lifecycle. @return Active, Retiring, or Stopped. */
         [[nodiscard]] UiLayoutEngineState State() const noexcept;
         /** @brief Reports whether no external immutable snapshot lease remains. @return True when retirement may finish. */
         [[nodiscard]] bool IsDrained() const noexcept;
 
     private:
-        struct Storage;
-        explicit UiLayoutEngine(std::unique_ptr<Storage> storage) noexcept;
-        std::unique_ptr<Storage> storage_;
+        friend class UiAnimationOwner;
+        /** @brief Reads the actual owner-issued initial/current interaction revision for aggregate style input admission. */
+        [[nodiscard]] UiInteractionRevision PublishedInteraction() const noexcept;
+        /** @brief Performs callback-free publication after all owning candidates pass admission. */
+        [[nodiscard]] UiLayoutSnapshot PublishValidated(PreparedUpdate &&candidate) const noexcept;
+        explicit UiLayoutEngine(std::shared_ptr<Storage> storage) noexcept;
+        std::shared_ptr<Storage> storage_;
     };
 }  // namespace Horo::Runtime::Ui

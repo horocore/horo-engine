@@ -45,9 +45,12 @@ namespace Horo::Runtime::Ui {
 
     private:
         friend class UiElementSlotAllocator;
-        UiElementSlotRange(std::uint32_t firstSlot, std::uint32_t slotCount) noexcept;
+        friend class UiElementTree;
+        struct Authority;
+        UiElementSlotRange(std::uint32_t firstSlot, std::uint32_t slotCount, std::shared_ptr<const Authority> authority) noexcept;
         std::uint32_t firstSlot_{};
         std::uint32_t slotCount_{};
+        std::shared_ptr<const Authority> authority_;
     };
 
     /**
@@ -62,8 +65,8 @@ namespace Horo::Runtime::Ui {
          * @param ownership Active owner.
          * @param previousIssuedSlot Owner-retained EVER-reserved high-water mark; zero starts a new ownership namespace.
          * The service must transfer its entire burned history when reinitializing an allocator, never just live slots.
-         * @return Allocator or error.
-         * @pre Called exactly once by the Runtime UI service that issued ownership.
+         * @return Allocator or invalid-owner/capacity error; its immutable issuer identity is allocated once at load time.
+         * @pre Exactly one active allocator per owner; recreation transfers the authoritative complete issued high-water mark.
          */
         [[nodiscard]] static Result<UiElementSlotAllocator> Create(UiOwnershipGeneration ownership, std::uint32_t previousIssuedSlot = 0);
         /** @brief Transfers the remaining owner-wide slot namespace. @param other Allocator to invalidate and transfer. */
@@ -77,11 +80,14 @@ namespace Horo::Runtime::Ui {
 
     private:
         friend class UiElementTree;
-        explicit UiElementSlotAllocator(UiOwnershipGeneration ownership) noexcept;
+        friend class UiAnimationOwner;
+        explicit UiElementSlotAllocator(UiOwnershipGeneration ownership,
+                                        std::shared_ptr<const UiElementSlotRange::Authority> authority) noexcept;
         /** @brief Burns one contiguous range or reports non-wrapping generation exhaustion. */
         [[nodiscard]] Result<UiElementSlotRange> Reserve(std::uint32_t slotCount);
         UiOwnershipGeneration ownership_;
         std::uint64_t nextSlot_{1};
+        std::shared_ptr<const UiElementSlotRange::Authority> authority_;
     };
 
     /** @brief Exact immutable ownership and source-document evidence for one runtime canvas tree. */
@@ -206,6 +212,13 @@ namespace Horo::Runtime::Ui {
         UiElementTree(const UiElementTree &) = delete;
         UiElementTree &operator=(const UiElementTree &) = delete;
 
+        /**
+         * @brief Checks the immutable authority that actually reserved this tree's slot namespace.
+         * @param allocator Live or moved-to sole owner allocator.
+         * @return True only for the exact issuer; another allocator with equal ownership is rejected.
+         * @details The tree retains an immutable issuer pin and never borrows the allocator or its mutable ledger.
+         */
+        [[nodiscard]] bool WasIssuedBy(const UiElementSlotAllocator &allocator) const noexcept;
         /** @brief Returns lifecycle state. @return Active, Retiring, or Stopped. */
         [[nodiscard]] UiElementTreeState State() const noexcept;
         /** @brief Returns exact target instance. @return Runtime instance identity. */
@@ -257,7 +270,12 @@ namespace Horo::Runtime::Ui {
         void Shutdown() noexcept;
 
     private:
+        friend class UiStyleResolver;
+        friend class UiLayoutEngine;
+        friend class UiLayoutClipEngine;
         struct Storage;
+        /** @brief Pins the actual issuer of this burned range for same-target publication admission. */
+        [[nodiscard]] std::shared_ptr<const void> IssuerPin() const noexcept;
         explicit UiElementTree(std::unique_ptr<Storage> state) noexcept;
         /** @brief Validates lifecycle, safe point, target identities, revisions, and batch bounds before candidate allocation. */
         [[nodiscard]] Result<void> ValidateCommitRequest(const UiStructuralCommandBuffer &buffer, UiStructuralCommitPoint point) const;

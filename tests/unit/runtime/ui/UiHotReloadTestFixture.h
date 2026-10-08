@@ -31,7 +31,7 @@ namespace Horo::Runtime::Ui::ReloadTests {
     /** @brief Produces real cooked/provider-loaded closures and actual typed owner compositions. */
     [[nodiscard]] UiReloadGeneration Generation(UiElementSlotAllocator &allocator, std::uint64_t version, std::uint16_t textLimit = 32,
                                                 bool secondCanvas = false, std::uint32_t modalHighWater = 0,
-                                                std::uint32_t routeHighWater = 0);
+                                                std::uint32_t routeHighWater = 0, std::uint32_t concurrentSnapshots = 3);
     [[nodiscard]] UiReloadCanvas &Canvas(UiHotReload &publisher);
     [[nodiscard]] UiControlInput Input(const UiControlStateMachine &control, UiControlInputKind kind, std::uint64_t sequence,
                                        std::string_view text = {});

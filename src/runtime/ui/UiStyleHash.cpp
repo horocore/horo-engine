@@ -93,6 +93,10 @@ namespace Horo::Runtime::Ui::StyleInternal {
         }
         hash ^= HashAssignments(input.inlineProperties);
         hash *= 1099511628211ULL;
+        for (const auto &sample : input.animation) {
+            HashIdentity(hash, sample.property);
+            HashValue(hash, sample.value);
+        }
         hash ^= HashAssignments(input.policyProperties);
         hash *= 1099511628211ULL;
         return hash;

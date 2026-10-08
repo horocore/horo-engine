@@ -404,7 +404,25 @@ namespace Horo::Runtime::Ui {
 
     private:
         struct Storage;
+        friend class UiAnimationOwner;
+        /** @brief Load-time reservation for a distinct inactive immutable action-source generation. @return Reservation or failure. */
+        [[nodiscard]] Result<void> ReserveInteractionReplacement();
+        /** @brief Copies compatible logical state into a new source generation only after pending work is drained. @return Admission. */
+        [[nodiscard]] Result<void> PrepareInteractionReplacement(const UiActionOwnerContext &owner);
+        /** @brief Checks copied source state and replacement admission without publishing. @return Admission or stale failure. */
+        [[nodiscard]] Result<void> CanPublishInteractionReplacement(const UiActionOwnerContext &owner) const;
+        /** @brief Borrows the copied replacement state only while its private reservation is admitted. @return State. */
+        [[nodiscard]] const UiControlState &PreparedInteractionState() const noexcept;
+        /** @brief Swaps already prepared uniquely owned generations without allocation; the old descriptor is never mutated. */
+        void PublishInteractionReplacement() noexcept;
+        /** @brief Drops the unpublished replacement reservation without altering active logical state. */
+        void AbandonInteractionReplacement() noexcept;
+        /** @brief Releases the inactive generation's terminal projection pins at explicit owner quiescence. @return Released count. */
+        [[nodiscard]] std::size_t DrainInteractionReplacement() noexcept;
         explicit UiControlStateMachine(std::unique_ptr<Storage> storage) noexcept;
         std::unique_ptr<Storage> storage_;
+        std::unique_ptr<Storage> replacement_;
+        std::optional<UiControlReloadStamp> replacementSource_;
+        bool replacementSwap_{};
     };
 }  // namespace Horo::Runtime::Ui

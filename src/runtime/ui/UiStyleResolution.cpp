@@ -228,6 +228,44 @@ namespace Horo::Runtime::Ui::StyleInternal {
             return Result<void>::Success();
         }
 
+        /** @brief Validates literal animation samples against the same immutable property schema as authored styles. */
+        [[nodiscard]] Result<void> ValidateAnimation(const RuntimeStyleRegistry &registry,
+                                                     const std::span<const UiStyleAnimationSample> samples,
+                                                     const std::uint32_t propertyCapacity) {
+            using enum UiStyleValueCategory;
+            if (samples.size() > propertyCapacity)
+                return Failure(UiErrors::StyleInvalid);
+            for (std::size_t index = 0; index < samples.size(); ++index) {
+                const auto &sample = samples[index];
+                const auto *property = FindProperty(registry.Properties(), sample.property);
+                if (property == nullptr)
+                    return Failure(UiErrors::StyleReferenceInvalid);
+                if (const auto category = UiStyleValueCategoryOf(sample.value);
+                    category != Color && category != Dimension && category != Shape && category != Scalar)
+                    return Failure(UiErrors::StyleTypeMismatch);
+                if (!IsValueCompatible(*property, sample.value))
+                    return Failure(UiErrors::StyleTypeMismatch);
+                for (std::size_t previous = 0; previous < index; ++previous)
+                    if (samples[previous].property == sample.property)
+                        return Failure(UiErrors::StyleInvalid);
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Applies sampled values without admitting token/sealing or policy authority. */
+        [[nodiscard]] Result<void> ApplyAnimation(WorkingStyle &style, const RuntimeStyleRegistry &registry,
+                                                  const UiStyleElementInput &input, const std::uint32_t propertyCapacity) {
+            for (const auto &sample : input.animation) {
+                const auto *property = FindProperty(registry.Properties(), sample.property);
+                if (property == nullptr)
+                    return Failure(UiErrors::StyleReferenceInvalid);
+                const UiStyleProvenance provenance{UiStyleOrigin::Animation, input.asset, {}, {}, registry.Generation()};
+                if (const auto result = ApplyValue(style, *property, sample.value, provenance, false, propertyCapacity); result.HasError())
+                    return result;
+            }
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> CollectStateApplications(
             const RuntimeStyleRegistry &registry, const UiStyleElementInput &input,
             const std::array<RuntimeStyleAssetId, MaximumUiStyleInheritanceDepth> &assetChain, const std::uint32_t assetCount,
@@ -314,7 +352,9 @@ namespace Horo::Runtime::Ui::StyleInternal {
                 return Failure(UiErrors::StyleReferenceInvalid);
         if (const auto valid = ValidateAssignments(registry, input.inlineProperties, propertyCapacity); valid.HasError())
             return valid;
-        return ValidateAssignments(registry, input.policyProperties, propertyCapacity);
+        if (const auto valid = ValidateAssignments(registry, input.policyProperties, propertyCapacity); valid.HasError())
+            return valid;
+        return ValidateAnimation(registry, input.animation, propertyCapacity);
     }
 
     Result<WorkingStyle> ResolveElement(const RuntimeStyleRegistry &registry, const UiStyleElementInput &input, const WorkingStyle *parent,
@@ -352,6 +392,8 @@ namespace Horo::Runtime::Ui::StyleInternal {
             return Result<WorkingStyle>::Failure(result.ErrorValue());
         if (const auto result = ApplyStateApplications(style, registry, input, applications, applicationCount, propertyCapacity);
             result.HasError())
+            return Result<WorkingStyle>::Failure(result.ErrorValue());
+        if (const auto result = ApplyAnimation(style, registry, input, propertyCapacity); result.HasError())
             return Result<WorkingStyle>::Failure(result.ErrorValue());
         if (const auto result = ApplyInlineOrPolicy(style, registry, input.policyProperties, UiStyleOrigin::AccessibilityPolicy,
                                                     input.asset, propertyCapacity);

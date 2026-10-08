@@ -67,6 +67,7 @@ namespace Horo::Runtime::Ui {
             UiFocusNodeDescriptor descriptor;
             std::size_t parentIndex{InvalidIndex};
             std::optional<UiLogicalRect> bounds;
+            bool presentationEligible{true};
         };
 
         struct RestorationEntry final {
@@ -88,6 +89,7 @@ namespace Horo::Runtime::Ui {
             modalSlots.resize(value.modalCapacity);
             restorations.resize(value.restorationCapacity);
             layoutScratch.resize(value.nodeCapacity);
+            eligibilityScratch.resize(value.nodeCapacity, true);
             handleOrder.reserve(value.nodeCapacity);
         }
 
@@ -140,7 +142,7 @@ namespace Horo::Runtime::Ui {
             std::size_t current = index;
             for (std::uint32_t depth = 0; depth < MaximumUiFocusGraphDepth; ++depth) {
                 const Node &ancestor = nodes[current];
-                if (!ancestor.descriptor.enabled || !ancestor.descriptor.visible)
+                if (!ancestor.descriptor.enabled || !ancestor.descriptor.visible || !ancestor.presentationEligible)
                     return false;
                 if (ancestor.parentIndex == InvalidIndex)
                     return true;
@@ -365,6 +367,7 @@ namespace Horo::Runtime::Ui {
         std::vector<std::size_t> handleOrder;
         std::vector<ModalSlot> modalSlots;
         std::vector<RestorationEntry> restorations;
+        std::vector<std::uint8_t> eligibilityScratch;
         std::optional<std::size_t> focusedIndex;
         std::uint32_t lastModalIncarnation{};
         std::uint32_t modalDepth{};

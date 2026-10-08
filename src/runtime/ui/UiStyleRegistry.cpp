@@ -27,7 +27,7 @@ namespace Horo::Runtime::Ui {
         if (!generation.IsValid())
             return StyleInternal::Failure<RuntimeStyleRegistry>(UiErrors::StyleInvalid);
         try {
-            auto storage = std::make_unique<Storage>(std::move(definition), generation);
+            auto storage = std::make_shared<Storage>(std::move(definition), generation);
             std::ranges::sort(storage->definition.properties, {}, &UiStylePropertyDescriptor::id);
             std::ranges::sort(storage->definition.assets, {}, &UiStyleAssetDefinition::id);
             for (auto &asset : storage->definition.assets) {
@@ -61,7 +61,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc RuntimeStyleRegistry::RuntimeStyleRegistry */
-    RuntimeStyleRegistry::RuntimeStyleRegistry(std::unique_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
+    RuntimeStyleRegistry::RuntimeStyleRegistry(std::shared_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
 
     /** @copydoc RuntimeStyleRegistry::~RuntimeStyleRegistry */
     RuntimeStyleRegistry::~RuntimeStyleRegistry() {
@@ -122,7 +122,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc RuntimeStyleRegistry::BeginRetirement */
-    Result<void> RuntimeStyleRegistry::BeginRetirement() {
+    Result<void> RuntimeStyleRegistry::BeginRetirement() const {
         if (!storage_ || storage_->lifecycle != RuntimeStyleRegistryState::Active)
             return StyleInternal::Failure(UiErrors::StyleLifecycleUnavailable);
         storage_->lifecycle = RuntimeStyleRegistryState::Retiring;
@@ -130,7 +130,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc RuntimeStyleRegistry::Shutdown */
-    void RuntimeStyleRegistry::Shutdown() noexcept {
+    void RuntimeStyleRegistry::Shutdown() const noexcept {
         if (!storage_ || storage_->lifecycle == RuntimeStyleRegistryState::Stopped)
             return;
         storage_->lifecycle = RuntimeStyleRegistryState::Stopped;

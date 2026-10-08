@@ -4,7 +4,7 @@
 
 namespace Horo::Runtime {
     /** @copydoc RuntimeHost::Create */
-    Result<std::unique_ptr<RuntimeHost>> RuntimeHost::Create(Clock &clock, FrameSchedulerConfig config) {
+    Result<std::unique_ptr<RuntimeHost>> RuntimeHost::Create(Clock &clock, const FrameSchedulerConfig &config) {
         auto scheduler = FrameScheduler::Create(clock, config);
         if (scheduler.HasError()) {
             return Result<std::unique_ptr<RuntimeHost>>::Failure(scheduler.ErrorValue());
@@ -64,6 +64,8 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeHost::Shutdown */
     void RuntimeHost::Shutdown() noexcept {
+        scheduler_->RetireDispatch();
+        scheduler_->simulationControl_.Close();
         cancellation_.RequestCancellation();
         lifecycle_.Shutdown();
     }
@@ -76,5 +78,20 @@ namespace Horo::Runtime {
     /** @copydoc RuntimeHost::Statistics */
     FrameSchedulerStatistics RuntimeHost::Statistics() const noexcept {
         return scheduler_->Statistics();
+    }
+
+    /** @copydoc RuntimeHost::SimulationControl */
+    RuntimeSimulationControl &RuntimeHost::SimulationControl() noexcept {
+        return scheduler_->SimulationControl();
+    }
+
+    /** @copydoc RuntimeHost::SimulationControl */
+    const RuntimeSimulationControl &RuntimeHost::SimulationControl() const noexcept {
+        return std::as_const(*scheduler_).SimulationControl();
+    }
+
+    /** @copydoc RuntimeHost::DispatchSource */
+    RuntimeDispatchSource RuntimeHost::DispatchSource() const noexcept {
+        return scheduler_->DispatchSource();
     }
 }  // namespace Horo::Runtime

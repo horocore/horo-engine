@@ -450,11 +450,31 @@ namespace Horo::Runtime::Ui {
 
     private:
         struct Storage;
+        friend class UiAnimationOwner;
+        friend class UiScreenStack;
+        /** @brief Reserves a bounded distinct inactive router source at load time. @return Reservation or typed failure. */
+        [[nodiscard]] Result<void> ReserveInteractionReplacement();
+        /** @brief Prepares a genuinely new source owner only after every old request and producer pin has drained. @return Admission. */
+        [[nodiscard]] Result<void> PrepareInteractionReplacement(const UiActionOwnerContext &owner);
+        /** @brief Rechecks exact active source, sequence high-water and inactive prepared identity. @return Admission. */
+        [[nodiscard]] Result<void> CanPublishInteractionReplacement(const UiActionOwnerContext &owner) const;
+        /** @brief Publishes the prepared immutable source by swapping retained pools without allocating or freeing. */
+        void PublishInteractionReplacement() noexcept;
+        /** @brief Releases preparation admission without changing the active router. */
+        void AbandonInteractionReplacement() noexcept;
+        /** @brief Releases drained terminal error pins at explicit load-time quiescence. @return Reclaimed count. */
+        [[nodiscard]] std::size_t DrainInteractionReplacement() const noexcept;
         explicit UiActionRouter(std::shared_ptr<Storage> storage) noexcept;
         /** @brief Borrows mutable owner state. @return Null after move; unavailable on const owners. */
         [[nodiscard]] Storage *StateStorage() noexcept;
         /** @brief Borrows read-only owner state. @return Null after move. */
         [[nodiscard]] const Storage *StateStorage() const noexcept;
         std::shared_ptr<Storage> storage_;
+        std::shared_ptr<Storage> replacement_;
+        bool replacementPrepared_{};
+        bool replacementSwap_{};
+        std::size_t replacementCount_{};
+        UiActionOwnerContext replacementSource_;
+        UiActionSequence replacementSequence_;
     };
 }  // namespace Horo::Runtime::Ui

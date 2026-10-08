@@ -1,0 +1,127 @@
+#include "UiAnimationMarkers.h"
+#include "UiAnimationOwnerInternal.h"
+#include "UiAnimationTrackSampling.h"
+
+#include <algorithm>
+
+namespace Horo::Runtime::Ui {
+    /** @copydoc UiAnimationOwner::EvaluateTimelineCursor */
+    Result<void> UiAnimationOwner::EvaluateTimelineCursor(Storage &storage, const std::uint32_t index) {
+        auto &timeline = storage.candidate.timelines[index];
+        const auto &definition = storage.definition.animations[timeline.definition];
+        const auto &clock = storage.frames[storage.candidate.frameSlot]->clocks.domains[static_cast<std::size_t>(definition.time.domain)];
+        if (!clock.available && timeline.cancellation == UiAnimationCancellation::None)
+            return Result<void>::Failure(MakeError(UiErrors::ClockUnavailable));
+        UiDuration delta = timeline.pendingStart ? UiDuration{} : clock.delta;
+        if (timeline.pendingStart)
+            timeline.origin = clock.elapsed;
+        auto initial = timeline.cursor;
+        const bool seek = clock.continuity == UiClockContinuity::ExplicitSeek;
+        if (seek) {
+            initial = {};
+            delta = {std::max<std::int64_t>(0, clock.elapsed.nanoseconds - timeline.origin.nanoseconds)};
+        }
+        auto evaluated = [&] {
+            if (timeline.cancellation != UiAnimationCancellation::None)
+                return AnimationInternal::CancelPlayback(initial, timeline.cancellation);
+            if (seek)
+                return AnimationInternal::SeekPlayback(definition.time, delta);
+            return AnimationInternal::AdvancePlayback(initial, definition.time, delta, storage.candidate.remainingCrossings);
+        }();
+        if (evaluated.HasError())
+            return Result<void>::Failure(evaluated.ErrorValue());
+        if (timeline.required && !timeline.waiting && storage.route.gate &&
+            storage.candidate.routeCancellation == UiAnimationCancellation::None &&
+            storage.candidate.routeElapsed.nanoseconds >= storage.route.stages[storage.route.stage].maximumWait.nanoseconds &&
+            evaluated.Value().sample.outcome != UiAnimationOutcome::Completed) {
+            storage.candidate.routeCancellation = UiAnimationCancellation::Deadline;
+            timeline.cancellation = UiAnimationCancellation::Deadline;
+            evaluated = AnimationInternal::CancelPlayback(initial, timeline.cancellation);
+        }
+        timeline.cursor = evaluated.Value();
+        storage.candidate.remainingCrossings -= timeline.cursor.sample.crossedIterations;
+        timeline.cursor.sample.newTerminalOutcome = timeline.cursor.sample.newTerminalOutcome && !timeline.terminalIssued;
+        timeline.terminalIssued = timeline.terminalIssued || timeline.cursor.sample.newTerminalOutcome;
+        timeline.clock = clock.clock;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiAnimationOwner::PrepareTimeline */
+    Result<void> UiAnimationOwner::PrepareTimeline(Storage &storage, const std::uint32_t index) {
+        const auto &current = storage.timelines[index];
+        auto &timeline = storage.candidate.timelines[index];
+        timeline = current;
+        if (timeline.required && storage.candidate.routeCancellation != UiAnimationCancellation::None)
+            timeline.cancellation = storage.candidate.routeCancellation;
+        if (!timeline.occupied || (timeline.waiting && timeline.cancellation == UiAnimationCancellation::None))
+            return Result<void>::Success();
+        auto &frame = *storage.frames[storage.candidate.frameSlot];
+        const auto &definition = storage.definition.animations[timeline.definition];
+        const auto &clock = frame.clocks.domains[static_cast<std::size_t>(definition.time.domain)];
+        if (timeline.required && timeline.terminalIssued) {
+            auto sample = timeline.cursor.sample;
+            sample.newTerminalOutcome = false;
+            sample.crossedIterations = 0;
+            const UiAnimationTimelineId id{storage.binding.source.ownership,
+                                           storage.range.FirstSlot() + static_cast<std::uint32_t>(UiTimeDomainCount) + 1 + index,
+                                           timeline.generation};
+            frame.timelines.emplace_back(id, definition.id, sample);
+            return Result<void>::Success();
+        }
+        if (auto evaluated = EvaluateTimelineCursor(storage, index); evaluated.HasError())
+            return evaluated;
+        const bool seek = clock.continuity == UiClockContinuity::ExplicitSeek;
+        const UiAnimationTimelineId id{storage.binding.source.ownership,
+                                       storage.range.FirstSlot() + static_cast<std::uint32_t>(UiTimeDomainCount) + 1 + index,
+                                       timeline.generation};
+        // Explicit preview/test/manual seek samples local values but cannot replay semantic marker callbacks.
+        if (!seek) {
+            if (auto markers =
+                    AnimationInternal::AppendMarkers(definition, {id, frame.clocks.updateSequence, storage.limits.markerCrossingsPerUpdate},
+                                                     current.cursor, timeline.cursor, timeline.pendingStart, frame.markers);
+                markers.HasError())
+                return markers;
+        }
+        timeline.pendingStart = false;
+        frame.timelines.emplace_back(id, definition.id, timeline.cursor.sample);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiAnimationOwner::PrepareTimelines */
+    Result<void> UiAnimationOwner::PrepareTimelines(Storage &storage) {
+        std::ranges::fill(storage.work.sampleCounts, 0);
+        storage.candidate.remainingCrossings = storage.limits.markerCrossingsPerUpdate;
+        for (std::uint32_t index = 0; index < storage.timelines.size(); ++index) {
+            if (auto prepared = PrepareTimeline(storage, index); prepared.HasError())
+                return prepared;
+            const auto &timeline = storage.candidate.timelines[index];
+            if (!timeline.occupied || timeline.waiting || !timeline.cursor.sample.contributesValue)
+                continue;
+            for (const auto &track : storage.definition.animations[timeline.definition].tracks) {
+                const auto target = std::ranges::find(storage.definition.elements, track.target, &UiAnimationElementDefinition::element);
+                ++storage.work.sampleCounts[static_cast<std::size_t>(target - storage.definition.elements.begin())];
+            }
+        }
+        storage.work.sampleOffsets[0] = 0;
+        for (std::size_t index = 0; index < storage.work.sampleCounts.size(); ++index)
+            storage.work.sampleOffsets[index + 1] = storage.work.sampleOffsets[index] + storage.work.sampleCounts[index];
+        std::ranges::fill(storage.work.sampleCounts, 0);
+        for (const auto &timeline : storage.candidate.timelines) {
+            if (!timeline.occupied || timeline.waiting || !timeline.cursor.sample.contributesValue)
+                continue;
+            for (const auto &track : storage.definition.animations[timeline.definition].tracks) {
+                const auto target = std::ranges::find(storage.definition.elements, track.target, &UiAnimationElementDefinition::element);
+                const auto index = static_cast<std::size_t>(target - storage.definition.elements.begin());
+                const auto value = AnimationInternal::SamplePropertyTrack(track, timeline.cursor.sample.progress);
+                if (value.HasError())
+                    return Result<void>::Failure(value.ErrorValue());
+                storage.work.samples[storage.work.sampleOffsets[index] + storage.work.sampleCounts[index]++] = {track.property,
+                                                                                                                value.Value()};
+            }
+        }
+        for (std::size_t index = 0; index < storage.work.elementInputs.size(); ++index)
+            storage.work.elementInputs[index].animation =
+                std::span(storage.work.samples).subspan(storage.work.sampleOffsets[index], storage.work.sampleCounts[index]);
+        return Result<void>::Success();
+    }
+}  // namespace Horo::Runtime::Ui

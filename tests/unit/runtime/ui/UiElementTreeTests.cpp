@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdlib>
 #include <new>
+#include <optional>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -100,6 +101,39 @@ namespace Horo::Runtime::Ui {
             for (const auto handle : handles)
                 ids.push_back(tree.Get(handle).Value().id);
             return ids;
+        }
+
+        TEST_CASE("Retained tree pins the actual slot issuer across allocator moves and retirement", "[runtime_ui][tree]") {
+            std::optional<UiElementTree> tree;
+            const auto elements = Elements();
+            {
+                auto allocated = UiElementSlotAllocator::Create(Owner());
+                REQUIRE(allocated.HasValue());
+                auto allocator = std::move(allocated).Value();
+                auto created = UiElementTree::Create(allocator, Descriptor(), elements);
+                REQUIRE(created.HasValue());
+                tree.emplace(std::move(created).Value());
+                auto foreignResult = UiElementSlotAllocator::Create(Owner());
+                REQUIRE(foreignResult.HasValue());
+                auto foreign = std::move(foreignResult).Value();
+                auto collidingTree = UiElementTree::Create(foreign, Descriptor(), elements);
+                REQUIRE(collidingTree.HasValue());
+                REQUIRE(collidingTree.Value().Root().Value().handle == tree->Root().Value().handle);
+                REQUIRE_FALSE(tree->WasIssuedBy(foreign));
+                REQUIRE_FALSE(collidingTree.Value().WasIssuedBy(allocator));
+                auto moved = std::move(allocator);
+                REQUIRE_FALSE(tree->WasIssuedBy(allocator));
+                const auto before = allocations.load(std::memory_order_relaxed);
+                const bool sameIssuer = tree->WasIssuedBy(moved);
+                const auto after = allocations.load(std::memory_order_relaxed);
+                REQUIRE(sameIssuer);
+                REQUIRE(after == before);
+            }
+            REQUIRE(tree->Root().HasValue());
+            auto replacementResult = UiElementSlotAllocator::Create(Owner());
+            REQUIRE(replacementResult.HasValue());
+            auto replacement = std::move(replacementResult).Value();
+            REQUIRE_FALSE(tree->WasIssuedBy(replacement));
         }
 
         TEST_CASE("Retained UI tree owns deterministic authored child and preorder order", "[runtime_ui][tree]") {

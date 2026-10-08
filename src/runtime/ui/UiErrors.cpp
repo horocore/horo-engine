@@ -428,6 +428,22 @@ namespace Horo::Runtime::Ui::UiErrors {
                                                         "Create a new style registry or resolver for the active runtime generation.",
                                                         false,
                                                         false};
+    /** @copydoc LayoutCandidateBusy */
+    const ErrorCodeDescriptor LayoutCandidateBusy{UiDomain,
+                                                  ErrorCode{"runtime_ui.layout.candidate_busy"},
+                                                  ErrorSeverity::Error,
+                                                  "A prepared Runtime UI layout candidate is still outstanding.",
+                                                  "Commit or abandon the candidate before submitting another layout mutation.",
+                                                  true,
+                                                  false};
+    /** @copydoc StyleCandidateBusy */
+    const ErrorCodeDescriptor StyleCandidateBusy{UiDomain,
+                                                 ErrorCode{"runtime_ui.style.candidate_busy"},
+                                                 ErrorSeverity::Error,
+                                                 "A prepared Runtime UI style candidate is still outstanding.",
+                                                 "Commit or abandon the candidate before submitting another style mutation.",
+                                                 true,
+                                                 false};
     /** @copydoc HitTestInvalid */
     const ErrorCodeDescriptor
         HitTestInvalid{UiDomain,
@@ -934,4 +950,84 @@ namespace Horo::Runtime::Ui::UiErrors {
                                                           "Prepare a new binding generation for the active owner.",
                                                           false,
                                                           true};
+    /** @copydoc ClockInputInvalid */
+    const ErrorCodeDescriptor ClockInputInvalid{UiDomain,
+                                                ErrorCode{"runtime_ui.clock.input_invalid"},
+                                                ErrorSeverity::Error,
+                                                "A Runtime UI clock sample, rate or command is malformed.",
+                                                "Use the admitted source, positive rational denominator and ordered non-negative time.",
+                                                false,
+                                                true};
+    /** @copydoc ClockSourceStale */
+    const ErrorCodeDescriptor ClockSourceStale{UiDomain,
+                                               ErrorCode{"runtime_ui.clock.source_stale"},
+                                               ErrorSeverity::Error,
+                                               "A Runtime UI clock source or generation is stale.",
+                                               "Use the current actual host or explicit owner clock binding.",
+                                               false,
+                                               true};
+    /** @copydoc ClockOverflow */
+    const ErrorCodeDescriptor ClockOverflow{UiDomain,
+                                            ErrorCode{"runtime_ui.clock.overflow"},
+                                            ErrorSeverity::Error,
+                                            "Runtime UI clock arithmetic exceeds its finite representation.",
+                                            "Reduce the duration, rate or rational remainder complexity without discarding elapsed time.",
+                                            false,
+                                            true};
+    /** @copydoc ClockUnavailable */
+    const ErrorCodeDescriptor ClockUnavailable{UiDomain,
+                                               ErrorCode{"runtime_ui.clock.unavailable"},
+                                               ErrorSeverity::Error,
+                                               "The requested Runtime UI time domain is not admitted.",
+                                               "Select an explicitly available composition capability.",
+                                               false,
+                                               true};
+    /** @copydoc AnimationPolicyInvalid */
+    const ErrorCodeDescriptor AnimationPolicyInvalid{UiDomain,
+                                                     ErrorCode{"runtime_ui.animation.policy_invalid"},
+                                                     ErrorSeverity::Error,
+                                                     "The Runtime UI animation policy or keyframe contract is invalid.",
+                                                     "Use bounded compatible timing, interpolation, marker and lifecycle policies.",
+                                                     false,
+                                                     true};
+    /** @copydoc AnimationTargetStale */
+    const ErrorCodeDescriptor AnimationTargetStale{UiDomain,
+                                                   ErrorCode{"runtime_ui.animation.target_stale"},
+                                                   ErrorSeverity::Error,
+                                                   "The Runtime UI animation target or property generation is stale.",
+                                                   "Revalidate the actual tree, registry, route and property before admission.",
+                                                   false,
+                                                   true};
+    /** @copydoc AnimationConflict */
+    const ErrorCodeDescriptor AnimationConflict{UiDomain,
+                                                ErrorCode{"runtime_ui.animation.conflict"},
+                                                ErrorSeverity::Error,
+                                                "Multiple admitted Runtime UI tracks claim an incompatible target property.",
+                                                "Resolve the conflict explicitly before atomic publication.",
+                                                false,
+                                                true};
+    /** @copydoc AnimationBudgetExceeded */
+    const ErrorCodeDescriptor AnimationBudgetExceeded{UiDomain,
+                                                      ErrorCode{"runtime_ui.animation.budget_exceeded"},
+                                                      ErrorSeverity::Error,
+                                                      "A Runtime UI animation crossing, marker or deadline budget was exceeded.",
+                                                      "Admit bounded work or cancel the required candidate without partial advancement.",
+                                                      false,
+                                                      true};
+    /** @copydoc AnimationLifecycleUnavailable */
+    const ErrorCodeDescriptor AnimationLifecycleUnavailable{UiDomain,
+                                                            ErrorCode{"runtime_ui.animation.lifecycle_unavailable"},
+                                                            ErrorSeverity::Error,
+                                                            "The Runtime UI animation owner has closed admission.",
+                                                            "Prepare a new admitted owner generation after orderly retirement.",
+                                                            false,
+                                                            true};
+    /** @copydoc AnimationStorageExhausted */
+    const ErrorCodeDescriptor AnimationStorageExhausted{UiDomain,
+                                                        ErrorCode{"runtime_ui.animation.storage_exhausted"},
+                                                        ErrorSeverity::Error,
+                                                        "All finite Runtime UI animation publication slots remain leased.",
+                                                        "Retire earlier immutable frame leases before publishing another candidate.",
+                                                        false,
+                                                        true};
 }  // namespace Horo::Runtime::Ui::UiErrors

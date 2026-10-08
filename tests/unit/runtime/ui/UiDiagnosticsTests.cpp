@@ -25,6 +25,42 @@ namespace Horo::Runtime::Ui {
             REQUIRE((result.HasError() && result.ErrorValue().code.Value() == expected.code.Value()));
         }
 
+        /** @brief Requires the complete typed cooked-asset, clock and animation error surface to stay in the registry. */
+        void RequireRegisteredErrors(const std::span<const ErrorCodeDescriptor *const> descriptors) {
+            const std::array newlyRegistered{
+                &UiErrors::CookedFormatUnsupported,
+                &UiErrors::CookedPayloadMalformed,
+                &UiErrors::AssetMissing,
+                &UiErrors::AssetTypeMismatch,
+                &UiErrors::AssetIdentityMismatch,
+                &UiErrors::AssetTargetMismatch,
+                &UiErrors::AssetRegistryStale,
+                &UiErrors::AssetPayloadEmpty,
+                &UiErrors::AssetBudgetExceeded,
+                &UiErrors::AssetLoadQueueFull,
+                &UiErrors::AssetLoadNotReady,
+                &UiErrors::AssetLoadConsumed,
+                &UiErrors::AssetLoadShutdown,
+                &UiErrors::AssetLoadCancelled,
+                &UiErrors::BindingValueInvalid,
+                &UiErrors::BindingLifecycleUnavailable,
+                &UiErrors::LayoutCandidateBusy,
+                &UiErrors::StyleCandidateBusy,
+                &UiErrors::ClockInputInvalid,
+                &UiErrors::ClockSourceStale,
+                &UiErrors::ClockOverflow,
+                &UiErrors::ClockUnavailable,
+                &UiErrors::AnimationPolicyInvalid,
+                &UiErrors::AnimationTargetStale,
+                &UiErrors::AnimationConflict,
+                &UiErrors::AnimationBudgetExceeded,
+                &UiErrors::AnimationLifecycleUnavailable,
+                &UiErrors::AnimationStorageExhausted,
+            };
+            for (const ErrorCodeDescriptor *expected : newlyRegistered)
+                REQUIRE(std::ranges::find(descriptors, expected) != descriptors.end());
+        }
+
         TEST_CASE("Runtime UI diagnostic categories expose stable derived names", "[runtime_ui][diagnostics]") {
             REQUIRE(UiDiagnosticCategoryName(UiDiagnosticCategory::Document) == "runtime_ui.document");
             REQUIRE(UiDiagnosticCategoryName(UiDiagnosticCategory::Layout) == "runtime_ui.layout");
@@ -40,17 +76,8 @@ namespace Horo::Runtime::Ui {
 
         TEST_CASE("Runtime UI diagnostic records map every canonical error and reject invented sources", "[runtime_ui][diagnostics]") {
             const auto descriptors = UiDiagnosticErrorDescriptors();
-            REQUIRE(descriptors.size() == 194);
-            const std::array newlyRegistered{
-                &UiErrors::CookedFormatUnsupported,     &UiErrors::CookedPayloadMalformed, &UiErrors::AssetMissing,
-                &UiErrors::AssetTypeMismatch,           &UiErrors::AssetIdentityMismatch,  &UiErrors::AssetTargetMismatch,
-                &UiErrors::AssetRegistryStale,          &UiErrors::AssetPayloadEmpty,      &UiErrors::AssetBudgetExceeded,
-                &UiErrors::AssetLoadQueueFull,          &UiErrors::AssetLoadNotReady,      &UiErrors::AssetLoadConsumed,
-                &UiErrors::AssetLoadShutdown,           &UiErrors::AssetLoadCancelled,     &UiErrors::BindingValueInvalid,
-                &UiErrors::BindingLifecycleUnavailable,
-            };
-            for (const ErrorCodeDescriptor *expected : newlyRegistered)
-                REQUIRE(std::ranges::find(descriptors, expected) != descriptors.end());
+            REQUIRE(descriptors.size() == 206);
+            RequireRegisteredErrors(descriptors);
             for (std::size_t index = 0; index < descriptors.size(); ++index) {
                 const ErrorCodeDescriptor *descriptor = descriptors[index];
                 REQUIRE(descriptor != nullptr);

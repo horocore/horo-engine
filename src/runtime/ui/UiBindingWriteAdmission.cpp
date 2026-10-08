@@ -127,4 +127,39 @@ namespace Horo::Runtime::Ui {
         return Result<void>::Success();
     }
 
+    /** @copydoc UiBindingStore::CanAdoptAnimationPresentation */
+    Result<bool> UiBindingStore::CanAdoptAnimationPresentation(const UiElementTree &tree, const UiActionOwnerContext &owner) const {
+        if (!storage_ || !storage_->active || storage_->processingWrite)
+            return Failure<bool>(UiErrors::BindingLifecycleUnavailable);
+        if (const auto treeResult = storage_->ValidateTree(tree); treeResult.HasError())
+            return Result<bool>::Failure(treeResult.ErrorValue());
+        if (!owner.IsValid() || !SameTreeOwner(tree, owner))
+            return Failure<bool>(UiErrors::RevisionStale);
+        bool changed{};
+        for (const auto &target : storage_->targets) {
+            if (!target.admission)
+                continue;
+            if (owner.interaction < target.admission->owner.interaction)
+                return Failure<bool>(UiErrors::RevisionStale);
+            if (owner == target.admission->owner)
+                continue;
+            if (target.command || target.outcome || target.deferredAbandon)
+                return Failure<bool>(UiErrors::BindingDescriptorConflict);
+            changed = true;
+        }
+        return Result<bool>::Success(changed);
+    }
+
+    /** @copydoc UiBindingStore::AdoptAnimationPresentationValidated */
+    void UiBindingStore::AdoptAnimationPresentationValidated(const UiActionOwnerContext &owner) noexcept {
+        for (auto &target : storage_->targets) {
+            if (target.admission && target.admission->owner != owner) {
+                // Command/authority reservations were proven drained. This preserves the ordinary cancellation-before-adoption order
+                // without invoking a foreign Abandon callback inside presentation or aggregate publication.
+                target.edit = {};
+                target.admission->owner = owner;
+            }
+        }
+    }
+
 }  // namespace Horo::Runtime::Ui

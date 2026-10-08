@@ -203,6 +203,8 @@ namespace Horo::Runtime::Ui {
         std::span<const UiRouteMetadata> definitions;
         std::uint32_t maximumRoutes{};
         std::uint32_t previousRouteIncarnation{}; /**< Initial EVER-issued route high-water mark within the never-reused stack slot. */
+        std::uint32_t
+            maximumRetiredActionRouters{}; /**< Deferred retirement capacity; zero uses maximumRoutes. Drain explicitly at quiescence. */
 
         /** @brief Validates ownership, route definitions, and finite storage bounds. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -218,6 +220,8 @@ namespace Horo::Runtime::Ui {
     class UiScreenStack final {
     private:
         struct Storage;
+        class AnimationGate;
+        class AnimationTerminalProof;
 
     public:
         /** @brief Move-only prepared transaction whose commit or cancel produces one terminal result. */
@@ -238,6 +242,8 @@ namespace Horo::Runtime::Ui {
 
         private:
             friend class UiScreenStack;
+            friend class UiAnimationOwner;
+            friend class AnimationTerminalProof;
             Transaction(std::shared_ptr<Storage> storage, UiRouteOperationRequest request, UiRouteOperationId operation,
                         std::optional<UiRouteMetadata> definition, UiRouteOperationRejection preparedRejection) noexcept;
             void Abandon() noexcept;
@@ -344,7 +350,8 @@ namespace Horo::Runtime::Ui {
          * @brief Transfers one active router into the exact live route's lifetime.
          * @param route Exact committed route incarnation.
          * @param router Same-owner router, moved only on success; its source revisions stay immutable.
-         * @return Success or typed stale/duplicate/lifecycle failure. Preparation failure leaves both owners unchanged.
+         * @return Success or typed stale/duplicate/lifecycle/capacity failure. Preparation failure preserves both active owners.
+         * @details Attachment reserves replacement action storage before transfer; call it outside frame publication work.
          * @details Pop/back/clear cancel with OwnerRetired, replacement cancels with Superseded, stack shutdown
          * cancels with Shutdown. Failed/cancelled route transactions preserve pending operations.
          */
@@ -357,10 +364,83 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> BeginRetirement();
         /** @brief Idempotently stops the stack and releases route instances and definitions. */
         void Shutdown() noexcept;
+        /**
+         * @brief Reclaims cancelled route-owned action routers outside frame publication.
+         * @return Number reclaimed or typed busy/lifecycle failure.
+         * @pre Owner-thread load-time/quiescent operation; no prepared route transaction or borrowed action router remains.
+         * @details Route removal closes action admission immediately, but retains router storage in preallocated slots.
+         *          Call this method before admitting more removals when deferred capacity is exhausted, including after Shutdown.
+         *          Temporarily withdraws this owner's publisher handle during reclamation; reentrant operation admission
+         *          is unavailable until the quiescent drain returns. Requires a mutable owner, never a const view.
+         */
+        [[nodiscard]] Result<std::size_t> DrainRetiredActions();
 
     private:
+        friend class UiAnimationOwner;
+
+        /** @brief Actual stack-issued required-animation reservation; cancellation retains the last-good route stack. */
+        class AnimationGate final {
+        public:
+            AnimationGate(AnimationGate &&) noexcept = default;
+            AnimationGate &operator=(AnimationGate &&) noexcept = default;
+            AnimationGate(const AnimationGate &) = delete;
+            AnimationGate &operator=(const AnimationGate &) = delete;
+
+        private:
+            friend class UiScreenStack;
+            friend class UiAnimationOwner;
+            AnimationGate(Transaction transaction, UiRouteStackRevision expected, UiRouteStackRevision next,
+                          std::optional<UiRouteInstanceId> instance, UiInteractionRevision interaction) noexcept;
+            Transaction transaction_;
+            UiRouteStackRevision expected_;
+            UiRouteStackRevision next_;
+            std::optional<UiRouteInstanceId> instance_;
+            UiInteractionRevision admissionInteraction_;
+        };
+
+        /** @brief Private terminal evidence issued only from a successful actual aggregate timeline candidate. */
+        class AnimationTerminalProof final {
+        public:
+            AnimationTerminalProof(const AnimationTerminalProof &) = delete;
+            AnimationTerminalProof &operator=(const AnimationTerminalProof &) = delete;
+
+        private:
+            friend class UiScreenStack;
+            friend class UiAnimationOwner;
+            AnimationTerminalProof(const AnimationGate &gate, UiInteractionRevision interaction) noexcept;
+            std::shared_ptr<Storage> stack_;
+            UiRouteOperationId operation_;
+            UiRouteStackRevision revision_;
+            UiInteractionRevision interaction_;
+        };
+
+        /** @brief Reserves the exact operation and mutation identities before required route motion starts. */
+        [[nodiscard]] Result<AnimationGate> PrepareAnimation(const UiRouteOperationRequest &request, UiInteractionRevision interaction);
+        /** @brief Checks actual gate identity, unchanged stack, deferred retirement capacity and private completed-candidate evidence. */
+        [[nodiscard]] Result<void> CanPublishAnimation(const AnimationGate &gate, const AnimationTerminalProof &proof) const;
+        /** @brief Applies the already checked route mutation once without allocation, callbacks or reclamation. */
+        [[nodiscard]] UiRouteOperationResult PublishAnimationValidated(AnimationGate &gate,
+                                                                       const AnimationTerminalProof &proof) const noexcept;
+        /** @brief Applies one pre-issued mutation after all revision, capacity and instance checks have succeeded. */
+        /** @brief Qualifies exact live reservation without granting terminal success. */
+        [[nodiscard]] Result<void> CanCloseAnimation(const AnimationGate &gate) const;
+        /** @brief Publishes prevalidated cancellation or original admission rejection without mutating routes. */
+        [[nodiscard]] UiRouteOperationResult CloseAnimationValidated(AnimationGate &gate,
+                                                                     UiRouteOperationRejection rejection) const noexcept;
+        [[nodiscard]] static std::optional<UiRouteInstanceId> ApplyIssuedMutation(Storage &storage, const Transaction &transaction,
+                                                                                  std::optional<UiRouteInstanceId> instance) noexcept;
+        /** @brief Load-time reservation for each actual route-owned action source. @return Reservation or failure. */
+        [[nodiscard]] Result<void> ReserveActionInteractionReplacements() const;
+        /** @brief Prepares new action source generations only after queues, pending operations and retained producers drain. */
+        [[nodiscard]] Result<void> PrepareActionInteractionReplacements(const UiActionOwnerContext &owner) const;
+        /** @brief Revalidates actual route-owned replacement sources before no-fail aggregate publication. */
+        [[nodiscard]] Result<void> CanPublishActionInteractionReplacements(const UiActionOwnerContext &owner) const;
+        /** @brief Swaps prepared actual route action generations without allocation, callbacks or releasing retained pools. */
+        void PublishActionInteractionReplacements() const noexcept;
+        /** @brief Cancels every unpublished actual action source reservation. */
+        void AbandonActionInteractionReplacements() const noexcept;
         explicit UiScreenStack(std::shared_ptr<Storage> storage) noexcept;
-        [[nodiscard]] static Result<std::optional<UiRouteInstanceId>> ApplyMutation(Storage &storage, Transaction &transaction);
+        [[nodiscard]] static Result<std::optional<UiRouteInstanceId>> ApplyMutation(Storage &storage, const Transaction &transaction);
         static void Finish(Transaction &transaction) noexcept;
         [[nodiscard]] static Result<UiRouteOperationResult> Commit(Transaction &transaction);
         [[nodiscard]] static Result<UiRouteOperationResult> Cancel(Transaction &transaction);

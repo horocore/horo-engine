@@ -29,9 +29,12 @@ namespace Horo::Runtime::Ui {
         explicit Storage(const UiScreenStackDescriptor &descriptor)
             : ownership(descriptor.ownership), stack(descriptor.stack),
               definitions(descriptor.definitions.begin(), descriptor.definitions.end()), maximumRoutes(descriptor.maximumRoutes),
+              maximumRetiredActions(descriptor.maximumRetiredActionRouters == 0 ? descriptor.maximumRoutes
+                                                                                : descriptor.maximumRetiredActionRouters),
               lastRouteIncarnation(descriptor.previousRouteIncarnation) {
             routes.reserve(maximumRoutes);
             actions.reserve(maximumRoutes);
+            retiredActions.reserve(maximumRetiredActions);
         }
 
         [[nodiscard]] std::optional<UiRouteMetadata> Find(const UiRouteId route) const noexcept {
@@ -74,6 +77,18 @@ namespace Horo::Runtime::Ui {
         };
 
         std::vector<RouteActions> actions;
+        std::vector<RouteActions> retiredActions;
+
+        /** @brief Preflights exact removal storage while the active operation excludes competing attach/navigation. */
+        [[nodiscard]] bool CanRetireFor(const UiRouteOperationKind kind) const noexcept {
+            std::size_t required{};
+            if (kind == UiRouteOperationKind::Clear)
+                required = actions.size();
+            else if ((kind == UiRouteOperationKind::Pop || kind == UiRouteOperationKind::Back || kind == UiRouteOperationKind::Replace) &&
+                     !routes.empty())
+                required = std::ranges::find(actions, routes.back().id, &RouteActions::route) != actions.end() ? 1U : 0U;
+            return required <= maximumRetiredActions - retiredActions.size();
+        }
 
         /** @brief Cancels before releasing the exact route-owned router; no widget callback is invoked. */
         void RetireActions(const UiRouteInstanceId route, const UiActionCancellationReason reason) noexcept {
@@ -81,12 +96,14 @@ namespace Horo::Runtime::Ui {
             if (found != actions.end()) {
                 if (found->router.State() == UiActionRouterState::Active)
                     (void)found->router.BeginRetirement(reason);
-                found->router.Shutdown();
+                retiredActions.emplace_back(found->route, std::move(found->router));
+                // The erased destination and each shifted source are moved-from routers, so erase cannot reclaim router storage.
                 actions.erase(found);
             }
         }
 
         std::size_t maximumRoutes;
+        std::size_t maximumRetiredActions;
         UiRouteStackRevision revision{UiRouteStackRevision::Create(1).Value()};
         std::uint32_t lastRouteIncarnation{};
         std::uint64_t nextOperationSequence{1};
@@ -187,44 +204,50 @@ namespace Horo::Runtime::Ui {
         return *this;
     }
 
-    /** @copydoc UiScreenStack::ApplyMutation */
-    Result<std::optional<UiRouteInstanceId>> UiScreenStack::ApplyMutation(Storage &storage, Transaction &transaction) {
+    /** @copydoc UiScreenStack::ApplyIssuedMutation */
+    std::optional<UiRouteInstanceId> UiScreenStack::ApplyIssuedMutation(Storage &storage, const Transaction &transaction,
+                                                                        const std::optional<UiRouteInstanceId> instance) noexcept {
         switch (transaction.request_.kind) {
             case UiRouteOperationKind::Push:
-            case UiRouteOperationKind::Navigate: {
-                const auto instance = storage.NextInstance();
-                if (instance.HasError())
-                    return Result<std::optional<UiRouteInstanceId>>::Failure(instance.ErrorValue());
+            case UiRouteOperationKind::Navigate:
                 if (!storage.routes.empty())
                     storage.routes.back().visibility = UiRouteVisibilityState::Covered;
-                storage.routes.push_back({instance.Value(), *transaction.definition_, UiRouteVisibilityState::Visible});
-                return Result<std::optional<UiRouteInstanceId>>::Success(instance.Value());
-            }
+                storage.routes.emplace_back(*instance, *transaction.definition_, UiRouteVisibilityState::Visible);
+                return instance;
             case UiRouteOperationKind::Pop:
             case UiRouteOperationKind::Back:
                 storage.RetireActions(storage.routes.back().id, UiActionCancellationReason::OwnerRetired);
                 storage.routes.pop_back();
                 if (storage.routes.empty())
-                    return Result<std::optional<UiRouteInstanceId>>::Success(std::nullopt);
+                    return std::nullopt;
                 storage.routes.back().visibility = UiRouteVisibilityState::Visible;
-                return Result<std::optional<UiRouteInstanceId>>::Success(storage.routes.back().id);
-            case UiRouteOperationKind::Replace: {
-                const auto instance = storage.NextInstance();
-                if (instance.HasError())
-                    return Result<std::optional<UiRouteInstanceId>>::Failure(instance.ErrorValue());
+                return storage.routes.back().id;
+            case UiRouteOperationKind::Replace:
                 storage.RetireActions(storage.routes.back().id, UiActionCancellationReason::Superseded);
-                storage.routes.back() = {instance.Value(), *transaction.definition_, UiRouteVisibilityState::Visible};
-                return Result<std::optional<UiRouteInstanceId>>::Success(instance.Value());
-            }
+                storage.routes.back() = {*instance, *transaction.definition_, UiRouteVisibilityState::Visible};
+                return instance;
             case UiRouteOperationKind::Clear:
                 for (const auto &route : storage.routes)
                     storage.RetireActions(route.id, UiActionCancellationReason::OwnerRetired);
                 storage.routes.clear();
-                return Result<std::optional<UiRouteInstanceId>>::Success(std::nullopt);
+                return std::nullopt;
             case UiRouteOperationKind::Count:
-                return Failure<std::optional<UiRouteInstanceId>>(UiErrors::RouteOperationInvalid);
+                return std::nullopt;
         }
-        return Failure<std::optional<UiRouteInstanceId>>(UiErrors::RouteOperationInvalid);
+        return std::nullopt;
+    }
+
+    /** @copydoc UiScreenStack::ApplyMutation */
+    Result<std::optional<UiRouteInstanceId>> UiScreenStack::ApplyMutation(Storage &storage, const Transaction &transaction) {
+        std::optional<UiRouteInstanceId> instance;
+        if (transaction.request_.kind == UiRouteOperationKind::Push || transaction.request_.kind == UiRouteOperationKind::Navigate ||
+            transaction.request_.kind == UiRouteOperationKind::Replace) {
+            const auto issued = storage.NextInstance();
+            if (issued.HasError())
+                return Result<std::optional<UiRouteInstanceId>>::Failure(issued.ErrorValue());
+            instance = issued.Value();
+        }
+        return Result<std::optional<UiRouteInstanceId>>::Success(ApplyIssuedMutation(storage, transaction, instance));
     }
 
     /** @copydoc UiScreenStack::Finish */
@@ -233,6 +256,96 @@ namespace Horo::Runtime::Ui {
         transaction.storage_->activeOperation = {};
         transaction.terminal_ = true;
         transaction.storage_ = nullptr;
+    }
+
+    /** @copydoc UiScreenStack::AnimationGate::AnimationGate */
+    UiScreenStack::AnimationGate::AnimationGate(Transaction transaction, const UiRouteStackRevision expected,
+                                                const UiRouteStackRevision next, const std::optional<UiRouteInstanceId> instance,
+                                                const UiInteractionRevision interaction) noexcept
+        : transaction_(std::move(transaction)), expected_(expected), next_(next), instance_(instance), admissionInteraction_(interaction) {}
+
+    /** @copydoc UiScreenStack::AnimationTerminalProof::AnimationTerminalProof */
+    UiScreenStack::AnimationTerminalProof::AnimationTerminalProof(const AnimationGate &gate,
+                                                                  const UiInteractionRevision interaction) noexcept
+        : stack_(gate.transaction_.storage_), operation_(gate.transaction_.operation_), revision_(gate.expected_),
+          interaction_(interaction) {}
+
+    /** @copydoc UiScreenStack::CanCloseAnimation */
+    Result<void> UiScreenStack::CanCloseAnimation(const AnimationGate &gate) const {
+        if (const auto &transaction = gate.transaction_;
+            !storage_ || storage_->state != UiScreenStackState::Active || !storage_->busy || transaction.terminal_ ||
+            transaction.storage_ != storage_ || storage_->activeOperation != transaction.operation_ || storage_->revision != gate.expected_)
+            return Failure(UiErrors::RouteOperationStale);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiScreenStack::CloseAnimationValidated */
+    UiRouteOperationResult UiScreenStack::CloseAnimationValidated(AnimationGate &gate,
+                                                                  const UiRouteOperationRejection rejection) const noexcept {
+        const auto &transaction = gate.transaction_;
+        const UiRouteOperationResult result{transaction.operation_,
+                                            transaction.request_.kind,
+                                            UiRouteOperationOutcome::Rejected,
+                                            rejection,
+                                            storage_->revision,
+                                            {}};
+        Finish(gate.transaction_);
+        return result;
+    }
+
+    /** @copydoc UiScreenStack::PrepareAnimation */
+    Result<UiScreenStack::AnimationGate> UiScreenStack::PrepareAnimation(const UiRouteOperationRequest &request,
+                                                                         const UiInteractionRevision interaction) {
+        if (!interaction.IsValid())
+            return Failure<AnimationGate>(UiErrors::RouteOperationInvalid);
+        auto prepared = Prepare(request);
+        if (prepared.HasError())
+            return Result<AnimationGate>::Failure(prepared.ErrorValue());
+        auto transaction = std::move(prepared).Value();
+        if (transaction.preparedRejection_ != UiRouteOperationRejection::None)
+            return Result<AnimationGate>::Success(
+                AnimationGate{std::move(transaction), storage_->revision, storage_->revision, {}, interaction});
+        const bool changes = request.kind != UiRouteOperationKind::Clear || !storage_->routes.empty();
+        const auto next = changes ? storage_->revision.Next() : Result<UiRouteStackRevision>::Success(storage_->revision);
+        if (next.HasError())
+            return Result<AnimationGate>::Failure(next.ErrorValue());
+        std::optional<UiRouteInstanceId> instance;
+        if (request.kind == UiRouteOperationKind::Push || request.kind == UiRouteOperationKind::Navigate ||
+            request.kind == UiRouteOperationKind::Replace) {
+            const auto issued = storage_->NextInstance();
+            if (issued.HasError())
+                return Result<AnimationGate>::Failure(issued.ErrorValue());
+            instance = issued.Value();
+        }
+        return Result<AnimationGate>::Success(
+            AnimationGate{std::move(transaction), storage_->revision, next.Value(), instance, interaction});
+    }
+
+    /** @copydoc UiScreenStack::CanPublishAnimation */
+    Result<void> UiScreenStack::CanPublishAnimation(const AnimationGate &gate, const AnimationTerminalProof &proof) const {
+        const auto &transaction = gate.transaction_;
+        if (!storage_ || storage_->state != UiScreenStackState::Active || !storage_->busy || transaction.terminal_ ||
+            transaction.storage_ != storage_ || storage_->activeOperation != transaction.operation_ ||
+            transaction.preparedRejection_ != UiRouteOperationRejection::None)
+            return Failure(UiErrors::RouteOperationLifecycleUnavailable);
+        if (proof.stack_ != storage_ || proof.operation_ != transaction.operation_ || proof.revision_ != gate.expected_ ||
+            storage_->revision != gate.expected_ || !proof.interaction_.IsValid() ||
+            proof.interaction_.Compare(gate.admissionInteraction_) == UiRevisionRelation::Older)
+            return Failure(UiErrors::RouteOperationStale);
+        if (!storage_->CanRetireFor(transaction.request_.kind))
+            return Failure(UiErrors::CapacityExceeded);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiScreenStack::PublishAnimationValidated */
+    UiRouteOperationResult UiScreenStack::PublishAnimationValidated(AnimationGate &gate, const AnimationTerminalProof &) const noexcept {
+        auto &transaction = gate.transaction_;
+        const auto route = ApplyIssuedMutation(*storage_, transaction, gate.instance_);
+        storage_->revision = gate.next_;
+        const UiRouteOperationResult result{transaction.operation_,          transaction.request_.kind, UiRouteOperationOutcome::Committed,
+                                            UiRouteOperationRejection::None, storage_->revision,        route};
+        Finish(transaction);
+        return result;
     }
 
     /** @copydoc UiScreenStack::Prepare */
@@ -278,6 +391,8 @@ namespace Horo::Runtime::Ui {
                     break;
             }
         }
+        if (rejection == UiRouteOperationRejection::None && !storage_->CanRetireFor(request.kind))
+            rejection = UiRouteOperationRejection::Capacity;
         storage_->activeOperation = operation.Value();
         storage_->busy = true;
         return Result<Transaction>::Success(Transaction{storage_, request, operation.Value(), definition, rejection});
@@ -470,6 +585,8 @@ namespace Horo::Runtime::Ui {
             return Failure(UiErrors::RouteOperationStale);
         if (Actions(route) != nullptr)
             return Failure(UiErrors::RouteOperationReentrant);
+        if (auto reserved = router.ReserveInteractionReplacement(); reserved.HasError())
+            return reserved;
         storage_->actions.emplace_back(route, std::move(router));
         return Result<void>::Success();
     }
@@ -504,8 +621,97 @@ namespace Horo::Runtime::Ui {
         storage_->activeOperation = {};
         for (auto &actions : storage_->actions)
             actions.router.Shutdown();
-        storage_->actions.clear();
+        // Actual router ownership remains pinned until an explicit quiescent drain or final stack destruction.
         storage_->routes.clear();
         storage_->definitions.clear();
     }
+
+    /** @copydoc UiScreenStack::DrainRetiredActions */
+    Result<std::size_t> UiScreenStack::DrainRetiredActions() {
+        if (!storage_)
+            return Failure<std::size_t>(UiErrors::RouteOperationLifecycleUnavailable);
+        if (storage_->busy)
+            return Failure<std::size_t>(UiErrors::RouteOperationReentrant);
+
+        struct DrainPublisher final {
+            explicit DrainPublisher(std::shared_ptr<Storage> &publisher) noexcept
+                : publisher(publisher), held(std::exchange(publisher, {})) {}
+
+            DrainPublisher(const DrainPublisher &) = delete;
+            DrainPublisher &operator=(const DrainPublisher &) = delete;
+            DrainPublisher(DrainPublisher &&) = delete;
+            DrainPublisher &operator=(DrainPublisher &&) = delete;
+
+            ~DrainPublisher() {
+                publisher.swap(held);
+            }
+
+            std::shared_ptr<Storage> &publisher;
+            std::shared_ptr<Storage> held;
+        };
+
+        DrainPublisher drain{storage_};
+
+        auto &owner = *drain.held;
+        std::size_t reclaimed = owner.retiredActions.size();
+        for (const auto &actions : owner.actions)
+            reclaimed += actions.router.DrainInteractionReplacement();
+        for (auto &actions : owner.retiredActions)
+            actions.router.Shutdown();
+        owner.retiredActions.clear();
+        if (owner.state == UiScreenStackState::Stopped) {
+            reclaimed += owner.actions.size();
+            owner.actions.clear();
+        }
+        return Result<std::size_t>::Success(reclaimed);
+    }
+
+    /** @copydoc UiScreenStack::ReserveActionInteractionReplacements */
+    Result<void> UiScreenStack::ReserveActionInteractionReplacements() const {
+        if (!storage_ || storage_->state != UiScreenStackState::Active || storage_->busy)
+            return Failure(UiErrors::RouteOperationLifecycleUnavailable);
+        for (auto &actions : storage_->actions) {
+            if (auto reserved = actions.router.ReserveInteractionReplacement(); reserved.HasError())
+                return reserved;
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiScreenStack::PrepareActionInteractionReplacements */
+    Result<void> UiScreenStack::PrepareActionInteractionReplacements(const UiActionOwnerContext &owner) const {
+        if (!storage_ || storage_->state != UiScreenStackState::Active)
+            return Failure(UiErrors::RouteOperationLifecycleUnavailable);
+        for (auto &actions : storage_->actions) {
+            if (auto prepared = actions.router.PrepareInteractionReplacement(owner); prepared.HasError()) {
+                AbandonActionInteractionReplacements();
+                return prepared;
+            }
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiScreenStack::CanPublishActionInteractionReplacements */
+    Result<void> UiScreenStack::CanPublishActionInteractionReplacements(const UiActionOwnerContext &owner) const {
+        if (!storage_ || storage_->state != UiScreenStackState::Active)
+            return Failure(UiErrors::RouteOperationLifecycleUnavailable);
+        for (const auto &actions : storage_->actions) {
+            if (auto valid = actions.router.CanPublishInteractionReplacement(owner); valid.HasError())
+                return valid;
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiScreenStack::PublishActionInteractionReplacements */
+    void UiScreenStack::PublishActionInteractionReplacements() const noexcept {
+        for (auto &actions : storage_->actions)
+            actions.router.PublishInteractionReplacement();
+    }
+
+    /** @copydoc UiScreenStack::AbandonActionInteractionReplacements */
+    void UiScreenStack::AbandonActionInteractionReplacements() const noexcept {
+        if (storage_)
+            for (auto &actions : storage_->actions)
+                actions.router.AbandonInteractionReplacement();
+    }
+
 }  // namespace Horo::Runtime::Ui

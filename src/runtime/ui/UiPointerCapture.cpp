@@ -502,6 +502,21 @@ namespace Horo::Runtime::Ui {
         return Result<std::uint32_t>::Success(cancelled);
     }
 
+    /** @copydoc UiPointerCaptureStore::CanPublishInteraction */
+    Result<void> UiPointerCaptureStore::CanPublishInteraction(const UiCanvasInstanceId canvas) const {
+        if (!storage_ || storage_->lifecycle != UiPointerCaptureStoreState::Active)
+            return Failure(UiErrors::PointerCaptureLifecycleUnavailable);
+        return ValidateCanvasForStore(canvas, storage_->ownership);
+    }
+
+    /** @copydoc UiPointerCaptureStore::PublishInteractionValidated */
+    void UiPointerCaptureStore::PublishInteractionValidated(const UiCanvasInstanceId canvas,
+                                                            const UiInteractionRevision interaction) const noexcept {
+        (void)storage_->CancelMatching([canvas, interaction](const Detail::CaptureSlot &entry) noexcept {
+            return entry.request.route.canvas == canvas && entry.request.route.interaction != interaction;
+        }, UiPointerCaptureCancellationReason::InteractionRevisionLost);
+    }
+
     /** @copydoc UiPointerCaptureStore::BeginRetirement */
     Result<void> UiPointerCaptureStore::BeginRetirement() {
         if (!storage_ || storage_->lifecycle != UiPointerCaptureStoreState::Active)

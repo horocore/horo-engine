@@ -119,6 +119,12 @@ namespace Horo::Runtime::Ui {
                 storage->asyncActions.Retire(UiActionCancellationReason::Superseded);
             Shutdown();
             storage_ = std::move(other.storage_);
+            replacement_ = std::move(other.replacement_);
+            replacementPrepared_ = std::exchange(other.replacementPrepared_, false);
+            replacementSwap_ = std::exchange(other.replacementSwap_, false);
+            replacementCount_ = other.replacementCount_;
+            replacementSource_ = other.replacementSource_;
+            replacementSequence_ = other.replacementSequence_;
         }
         return *this;
     }
@@ -297,4 +303,102 @@ namespace Horo::Runtime::Ui {
         const auto *const storage = StateStorage();
         return storage ? storage->state : UiActionRouterState::Stopped;
     }
+
+    /** @copydoc UiActionRouter::ReserveInteractionReplacement */
+    Result<void> UiActionRouter::ReserveInteractionReplacement() {
+        const auto *const active = StateStorage();
+        if (!active || active->state != UiActionRouterState::Active || active->dispatching || replacementPrepared_)
+            return Failure(UiErrors::ActionLifecycleUnavailable);
+        if (replacement_)
+            return Result<void>::Success();
+        try {
+            auto operations = UiAsyncActionStore::Create(active->owner, static_cast<std::uint32_t>(active->queue.size()));
+            if (operations.HasError())
+                return Result<void>::Failure(operations.ErrorValue());
+            replacement_ =
+                std::make_shared<Storage>(UiActionRouterDescriptor{active->owner, static_cast<std::uint32_t>(active->queue.size()),
+                                                                   active->lastIssued},
+                                          std::move(operations).Value());
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            return Failure(UiErrors::CapacityExceeded);
+        }
+    }
+
+    /** @copydoc UiActionRouter::PrepareInteractionReplacement */
+    Result<void> UiActionRouter::PrepareInteractionReplacement(const UiActionOwnerContext &owner) {
+        const auto *const active = StateStorage();
+        if (!active || !replacement_ || replacementPrepared_ || active->state != UiActionRouterState::Active || active->dispatching)
+            return Failure(UiErrors::ActionLifecycleUnavailable);
+        const auto &prior = active->owner;
+        if (!owner.IsValid() || owner.instance != prior.instance || owner.canvas != prior.canvas || owner.document != prior.document ||
+            owner.documentRevision != prior.documentRevision || owner.treeRevision != prior.treeRevision ||
+            owner.interaction.Compare(prior.interaction) == UiRevisionRelation::Older)
+            return Failure(UiErrors::ActionSourceStale);
+        const bool swap = prior != owner;
+        if (swap && (active->count != 0 || !active->asyncActions.CanPrepareReplacementSource() ||
+                     !replacement_->asyncActions.CanPrepareReplacementSource()))
+            return Failure(UiErrors::ActionLifecycleUnavailable);
+        if (swap && active->nextSequence == 0)
+            return Failure(UiErrors::GenerationExhausted);
+        replacementSource_ = prior;
+        replacementSequence_ = active->lastIssued;
+        replacementCount_ = active->count;
+        replacementSwap_ = swap;
+        if (!swap) {
+            replacementPrepared_ = true;
+            return Result<void>::Success();
+        }
+        replacement_->owner = owner;
+        replacement_->head = 0;
+        replacement_->count = 0;
+        replacement_->lastIssued = active->lastIssued;
+        replacement_->nextSequence = active->nextSequence;
+        replacement_->state = UiActionRouterState::Active;
+        replacement_->dispatching = false;
+        replacement_->asyncActions.PrepareReplacementSource(owner, active->lastIssued.Value());
+        replacementSource_ = prior;
+        replacementSequence_ = active->lastIssued;
+        replacementPrepared_ = true;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiActionRouter::CanPublishInteractionReplacement */
+    Result<void> UiActionRouter::CanPublishInteractionReplacement(const UiActionOwnerContext &owner) const {
+        const auto *const active = StateStorage();
+        if (!active || !replacement_ || !replacementPrepared_ || active->owner != replacementSource_ ||
+            active->lastIssued != replacementSequence_ || active->count != replacementCount_ || active->dispatching ||
+            active->state != UiActionRouterState::Active || (replacementSwap_ ? replacement_->owner : active->owner) != owner)
+            return Failure(UiErrors::ActionSourceStale);
+        if (replacementSwap_ && (active->count != 0 || !active->asyncActions.CanPrepareReplacementSource()))
+            return Failure(UiErrors::ActionSourceStale);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiActionRouter::PublishInteractionReplacement */
+    void UiActionRouter::PublishInteractionReplacement() noexcept {
+        if (replacementSwap_) {
+            storage_.swap(replacement_);
+            replacement_->state = UiActionRouterState::Retiring;
+        }
+        replacementPrepared_ = false;
+        replacementSwap_ = false;
+    }
+
+    /** @copydoc UiActionRouter::AbandonInteractionReplacement */
+    void UiActionRouter::AbandonInteractionReplacement() noexcept {
+        replacementPrepared_ = false;
+        replacementSwap_ = false;
+    }
+
+    /** @copydoc UiActionRouter::DrainInteractionReplacement */
+    std::size_t UiActionRouter::DrainInteractionReplacement() const noexcept {
+        if (!storage_ || replacementPrepared_ || storage_->dispatching)
+            return 0;
+        auto count = storage_->asyncActions.DrainReplacementSource();
+        if (replacement_)
+            count += replacement_->asyncActions.DrainReplacementSource();
+        return count;
+    }
+
 }  // namespace Horo::Runtime::Ui

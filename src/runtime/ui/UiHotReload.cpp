@@ -80,6 +80,13 @@ namespace Horo::Runtime::Ui {
         }
     }
 
+    /** @copydoc UiHotReload::AnimationReplacement */
+    UiReloadGeneration *UiHotReload::AnimationReplacement(const Prepared &prepared) noexcept {
+        if (!storage_ || !prepared.storage_ || prepared.storage_->consumed || !storage_.Matches(prepared.storage_->publisher))
+            return nullptr;
+        return prepared.storage_->replacement.get();
+    }
+
     /** @copydoc UiHotReload::Commit */
     Result<UiReloadReconciliation> UiHotReload::Commit(Prepared &prepared, const UiStructuralCommitPoint point) {
         if (!storage_ || storage_->stopped || storage_->collecting || !prepared.storage_ || prepared.storage_->consumed)

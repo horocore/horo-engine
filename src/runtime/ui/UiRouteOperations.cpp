@@ -153,7 +153,8 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiScreenStackDescriptor::IsValid */
     bool UiScreenStackDescriptor::IsValid() const noexcept {
         if (!ownership.IsValid() || !stack.IsValid() || stack.ownership != ownership || maximumRoutes == 0 ||
-            maximumRoutes > MaximumUiScreenStackRoutes || definitions.size() > MaximumUiScreenStackRoutes)
+            maximumRoutes > MaximumUiScreenStackRoutes || definitions.size() > MaximumUiScreenStackRoutes ||
+            maximumRetiredActionRouters > MaximumUiScreenStackRoutes)
             return false;
         for (std::size_t index = 0; index < definitions.size(); ++index) {
             if (!IsValidRouteMetadata(definitions[index]))

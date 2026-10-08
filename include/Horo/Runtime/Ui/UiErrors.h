@@ -206,6 +206,10 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor StyleSnapshotStorageExhausted;
     /** @brief The style registry or resolver is retiring or stopped and rejects new work. */
     extern const ErrorCodeDescriptor StyleLifecycleUnavailable;
+    /** @brief A prepared style candidate reserves the resolver's bounded scratch publication state. */
+    extern const ErrorCodeDescriptor StyleCandidateBusy;
+    /** @brief A prepared layout candidate reserves the bounded layout owner's scratch state. */
+    extern const ErrorCodeDescriptor LayoutCandidateBusy;
     /** @brief Hit-test projection, geometry, pointer, ray, or canvas evidence is malformed. */
     extern const ErrorCodeDescriptor HitTestInvalid;
     /** @brief Hit-test ownership, tree, canvas, or interaction evidence is stale or mismatched. */
@@ -456,4 +460,24 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor AccessibilityActionRejected;
     /** @brief More than one accessibility node claims semantic focus. */
     extern const ErrorCodeDescriptor AccessibilityFocusConflict;
+    /** @brief A Runtime UI clock sample, rate or command is malformed. */
+    extern const ErrorCodeDescriptor ClockInputInvalid;
+    /** @brief A Runtime UI clock source or generation is stale. */
+    extern const ErrorCodeDescriptor ClockSourceStale;
+    /** @brief Runtime UI clock arithmetic exceeds its finite representation. */
+    extern const ErrorCodeDescriptor ClockOverflow;
+    /** @brief The requested Runtime UI time domain is not admitted. */
+    extern const ErrorCodeDescriptor ClockUnavailable;
+    /** @brief The Runtime UI animation policy or keyframe contract is invalid. */
+    extern const ErrorCodeDescriptor AnimationPolicyInvalid;
+    /** @brief The Runtime UI animation target or property generation is stale. */
+    extern const ErrorCodeDescriptor AnimationTargetStale;
+    /** @brief Multiple admitted Runtime UI tracks claim an incompatible target property. */
+    extern const ErrorCodeDescriptor AnimationConflict;
+    /** @brief A Runtime UI animation crossing, marker or deadline budget was exceeded. */
+    extern const ErrorCodeDescriptor AnimationBudgetExceeded;
+    /** @brief The Runtime UI animation owner has closed admission. */
+    extern const ErrorCodeDescriptor AnimationLifecycleUnavailable;
+    /** @brief All finite Runtime UI animation publication slots remain leased. */
+    extern const ErrorCodeDescriptor AnimationStorageExhausted;
 }  // namespace Horo::Runtime::Ui::UiErrors

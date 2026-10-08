@@ -17,7 +17,7 @@ namespace Horo::Runtime {
          * @param config Fixed-step and stall-normalization policy.
          * @return Owned host or a typed invalid-configuration failure.
          */
-        [[nodiscard]] static Result<std::unique_ptr<RuntimeHost>> Create(Clock &clock, FrameSchedulerConfig config = {});
+        [[nodiscard]] static Result<std::unique_ptr<RuntimeHost>> Create(Clock &clock, const FrameSchedulerConfig &config = {});
 
         ~RuntimeHost();
 
@@ -56,6 +56,14 @@ namespace Horo::Runtime {
 
         /** @brief Returns scheduler timing diagnostics by value. @return Allocation-free cumulative statistics snapshot. */
         [[nodiscard]] FrameSchedulerStatistics Statistics() const noexcept;
+
+        /** @brief Borrows the actual host-owned simulation command capability. @return Owner-thread control; outlived by host. */
+        [[nodiscard]] RuntimeSimulationControl &SimulationControl() noexcept;
+        /** @brief Borrows actual read-only host timing. @return Const capability; opaque reads may retain retired storage. */
+        [[nodiscard]] const RuntimeSimulationControl &SimulationControl() const noexcept;
+
+        /** @brief Copies the actual host scheduler issuer for explicit application composition. @return Read-only producer pin. */
+        [[nodiscard]] RuntimeDispatchSource DispatchSource() const noexcept;
 
     private:
         class ConstructionKey {

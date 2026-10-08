@@ -394,6 +394,13 @@ namespace Horo::Runtime::Ui {
 
     private:
         struct Storage;
+        friend class UiAnimationOwner;
+        /** @brief Checks exact newer presentation and fully drained writes without calling authority callbacks.
+         * @return Whether a source change is required, or typed busy/stale failure.
+         */
+        [[nodiscard]] Result<bool> CanAdoptAnimationPresentation(const UiElementTree &tree, const UiActionOwnerContext &owner) const;
+        /** @brief Cancels old edit evidence before adopting a prevalidated successfully presented source, with no foreign callback. */
+        void AdoptAnimationPresentationValidated(const UiActionOwnerContext &owner) noexcept;
         /** @brief Adopts a fully prepared private binding candidate. @param storage Unique candidate ownership. */
         explicit UiBindingStore(std::unique_ptr<Storage> storage) noexcept;
         std::unique_ptr<Storage> storage_;
