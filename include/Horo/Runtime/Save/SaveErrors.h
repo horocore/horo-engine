@@ -8,6 +8,21 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::Runtime::SaveErrors {
+    /** @brief Thumbnail request, completion, format, bound or monotonic time is invalid. */
+    extern const ErrorCodeDescriptor ThumbnailInvalid;
+    /** @brief Thumbnail admission retains an unacknowledged request or exhausted serial capacity. */
+    extern const ErrorCodeDescriptor ThumbnailBusy;
+    /** @brief Explicit host composition cannot capture a requested thumbnail. */
+    extern const ErrorCodeDescriptor ThumbnailUnavailable;
+    /** @brief Thumbnail capture exceeded its finite owner-polled deadline. */
+    extern const ErrorCodeDescriptor ThumbnailExpired;
+    /** @brief Thumbnail source or publication no longer matches its captured generation. */
+    extern const ErrorCodeDescriptor ThumbnailStale;
+    /** @brief Thumbnail request was cancelled or admission permanently closed. */
+    extern const ErrorCodeDescriptor ThumbnailCancelled;
+    /** @brief Detached CPU thumbnail ownership could not be allocated. */
+    extern const ErrorCodeDescriptor ThumbnailAllocationFailed;
+
     /** @brief A persistent save identity was missing or used the reserved all-zero value. */
     extern const ErrorCodeDescriptor IdentityInvalid;
     /** @brief Persistent identity text or bytes were not in the canonical representation. */
