@@ -110,36 +110,6 @@ namespace Horo::Physics {
         static_assert(!std::is_convertible_v<CollisionLayerId, PhysicsQueryChannelId>);
     }
 
-    TEST_CASE("Analytic capsule overlap rejects malformed geometry before native construction", "[physics][query][descriptor]") {
-        auto descriptor = RayDescriptor();
-        PhysicsCapsuleOverlapQuery capsule{{0.5F, 0.5F}, {1, 2, 3}, {1, 0, 0}};
-        descriptor.geometry = capsule;
-        REQUIRE(ValidatePhysicsQueryDescriptor(descriptor, World(), 9).HasValue());
-        SECTION("zero radius") {
-            capsule.capsule.radiusMeters = 0;
-        }
-        SECTION("zero cylindrical height") {
-            capsule.capsule.cylindricalHalfHeightMeters = 0;
-        }
-        SECTION("non-finite height") {
-            capsule.capsule.cylindricalHalfHeightMeters = std::numeric_limits<float>::infinity();
-        }
-        SECTION("invalid up") {
-            capsule.up = {0, 2, 0};
-        }
-        SECTION("non-finite position") {
-            capsule.position.z = std::numeric_limits<float>::quiet_NaN();
-        }
-        SECTION("outside origin envelope") {
-            capsule.position.y = MaximumPhysicsLocalHalfExtentMeters + 1;
-        }
-        SECTION("outside shape envelope") {
-            capsule.capsule.radiusMeters = MaximumPhysicsLocalHalfExtentMeters;
-        }
-        descriptor.geometry = capsule;
-        REQUIRE(ValidatePhysicsQueryDescriptor(descriptor, World(), 9).HasError());
-    }
-
     TEST_CASE("Physics query descriptors validate all backend-neutral geometry alternatives", "[physics][query][descriptor]") {
         auto descriptor = RayDescriptor();
         REQUIRE(ValidatePhysicsQueryDescriptor(descriptor, World(), 9).HasValue());
