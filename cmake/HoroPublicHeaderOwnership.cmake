@@ -597,6 +597,7 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/AITaskJobService.h
     Horo/AI/BehaviorTree.h
     Horo/AI/BehaviorTreeRuntime.h
+    Horo/AI/DecisionWakePolicy.h
     Horo/AI/BlackboardInstance.h
     Horo/AI/BlackboardSchema.h
     Horo/AI/DecisionAssetValidation.h
