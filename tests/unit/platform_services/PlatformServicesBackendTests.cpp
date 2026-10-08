@@ -50,16 +50,16 @@ namespace Horo::PlatformServices {
                 return Unavailable<void>();
             }
 
-            Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryRankedLeaderboard(LeaderboardRankedQuery) override {
+            Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryRankedLeaderboard(const LeaderboardRankedQuery &) override {
                 return Unavailable<LeaderboardEntriesPage>();
             }
 
             Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>> QueryLeaderboardAroundSubject(
-                LeaderboardAroundSubjectQuery) override {
+                const LeaderboardAroundSubjectQuery &) override {
                 return Unavailable<LeaderboardAroundSubjectResult>();
             }
 
-            Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryFriendsLeaderboard(LeaderboardFriendsQuery) override {
+            Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryFriendsLeaderboard(const LeaderboardFriendsQuery &) override {
                 return Unavailable<LeaderboardEntriesPage>();
             }
 

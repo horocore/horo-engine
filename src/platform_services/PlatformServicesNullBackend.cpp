@@ -68,18 +68,20 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc ILeaderboardStatService::QueryRankedLeaderboard */
-    Result<PlatformRequestHandle<LeaderboardEntriesPage>> NullPlatformServicesBackend::QueryRankedLeaderboard(LeaderboardRankedQuery) {
+    Result<PlatformRequestHandle<LeaderboardEntriesPage>> NullPlatformServicesBackend::QueryRankedLeaderboard(
+        const LeaderboardRankedQuery &) {
         return NullProviderFailure<PlatformRequestHandle<LeaderboardEntriesPage>>();
     }
 
     /** @copydoc ILeaderboardStatService::QueryLeaderboardAroundSubject */
     Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>> NullPlatformServicesBackend::QueryLeaderboardAroundSubject(
-        LeaderboardAroundSubjectQuery) {
+        const LeaderboardAroundSubjectQuery &) {
         return NullProviderFailure<PlatformRequestHandle<LeaderboardAroundSubjectResult>>();
     }
 
     /** @copydoc ILeaderboardStatService::QueryFriendsLeaderboard */
-    Result<PlatformRequestHandle<LeaderboardEntriesPage>> NullPlatformServicesBackend::QueryFriendsLeaderboard(LeaderboardFriendsQuery) {
+    Result<PlatformRequestHandle<LeaderboardEntriesPage>> NullPlatformServicesBackend::QueryFriendsLeaderboard(
+        const LeaderboardFriendsQuery &) {
         return NullProviderFailure<PlatformRequestHandle<LeaderboardEntriesPage>>();
     }
 
@@ -94,12 +96,12 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc ICloudService::WriteCloudObject */
-    Result<PlatformRequestHandle<CloudMutationResult>> NullPlatformServicesBackend::WriteCloudObject(CloudBlobWriteRequest) {
+    Result<PlatformRequestHandle<CloudMutationResult>> NullPlatformServicesBackend::WriteCloudObject(CloudBlobWriteRequest &&) {
         return NullProviderFailure<PlatformRequestHandle<CloudMutationResult>>();
     }
 
     /** @copydoc ICloudService::DeleteCloudObject */
-    Result<PlatformRequestHandle<CloudMutationResult>> NullPlatformServicesBackend::DeleteCloudObject(CloudBlobDeleteRequest) {
+    Result<PlatformRequestHandle<CloudMutationResult>> NullPlatformServicesBackend::DeleteCloudObject(CloudBlobDeleteRequest &&) {
         return NullProviderFailure<PlatformRequestHandle<CloudMutationResult>>();
     }
 

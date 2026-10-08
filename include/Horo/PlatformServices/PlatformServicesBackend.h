@@ -157,20 +157,22 @@ namespace Horo::PlatformServices {
         /** @copydoc ILeaderboardStatService::SubmitScore */
         [[nodiscard]] Result<PlatformRequestHandle<void>> SubmitScore(LeaderboardScoreRequest request) override;
         /** @copydoc ILeaderboardStatService::QueryRankedLeaderboard */
-        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryRankedLeaderboard(LeaderboardRankedQuery query) override;
+        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryRankedLeaderboard(
+            const LeaderboardRankedQuery &query) override;
         /** @copydoc ILeaderboardStatService::QueryLeaderboardAroundSubject */
         [[nodiscard]] Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>> QueryLeaderboardAroundSubject(
-            LeaderboardAroundSubjectQuery query) override;
+            const LeaderboardAroundSubjectQuery &query) override;
         /** @copydoc ILeaderboardStatService::QueryFriendsLeaderboard */
-        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryFriendsLeaderboard(LeaderboardFriendsQuery query) override;
+        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryFriendsLeaderboard(
+            const LeaderboardFriendsQuery &query) override;
         /** @copydoc ILeaderboardStatService::WriteStat */
         [[nodiscard]] Result<PlatformRequestHandle<void>> WriteStat(StatWriteRequest request) override;
         /** @copydoc ICloudService::ReadCloudObject */
         [[nodiscard]] Result<PlatformRequestHandle<CloudReadResult>> ReadCloudObject(CloudReadRequest request) override;
         /** @copydoc ICloudService::WriteCloudObject */
-        [[nodiscard]] Result<PlatformRequestHandle<CloudMutationResult>> WriteCloudObject(CloudBlobWriteRequest request) override;
+        [[nodiscard]] Result<PlatformRequestHandle<CloudMutationResult>> WriteCloudObject(CloudBlobWriteRequest &&request) override;
         /** @copydoc ICloudService::DeleteCloudObject */
-        [[nodiscard]] Result<PlatformRequestHandle<CloudMutationResult>> DeleteCloudObject(CloudBlobDeleteRequest request) override;
+        [[nodiscard]] Result<PlatformRequestHandle<CloudMutationResult>> DeleteCloudObject(CloudBlobDeleteRequest &&request) override;
         /** @copydoc IPresenceService::SetPresence */
         [[nodiscard]] Result<PlatformRequestHandle<void>> SetPresence(PresenceUpdateRequest request) override;
         /** @copydoc IPresenceService::ClearPresence */

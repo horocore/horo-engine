@@ -277,19 +277,19 @@ namespace Horo::PlatformServices::TestSupport {
     }
 
     Result<PlatformRequestHandle<LeaderboardEntriesPage>> MockPlatformServicesBackend::QueryRankedLeaderboard(
-        LeaderboardRankedQuery query) {
+        const LeaderboardRankedQuery &query) {
         const bool validPageSize = query.pageSize > 0 && query.pageSize <= MaximumPageEntries;
         return impl_->Submit<LeaderboardEntriesPage>(MockPlatformServicesOperation::QueryRankedLeaderboard, validPageSize);
     }
 
     Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>> MockPlatformServicesBackend::QueryLeaderboardAroundSubject(
-        LeaderboardAroundSubjectQuery query) {
+        const LeaderboardAroundSubjectQuery &query) {
         const bool validWindow = static_cast<std::uint64_t>(query.entriesBefore) + query.entriesAfter + 1U <= MaximumPageEntries;
         return impl_->Submit<LeaderboardAroundSubjectResult>(MockPlatformServicesOperation::QueryLeaderboardAroundSubject, validWindow);
     }
 
     Result<PlatformRequestHandle<LeaderboardEntriesPage>> MockPlatformServicesBackend::QueryFriendsLeaderboard(
-        LeaderboardFriendsQuery query) {
+        const LeaderboardFriendsQuery &query) {
         const bool validPageSize = query.pageSize > 0 && query.pageSize <= MaximumPageEntries;
         return impl_->Submit<LeaderboardEntriesPage>(MockPlatformServicesOperation::QueryFriendsLeaderboard, validPageSize);
     }
@@ -302,7 +302,7 @@ namespace Horo::PlatformServices::TestSupport {
         return impl_->Submit<CloudReadResult>(MockPlatformServicesOperation::ReadCloudObject);
     }
 
-    Result<PlatformRequestHandle<CloudMutationResult>> MockPlatformServicesBackend::WriteCloudObject(CloudBlobWriteRequest request) {
+    Result<PlatformRequestHandle<CloudMutationResult>> MockPlatformServicesBackend::WriteCloudObject(CloudBlobWriteRequest &&request) {
         return impl_->Submit<CloudMutationResult>(MockPlatformServicesOperation::WriteCloudObject,
                                                   request.bytes.Bytes().size() <= MaximumPayloadBytes);
     }

@@ -159,14 +159,16 @@ namespace Horo::PlatformServices::TestSupport {
         [[nodiscard]] Result<PlatformRequestHandle<FriendsPage>> QueryFriends(FriendsQuery query) override;
         [[nodiscard]] Result<PlatformRequestHandle<void>> ClearPresence(PlatformSubjectHandle subject) override;
         [[nodiscard]] Result<PlatformRequestHandle<void>> SetPresence(PresenceUpdateRequest request) override;
-        [[nodiscard]] Result<PlatformRequestHandle<CloudMutationResult>> WriteCloudObject(CloudBlobWriteRequest request) override;
+        [[nodiscard]] Result<PlatformRequestHandle<CloudMutationResult>> WriteCloudObject(CloudBlobWriteRequest &&request) override;
         [[nodiscard]] Result<PlatformRequestHandle<CloudReadResult>> ReadCloudObject(CloudReadRequest request) override;
         [[nodiscard]] Result<PlatformRequestHandle<void>> WriteStat(StatWriteRequest request) override;
         [[nodiscard]] Result<PlatformRequestHandle<void>> SubmitScore(LeaderboardScoreRequest request) override;
-        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryRankedLeaderboard(LeaderboardRankedQuery query) override;
+        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryRankedLeaderboard(
+            const LeaderboardRankedQuery &query) override;
         [[nodiscard]] Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>> QueryLeaderboardAroundSubject(
-            LeaderboardAroundSubjectQuery query) override;
-        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryFriendsLeaderboard(LeaderboardFriendsQuery query) override;
+            const LeaderboardAroundSubjectQuery &query) override;
+        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryFriendsLeaderboard(
+            const LeaderboardFriendsQuery &query) override;
         [[nodiscard]] Result<PlatformRequestHandle<void>> UnlockAchievement(AchievementUnlockRequest request) override;
 
     private:
