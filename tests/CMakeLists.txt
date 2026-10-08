@@ -1831,6 +1831,7 @@ target_compile_features(HoroReleaseProcessTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReleaseProcessTests PRIVATE HoroEngine::ReleaseProcess)
 add_executable(HoroProjectMigrationTests
         unit/application/ProjectMigrationTests.cpp
+        unit/application/ProjectMigrationUnitFixture.h
         unit/application/ProjectMigrationCatalogTests.cpp
         unit/application/ProjectAuthoringMigrationTests.cpp
 )
