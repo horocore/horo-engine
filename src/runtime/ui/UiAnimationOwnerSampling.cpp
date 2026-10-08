@@ -83,7 +83,7 @@ namespace Horo::Runtime::Ui {
                 return markers;
         }
         timeline.pendingStart = false;
-        frame.timelines.push_back({id, definition.id, timeline.cursor.sample});
+        frame.timelines.emplace_back(id, definition.id, timeline.cursor.sample);
         return Result<void>::Success();
     }
 

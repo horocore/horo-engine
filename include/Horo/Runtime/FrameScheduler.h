@@ -132,7 +132,7 @@ namespace Horo::Runtime {
          * @param config Fixed-step and stall policy.
          * @return Owned scheduler or a typed invalid-configuration error.
          */
-        [[nodiscard]] static Result<std::unique_ptr<FrameScheduler>> Create(Clock &clock, FrameSchedulerConfig config = {});
+        [[nodiscard]] static Result<std::unique_ptr<FrameScheduler>> Create(Clock &clock, const FrameSchedulerConfig &config = {});
 
         /**
          * @brief Executes one running or suspended frame through the supplied lifecycle.
@@ -189,7 +189,7 @@ namespace Horo::Runtime {
         };
 
     public:
-        FrameScheduler(Clock &clock, FrameSchedulerConfig config, ConstructionKey) noexcept;
+        FrameScheduler(Clock &clock, const FrameSchedulerConfig &config, ConstructionKey) noexcept;
 
     private:
         /** @brief Normalizes one raw clock sample into the accumulator domain. */

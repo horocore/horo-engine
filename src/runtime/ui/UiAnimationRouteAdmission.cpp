@@ -6,7 +6,9 @@ namespace Horo::Runtime::Ui::AnimationInternal {
     namespace {
         /** @brief Walks only the actual bounded retained parent lineage; authored IDs alone cannot assert subtree ownership. */
         [[nodiscard]] bool DescendsFrom(const UiElementTree &tree, UiElementHandle target, const UiElementHandle root) {
-            for (std::size_t count = 0; count < tree.Size() && target.IsValid(); ++count) {
+            auto remaining = tree.Size();
+            while (remaining != 0 && target.IsValid()) {
+                --remaining;
                 if (target == root)
                     return true;
                 const auto record = tree.Get(target);

@@ -126,7 +126,9 @@ namespace Horo::Runtime::Ui {
             std::vector<UiStyleAnimationSample> samples;
             std::vector<std::uint32_t> sampleCounts;
             std::vector<std::uint32_t> sampleOffsets;
-        } work;
+        };
+
+        WorkBuffers work;
 
         Candidate candidate;
         Route route;
@@ -136,7 +138,9 @@ namespace Horo::Runtime::Ui {
             UiAnimationHostSourceId source;
             UiClockSnapshot clocks;
             bool bound{};
-        } binding;
+        };
+
+        ClockBinding binding;
 
         std::optional<std::uint32_t> currentFrame;
         std::uint64_t commandRevision{1};

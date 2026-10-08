@@ -23,6 +23,20 @@ namespace {
 
     using namespace Horo::Runtime::LifecycleTests;
 
+    TEST_CASE("Host creation retains its configuration independently of the borrowed input", "[unit][runtime][clock]") {
+        DeterministicClock clock;
+        FrameSchedulerConfig config{.fixedStep = Duration::FromMilliseconds(10)};
+        auto created = RuntimeHost::Create(clock, config);
+        REQUIRE(created.HasValue());
+        auto host = std::move(created).Value();
+        config.fixedStep = Duration::FromMilliseconds(1000);
+        REQUIRE(host->Startup().HasValue());
+        REQUIRE(host->RunFrame().HasValue());
+        clock.Advance(Duration::FromMilliseconds(10));
+        REQUIRE(host->RunFrame().HasValue());
+        CHECK(host->Statistics().completedSimulationTick == 1);
+    }
+
     TEST_CASE("Scheduler success fence distinguishes a failed tick from its retry", "[unit][runtime][clock]") {
         DeterministicClock clock;
         RuntimeLifecycle lifecycle;

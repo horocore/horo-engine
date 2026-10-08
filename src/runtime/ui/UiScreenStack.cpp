@@ -238,7 +238,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiScreenStack::ApplyMutation */
-    Result<std::optional<UiRouteInstanceId>> UiScreenStack::ApplyMutation(Storage &storage, Transaction &transaction) {
+    Result<std::optional<UiRouteInstanceId>> UiScreenStack::ApplyMutation(Storage &storage, const Transaction &transaction) {
         std::optional<UiRouteInstanceId> instance;
         if (transaction.request_.kind == UiRouteOperationKind::Push || transaction.request_.kind == UiRouteOperationKind::Navigate ||
             transaction.request_.kind == UiRouteOperationKind::Replace) {
@@ -280,7 +280,8 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiScreenStack::CloseAnimationValidated */
-    UiRouteOperationResult UiScreenStack::CloseAnimationValidated(AnimationGate &gate, const UiRouteOperationRejection rejection) noexcept {
+    UiRouteOperationResult UiScreenStack::CloseAnimationValidated(AnimationGate &gate,
+                                                                  const UiRouteOperationRejection rejection) const noexcept {
         const auto &transaction = gate.transaction_;
         const UiRouteOperationResult result{transaction.operation_,
                                             transaction.request_.kind,
@@ -293,7 +294,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiScreenStack::PrepareAnimation */
-    Result<UiScreenStack::AnimationGate> UiScreenStack::PrepareAnimation(UiRouteOperationRequest request,
+    Result<UiScreenStack::AnimationGate> UiScreenStack::PrepareAnimation(const UiRouteOperationRequest &request,
                                                                          const UiInteractionRevision interaction) {
         if (!interaction.IsValid())
             return Failure<AnimationGate>(UiErrors::RouteOperationInvalid);
@@ -636,13 +637,20 @@ namespace Horo::Runtime::Ui {
             explicit DrainPublisher(std::shared_ptr<Storage> &publisher) noexcept
                 : publisher(publisher), held(std::exchange(publisher, {})) {}
 
+            DrainPublisher(const DrainPublisher &) = delete;
+            DrainPublisher &operator=(const DrainPublisher &) = delete;
+            DrainPublisher(DrainPublisher &&) = delete;
+            DrainPublisher &operator=(DrainPublisher &&) = delete;
+
             ~DrainPublisher() {
                 publisher.swap(held);
             }
 
             std::shared_ptr<Storage> &publisher;
             std::shared_ptr<Storage> held;
-        } drain{storage_};
+        };
+
+        DrainPublisher drain{storage_};
 
         auto &owner = *drain.held;
         std::size_t reclaimed = owner.retiredActions.size();
@@ -670,7 +678,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiScreenStack::PrepareActionInteractionReplacements */
-    Result<void> UiScreenStack::PrepareActionInteractionReplacements(const UiActionOwnerContext &owner) {
+    Result<void> UiScreenStack::PrepareActionInteractionReplacements(const UiActionOwnerContext &owner) const {
         if (!storage_ || storage_->state != UiScreenStackState::Active)
             return Failure(UiErrors::RouteOperationLifecycleUnavailable);
         for (auto &actions : storage_->actions) {

@@ -134,8 +134,7 @@ namespace Horo::Runtime::Ui::AnimationInternal {
     /** @brief Evaluates an inactive cursor without mutating current state; every arithmetic/work error retains the prior cursor. */
     [[nodiscard]] inline Result<PlaybackCursor> AdvancePlayback(const PlaybackCursor &current, const UiAnimationTimePolicy &policy,
                                                                 const UiDuration domainDelta, const std::uint32_t crossingBudget) {
-        auto admitted = ValidatePlaybackPolicy(policy);
-        if (admitted.HasError())
+        if (const auto admitted = ValidatePlaybackPolicy(policy); admitted.HasError())
             return Result<PlaybackCursor>::Failure(admitted.ErrorValue());
         auto candidate = current;
         candidate.sample.newTerminalOutcome = false;

@@ -421,7 +421,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiLayoutClipEngine::Update */
     Result<UiLayoutClipSnapshot> UiLayoutClipEngine::Update(const UiElementTree &tree, const UiLayoutSnapshot &layout,
-                                                            const UiLayoutClipUpdateRequest &request) {
+                                                            const UiLayoutClipUpdateRequest &request) const {
         auto result = Prepare(tree, layout, request);
         if (result.HasError())
             return Result<UiLayoutClipSnapshot>::Failure(result.ErrorValue());
@@ -508,11 +508,11 @@ namespace Horo::Runtime::Ui {
         if (!owner_ || !snapshot_ || !owner_->prepared || owner_->lifecycle != UiLayoutClipEngineState::Active)
             return Failure(UiErrors::LayoutClipLifecycleUnavailable);
         const auto &source = snapshot_->Descriptor();
-        const auto root = tree.Root();
-        if (root.HasError() || root.Value().handle != root_ || tree.IssuerPin() != treeIssuer_ ||
-            tree.State() != UiElementTreeState::Active || tree.Instance() != source.instance || tree.Canvas() != source.canvas ||
-            tree.SourceDocument() != source.document || tree.SourceDocumentRevision() != source.sources.document ||
-            tree.Revision() != source.sources.tree)
+        if (const auto root = tree.Root(); root.HasError() || root.Value().handle != root_ || tree.IssuerPin() != treeIssuer_ ||
+                                           tree.State() != UiElementTreeState::Active || tree.Instance() != source.instance ||
+                                           tree.Canvas() != source.canvas || tree.SourceDocument() != source.document ||
+                                           tree.SourceDocumentRevision() != source.sources.document ||
+                                           tree.Revision() != source.sources.tree)
             return Failure(UiErrors::LayoutClipSourceStale);
         return Result<void>::Success();
     }
@@ -528,7 +528,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiLayoutClipEngine::BeginRetirement */
-    Result<void> UiLayoutClipEngine::BeginRetirement() {
+    Result<void> UiLayoutClipEngine::BeginRetirement() const {
         if (!storage_ || storage_->lifecycle != UiLayoutClipEngineState::Active)
             return Failure(UiErrors::LayoutClipLifecycleUnavailable);
         storage_->lifecycle = UiLayoutClipEngineState::Retiring;

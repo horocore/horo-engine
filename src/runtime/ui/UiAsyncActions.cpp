@@ -391,7 +391,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAsyncActionStore::DrainReplacementSource */
     std::size_t UiAsyncActionStore::DrainReplacementSource() noexcept {
-        auto *const storage = StateStorage();
+        const auto *const storage = StateStorage();
         if (!storage || storage->ownerThread != std::this_thread::get_id())
             return 0;
         std::size_t drained{};

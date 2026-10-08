@@ -44,7 +44,7 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc FrameScheduler::Create */
-    Result<std::unique_ptr<FrameScheduler>> FrameScheduler::Create(Clock &clock, FrameSchedulerConfig config) {
+    Result<std::unique_ptr<FrameScheduler>> FrameScheduler::Create(Clock &clock, const FrameSchedulerConfig &config) {
         if (!IsPositive(config.fixedStep) || !IsPositive(config.maximumFrameDelta) || config.maximumCatchUpSteps == 0) {
             return Result<std::unique_ptr<FrameScheduler>>::Failure(MakeError(RuntimeErrors::InvalidSchedulerConfig));
         }
@@ -57,7 +57,7 @@ namespace Horo::Runtime {
         return Result<std::unique_ptr<FrameScheduler>>::Success(std::move(scheduler));
     }
 
-    FrameScheduler::FrameScheduler(Clock &clock, const FrameSchedulerConfig config, ConstructionKey) noexcept
+    FrameScheduler::FrameScheduler(Clock &clock, const FrameSchedulerConfig &config, ConstructionKey) noexcept
         : clock_(clock), config_(config) {}
 
     /** @copydoc FrameScheduler::NormalizeSampleDelta */

@@ -49,6 +49,11 @@ namespace Horo::Runtime::Ui {
                 slots.push_back(std::make_shared<UiComputedStyleSnapshot::Storage>(source.elementCapacity, source.propertyCapacity));
         }
 
+        Storage(const Storage &) = delete;
+        Storage &operator=(const Storage &) = delete;
+        Storage(Storage &&) = delete;
+        Storage &operator=(Storage &&) = delete;
+
         ~Storage() {
             ReleaseCurrent();
         }
@@ -154,8 +159,7 @@ namespace Horo::Runtime::Ui {
                     valid.HasError())
                     return Result<void>::Failure(valid.ErrorValue());
 
-            const auto preorder = tree.Preorder(std::span<UiElementHandle>{traversalScratch.data(), tree.Size()});
-            if (preorder.HasError())
+            if (const auto preorder = tree.Preorder(std::span<UiElementHandle>{traversalScratch.data(), tree.Size()}); preorder.HasError())
                 return StyleInternal::Failure(UiErrors::StyleSourceStale);
             for (std::size_t index = 0; index < request.elements.size(); ++index)
                 if (request.elements[index].element != traversalScratch[index])
@@ -179,8 +183,8 @@ namespace Horo::Runtime::Ui {
             }
             const bool registryChanged = !hasPublication || sources.registry != request.sources.registry;
             const bool contentChanged = !hasPublication || sources.content != request.sources.content;
-            const bool policyChanged = !hasPublication || sources.policy != request.sources.policy;
-            if (registryChanged || contentChanged || policyChanged)
+            if (const bool policyChanged = !hasPublication || sources.policy != request.sources.policy;
+                registryChanged || contentChanged || policyChanged)
                 MarkAll();
             for (std::uint32_t index = 0; index < request.elements.size(); ++index) {
                 auto &node = candidateNodes[index];

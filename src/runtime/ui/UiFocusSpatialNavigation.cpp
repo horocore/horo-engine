@@ -73,7 +73,7 @@ namespace Horo::Runtime::Ui {
             return Failure(UiErrors::FocusCapacityExceeded);
 
         std::ranges::fill(storage_->layoutScratch, std::nullopt);
-        std::fill(storage_->eligibilityScratch.begin(), storage_->eligibilityScratch.end(), eligibility.empty());
+        std::ranges::fill(storage_->eligibilityScratch, eligibility.empty());
         for (std::size_t recordIndex = 0; recordIndex < records.size(); ++recordIndex) {
             const auto &record = records[recordIndex];
             if (!record.element.IsValid() || record.element.ownership != owner.instance.ownership || !record.arrangement.IsValid())

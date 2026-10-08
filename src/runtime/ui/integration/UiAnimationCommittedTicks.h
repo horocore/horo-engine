@@ -30,6 +30,8 @@ namespace Horo::Runtime::Ui::IntegrationInternal {
      */
     class CommittedTickLedger final {
     public:
+        ~CommittedTickLedger() = default;
+
         /** @brief Opaque immutable proposed consumption, pinned by its surrounding application-owner candidate. */
         class Prepared final {
         public:
@@ -47,7 +49,7 @@ namespace Horo::Runtime::Ui::IntegrationInternal {
             friend class CommittedTickLedger;
 
             Prepared(const CommittedTickLedger *issuer, std::uint64_t revision, std::uint64_t consumedTick, std::uint32_t count,
-                     UiDuration delta, CommittedFixedStepEvidence fence) noexcept
+                     UiDuration delta, const CommittedFixedStepEvidence &fence) noexcept
                 : issuer_(issuer), revision_(revision), consumedTick_(consumedTick), count_(count), delta_(delta), fence_(fence) {}
 
             const CommittedTickLedger *issuer_{};
@@ -164,8 +166,8 @@ namespace Horo::Runtime::Ui::IntegrationInternal {
 
         /** @brief Requires contiguous observed ticks without imposing a fabricated contiguous attempt sequence. */
         [[nodiscard]] Result<void> AppendAttempt(const CommittedFixedStepEvidence &evidence) {
-            const auto &prior = count_ == 0 ? consumed_ : records_[count_ - 1];
-            if (prior.simulationTick == std::numeric_limits<std::uint64_t>::max() || evidence.simulationTick != prior.simulationTick + 1 ||
+            if (const auto &prior = count_ == 0 ? consumed_ : records_[count_ - 1];
+                prior.simulationTick == std::numeric_limits<std::uint64_t>::max() || evidence.simulationTick != prior.simulationTick + 1 ||
                 evidence.attemptNumber <= lastStaged_.attemptNumber || evidence.frameNumber < lastStaged_.frameNumber)
                 return Result<void>::Failure(MakeError(UiErrors::ClockSourceStale));
             if (count_ == capacity_)

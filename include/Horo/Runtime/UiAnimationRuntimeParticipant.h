@@ -66,7 +66,7 @@ namespace Horo::Runtime {
          * @param rate Nonnegative checked rational local rate; zero explicitly holds. Existing fractional carry remains exact.
          * @return Admission or typed capability/stale/rational/capacity failure.
          */
-        [[nodiscard]] Result<void> SetPreviewPlayback(Ui::UiAnimationClockId clock, bool playing, Ui::UiPlaybackRate rate);
+        [[nodiscard]] Result<void> SetPreviewPlayback(Ui::UiAnimationClockId clock, bool playing, Ui::UiPlaybackRate rate) const;
 
     private:
         friend class UiAnimationRuntimeParticipant;
@@ -125,14 +125,14 @@ namespace Horo::Runtime {
         /** @brief Applies real load-time asset reconciliation outside scheduler dispatch and invalidates old controllers.
          * @param replacement Detached actual cooked replacement. @param allocator Its sole actual tree issuer.
          * @param registry New owned schema. @param styles New style resolver. @param definition New inert authored declarations.
-         * @param policy Explicit cancel/restart policy. @param point Application structural safe point. @param cancellation Load ancestry.
+         * @param admission Explicit cancel/restart policy and application structural safe point. @param cancellation Load ancestry.
          * @return Reconciliation and fresh controller, or typed failure preserving all old admission and source cursors.
          * @note Host duration/committed-tick consumption is retained; queued optional-domain commands belong to retired controllers.
          */
         [[nodiscard]] Result<UiAnimationRuntimeReload> Reload(Ui::UiReloadGeneration replacement, Ui::UiElementSlotAllocator &allocator,
                                                               Ui::RuntimeStyleRegistry registry, Ui::UiStyleResolver styles,
                                                               Ui::UiAnimationCanvasDefinition definition,
-                                                              Ui::UiAnimationReloadPolicy policy, Ui::UiStructuralCommitPoint point,
+                                                              const Ui::UiAnimationReloadAdmission &admission,
                                                               const CancellationToken &cancellation = {});
         /** @brief Starts one nonblocking authored animation through the actual retained canvas owner.
          * @param animation Stable admitted definition.

@@ -56,13 +56,10 @@ namespace Horo::Runtime {
                     return Result<void>::Failure(MakeError(Ui::UiErrors::ClockOverflow));
                 const Ui::UiDuration delta{scaled.nanoseconds + control.pending.nanoseconds};
                 control.remainder = {scaled.remainder.numerator, scaled.remainder.denominator};
-                inputs[index] = {delta,
-                                 control.seek,
-                                 control.clock,
-                                 control.revision,
-                                 control.seek ? Ui::UiClockContinuity::ExplicitSeek
-                                              : (delta.nanoseconds == 0 ? Ui::UiClockContinuity::Held : Ui::UiClockContinuity::Continuous),
-                                 true};
+                auto continuity = delta.nanoseconds == 0 ? Ui::UiClockContinuity::Held : Ui::UiClockContinuity::Continuous;
+                if (control.seek)
+                    continuity = Ui::UiClockContinuity::ExplicitSeek;
+                inputs[index] = {delta, control.seek, control.clock, control.revision, continuity, true};
             }
             return Result<void>::Success();
         }
@@ -105,10 +102,11 @@ namespace Horo::Runtime {
                                                                                      true};
         const auto clocks = storage_->owner.ClockBindings();
         const auto &prior = clocks.domains[static_cast<std::size_t>(Ui::UiTimeDomain::PresentationUnscaled)];
-        const auto continuity = prior.sequence == 0                                    ? Ui::UiClockContinuity::Initial
-                                : prior.sourceRevision != facts.presentationGeneration ? Ui::UiClockContinuity::BaselineReset
-                                : presentation == 0                                    ? Ui::UiClockContinuity::Held
-                                                                                       : Ui::UiClockContinuity::Continuous;
+        auto continuity = presentation == 0 ? Ui::UiClockContinuity::Held : Ui::UiClockContinuity::Continuous;
+        if (prior.sequence == 0)
+            continuity = Ui::UiClockContinuity::Initial;
+        else if (prior.sourceRevision != facts.presentationGeneration)
+            continuity = Ui::UiClockContinuity::BaselineReset;
         readFacts.domains[static_cast<std::size_t>(Ui::UiTimeDomain::PresentationUnscaled)] =
             {{presentation}, {}, {}, facts.presentationGeneration, continuity, true};
         storage_->candidateControls = storage_->controls->domains;

@@ -35,7 +35,7 @@ namespace Horo::Runtime::Ui {
             return nullptr;
         const auto canvases = generation->Canvases();
         const auto found = std::ranges::find(canvases, storage.definition.canvas, &UiReloadCanvas::id);
-        return found == canvases.end() ? nullptr : &*found;
+        return found == canvases.end() ? nullptr : std::to_address(found);
     }
 
     /** @copydoc UiAnimationOwner::PrepareRouteClock */
@@ -140,8 +140,8 @@ namespace Horo::Runtime::Ui {
             route.elapsed = storage.candidate.routeElapsed;
             route.cancellation = storage.candidate.routeCancellation;
             if (storage.candidate.routeTerminal) {
-                const auto rejection = route.gate->transaction_.preparedRejection_;
-                if (route.cancellation != UiAnimationCancellation::None || rejection != UiRouteOperationRejection::None) {
+                if (const auto rejection = route.gate->transaction_.preparedRejection_;
+                    route.cancellation != UiAnimationCancellation::None || rejection != UiRouteOperationRejection::None) {
                     route.record->terminal = stack->CloseAnimationValidated(*route.gate, rejection == UiRouteOperationRejection::None
                                                                                              ? UiRouteOperationRejection::Cancelled
                                                                                              : rejection);

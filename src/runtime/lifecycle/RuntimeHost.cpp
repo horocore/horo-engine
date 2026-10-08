@@ -4,7 +4,7 @@
 
 namespace Horo::Runtime {
     /** @copydoc RuntimeHost::Create */
-    Result<std::unique_ptr<RuntimeHost>> RuntimeHost::Create(Clock &clock, FrameSchedulerConfig config) {
+    Result<std::unique_ptr<RuntimeHost>> RuntimeHost::Create(Clock &clock, const FrameSchedulerConfig &config) {
         auto scheduler = FrameScheduler::Create(clock, config);
         if (scheduler.HasError()) {
             return Result<std::unique_ptr<RuntimeHost>>::Failure(scheduler.ErrorValue());

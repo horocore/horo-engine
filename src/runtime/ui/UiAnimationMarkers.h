@@ -34,7 +34,7 @@ namespace Horo::Runtime::Ui::AnimationInternal {
                 continue;
             if (output.size() == publication.capacity)
                 return Result<void>::Failure(MakeError(UiErrors::AnimationBudgetExceeded));
-            output.push_back({publication.timeline, marker.id, iteration, publication.sequence, reverse});
+            output.emplace_back(publication.timeline, marker.id, iteration, publication.sequence, reverse);
         }
         return Result<void>::Success();
     }

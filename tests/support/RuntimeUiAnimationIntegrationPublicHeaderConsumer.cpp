@@ -30,7 +30,11 @@ static_assert(std::is_same_v<decltype(std::declval<UiAnimationRuntimeParticipant
 static_assert(std::is_nothrow_move_constructible_v<Horo::Runtime::Ui::UiAnimationReloadResult>);
 static_assert(std::is_nothrow_move_constructible_v<UiAnimationRuntimeReload>);
 static_assert(!std::is_copy_constructible_v<UiAnimationRuntimeReload>);
-static_assert(std::is_member_function_pointer_v<decltype(&UiAnimationRuntimeParticipant::Reload)>);
+using ReloadSignature = Horo::Result<UiAnimationRuntimeReload> (UiAnimationRuntimeParticipant::*)(
+    Horo::Runtime::Ui::UiReloadGeneration, Horo::Runtime::Ui::UiElementSlotAllocator &, Horo::Runtime::Ui::RuntimeStyleRegistry,
+    Horo::Runtime::Ui::UiStyleResolver, Horo::Runtime::Ui::UiAnimationCanvasDefinition,
+    const Horo::Runtime::Ui::UiAnimationReloadAdmission &, const Horo::CancellationToken &);
+static_assert(std::is_same_v<decltype(&UiAnimationRuntimeParticipant::Reload), ReloadSignature>);
 
 using NavigateSignature = Horo::Result<Horo::Runtime::Ui::UiRouteOperationId> (UiAnimationRuntimeParticipant::*)(
     const Horo::Runtime::Ui::UiRouteOperationRequest &);

@@ -98,8 +98,8 @@ namespace Horo::Runtime::Ui::AnimationInternal {
             return layout;
         for (std::size_t index = 0; index < definition.animations.size(); ++index) {
             const auto &animation = definition.animations[index];
-            const auto prior = std::span(definition.animations).first(index);
-            if (animation.resolvedMotionPolicy != definition.resolvedPolicy ||
+            if (const auto prior = std::span(definition.animations).first(index);
+                animation.resolvedMotionPolicy != definition.resolvedPolicy ||
                 std::ranges::find(prior, animation.id, &UiAnimationDefinition::id) != prior.end())
                 return Result<void>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
             if (const auto valid = ValidateAnimation(animation, canvas.tree, registry, limits); valid.HasError())

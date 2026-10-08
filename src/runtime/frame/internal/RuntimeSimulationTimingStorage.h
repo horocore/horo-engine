@@ -38,15 +38,14 @@ namespace Horo::Runtime::SimulationTimingDetail {
      *          The live host retains this object, so releasing a frame-hot lease cannot perform last-owner reclamation.
      */
     struct Storage final {
-        Storage(std::uint32_t pauseCapacity, std::uint32_t stepCapacity)
-            : owner(std::this_thread::get_id()), pauses(pauseCapacity), steps(stepCapacity) {}
+        Storage(std::uint32_t pauseCapacity, std::uint32_t stepCapacity) : pauses(pauseCapacity), steps(stepCapacity) {}
 
         Storage(const Storage &) = delete;
         Storage &operator=(const Storage &) = delete;
         Storage(Storage &&) = delete;
         Storage &operator=(Storage &&) = delete;
 
-        const std::thread::id owner;
+        const std::thread::id owner{std::this_thread::get_id()};
         std::vector<PauseRecord> pauses;
         std::vector<StepRecord> steps;
         RuntimeSimulationPolicy desired;

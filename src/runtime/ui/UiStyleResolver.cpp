@@ -179,7 +179,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiStyleResolver::PublishValidated */
-    UiComputedStyleSnapshot UiStyleResolver::PublishValidated(PreparedUpdate &&candidate) noexcept {
+    UiComputedStyleSnapshot UiStyleResolver::PublishValidated(PreparedUpdate &&candidate) const noexcept {
         if (candidate.changes_) {
             storage_->ReleaseCurrent();
             storage_->current = std::const_pointer_cast<UiComputedStyleSnapshot::Storage>(candidate.snapshot_->storage_);
@@ -198,7 +198,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiStyleResolver::Commit */
     Result<UiComputedStyleSnapshot> UiStyleResolver::Commit(PreparedUpdate &&candidate, const UiElementTree &tree,
-                                                            const RuntimeStyleRegistry &registry) {
+                                                            const RuntimeStyleRegistry &registry) const {
         if (candidate.owner_ != storage_)
             return StyleInternal::Failure<UiComputedStyleSnapshot>(UiErrors::StyleSourceStale);
         if (const auto admitted = candidate.CanPublish(tree, registry); admitted.HasError())
@@ -208,7 +208,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiStyleResolver::Update */
     Result<UiComputedStyleSnapshot> UiStyleResolver::Update(const UiElementTree &tree, const RuntimeStyleRegistry &registry,
-                                                            const UiStyleUpdateRequest &request) {
+                                                            const UiStyleUpdateRequest &request) const {
         auto candidate = Prepare(tree, registry, request);
         if (candidate.HasError())
             return Result<UiComputedStyleSnapshot>::Failure(candidate.ErrorValue());
@@ -216,7 +216,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiStyleResolver::BeginRetirement */
-    Result<void> UiStyleResolver::BeginRetirement() {
+    Result<void> UiStyleResolver::BeginRetirement() const {
         if (!storage_ || storage_->lifecycle != UiStyleResolverState::Active)
             return StyleInternal::Failure(UiErrors::StyleLifecycleUnavailable);
         storage_->lifecycle = UiStyleResolverState::Retiring;

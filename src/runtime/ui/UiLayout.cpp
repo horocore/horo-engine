@@ -116,7 +116,9 @@ namespace Horo::Runtime::Ui {
             std::vector<Node> nodes;
             std::vector<std::uint32_t> children;
             std::vector<std::uint32_t> lookup;
-        } candidateTree;
+        };
+
+        TreeCandidate candidateTree;
 
         std::vector<std::uint32_t> activeChildren;
         std::vector<UiElementHandle> traversalScratch;
@@ -755,7 +757,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiLayoutEngine::Commit */
-    Result<UiLayoutSnapshot> UiLayoutEngine::Commit(PreparedUpdate &&candidate, const UiElementTree &tree) {
+    Result<UiLayoutSnapshot> UiLayoutEngine::Commit(PreparedUpdate &&candidate, const UiElementTree &tree) const {
         if (candidate.owner_ != storage_)
             return Failure<UiLayoutSnapshot>(UiErrors::LayoutSourceStale);
         if (const auto admitted = candidate.CanPublish(tree); admitted.HasError())
@@ -764,7 +766,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiLayoutEngine::Update */
-    Result<UiLayoutSnapshot> UiLayoutEngine::Update(const UiElementTree &tree, const UiLayoutUpdateRequest &request) {
+    Result<UiLayoutSnapshot> UiLayoutEngine::Update(const UiElementTree &tree, const UiLayoutUpdateRequest &request) const {
         auto candidate = Prepare(tree, request);
         if (candidate.HasError())
             return Result<UiLayoutSnapshot>::Failure(candidate.ErrorValue());

@@ -61,8 +61,8 @@ TEST_CASE("Real animation reload reconciles compatible draft and invalidates sou
     auto replacement = Generation(allocator, 100);
     auto resources = Resources(replacement.Canvases().front());
     auto reloaded = participant.Reload(std::move(replacement), allocator, std::move(resources.registry), std::move(resources.styles),
-                                       std::move(resources.definition), UiAnimationReloadPolicy::Cancel,
-                                       UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands);
+                                       std::move(resources.definition),
+                                       {UiAnimationReloadPolicy::Cancel, UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands});
     REQUIRE(reloaded.HasValue());
     CHECK(reloaded.Value().result.state.preservedControls == 1);
     CHECK(fixture.controller.Step(oldClock.Value(), UiDuration{1}).HasError());
@@ -102,9 +102,10 @@ TEST_CASE("Rejected and cancelled real animation reloads preserve the existing f
     SECTION("authored replacement missing actual element") {
         resources.definition.elements.pop_back();
     }
-    auto result = participant.Reload(std::move(replacement), allocator, std::move(resources.registry), std::move(resources.styles),
-                                     std::move(resources.definition), UiAnimationReloadPolicy::Cancel,
-                                     UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands, cancelled.Token());
+    auto result =
+        participant.Reload(std::move(replacement), allocator, std::move(resources.registry), std::move(resources.styles),
+                           std::move(resources.definition),
+                           {UiAnimationReloadPolicy::Cancel, UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands}, cancelled.Token());
     REQUIRE(result.HasError());
     auto unchanged = Frame(participant);
     CHECK(unchanged.Timelines().front().timeline == timeline.Value());
@@ -131,8 +132,8 @@ TEST_CASE("Explicit real reload restart closes the old instance once and starts 
     auto replacement = Generation(allocator, 100);
     auto resources = Resources(replacement.Canvases().front());
     auto result = participant.Reload(std::move(replacement), allocator, std::move(resources.registry), std::move(resources.styles),
-                                     std::move(resources.definition), UiAnimationReloadPolicy::Restart,
-                                     UiStructuralCommitPoint::CommitDeferredLifecycleChanges);
+                                     std::move(resources.definition),
+                                     {UiAnimationReloadPolicy::Restart, UiStructuralCommitPoint::CommitDeferredLifecycleChanges});
     REQUIRE(result.HasValue());
     REQUIRE(result.Value().result.terminal.size() == 1);
     CHECK(result.Value().result.terminal.front().timeline == timeline.Value());
@@ -167,8 +168,8 @@ TEST_CASE("A pending actual route gate rejects reload without cancelling its adm
     auto resources = Resources(replacement.Canvases().front(), true);
     CHECK(participant
               .Reload(std::move(replacement), allocator, std::move(resources.registry), std::move(resources.styles),
-                      std::move(resources.definition), UiAnimationReloadPolicy::Cancel,
-                      UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands)
+                      std::move(resources.definition),
+                      {UiAnimationReloadPolicy::Cancel, UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands})
               .HasError());
     fixture.clock.Advance(Duration::FromMilliseconds(100));
     REQUIRE(fixture.host->RunFrame().HasValue());

@@ -89,7 +89,7 @@ namespace Horo::Runtime::Ui {
         }
         const auto clocks = AnimationInternal::ReserveChildIncarnations(storage.issuedRouteClockGeneration,
                                                                         static_cast<std::uint32_t>(storage.route.stages.size()));
-        if (!clocks)
+        if (!clocks.has_value())
             return Result<void>::Failure(MakeError(UiErrors::ClockOverflow));
         // Every capacity/conflict check completed before any reserved incarnation becomes active.
         RetireRouteTimelines(storage);

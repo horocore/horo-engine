@@ -187,9 +187,9 @@ namespace Horo::Runtime::Ui {
          * @pre Calls for one projector are serialized on the Runtime UI owner thread.
          */
         [[nodiscard]] Result<UiLayoutClipSnapshot> Update(const UiElementTree &tree, const UiLayoutSnapshot &layout,
-                                                          const UiLayoutClipUpdateRequest &request);
+                                                          const UiLayoutClipUpdateRequest &request) const;
         /** @brief Closes new updates while preserving external immutable snapshot leases. @return Success or lifecycle failure. */
-        [[nodiscard]] Result<void> BeginRetirement();
+        [[nodiscard]] Result<void> BeginRetirement() const;
         /** @brief Idempotently stops the projector and releases mutable storage. */
         void Shutdown() const noexcept;
         /** @brief Returns the explicit admission lifecycle. @return Active, Retiring, or Stopped. */

@@ -71,7 +71,9 @@ namespace Horo::Runtime::Ui {
             std::vector<UiLayoutClipRecord> records;
             std::vector<UiLayoutClipNode> clips;
             std::vector<UiLayoutScrollRecord> scrolls;
-        } candidate;
+        };
+
+        CandidateProjection candidate;
 
         explicit Storage(const UiLayoutClipEngineDescriptor &source);
         Storage(const Storage &) = delete;

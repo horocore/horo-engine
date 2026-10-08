@@ -392,7 +392,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiActionRouter::DrainInteractionReplacement */
-    std::size_t UiActionRouter::DrainInteractionReplacement() noexcept {
+    std::size_t UiActionRouter::DrainInteractionReplacement() const noexcept {
         if (!storage_ || replacementPrepared_ || storage_->dispatching)
             return 0;
         auto count = storage_->asyncActions.DrainReplacementSource();

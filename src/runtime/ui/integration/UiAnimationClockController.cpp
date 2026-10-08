@@ -77,7 +77,7 @@ namespace Horo::Runtime {
 
     /** @copydoc UiAnimationClockController::SetPreviewPlayback */
     Result<void> UiAnimationClockController::SetPreviewPlayback(const Ui::UiAnimationClockId clock, const bool playing,
-                                                                const Ui::UiPlaybackRate rate) {
+                                                                const Ui::UiPlaybackRate rate) const {
         if (!storage_)
             return Result<void>::Failure(MakeError(Ui::UiErrors::AnimationLifecycleUnavailable));
         const auto admitted = Admit(*storage_, clock);

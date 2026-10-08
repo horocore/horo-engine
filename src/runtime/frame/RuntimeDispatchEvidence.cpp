@@ -13,14 +13,14 @@ namespace Horo::Runtime {
     }
 
     struct RuntimeDispatchSource::Storage final {
-        Storage() : owner(std::this_thread::get_id()) {}
+        Storage() = default;
 
         Storage(const Storage &) = delete;
         Storage &operator=(const Storage &) = delete;
         Storage(Storage &&) = delete;
         Storage &operator=(Storage &&) = delete;
 
-        const std::thread::id owner;
+        const std::thread::id owner{std::this_thread::get_id()};
         // Only retirement may cross the owner thread. Foreign reads reject before accessing all other mutable fields.
         std::atomic<bool> retired{};
         RuntimeDispatchFacts facts;
@@ -61,17 +61,17 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeDispatchSource::Begin */
     RuntimeDispatchStatus RuntimeDispatchSource::Begin(const RuntimePhase phase, const RuntimeDispatchFacts &facts) noexcept {
-        const auto valid = ValidateRun();
-        if (valid != RuntimeDispatchStatus::Valid)
+        using enum RuntimeDispatchStatus;
+        if (const auto valid = ValidateRun(); valid != Valid)
             return valid;
         if (!Internal::AdvanceDispatchOrdinal(storage_->ordinal)) {
             storage_->exhausted = true;
-            return RuntimeDispatchStatus::Exhausted;
+            return Exhausted;
         }
         storage_->phase = phase;
         storage_->facts = facts;
         storage_->active = true;
-        return RuntimeDispatchStatus::Valid;
+        return Valid;
     }
 
     /** @copydoc RuntimeDispatchSource::End */
@@ -93,19 +93,20 @@ namespace Horo::Runtime {
     /** @copydoc RuntimeDispatchEvidence::Read */
     RuntimeDispatchStatus RuntimeDispatchEvidence::Read(const RuntimeDispatchSource &expected, const RuntimePhase phase,
                                                         RuntimeDispatchFacts &facts) const noexcept {
+        using enum RuntimeDispatchStatus;
         if (!storage_ || ordinal_ == 0)
-            return RuntimeDispatchStatus::Invalid;
+            return Invalid;
         if (storage_->owner != std::this_thread::get_id())
-            return RuntimeDispatchStatus::WrongThread;
+            return WrongThread;
         if (storage_.get() != expected.storage_.Get())
-            return RuntimeDispatchStatus::ForeignSource;
+            return ForeignSource;
         if (storage_->retired.load())
-            return RuntimeDispatchStatus::Retired;
+            return Retired;
         if (!storage_->active || storage_->ordinal != ordinal_)
-            return RuntimeDispatchStatus::Stale;
+            return Stale;
         if (storage_->phase != phase)
-            return RuntimeDispatchStatus::WrongPhase;
+            return WrongPhase;
         facts = storage_->facts;
-        return RuntimeDispatchStatus::Valid;
+        return Valid;
     }
 }  // namespace Horo::Runtime

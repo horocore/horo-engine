@@ -3,11 +3,11 @@
 Rebuild C++ consumers after these signature changes. C ABI and published frame
 record layouts are unchanged.
 
-`UiAnimationOwner::Reload` groups its policy and structural commit point in
+`UiAnimationOwner::Reload` and `UiAnimationRuntimeParticipant::Reload` group their policy and structural commit point in
 `const UiAnimationReloadAdmission&`: pass `{policy, point}` before the optional
 cancellation token. This synchronous inert record is borrowed until return;
 replacement generations, registries, styles and definitions remain transferred
-values. `UiAnimationRuntimeParticipant::Reload` retains its host call syntax.
+values. Update both owner and participant callers to pass the same admission record.
 
 `UiAnimationRuntimeParticipant::Navigate` now borrows
 `const UiRouteOperationRequest&` until return. Admission still copies retained
@@ -36,3 +36,13 @@ retired actions.
 Animation scratch arrays are grouped by purpose and the committed-tick ledger
 uses a vector allocated once at creation. The ledger never grows during frame
 processing; moving it leaves the source unavailable, as before.
+
+`FrameScheduler::Create`, its construction-key constructor and `RuntimeHost::Create`
+borrow `const FrameSchedulerConfig&` during synchronous creation. The scheduler
+still stores its own configuration copy. Rebuild function pointer aliases.
+
+`UiAnimationClockController::SetPreviewPlayback`, style retirement/publication,
+layout update/commit and clipping update/retirement now use const member signatures.
+Their existing owned-state and admission checks still apply. Private route/action
+publication helpers use the same logical constness; public action reclamation
+still requires a mutable owner.

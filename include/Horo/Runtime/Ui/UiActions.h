@@ -463,7 +463,7 @@ namespace Horo::Runtime::Ui {
         /** @brief Releases preparation admission without changing the active router. */
         void AbandonInteractionReplacement() noexcept;
         /** @brief Releases drained terminal error pins at explicit load-time quiescence. @return Reclaimed count. */
-        [[nodiscard]] std::size_t DrainInteractionReplacement() noexcept;
+        [[nodiscard]] std::size_t DrainInteractionReplacement() const noexcept;
         explicit UiActionRouter(std::shared_ptr<Storage> storage) noexcept;
         /** @brief Borrows mutable owner state. @return Null after move; unavailable on const owners. */
         [[nodiscard]] Storage *StateStorage() noexcept;

@@ -634,12 +634,12 @@ namespace Horo::Runtime::Ui {
          * @return Published lease, or typed failure with unchanged last-good state.
          */
         [[nodiscard]] Result<UiComputedStyleSnapshot> Commit(PreparedUpdate &&candidate, const UiElementTree &tree,
-                                                             const RuntimeStyleRegistry &registry);
+                                                             const RuntimeStyleRegistry &registry) const;
         /** @brief Resolves and atomically publishes one complete style candidate; equivalent to Prepare followed by Commit. */
         [[nodiscard]] Result<UiComputedStyleSnapshot> Update(const UiElementTree &tree, const RuntimeStyleRegistry &registry,
-                                                             const UiStyleUpdateRequest &request);
+                                                             const UiStyleUpdateRequest &request) const;
         /** @brief Stops new work while retaining outstanding immutable snapshot leases. */
-        [[nodiscard]] Result<void> BeginRetirement();
+        [[nodiscard]] Result<void> BeginRetirement() const;
         /** @brief Idempotently closes mutable caches and releases its current snapshot lease. */
         void Shutdown() const noexcept;
         /** @brief Returns the explicit resolver lifecycle. @return Active, Retiring, or Stopped. */
@@ -650,7 +650,7 @@ namespace Horo::Runtime::Ui {
     private:
         friend class UiAnimationOwner;
         /** @brief Publishes an already validated candidate during a callback-free owner-thread commit. */
-        [[nodiscard]] UiComputedStyleSnapshot PublishValidated(PreparedUpdate &&candidate) noexcept;
+        [[nodiscard]] UiComputedStyleSnapshot PublishValidated(PreparedUpdate &&candidate) const noexcept;
         explicit UiStyleResolver(std::shared_ptr<Storage> storage) noexcept;
         std::shared_ptr<Storage> storage_;
     };

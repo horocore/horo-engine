@@ -729,14 +729,14 @@ namespace Horo::Runtime::Ui {
          * @param candidate Candidate consumed on success. @param tree Actual current tree.
          * @return Published lease, or typed failure leaving the last-good generation unchanged.
          */
-        [[nodiscard]] Result<UiLayoutSnapshot> Commit(PreparedUpdate &&candidate, const UiElementTree &tree);
+        [[nodiscard]] Result<UiLayoutSnapshot> Commit(PreparedUpdate &&candidate, const UiElementTree &tree) const;
         /** @brief Evaluates dirty work and atomically publishes a complete immutable generation.
          * @param tree Exact active retained tree.
          * @param request Coherent source revisions, root geometry, and synchronous evaluator.
          * @return New snapshot, the retained current snapshot for a no-op, or typed failure preserving last-good state.
          * @pre Serialized on the Runtime UI owner thread during VariableUpdate.
          */
-        [[nodiscard]] Result<UiLayoutSnapshot> Update(const UiElementTree &tree, const UiLayoutUpdateRequest &request);
+        [[nodiscard]] Result<UiLayoutSnapshot> Update(const UiElementTree &tree, const UiLayoutUpdateRequest &request) const;
         /** @brief Closes new update/invalidation admission while preserving leased snapshots. @return Success or lifecycle failure. */
         [[nodiscard]] Result<void> BeginRetirement() const;
         /** @brief Idempotently stops the engine and releases mutable caches and its active lease. */
