@@ -1104,8 +1104,13 @@ target_include_directories(HoroXRRuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 target_link_libraries(HoroXRRuntimeTests PRIVATE HoroEngine::XRRuntime)
 horo_register_catch_test(HoroXRRuntimeTests LABELS "unit;xr;headless;lifecycle")
 
+add_executable(HoroXRActionBindingTests unit/runtime/xr/XRActionBindingsTests.cpp)
+target_include_directories(HoroXRActionBindingTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroXRActionBindingTests PRIVATE HoroEngine::XRInputBindings)
+horo_register_catch_test(HoroXRActionBindingTests LABELS "unit;xr;input;headless;lifecycle")
+
 if(HORO_BUILD_XR_OPENXR)
-    add_executable(HoroXROpenXRTests unit/runtime/xr/OpenXRNativeSessionTests.cpp)
+    add_executable(HoroXROpenXRTests unit/runtime/xr/OpenXRNativeSessionTests.cpp unit/runtime/xr/OpenXRActionBindingsTests.cpp)
     target_include_directories(HoroXROpenXRTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(HoroXROpenXRTests PRIVATE HoroEngine::XROpenXR HoroXROpenXRHostInterface)
     horo_register_catch_test(HoroXROpenXRTests LABELS "unit;xr;headless;native;lifecycle")
