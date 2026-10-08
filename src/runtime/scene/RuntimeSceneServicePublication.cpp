@@ -1,6 +1,7 @@
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Runtime/Save/SaveRestoreTransaction.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
+#include "RuntimeScenePublicationInternal.h"
 
 #include <utility>
 
@@ -15,6 +16,11 @@ namespace Horo::Runtime {
             service.pending_.restore = std::move(service.aggregateRestore_);
             retired = std::move(service.active_);
             service.active_ = std::move(service.pending_);
+            if (service.publicationReceipt_) {
+                const auto view = service.active_.scene->View();
+                service.publicationReceipt_->snapshot = {ScenePublicationStatus::Published, view.RuntimeId(), view.StructuralRevision(),
+                                                         service.active_.datasets};
+            }
         }
 
         RuntimeSceneService &service;
@@ -36,6 +42,8 @@ namespace Horo::Runtime {
         if (publicationCheck_) {
             if (const auto valid = publicationCheck_->ValidatePublication(); valid.HasError())
                 return Result<bool>::Failure(valid.ErrorValue());
+            if (const auto valid = publicationCheck_->ValidatePreparedComposition(pending_.datasets); valid.HasError())
+                return Result<bool>::Failure(valid.ErrorValue());
         }
         for (const auto &candidate : pending_.candidates) {
             if (const auto valid = candidate->ValidatePublication(); valid.HasError())
@@ -53,6 +61,7 @@ namespace Horo::Runtime {
         } else {
             transfer.PublishPrepared();
         }
+        RetirePublicationReceipt(ScenePublicationStatus::Rejected);
         publicationCheck_.reset();
         ShutdownCandidates(transfer.retired.candidates);
         transfer.retired.restore.reset();
@@ -105,6 +114,7 @@ namespace Horo::Runtime {
         operationError_ = std::move(error);
         ShutdownCandidates(pending_.candidates);
         pending_.scene.reset();
+        RetirePublicationReceipt(ScenePublicationStatus::Rejected);
         publicationCheck_.reset();
         transition_ = TransitionKind::None;
     }

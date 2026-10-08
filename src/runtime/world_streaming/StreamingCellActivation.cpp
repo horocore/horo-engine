@@ -3,6 +3,7 @@
 #include "WorldStreamingInternal.h"
 
 #include <algorithm>
+#include <limits>
 #include <ranges>
 #include <utility>
 
@@ -34,7 +35,7 @@ namespace Horo::WorldStreaming {
 
         [[nodiscard]] Result<void> ValidateContext(const StreamingCellActivationContext &context) {
             if (!context.activation.IsValid() || !context.operation.Handle().IsValid() || context.maximumReceipts == 0 ||
-                !IsKnown(context.lifecycle))
+                !IsKnown(context.lifecycle) || !context.scheduler.IsValid())
                 return Internal::Failure<void>(WorldStreamingErrors::CellActivationInvalid);
             if (context.operation.Kind() != StreamingCellOperationKind::Activate ||
                 context.operation.State() != StreamingCellOperationState::Activating)
@@ -98,7 +99,7 @@ namespace Horo::WorldStreaming {
     /** @copydoc StreamingCellActivationTransaction::StreamingCellActivationTransaction */
     StreamingCellActivationTransaction::StreamingCellActivationTransaction(StreamingCellActivationTransaction &&other) noexcept
         : context_(other.context_), requirements_(std::move(other.requirements_)), receipts_(std::move(other.receipts_)),
-          state_(other.state_) {
+          publicationNanoseconds_(other.publicationNanoseconds_), state_(other.state_) {
         other.state_ = StreamingCellActivationState::RolledBack;
     }
 
@@ -110,6 +111,7 @@ namespace Horo::WorldStreaming {
         context_ = other.context_;
         requirements_ = std::move(other.requirements_);
         receipts_ = std::move(other.receipts_);
+        publicationNanoseconds_ = other.publicationNanoseconds_;
         state_ = other.state_;
         other.state_ = StreamingCellActivationState::RolledBack;
         return *this;
@@ -133,14 +135,24 @@ namespace Horo::WorldStreaming {
             return Result<StreamingCellActivationTransaction>::Failure(valid.ErrorValue());
         }
 
+        std::uint64_t publicationNanoseconds{};
+        for (const auto &receipt : receipts) {
+            const auto cost = receipt->MaximumPublicationNanoseconds();
+            if (cost == 0 || cost > std::numeric_limits<std::uint64_t>::max() - publicationNanoseconds) {
+                RollbackReceipts(receipts);
+                return Internal::Failure<StreamingCellActivationTransaction>(WorldStreamingErrors::OwnerFrameInvalid);
+            }
+            publicationNanoseconds += cost;
+        }
         return Result<StreamingCellActivationTransaction>::Success(
-            StreamingCellActivationTransaction{context, std::move(canonical).Value(), std::move(receipts)});
+            StreamingCellActivationTransaction{context, std::move(canonical).Value(), std::move(receipts), publicationNanoseconds});
     }
 
     /** @copydoc StreamingCellActivationTransaction::Commit */
     Result<void> StreamingCellActivationTransaction::Commit(const StreamingCellOperation &expected,
                                                             const StreamingCellActivationCommitPoint commitPoint,
-                                                            const StreamingCellActivationLifecycle lifecycle) {
+                                                            const StreamingCellActivationLifecycle lifecycle,
+                                                            StreamingOwnerFrameBudget &budget, const std::uint64_t elapsedNanoseconds) {
         if (state_ != StreamingCellActivationState::Prepared)
             return Internal::Failure<void>(WorldStreamingErrors::CellActivationLifecycleUnavailable);
         if (!IsKnown(commitPoint))
@@ -158,6 +170,11 @@ namespace Horo::WorldStreaming {
             return Internal::Failure<void>(WorldStreamingErrors::CellActivationStale);
         }
 
+        const auto admitted = budget.TryConsume(context_.scheduler, publicationNanoseconds_, elapsedNanoseconds);
+        if (admitted.HasError())
+            return Result<void>::Failure(admitted.ErrorValue());
+        if (!admitted.Value())
+            return Internal::Failure<void>(WorldStreamingErrors::OwnerFrameDeferred);
         for (const auto &receipt : receipts_)
             receipt->PublishPrepared();
         state_ = StreamingCellActivationState::Published;
@@ -194,7 +211,7 @@ namespace Horo::WorldStreaming {
 
     StreamingCellActivationTransaction::StreamingCellActivationTransaction(
         const StreamingCellActivationContext &context, std::vector<StreamingCellActivationRequirement> requirements,
-        std::vector<std::unique_ptr<IStreamingCellActivationReceipt>> receipts) noexcept
+        std::vector<std::unique_ptr<IStreamingCellActivationReceipt>> receipts, const std::uint64_t publicationNanoseconds) noexcept
         : context_(context), requirements_(std::move(requirements)), receipts_(std::move(receipts)),
-          state_(StreamingCellActivationState::Prepared) {}
+          publicationNanoseconds_(publicationNanoseconds), state_(StreamingCellActivationState::Prepared) {}
 }  // namespace Horo::WorldStreaming

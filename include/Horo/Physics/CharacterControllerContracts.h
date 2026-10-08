@@ -14,6 +14,10 @@
 #include <cstdint>
 #include <optional>
 
+namespace Horo::Physics {
+    class PhysicsWorld;
+}
+
 namespace Horo::Character {
     /** @brief Absolute fixed capacity of one owned movement result. */
     inline constexpr std::uint32_t MaximumCharacterContacts = 32;
@@ -119,6 +123,27 @@ namespace Horo::Character {
         return static_cast<CharacterCollisionFlags>(static_cast<std::uint16_t>(left) | static_cast<std::uint16_t>(right));
     }
 
+    /** @brief Allocation-free selectors intersected with the controller's query channel; triggers are always excluded. */
+    struct CharacterCollisionSelectors final {
+        std::optional<Physics::CollisionLayerId> requiredLayer;
+        std::optional<Physics::CollisionProfileId> requiredProfile;
+        std::optional<Physics::BodyHandle> excludedBody;
+    };
+
+    /** @brief Validates typed selectors without resolving native state.
+     * @param selectors Candidate collision selectors.
+     * @param world Exact owning Physics world.
+     * @return Success or a malformed/foreign-world error.
+     */
+    [[nodiscard]] Result<void> ValidateCharacterCollisionSelectors(const CharacterCollisionSelectors &selectors,
+                                                                   Physics::PhysicsWorldId world);
+
+    /** @brief Deliberate response to a non-walkable upward-facing surface. */
+    enum class CharacterSteepSlopePolicy : std::uint8_t {
+        Stop,  /**< Blocks uphill intent and applies no automatic surface drift. */
+        Slide, /**< Integrates committed Character gravity velocity along the steep surface. */
+    };
+
     /**
      * @brief Owned inert controller creation policy for one exact scene/Character/Physics generation.
      *
@@ -141,7 +166,10 @@ namespace Horo::Character {
         float minimumMoveDistanceMeters{0.001F};
         float maximumStepHeightMeters{0.3F};
         float maximumSlopeDegrees{45.0F};
+        bool preserveHorizontalSpeedOnSlopes{true}; /**< Preserves requested displacement in the plane perpendicular to up. */
+        CharacterSteepSlopePolicy steepSlopePolicy{CharacterSteepSlopePolicy::Stop};
         std::uint32_t maximumContacts{16};
+        CharacterCollisionSelectors selectors;                       /**< Initial movement, placement and clearance filter. */
         std::optional<Physics::PhysicsCapsuleShape> crouchedCapsule; /**< Same radius and lower cylindrical height than standing. */
     };
 
@@ -163,6 +191,7 @@ namespace Horo::Character {
      * consumes only the stable overlap count and one deterministic depenetration displacement.
      * Clearance-only probes may return zero recovery for a blocker; overlapping spawn recovery
      * requires a finite non-zero displacement.
+     * The adapter must exclude triggers, overlap-only surfaces and every nonmatching selector before reduction.
      */
     struct CharacterOverlapProbeResult final {
         std::uint32_t overlapCount{};
@@ -181,6 +210,7 @@ namespace Horo::Character {
         Physics::CollisionProfileId collisionProfile;
         Physics::PhysicsQueryChannelId queryChannel;
         std::uint32_t iteration{};
+        CharacterCollisionSelectors selectors;
     };
 
     /**
@@ -209,6 +239,9 @@ namespace Horo::Character {
         float distanceMeters{};
         Math::Vec3 relativeVelocityMetersPerSecond{};               /**< Surface velocity relative to the queried Character frame. */
         std::optional<Physics::PhysicsShapeSubresourceId> subshape; /**< Exact authored child; absent for primitive support. */
+        bool trigger{};                                     /**< Defensive eligibility evidence: never physical contact or support. */
+        std::optional<Physics::CollisionLayerId> layer;     /**< Required when the request selects a layer. */
+        std::optional<Physics::CollisionProfileId> profile; /**< Required when the request selects a profile. */
     };
 
     /** @brief Read-only capsule sweep request for one bounded movement iteration. */
@@ -225,6 +258,7 @@ namespace Horo::Character {
         Physics::CollisionProfileId collisionProfile;
         Physics::PhysicsQueryChannelId queryChannel;
         std::uint32_t iteration{};
+        CharacterCollisionSelectors selectors;
     };
 
     /**
@@ -275,6 +309,30 @@ namespace Horo::Character {
         std::uint64_t originGeneration{};
         std::uint64_t tick{};
         std::uint64_t physicsSnapshotRevision{};
+    };
+
+    /** @brief Owner-thread Physics adapter borrowing one world for bounded allocation-free capsule queries.
+     * The host owns the adapter through each synchronous operation and destroys it before the world.
+     * This adapter uses the canonical immediate-query collider inventory; unsupported worlds fail explicitly.
+     */
+    class CharacterPhysicsQueryAdapter final {
+    public:
+        /** @brief Binds one explicit world without retaining native state.
+         * @param world Physics owner; must outlive this adapter and all returned contexts.
+         */
+        explicit CharacterPhysicsQueryAdapter(Physics::PhysicsWorld &world) noexcept;
+        /** @brief Captures host-selected exact tick/world expectations for a synchronous query operation.
+         * @param expected Exact Character tick and captured Physics generations.
+         * @return Borrowed context; ordinary Character context validation rejects mismatched expectations.
+         */
+        [[nodiscard]] CharacterPhysicsQueryContext Context(const CharacterPhysicsQueryExpectations &expected) noexcept;
+
+    private:
+        /** @brief Runs a filtered capsule overlap and canonically selects one recovery normal/depth. */
+        Result<CharacterOverlapProbeResult> Overlap(const CharacterOverlapProbeRequest &request) const noexcept;
+        /** @brief Runs a filtered capsule sweep and copies only Horo-owned evidence. */
+        Result<CharacterSweepProbeResult> Sweep(const CharacterSweepProbeRequest &request) const noexcept;
+        Physics::PhysicsWorld *world_;
     };
 
     /** @brief One coherent collision-root publication owned by the Character controller. */
@@ -369,6 +427,8 @@ namespace Horo::Character {
         bool jumpRequested{};
         CharacterStanceIntent stance{CharacterStanceIntent::Keep};
         std::optional<CharacterShapeChangeRequest> shapeChange; /**< Requires Keep stance; conflicts publish Invalid. */
+        std::optional<CharacterCollisionSelectors>
+            filterChange; /**< Applies to every probe of this command and persists only on tick commit. */
     };
 
     /** @brief Whether physical identity was supplied by Physics or by the explicit controller fallback. */
@@ -419,7 +479,8 @@ namespace Horo::Character {
         bool groundingRevalidationRequired{};
         std::optional<Physics::PhysicsShapeSubresourceId> groundSubshape;             /**< Selected support's authored child identity. */
         CharacterMaterialSource groundMaterialSource{CharacterMaterialSource::Query}; /**< Origin of the effective physical material. */
-        Math::Vec3 groundPoint{};                              /**< Selected support point; independent of retained contact capacity. */
+        Math::Vec3 groundPoint{};                    /**< Selected support point; independent of retained contact capacity. */
+        Math::Vec3 gravityVelocityMetersPerSecond{}; /**< Character-owned continuation; separate from achieved and gameplay velocity. */
         std::optional<CharacterShapeChangeResult> shapeChange; /**< Character-owned clearance outcome, never adapter authority. */
     };
 
@@ -438,6 +499,7 @@ namespace Horo::Character {
         CharacterTransformPublication transform;
         Physics::PhysicsCapsuleShape capsule; /**< Effective collision geometry for this committed state. */
         CharacterStance stance{CharacterStance::Standing};
+        CharacterCollisionSelectors selectors; /**< Exact filter used for this committed state; owned historical evidence. */
     };
 
     /**

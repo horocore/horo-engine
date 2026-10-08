@@ -274,8 +274,10 @@ namespace Horo::Runtime {
             return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Invalid));
         if (fence.partition != payload.Identity().partition || fence.cell != payload.Identity().cell)
             return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Stale));
-        return service.QueuePreparationWithPublicationCheck(payload.Definition(),
-                                                            std::make_unique<CellPublicationCheck>(payload.Identity(), fence,
-                                                                                                   std::move(authority), cancellation));
+        auto queued =
+            service.QueuePreparationWithPublicationCheck(payload.Definition(),
+                                                         std::make_unique<CellPublicationCheck>(payload.Identity(), fence,
+                                                                                                std::move(authority), cancellation));
+        return queued.HasError() ? Result<void>::Failure(queued.ErrorValue()) : Result<void>::Success();
     }
 }  // namespace Horo::Runtime

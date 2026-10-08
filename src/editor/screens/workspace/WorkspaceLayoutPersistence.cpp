@@ -8,6 +8,10 @@
 
 namespace Horo::Editor {
     namespace {
+        constexpr std::size_t MaximumSurfaceEntries = 512;
+        constexpr std::size_t MaximumSurfaceStateBytes = 8192;
+        constexpr std::size_t MaximumTotalSurfaceStateBytes = 1024U * 1024U;
+        constexpr std::size_t MaximumWorkspaceDocumentBytes = 8U * 1024U * 1024U;
         constexpr std::string_view LegacyContentBrowserPanelId = "horo.content_browser";
         constexpr std::string_view GlobalDockPanelId = "horo.global_dock";
 
@@ -53,9 +57,21 @@ namespace Horo::Editor {
                         return std::nullopt;
                     layout.openDocuments = std::move(*documents);
                 }
+                if (Take(',')) {
+                    if (!Key("surfaces") || !Take('[')) {
+                        error = "workspace surfaces invalid";
+                        return std::nullopt;
+                    }
+                    if (!ParseSurfaces(layout))
+                        return std::nullopt;
+                }
                 if (!ObjectEnd())
                     return std::nullopt;
-                if (layout.schemaVersion != WorkspaceLayoutPersistence::CurrentSchemaVersion) {
+                Skip();
+                if (m_pos != m_text.size())
+                    return std::nullopt;
+                if (layout.schemaVersion != 1 && layout.schemaVersion != 2 &&
+                    layout.schemaVersion != WorkspaceLayoutPersistence::CurrentSchemaVersion) {
                     error = "unsupported workspace schema version";
                     return std::nullopt;
                 }
@@ -67,6 +83,73 @@ namespace Horo::Editor {
         private:
             std::string_view m_text;
             std::size_t m_pos = 0;
+
+            /** @brief Parses one bounded surface including optional schema-3 placement without publishing workspace state. */
+            bool ParseSurface(WorkspaceSurfaceState &surface, std::size_t &bytes, const std::uint32_t schemaVersion) {
+                std::uint32_t open{};
+                std::uint32_t focused{};
+                std::uint32_t visible{};
+                if (!ObjectStart() || !KeyedString("id", surface.id) || !Comma() || !KeyedString("extension", surface.extensionId) ||
+                    !Comma() || !KeyedString("module", surface.moduleId) || !Comma() || !Key("open") || !UInt(open) || !Comma() ||
+                    !Key("focused") || !UInt(focused) || !Comma() || !Key("visible") || !UInt(visible) || !Comma() || !Key("state") ||
+                    !Take('[') || open > 1 || focused > open || visible > 1 || surface.id.empty() || surface.extensionId.empty() ||
+                    surface.moduleId.empty() || surface.id.size() > 256 || surface.extensionId.size() > 256 ||
+                    surface.moduleId.size() > 256)
+                    return false;
+                while (!Take(']')) {
+                    std::uint32_t byte{};
+                    if (!UInt(byte))
+                        return false;
+                    if (byte > 255 || surface.state.size() >= MaximumSurfaceStateBytes || bytes >= MaximumTotalSurfaceStateBytes)
+                        return false;
+                    ++bytes;
+                    surface.state.push_back(static_cast<std::uint8_t>(byte));
+                    if (!Take(',')) {
+                        if (!Take(']'))
+                            return false;
+                        break;
+                    }
+                }
+                if (Take(',')) {
+                    std::uint32_t side{};
+                    std::uint32_t group{};
+                    std::uint32_t order{};
+                    if (schemaVersion < 3 || !Key("placement") || !ObjectStart() || !Key("side") || !UInt(side) || !Comma() ||
+                        !Key("group") || !UInt(group) || !Comma() || !Key("order") || !UInt(order) || !ObjectEnd() || side > 2 ||
+                        group > 2 || order >= MaximumSurfaceEntries)
+                        return false;
+                    surface.activityPlacement =
+                        WorkspaceActivityPlacement{static_cast<WorkspaceActivitySide>(side), static_cast<std::uint8_t>(group), order};
+                }
+                if (!ObjectEnd())
+                    return false;
+                surface.open = open != 0;
+                surface.focused = focused != 0;
+                surface.visible = visible != 0;
+                return true;
+            }
+
+            /** @brief Parses the finite surface list and rejects duplicate identities before the caller validates the document. */
+            bool ParseSurfaces(WorkspaceLayout &layout) {
+                std::size_t bytes{};
+                while (!Take(']')) {
+                    if (layout.surfaces.size() >= MaximumSurfaceEntries)
+                        return false;
+                    WorkspaceSurfaceState surface;
+                    if (!ParseSurface(surface, bytes, layout.schemaVersion))
+                        return false;
+                    for (const auto &existing : layout.surfaces)
+                        if (existing.id == surface.id)
+                            return false;
+                    layout.surfaces.push_back(std::move(surface));
+                    if (!Take(',')) {
+                        if (!Take(']'))
+                            return false;
+                        break;
+                    }
+                }
+                return true;
+            }
 
             void Skip() {
                 while (m_pos < m_text.size() &&
@@ -256,10 +339,12 @@ namespace Horo::Editor {
                 auto second = Node(error);
                 if (!second || !ObjectEnd())
                     return std::nullopt;
+                // Own each child before preparing the next; unwinding releases the first if the second allocation fails.
+                auto firstChild = std::make_unique<LayoutNode>(std::move(*first));
+                auto secondChild = std::make_unique<LayoutNode>(std::move(*second));
                 return LayoutNode(SplitNode{std::move(id),
                                             axis == "vertical" ? WorkspaceSplitAxis::Vertical : WorkspaceSplitAxis::Horizontal, ratio,
-                                            160.0F, 160.0F, std::make_unique<LayoutNode>(std::move(*first)),
-                                            std::make_unique<LayoutNode>(std::move(*second))});
+                                            160.0F, 160.0F, std::move(firstChild), std::move(secondChild)});
             }
 
             std::optional<LayoutNode> Node(std::string &error) {
@@ -354,6 +439,19 @@ namespace Horo::Editor {
     }  // namespace
 
     std::string WorkspaceLayoutPersistence::Serialize(const WorkspaceLayout &layout) {
+        if (layout.surfaces.size() > MaximumSurfaceEntries)
+            return {};
+        std::size_t stateBytes = 0;
+        for (const auto &surface : layout.surfaces) {
+            if (surface.id.size() > 256 || surface.extensionId.size() > 256 || surface.moduleId.size() > 256 ||
+                surface.state.size() > MaximumSurfaceStateBytes || surface.state.size() > MaximumTotalSurfaceStateBytes - stateBytes)
+                return {};
+            if (surface.activityPlacement &&
+                (surface.activityPlacement->side > WorkspaceActivitySide::Bottom || surface.activityPlacement->group > 2 ||
+                 surface.activityPlacement->order >= MaximumSurfaceEntries))
+                return {};
+            stateBytes += surface.state.size();
+        }
         std::ostringstream out;
         out << "{\"schemaVersion\":" << CurrentSchemaVersion << ",\"root\":";
         WriteNode(out, layout.root);
@@ -364,13 +462,39 @@ namespace Horo::Editor {
             const SerializedDocumentOpenKey &document = layout.openDocuments[index];
             out << R"({"kind":")" << Escape(document.kind) << R"(","source":")" << Escape(document.source) << R"("})";
         }
-        out << ']';
-        out << '}';
-        return out.str();
+        out << R"(],"surfaces":[)";
+        for (std::size_t index = 0; index < layout.surfaces.size(); ++index) {
+            if (index)
+                out << ',';
+            const auto &surface = layout.surfaces[index];
+            out << R"({"id":")" << Escape(surface.id) << R"(","extension":")" << Escape(surface.extensionId) << R"(","module":")"
+                << Escape(surface.moduleId) << R"(","open":)" << static_cast<unsigned>(surface.open) << R"(,"focused":)"
+                << static_cast<unsigned>(surface.focused) << R"(,"visible":)" << static_cast<unsigned>(surface.visible) << R"(,"state":[)";
+            for (std::size_t byte = 0; byte < surface.state.size(); ++byte) {
+                if (byte)
+                    out << ',';
+                out << static_cast<unsigned>(surface.state[byte]);
+            }
+            out << ']';
+            if (surface.activityPlacement) {
+                const auto &placement = *surface.activityPlacement;
+                out << R"(,"placement":{"side":)" << static_cast<unsigned>(placement.side) << R"(,"group":)"
+                    << static_cast<unsigned>(placement.group) << R"(,"order":)" << placement.order << '}';
+            }
+            out << '}';
+        }
+        out << "]}";
+        auto encoded = out.str();
+        return encoded.size() <= MaximumWorkspaceDocumentBytes ? std::move(encoded) : std::string{};
     }
 
     std::optional<WorkspaceLayout> WorkspaceLayoutPersistence::Deserialize(const std::string_view json, std::string *error) {
         std::string local;
+        if (json.size() > MaximumWorkspaceDocumentBytes) {
+            if (error)
+                *error = "workspace document exceeds limit";
+            return std::nullopt;
+        }
         Parser parser(json);
         auto result = parser.Parse(local);
         if (!result && error)
@@ -379,6 +503,12 @@ namespace Horo::Editor {
     }
 
     bool WorkspaceLayoutPersistence::Save(const std::filesystem::path &path, const WorkspaceLayout &layout, std::string *error) {
+        const auto encoded = Serialize(layout);
+        if (encoded.empty()) {
+            if (error)
+                *error = "workspace surface state exceeds limit";
+            return false;
+        }
         std::error_code ec;
         std::filesystem::create_directories(path.parent_path(), ec);
         if (ec) {
@@ -388,7 +518,7 @@ namespace Horo::Editor {
         }
         const std::filesystem::path temp = path.string() + ".tmp";
         std::ofstream out(temp, std::ios::binary | std::ios::trunc);
-        out << Serialize(layout);
+        out << encoded;
         out.close();
         if (!out) {
             if (error)
@@ -406,6 +536,12 @@ namespace Horo::Editor {
     }
 
     std::optional<WorkspaceLayout> WorkspaceLayoutPersistence::Load(const std::filesystem::path &path, std::string *error) {
+        std::error_code sizeError;
+        if (const auto size = std::filesystem::file_size(path, sizeError); sizeError || size > MaximumWorkspaceDocumentBytes) {
+            if (error)
+                *error = "workspace document unavailable or exceeds limit";
+            return std::nullopt;
+        }
         const std::ifstream in(path, std::ios::binary);
         if (!in) {
             if (error)

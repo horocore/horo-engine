@@ -50,7 +50,12 @@ namespace Horo::Physics {
         descriptor.world = request.physicsWorld;
         descriptor.sceneGeneration = request.sceneGeneration;
         descriptor.geometry = PhysicsCapsuleOverlapQuery{request.capsule, request.position, request.up};
-        descriptor.filter.channel = request.queryChannel;
+        descriptor.filter = {request.queryChannel,
+                             PhysicsQueryTriggerPolicy::Exclude,
+                             request.selectors.requiredLayer,
+                             request.selectors.requiredProfile,
+                             request.selectors.excludedBody,
+                             true};
         descriptor.collection = PhysicsQueryCollection::Any;
         std::array<PhysicsQueryHit, 1> hits{};
         const auto result =

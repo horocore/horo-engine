@@ -27,7 +27,7 @@
 
 enum {  // NOSONAR(cpp:S3642) C ABI constant group
     HORO_EXTENSION_ABI_VERSION = 1,
-    HORO_EXTENSION_ABI_MINOR_VERSION = 3,
+    HORO_EXTENSION_ABI_MINOR_VERSION = 4,
     HORO_ASSET_IMPORTER_ABI_VERSION = 1,
     HORO_PLATFORM_SERVICES_PROVIDER_ABI_VERSION = 1,
     HORO_PLATFORM_SERVICES_PROVIDER_ABI_VERSION_2 = 2,
@@ -385,6 +385,19 @@ typedef struct HoroPlatformServicesProviderDescriptor  // NOSONAR(cpp:S5416) Sha
 typedef HoroExtensionStatus (*HoroRegisterPlatformServicesProviderFunc)(  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
     void *hostContext, const HoroPlatformServicesProviderDescriptor *descriptor);
 
+/** @brief Inert activity/drawer descriptor transported by the append-only editor ABI 1.4 extension. */
+struct HoroEditorActivityDescriptor;
+/** @brief Versioned live session operations populated only after validated publication. */
+struct HoroEditorActivitySessionApi;
+/** @brief Copies a manifest-declared editor activity contribution into the package activation transaction. */
+#ifdef __cplusplus
+using HoroRegisterEditorActivityFunc = HoroExtensionStatus (*)(void *hostContext, const struct HoroEditorActivityDescriptor *descriptor,
+                                                               struct HoroEditorActivitySessionApi *session);
+#else
+typedef HoroExtensionStatus (*HoroRegisterEditorActivityFunc)(void *hostContext, const struct HoroEditorActivityDescriptor *descriptor,
+                                                              struct HoroEditorActivitySessionApi *session);
+#endif
+
 struct HoroExtensionHostApi {
     /** @brief Size of this struct for append-only ABI negotiation. */
     uint32_t structSize;
@@ -398,6 +411,8 @@ struct HoroExtensionHostApi {
     uint32_t reserved;
     /** @brief Appended in 1.2; present only when structSize covers this field. */
     HoroRegisterPlatformServicesProviderFunc registerPlatformServicesProvider;
+    /** @brief Appended in 1.4; unavailable in headless compositions. Check structSize before reading. */
+    HoroRegisterEditorActivityFunc registerEditorActivity;
 };
 typedef struct HoroExtensionHostApi HoroExtensionHostApi;  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
 
@@ -413,6 +428,7 @@ typedef struct HoroExtensionModuleApi HoroExtensionModuleApi;  // NOSONAR(cpp:S5
 enum {  // NOSONAR(cpp:S3642) C ABI function requirement bits.
     HORO_EXTENSION_REQUIRES_ASSET_IMPORTER = 1,
     HORO_EXTENSION_REQUIRES_PLATFORM_PROVIDER = 2,
+    HORO_EXTENSION_REQUIRES_EDITOR_ACTIVITY = 4,
 };
 
 /**

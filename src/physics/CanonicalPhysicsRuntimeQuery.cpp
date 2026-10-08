@@ -128,6 +128,7 @@ namespace Horo::Physics::Detail {
             const auto layer = child == nullptr ? fixture.descriptor.layer : child->layer;
             const auto profile = child == nullptr ? fixture.descriptor.profile : child->profile;
             if (channel != descriptor.filter.channel || response == PhysicsQueryFixtureResponse::Ignore ||
+                (descriptor.filter.blockingOnly && response != PhysicsQueryFixtureResponse::Block) ||
                 (trigger && descriptor.filter.triggers == PhysicsQueryTriggerPolicy::Exclude))
                 return false;
             if (descriptor.filter.requiredLayer.has_value() && layer != *descriptor.filter.requiredLayer)
@@ -241,17 +242,6 @@ namespace Horo::Physics::Detail {
                                                              JPH::RVec3::sZero(), collectors.overlap, {}, {}, bodyFilter);
         }
 
-        /** @brief Uses a stack-owned analytic capsule with the existing bounded world collectors. */
-        void CollectCapsuleOverlapQuery(const CanonicalQueryAccess &access, const PhysicsCapsuleOverlapQuery &query,
-                                        CanonicalQueryCollectors &collectors, const QueryBodyFilter &bodyFilter) {
-            const JPH::CapsuleShape capsule{query.capsule.cylindricalHalfHeightMeters, query.capsule.radiusMeters};
-            const auto rotation = JPH::Quat::sFromTo(JPH::Vec3::sAxisY(), ToNative(query.up));
-            const auto transform =
-                JPH::RMat44::sRotationTranslation(rotation, JPH::RVec3(query.position.x, query.position.y, query.position.z));
-            access.system.GetNarrowPhaseQuery().CollideShape(&capsule, JPH::Vec3::sOne(), transform, JPH::CollideShapeSettings{},
-                                                             JPH::RVec3::sZero(), collectors.overlap, {}, {}, bodyFilter);
-        }
-
         void CollectSweepQuery(const CanonicalQueryAccess &access, const PhysicsSweepQuery &query,
                                const CanonicalQueryFixtureRecord &source, CanonicalQueryCollectors &collectors,
                                const QueryBodyFilter &bodyFilter) {
@@ -260,6 +250,26 @@ namespace Horo::Physics::Detail {
                                                                               ToNative(query.direction * query.maximumDistanceMeters));
             access.system.GetNarrowPhaseQuery().CastShape(cast, JPH::ShapeCastSettings{}, JPH::RVec3::sZero(), collectors.sweep, {}, {},
                                                           bodyFilter);
+        }
+
+        /** @brief Uses a stack capsule for one query; native identities and transforms remain private. */
+        template <typename Query>
+        void CollectCapsuleQuery(const CanonicalQueryAccess &access, const Query &query, CanonicalQueryCollectors &collectors,
+                                 const QueryBodyFilter &bodyFilter) {
+            JPH::CapsuleShape capsule(query.capsule.cylindricalHalfHeightMeters, query.capsule.radiusMeters);
+            capsule.SetEmbedded();
+            const JPH::Quat rotation = JPH::Quat::sFromTo(JPH::Vec3::sAxisY(), ToNative(query.up));
+            const JPH::RMat44 transform =
+                JPH::RMat44::sRotationTranslation(rotation, {query.position.x, query.position.y, query.position.z});
+            if constexpr (std::is_same_v<Query, PhysicsCapsuleOverlapQuery>)
+                access.system.GetNarrowPhaseQuery().CollideShape(&capsule, JPH::Vec3::sOne(), transform, JPH::CollideShapeSettings{},
+                                                                 JPH::RVec3::sZero(), collectors.overlap, {}, {}, bodyFilter);
+            else {
+                const auto cast = JPH::RShapeCast::sFromWorldTransform(&capsule, JPH::Vec3::sOne(), transform,
+                                                                       ToNative(query.direction * query.maximumDistanceMeters));
+                access.system.GetNarrowPhaseQuery().CastShape(cast, JPH::ShapeCastSettings{}, JPH::RVec3::sZero(), collectors.sweep, {}, {},
+                                                              bodyFilter);
+            }
         }
 
         [[nodiscard]] Result<void> CollectCanonicalQuery(const CanonicalQueryAccess &access, const PhysicsQueryDescriptor &descriptor,
@@ -277,12 +287,10 @@ namespace Horo::Physics::Detail {
                     CollectPointQuery(access, query, collectors, bodyFilter);
                 else if constexpr (std::is_same_v<Query, PhysicsOverlapQuery>)
                     CollectOverlapQuery(access, query, *source, collectors, bodyFilter);
-                else if constexpr (std::is_same_v<Query, PhysicsCapsuleOverlapQuery>)
-                    CollectCapsuleOverlapQuery(access, query, collectors, bodyFilter);
-                else {
-                    static_assert(std::is_same_v<Query, PhysicsSweepQuery>);
+                else if constexpr (std::is_same_v<Query, PhysicsSweepQuery>)
                     CollectSweepQuery(access, query, *source, collectors, bodyFilter);
-                }
+                else
+                    CollectCapsuleQuery(access, query, collectors, bodyFilter);
             }, descriptor.geometry);
             if (collectors.ray.overflow || collectors.point.overflow || collectors.overlap.overflow || collectors.sweep.overflow)
                 return Result<void>::Failure(
@@ -303,6 +311,7 @@ namespace Horo::Physics::Detail {
             Math::Vec3 position;
             std::optional<Math::Vec3> normal;
             float distance{};
+            float penetrationDepth{};
         };
 
         [[nodiscard]] Result<void> AppendCanonicalHit(const CanonicalQueryAccess &access, const PhysicsQueryDescriptor &descriptor,
@@ -332,7 +341,8 @@ namespace Horo::Physics::Detail {
                                 .response = ToResponse(child == nullptr ? fixture->descriptor.response : child->response),
                                 .position = evidence.position,
                                 .normal = evidence.normal,
-                                .distanceMeters = evidence.distance};
+                                .distanceMeters = evidence.distance,
+                                .penetrationDepthMeters = evidence.penetrationDepth};
             if (const Result<void> valid = ValidatePhysicsQueryHit(hit, descriptor); valid.HasError())
                 return valid;
             candidates[candidateCount++] = std::move(hit);
@@ -394,7 +404,8 @@ namespace Horo::Physics::Detail {
                                             .subshape = hit.mSubShapeID2,
                                             .position = position,
                                             .normal = ContactNormal(hit.mPenetrationAxis),
-                                            .distance = distanceFunction(hit)};
+                                            .distance = distanceFunction(hit),
+                                            .penetrationDepth = std::max(hit.mPenetrationDepth, 0.0F)};
             });
         }
 
@@ -411,9 +422,11 @@ namespace Horo::Physics::Detail {
                 return AppendContactQueryHits(access, descriptor, collectors.overlap, candidates, candidateCount, [](const auto &) {
                     return 0.0F;
                 });
-            const auto &sweep = std::get<PhysicsSweepQuery>(descriptor.geometry);
-            return AppendContactQueryHits(access, descriptor, collectors.sweep, candidates, candidateCount, [&sweep](const auto &hit) {
-                return hit.mFraction * sweep.maximumDistanceMeters;
+            const float distance = std::holds_alternative<PhysicsSweepQuery>(descriptor.geometry)
+                                       ? std::get<PhysicsSweepQuery>(descriptor.geometry).maximumDistanceMeters
+                                       : std::get<PhysicsCapsuleSweepQuery>(descriptor.geometry).maximumDistanceMeters;
+            return AppendContactQueryHits(access, descriptor, collectors.sweep, candidates, candidateCount, [distance](const auto &hit) {
+                return hit.mFraction * distance;
             });
         }
 

@@ -95,6 +95,9 @@ namespace Horo::Navigation {
         [[nodiscard]] NavigationProjectProfileRevision Revision() const noexcept;
         /** @brief Returns the deterministic authoritative fingerprint. @return Non-zero stable fingerprint. */
         [[nodiscard]] NavigationProjectProfileFingerprint Fingerprint() const noexcept;
+        /** @brief Compares exact captured authority, including finite capacities and every capability/query fact.
+         * @param expected Validated project authority. @return True only for identical identity, revision, fingerprint and facts. */
+        [[nodiscard]] bool MatchesAuthority(const NavigationProjectProfile &expected) const noexcept;
         /** @brief Returns the finite authoritative ceilings. @return Immutable capacity limits. */
         [[nodiscard]] const NavigationCapacityLimits &Capacities() const noexcept;
         /** @brief Returns the exact project query envelope. @return Immutable typed query requirement. */

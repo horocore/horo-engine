@@ -26,7 +26,7 @@ namespace Horo::Character {
         [[nodiscard]] constexpr auto operator<=>(const CharacterWorldPreparationDescriptor &) const noexcept = default;
     };
 
-    /** @brief Immutable complete owner generations retained by one prepared Character world. */
+    /** @brief Fixed owner generations and the explicitly admitted current Physics query revision. */
     struct CharacterWorldDescriptor final {
         std::uint64_t sceneGeneration{};           /**< Exact scene generation that owns the world. */
         CharacterWorldId identity;                 /**< Internally issued, never-reused process-local generation. */
@@ -76,6 +76,15 @@ namespace Horo::Character {
          */
         [[nodiscard]] Result<void> Activate();
 
+        /** @brief Admits the paired Physics world's current query publication between synchronous operations.
+         * @param world Exact paired Physics identity; another world cannot refresh this snapshot.
+         * @param revision Non-zero, monotonically advancing Physics publication revision captured by the host.
+         * @return Success, or a typed owner/lifecycle/stale-revision error without mutation.
+         * @pre Owner thread only; no tick or placement callback may be in progress. The host must
+         * capture the actual Physics revision. This does not acquire a capability or change controller state.
+         */
+        [[nodiscard]] Result<void> RefreshPhysicsSnapshot(Physics::PhysicsWorldId world, std::uint64_t revision);
+
         /**
          * @brief Installs one validated owned controller descriptor into bounded world storage.
          * @param descriptor Inert descriptor bound to this world's exact owner generations.
@@ -114,7 +123,7 @@ namespace Horo::Character {
                                                                           const CharacterPhysicsQueryContext &query);
 
         /**
-         * @brief Copies the inert descriptor for one exact live controller generation.
+         * @brief Copies the controller policy including its last committed collision selectors.
          * @param handle Handle issued by this world for a currently resident controller.
          * @return Owned descriptor copy, or a typed malformed/foreign/stale/lifecycle error.
          */
@@ -148,7 +157,9 @@ namespace Horo::Character {
          * @brief Freezes and schedules one exact next Character fixed tick on the owner thread.
          * @param input One-based next tick, exact scene generation and positive host fixed quantum.
          * @return Success or a typed affinity/lifecycle/order/request error without partial publication.
-         * @post Commands are ordered by stable controller identity. A controller with no command performs no
+         * @post A filter change is selected with the final command before its shape/movement probes;
+         * it becomes persistent only at atomic publication. Failed attempts keep prior selectors.
+         * Commands are ordered by stable controller identity. A controller with no command performs no
          * movement for the tick; prior intent is never replayed. The queue closes before callbacks execute.
          */
         [[nodiscard]] Result<void> AdvanceFixedTick(const CharacterFixedTickInput &input);
@@ -162,7 +173,8 @@ namespace Horo::Character {
         void Shutdown() noexcept;
         /** @brief Returns the current lifecycle state. @return Prepared, Active, or Destroyed. */
         [[nodiscard]] CharacterWorldState State() const noexcept;
-        /** @brief Returns the immutable owner generations selected during preparation. @return Borrow valid for this world lifetime. */
+        /** @brief Returns fixed owner generations and the current admitted Physics revision. @return Owner-thread borrow;
+         * observe the revision again after RefreshPhysicsSnapshot. */
         [[nodiscard]] const CharacterWorldDescriptor &Descriptor() const noexcept;
         /** @brief Returns the immutable settings snapshot retained for this world lifetime. @return Borrow valid for this world lifetime.
          */

@@ -502,6 +502,18 @@ privacy state and fallback. Runtime space-warp depth/motion inputs remain post-1
 their exact semantics are admitted. Runtime asynchronous reprojection and guardian/
 chaperone composition never become Horo passes.
 
+## Deterministic Headless Session Harness
+
+`XRFakeRuntime.h` is the XRRuntime-owned deterministic harness for the public
+session and predicted-frame gates. It owns the resource port and both gates,
+copies bounded exact-owner scripts at tooling-time admission and publishes
+fixed-size owned view/action/frame evidence. Events, runtime predictions,
+tracking loss, preparation failures and frame-operation failures are explicit
+inputs. Replacement clears scripts and fences prior session IDs; shutdown closes
+frame admission before retiring session resources. The fake has no native or GPU
+leases and cannot qualify a production runtime/device. Input semantic mapping
+remains host-owned. See [the migration guide](../../guides/xr-fake-runtime-migration.md).
+
 ## Tracking, Actions, And Haptics
 
 OpenXR action sets and suggested bindings are backend data. Engine systems

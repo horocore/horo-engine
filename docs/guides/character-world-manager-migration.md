@@ -96,3 +96,70 @@ remain capability failures; never replace them with a clear fallback. It supplie
 no penetration recovery for an overlapping spawn. The new header belongs solely
 to `HoroEngine::Physics`; clients of the extended `PhysicsQueryGeometry` variant
 must rebuild and account for the analytic alternative in exhaustive visitors.
+## Collision filtering migration
+
+The additive `CharacterCollisionSelectors` fields on controller descriptors and
+probe requests default to no selectors. Existing custom overlap adapters must
+apply the supplied selectors and exclude triggers and overlap-only colliders
+before producing their reduced count and recovery displacement. Custom sweep
+adapters copy `CharacterSweepHit::trigger` when returning trigger evidence; that
+evidence cannot block or become support. Sweep adapters also copy typed `layer`
+and `profile` evidence whenever their request selects those values. Missing or
+malformed selector evidence fails the attempt; nonmatching valid evidence and
+excluded body identities are ineligible for both movement and ground reduction. New hosts can use the owner-thread
+`CharacterPhysicsQueryAdapter` for the current analytic Physics fixture inventory.
+It retains no world lifetime; destroy Character and its borrowed adapter before
+retiring the paired Physics world.
+
+Use `CharacterMovementRequest::filterChange` for live changes, rather than mutating
+a descriptor copy. The final command for the addressed tick applies the entire
+replacement to shape clearance, movement and snap. The controller commits it only
+with successful publication. `ControllerDescriptor` then returns the last
+committed selectors, which also govern subsequent placement operations. Submit an
+explicit empty selector value to clear all three selectors. The stable query
+channel and controller collision profile remain creation policy.
+
+Physics' additive inline capsule query alternatives avoid creating resident source
+fixtures during a tick. They use the same typed `PhysicsQueryFilter` and owner
+validation as existing queries. `blockingOnly` defaults to false for ordinary
+Gameplay queries; Character enables it and always excludes triggers. Copied hits
+now include nonnegative penetration depth for bounded recovery. Existing consumers
+that do not inspect it retain their previous behavior. Generic visitors over
+`PhysicsQueryGeometry` must handle the two inline capsule alternatives.
+
+## Slope policy
+
+Existing descriptors default to horizontal ramp-speed preservation and steep Stop.
+This deliberately changes the former unconditional orthogonal projection: horizontal
+commands no longer lose speed on walkable ramps or acquire uphill travel beyond the
+slope limit. Set `preserveHorizontalSpeedOnSlopes = false` to retain orthogonal
+projection on walkable surfaces. Steep safety remains enabled in both modes.
+
+Gameplay/controller authoring selects `CharacterSteepSlopePolicy::Slide` explicitly
+for deterministic gravity-tangent acceleration across committed fixed ticks. The
+additive `CharacterMovementResult::gravityVelocityMetersPerSecond` is the single
+Character-owned gravity continuation required by ADR-092. It passes by value in
+existing locomotion snapshots and must be populated finitely by custom result
+producers (default zero remains valid). Gameplay desired velocity and achieved
+velocity are separate quantities; neither is reused as the gravity accumulator.
+Teleport resets locomotion, failed ticks preserve committed state, and actual
+capsule changes restart gravity continuation. Future CHR-002.5 ordinary gravity and
+jump integration must compose this field rather than add another accumulator.
+Unknown policy discriminators fail descriptor admission.
+The descriptor remains owned by Physics and passes unchanged through CharacterWorld
+creation; no native or Gameplay dependencies or header ownership changes are needed.
+Custom result producers remain responsible for coherent ground evidence.
+
+## Current Physics query publication
+
+`CharacterWorld::RefreshPhysicsSnapshot(world, revision)` explicitly admits the paired
+Physics world's current publication between owner-thread Character operations. Prepare
+with the actual Physics revision and refresh after a Physics tick or fixture mutation,
+before capturing the next query adapter. Pass the exact paired world identity and
+`PhysicsWorld::PublishedTick().publicationRevision`; do not infer a revision from an
+untrusted adapter. Zero, backward, foreign-world, retired-world and reentrant updates
+fail without changing the admitted revision or controller state. Retained adapters
+continue to fail exact-snapshot validation after a refresh or Physics publication.
+The owner generations and settings remain fixed. `Descriptor()` now reports the latest
+explicitly admitted revision; its borrowed view is for owner-thread use. This additive
+C++ API requires rebuilding consumers; it changes no request layout or C ABI.
