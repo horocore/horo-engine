@@ -21,6 +21,7 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroCliCommandRegistryTests
     HoroCliOutputPublicHeaderConsumer
     HoroCliProductionOutputContract
+    HoroCliMcpServeTests
     HoroPlatformTests
     HoroUpdateZipPackageProducerTests
     HoroVfxApiTests

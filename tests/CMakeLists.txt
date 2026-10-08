@@ -3935,6 +3935,15 @@ add_dependencies(HoroCliProductionOutputContract horo-engine)
 add_test(NAME HoroCliProductionOutputContract COMMAND HoroCliProductionOutputContract "$<TARGET_FILE:horo-engine>")
 set_tests_properties(HoroCliProductionOutputContract PROPERTIES LABELS "cli;integration;headless;sonar-coverage;ci-windows" TIMEOUT 120)
 
+add_executable(HoroCliMcpServeTests unit/cli/McpServeTests.cpp
+    "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/McpServe.cpp")
+target_compile_features(HoroCliMcpServeTests PRIVATE cxx_std_20)
+target_include_directories(HoroCliMcpServeTests PRIVATE "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host")
+target_link_libraries(HoroCliMcpServeTests PRIVATE HoroEngine::McpController HoroEngine::CliHost)
+horo_register_catch_test(HoroCliMcpServeTests LABELS "unit;cli;mcp;headless")
+add_test(NAME HoroCliMcpStdioContract COMMAND "${Python3_EXECUTABLE}"
+    "${PROJECT_SOURCE_DIR}/tests/integration/cli_mcp_stdio_contract.py" "$<TARGET_FILE:horo-engine>")
+set_tests_properties(HoroCliMcpStdioContract PROPERTIES LABELS "cli;mcp;integration;headless;ci-windows" TIMEOUT 90)
 add_executable(HoroMixerDocumentTests unit/editor/MixerAssetDocumentTests.cpp)
 target_link_libraries(HoroMixerDocumentTests PRIVATE HoroEngine::EditorServices)
 horo_register_catch_test(HoroMixerDocumentTests LABELS "unit;editor;audio;headless")
