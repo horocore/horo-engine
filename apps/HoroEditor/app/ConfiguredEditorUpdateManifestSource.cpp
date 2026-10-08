@@ -138,7 +138,7 @@ namespace Horo::Editor {
         if (curl == nullptr)
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
         // Establish the transport security policy before transferring the handle to the response owner.
-        if (curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK)
+        if (curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3 | CURL_SSLVERSION_MAX_TLSv1_3) != CURLE_OK)
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
         ManifestResponse response{std::move(handle), cancellation};
         if (!response.Configure(url, policy))

@@ -267,6 +267,12 @@ helper result never becomes a success state. Hosts that do not compose updates
 keep using the default app entry point without an update context. The running
 editor never switches its own executable files.
 
+The native installed-manifest transport explicitly selects TLS 1.3 as both its
+minimum and maximum protocol version before any request configuration. TLS 1.2
+and earlier are rejected; peer and hostname verification remain mandatory. An
+additional supported protocol version requires an explicit transport-policy
+revision and corresponding negotiation tests.
+
 For network discovery, the installed host supplies exact HTTPS manifest
 endpoints keyed by editor channel, including the expected signed channel. The
 private manifest source rejects an absent or ambiguous mapping, userinfo,
