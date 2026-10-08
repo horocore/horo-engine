@@ -2777,6 +2777,18 @@ add_executable(HoroRuntimeUiStyleTests
 )
 target_compile_features(HoroRuntimeUiStyleTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiStyleTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiThemeTests
+        unit/runtime/ui/UiThemeTests.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeUiThemeTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiThemeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRuntimeUiThemeTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiThemePublicHeaderConsumer support/RuntimeUiThemePublicHeaderConsumer.cpp)
+target_compile_features(HoroRuntimeUiThemePublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiThemePublicHeaderConsumer PRIVATE HoroEngine::RuntimeUi)
+add_test(NAME HoroRuntimeUiThemePublicHeaderConsumer COMMAND HoroRuntimeUiThemePublicHeaderConsumer)
+set_tests_properties(HoroRuntimeUiThemePublicHeaderConsumer PROPERTIES LABELS "unit;runtime_ui;headless;public_headers")
 add_executable(HoroRuntimeUiHitTestingTests
         unit/runtime/ui/UiHitTestingTests.cpp
         support/AllocationProbe.cpp
@@ -3822,6 +3834,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiTextLayoutTests
         HoroRuntimeUiGlyphAtlasTests
         HoroRuntimeUiStyleTests
+        HoroRuntimeUiThemeTests
         HoroRuntimeUiHitTestingTests
         HoroRuntimeUiEventDispatchTests
         HoroRuntimeUiPointerCaptureTests
