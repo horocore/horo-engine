@@ -13,17 +13,17 @@
 #include <utility>
 
 namespace Horo::Gameplay {
-    namespace {
-        [[nodiscard]] GameplayEntityRef ToGameplay(const Runtime::EntityRef entity) noexcept {
+    namespace BehaviorRuntimeDetail {
+        [[nodiscard]] inline GameplayEntityRef ToGameplay(const Runtime::EntityRef entity) noexcept {
             return {entity.runtime.value, entity.entity.index, entity.entity.generation};
         }
 
-        [[nodiscard]] Runtime::EntityRef ToRuntime(const GameplayEntityRef entity) noexcept {
+        [[nodiscard]] inline Runtime::EntityRef ToRuntime(const GameplayEntityRef entity) noexcept {
             return {Runtime::SceneRuntimeId{entity.scene}, Runtime::EntityId{entity.index, entity.generation}};
         }
 
         /** @brief Validates supplied runtime fields against the frozen provider schema before group publication. */
-        [[nodiscard]] Result<void> ValidateSpawnSchema(const BehaviorComponent &component, const BehaviorDescriptor &descriptor) {
+        [[nodiscard]] inline Result<void> ValidateSpawnSchema(const BehaviorComponent &component, const BehaviorDescriptor &descriptor) {
             if (component.schemaVersion != descriptor.schemaVersion)
                 return Result<void>::Failure(
                     MakeError(GameplayErrors::InvalidBehaviorComponent, "Spawned behavior schema version mismatch."));
@@ -36,7 +36,7 @@ namespace Horo::Gameplay {
             return Result<void>::Success();
         }
 
-    }  // namespace
+    }  // namespace BehaviorRuntimeDetail
 
     struct BehaviorRuntime::Impl {
         struct EventQueue {
@@ -86,7 +86,7 @@ namespace Horo::Gameplay {
             bool allowSimulationMutation{true};
 
             [[nodiscard]] GameplayEntityRef Entity() const noexcept override {
-                return ToGameplay(instance.entity);
+                return BehaviorRuntimeDetail::ToGameplay(instance.entity);
             }
 
             [[nodiscard]] BehaviorInstanceId InstanceId() const noexcept override {
@@ -402,7 +402,7 @@ namespace Horo::Gameplay {
                     const BehaviorRegistration *registration = owner.registry.Find(component.typeId);
                     if (registration == nullptr)
                         return Result<void>::Failure(MakeError(GameplayErrors::BehaviorNotRegistered));
-                    if (auto schema = ValidateSpawnSchema(component, registration->descriptor); schema.HasError())
+                    if (auto schema = BehaviorRuntimeDetail::ValidateSpawnSchema(component, registration->descriptor); schema.HasError())
                         return schema;
                     if (const auto sameIdentity = [&component, destroyed](const Instance &existing) {
                         return existing.component.instanceId == component.instanceId &&

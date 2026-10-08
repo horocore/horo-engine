@@ -85,7 +85,7 @@ namespace Horo::Gameplay {
                 instance.started = true;
             }
             for (const GameplayEvent &event : impl_->events.current) {
-                if (!event.target || ToRuntime(*event.target) == instance.entity)
+                if (!event.target || BehaviorRuntimeDetail::ToRuntime(*event.target) == instance.entity)
                     instance.implementation->OnEvent(context, event);
             }
             for (const GameplayInputAction &action : input) {
