@@ -1,6 +1,7 @@
 #include "AllocationProbe.h"
 #include "CharacterWorldTestHelpers.h"
 
+#include <array>
 #include <barrier>
 #include <catch2/catch_approx.hpp>
 #include <cmath>
@@ -172,6 +173,26 @@ namespace Horo::Character {
             REQUIRE(resolver.observedPrevious == Math::Vec3{1, 0, 0});
             REQUIRE(next.Value().transform.position == Math::Vec3{2, 0, 0});
             REQUIRE(next.Value().stateRevision == 2);
+        }
+
+        TEST_CASE("Character derives support transitions from committed state for custom movement providers",
+                  "[physics][character][world][snapshot][airborne]") {
+            auto spawned = SpawnedActiveWorldWithController();
+            auto &world = *spawned.world;
+            MovementResolver resolver;
+            const CharacterTickObserver observer{.context = &resolver, .movementResult = MovementResolver::Resolve};
+            constexpr std::array grounded{true, true, false, false, true};
+            using enum CharacterGroundTransition;
+            constexpr std::array transitions{Landed, None, LeftGround, None, Landed};
+            for (std::size_t index{}; index < grounded.size(); ++index) {
+                resolver = grounded[index] ? GroundedMovementResolver(world.Descriptor()) : MovementResolver{};
+                const auto tick = static_cast<std::uint64_t>(index + 1);
+                REQUIRE(world.QueueMovementCommand(Movement(spawned.controller, tick, tick)).HasValue());
+                REQUIRE(world.AdvanceFixedTick(FixedTick(tick, observer)).HasValue());
+                const auto snapshot = world.ControllerLocomotionSnapshot(spawned.controller).Value();
+                REQUIRE(snapshot.movement.grounded == grounded[index]);
+                REQUIRE(snapshot.movement.groundTransition == transitions[index]);
+            }
         }
 
         TEST_CASE("Character publishes the backend-free baseline movement and heading intent",

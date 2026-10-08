@@ -805,7 +805,10 @@ namespace Horo::Character::Detail {
         }
         result.gravityVelocityMetersPerSecond = motion.gravityVelocity;
         std::optional<CharacterSweepHit> steepSupport;
-        if (const auto support = ResolveGrounding(impl, result, command, input, supportDescriptor, motion.position, steepSupport);
+        // Free flight can acquire touching support but cannot restart step-height snapping.
+        auto landingDescriptor = supportDescriptor;
+        landingDescriptor.maximumStepHeightMeters = 0.0F;
+        if (const auto support = ResolveGrounding(impl, result, command, input, landingDescriptor, motion.position, steepSupport);
             support.HasError())
             return support;
         if (result.grounded)
