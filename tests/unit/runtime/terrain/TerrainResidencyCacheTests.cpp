@@ -145,6 +145,35 @@ namespace Horo::Terrain {
             RequireError(f.cache->Release(hit), TerrainErrors::GenerationStale);
         }
 
+        TEST_CASE("Terrain cache rejects admitted retirement operations with and without shared readers", "[terrain][residency]") {
+            Fixture f;
+            const auto reservation = f.Admit();
+            const auto first = f.Insert(reservation);
+            const auto operation =
+                WST::StreamingCellOperation::Create({IdentityFrom<WST::StreamingCellOperationId>(2), reservation.scheduler.operation.fence},
+                                                    WST::StreamingCellOperationKind::Retire)
+                    .Value();
+            const auto retirement = f.authority.TryAdmit(f.authority.Context(), operation, Plan(), 1, operation.Handle().fence).Value();
+            REQUIRE(f.authority.Runtime().Scheduler().Inspect(retirement.scheduler).Value().State() ==
+                    WST::StreamingCellOperationState::Admitted);
+            const auto before = f.authority.Context().revision;
+            const auto acquired = f.cache->Acquire(f.Key(), retirement, Bytes(), TerrainResidencyRetention::Cell);
+            if (acquired.HasValue())
+                f.readers.push_back(acquired.Value());
+            RequireError(acquired, WST::WorldStreamingErrors::FeatureBudgetLifecycleUnavailable);
+            REQUIRE(f.authority.Context().revision == before);
+            REQUIRE(f.cache->LeaseCount() == 1);
+            REQUIRE(f.authority.SharedAssets().LeaseCount() == 1);
+            REQUIRE(f.cache->Read(first).Value().front() == 1);
+            REQUIRE(f.cache->Release(first).HasValue());
+            const auto unleasedBefore = f.authority.Context().revision;
+            RequireError(f.cache->Acquire(f.Key(), retirement, Bytes(), TerrainResidencyRetention::Cell),
+                         WST::WorldStreamingErrors::FeatureBudgetLifecycleUnavailable);
+            REQUIRE(f.authority.Context().revision == unleasedBefore);
+            REQUIRE(f.cache->LeaseCount() == 0);
+            REQUIRE(f.authority.SharedAssets().LeaseCount() == 0);
+        }
+
         TEST_CASE("Terrain LRU follows accepted access order and bounds eviction work", "[terrain][residency]") {
             Fixture f;
             const auto reservation = f.Admit();

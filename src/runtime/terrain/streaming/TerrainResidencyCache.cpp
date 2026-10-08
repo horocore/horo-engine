@@ -7,6 +7,14 @@
 namespace Horo::Terrain {
     namespace WST = WorldStreaming;
 
+    namespace {
+        /** @brief Identifies both an admitted retirement and one already entering its retiring state. */
+        [[nodiscard]] bool IsRetiringOperation(const WST::StreamingCellOperationState state,
+                                               const WST::StreamingCellOperationKind kind) noexcept {
+            return state == WST::StreamingCellOperationState::Retiring || kind == WST::StreamingCellOperationKind::Retire;
+        }
+    }  // namespace
+
     /** @copydoc TerrainResidencyKey::IsValid */
     bool TerrainResidencyKey::IsValid() const noexcept {
         if (!runtime.IsValid() || !content.IsValid() || !capability.IsValid())
@@ -117,7 +125,7 @@ namespace Horo::Terrain {
             if (operation.HasError())
                 return Result<TerrainResidencyLease>::Failure(operation.ErrorValue());
             if (reservation.owner != budgetOwner_ || authority_.State() != WST::StreamingSchedulerAdmissionState::Accepting ||
-                operation.Value().IsTerminal() || operation.Value().State() == WST::StreamingCellOperationState::Retiring)
+                operation.Value().IsTerminal() || IsRetiringOperation(operation.Value().State(), operation.Value().Kind()))
                 return Result<TerrainResidencyLease>::Failure(MakeError(WST::WorldStreamingErrors::FeatureBudgetLifecycleUnavailable));
             if (!peakPortion.IsZero())
                 return Result<TerrainResidencyLease>::Failure(MakeError(WST::WorldStreamingErrors::SharedAssetConflict));
