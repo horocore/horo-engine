@@ -856,6 +856,7 @@ add_library(HoroAudioApi STATIC
         audio/api/AudioStreamDecoderErrors.cpp
         audio/api/AudioStreamingService.cpp
         audio/api/AudioConcurrencyGroup.cpp
+        audio/api/AudioVoiceAdmission.cpp
         audio/api/AudioVoiceStateMachine.cpp
         audio/api/AudioVoiceControls.cpp
         audio/api/AudioHandleRegistry.h
