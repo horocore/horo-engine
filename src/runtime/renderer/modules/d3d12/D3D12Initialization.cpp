@@ -61,6 +61,45 @@ namespace Horo::Render {
             }
             return Result<void>::Success();
         }
+
+        /** @brief Acquires bounded adapter/device/queue state under the caller's rollback transaction. */
+        Result<RenderAdapterId> CreateNativeSession(ID3D12InitializationRuntime &runtime, ID3D12HostAdmission &host,
+                                                    const D3D12InitializationRequest &request) {
+            const auto fail = [](const char *code, const char *message) {
+                return Result<RenderAdapterId>::Failure(D3D12InitializationError(code, message));
+            };
+            auto opened = runtime.Open(request.enableDebugLayer);
+            if (opened.HasError()) {
+                return Result<RenderAdapterId>::Failure(std::move(opened).ErrorValue());
+            }
+            if (request.cancellation.IsCancellationRequested()) {
+                return fail("render.d3d12.cancelled", "D3D12 initialization was cancelled before adapter discovery.");
+            }
+            auto enumeration = runtime.Enumerate(request.maxAdapters);
+            if (enumeration.HasError()) {
+                return Result<RenderAdapterId>::Failure(std::move(enumeration).ErrorValue());
+            }
+            const auto &adapters = enumeration.Value();
+            std::set<RenderAdapterId> identities;
+            if (adapters.size() > request.maxAdapters || !std::ranges::all_of(adapters, [&](const auto &adapter) {
+                return adapter.id.IsValid() && identities.insert(adapter.id).second;
+            })) {
+                return fail("render.d3d12.invalid_adapters",
+                            "Refresh discovery; the driver returned invalid or excessive adapter identities.");
+            }
+            auto device = CreateSelectedDevice(runtime, host, adapters, request);
+            if (device.HasError()) {
+                return Result<RenderAdapterId>::Failure(std::move(device).ErrorValue());
+            }
+            auto queues = CreateQueues(runtime, request);
+            if (queues.HasError()) {
+                return Result<RenderAdapterId>::Failure(std::move(queues).ErrorValue());
+            }
+            if (request.cancellation.IsCancellationRequested()) {
+                return fail("render.d3d12.cancelled", "D3D12 initialization was cancelled before publishing device readiness.");
+            }
+            return device;
+        }
     }  // namespace
 
     /** @copydoc D3D12InitializationError */
@@ -127,34 +166,9 @@ namespace Horo::Render {
         }
 
         rollback.acquired = true;
-        auto opened = runtime_->Open(request.enableDebugLayer);
-        if (opened.HasError()) {
-            return Result<RenderAdapterId>::Failure(std::move(opened).ErrorValue());
-        }
-        if (request.cancellation.IsCancellationRequested()) {
-            return fail("render.d3d12.cancelled", "D3D12 initialization was cancelled before adapter discovery.");
-        }
-        auto enumeration = runtime_->Enumerate(request.maxAdapters);
-        if (enumeration.HasError()) {
-            return Result<RenderAdapterId>::Failure(std::move(enumeration).ErrorValue());
-        }
-        const auto &adapters = enumeration.Value();
-        std::set<RenderAdapterId> identities;
-        if (adapters.size() > request.maxAdapters || !std::ranges::all_of(adapters, [&](const auto &adapter) {
-            return adapter.id.IsValid() && identities.insert(adapter.id).second;
-        })) {
-            return fail("render.d3d12.invalid_adapters", "Refresh discovery; the driver returned invalid or excessive adapter identities.");
-        }
-        auto device = CreateSelectedDevice(*runtime_, host, adapters, request);
+        auto device = CreateNativeSession(*runtime_, host, request);
         if (device.HasError()) {
-            return Result<RenderAdapterId>::Failure(std::move(device).ErrorValue());
-        }
-        auto queues = CreateQueues(*runtime_, request);
-        if (queues.HasError()) {
-            return Result<RenderAdapterId>::Failure(std::move(queues).ErrorValue());
-        }
-        if (request.cancellation.IsCancellationRequested()) {
-            return fail("render.d3d12.cancelled", "D3D12 initialization was cancelled before publishing device readiness.");
+            return device;
         }
         state_ = State::Ready;
         rollback.committed = true;
