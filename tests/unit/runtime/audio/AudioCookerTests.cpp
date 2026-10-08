@@ -245,6 +245,8 @@ namespace Horo::Audio {
                 }
                 REQUIRE(service->Retire(admitted.Value()).HasValue());
                 service.reset();
+                // A terminal fill receipt can precede release of the worker's copied source.
+                jobs.Shutdown(ShutdownPolicy::Drain);
                 CHECK(retained.expired());
             }
         };

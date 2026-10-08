@@ -335,6 +335,48 @@ invalidates the old intent; the host reports cancellation or explicitly schedule
 new-session checkpoint. Autosave ring rotation advances only after durable success;
 a failed save never consumes the last good ring entry.
 
+`SaveEventTriggers` is the additive owner-thread event adapter for SAV-005.6.
+A host copies an immutable allowlist of at most 64 product-issued trigger IDs,
+typed payload requirements, Auto/Checkpoint modes, safe logical targets and
+Continue/Block transition-failure policy. Publishers supply only an ID, monotonic
+sequence, generation and a bounded gameplay/milestone/project/transition payload;
+paths and target selection are absent from that contract. Registrations cannot
+publish Manual/Quick slots or bypass namespace, catalog capacity, generation CAS,
+product eligibility, cooldown or confirmation policy. A fixed registered target
+is chosen by the host's catalog policy; ring selection/rotation remains a separate
+host responsibility and advances only on durable success. Recompose registrations
+at a quiescent session boundary to change allowed targets.
+
+One pending intent survives competing arbiter work. Equivalent rapid events
+coalesce only when cooked policy permits it and return the original effective
+correlation; distinct busy intents are explicitly rejected rather than silently
+lost or queued without bound. Receipts retain one effective event per registration;
+older monotonic sequences cannot replay work. Callers keep the returned handle for
+terminal observation after the bounded receipt is replaced. Cooldown is shared by
+all triggers for a mode, so a second publisher cannot bypass it.
+
+BeforeTransition payloads capture the exact source scene/registry incarnation;
+the transition owner waits asynchronously for durable completion before applying
+the scene change. AfterTransition payloads capture the activated destination and
+hold transition finalization; Block denotes an explicit failure state and never
+an automatic rollback. Either failure or cancellation applies the registered
+Continue/Block policy and preserves its original typed cause. No timer-time state
+or live scene pointer is retained. A transition to the wrong incarnation before
+capture fails visibly. Session replacement closes and recreates the dispatcher.
+
+Migration for event publishers: replace direct storage calls with Submit, retain
+the effective correlation, and poll Receipt/DecideSaveTransition. Host composition
+calls CommitAtSafePoint only inside CommitDeferredLifecycleChanges and forwards
+its immutable handoff with the existing handle. The adapter reserves the existing
+safe-point coordinator's exact-generation capture fence. The host capture executor
+polls cancellation, calls Revalidate under its mutation lease, uses the existing
+capture barrier, and advances the arbiter to Encoding only after a coherent cut.
+Workers receive the same correlation and expected generation; the host enforces
+storage CAS, publication, terminal acknowledgement and lifecycle-fence retirement.
+Close admission on the owner before destroying dependencies; admitted workers
+remain host-owned. There is no independent event bus, operation store or worker
+pipeline, and timer/manual producer contracts are unchanged.
+
 The host registers capture and restore publication **inside**
 CommitDeferredLifecycleChanges, after pending structural changes are resolved and
 before the next simulation step. PumpOwnerThread runs on the owner and drains ready
@@ -1300,6 +1342,46 @@ its mutation lease; a view check alone is never commit authority. The public hea
 is owned by `HoroRuntime` in the header-ownership registry. Existing catalog/storage
 callers need no migration; presentation adapters should replace retained catalog or
 storage objects with this immutable view and command preconditions.
+
+### Manual, quick-save and load command admission
+
+`SaveCommands` is the owner-thread gameplay/script command adapter over the existing
+session `SaveOperationArbiter`. The host supplies trusted namespace binding, runtime
+revision/activity/authority, cooked product policy, a bounded catalog and exact-generation
+compatibility/integrity assessments. Requests cannot supply those authority facts.
+Manual save and slot load name opaque slots and capture their exact generation;
+all requests carry namespace/binding, catalog and runtime revisions. Rejected admission
+leaves the arbiter unchanged. Loading requires a Direct or MigrationAvailable assessment
+and Verified or VerificationRequired integrity; archive verification and migration are
+still mandatory in the existing load pipeline.
+
+Cooked Quick policy already requires ReplaceSingle with one retained logical slot.
+Both quick commands resolve the host's reserved `quickSlot`, independent of timestamps,
+display names or catalog ordering. A missing quick generation permits quick save and
+rejects quick load. Manual save cannot write the reserved quick slot or reclassify
+another slot kind, and new manual slots must fit the cooked category capacity.
+
+Confirmation returns a typed exact target and no operation handle. UI adapters own
+prompt wording and interaction. A confirmed retry preserves the original revisions
+and expected target generation; it cannot follow an overwrite or namespace/session
+change. At most one nonterminal user command is retained: identical repeated input
+returns its original handle and cancellation/deadline, while other user requests or
+existing arbiter work return `save.operation.in_progress`. Product cooldown is measured
+from admission using the host's monotonic clock and never accumulates delayed requests.
+
+The host calls `Revalidate` under its mutation lease before dispatch/capture/load and
+publication, then carries the exact expected generation into the existing slot CAS.
+Changed authority, eligibility, binding, revision, kind or assessment rejects dispatch;
+the host publishes the failure/cancellation through the arbiter. This adapter does no
+I/O, capture, callbacks, worker scheduling or blocking. The host still owns barrier,
+archive, storage, restore, shutdown and terminal acknowledgement. Close the command
+adapter before settling the shared arbiter. Borrowed host facts/arbiter outlive the
+adapter; recreate it for a replacement runtime session.
+
+The public header is assigned to `HoroRuntime` with a dedicated public-header consumer.
+This additive command contract changes no archive format or existing storage/capture API;
+new adapters should submit typed commands rather than admitting arbitrary user intents
+directly to the arbiter. Existing host producers retain their explicit composition path.
 
 ### Physical mapping and safety
 

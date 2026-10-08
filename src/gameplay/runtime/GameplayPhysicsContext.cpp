@@ -71,6 +71,15 @@ namespace Horo::Gameplay {
         return Result<Physics::PhysicsQueryEventCapability>::Success(capability_);
     }
 
+    /** @copydoc GameplayPhysicsContext::AcquireCharacterClearance */
+    Result<Physics::CharacterClearanceQuery> GameplayPhysicsContext::AcquireCharacterClearance(
+        const std::string_view moduleId, const std::uint64_t scene, const Character::CharacterPhysicsQueryExpectations &expected) const {
+        auto capability = Acquire(moduleId, scene, expected.sceneGeneration);
+        if (capability.HasError())
+            return Result<Physics::CharacterClearanceQuery>::Failure(capability.ErrorValue());
+        return Physics::CharacterClearanceQuery::Capture(std::move(capability).Value(), expected);
+    }
+
     /** @copydoc GameplayPhysicsContext::Revoke */
     void GameplayPhysicsContext::Revoke() const noexcept {
         revocation_.RequestCancellation();

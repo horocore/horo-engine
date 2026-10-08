@@ -27,8 +27,8 @@ namespace Horo::PlatformServices {
         extern const ErrorCodeDescriptor InvalidRequest;
         /** @brief Frozen product policy denies the requested service. */
         extern const ErrorCodeDescriptor OperationDenied;
-        /** @brief The explicit Null provider cannot accept remote service work. */
-        extern const ErrorCodeDescriptor NullProvider;
+        /** @brief Compatibility alias for the canonical explicit-Null rejection descriptor. */
+        extern const ErrorCodeDescriptor &NullProvider;
         /** @brief A backend returned successful but malformed request identity evidence. */
         extern const ErrorCodeDescriptor InvalidDispatchResult;
     }  // namespace FrontendErrors
@@ -68,14 +68,16 @@ namespace Horo::PlatformServices {
         [[nodiscard]] Result<PlatformRequestHandle<void>> SubmitScore(LeaderboardScoreRequest request) const;
         /** @brief Validates and routes one finite ranked page. @param query Explicit zero-based offset and page size. @return Page request
          * or typed failure. */
-        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryRankedLeaderboard(LeaderboardRankedQuery query) const;
+        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryRankedLeaderboard(
+            const LeaderboardRankedQuery &query) const;
         /** @brief Validates and routes one bounded window around the current subject. @param query Explicit before/after limits. @return
          * Window request or typed failure. */
         [[nodiscard]] Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>> QueryLeaderboardAroundSubject(
-            LeaderboardAroundSubjectQuery query) const;
+            const LeaderboardAroundSubjectQuery &query) const;
         /** @brief Validates and routes one finite friends page. @param query Explicit zero-based offset and page size. @return Page request
          * or typed failure. */
-        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryFriendsLeaderboard(LeaderboardFriendsQuery query) const;
+        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryFriendsLeaderboard(
+            const LeaderboardFriendsQuery &query) const;
         /** @brief Validates and routes one persistent-stat write. @param request Owned typed intent. @return Backend request handle or
          * pre-admission failure. */
         [[nodiscard]] Result<PlatformRequestHandle<void>> WriteStat(StatWriteRequest request) const;

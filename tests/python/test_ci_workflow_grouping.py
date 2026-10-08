@@ -29,9 +29,11 @@ def targets(name: str) -> set[str]:
 
 def test_windows_group_preserves_every_previously_built_target() -> None:
     assert targets("HORO_CI_WINDOWS_TARGETS") == targets("HORO_CI_AUDIO_TARGETS") | {
+        "HoroNetworkDebuggerTests", "HoroNetworkDebuggerPublicHeaderConsumer",
         "HoroTerrainAuthoringTests", "HoroTerrainAuthoringPublicHeaderConsumer",
         "HoroCliCommandRegistryTests", "HoroPlatformTests", "HoroUpdateZipPackageProducerTests",
         "HoroCliOutputPublicHeaderConsumer", "HoroCliProductionOutputContract",
+        "HoroCliMcpServeTests",
         "HoroVfxApiTests", "HoroCinematicModelTests", "HoroCinematicRuntimeTests",
         "HoroFractureDocumentTests", "HoroFractureDocumentPublicHeaderConsumer",
         "HoroCinematicPropertyIntegrationTests", "HoroCinematicModelPublicHeaderConsumer",
@@ -46,6 +48,7 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
         "HoroRuntimePublicHeaderConsumer", "HoroMixerDocumentTests",
         "HoroRuntimeUiTextLayoutTests", "HoroRuntimeUiTextShapingTests", "HoroRuntimeUiTextUnicodeTests",
         "HoroRuntimeUiUnicodeStartupTests", "HoroRuntimeUiUnicodeLifecycleTests", "HoroRuntimeUiPublicHeaderConsumer",
+        "HoroRuntimeSaveEventTriggersTests", "HoroSaveEventTriggersPublicHeaderConsumer",
     }
     for workflow in ("prefab-foundation-windows", "extension-abi-windows", "mcp-session-windows", "save-path-windows"):
         assert not (ROOT / f".github/workflows/{workflow}.yml").exists()
@@ -136,3 +139,9 @@ def test_required_checks_and_sdl_composition_are_preserved() -> None:
     assert "actions/checkout" not in cleanup
     assert "contents: read" not in cleanup
     assert "await cancelClosedPrRuns" in cleanup
+
+
+def test_installed_manifest_source_keeps_sonar_coverage() -> None:
+    collector = (ROOT / ".github/scripts/collect_sonar_coverage.sh").read_text(encoding="utf-8")
+    assert '"$workspace/apps/HoroEditor/app/ConfiguredEditorUpdateManifestSource.cpp"' in collector
+    assert "HoroConfiguredEditorUpdateBackendTests" in targets("HORO_SONAR_EDITOR_TARGETS")

@@ -18,6 +18,7 @@ started=$SECONDS
     "$workspace/apps/common/" \
     "$workspace/apps/horo-engine/" \
     "$workspace/apps/horo-package/" \
+    "$workspace/apps/HoroEditor/app/ConfiguredEditorUpdateManifestSource.cpp" \
     "$workspace/apps/HoroEditor/app/EditorUserStateMigration.cpp" \
     "$workspace/apps/HoroEditor/app/ConfiguredEditorUpdateBackend.cpp" \
   --output "$build_dir/fastcov-coverage.json"

@@ -39,6 +39,18 @@ namespace Horo::Character {
         return Result<void>::Success();
     }
 
+    /** @copydoc CharacterWorld::RefreshPhysicsSnapshot */
+    Result<void> CharacterWorld::RefreshPhysicsSnapshot(const Physics::PhysicsWorldId world, const std::uint64_t revision) {
+        if (const auto ready = Detail::RequirePlacementMutation(*impl_); ready.HasError())
+            return ready;
+        if (world != impl_->descriptor.physicsWorld)
+            return Result<void>::Failure(MakeError(CharacterErrors::HandleWorldMismatch));
+        if (revision == 0 || revision < impl_->descriptor.physicsSnapshotRevision)
+            return Result<void>::Failure(MakeError(CharacterErrors::QuerySnapshotStale));
+        impl_->descriptor.physicsSnapshotRevision = revision;
+        return Result<void>::Success();
+    }
+
     /** @copydoc CharacterWorld::CreateController */
     Result<CharacterControllerHandle> CharacterWorld::CreateController(const CharacterControllerDescriptor &descriptor) {
         if (const auto owner = Detail::RequireOwnerThread(impl_->ownerThread); owner.HasError())

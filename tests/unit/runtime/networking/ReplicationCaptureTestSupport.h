@@ -205,10 +205,10 @@ namespace Horo::Network::CaptureTestSupport {
         std::shared_ptr<const ReplicationSerializerRegistry> registry{Registry(codec)};
         std::unique_ptr<ReplicationStateCapture> capture;
 
-        explicit Fixture(ReplicationCaptureLimits limits = {}) {
+        explicit Fixture(ReplicationCaptureLimits limits = {}, NetworkDebugger *debugger = nullptr) {
             REQUIRE(lifecycle.RegisterObject(World().scene, World().session, Object()).HasValue());
             const std::array targets{ReplicationCaptureTarget{Object(), owner}};
-            auto result = ReplicationStateCapture::Prepare(Read(lifecycle), registry, targets, limits);
+            auto result = ReplicationStateCapture::Prepare(Read(lifecycle), registry, targets, limits, debugger);
             REQUIRE(result.HasValue());
             capture = std::move(result).Value();
         }

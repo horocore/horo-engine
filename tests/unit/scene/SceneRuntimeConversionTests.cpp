@@ -14,7 +14,7 @@ namespace {
         const Application::HoroVersion version = Application::ParseHoroVersion("1.2.3").Value();
         Assets::AssetRegistry registry;
 
-        PrefabSourceResolverSnapshot Resolver() {
+        PrefabSourceResolverSnapshot Resolver(const std::string_view rootName = "Root") {
             REQUIRE(registry
                         .Publish({{asset, Assets::AssetTypeId::Parse("core.prefab").Value(),
                                    ProjectPath::Parse("assets/hierarchy.prefab").Value(),
@@ -22,7 +22,7 @@ namespace {
                         .status == Assets::AssetRegistryBuildStatus::Complete);
             auto document = PrefabDocument::Create({.projectVersion = version,
                                                     .assetId = asset,
-                                                    .objects = {{.localId = {0}, .name = "Root"},
+                                                    .objects = {{.localId = {0}, .name = std::string{rootName}},
                                                                 {.localId = {3},
                                                                  .parentLocalId = LocalObjectId{0},
                                                                  .name = "Child",
@@ -48,6 +48,33 @@ namespace {
         }
     };
 }  // namespace
+
+TEST_CASE("Headless retained conversion fences source changes until a fresh projection is resolved", "[native][prefab-cook]") {
+    ConversionFixture fixture;
+    const auto resolver = fixture.Resolver();
+    const std::vector<SceneObjectSnapshot> objects{{.id = {900}, .name = "Containing scene"}};
+    const std::vector<ScenePrefabInstance> placements{fixture.Placement(7)};
+    const SceneSourceView source{objects, placements};
+    auto retained = BuildScenePrefabProjection(source, resolver, fixture.limits).Value();
+    const auto previous = ConvertScenePrefabProjectionToRuntime(source, {1}, {2}, retained, resolver, fixture.limits);
+    REQUIRE(previous.HasValue());
+
+    const auto current = fixture.Resolver("Edited");
+    REQUIRE(ConvertScenePrefabProjectionToRuntime(source, {1}, {2}, retained, current, fixture.limits).HasError());
+    const std::array changed{fixture.asset};
+    InvalidateScenePrefabProjection(retained, current, changed, fixture.limits);
+    REQUIRE(retained.instances.front().stale);
+    REQUIRE_FALSE(retained.instances.front().IsSynchronized());
+    CHECK(retained.instances.front().expanded->Objects().front().object.name == "Root");
+    InvalidateScenePrefabProjection(retained, resolver, {}, fixture.limits);
+    REQUIRE(ConvertScenePrefabProjectionToRuntime(source, {1}, {2}, retained, resolver, fixture.limits).HasError());
+
+    const auto refreshed = BuildScenePrefabProjection(source, current, fixture.limits).Value();
+    const auto replacement = ConvertScenePrefabProjectionToRuntime(source, {1}, {2}, refreshed, current, fixture.limits);
+    REQUIRE(replacement.HasValue());
+    CHECK(replacement.Value().Entities()[1].object == previous.Value().Entities()[1].object);
+    CHECK(previous.Value().Entities().size() == 3);
+}
 
 TEST_CASE("Headless scene conversion expands repeated placements through the shared resolver", "[native][prefab-cook]") {
     ConversionFixture fixture;
