@@ -1451,12 +1451,19 @@ target_compile_features(HoroUpdateExperienceSessionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateExperienceSessionTests PRIVATE HoroEngine::EditorModel)
 add_executable(HoroConfiguredEditorUpdateBackendTests
         unit/editor/ConfiguredEditorUpdateBackendTests.cpp
+        unit/editor/ConfiguredEditorUpdateManifestSourceTests.cpp
+        unit/editor/ConfiguredEditorUpdateManifestTlsTests.cpp
         ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/ConfiguredEditorUpdateBackend.cpp
+        ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/ConfiguredEditorUpdateManifestSource.cpp
 )
 target_compile_features(HoroConfiguredEditorUpdateBackendTests PRIVATE cxx_std_20)
 target_include_directories(HoroConfiguredEditorUpdateBackendTests PRIVATE ${PROJECT_SOURCE_DIR}/apps ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(HoroConfiguredEditorUpdateBackendTests PRIVATE HoroEngine::EditorModel HoroEngine::UpdateDiscovery
-        HoroEngine::UpdateDownload HoroEngine::Platform)
+        HoroEngine::UpdateDownload HoroEngine::Platform CURL::libcurl)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(OpenSSL REQUIRED COMPONENTS SSL)
+    target_link_libraries(HoroConfiguredEditorUpdateBackendTests PRIVATE OpenSSL::SSL)
+endif()
 horo_register_catch_test(HoroConfiguredEditorUpdateBackendTests LABELS "editor;update;headless")
 add_executable(HoroProjectGameplayRegistryTests
         unit/editor/ProjectGameplayRegistryTests.cpp

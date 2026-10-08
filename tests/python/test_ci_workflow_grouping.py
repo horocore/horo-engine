@@ -135,3 +135,9 @@ def test_required_checks_and_sdl_composition_are_preserved() -> None:
     assert "actions/checkout" not in cleanup
     assert "contents: read" not in cleanup
     assert "await cancelClosedPrRuns" in cleanup
+
+
+def test_installed_manifest_source_keeps_sonar_coverage() -> None:
+    collector = (ROOT / ".github/scripts/collect_sonar_coverage.sh").read_text(encoding="utf-8")
+    assert '"$workspace/apps/HoroEditor/app/ConfiguredEditorUpdateManifestSource.cpp"' in collector
+    assert "HoroConfiguredEditorUpdateBackendTests" in targets("HORO_SONAR_EDITOR_TARGETS")
