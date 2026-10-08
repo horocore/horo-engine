@@ -1,5 +1,6 @@
 #include "Horo/XR/XRProjectSettings.h"
 
+#include <format>
 #include <string_view>
 #include <utility>
 
@@ -25,9 +26,9 @@ namespace Horo::XR {
             SourceLocation location;
             if (const auto *entry = source.FindResolved(SettingKey{std::string(key)}); entry && entry->location)
                 location = *entry->location;
-            error.diagnostics.push_back({DiagnosticCode{error.code.Value()},
-                                         DiagnosticSeverityForError(error.severity).value_or(DiagnosticSeverity::Error), error.message,
-                                         std::move(location), std::string(key)});
+            error.diagnostics.emplace_back(DiagnosticCode{error.code.Value()},
+                                           DiagnosticSeverityForError(error.severity).value_or(DiagnosticSeverity::Error), error.message,
+                                           std::move(location), std::string(key));
             return error;
         }
 
@@ -57,10 +58,10 @@ namespace Horo::XR {
             const auto policy = static_cast<XRProjectFeaturePolicy>(value.Value());
             if (policy == XRProjectFeaturePolicy::Unrequested)
                 return Result<std::optional<XRFeatureRequest>>::Success(std::nullopt);
-            const bool projectionFallback =
-                feature.capability == XRCapability::DepthComposition || feature.capability == XRCapability::FixedFoveation ||
-                feature.capability == XRCapability::RefreshRateSelection || feature.capability == XRCapability::VisibilityMask;
-            if ((policy == XRProjectFeaturePolicy::OptionalProjection && !projectionFallback) ||
+            if (const bool projectionFallback =
+                    feature.capability == XRCapability::DepthComposition || feature.capability == XRCapability::FixedFoveation ||
+                    feature.capability == XRCapability::RefreshRateSelection || feature.capability == XRCapability::VisibilityMask;
+                (policy == XRProjectFeaturePolicy::OptionalProjection && !projectionFallback) ||
                 (feature.capability == XRCapability::ControllerPresentation && profile != XRFeatureProfile::TrackedInteraction1_0))
                 return Result<std::optional<XRFeatureRequest>>::Failure(
                     Failure(source, feature.key, XRErrors::OperationIncompatible,
@@ -80,21 +81,22 @@ namespace Horo::XR {
         /** @brief Revalidates retained loader evidence against the complete current host request. */
         Result<void> ValidateLoader(const XRProjectSettings &settings, const XRProjectSettingsAdmission &admission) {
             const auto &request = admission.currentLoaderRequest;
-            const auto loader = ValidateXRLoaderPreflight(admission.loader, request.attempt, request.backend, request.installRecord,
-                                                          request.productProfile);
-            if (loader.HasError()) {
+            if (const auto loader = ValidateXRLoaderPreflight(admission.loader, request.attempt, request.backend, request.installRecord,
+                                                              request.productProfile);
+                loader.HasError()) {
                 return Result<void>::Failure(WithSource(loader.ErrorValue(), settings.Source(), "xr.runtime_selection"));
             }
-            const auto current = CreateXRLoaderPreflightSnapshot(request, {
-                                                                              .attempt = admission.loader.Attempt(),
-                                                                              .loader = XRLoaderAvailability::Available,
-                                                                              .runtime = XRRuntimeAvailability::Available,
-                                                                              .system = XRSystemAvailability::Supported,
-                                                                              .loaderApiVersion = admission.loader.LoaderApiVersion(),
-                                                                              .runtimeGeneration = admission.loader.RuntimeGeneration(),
-                                                                              .consumedProbeSteps = admission.loader.ConsumedProbeSteps(),
-                                                                          });
-            if (current.HasError()) {
+            if (const auto current = CreateXRLoaderPreflightSnapshot(request,
+                                                                     {
+                                                                         .attempt = admission.loader.Attempt(),
+                                                                         .loader = XRLoaderAvailability::Available,
+                                                                         .runtime = XRRuntimeAvailability::Available,
+                                                                         .system = XRSystemAvailability::Supported,
+                                                                         .loaderApiVersion = admission.loader.LoaderApiVersion(),
+                                                                         .runtimeGeneration = admission.loader.RuntimeGeneration(),
+                                                                         .consumedProbeSteps = admission.loader.ConsumedProbeSteps(),
+                                                                     });
+                current.HasError()) {
                 return Result<void>::Failure(WithSource(current.ErrorValue(), settings.Source(), "xr.runtime_selection"));
             }
             if (admission.loader.RuntimeGeneration() != admission.activeSystem.runtime)
@@ -133,8 +135,8 @@ namespace Horo::XR {
                                                ConfigurationSourceMask::Invocation | ConfigurationSourceMask::Session};
         std::vector<SettingDescriptor> descriptors;
         const auto add = [&](std::string key, const SettingValueType type, SettingValue value) {
-            descriptors.push_back({SettingKey{std::move(key)}, type, std::move(value), SettingScope::Project, ReloadPolicy::ProjectReopen,
-                                   SettingSensitivity::Public, policy});
+            descriptors.emplace_back(SettingKey{std::move(key)}, type, std::move(value), SettingScope::Project, ReloadPolicy::ProjectReopen,
+                                     SettingSensitivity::Public, policy);
         };
         add("xr.schema_version", SettingValueType::Integer, XRProjectSettingsSchemaVersion);
         add("xr.enabled", SettingValueType::Boolean, false);
@@ -189,8 +191,8 @@ namespace Horo::XR {
 
     /** @copydoc ResolveXRProjectSettings */
     Result<XRProjectSettings> ResolveXRProjectSettings(const ConfigurationSnapshot &source) {
-        const auto version = Integer(source, "xr.schema_version", XRProjectSettingsSchemaVersion, XRProjectSettingsSchemaVersion);
-        if (version.HasError())
+        if (const auto version = Integer(source, "xr.schema_version", XRProjectSettingsSchemaVersion, XRProjectSettingsSchemaVersion);
+            version.HasError())
             return Result<XRProjectSettings>::Failure(Failure(source, "xr.schema_version", XRErrors::ContractVersionIncompatible,
                                                               "Migrate to XR project-settings schema version 1 before reopening."));
         XRProjectSettings settings{source};
@@ -259,8 +261,7 @@ namespace Horo::XR {
             (settings.RuntimeSelection() == XRRuntimeSelectionPolicy::SystemDefault && request.developerOverrideApproved))
             return fail("xr.runtime_selection", XRErrors::RuntimeOverrideRejected,
                         "Match current runtime policy and obtain host approval for a non-shipping developer override.");
-        const auto loader = ValidateLoader(settings, admission);
-        if (loader.HasError())
+        if (const auto loader = ValidateLoader(settings, admission); loader.HasError())
             return Result<XRFeaturePlan>::Failure(loader.ErrorValue());
         if (admission.renderer != XRRendererCompatibility::Compatible)
             return fail("xr.enabled", XRErrors::OperationIncompatible,
@@ -284,9 +285,9 @@ namespace Horo::XR {
                 if (feature.capability == negotiated.capability)
                     key = feature.key;
             return fail(key, NegotiationError(negotiated.status),
-                        "The exact XR system cannot admit the selected profile, feature state or budget. Capability=" +
-                            std::to_string(static_cast<unsigned>(negotiated.capability)) +
-                            ", observed state=" + std::to_string(static_cast<unsigned>(negotiated.observed)) + ".");
+                        std::format("The exact XR system cannot admit the selected profile, feature state or budget. Capability={}, "
+                                    "observed state={}.",
+                                    static_cast<unsigned>(negotiated.capability), static_cast<unsigned>(negotiated.observed)));
         }
         return Result<XRFeaturePlan>::Success(*negotiated.plan);
     }
