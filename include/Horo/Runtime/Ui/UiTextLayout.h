@@ -16,6 +16,9 @@
 #include <vector>
 
 namespace Horo::Runtime::Ui {
+    class UiTextShape;
+    class UiTextUnicodeAnalysis;
+    class UiTextUnicodeAnalyzer;
     inline constexpr std::uint32_t MaximumUiTextLayoutSourceBytes = 1U * 1024U * 1024U;
     inline constexpr std::uint32_t MaximumUiTextLayoutClusters = 65'536;
     inline constexpr std::uint32_t MaximumUiTextLayoutGlyphs = 65'536;
@@ -148,6 +151,7 @@ namespace Horo::Runtime::Ui {
         std::uint32_t glyphCount{};                                            /**< Number of glyphs attributed to this cluster. */
         UiLogicalPoint advance;                                                /**< Cluster advance used for wrapping. */
         UiTextBreakOpportunity breakOpportunity{UiTextBreakOpportunity::None}; /**< Break after this cluster. */
+        std::uint8_t bidiLevel{}; /**< Resolved paragraph level; zero for caller-supplied LTR cluster evidence. */
 
         /**
          * @brief Checks byte ordering, glyph range, advance, and break evidence.
@@ -225,6 +229,8 @@ namespace Horo::Runtime::Ui {
         UiTextLayoutOptions options;                  /**< Wrapping, alignment, overflow, and scale policy. */
         UiTextShapedTextView shaped;                  /**< Main shaped text view. */
         std::optional<UiTextShapedTextView> ellipsis; /**< Pre-shaped ellipsis view, required only when ellipsis is needed. */
+        const UiTextUnicodeAnalysis *unicode{};       /**< Exact paragraph evidence for line-specific reordering. */
+        UiTextUnicodeAnalyzer *unicodeAnalyzer{};     /**< Serialized owner scratch for the matching paragraph lease. */
 
         /**
          * @brief Validates the complete candidate against fixed owner capacities.
@@ -250,6 +256,17 @@ namespace Horo::Runtime::Ui {
         /** @brief Checks ranges against a complete immutable result. @return Whether the line is representable. */
         [[nodiscard]] bool IsValid(std::size_t glyphCountLimit, std::size_t runCountLimit) const noexcept;
         [[nodiscard]] auto operator<=>(const UiTextLayoutLine &) const noexcept = default;
+    };
+
+    /** @brief One visual cluster retaining logical selection/navigation coordinates. */
+    struct UiTextLayoutCluster final {
+        std::uint32_t logicalCluster{}; /**< Index in the source-ordered shaped cluster table. */
+        std::uint32_t byteStart{};      /**< Logical UTF-8 selection start. */
+        std::uint32_t byteEnd{};        /**< Logical UTF-8 selection end. */
+        std::uint32_t line{};           /**< Visual line index. */
+        UiLogicalPoint origin;          /**< Visual leading box origin. */
+        std::int32_t advance{};         /**< Logical box width. */
+        bool rightToLeft{};             /**< Logical leading caret is at origin plus advance when true. */
     };
 
     /** @brief One positioned backend-neutral glyph shared by layout and render extraction. */
@@ -333,6 +350,10 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] std::span<const UiTextLayoutGlyph> Glyphs() const noexcept;
         /** @brief Returns face runs over the positioned glyph table. @return Borrowed immutable runs. */
         [[nodiscard]] std::span<const UiTextLayoutRun> Runs() const noexcept;
+        /** @brief Returns visual-order clusters with original logical byte ranges, including hard breaks.
+         * @return Borrowed immutable mapping for selection, caret navigation and source/visual round trips.
+         */
+        [[nodiscard]] std::span<const UiTextLayoutCluster> Clusters() const noexcept;
         /** @brief Checks that the result still owns a complete immutable publication. @return True for a live result. */
         [[nodiscard]] bool IsValid() const noexcept;
 
@@ -394,6 +415,17 @@ namespace Horo::Runtime::Ui {
          * @pre Calls for one engine are serialized on its Runtime UI owner thread.
          */
         [[nodiscard]] Result<UiTextLayoutResult> Layout(const UiTextLayoutRequest &request);
+        /**
+         * @brief Converts a real prepared shape and Unicode paragraph into bounded wrapped visual glyph output.
+         * @param request Exact layout lineage, box and policy; supplied shaped spans are replaced by the shape.
+         * @param shape Immutable glyph result produced from the same Unicode paragraph.
+         * @param unicode Exact source/locale/content evidence used for shaping.
+         * @param analyzer Owner scratch that prepared unicode; must remain active for this synchronous call.
+         * @return Published visual layout or typed stale, capacity, invalid or lifecycle failure.
+         * @details Conversion uses this engine's preallocated storage, not renderer/frontend state.
+         */
+        [[nodiscard]] Result<UiTextLayoutResult> LayoutShaped(UiTextLayoutRequest request, const UiTextShape &shape,
+                                                              const UiTextUnicodeAnalysis &unicode, UiTextUnicodeAnalyzer &analyzer);
         /** @brief Stops new layout calls without invalidating existing result leases. */
         void Close() noexcept;
         /** @brief Idempotently closes admission and releases mutable scratch storage. */

@@ -44,6 +44,7 @@ namespace Horo::Runtime::Ui {
         lines.reserve(limits.lines);
         glyphs.reserve(limits.glyphs);
         runs.reserve(limits.runs);
+        clusters.reserve(limits.clusters);
     }
 
     void UiTextLayoutResult::Storage::Reset() noexcept {
@@ -53,6 +54,7 @@ namespace Horo::Runtime::Ui {
         lines.clear();
         glyphs.clear();
         runs.clear();
+        clusters.clear();
     }
 
     UiTextLayoutEngine::Storage::Storage(const UiTextLayoutEngineDescriptor &source) : descriptor(source) {
@@ -65,6 +67,11 @@ namespace Horo::Runtime::Ui {
         linePlans.reserve(source.limits.lines);
         glyphFaces.reserve(source.limits.glyphs);
         ellipsisFaces.reserve(source.limits.glyphs);
+        preparedRuns.reserve(source.limits.runs);
+        preparedGlyphs.reserve(source.limits.glyphs);
+        preparedClusters.reserve(source.limits.clusters);
+        visualScalars.resize(source.limits.sourceBytes);
+        visualLevels.resize(source.limits.sourceBytes);
     }
 
     std::shared_ptr<UiTextLayoutResult::Storage> UiTextLayoutEngine::Storage::TryAcquire() noexcept {
@@ -206,6 +213,11 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiTextLayoutResult::Runs */
     std::span<const UiTextLayoutRun> UiTextLayoutResult::Runs() const noexcept {
         return storage_->runs;
+    }
+
+    /** @copydoc UiTextLayoutResult::Clusters */
+    std::span<const UiTextLayoutCluster> UiTextLayoutResult::Clusters() const noexcept {
+        return storage_->clusters;
     }
 
     /** @copydoc UiTextLayoutResult::IsValid */

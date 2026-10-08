@@ -97,6 +97,7 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # One translation unit per registered public header verifies that consumers can
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
+target_sources(HoroRuntimeUiPublicHeaderConsumer PRIVATE support/RuntimeUiUnicodePublicContract.cpp)
 target_sources(HoroGameplayApiPublicHeaderConsumer PRIVATE support/PersistenceInstallationPublicHeaderConsumer.cpp)
 target_sources(HoroRuntimePublicHeaderConsumer PRIVATE support/SaveSceneCanonicalPublicHeaderConsumer.cpp)
 target_sources(HoroRuntimeScenePublicHeaderConsumer PRIVATE support/SaveContentWorldPublicHeaderConsumer.cpp)
@@ -2903,6 +2904,22 @@ add_executable(HoroRuntimeUiTextShapingTests
 )
 target_compile_features(HoroRuntimeUiTextShapingTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiTextShapingTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiTextUnicodeTests
+        unit/runtime/ui/UiTextUnicodeTests.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeUiTextUnicodeTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiTextUnicodeTests PRIVATE HoroEngine::RuntimeUi)
+target_include_directories(HoroRuntimeUiTextUnicodeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(HoroRuntimeUiTextUnicodeTests PRIVATE HORO_UNICODE_DATA_FILE="${HORO_UNICODE_DATA_FILE}")
+add_executable(HoroRuntimeUiUnicodeStartupTests unit/runtime/ui/UiTextUnicodeStartupTests.cpp)
+target_compile_features(HoroRuntimeUiUnicodeStartupTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiUnicodeStartupTests PRIVATE HoroEngine::RuntimeUi HoroThirdParty::Unicode)
+target_compile_definitions(HoroRuntimeUiUnicodeStartupTests PRIVATE HORO_UNICODE_DATA_FILE="${HORO_UNICODE_DATA_FILE}")
+add_executable(HoroRuntimeUiUnicodeLifecycleTests unit/runtime/ui/UiTextUnicodeLifecycleTests.cpp)
+target_compile_features(HoroRuntimeUiUnicodeLifecycleTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiUnicodeLifecycleTests PRIVATE HoroEngine::RuntimeUi)
+target_compile_definitions(HoroRuntimeUiUnicodeLifecycleTests PRIVATE HORO_UNICODE_DATA_FILE="${HORO_UNICODE_DATA_FILE}")
 add_executable(HoroRuntimeSaveArchiveMetadataTests
         unit/runtime/save/SaveArchiveMetadataTests.cpp
 )
@@ -3890,6 +3907,9 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiFocusGraphTests
         HoroRuntimeUiControlsTests
         HoroRuntimeUiTextShapingTests
+        HoroRuntimeUiTextUnicodeTests
+        HoroRuntimeUiUnicodeStartupTests
+        HoroRuntimeUiUnicodeLifecycleTests
         HoroRuntimeSaveArchiveMetadataTests
         HoroRuntimeSaveArchiveFramingTests
         HoroRuntimeSaveArchiveFinalizationTests

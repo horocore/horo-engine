@@ -79,6 +79,16 @@ namespace Horo::Runtime::Ui {
             bool ellipsis{};
         };
 
+        /** @brief Checked horizontal glyph geometry shared by source and omission-marker placement. */
+        struct GlyphGeometry final {
+            UiLogicalPoint origin;
+            UiLogicalPoint advance;
+        };
+
+        /** @brief Scales offsets/advance and validates translated glyph coordinates without mutating the cursor. */
+        [[nodiscard]] Result<GlyphGeometry> PrepareGlyphGeometry(const UiTextShapedGlyph &glyph, UiTextScale scale,
+                                                                 UiLogicalPoint lineOrigin, std::int64_t cursor);
+
         [[nodiscard]] Result<std::int32_t> ScaleValue(std::int32_t value, UiTextScale scale);
         [[nodiscard]] Result<std::int32_t> AddValue(std::int64_t left, std::int64_t right);
         [[nodiscard]] bool IsOlder(const UiLayoutSourceRevisions &candidate, const UiLayoutSourceRevisions &current) noexcept;
@@ -92,6 +102,7 @@ namespace Horo::Runtime::Ui {
         std::vector<UiTextLayoutLine> lines;
         std::vector<UiTextLayoutGlyph> glyphs;
         std::vector<UiTextLayoutRun> runs;
+        std::vector<UiTextLayoutCluster> clusters;
 
         explicit Storage(const UiTextLayoutLimits &limits);
         void Reset() noexcept;
@@ -112,6 +123,11 @@ namespace Horo::Runtime::Ui {
         std::vector<UiTextLayoutInternal::LinePlan> linePlans;
         std::vector<UiTextFaceId> glyphFaces;
         std::vector<UiTextFaceId> ellipsisFaces;
+        std::vector<UiTextShapedRun> preparedRuns;
+        std::vector<UiTextShapedGlyph> preparedGlyphs;
+        std::vector<UiTextShapedCluster> preparedClusters;
+        std::vector<std::uint32_t> visualScalars;
+        std::vector<std::uint8_t> visualLevels;
 
         explicit Storage(const UiTextLayoutEngineDescriptor &source);
         Storage(const Storage &) = delete;
@@ -144,6 +160,13 @@ namespace Horo::Runtime::Ui {
                                                                                        std::int32_t scaledAscent) const;
         [[nodiscard]] Result<void> BuildLine(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,
                                              const UiTextLayoutInternal::LineBuildContext &context);
+        /** @brief Appends one line's source mapping and omission marker in visual order. */
+        [[nodiscard]] Result<void> AppendLineContent(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,
+                                                     const UiTextLayoutInternal::LineWindow &window,
+                                                     UiTextLayoutInternal::SourceAppendState &state);
+        /** @brief Validates and converts one complete shaped cluster into reserved candidate storage. */
+        [[nodiscard]] Result<void> AppendPreparedCluster(const UiTextShape &shape, const UiTextUnicodeAnalysis &unicode,
+                                                         std::uint32_t clusterIndex);
         [[nodiscard]] Result<void> AppendLineRecord(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,
                                                     const UiTextLayoutInternal::LineBuildContext &context,
                                                     const UiTextLayoutInternal::LineWindow &window,
@@ -151,7 +174,8 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> AppendSourceRange(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,
                                                      std::uint32_t end, UiTextLayoutInternal::SourceAppendState &state);
         [[nodiscard]] Result<void> AppendSourceCluster(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,
-                                                       std::uint32_t clusterIndex, UiTextLayoutInternal::SourceAppendState &state);
+                                                       std::uint32_t clusterIndex, UiTextLayoutInternal::SourceAppendState &state,
+                                                       std::uint8_t lineLevel);
         [[nodiscard]] Result<std::uint32_t> CountEllipsisGlyphs(const UiTextLayoutRequest &request, std::int64_t available,
                                                                 std::int64_t &usedWidth) const;
         [[nodiscard]] Result<void> AppendEllipsisGlyphs(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,

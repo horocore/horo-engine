@@ -1,4 +1,5 @@
 #include "Horo/Runtime/Ui/UiErrors.h"
+#include "Horo/Runtime/Ui/UiTextUnicode.h"
 #include "UiTextShapingInternal.h"
 
 #include <algorithm>
@@ -16,47 +17,12 @@ namespace Horo::Runtime::Ui {
     using namespace TextShapingDetail;
 
     namespace {
-        struct FaceSelection final {
-            std::size_t index{};
-            bool missing{};
-        };
-
         struct ShapedGlyphBatch final {
             std::uint32_t firstGlyph{NoUiTextIndex};
             std::size_t glyphCount{};
             UiLogicalPoint advance;
         };
 
-        /** @brief Resolves one source cluster's script evidence without splitting its scalars. */
-        hb_script_t DetectClusterScript(hb_unicode_funcs_t *unicode, const UiTextScript requested,
-                                        const std::vector<DecodedScalar> &scalars, const SourceCluster &cluster) noexcept {
-            if (!requested.IsAuto())
-                return ToHbScript(requested);
-            for (std::size_t index = cluster.scalarStart; index < cluster.scalarEnd; ++index) {
-                const auto candidate = hb_unicode_script(unicode, scalars[index].value);
-                if (candidate != HB_SCRIPT_COMMON && candidate != HB_SCRIPT_INHERITED)
-                    return candidate;
-            }
-            return HB_SCRIPT_COMMON;
-        }
-
-        /** @brief Resolves one source cluster's explicit or script-derived direction. */
-        UiTextDirection ResolveClusterDirection(const UiTextShapingRequest &request, const hb_script_t script) noexcept {
-            return request.direction == UiTextDirection::Auto ? FromHbDirection(hb_script_get_horizontal_direction(script))
-                                                              : request.direction;
-        }
-
-        /** @brief Selects the first face covering a complete source cluster. */
-        Result<FaceSelection> SelectClusterFace(const std::span<const UiFontFace> faces, const std::vector<hb_font_t *> &fonts,
-                                                const std::vector<DecodedScalar> &scalars, const SourceCluster &cluster,
-                                                const UiMissingGlyphPolicy policy) {
-            for (std::size_t faceIndex = 0; faceIndex < faces.size(); ++faceIndex)
-                if (SupportsCluster(fonts[faceIndex], scalars, cluster.scalarStart, cluster.scalarEnd))
-                    return Result<FaceSelection>::Success(FaceSelection{faceIndex, false});
-            if (policy == UiMissingGlyphPolicy::FailStrict)
-                return Failure<FaceSelection>(UiErrors::TextMissingCoverage);
-            return Result<FaceSelection>::Success(FaceSelection{faces.size() - 1, true});
-        }
     }  // namespace
 
     struct UiTextShaper::Storage final {
@@ -133,24 +99,10 @@ namespace Horo::Runtime::Ui {
             return glyphs <= descriptor.limits.maxGlyphs && clusters <= descriptor.limits.maxClusters && runs <= descriptor.limits.maxRuns;
         }
 
-        /** @brief Resolves script and direction, chooses complete-cluster fallback, and records source evidence. */
+        /** @brief Resolves complete source evidence before native run shaping. */
         Result<void> ResolveClusters(const UiTextShapingRequest &request) {
-            auto *unicode = hb_unicode_funcs_get_default();
-            const auto faces = descriptor.fonts.Faces();
-            for (auto &cluster : sourceClusters) {
-                const auto hbScript = DetectClusterScript(unicode, request.script, scalars, cluster);
-                const auto script = FromHbScript(hbScript);
-                if (script.HasError())
-                    return Result<void>::Failure(script.ErrorValue());
-                cluster.script = script.Value();
-                cluster.direction = ResolveClusterDirection(request, hbScript);
-                const auto selection = SelectClusterFace(faces, fonts, scalars, cluster, descriptor.fonts.MissingPolicy());
-                if (selection.HasError())
-                    return Result<void>::Failure(selection.ErrorValue());
-                cluster.faceIndex = selection.Value().index;
-                cluster.missing = selection.Value().missing;
-            }
-            return Result<void>::Success();
+            return ResolveSourceClusters(request, {descriptor.fonts.Faces(), fonts, scalars, descriptor.fonts.MissingPolicy()},
+                                         sourceClusters);
         }
 
         /** @brief Converts the request's feature values once before shaping any run. */
@@ -350,7 +302,8 @@ namespace Horo::Runtime::Ui {
             while (last < sourceClusters.size() && sourceClusters[last].faceIndex == sourceClusters[first].faceIndex &&
                    sourceClusters[last].script == sourceClusters[first].script &&
                    sourceClusters[last].direction == sourceClusters[first].direction &&
-                   sourceClusters[last].missing == sourceClusters[first].missing)
+                   sourceClusters[last].bidiLevel == sourceClusters[first].bidiLevel && !sourceClusters[last].hardBreak &&
+                   !sourceClusters[first].hardBreak && sourceClusters[last].missing == sourceClusters[first].missing)
                 ++last;
             return last;
         }
@@ -364,6 +317,16 @@ namespace Horo::Runtime::Ui {
             }
             std::size_t first = 0;
             while (first < sourceClusters.size()) {
+                if (sourceClusters[first].hardBreak) {
+                    if (slot.clusters.size() >= descriptor.limits.maxClusters)
+                        return Failure(UiErrors::CapacityExceeded);
+                    const auto &source = sourceClusters[first];
+                    slot.clusters.push_back({source.byteStart, source.byteEnd, NoUiTextIndex, 0, {}, false});
+                    if (!AccumulateMetrics(fonts.front(), source.direction, request.fontSize, slot.metrics))
+                        return Failure(UiErrors::TextShapeInvalid);
+                    ++first;
+                    continue;
+                }
                 const auto last = FindGroupEnd(first);
                 const auto omitted =
                     sourceClusters[first].missing && descriptor.fonts.MissingPolicy() == UiMissingGlyphPolicy::OmitWithAdvance;
@@ -429,14 +392,44 @@ namespace Horo::Runtime::Ui {
             slot.clusters.clear();
             if (const auto decoded = DecodeText(request.text, scalars); decoded.HasError())
                 return decoded;
-            if (const auto segmented = SegmentText(scalars, sourceClusters); segmented.HasError())
+            if (request.unicode != nullptr) {
+                sourceClusters.clear();
+                std::size_t first = 0;
+                const auto evidence = request.unicode->Scalars();
+                if (evidence.size() != scalars.size())
+                    return Failure(UiErrors::TextInputInvalid);
+                for (std::size_t index = 0; index < evidence.size(); ++index) {
+                    if (!evidence[index].graphemeEnd)
+                        continue;
+                    if (sourceClusters.size() >= descriptor.limits.maxClusters)
+                        return Failure(UiErrors::CapacityExceeded);
+                    sourceClusters.emplace_back(first, index + 1, scalars[first].byteStart, scalars[index].byteEnd, 0, UiTextScript::Auto(),
+                                                UiTextDirection::LeftToRight, false);
+                    first = index + 1;
+                }
+                if (first != scalars.size())
+                    return Failure(UiErrors::TextInputInvalid);
+            } else if (const auto segmented = SegmentText(scalars, sourceClusters); segmented.HasError()) {
                 return segmented;
+            }
             if (const auto features = PrepareFeatures(slot.features); features.HasError())
                 return features;
             if (const auto resolved = ResolveClusters(request); resolved.HasError())
                 return resolved;
             if (const auto groups = AppendGroups(slot, request); groups.HasError())
                 return groups;
+            if (request.unicode != nullptr) {
+                const auto evidence = request.unicode->Scalars();
+                for (auto &cluster : slot.clusters) {
+                    const auto first = std::ranges::lower_bound(evidence, cluster.byteStart, {}, &UiTextUnicodeScalar::byteStart);
+                    const auto last = std::ranges::lower_bound(evidence, cluster.byteEnd, {}, &UiTextUnicodeScalar::byteEnd);
+                    if (first == evidence.end() || last == evidence.end() || first->byteStart != cluster.byteStart ||
+                        last->byteEnd != cluster.byteEnd)
+                        return Failure(UiErrors::TextShapeInvalid);
+                    cluster.bidiLevel = first->level;
+                    cluster.breakAfter = last->breakAfter;
+                }
+            }
             return FinalizeMetrics(slot);
         }
 

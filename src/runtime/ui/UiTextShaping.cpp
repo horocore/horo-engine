@@ -2,6 +2,7 @@
 
 #include "Horo/Foundation/Utf8.h"
 #include "Horo/Runtime/Ui/UiErrors.h"
+#include "Horo/Runtime/Ui/UiTextUnicode.h"
 #include "UiTextShapingInternal.h"
 
 #include <algorithm>
@@ -534,6 +535,9 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiTextShapingRequest::IsValid */
     bool UiTextShapingRequest::IsValid(const UiTextShaperLimits &limits) const noexcept {
         if (!ValidTextRequestBounds(*this, limits) || !ValidTextRequestEvidence(*this, limits))
+            return false;
+        if (unicode != nullptr && (!unicode->IsValid() || unicode->Text() != text || unicode->Content() != content ||
+                                   unicode->Locale() != language || direction != UiTextDirection::Auto))
             return false;
         return std::all_of(features.begin(), features.end(), [this](const auto &feature) {
             return ValidFeatureRange(feature, text.size());
