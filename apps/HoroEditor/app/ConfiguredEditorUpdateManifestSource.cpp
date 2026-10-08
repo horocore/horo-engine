@@ -134,12 +134,14 @@ namespace Horo::Editor {
         if (static const bool CurlReady = curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK; !CurlReady)
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
         CURL *const curl = curl_easy_init();
-        CurlHandle handle{curl, &curl_easy_cleanup};
         if (curl == nullptr)
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
-        // Establish the transport security policy before transferring the handle to the response owner.
-        if (curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3 | CURL_SSLVERSION_MAX_TLSv1_3) != CURLE_OK)
+        // Establish TLS policy during acquisition, before the handle reaches any owning wrapper.
+        if (curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3 | CURL_SSLVERSION_MAX_TLSv1_3) != CURLE_OK) {
+            curl_easy_cleanup(curl);
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
+        }
+        CurlHandle handle{curl, &curl_easy_cleanup};
         ManifestResponse response{std::move(handle), cancellation};
         if (!response.Configure(url, policy))
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
