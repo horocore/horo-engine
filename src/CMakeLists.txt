@@ -1549,6 +1549,11 @@ target_link_libraries(HoroTerrainRender PUBLIC HoroEngine::TerrainApi HoroEngine
 add_library(HoroTerrainRuntime STATIC
         runtime/terrain/runtime/TerrainAsyncJobs.cpp
 )
+add_library(HoroTerrainStreaming STATIC runtime/terrain/streaming/TerrainResidencyCache.cpp)
+add_library(HoroEngine::TerrainStreaming ALIAS HoroTerrainStreaming)
+target_compile_features(HoroTerrainStreaming PUBLIC cxx_std_20)
+target_link_libraries(HoroTerrainStreaming PUBLIC HoroEngine::TerrainApi HoroEngine::WorldStreaming)
+
 add_library(HoroEngine::TerrainRuntime ALIAS HoroTerrainRuntime)
 target_compile_features(HoroTerrainRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroTerrainRuntime PUBLIC HoroEngine::TerrainApi HoroEngine::Foundation)
