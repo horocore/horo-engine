@@ -13,6 +13,13 @@ namespace Horo::SceneSource {
         ScenePrefabInstance authored;
         std::optional<Prefab::EffectivePrefabCandidate> expanded;
         std::optional<Error> failure;
+        bool stale{false}; /**< Retained expansion requires explicit re-resolution before publication. */
+
+        /** @brief Reports whether the retained candidate matches its inspected publication. @return True for a complete current candidate.
+         */
+        [[nodiscard]] bool IsSynchronized() const noexcept {
+            return expanded.has_value() && !failure && !stale;
+        }
 
         /** @brief Reports unresolved required content. @return True when this placement failed resolution. */
         [[nodiscard]] bool IsBroken() const noexcept {
@@ -37,6 +44,33 @@ namespace Horo::SceneSource {
     [[nodiscard]] Result<ScenePrefabProjection> BuildScenePrefabProjection(const SceneSourceView &document,
                                                                            const Prefab::PrefabSourceResolverSnapshot &resolver,
                                                                            const Prefab::PrefabLimitProfile &limits);
+
+    /**
+     * @brief Marks retained projections stale after affected source/resource publications without replacing their evidence.
+     * @param projection Owned retained placements, updated on their owner's thread.
+     * @param current Current immutable resolver publication.
+     * @param changedAssets Complete intervening publication identities, including ordinary resources.
+     * @param limits Bounded revision inspection policy.
+     * @details Staleness remains sticky until rebuilding the projection; authored references remain available for repair.
+     */
+    void InvalidateScenePrefabProjection(ScenePrefabProjection &projection, const Prefab::PrefabSourceResolverSnapshot &current,
+                                         std::span<const Assets::AssetId> changedAssets, const Prefab::PrefabLimitProfile &limits);
+
+    /**
+     * @brief Converts retained prefab candidates only after validating authored and current source evidence.
+     * @param document Coherent authored values captured by the calling host.
+     * @param sceneId Stable containing scene identity.
+     * @param revision Captured authored revision.
+     * @param projection Retained candidates; stale, broken or mismatched placements reject the complete conversion.
+     * @param resolver Current immutable source publication.
+     * @param limits Bounded conversion and publication policy.
+     * @return Complete immutable runtime definition or typed failure, without partial publication.
+     * @details The owner must invalidate retained projections for intervening resource publications before conversion.
+     */
+    [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> ConvertScenePrefabProjectionToRuntime(
+        const SceneSourceView &document, Runtime::SceneDefinitionId sceneId, Runtime::SceneDefinitionRevision revision,
+        const ScenePrefabProjection &projection, const Prefab::PrefabSourceResolverSnapshot &resolver,
+        const Prefab::PrefabLimitProfile &limits);
 
     /**
      * @brief Converts an ordinary source-free authored scene into one validated runtime definition.
