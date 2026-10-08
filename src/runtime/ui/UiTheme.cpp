@@ -122,6 +122,25 @@ namespace Horo::Runtime::Ui {
             return arranged;
         }
 
+        /** @brief Reserves the next render revision before extracting a candidate from the arranged surfaces. */
+        [[nodiscard]] Result<UiRenderSnapshot> ExtractRender(const UiElementTree &tree, const UiLayoutSnapshot &layout) {
+            const std::array transforms{UiLogicalTransform{}};
+            const UiRenderSnapshotDescriptor renderDescriptor{tree.Instance(),         tree.Canvas(),
+                                                              tree.SourceDocument(),   tree.SourceDocumentRevision(),
+                                                              tree.Revision(),         layout.Descriptor().interaction,
+                                                              revisions.render,        descriptor.render.view,
+                                                              descriptor.render.limits};
+            // Reserve the next revision before extraction so exhaustion never follows a successful publication.
+            const auto nextRender = revisions.render.Next();
+            if (nextRender.HasError())
+                return Result<UiRenderSnapshot>::Failure(nextRender.ErrorValue());
+            auto extracted = renders.Extract(tree, renderDescriptor, {.commands = paints, .transforms = transforms});
+            if (extracted.HasError())
+                return Result<UiRenderSnapshot>::Failure(extracted.ErrorValue());
+            revisions.render = nextRender.Value();
+            return extracted;
+        }
+
         [[nodiscard]] Result<UiThemeSnapshot> Build(const UiElementTree &tree, const UiThemeUpdateRequest &request,
                                                     const RuntimeStyleRegistry &registry, const RuntimeStyleAssetId selection,
                                                     const std::uint32_t fallbacks) {
@@ -165,20 +184,9 @@ namespace Horo::Runtime::Ui {
                        std::get<UiSolidDraw>(left.payload).color == std::get<UiSolidDraw>(right.payload).color;
             }))
                 return Result<UiThemeSnapshot>::Success(*current);
-            const std::array transforms{UiLogicalTransform{}};
-            const UiRenderSnapshotDescriptor renderDescriptor{tree.Instance(),         tree.Canvas(),
-                                                              tree.SourceDocument(),   tree.SourceDocumentRevision(),
-                                                              tree.Revision(),         arranged.Value().Descriptor().interaction,
-                                                              revisions.render,        descriptor.render.view,
-                                                              descriptor.render.limits};
-            // Reserve the next revision before extraction so exhaustion never follows a successful publication.
-            const auto nextRender = revisions.render.Next();
-            if (nextRender.HasError())
-                return Result<UiThemeSnapshot>::Failure(nextRender.ErrorValue());
-            auto extracted = renders.Extract(tree, renderDescriptor, {.commands = paints, .transforms = transforms});
+            auto extracted = ExtractRender(tree, arranged.Value());
             if (extracted.HasError())
                 return Result<UiThemeSnapshot>::Failure(extracted.ErrorValue());
-            revisions.render = nextRender.Value();
             return Result<UiThemeSnapshot>::Success(
                 {selection, fallbacks, std::move(computed).Value(), std::move(arranged).Value(), std::move(extracted).Value()});
         }
