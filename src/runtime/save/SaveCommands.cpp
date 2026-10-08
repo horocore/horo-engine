@@ -3,15 +3,17 @@
 #include "Horo/Runtime/Save/SaveErrors.h"
 
 #include <algorithm>
+#include <memory>
 #include <utility>
 
 namespace Horo::Runtime {
     namespace {
         /** @brief Maps exact user intent to cooked product policy. */
         [[nodiscard]] SavePolicyMode Mode(const SaveCommandKind kind) noexcept {
+            using enum SavePolicyMode;
             if (kind == SaveCommandKind::ManualSave)
-                return SavePolicyMode::Manual;
-            return kind == SaveCommandKind::QuickSave ? SavePolicyMode::Quick : SavePolicyMode::Load;
+                return Manual;
+            return kind == SaveCommandKind::QuickSave ? Quick : Load;
         }
 
         /** @brief Tests whether an intent reads an existing publication. */
@@ -24,7 +26,27 @@ namespace Horo::Runtime {
             const auto found = std::ranges::find_if(catalog.entries, [slot](const auto &entry) {
                 return entry.publication.slot == slot;
             });
-            return found == catalog.entries.end() ? nullptr : &*found;
+            return found == catalog.entries.end() ? nullptr : std::to_address(found);
+        }
+
+        /** @brief Admits only one exact-generation, supported and verifiable load assessment. */
+        [[nodiscard]] Result<void> ValidateLoadAssessment(const std::span<const SaveManagerSlotAssessment> assessments,
+                                                          const SaveCommandTarget &target) {
+            const SaveManagerSlotAssessment *assessment = nullptr;
+            for (const auto &candidate : assessments) {
+                if (candidate.slot != target.slot)
+                    continue;
+                if (assessment || candidate.generation != target.generation)
+                    return Result<void>::Failure(MakeError(SaveErrors::CommandStale));
+                assessment = &candidate;
+            }
+            if (!assessment ||
+                (assessment->compatibility != SaveManagerCompatibility::Direct &&
+                 assessment->compatibility != SaveManagerCompatibility::MigrationAvailable) ||
+                (assessment->integrity != SaveManagerIntegrity::Verified &&
+                 assessment->integrity != SaveManagerIntegrity::VerificationRequired))
+                return Result<void>::Failure(MakeError(SaveErrors::CommandIncompatible));
+            return Result<void>::Success();
         }
 
         /** @brief Compares exact admission preconditions without operation identity/deadline. */
@@ -123,21 +145,7 @@ namespace Horo::Runtime {
                 return Result<void>::Failure(MakeError(SaveErrors::CommandTargetUnavailable));
             if (target.kind == SaveCommandKind::QuickLoad && entry->publication.kind != SaveSlotKind::Quick)
                 return Result<void>::Failure(MakeError(SaveErrors::CommandTargetUnavailable));
-            const SaveManagerSlotAssessment *assessment = nullptr;
-            for (const auto &candidate : host_->assessments) {
-                if (candidate.slot != target.slot)
-                    continue;
-                if (assessment || candidate.generation != target.generation)
-                    return Result<void>::Failure(MakeError(SaveErrors::CommandStale));
-                assessment = &candidate;
-            }
-            if (!assessment ||
-                (assessment->compatibility != SaveManagerCompatibility::Direct &&
-                 assessment->compatibility != SaveManagerCompatibility::MigrationAvailable) ||
-                (assessment->integrity != SaveManagerIntegrity::Verified &&
-                 assessment->integrity != SaveManagerIntegrity::VerificationRequired))
-                return Result<void>::Failure(MakeError(SaveErrors::CommandIncompatible));
-            return Result<void>::Success();
+            return ValidateLoadAssessment(host_->assessments, target);
         }
         const SaveSlotKind kind = target.kind == SaveCommandKind::QuickSave ? SaveSlotKind::Quick : SaveSlotKind::Manual;
         if ((kind == SaveSlotKind::Manual && host_->quickSlot == target.slot) || (entry && entry->publication.kind != kind))
@@ -145,8 +153,8 @@ namespace Horo::Runtime {
         const auto count = std::ranges::count_if(host_->catalog.entries, [kind](const auto &candidate) {
             return candidate.publication.kind == kind;
         });
-        const auto capacity = policy_.Mode(Mode(target.kind))->rotation.maximumRetainedSlots;
-        if (count > capacity || (!entry && count >= capacity))
+        if (const auto capacity = policy_.Mode(Mode(target.kind))->rotation.maximumRetainedSlots;
+            count > capacity || (!entry && count >= capacity))
             return Result<void>::Failure(MakeError(SaveErrors::CommandTargetUnavailable));
         return Result<void>::Success();
     }
@@ -166,8 +174,7 @@ namespace Horo::Runtime {
             return Result<SaveCommandSubmission>::Failure(resolved.ErrorValue());
         const SaveCommandTarget target = std::move(resolved).Value();
         if (pending_) {
-            const auto snapshot = operation_.Snapshot();
-            if (snapshot && !snapshot->IsTerminal()) {
+            if (const auto snapshot = operation_.Snapshot(); snapshot && !snapshot->IsTerminal()) {
                 if (Equivalent(*pending_, target))
                     return Result<SaveCommandSubmission>::Success({SaveCommandDisposition::Coalesced, operation_, target});
                 return Result<SaveCommandSubmission>::Failure(MakeError(SaveErrors::OperationInProgress));
@@ -175,16 +182,16 @@ namespace Horo::Runtime {
             pending_.reset();
             operation_ = {};
         }
-        if (arbiter_->ActiveOperation() || arbiter_->QueuedCount() != 0)
+        if (arbiter_->ActiveOperation().has_value() || arbiter_->QueuedCount() != 0)
             return Result<SaveCommandSubmission>::Failure(MakeError(SaveErrors::OperationInProgress));
         const auto mode = Mode(request.kind);
         const auto &policy = *policy_.Mode(mode);
-        const auto &last = lastAdmission_[static_cast<std::size_t>(mode)];
-        if (last &&
+        if (const auto &last = lastAdmission_[static_cast<std::size_t>(mode)];
+            last.has_value() &&
             (host_->monotonicMilliseconds < *last || host_->monotonicMilliseconds - *last < policy.cooldown.minimumIntervalMilliseconds))
             return Result<SaveCommandSubmission>::Failure(MakeError(SaveErrors::CommandCooldown));
-        const auto confirmation = policy.presentation.confirmation;
-        if (request.confirmation != SaveCommandConfirmation::Confirmed &&
+        if (const auto confirmation = policy.presentation.confirmation;
+            request.confirmation != SaveCommandConfirmation::Confirmed &&
             (confirmation == SaveConfirmationPolicy::Always || (confirmation == SaveConfirmationPolicy::OnOverwrite && target.generation)))
             return Result<SaveCommandSubmission>::Success({SaveCommandDisposition::ConfirmationRequired, {}, target});
         auto admission = arbiter_->Admit({.operation = std::move(operation),
@@ -204,8 +211,8 @@ namespace Horo::Runtime {
     Result<SaveCommandTarget> SaveCommands::Revalidate(const OperationId operation) const {
         if (const auto owner = ValidateOwner(); owner.HasError())
             return Result<SaveCommandTarget>::Failure(owner.ErrorValue());
-        const auto snapshot = operation_.Snapshot();
-        if (!pending_ || !snapshot || snapshot->operation != operation || snapshot->IsTerminal())
+        if (const auto snapshot = operation_.Snapshot();
+            !pending_ || !snapshot || snapshot->operation != operation || snapshot->IsTerminal())
             return Result<SaveCommandTarget>::Failure(MakeError(SaveErrors::CommandInvalid));
         const auto &target = *pending_;
         const SaveCommandRequest request{.kind = target.kind,
