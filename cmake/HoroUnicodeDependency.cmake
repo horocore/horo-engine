@@ -27,6 +27,8 @@ function(horo_add_unicode_dependency)
         "${horo_icu_SOURCE_DIR}/source/stubdata/stubdata.cpp")
     add_library(HoroThirdParty::Unicode ALIAS HoroThirdPartyUnicode)
     target_compile_features(HoroThirdPartyUnicode PRIVATE cxx_std_20)
+    # ICU source literals use UTF-8 independently of the Windows host code page.
+    target_compile_options(HoroThirdPartyUnicode PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
     set_target_properties(HoroThirdPartyUnicode PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_include_directories(HoroThirdPartyUnicode SYSTEM PUBLIC "${horo_icu_SOURCE_DIR}/source/common")
     target_compile_definitions(HoroThirdPartyUnicode PUBLIC
