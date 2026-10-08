@@ -13,7 +13,8 @@ namespace Horo::WorldStreaming {
         using TestSupport::World;
 
         StreamingCellStabilityPolicy Policy(const std::uint64_t revision = 1, const std::uint32_t maximumTrackedCells = 8,
-                                            const std::uint64_t lingerMilliseconds = 5'000) {
+                                            const std::uint64_t lingerMilliseconds = 5'000, const std::uint64_t cooldownMilliseconds = 0,
+                                            const std::uint32_t thrashThreshold = 3) {
             StreamingCellStabilityPolicyRequest request{};
             request.id = IdentityFrom<StreamingCellStabilityPolicyId>(10);
             request.revision = IdentityFrom<StreamingCellStabilityPolicyRevision>(revision);
@@ -21,6 +22,8 @@ namespace Horo::WorldStreaming {
             request.exitMarginMillimeters = 200;
             request.lingerMilliseconds = lingerMilliseconds;
             request.maximumTrackedCells = maximumTrackedCells;
+            request.cooldownMilliseconds = cooldownMilliseconds;
+            request.thrashExitThreshold = thrashThreshold;
             return StreamingCellStabilityPolicy::Create(request).Value();
         }
 
@@ -111,7 +114,7 @@ namespace Horo::WorldStreaming {
             invalid.enterMarginMillimeters = -1;
             RequireError(StreamingCellStabilityPolicy::Create(invalid), WorldStreamingErrors::CellStabilityInvalid);
             invalid.enterMarginMillimeters = 0;
-            invalid.contractVersion = 2;
+            invalid.contractVersion = StreamingCellStabilityPolicyRequest::CurrentContractVersion + 1;
             RequireError(StreamingCellStabilityPolicy::Create(invalid), WorldStreamingErrors::CellStabilityUnsupported);
 
             const auto policy = Policy();
@@ -147,5 +150,171 @@ namespace Horo::WorldStreaming {
             REQUIRE(released.snapshot.phase == StreamingCellStabilityPhase::Unloaded);
             REQUIRE(released.lingerExpired);
         }
+
+        TEST_CASE("Thrashing arms metadata-only cooldown and admits at the exact deadline",
+                  "[unit][world_streaming][stability][cooldown]") {
+            const auto policy = Policy(1, 1, 100, 500, 2);
+            auto state = Decision(policy, Context(0), Observation(100));
+            state = Decision(policy, Context(10, 1), Observation(-201), state.snapshot);
+            REQUIRE(state.snapshot.boundaryExitCount == 1);
+            state = Decision(policy, Context(20, 1), Observation(100), state.snapshot);
+            state = Decision(policy, Context(30, 1), Observation(-201), state.snapshot);
+            REQUIRE(state.thrashing);
+            state = Decision(policy, Context(130, 1), Observation(-201), state.snapshot);
+            REQUIRE(state.lingerExpired);
+            REQUIRE(state.snapshot.phase == StreamingCellStabilityPhase::Cooldown);
+            REQUIRE(state.snapshot.retainedResidency == StreamingDesiredResidency::Unloaded);
+            state = Decision(policy, Context(629, 1), Observation(100), state.snapshot);
+            REQUIRE(state.cooldownHeld);
+            REQUIRE(state.snapshot.cooldownStartedAtServiceMilliseconds == 130);
+            state = Decision(policy, Context(630, 1), Observation(100), state.snapshot);
+            REQUIRE(state.snapshot.phase == StreamingCellStabilityPhase::Resident);
+            REQUIRE_FALSE(state.cooldownHeld);
+        }
+
+        TEST_CASE("Pins bypass cooldown while pressure never discards current demand",
+                  "[unit][world_streaming][stability][pressure][pin]") {
+            const auto policy = Policy(1, 1, 0, 500, 1);
+            const auto admitted = Decision(policy, Context(), Observation(100));
+            const auto cooling = Decision(policy, Context(1'001, 1), Observation(-201), admitted.snapshot);
+            auto context = Context(1'002, 1);
+            context.pressure = StreamingCellStabilityPressure::Critical;
+            auto pinned = Observation(-1'000);
+            pinned.pinnedResidencyFloor = StreamingDesiredResidency::Loaded;
+            const auto resumed = Decision(policy, context, pinned, cooling.snapshot);
+            REQUIRE(resumed.snapshot.phase == StreamingCellStabilityPhase::Resident);
+            REQUIRE_FALSE(resumed.pressureReleased);
+            REQUIRE(Decision(policy, context, Observation(100), resumed.snapshot).snapshot.phase == StreamingCellStabilityPhase::Resident);
+        }
+
+        TEST_CASE("Pressure caps linger from its original origin and critical pressure releases immediately",
+                  "[unit][world_streaming][stability][pressure]") {
+            const auto policy = Policy();
+            const auto admitted = Decision(policy, Context(), Observation(100));
+            const auto lingering = Decision(policy, Context(2'000, 1), Observation(-201), admitted.snapshot);
+            auto elevated = Context(2'999, 1);
+            elevated.pressure = StreamingCellStabilityPressure::Elevated;
+            const auto held = Decision(policy, elevated, Observation(-201), lingering.snapshot);
+            REQUIRE(held.snapshot.phase == StreamingCellStabilityPhase::Lingering);
+            elevated.serviceTimeMilliseconds = 3'000;
+            const auto released = Decision(policy, elevated, Observation(-201), held.snapshot);
+            REQUIRE(released.snapshot.phase == StreamingCellStabilityPhase::Unloaded);
+            REQUIRE(released.pressureReleased);
+            auto critical = Context(2'001, 1);
+            critical.pressure = StreamingCellStabilityPressure::Critical;
+            REQUIRE(Decision(policy, critical, Observation(-201), lingering.snapshot).pressureReleased);
+        }
+
+        TEST_CASE("Thrash windows reset exactly and repeated linger observations do not count exits",
+                  "[unit][world_streaming][stability][thrash]") {
+            const auto policy = Policy(1, 8, 60'000, 500, 2);
+            auto state = Decision(policy, Context(0), Observation(100));
+            state = Decision(policy, Context(10, 1), Observation(-201), state.snapshot);
+            state = Decision(policy, Context(20, 1), Observation(-201), state.snapshot);
+            REQUIRE(state.snapshot.boundaryExitCount == 1);
+            state = Decision(policy, Context(30'010, 1), Observation(100), state.snapshot);
+            REQUIRE(state.snapshot.boundaryExitCount == 0);
+            state = Decision(policy, Context(30'011, 1), Observation(-201), state.snapshot);
+            REQUIRE(state.snapshot.boundaryExitCount == 1);
+            REQUIRE_FALSE(state.thrashing);
+        }
+
+        TEST_CASE("Cooldown expires without demand and does not require overflowing absolute deadlines",
+                  "[unit][world_streaming][stability][cooldown][boundary]") {
+            const auto policy = Policy(1, 1, 0, 500, 1);
+            const auto maximum = std::numeric_limits<std::uint64_t>::max();
+            const auto admitted = Decision(policy, Context(maximum - 600), Observation(100));
+            const auto cooling = Decision(policy, Context(maximum - 500, 1), Observation(-201), admitted.snapshot);
+            REQUIRE(Decision(policy, Context(maximum - 1, 1), Observation(100), cooling.snapshot).cooldownHeld);
+            const auto absent =
+                Decision(policy, Context(maximum, 1), Observation(-201, StreamingDesiredResidency::Unloaded), cooling.snapshot);
+            REQUIRE(absent.snapshot.phase == StreamingCellStabilityPhase::Unloaded);
+            REQUIRE_FALSE(absent.lingerExpired);
+        }
+
+        TEST_CASE("Pressure and cooldown validate hostile facts without changing prior snapshots",
+                  "[unit][world_streaming][stability][failure]") {
+            auto request = StreamingCellStabilityPolicyRequest{};
+            request.id = IdentityFrom<StreamingCellStabilityPolicyId>(10);
+            request.revision = IdentityFrom<StreamingCellStabilityPolicyRevision>(1);
+            request.cooldownMilliseconds = StreamingCellStabilityPolicyRequest::MaximumLingerMilliseconds + 1;
+            RequireError(StreamingCellStabilityPolicy::Create(request), WorldStreamingErrors::CellStabilityInvalid);
+            request.cooldownMilliseconds = 0;
+            request.thrashWindowMilliseconds = 0;
+            RequireError(StreamingCellStabilityPolicy::Create(request), WorldStreamingErrors::CellStabilityInvalid);
+            request.thrashWindowMilliseconds = 1;
+            request.thrashExitThreshold = 0;
+            RequireError(StreamingCellStabilityPolicy::Create(request), WorldStreamingErrors::CellStabilityInvalid);
+            const auto policy = Policy(1, 1, 0, 500, 1);
+            const auto admitted = Decision(policy, Context(), Observation(100));
+            const auto cooling = Decision(policy, Context(1'001, 1), Observation(-201), admitted.snapshot);
+            const auto original = cooling.snapshot;
+            auto invalid = Context(1'002, 1);
+            invalid.pressure = StreamingCellStabilityPressure::Count;
+            RequireError(EvaluateStreamingCellStability(policy, invalid, Observation(100), original),
+                         WorldStreamingErrors::CellStabilityUnsupported);
+            invalid = Context(1'000, 1);
+            RequireError(EvaluateStreamingCellStability(policy, invalid, Observation(100), original),
+                         WorldStreamingErrors::CellStabilityStale);
+            invalid = Context(1'002, 1);
+            invalid.lifecycle = StreamingCellStabilityLifecycle::Cancelling;
+            RequireError(EvaluateStreamingCellStability(policy, invalid, Observation(100), original),
+                         WorldStreamingErrors::CellStabilityLifecycleUnavailable);
+            invalid.lifecycle = StreamingCellStabilityLifecycle::Active;
+            invalid.epoch = IdentityFrom<PartitionEpoch>(5);
+            RequireError(EvaluateStreamingCellStability(policy, invalid, Observation(100), original),
+                         WorldStreamingErrors::CellStabilityStale);
+            REQUIRE(cooling.snapshot == original);
+        }
+
+        TEST_CASE("Actual releases retain bounded history until cooldown arms or the window expires",
+                  "[unit][world_streaming][stability][thrash][lifecycle]") {
+            const auto policy = Policy(1, 1, 0, 500, 2);
+            auto state = Decision(policy, Context(0), Observation(100));
+            state = Decision(policy, Context(10, 1), Observation(-201), state.snapshot);
+            REQUIRE(state.snapshot.phase == StreamingCellStabilityPhase::Watching);
+            REQUIRE(state.snapshot.retainedResidency == StreamingDesiredResidency::Unloaded);
+            REQUIRE(state.snapshot.boundaryExitCount == 1);
+            const auto original = state.snapshot;
+            auto closed = Context(11, 1);
+            closed.lifecycle = StreamingCellStabilityLifecycle::Closed;
+            RequireError(EvaluateStreamingCellStability(policy, closed, Observation(100), original),
+                         WorldStreamingErrors::CellStabilityLifecycleUnavailable);
+            auto malformed = original;
+            malformed.retainedResidency = StreamingDesiredResidency::Loaded;
+            RequireError(EvaluateStreamingCellStability(policy, Context(11, 1), Observation(100), malformed),
+                         WorldStreamingErrors::CellStabilityStale);
+            state = Decision(policy, Context(20, 1), Observation(100), state.snapshot);
+            REQUIRE(state.snapshot.phase == StreamingCellStabilityPhase::Resident);
+            state = Decision(policy, Context(30, 1), Observation(-201), state.snapshot);
+            REQUIRE(state.snapshot.phase == StreamingCellStabilityPhase::Cooldown);
+            REQUIRE(state.thrashing);
+            REQUIRE(Decision(policy, Context(31, 1), Observation(100), state.snapshot).cooldownHeld);
+
+            auto waiting = Decision(policy, Context(30'009, 1), Observation(-201, StreamingDesiredResidency::Unloaded), original);
+            REQUIRE(waiting.snapshot.phase == StreamingCellStabilityPhase::Watching);
+            waiting = Decision(policy, Context(30'010, 1), Observation(-201, StreamingDesiredResidency::Unloaded), waiting.snapshot);
+            REQUIRE(waiting.snapshot.phase == StreamingCellStabilityPhase::Unloaded);
+            REQUIRE(waiting.snapshot.boundaryExitCount == 0);
+            REQUIRE_FALSE(waiting.thrashing);
+        }
+
+        TEST_CASE("Linger outliving the thrash window releases without empty watching metadata",
+                  "[unit][world_streaming][stability][thrash][boundary]") {
+            const auto policy = Policy(1, 1, 60'000, 500, 2);
+            auto state = Decision(policy, Context(0), Observation(100));
+            state = Decision(policy, Context(10, 1), Observation(-201), state.snapshot);
+            REQUIRE(state.snapshot.boundaryExitCount == 1);
+            state = Decision(policy, Context(30'010, 1), Observation(-201), state.snapshot);
+            REQUIRE(state.snapshot.phase == StreamingCellStabilityPhase::Lingering);
+            REQUIRE(state.snapshot.boundaryExitCount == 0);
+            REQUIRE(state.snapshot.lingerStartedAtServiceMilliseconds == 10);
+            state = Decision(policy, Context(60'010, 1), Observation(-201), state.snapshot);
+            REQUIRE(state.snapshot.phase == StreamingCellStabilityPhase::Unloaded);
+            REQUIRE(state.lingerExpired);
+            REQUIRE_FALSE(state.thrashing);
+            REQUIRE_FALSE(state.cooldownHeld);
+        }
+
     }  // namespace
 }  // namespace Horo::WorldStreaming
