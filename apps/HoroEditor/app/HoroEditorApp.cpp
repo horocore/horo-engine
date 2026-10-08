@@ -3,6 +3,7 @@
 #include "EditorUserStateMigration.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/HostObservability.h"
+#include "Horo/Application/NetworkDebugger.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Editor/DefaultScreenFactories.h"
@@ -1184,6 +1185,7 @@ namespace Horo::Editor {
             Extensions::ExtensionMarketplaceService extensionMarketplace{p.background.jobs, extensionInventory,
                                                                          Extensions::ExtensionMarketplaceService::DefaultRegistryUrl()};
             PfdNativeDialogs nativeDialogs;
+            Application::NetworkDebuggerService networkDebugger;
             GuiScreenHost screenHost{guiContext,
                                      GuiScreenHostComposition{.modalHost = p.modalHost,
                                                               .settingsService = p.settings,
@@ -1217,6 +1219,9 @@ namespace Horo::Editor {
             screenHost.Services().Register<OperationStore>(p.operationServices.operationStore);
             screenHost.Services().RegisterConst<IOperationQuery>(p.operationServices.operationStore);
             screenHost.Services().Register<IOperationControl>(p.operationServices.operationStore);
+            screenHost.Services().Register<Application::NetworkDebuggerService>(networkDebugger);
+            screenHost.Services().RegisterConst<Application::INetworkDebuggerQuery>(networkDebugger);
+            screenHost.Services().Register<Application::INetworkDebuggerControl>(networkDebugger);
             if (const auto started = screenHost.Start(std::move(p.initialRoute)); started.HasError()) {
                 LOG_ERROR("editor.screens", "Initial screen startup failed: %s", started.ErrorValue().message.c_str());
                 screenHost.RequestFatalShutdown();

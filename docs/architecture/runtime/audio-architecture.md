@@ -2803,3 +2803,49 @@ or feature plan must be updated in the same change.
 - [Observability Metrics And Profiling](../observability/observability-performance.md)
 - [XR Architecture](./vr-ar-architecture.md)
 - [Editor AI Agent Architecture](../editor/editor-ai-agent-architecture.md)
+
+### Deterministic physical voice admission (AUD-003.5)
+
+`EvaluateAudioVoiceAdmission` in AudioApi consumes a complete, strictly
+handle-ordered runtime projection and up to eight applicable concurrency buckets.
+These include both authored groups and source-local limits; neither overrides the
+other. Each bucket state must match the global registry projection. The exclusive
+Audio control owner evaluates and commits one request before evaluating another.
+The evaluator retains no spans and creates, stops, releases or renders no voice.
+Valid evaluation allocates nothing. Validation is linear per bucket; victim
+selection is bounded by voice count times bucket count times log(bucket size).
+
+Created/Ready/Scheduled reservations and Stopping work can hold physical capacity;
+Virtual states cannot hold physical reservations. Terminal states may retain a
+physical reservation until render retirement; they cannot be stolen. Paused
+reservations are explicit. Native
+voices and event proxy reservations occupy the same physical budget; protected
+proxy owners set `stealable=false`. Terminal slots remain owned until normal
+reconciliation. A replacement decision does not authorize premature reuse of
+in-flight render storage: control schedules the selected victim's stop and waits
+for detachment/retirement before realizing the replacement.
+
+At a full ceiling, Reject rejects the incoming request; Allow also respects the
+ceiling. Oldest and Replace select minimum admission order. Quietest selects
+minimum effective post-attenuation gain; LowestPriority selects minimum priority;
+Furthest selects maximum distance in a common frame. Ties use minimum admission
+order, then the complete generation-safe handle. Stopping, terminal and protected
+voices are never victims. A victim must free *every* saturated bucket and, when
+physical capacity is full, a physical reservation. If no single victim can do so,
+the request rejects. A lowered budget already exceeded rejects until reconciled.
+Cooldown rejects even when the instance limit is simultaneously full. Every
+normal result carries exactly one reason and only replacement carries a victim.
+
+Virtualize permits virtual admission only when physical capacity is the sole
+restriction. It never evades a counted-instance limit or cooldown. AUD-003.6 owns
+virtual cursor advancement and realization; AUD-016.6 owns middleware state and
+full-replacement exceptions. Neither provider may silently exceed this shared
+budget. No middleware exception is implicit in the evaluator.
+
+Migration: concurrency enum values 0 through 4 retain their meanings. The old
+`StealLowestPriority` alias incorrectly serialized as quietest; existing persisted
+`steal_quietest` continues to mean quietest. Recompiled callers using the priority
+name now receive distinct priority behavior (value 5). Scene source parsing and
+writing support `steal_lowest_priority`, `steal_furthest` and `replace` explicitly.
+The additive admission header is owned by AudioApi and covered by its generated
+public-header consumer. Existing registry and eligibility callers are unchanged.

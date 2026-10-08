@@ -5,6 +5,7 @@
  * @brief Isolated editor play-session state machine and runtime-scene ownership.
  */
 
+#include "Horo/Application/NetworkDebugger.h"
 #include "Horo/Gameplay/BehaviorRuntime.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "editor/document/RuntimeSceneConversion.h"
@@ -33,6 +34,15 @@ namespace Horo::Editor {
     /** @brief Owns a runtime clone and gameplay runner without mutating its authoring document. */
     class EditorPlaySessionController final {
     public:
+        /** @brief Borrows optional host diagnostics for the complete Play controller lifetime.
+         * @param debugger Host service; must outlive this controller. */
+        explicit EditorPlaySessionController(Application::NetworkDebuggerService *debugger = nullptr) noexcept : debugger_(debugger) {}
+
+        /** @brief Stops publication before releasing the clone. */
+        ~EditorPlaySessionController() {
+            Stop();
+        }
+
         /** @brief Creates and starts an isolated runtime clone from one committed authoring snapshot. */
         [[nodiscard]] Result<void> Start(const SceneDocumentSnapshot &authoring, const Gameplay::BehaviorRegistry &registry,
                                          std::unique_ptr<Runtime::RuntimeScene> preparedScene = nullptr);
@@ -94,6 +104,8 @@ namespace Horo::Editor {
     private:
         void Fail(Error error) noexcept;
 
+        Application::NetworkDebuggerService *debugger_{};
+        std::uint64_t diagnosticGeneration_{};
         EditorPlaySessionState state_{EditorPlaySessionState::Idle};
         std::unique_ptr<Runtime::RuntimeScene> scene_;
         std::unique_ptr<Gameplay::BehaviorRuntime> behaviors_;

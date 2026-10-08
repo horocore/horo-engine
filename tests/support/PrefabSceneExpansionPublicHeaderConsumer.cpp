@@ -55,5 +55,9 @@ int main() {
     auto expanded = Prefab::ExpandPrefabSceneSubtree(candidate.Value(), identities.Value(), projections, {}, limits.Value());
     if (expanded.HasError())
         return 7;
+    if (expanded.Value().ValidatePublication(asset, resolver.Value(), {}, limits.Value()).HasError())
+        return 9;
+    if (candidate.Value().Revision().dependencies.size() != 1)
+        return 10;
     return VerifyDefinition(expanded.Value());
 }

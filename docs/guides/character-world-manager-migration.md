@@ -73,6 +73,29 @@ material generations after reload or shutdown. Physical references are not
 semantic surface IDs. The ADR-181 semantic producer/catalog remains a separate
 unimplemented prerequisite; do not infer surfaces from material names or media.
 
+## Bottom-preserving resize (CHR-003.2)
+
+Named stance and explicit capsule replacements now preserve the bottom point along
+the descriptor's owned up axis. The collision-root center shifts by the difference
+in capsule total half-extents. This intentionally replaces the CHR-003.1 center-fixed
+behavior without adding a second resize authority or changing request layout.
+Consumers of `CharacterMovementRequest` must read the committed transform and
+effective capsule together; do not retain the pre-resize center for Scene or camera
+publication. Achieved velocity describes locomotion and excludes the resize shift.
+Clearance checks the shifted candidate, including shrink, before any publication.
+Blocked/invalid outcomes keep the previous capsule, stance and resize center; query
+failure aborts the entire attempted tick. Keep never retries a blocked Stand.
+
+For production clearance, acquire `CharacterClearanceQuery` from the host's
+`GameplayPhysicsContext::AcquireCharacterClearance` (or capture a directly
+host-admitted Physics capability). Supply the exact operation expectations and
+Physics publication revision, then keep the returned adapter stationary while
+passing its `Context()` to the synchronous Character call. Its query constructs an
+analytic capsule without installing fixture bodies. Revocation and world retirement
+remain capability failures; never replace them with a clear fallback. It supplies
+no penetration recovery for an overlapping spawn. The new header belongs solely
+to `HoroEngine::Physics`; clients of the extended `PhysicsQueryGeometry` variant
+must rebuild and account for the analytic alternative in exhaustive visitors.
 ## Collision filtering migration
 
 The additive `CharacterCollisionSelectors` fields on controller descriptors and
@@ -126,3 +149,29 @@ Unknown policy discriminators fail descriptor admission.
 The descriptor remains owned by Physics and passes unchanged through CharacterWorld
 creation; no native or Gameplay dependencies or header ownership changes are needed.
 Custom result producers remain responsible for coherent ground evidence.
+
+## Current Physics query publication
+
+`CharacterWorld::RefreshPhysicsSnapshot(world, revision)` explicitly admits the paired
+Physics world's current publication between owner-thread Character operations. Prepare
+with the actual Physics revision and refresh after a Physics tick or fixture mutation,
+before capturing the next query adapter. Pass the exact paired world identity and
+`PhysicsWorld::PublishedTick().publicationRevision`; do not infer a revision from an
+untrusted adapter. Zero, backward, foreign-world, retired-world and reentrant updates
+fail without changing the admitted revision or controller state. Retained adapters
+continue to fail exact-snapshot validation after a refresh or Physics publication.
+The owner generations and settings remain fixed. `Descriptor()` now reports the latest
+explicitly admitted revision; its borrowed view is for owner-thread use. This additive
+C++ API requires rebuilding consumers; it changes no request layout or C ABI.
+
+## Clearance metadata borrowing
+
+`CharacterClearanceQuery::Capture` and
+`GameplayPhysicsContext::AcquireCharacterClearance` now take
+`const CharacterPhysicsQueryExpectations&`. The borrow lasts only for the call;
+the returned adapter owns a value copy, so destroying or modifying caller metadata
+cannot alter a captured operation. Ordinary calls remain source-compatible, while
+function-pointer declarations must match the new signature and C++ consumers must
+rebuild. There is no request-layout or C ABI change. The erased overlap callback
+only dispatches to a typed const probe; capability identity, filtering and revocation
+checks remain in that probe.

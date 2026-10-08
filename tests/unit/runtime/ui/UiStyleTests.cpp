@@ -3,9 +3,11 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <cstdint>
 #include <limits>
 #include <utility>
+#include <vector>
 
 namespace Horo::Runtime::Ui {
     namespace {
@@ -118,6 +120,26 @@ namespace Horo::Runtime::Ui {
                 if (value.property == property)
                     return &value;
             return nullptr;
+        }
+
+        /** @brief Authored assignment locations that must be admitted before selecting any visual state. */
+        enum class AssignmentScope {
+            Asset,
+            AssetState,
+            Class,
+            ClassState
+        };
+
+        /** @brief Selects the requested declaration list, creating an inactive state when needed. */
+        std::vector<UiStyleAssignment> &Assignments(UiStyleRegistryDefinition &definition, const AssignmentScope scope) {
+            auto &asset = definition.assets.front();
+            if (scope == AssignmentScope::Asset)
+                return asset.assignments;
+            if (scope == AssignmentScope::Class)
+                return asset.classes.front().assignments;
+            auto &states = scope == AssignmentScope::AssetState ? asset.states : asset.classes.front().states;
+            states.push_back({UiVisualStateMask{UiVisualState::Hovered}, {}, UiStateLayer::Pointer, {}});
+            return states.back().assignments;
         }
 
         void RequireError(const auto &result, const ErrorCodeDescriptor &expected) {
@@ -434,6 +456,45 @@ namespace Horo::Runtime::Ui {
 
             definition = Definition();
             definition.assets[0].tokens[1].category = UiStyleValueCategory::Dimension;
+            RequireError(RuntimeStyleRegistry::Create(std::move(definition), Rev<RuntimeStyleGeneration>(1)), UiErrors::StyleTypeMismatch);
+        }
+
+        TEST_CASE("Runtime style admission rejects dangling assignments in every authored scope", "[runtime_ui][style][failure]") {
+            const auto scope =
+                GENERATE(AssignmentScope::Asset, AssignmentScope::AssetState, AssignmentScope::Class, AssignmentScope::ClassState);
+            auto definition = Definition();
+            auto invalid = Assignment(Property(1), UiStyleValue{Color(0.2F, 0.3F, 0.4F)});
+            SECTION("missing property") {
+                invalid.property = Property(99);
+            }
+            SECTION("missing token") {
+                invalid.value = UiStyleValueSource::Token({Asset(10), Token(99)});
+            }
+            SECTION("missing token namespace") {
+                invalid.value = UiStyleValueSource::Token({Asset(99), Token(1)});
+            }
+            Assignments(definition, scope).push_back(std::move(invalid));
+            RequireError(RuntimeStyleRegistry::Create(std::move(definition), Rev<RuntimeStyleGeneration>(1)),
+                         UiErrors::StyleReferenceInvalid);
+        }
+
+        TEST_CASE("Runtime style admission rejects incompatible assignments before inactive states are selected",
+                  "[runtime_ui][style][failure]") {
+            const auto scope =
+                GENERATE(AssignmentScope::Asset, AssignmentScope::AssetState, AssignmentScope::Class, AssignmentScope::ClassState);
+            auto definition = Definition();
+            auto invalid = Assignment(Property(1), UiStyleValue{Color(0.2F, 0.3F, 0.4F)});
+            SECTION("literal category") {
+                invalid.value = UiStyleValueSource::Literal(UiStyleDimension{8});
+            }
+            SECTION("token category") {
+                invalid.property = Property(2);
+                invalid.value = UiStyleValueSource::Token({Asset(10), Token(1)});
+            }
+            SECTION("scalar range") {
+                invalid = Assignment(Property(4), UiStyleValue{UiStyleScalar{2.0F}});
+            }
+            Assignments(definition, scope).push_back(std::move(invalid));
             RequireError(RuntimeStyleRegistry::Create(std::move(definition), Rev<RuntimeStyleGeneration>(1)), UiErrors::StyleTypeMismatch);
         }
 

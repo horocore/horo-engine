@@ -9,6 +9,7 @@
 #include <new>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 
 namespace Horo::Runtime {
@@ -269,15 +270,41 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeSceneService::QueueStructuralCommands */
     Result<void> RuntimeSceneService::QueueStructuralCommands(SceneCommandBuffer commands) {
+        if (shutdown_)
+            return Result<void>::Failure(MakeError(SceneErrors::ServiceShutdown));
         if (!active_.scene)
             return Result<void>::Failure(MakeError(SceneErrors::NoActiveScene));
         if (mutatingLifecycle_ || transition_ != TransitionKind::None || structuralCommands_ || preparation_)
             return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
+        const LifecycleMutation mutation{*this};
         const auto revision = assetRegistry_ ? assetRegistry_->Snapshot().Revision() : Assets::AssetRegistryRevision{};
         if (auto admission = commands.ValidateAdmission(active_.scene->View().RuntimeId(), revision); admission.HasError())
             return admission;
         if (!commands.Empty())
             structuralCommands_ = std::move(commands);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc RuntimeSceneService::CancelPendingBaseline */
+    Result<void> RuntimeSceneService::CancelPendingBaseline(const SceneRuntimeId scene, const SceneDefinitionId baseline,
+                                                            const SceneBaselineOwnership &ownership) {
+        if (mutatingLifecycle_)
+            return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
+        if (!active_.scene || active_.scene->runtimeId_ != scene || !structuralCommands_ || structuralCommands_->commands_.size() != 1)
+            return Result<void>::Failure(MakeError(SceneErrors::BaselineStale));
+        if (const bool matches = std::visit(
+                [&]<typename T>(const T &command) {
+            if constexpr (std::is_same_v<T, SceneCommandBuffer::AttachBaselineCommand>)
+                return command.definition.Id() == baseline && command.ownership->MatchesOperation(ownership);
+            else if constexpr (std::is_same_v<T, SceneCommandBuffer::DetachBaselineCommand>)
+                return command.id == baseline && command.ownership->MatchesOperation(ownership);
+            else
+                return false;
+        }, structuralCommands_->commands_.front());
+            !matches)
+            return Result<void>::Failure(MakeError(SceneErrors::BaselineStale));
+        const LifecycleMutation mutation{*this};
+        structuralCommands_.reset();
         return Result<void>::Success();
     }
 

@@ -174,4 +174,30 @@ TEST_CASE("Retained pending and completed Physics batches preserve first termina
     Physics::Test::RequireError(pending.Poll(), PhysicsErrors::CapabilityRevoked);
     REQUIRE(completed.Poll().Value() == committed);
 }
+
+TEST_CASE("Production Character clearance capture retains module permission and exact world admission", "[gameplay-physics][stance]") {
+    using namespace Horo::Character;
+    auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+    auto world = runtime->PrepareWorld(Physics::Test::SmallWorldSettings()).Value();
+    Activate(*world, 306);
+    auto context = GameplayPhysicsContext::Create(Binding(*world), world.get()).Value();
+    const CharacterPhysicsQueryExpectations expected{7, CharacterWorldId::Create(1).Value(),       world->Identity(), 1, 1,
+                                                     1, world->PublishedTick().publicationRevision};
+    auto borrowed = expected;
+    auto retained = context->AcquireCharacterClearance("game.tests", 7, borrowed).Value();
+    borrowed = {};
+    REQUIRE(ValidateCharacterPhysicsQueryContext(retained.Context(), expected).HasValue());
+    Physics::Test::RequireError(context->AcquireCharacterClearance("game.other", 7, expected), GameplayErrors::PhysicsPermissionDenied);
+    auto foreign = expected;
+    foreign.physicsWorld = PhysicsWorldId::Create(307).Value();
+    Physics::Test::RequireError(context->AcquireCharacterClearance("game.tests", 7, foreign), PhysicsErrors::HandleWorldMismatch);
+    foreign = expected;
+    foreign.characterWorld = {};
+    Physics::Test::RequireError(context->AcquireCharacterClearance("game.tests", 7, foreign), CharacterErrors::WorldInvalid);
+    foreign = expected;
+    ++foreign.sceneGeneration;
+    Physics::Test::RequireError(context->AcquireCharacterClearance("game.tests", 7, foreign), PhysicsErrors::HandleWorldMismatch);
+    context->Revoke();
+    Physics::Test::RequireError(context->AcquireCharacterClearance("game.tests", 7, expected), PhysicsErrors::CapabilityRevoked);
+}
 #endif

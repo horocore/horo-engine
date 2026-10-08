@@ -51,7 +51,10 @@ namespace Horo::Runtime::Ui {
                     storage->flattenedTokens.push_back({{asset.id, token.id}, std::move(resolved).Value()});
                 }
             }
-            return Result<RuntimeStyleRegistry>::Success(RuntimeStyleRegistry{std::move(storage)});
+            RuntimeStyleRegistry registry{std::move(storage)};
+            if (const auto valid = StyleInternal::ValidateRegistryAssignments(registry); valid.HasError())
+                return Result<RuntimeStyleRegistry>::Failure(valid.ErrorValue());
+            return Result<RuntimeStyleRegistry>::Success(std::move(registry));
         } catch (const std::bad_alloc &) {
             return StyleInternal::Failure<RuntimeStyleRegistry>(UiErrors::CapacityExceeded);
         }

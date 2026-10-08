@@ -132,7 +132,7 @@ namespace Horo::Application::Internal {
         /** @brief Reverse shutdown on every terminal path; borrowed adapters are destroyed first. */
         struct HostSession final {
             std::unique_ptr<ModuleHost> modules;
-            std::unique_ptr<HostObservabilitySession> observability;
+            std::shared_ptr<HostObservabilitySession> observability;
             std::unique_ptr<Runtime::SaveTelemetryRegistration> saveTelemetry;
             std::unique_ptr<Extensions::HeadlessExtensionHost> extensions;
 
@@ -205,9 +205,10 @@ namespace Horo::Application::Internal {
             auto configuration = Configuration();
             if (configuration.HasError())
                 return CompleteError(presenter, configuration.ErrorValue());
-            auto admitted =
-                CliDispatcher::Create(std::move(registry), HostCommandAdapters(descriptors, *session.observability, {}),
-                                      {.activeHost = CliHostKind::HoroEngine, .maximumSideEffects = CliSideEffectPolicy::WritesFiles});
+            auto admitted = CliDispatcher::Create(std::move(registry), HostCommandAdapters(descriptors, session.observability, {}),
+                                                  {.activeHost = CliHostKind::HoroEngine,
+                                                   .maximumSideEffects = CliSideEffectPolicy::WritesFiles,
+                                                   .grantedCapabilities = {{"horo.mcp.serve"}, {"horo.observability.smoke"}}});
             if (admitted.HasError())
                 return CompleteError(presenter, admitted.ErrorValue());
             CliDispatcher dispatcher = std::move(admitted).Value();
@@ -230,7 +231,9 @@ namespace Horo::Application::Internal {
         const auto normalized = NormalizeArguments(arguments);
         NativePathNormalizer paths;
         auto registry =
-            CliCommandRegistry::Create(descriptors, {.activeHost = CliHostKind::HoroEngine, .supportedContractVersion = {1, 0, 0}});
+            CliCommandRegistry::Create(descriptors, {.activeHost = CliHostKind::HoroEngine,
+                                                     .supportedContractVersion = {1, 0, 0},
+                                                     .grantedCapabilities = {{"horo.mcp.serve"}, {"horo.observability.smoke"}}});
         const CliCommandDescriptor *selected = nullptr;
         auto parsed = [&]() {
             if (admissionFailure)
@@ -241,8 +244,10 @@ namespace Horo::Application::Internal {
         }();
         if (parsed.HasValue())
             selected = registry.Value().Find(parsed.Value().command);
-        CliOutputPresenter presenter(selected == nullptr ? InvocationDescriptor() : *selected, {1}, std::move(*translator), output,
-                                     diagnostics, RequestedMode(arguments), terminal);
+        const bool protocol = normalized.size() >= 2 && normalized[0] == "mcp" && normalized[1] == "serve";
+        // Even syntax/startup failures use stderr once stdio protocol ownership is requested.
+        CliOutputPresenter presenter(selected == nullptr ? InvocationDescriptor() : *selected, {1}, std::move(*translator),
+                                     protocol ? diagnostics : output, diagnostics, RequestedMode(arguments), terminal);
         if (parsed.HasError())
             return presenter.Complete(CliTerminalResult::Failure({.invocation = {1}}, parsed.ErrorValue())).exitCode;
         if (parsed.Value().command.segments == std::vector<std::string>{"host", "help"})

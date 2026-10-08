@@ -115,6 +115,58 @@ namespace Horo::Runtime {
                                                                const WorldStreaming::StreamingFence &fence) const = 0;
     };
 
+    /** @brief Complete immutable owner evidence and explicit resident limits for a cell attachment. */
+    struct SceneCellAttachmentRequest final {
+        SceneRuntimeId runtime; /**< Receiving canonical domain; never a candidate runtime ID. */
+        WorldStreaming::StreamingFence fence;
+        Assets::AssetRegistryRevision registry;
+        SceneBaselineAttachmentLimits limits;
+        SceneDefinitionRevision expectedRevision; /**< Zero requires absence; otherwise exact replacement revision. */
+        CancellationToken cancellation;
+        CancellationToken ownerCancellation;
+    };
+
+    /** @brief Finds exact committed cell ownership in an immutable Scene view.
+     * @param scene Borrowed canonical Scene publication. @param identity Exact durable content publication.
+     * @param epoch Exact mounted partition incarnation.
+     * @return Borrowed ownership only for the matching cell, content revision and partition incarnation.
+     */
+    [[nodiscard]] std::optional<SceneBaselineAttachmentView> FindRuntimeSceneCellAttachment(RuntimeSceneView scene,
+                                                                                            const SceneCellPayloadIdentity &identity,
+                                                                                            WorldStreaming::PartitionEpoch epoch) noexcept;
+
+    /** @brief Cancels only the exact pending cell operation; published resident state is preserved.
+     * @param service Canonical Scene owner. @param identity Captured pending content identity and revision.
+     * @param request Captured runtime and complete residency attempt fence.
+     * @return Success or typed stale/foreign-operation rejection without cancelling another attempt.
+     */
+    [[nodiscard]] Result<void> CancelRuntimeSceneCellOperation(RuntimeSceneService &service, const SceneCellPayloadIdentity &identity,
+                                                               const SceneCellAttachmentRequest &request);
+
+    /** @brief Attaches or replaces an independent cell through the canonical Scene structural transaction.
+     * @param service Existing canonical world Scene service. @param payload Complete immutable CoreEcs baseline.
+     * @param request Exact runtime/residency/catalog/cancellation evidence and positive aggregate ceilings.
+     * @param resources Prepared named artifact closure in payload dependency order, consumed on admission.
+     * @param authority Non-null shared owner lease validating complete provider readiness and full residency fence.
+     * @return Typed admission result; safe-point failures reach TakeOperationError without partial ownership.
+     * @details Baseline Scene IDs and authored object IDs must be unique in the final world. Assets/provider work is
+     * prepared by existing owners; this seam performs no I/O or backend discovery. Caller content may retire after return.
+     */
+    [[nodiscard]] Result<void> QueueRuntimeSceneCellAttachment(RuntimeSceneService &service, const RuntimeSceneCellPayload &payload,
+                                                               const SceneCellAttachmentRequest &request,
+                                                               std::vector<RuntimeGroupAssetLease> resources,
+                                                               std::shared_ptr<const SceneCellPayloadAuthority> authority);
+
+    /** @brief Retires exactly one attached baseline at the canonical Scene safe point.
+     * @param service Canonical Scene owner. @param identity Exact committed baseline identity and revision.
+     * @param request Current canonical runtime/residency/catalog/cancellation evidence.
+     * @param authority Retained owner lease revalidated immediately before publication.
+     * @return Typed result; stale revision, cancellation and outside hierarchy dependencies preserve the complete cell.
+     */
+    [[nodiscard]] Result<void> QueueRuntimeSceneCellDetachment(RuntimeSceneService &service, const SceneCellPayloadIdentity &identity,
+                                                               const SceneCellAttachmentRequest &request,
+                                                               std::shared_ptr<const SceneCellPayloadAuthority> authority);
+
     /**
      * @brief Queues a source-free baseline through RuntimeSceneService's existing detached aggregate preparation.
      * @param service Scene owner for this cell candidate; this replaces that domain, never merges into an unrelated scene.

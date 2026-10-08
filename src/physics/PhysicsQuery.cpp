@@ -1,6 +1,7 @@
 #include "Horo/Physics/PhysicsQuery.h"
 
 #include "Horo/Physics/PhysicsErrors.h"
+#include "Horo/Physics/PhysicsWorldSettings.h"
 
 #include <algorithm>
 #include <cmath>
@@ -47,11 +48,18 @@ namespace Horo::Physics {
             return ValidatePhysicsPose(query.pose);
         }
 
-        /** @brief Validates inline capsule dimensions, origin and its explicit unit up axis. */
+        /** @brief Validates transient capsule dimensions, owned up basis and local position before native construction. */
         [[nodiscard]] Result<void> ValidateGeometry(const PhysicsCapsuleOverlapQuery &query, const PhysicsWorldId) {
-            if (!Math::IsFinite(query.position) || !IsUnitDirection(query.up))
+            if (const auto shape = ValidatePhysicsShapeDescriptor(PhysicsShapeDescriptor{query.capsule}); shape.HasError())
+                return shape;
+            if (!Math::IsFinite(query.position) || !IsUnitDirection(query.up) ||
+                std::abs(query.position.x) > MaximumPhysicsLocalHalfExtentMeters ||
+                std::abs(query.position.y) > MaximumPhysicsLocalHalfExtentMeters ||
+                std::abs(query.position.z) > MaximumPhysicsLocalHalfExtentMeters ||
+                static_cast<double>(query.capsule.radiusMeters) + query.capsule.cylindricalHalfHeightMeters >
+                    MaximumPhysicsLocalHalfExtentMeters)
                 return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
-            return ValidatePhysicsShapeDescriptor(PhysicsShapeDescriptor{query.capsule});
+            return Result<void>::Success();
         }
 
         /** @brief Validates bounded inline capsule motion. */

@@ -223,9 +223,60 @@ namespace Horo::Prefab {
             return Result<EffectivePrefabCandidate>::Failure(std::move(error));
         }
 
+        auto revision = CaptureRevision(rootAsset, budget);
+        if (revision.HasError())
+            return Result<EffectivePrefabCandidate>::Failure(revision.ErrorValue());
         return Result<EffectivePrefabCandidate>::Success(
-            EffectivePrefabCandidate{rootAsset, PrefabResolutionRevision{graph_.RegistryRevision(), root->sourceRevision},
-                                     std::move(objects)});
+            EffectivePrefabCandidate{rootAsset, std::move(revision).Value(), std::move(objects)});
+    }
+
+    /** @copydoc PrefabSourceResolverSnapshot::CaptureRevision */
+    Result<PrefabResolutionRevision> PrefabSourceResolverSnapshot::CaptureRevision(const Assets::AssetId rootAsset,
+                                                                                   PrefabExpansionBudget &budget) const {
+        const auto *root = graph_.FindNode(rootAsset);
+        if (root == nullptr || !root->sourceRevision)
+            return Result<PrefabResolutionRevision>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
+        // Charge the complete graph before the bounded closure walk and its temporary storage.
+        if (auto charged = budget.Consume(graph_.Nodes().size() + graph_.Edges().size()); charged.HasError())
+            return Result<PrefabResolutionRevision>::Failure(charged.ErrorValue());
+        auto closure = graph_.DependencyClosure(std::span{&rootAsset, 1});
+        if (closure.HasError())
+            return Result<PrefabResolutionRevision>::Failure(closure.ErrorValue());
+        auto assets = std::move(closure).Value();
+        assets.insert(std::ranges::lower_bound(assets, rootAsset), rootAsset);
+        PrefabResolutionRevision revision{graph_.RegistryRevision(), *root->sourceRevision};
+        revision.dependencies.reserve(assets.size());
+        for (const auto asset : assets) {
+            revision.dependencies.push_back(*graph_.FindNode(asset));
+            const auto edges = graph_.DirectDependencies(asset);
+            revision.edges.insert(revision.edges.end(), edges.begin(), edges.end());
+        }
+        return Result<PrefabResolutionRevision>::Success(std::move(revision));
+    }
+
+    /** @copydoc PrefabSourceResolverSnapshot::ValidateRevisionPublication */
+    Result<void> PrefabSourceResolverSnapshot::ValidateRevisionPublication(const Assets::AssetId rootAsset,
+                                                                           const PrefabResolutionRevision &revision,
+                                                                           const std::span<const Assets::AssetId> changedAssets,
+                                                                           const PrefabLimitProfile &limits) const {
+        PrefabExpansionBudget budget{limits};
+        if (auto charged = budget.Consume(revision.dependencies.size() + revision.edges.size() + changedAssets.size()); charged.HasError())
+            return charged;
+        if (revision.dependencies.empty() || revision.registry.value > RegistryRevision().value)
+            return Result<void>::Failure(MakeError(PrefabErrors::ResolutionStale));
+        auto current = CaptureRevision(rootAsset, budget);
+        if (current.HasError())
+            return Result<void>::Failure(current.ErrorValue());
+        if (const auto &captured = current.Value(); revision.rootSource != captured.rootSource ||
+                                                    revision.dependencies != captured.dependencies || revision.edges != captured.edges)
+            return Result<void>::Failure(MakeError(PrefabErrors::ResolutionStale));
+        for (const auto asset : changedAssets) {
+            if (!asset.IsValid())
+                return Result<void>::Failure(MakeError(PrefabErrors::IdentityInvalid));
+            if (std::ranges::binary_search(revision.dependencies, asset, {}, &PrefabDependencyNode::assetId))
+                return Result<void>::Failure(MakeError(PrefabErrors::ResolutionStale));
+        }
+        return Result<void>::Success();
     }
 
     /** @copydoc BuildPrefabSourceResolverSnapshot */

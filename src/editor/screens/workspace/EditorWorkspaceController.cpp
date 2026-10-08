@@ -76,7 +76,8 @@ namespace Horo::Editor {
           m_sourceOpenNavigator(dependencies.sourceOpenNavigator), m_diagnosticSourceNavigator(dependencies.diagnosticSourceNavigator),
           m_gameplayBuilds(dependencies.gameplayBuilds), m_gameplayBuildEnvironment(dependencies.gameplayBuildEnvironment),
           m_localization(dependencies.localization),
-          m_sceneFileWatch(dependencies.jobs != nullptr ? std::make_unique<SceneFileWatchService>(*dependencies.jobs) : nullptr) {
+          m_sceneFileWatch(dependencies.jobs != nullptr ? std::make_unique<SceneFileWatchService>(*dependencies.jobs) : nullptr),
+          m_playSession(dependencies.networkDebugger) {
         if (dependencies.engineEvents != nullptr) {
             m_engineEventBridge = std::make_unique<EditorEngineEventBridge>(*dependencies.engineEvents, m_dataBus);
             m_engineEventBridge->Attach();
