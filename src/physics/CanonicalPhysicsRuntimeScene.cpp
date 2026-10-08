@@ -248,6 +248,23 @@ namespace Horo::Physics::Detail {
             return ResolveCanonicalMotionQuality(canonical.continuousCollision.policy, desired, *shape.shape, lock.GetBody().IsSensor());
         }
 
+        /** @brief Checks a resident body's captured profile and replacement motion before native mutation. */
+        [[nodiscard]] Result<void> ValidateMutationCollision(const CanonicalWorld &canonical, const CanonicalSceneBodyRecord &body,
+                                                             const PhysicsBodyDescriptor &desired) {
+            if (!body.collision.has_value())
+                return Result<void>::Success();
+            const auto profile = canonical.simulation.binding.schema->ResolveProfile(body.collision->profile);
+            if (profile.HasError())
+                return Result<void>::Failure(profile.ErrorValue());
+            const auto layers = std::span{canonical.simulation.layers.data(), canonical.simulation.layerCount};
+            const auto layer = std::ranges::find(layers, profile.Value()->layer, &CollisionLayerDefinition::id);
+            if (layer == layers.end())
+                return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
+            if (!CanonicalLayerAdmitsMotion(*layer, desired.motion))
+                return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported));
+            return Result<void>::Success();
+        }
+
         /** @brief Checks replacement policy against resident shape and native motion capabilities. */
         [[nodiscard]] Result<void> ValidateMutationPolicy(const CanonicalWorld &canonical, const PhysicsWorldId owner,
                                                           const CanonicalSceneBodyRecord &body, const PhysicsBodyMutation &mutation,
@@ -267,20 +284,8 @@ namespace Horo::Physics::Detail {
             const auto quality = ResolveMutationQuality(canonical, body, *shape, desired);
             if (quality.HasError())
                 return Result<void>::Failure(quality.ErrorValue());
-            if (body.collision.has_value()) {
-                const auto profile = canonical.simulation.binding.schema->ResolveProfile(body.collision->profile);
-                if (profile.HasError())
-                    return Result<void>::Failure(profile.ErrorValue());
-                const auto layers = std::span{canonical.simulation.layers.data(), canonical.simulation.layerCount};
-                const auto layer = std::ranges::find(layers, profile.Value()->layer, &CollisionLayerDefinition::id);
-                if (layer == layers.end())
-                    return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
-                const bool admitted = desired.motion == PhysicsMotionType::Static      ? layer->admitsStatic
-                                      : desired.motion == PhysicsMotionType::Kinematic ? layer->admitsKinematic
-                                                                                       : layer->admitsDynamic;
-                if (!admitted)
-                    return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported));
-            }
+            if (const auto collision = ValidateMutationCollision(canonical, body, desired); collision.HasError())
+                return collision;
             if (quality.Value() == JPH::EMotionQuality::LinearCast) {
                 JPH::BodyLockRead lock(canonical.native.system->GetBodyLockInterfaceNoLock(), body.nativeBody);
                 if (!lock.Succeeded())

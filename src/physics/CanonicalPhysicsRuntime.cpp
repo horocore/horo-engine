@@ -53,22 +53,22 @@ namespace Horo::Physics::Detail {
                 return Result<void>::Failure(
                     MakeError(PhysicsErrors::DescriptorInvalid, "Collision schema owner and generation must be supplied together."));
             world.simulation.binding = simulation;
-            if (simulation.schema) {
-                for (const auto &layer : simulation.schema->Layers()) {
-                    if (!layer.enabled)
-                        continue;
-                    if (world.simulation.layerCount == world.simulation.layers.size())
-                        return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
-                    world.simulation.layers[world.simulation.layerCount++] = layer;
-                }
-                const auto layers = std::span{world.simulation.layers.data(), world.simulation.layerCount};
-                for (std::size_t first = 0; first < layers.size(); ++first) {
-                    for (std::size_t second = 0; second < layers.size(); ++second) {
-                        const auto response = simulation.schema->ResolvePair(layers[first].id, layers[second].id);
-                        if (response.HasError())
-                            return Result<void>::Failure(response.ErrorValue());
-                        world.simulation.responses[(first + 1) * CanonicalSimulationTable::RowCount + second + 1] = response.Value();
-                    }
+            if (!simulation.schema)
+                return Result<void>::Success();
+            for (const auto &layer : simulation.schema->Layers()) {
+                if (!layer.enabled)
+                    continue;
+                if (world.simulation.layerCount == world.simulation.layers.size())
+                    return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
+                world.simulation.layers[world.simulation.layerCount++] = layer;
+            }
+            const auto layers = std::span{world.simulation.layers.data(), world.simulation.layerCount};
+            for (std::size_t first = 0; first < layers.size(); ++first) {
+                for (std::size_t second = 0; second < layers.size(); ++second) {
+                    const auto response = simulation.schema->ResolvePair(layers[first].id, layers[second].id);
+                    if (response.HasError())
+                        return Result<void>::Failure(response.ErrorValue());
+                    world.simulation.responses[(first + 1) * CanonicalSimulationTable::RowCount + second + 1] = response.Value();
                 }
             }
             return Result<void>::Success();

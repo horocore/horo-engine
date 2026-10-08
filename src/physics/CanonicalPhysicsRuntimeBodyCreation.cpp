@@ -92,8 +92,8 @@ namespace Horo::Physics::Detail {
         [[nodiscard]] Result<JPH::ObjectLayer> ResolveSceneObjectLayer(const CanonicalWorld &world,
                                                                        const PhysicsSceneBodyDescriptor &descriptor) {
             if (!descriptor.collision.has_value()) {
-                const auto requested = descriptor.body.continuousCollision.mode.value_or(world.continuousCollision.policy.defaultMode);
-                if (requested == PhysicsDefaultMotionQuality::LinearCast && descriptor.body.motion == PhysicsMotionType::Dynamic &&
+                if (const auto requested = descriptor.body.continuousCollision.mode.value_or(world.continuousCollision.policy.defaultMode);
+                    requested == PhysicsDefaultMotionQuality::LinearCast && descriptor.body.motion == PhysicsMotionType::Dynamic &&
                     !descriptor.sensor)
                     return Result<JPH::ObjectLayer>::Failure(
                         MakeError(PhysicsErrors::CapabilityUnavailable,
@@ -111,14 +111,12 @@ namespace Horo::Physics::Detail {
             const auto layer = std::ranges::find(layers, profile.Value()->layer, &CollisionLayerDefinition::id);
             if (layer == layers.end())
                 return Result<JPH::ObjectLayer>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
-            const bool admitted = descriptor.body.motion == PhysicsMotionType::Static      ? layer->admitsStatic
-                                  : descriptor.body.motion == PhysicsMotionType::Kinematic ? layer->admitsKinematic
-                                                                                           : layer->admitsDynamic;
-            if (!admitted || (descriptor.sensor && !layer->admitsOverlap))
+            if (const bool admitted = CanonicalLayerAdmitsMotion(*layer, descriptor.body.motion);
+                !admitted || (descriptor.sensor && !layer->admitsOverlap))
                 return Result<JPH::ObjectLayer>::Failure(MakeError(PhysicsErrors::OperationUnsupported));
             if (!profile.Value()->simulationEnabled) {
-                const auto requested = descriptor.body.continuousCollision.mode.value_or(world.continuousCollision.policy.defaultMode);
-                if (requested == PhysicsDefaultMotionQuality::LinearCast && descriptor.body.motion == PhysicsMotionType::Dynamic &&
+                if (const auto requested = descriptor.body.continuousCollision.mode.value_or(world.continuousCollision.policy.defaultMode);
+                    requested == PhysicsDefaultMotionQuality::LinearCast && descriptor.body.motion == PhysicsMotionType::Dynamic &&
                     !descriptor.sensor)
                     return Result<JPH::ObjectLayer>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
                 return Result<JPH::ObjectLayer>::Success(JPH::ObjectLayer{0});

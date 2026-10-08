@@ -84,8 +84,7 @@ namespace Horo::Physics::Detail {
             if (record.nativeBody != native.GetID() || !record.handle.IsValid() || !record.collision || row == 0 ||
                 row > world.simulation.layerCount)
                 return std::nullopt;
-            const auto *profile = world.simulation.Profile(record.collision->profile);
-            if (!profile || !profile->lifecycleEventsEnabled)
+            if (const auto *profile = world.simulation.Profile(record.collision->profile); !profile || !profile->lifecycleEventsEnabled)
                 return std::nullopt;
             PhysicsEventEndpoint endpoint{.body = record.handle,
                                           .shape = record.policy.shape,
@@ -190,9 +189,7 @@ namespace Horo::Physics::Detail {
     /** @copydoc CanonicalContactListener::OnContactPersisted */
     void CanonicalContactListener::OnContactPersisted(const JPH::Body &body1, const JPH::Body &body2, const JPH::ContactManifold &manifold,
                                                       JPH::ContactSettings &settings) {
-        settings.mIsSensor = settings.mIsSensor ||
-                             world_.simulation.Response(body1.GetObjectLayer(), body2.GetObjectLayer()) == SimulationPairResponse::Overlap;
-        Emit(body1, body2, manifold, settings);
+        OnContactAdded(body1, body2, manifold, settings);
     }
 
     /** @brief Copies one complete callback manifold before native storage is released. */

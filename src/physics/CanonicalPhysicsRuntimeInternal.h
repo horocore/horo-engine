@@ -53,6 +53,21 @@ namespace Horo::Physics::Detail {
      */
     [[nodiscard]] Result<void> ApplyCanonicalMassPolicy(JPH::BodyCreationSettings &settings, const PhysicsMassPolicy &mass);
 
+    /**
+     * @brief Reads the layer admission flag for a previously validated motion type.
+     * @param layer Immutable admitted collision layer.
+     * @param motion Validated body motion policy.
+     * @return Whether the layer permits that motion.
+     */
+    [[nodiscard]] constexpr bool CanonicalLayerAdmitsMotion(const CollisionLayerDefinition &layer,
+                                                            const PhysicsMotionType motion) noexcept {
+        if (motion == PhysicsMotionType::Static)
+            return layer.admitsStatic;
+        if (motion == PhysicsMotionType::Kinematic)
+            return layer.admitsKinematic;
+        return layer.admitsDynamic;
+    }
+
     /** @brief Process-owned Jolt registration and resource accounting. */
     struct CanonicalRuntime final {
         CanonicalRuntime() = default;
