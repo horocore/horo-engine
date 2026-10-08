@@ -56,6 +56,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroRuntimeSaveEventTriggersTests
     HoroSaveEventTriggersPublicHeaderConsumer
     HoroRuntimePublicHeaderConsumer
+    HoroTerrainSourceArtifactTests
+    HoroTerrainSourceArtifactPublicHeaderConsumer
 )
 
 set(HORO_CI_NAVIGATION_TARGETS

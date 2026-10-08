@@ -1552,6 +1552,8 @@ add_library(HoroTerrainCook STATIC
         runtime/terrain/cook/FoliageClusterCook.cpp
         runtime/terrain/cook/FoliageClusterCookOwner.cpp
         runtime/terrain/cook/FoliagePlacementCook.cpp
+        runtime/terrain/cook/TerrainSourceArtifacts.cpp
+        runtime/terrain/cook/TerrainSourceArtifactValidation.cpp
         runtime/terrain/cook/TerrainTileCook.cpp
         runtime/terrain/cook/TerrainTileCookCodec.cpp
         runtime/terrain/cook/TerrainTileCookErrors.cpp
