@@ -649,6 +649,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsQueryEventCapabilityTests.cpp
         unit/runtime/physics/PhysicsReferenceSceneCorpusTests.cpp
         unit/runtime/physics/PhysicsSceneActivationTests.cpp
+        unit/runtime/physics/RuntimeSceneBaselinePhysicsTests.cpp
         unit/runtime/physics/PrefabPhysicsStructuralTests.cpp
         unit/runtime/physics/PhysicsSceneContainmentTests.cpp
         unit/runtime/physics/PhysicsShapeDescriptorTests.cpp
@@ -1408,6 +1409,10 @@ add_test(NAME HoroGameplayPhysicsSdkContract COMMAND ${CMAKE_COMMAND}
     "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/physics_sdk_contract"
     "-DHOST_CONSUMER=$<TARGET_FILE:HoroGameplayPhysicsSdkHostConsumer>"
     "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+    "-DCMAKE_LINKER=${CMAKE_LINKER}"
+    "-DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}"
+    "-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}"
+    "-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
     "-DGENERATOR=${CMAKE_GENERATOR}"
     "-DGENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
     "-DGENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
@@ -3040,9 +3045,13 @@ target_sources(HoroRuntimeScenePublicHeaderConsumer PRIVATE support/AudioScenePu
 target_compile_features(HoroRuntimeSceneTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSceneTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroRuntimeSceneTests PRIVATE HoroEngine::NavigationSceneIntegration HoroEngine::RuntimeScene)
-add_executable(HoroRuntimeSceneCellPayloadTests unit/runtime/scene/RuntimeSceneCellPayloadTests.cpp
-    unit/runtime/scene/IncrementalSceneCellCookTests.cpp
-    unit/runtime/scene/SceneCellContentHasherTests.cpp)
+add_executable(HoroRuntimeSceneCellPayloadTests
+        unit/runtime/scene/RuntimeSceneCellPayloadTests.cpp
+        unit/runtime/scene/RuntimeSceneCellAttachmentTests.cpp
+        unit/runtime/scene/RuntimeSceneCellAssetAttachmentTests.cpp
+        unit/runtime/scene/IncrementalSceneCellCookTests.cpp
+        unit/runtime/scene/SceneCellContentHasherTests.cpp
+)
 target_compile_features(HoroRuntimeSceneCellPayloadTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSceneCellPayloadTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/scene)
 target_link_libraries(HoroRuntimeSceneCellPayloadTests PRIVATE HoroEngine::SceneCellPayload)

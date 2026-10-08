@@ -687,6 +687,8 @@ add_library(HoroRuntimeScene STATIC
         runtime/scene/SaveContentWorld.cpp
         runtime/scene/SaveContentSnapshot.cpp
         runtime/scene/RuntimeScene.cpp
+        runtime/scene/RuntimeSceneBaseline.cpp
+        runtime/scene/RuntimeSceneBaselineCommands.cpp
         runtime/scene/RuntimeSceneView.cpp
         runtime/scene/RuntimeSceneService.cpp
         runtime/scene/RuntimeSceneServicePublication.cpp
@@ -1700,6 +1702,7 @@ target_link_libraries(HoroWorldStreaming PUBLIC HoroEngine::Foundation HoroEngin
 
 # Scene owns CoreEcs baseline semantics; this host-composed seam leaves streaming policy and ECS targets independent.
 add_library(HoroSceneCellPayload STATIC
+        runtime/scene/RuntimeSceneCellAttachment.cpp
         runtime/scene/SceneCellAttachments.cpp
         runtime/scene/RuntimeSceneCellPayload.cpp
         runtime/scene/RuntimeSceneCellPayloadErrors.cpp

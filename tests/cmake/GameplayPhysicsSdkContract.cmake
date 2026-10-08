@@ -16,17 +16,24 @@ endif()
 if(GENERATOR_TOOLSET)
     list(APPEND generator_args -T "${GENERATOR_TOOLSET}")
 endif()
+# Keep the external module on the explicit caller toolchain on every supported host.
+set(toolchain_args)
+foreach(setting CMAKE_LINKER CMAKE_OSX_SYSROOT CMAKE_OSX_ARCHITECTURES CMAKE_OSX_DEPLOYMENT_TARGET)
+    if(DEFINED ${setting} AND NOT "${${setting}}" STREQUAL "")
+        list(APPEND toolchain_args "-D${setting}=${${setting}}")
+    endif()
+endforeach()
 file(MAKE_DIRECTORY "${TEST_ROOT}/source")
 file(COPY "${FIXTURE_DIR}/" DESTINATION "${TEST_ROOT}/source")
 execute_process(COMMAND "${CMAKE_COMMAND}" -S "${TEST_ROOT}/source" -B "${TEST_ROOT}/build"
-    ${generator_args}
+    ${generator_args} ${toolchain_args}
     "-DHoroEngineGameplay_DIR=${SDK_DIR}" "-DCMAKE_CXX_COMPILER=${CXX_COMPILER}" "-DCMAKE_BUILD_TYPE=${BUILD_CONFIG}"
     RESULT_VARIABLE configured)
 if(NOT configured EQUAL 0)
     message(FATAL_ERROR "External Physics SDK configure failed: ${configured}")
 endif()
 execute_process(COMMAND "${CMAKE_COMMAND}" --build "${TEST_ROOT}/build" --config "${BUILD_CONFIG}"
-    --target HoroPhysicsSdkModule --parallel 2 RESULT_VARIABLE built)
+    --target HoroPhysicsSdkModule --parallel 1 RESULT_VARIABLE built)
 if(NOT built EQUAL 0)
     message(FATAL_ERROR "External Physics SDK module build failed: ${built}")
 endif()
