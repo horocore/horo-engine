@@ -367,7 +367,8 @@ namespace Horo::Physics::Detail {
                 created = JPH::CapsuleShapeSettings(shape.cylindricalHalfHeightMeters, shape.radiusMeters).Create();
             else {
                 static_assert(std::is_same_v<ShapeType, PhysicsStaticPlaneShape>);
-                created = JPH::PlaneShapeSettings(JPH::Plane(ToNative(shape.normal), shape.signedDistanceMeters)).Create();
+                // Horo stores dot(normal, point) = distance; Jolt stores dot(normal, point) + constant = 0.
+                created = JPH::PlaneShapeSettings(JPH::Plane(ToNative(shape.normal), -shape.signedDistanceMeters)).Create();
             }
         }, descriptor);
         if (created.HasError())

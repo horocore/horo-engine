@@ -381,11 +381,9 @@ Slide starts only when the nearest downward blocking evidence is steep and withi
 skin width. Upward tangent gravity cannot produce a climb. Any blocking slide sweep resets gravity continuation, so obstructed displacement
 cannot accumulate pressure independently of the contact-retention capacity. Motion
 still slides against the canonical blocking normals. Continuation also resets on
-walkable support, lost steep evidence, Stop, jump/upward commands, actual capsule
-change, and teleport. Failed
-ticks preserve the prior snapshot and gravity continuation. Ordinary airborne
-free-fall and jump integration belong to CHR-002.5; they must compose this same
-Character-owned velocity field rather than introducing another state authority.
+walkable support, Stop, and teleport. Failed ticks preserve the prior snapshot and
+continuation. Leaving steep support carries that same velocity into free flight;
+changing capsule geometry alone cannot cancel airborne velocity.
 
 Slide displacement uses the same collision sweeps and remaining movement-iteration
 budget, including for sub-minimum ordinary movement distances. Zero ordinary
@@ -396,6 +394,46 @@ probes. A steep surface does not publish grounded or
 platform support, and the reducer never snaps through the nearest steep face to a
 deeper walkable surface. Failed queries or shutdown discard all candidate motion
 before publication.
+
+## Jump And Airborne Resolution (CHR-002.5)
+
+`jumpSpeedMetersPerSecond` is finite and nonnegative; zero disables jumping. A
+jump command consumes only the previous committed grounded state. Its accepted
+impulse replaces the Character continuation with `up * jumpSpeedMetersPerSecond`;
+subsequent airborne commands cannot reapply it. Producers submit discrete jump
+intent; a command on a later grounded tick is a new jump. Spawn first establishes
+support through the ordinary bounded ground query. Desired gameplay velocity
+remains separate from Character-owned gravity velocity.
+
+Ordinary movement and support classification run first. If no walkable or steep
+support remains, the remaining shared movement-iteration budget resolves
+`nextVelocity = priorVelocity + gravity * fixedDelta` and
+`0.5 * (priorVelocity + nextVelocity) * fixedDelta`. Gravity travel is resolved even
+below the ordinary intent threshold. Upward continuation suppresses downward snap;
+airborne landing probes use skin-width reach rather than step-height reach. The
+initial spawn support probe retains ordinary ground acquisition reach. Ceiling
+collision removes only continuation into each canonical blocking normal, retaining
+tangent velocity; conflicting corner constraints fail closed. Landing resets the
+continuation. Steep slide retains its established bounded obstructed-slide policy
+and does not integrate a second gravity phase during the same tick.
+
+The committed result owns `jumpApplied` and the closed `CharacterGroundTransition`
+value (`None`, `LeftGround`, `Landed`). The world derives exactly one transition
+from previous and candidate grounded states. Repeated support contacts produce
+`None`; failed query, capacity exhaustion and shutdown publish no candidate fact.
+Consumers identify facts by controller/tick/sequence and consume each committed
+result once. No callback or render frame can independently emit a landing.
+Consecutive fixed ticks consume their exact admitted command frames; a tick with
+no command continues to preserve its prior controller snapshot as specified above.
+
+Migration: controller descriptor and movement result grow appended fields owned by
+`HoroEngine::Physics` in the existing header registry. In-process Physics consumers
+must rebuild; no new header or dependency is published. Custom movement-result
+providers may retain `None`; CharacterWorld owns transition derivation. Native
+Physics/Scene/Gameplay consumers and the public-header consumer cover the appended
+fields. Actual capsule changes now preserve airborne continuation; teleport remains
+the explicit reset boundary. There is no additional velocity accumulator or state
+codec authority.
 
 ## Step Handling
 

@@ -103,6 +103,20 @@ namespace Horo::Physics::Detail {
 
     }  // namespace
 
+    TEST_CASE("Canonical native planes preserve the Horo signed-distance equation", "[physics][native][shape]") {
+        const auto created = CreateCanonicalRuntime();
+        REQUIRE(created.HasValue());
+        const RuntimeOwner runtime{created.Value()};
+        for (const float distance : {-1.7F, 1.7F}) {
+            const PhysicsStaticPlaneShape descriptor{{0, -1, 0}, distance};
+            const auto shape = CreateNativeShape(descriptor);
+            REQUIRE(shape.HasValue());
+            const auto &plane = static_cast<const JPH::PlaneShape *>(shape.Value().GetPtr())->GetPlane();
+            REQUIRE(plane.SignedDistance(JPH::Vec3{0, -distance, 0}) == 0.0F);
+            REQUIRE(plane.GetConstant() == -distance);
+        }
+    }
+
     TEST_CASE("Canonical runtime and world lifecycle retain no partial native ownership", "[physics][native][lifecycle]") {
         SECTION("process initialization rolls back every completed registration stage") {
             for (const auto point : {CanonicalFailurePoint::AllocatorRegistered, CanonicalFailurePoint::FactoryCreated,
