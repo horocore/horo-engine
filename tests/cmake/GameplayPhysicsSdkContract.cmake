@@ -16,7 +16,8 @@ endif()
 if(GENERATOR_TOOLSET)
     list(APPEND generator_args -T "${GENERATOR_TOOLSET}")
 endif()
-# Keep the external module on the explicit caller toolchain on every supported host.
+# The external consumer must use the caller's explicit toolchain rather than the
+# machine's current default SDK. Empty platform-specific inputs stay omitted.
 set(toolchain_args)
 foreach(setting CMAKE_LINKER CMAKE_OSX_SYSROOT CMAKE_OSX_ARCHITECTURES CMAKE_OSX_DEPLOYMENT_TARGET)
     if(DEFINED ${setting} AND NOT "${${setting}}" STREQUAL "")

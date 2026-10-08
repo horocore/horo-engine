@@ -259,6 +259,13 @@ namespace Horo::Physics::Detail {
                     return Result<void>::Failure(resolved.ErrorValue());
                 if (hasChildren && body.descriptor.sensor != collider.sensor)
                     return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported));
+                if (body.descriptor.collision && body.descriptor.collision->profile != collider.collisionProfile)
+                    return Result<void>::Failure(
+                        MakeError(PhysicsErrors::OperationUnsupported,
+                                  "The current native group body realization requires one exact profile for all contributors."));
+                if (!body.descriptor.collision)
+                    body.descriptor.collision = PhysicsSceneCollisionBinding{.profile = collider.collisionProfile};
+                body.descriptor.collision->colliders.push_back({.localPose = resolved.Value().localPose});
                 body.descriptor.sensor = collider.sensor;
                 plan.colliderBindings.emplace_back(contributor.entity, collider.collider, plan.shapes.size(), plan.bodies.size());
                 children.emplace_back(static_cast<std::uint32_t>(plan.shapes.size()), resolved.Value().localPose);

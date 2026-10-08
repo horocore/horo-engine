@@ -234,6 +234,8 @@ namespace Horo::Physics::Detail {
         std::erase_if(world.scene.constraints, [this](const auto &record) {
             return std::ranges::find(state_->retirement.retiredConstraints, record.handle) != state_->retirement.retiredConstraints.end();
         });
+        for (const JPH::BodyID body : state_->retirement.retiredNativeBodies)
+            world.scene.nativeBodyIndices[body.GetIndex()] = std::numeric_limits<std::size_t>::max();
         if (!state_->retirement.retiredNativeBodies.empty()) {
             bodies.RemoveBodies(state_->retirement.retiredNativeBodies.data(),
                                 static_cast<int>(state_->retirement.retiredNativeBodies.size()));
@@ -253,6 +255,7 @@ namespace Horo::Physics::Detail {
             world.scene.shapes.push_back(std::move(shape));
         for (auto &record : state_->records)
             world.scene.bodies.push_back(std::move(record));
+        RebuildCanonicalSceneBodyIndices(world);
         if (state_->constraintsPrepared) {
             [[maybe_unused]] const auto capacity = world.native.system->GetConstraintCapacity();
             if (!state_->nativeConstraints.empty())

@@ -1,8 +1,16 @@
 #include "Horo/Gameplay/GameModule.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
+#include "Horo/Physics/PhysicsContinuousCollision.h"
+#include "Horo/Physics/PhysicsWorld.h"
 
 #include <array>
+#include <type_traits>
+
+static_assert(std::is_same_v<decltype(Horo::Physics::PhysicsWorldSimulationBinding{}.schema),
+                             std::shared_ptr<const Horo::Physics::NormalizedCollisionSchema>>);
+static_assert(std::is_same_v<decltype(Horo::Physics::PhysicsSceneBodyDescriptor{}.collision),
+                             std::optional<Horo::Physics::PhysicsSceneCollisionBinding>>);
 
 #if __has_include(<Jolt/Jolt.h>)
 #error "The gameplay Physics SDK leaked native solver headers"
@@ -49,6 +57,11 @@ namespace {
         }
 
         Result<void> Start(GameRuntimeContext &context) override {
+            // Public value validation is linked from the SDK; it grants no native world mutation authority.
+            const auto ccd =
+                Physics::ValidatePhysicsContinuousCollisionPolicy({Physics::PhysicsDefaultMotionQuality::LinearCast, 0.5F, 0.25F});
+            if (ccd.HasError())
+                return ccd;
             if (!context.physics)
                 return Result<void>::Failure(MakeError(GameplayErrors::PhysicsUnavailable));
             const auto &binding = context.physics->Binding();

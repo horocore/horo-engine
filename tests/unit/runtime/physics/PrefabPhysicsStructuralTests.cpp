@@ -31,7 +31,7 @@ namespace Horo::Physics {
                 components.rigidBody = Runtime::RigidBodyComponent{.id = {10}, .body = {100}};
                 components.rigidBody->motion = Runtime::AuthoredPhysicsMotionType::Dynamic;
                 components.rigidBody->mass = Runtime::AuthoredPhysicsMass{1.0F};
-                components.colliders.push_back({.id = {20}, .collider = {200}, .body = {.body = {100}}});
+                components.colliders.push_back({.id = {20}, .collider = {200}, .body = {.body = {100}}, .collisionProfile = Profile()});
                 entity = {scene->View().RuntimeId(), {1, 1}};
                 references[0] = {Runtime::GroupPhysicsReferenceKind::ColliderBody, 0, entity, {100}};
             }
@@ -54,6 +54,11 @@ namespace Horo::Physics {
         auto *physics = fixture.physics;
         const auto entity = fixture.entity;
         auto staged = fixture.PrepareAddition();
+        if (staged.HasError()) {
+            INFO("Structural staging failure domain=" << staged.ErrorValue().domain.Value() << " code=" << staged.ErrorValue().code.Value()
+                                                      << " message=" << staged.ErrorValue().message);
+            REQUIRE(staged.HasValue());
+        }
         REQUIRE(staged.HasValue());
         auto candidate = std::move(staged).Value();
         REQUIRE(candidate->ValidatePublication().HasValue());

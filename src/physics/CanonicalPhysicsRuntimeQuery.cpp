@@ -509,13 +509,13 @@ namespace Horo::Physics::Detail {
         });
         if (found == access.fixtures.end())
             return Result<void>::Failure(MakeError(PhysicsErrors::HandleStale));
+        access.nativeFixtureIndices[found->nativeBody.GetIndex()] = std::numeric_limits<std::size_t>::max();
         access.system.GetBodyInterface().RemoveBody(found->nativeBody);
         access.system.GetBodyInterface().DestroyBody(found->nativeBody);
         const auto erasedIndex = static_cast<std::size_t>(std::distance(access.fixtures.begin(), found));
-        access.nativeFixtureIndices[found->nativeBody.GetIndex()] = std::numeric_limits<std::size_t>::max();
         access.fixtures.erase(found);
-        if (erasedIndex < access.fixtures.size())
-            access.nativeFixtureIndices[access.fixtures[erasedIndex].nativeBody.GetIndex()] = erasedIndex;
+        for (std::size_t index = erasedIndex; index < access.fixtures.size(); ++index)
+            access.nativeFixtureIndices[access.fixtures[index].nativeBody.GetIndex()] = index;
         ++access.querySchemaGeneration;
         return Result<void>::Success();
     }

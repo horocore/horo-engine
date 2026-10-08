@@ -6,6 +6,7 @@
 
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Physics/PhysicsCollisionSchema.h"
 #include "Horo/Physics/PhysicsSceneActivation.h"
 #include "Horo/Runtime/Scene/PhysicsSceneComponents.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
@@ -195,7 +196,20 @@ namespace Horo::Physics {
             auto character = Character::CharacterWorldSettings::Capture({});
             REQUIRE(physics.HasValue());
             REQUIRE(character.HasValue());
-            return {physics.Value(), character.Value()};
+            std::array<std::uint8_t, 16> layerBytes{};
+            layerBytes.back() = 2;
+            const auto layer = CollisionLayerId::FromBytes(layerBytes);
+            std::array<std::uint8_t, 16> channelBytes{};
+            channelBytes.back() = 3;
+            const auto channel = PhysicsQueryChannelId::FromBytes(channelBytes);
+            ProjectCollisionSchema authored{.defaultProfile = Profile(),
+                                            .layers = {{layer}},
+                                            .pairs = {{layer, layer, SimulationPairResponse::Ignore}},
+                                            .queryChannels = {{channel}},
+                                            .profiles = {{Profile(), layer, true, true, true, {{channel, CollisionQueryResponse::Block}}}}};
+            auto schema = NormalizedCollisionSchema::Create(authored);
+            REQUIRE(schema.HasValue());
+            return {physics.Value(), character.Value(), {std::make_shared<const NormalizedCollisionSchema>(std::move(schema).Value()), 1}};
         }
 
         [[nodiscard]] Runtime::FrameContext Context(const CancellationToken &cancellation) {

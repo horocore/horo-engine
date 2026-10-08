@@ -74,6 +74,7 @@ namespace Horo::Physics::Detail {
         Runtime::PhysicsColliderSlotId collider;
         PhysicsShapeDescriptor geometry;
         PhysicsPose localPose;
+        CollisionProfileId profile;
         bool sensor{};
     };
 

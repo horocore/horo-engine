@@ -91,6 +91,44 @@ namespace Horo::Physics {
             Test::RequireError(candidate->ValidatePublication(), PhysicsErrors::InvalidState);
         }
 
+        TEST_CASE("Scene collision composition pins exact schema ownership and rejects missing or stale replacements",
+                  "[physics][scene][activation][collision-schema]") {
+            auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical);
+            REQUIRE(runtime.HasValue());
+            AssetSceneFixture assets;
+            const auto definition = PhysicsDefinition(assets.material, assets.materialType);
+            const auto view = assets.Prepare(definition);
+            PhysicsSceneActivationAuthority authority;
+            auto settings = Settings();
+            std::weak_ptr<const NormalizedCollisionSchema> captured = settings.simulation.schema;
+            Result<std::unique_ptr<Runtime::SceneActivationCandidate>> prepared =
+                Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(PhysicsErrors::InvalidState));
+            {
+                PhysicsSceneActivationParticipant participant{*runtime.Value(), authority, settings};
+                prepared = participant.Prepare(definition, view);
+                REQUIRE(prepared.HasValue());
+            }
+            settings.simulation.schema.reset();
+            REQUIRE_FALSE(captured.expired());
+            auto owned = std::move(prepared).Value();
+            auto *candidate = dynamic_cast<PhysicsSceneActivationCandidate *>(owned.get());
+            REQUIRE(candidate != nullptr);
+            const auto first = candidate->FindBody({1}, {100});
+            REQUIRE(first.has_value());
+            auto missing = Settings();
+            missing.simulation = {};
+            PhysicsSceneActivationParticipant unavailable{*runtime.Value(), authority, missing};
+            Test::RequireError(unavailable.Prepare(definition, view), PhysicsErrors::CapabilityUnavailable);
+            auto stale = Settings();
+            stale.simulation.generation = 2;
+            PhysicsSceneActivationParticipant mismatched{*runtime.Value(), authority, stale};
+            Test::RequireError(mismatched.Prepare(definition, view), PhysicsErrors::QuerySnapshotStale);
+            REQUIRE(candidate->ValidatePublication().HasValue());
+            REQUIRE(candidate->FindBody({1}, {100}) == first);
+            owned.reset();
+            REQUIRE(captured.expired());
+        }
+
         TEST_CASE("Canonical Physics scene activation rolls back staged capacity failures and accepts a corrected retry",
                   "[physics][scene][activation][rollback]") {
             auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical);

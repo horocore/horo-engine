@@ -90,9 +90,14 @@ namespace Horo::Physics::Detail {
                                                        .mass = body.authored.mass,
                                                        .linearVelocity = body.authored.initialLinearVelocity,
                                                        .angularVelocity = body.authored.initialAngularVelocity,
-                                                       .motionSafety = body.authored.motionSafety};
-                const Result<BodyHandle> nativeBody =
-                    physics.CreateSceneBody({.body = descriptor, .sensor = body.sensor, .sceneEntity = body.object.value});
+                                                       .motionSafety = body.authored.motionSafety,
+                                                       .continuousCollision = body.authored.continuousCollision};
+                PhysicsSceneCollisionBinding collision{.profile = body.colliders.front().profile};
+                collision.colliders.reserve(body.colliders.size());
+                for (const PlannedCollider &collider : body.colliders)
+                    collision.colliders.push_back({.localPose = collider.localPose});
+                const Result<BodyHandle> nativeBody = physics.CreateSceneBody(
+                    {.body = descriptor, .sensor = body.sensor, .sceneEntity = body.object.value, .collision = std::move(collision)});
                 if (nativeBody.HasError())
                     return Result<void>::Failure(
                         AddActivationContext(nativeBody.ErrorValue(), "body", body.object, body.component.value, std::nullopt));
@@ -154,7 +159,7 @@ namespace Horo::Physics::Detail {
                                                          const Runtime::RuntimeSceneView scene,
                                                          const PhysicsSceneActivationEvidence evidence, const PhysicsWorldId identity,
                                                          const PhysicsScenePlan &plan) {
-            auto physics = runtime.PrepareWorld(settings.physics);
+            auto physics = runtime.PrepareWorld(settings.physics, settings.simulation);
             if (physics.HasError())
                 return Result<StagedPhysicsScene>::Failure(physics.ErrorValue());
             auto character = Character::CharacterWorld::Prepare({scene.RuntimeId().value, identity, evidence.collisionFilterGeneration,
@@ -238,6 +243,11 @@ namespace Horo::Physics {
                 return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(builtPlan.ErrorValue());
             Detail::PhysicsScenePlan plan = std::move(builtPlan).Value();
             const PhysicsSceneActivationEvidence evidence = authority_->Capture();
+            if (!plan.bodies.empty() && settings_.simulation.schema &&
+                settings_.simulation.generation != evidence.collisionFilterGeneration)
+                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(
+                    MakeError(PhysicsErrors::QuerySnapshotStale,
+                              "Captured collision schema generation does not match the activation authority."));
             const Result<PhysicsWorldId> identity = runtime_->IssueWorldIdentity();
             if (identity.HasError())
                 return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(identity.ErrorValue());

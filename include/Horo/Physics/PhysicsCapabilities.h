@@ -32,6 +32,7 @@ namespace Horo::Physics {
         SnapshotQueries,
         OriginRebasing,
         BodyMutation,
+        ContinuousCollision,
         Count
     };
 

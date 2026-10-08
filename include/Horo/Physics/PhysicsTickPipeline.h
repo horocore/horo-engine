@@ -62,7 +62,8 @@ namespace Horo::Physics {
      * @brief Owned partial replacement of one resident scene body at the pre-step safe point.
      *
      * Absent fields retain their current policy and velocity. Shape and mode changes rebuild the
-     * broadphase/contact representation in place and wake moving bodies. No pose or native ID is
+     * broadphase/contact representation in place and wake moving bodies. CCD override changes
+     * invalidate native contact cache and wake moving bodies; no angular sweep is introduced. No pose or native ID is
      * accepted; the body retains its current solver pose and Horo handle. A constrained body cannot
      * be changed until a qualified constraint-reconciliation path exists.
      */
@@ -74,7 +75,8 @@ namespace Horo::Physics {
         std::optional<PhysicsMotionSafety> motionSafety;
         std::optional<Math::Vec3> linearVelocity;
         std::optional<Math::Vec3> angularVelocity;
-        PhysicsBodyWakePolicy wake{PhysicsBodyWakePolicy::Preserve}; /**< Explicit override for otherwise non-waking damping edits. */
+        PhysicsBodyWakePolicy wake{PhysicsBodyWakePolicy::Preserve};       /**< Explicit override for otherwise non-waking damping edits. */
+        std::optional<PhysicsBodyContinuousCollision> continuousCollision; /**< Replacement override; an empty mode restores inheritance. */
     };
 
     /**
@@ -88,6 +90,8 @@ namespace Horo::Physics {
     struct PhysicsStructuralCommand final {
         PhysicsCommandOrderKey order;                    /**< Complete tick/world/scene/target/source canonical key. */
         std::optional<PhysicsBodyMutation> bodyMutation; /**< Only Change/Body commands may carry a native mutation. */
+        std::optional<PhysicsContinuousCollisionPolicy>
+            continuousCollision; /**< Only Change/World commands may replace effective CCD policy. */
     };
 
     /** @brief Non-throwing command admission result; rejected work remains owned by the caller. */

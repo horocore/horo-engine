@@ -88,7 +88,7 @@ namespace Horo::Physics::Detail {
 
     /** @copydoc CreateCanonicalWorld */
     Result<CanonicalWorldHandle> CreateCanonicalWorld(const CanonicalRuntimeHandle, const PhysicsWorldSettings &,
-                                                      const CanonicalFailurePoint) {
+                                                      const CanonicalFailurePoint, const PhysicsWorldSimulationBinding &) {
         return Result<CanonicalWorldHandle>::Failure(
             MakeError(PhysicsErrors::CapabilityUnavailable, "Canonical Physics was omitted from this product composition."));
     }
@@ -230,5 +230,20 @@ namespace Horo::Physics::Detail {
     /** @copydoc InspectCanonicalResources */
     CanonicalResourceCounts InspectCanonicalResources(const CanonicalRuntimeHandle) noexcept {
         return {};
+    }
+
+    /** @copydoc ValidateCanonicalContinuousCollision */
+    Result<void> ValidateCanonicalContinuousCollision(CanonicalWorldHandle, const PhysicsContinuousCollisionPolicy &) {
+        return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+    }
+
+    /** @copydoc ApplyCanonicalContinuousCollision */
+    Result<void> ApplyCanonicalContinuousCollision(CanonicalWorldHandle, const PhysicsContinuousCollisionPolicy &) {
+        return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+    }
+
+    /** @copydoc ReadCanonicalContinuousCollision */
+    Result<PhysicsContinuousCollisionObservation> ReadCanonicalContinuousCollision(CanonicalWorldHandle) {
+        return Result<PhysicsContinuousCollisionObservation>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
     }
 }  // namespace Horo::Physics::Detail

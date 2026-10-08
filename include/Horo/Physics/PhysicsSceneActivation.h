@@ -63,6 +63,7 @@ namespace Horo::Physics {
     struct PhysicsSceneActivationSettings final {
         PhysicsWorldSettings physics;
         Character::CharacterWorldSettings character;
+        PhysicsWorldSimulationBinding simulation; /**< Immutable project authority pinned across candidate preparation. */
     };
 
     /** @brief Stable authored-body to resident runtime-body binding retained by one scene candidate. */

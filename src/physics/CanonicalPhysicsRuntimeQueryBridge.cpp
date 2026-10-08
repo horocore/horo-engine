@@ -1,18 +1,33 @@
 #include "CanonicalPhysicsRuntimeInternal.h"
 
 namespace Horo::Physics::Detail {
-    namespace {
-        [[nodiscard]] CanonicalQueryAccess MakeQueryAccess(CanonicalWorld &world) {
-            return {.system = *world.native.system,
-                    .fixtures = world.query.fixtures,
-                    .nativeFixtureIndices = world.query.nativeFixtureIndices,
-                    .maximumFixtures = world.query.maximumFixtures,
-                    .nextFixtureSlot = world.query.nextFixtureSlot,
-                    .nextFixtureGeneration = world.query.nextFixtureGeneration,
-                    .querySchemaGeneration = world.query.querySchemaGeneration,
-                    .storage = world.query.storage};
-        }
-    }  // namespace
+    /** @copydoc MakeQueryAccess */
+    CanonicalQueryAccess MakeQueryAccess(CanonicalWorld &world) {
+        return {.system = *world.native.system,
+                .fixtures = world.query.fixtures,
+                .nativeFixtureIndices = world.query.nativeFixtureIndices,
+                .maximumFixtures = world.query.maximumFixtures,
+                .nextFixtureSlot = world.nextResourceSlot,
+                .nextFixtureGeneration = world.query.nextFixtureGeneration,
+                .querySchemaGeneration = world.query.querySchemaGeneration,
+                .storage = world.query.storage,
+                .sceneBodies = world.scene.bodies,
+                .nativeSceneBodyIndices = world.scene.nativeBodyIndices,
+                .simulation = world.simulation,
+                .sceneShapes = world.scene.shapes};
+    }
+
+    /** @copydoc ResolveCanonicalSceneBody */
+    const CanonicalSceneBodyRecord *ResolveCanonicalSceneBody(const CanonicalQueryAccess &access, const PhysicsWorldId owner,
+                                                              const JPH::BodyID nativeBody) noexcept {
+        if (nativeBody.IsInvalid() || nativeBody.GetIndex() >= access.nativeSceneBodyIndices.size())
+            return nullptr;
+        const std::size_t index = access.nativeSceneBodyIndices[nativeBody.GetIndex()];
+        if (index >= access.sceneBodies.size())
+            return nullptr;
+        const auto &record = access.sceneBodies[index];
+        return record.nativeBody == nativeBody && record.handle.IsValid() && record.handle.world == owner ? &record : nullptr;
+    }
 
     /** @copydoc CreateCanonicalQueryFixture */
     Result<PhysicsQueryFixture> CreateCanonicalQueryFixture(const CanonicalWorldHandle world, const PhysicsWorldId owner,

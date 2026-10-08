@@ -1104,6 +1104,7 @@ target_link_libraries(HoroGameplayLua PRIVATE HoroEngine::GameplayPhysicsIntegra
 if(HORO_BUILD_PHYSICS_NATIVE)
     target_sources(HoroPhysics PRIVATE
         physics/CanonicalPhysicsRuntime.cpp
+        physics/CanonicalPhysicsRuntimeContinuousCollision.cpp
         physics/CanonicalPhysicsRuntimeBodyCreation.cpp
         physics/CanonicalPhysicsRuntimeSceneBatch.cpp
         physics/CanonicalPhysicsRuntimeDebug.cpp
@@ -1119,6 +1120,7 @@ if(HORO_BUILD_PHYSICS_NATIVE)
     target_link_libraries(HoroPhysics PRIVATE Jolt)
     set_source_files_properties(
         physics/CanonicalPhysicsRuntime.cpp
+        physics/CanonicalPhysicsRuntimeContinuousCollision.cpp
         physics/CanonicalPhysicsRuntimeBodyCreation.cpp
         physics/CanonicalPhysicsRuntimeSceneBatch.cpp
         physics/CanonicalPhysicsRuntimeDebug.cpp

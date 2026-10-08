@@ -46,9 +46,9 @@ namespace Horo::Physics {
     TEST_CASE("World settings identity has an independently encoded default fixture", "[physics][settings]") {
         const auto result = PhysicsWorldSettings::Capture({});
         REQUIRE(result.HasValue());
-        // SHA-256 of schema-2's 34 little-endian uint64 words, independently encoded with Python struct.pack.
+        // SHA-256 of schema-3's 36 little-endian uint64 words, independently encoded with Python struct.pack.
         REQUIRE(FormatSha256(result.Value().Identity().digest) ==
-                "sha256:dacddeeb7448d68bce46ef935e79acc15fca20fc3adcaed465411b9d5e7016ea");
+                "sha256:94cecc88cd7622b429f063540d52680edf3dd8fc10ef33c0ee039f6a32f422e4");
         const auto repeated = PhysicsWorldSettings::Capture({});
         REQUIRE(repeated.HasValue());
         REQUIRE(repeated.Value().Identity() == result.Value().Identity());
