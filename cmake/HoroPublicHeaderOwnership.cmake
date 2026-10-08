@@ -916,6 +916,7 @@ Horo/Prefab/PrefabDependencyGraph.h
 horo_configure_target_header_boundary(HoroSceneCellPayload PUBLIC_HEADERS
     Horo/Runtime/Scene/SceneCellAttachments.h
     Horo/Runtime/Scene/RuntimeSceneCellPayload.h
+    Horo/Runtime/Scene/RuntimeSceneCellLayers.h
     Horo/Runtime/Scene/IncrementalSceneCellCook.h
 )
 

@@ -1726,6 +1726,7 @@ add_library(HoroSceneCellPayload STATIC
         runtime/scene/RuntimeSceneCellAttachment.cpp
         runtime/scene/SceneCellAttachments.cpp
         runtime/scene/RuntimeSceneCellPayload.cpp
+        runtime/scene/RuntimeSceneCellLayers.cpp
         runtime/scene/RuntimeSceneCellPayloadErrors.cpp
         runtime/scene/IncrementalSceneCellCook.cpp
 )
