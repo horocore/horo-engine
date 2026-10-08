@@ -145,10 +145,11 @@ HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_query(HoroExtensionRequ
                                                         : HORO_ABI_FIXTURE_MODE == 10 ? 2
                                                         : HORO_ABI_FIXTURE_MODE == 9  ? 1
                                                                                       : 0,
-                                    .requiredHostApiSize =
-                                        HORO_ABI_FIXTURE_MODE == 10 || HORO_ABI_FIXTURE_MODE == 11 ? sizeof(HoroExtensionHostApi)
-                                        : HORO_ABI_FIXTURE_MODE == 9 ? offsetof(HoroExtensionHostApi, registerPlatformServicesProvider)
-                                                                     : offsetof(HoroExtensionHostApi, abiMinorVersion),
+                                    .requiredHostApiSize = HORO_ABI_FIXTURE_MODE == 10 || HORO_ABI_FIXTURE_MODE == 11
+                                                               ? offsetof(HoroExtensionHostApi, registerEditorActivity)
+                                                           : HORO_ABI_FIXTURE_MODE == 9
+                                                               ? offsetof(HoroExtensionHostApi, registerPlatformServicesProvider)
+                                                               : offsetof(HoroExtensionHostApi, abiMinorVersion),
                                     .requiredFunctions =
                                         HORO_ABI_FIXTURE_MODE == 10 || HORO_ABI_FIXTURE_MODE == 11
                                             ? HORO_EXTENSION_REQUIRES_PLATFORM_PROVIDER

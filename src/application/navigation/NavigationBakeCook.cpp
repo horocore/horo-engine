@@ -86,6 +86,8 @@ namespace Horo::Application::NavigationBakeDetail {
         [[nodiscard]] Result<void> Gather(const ServiceState &state, Attempt &attempt, const CancellationToken &cancel) {
             attempt.candidate = std::make_shared<NavigationBakePublication>();
             attempt.candidate->tiles.inputFingerprint = attempt.request.input->Fingerprint();
+            attempt.candidate->tiles.provenance =
+                NavigationCookedContentProvenance{attempt.request.compatibility, attempt.request.projectProfile};
             std::size_t bytes{};
             for (const auto &tile : attempt.request.tiles) {
                 auto prepared = PrepareNavigationBakeTile(*attempt.request.input, tile, attempt.request.compatibility, cancel,

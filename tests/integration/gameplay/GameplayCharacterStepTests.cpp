@@ -59,6 +59,25 @@ namespace {
             descriptor.defaultMaterial = {Assets::AssetId::Parse("12345678-1234-4234-8234-123456789abc").Value(), 1,
                                           PhysicsMaterialSlotId::FromValue(1)};
             descriptor.selectors.requiredLayer = CollisionLayerId::Parse("42345678-1234-4234-8234-123456789abc").Value();
+            PrepareGeometry(height, ceiling);
+
+            controller = character->CreateController(descriptor).Value();
+            REQUIRE(character->Activate().HasValue());
+            CharacterPhysicsQueryAdapter adapter{*physics};
+            REQUIRE(character->SpawnController(controller, adapter.Context(Expectations(0))).HasValue());
+        }
+
+        ~CanonicalStepHost() {
+            if (gameplay)
+                gameplay->Shutdown();
+            if (character)
+                character->Shutdown();
+            if (physics)
+                physics->Shutdown();
+        }
+
+        /** @brief Installs the native floor, step and optional ceiling before controller publication. */
+        void PrepareGeometry(const float height, const bool ceiling) {
             const PhysicsQueryFixtureDescriptor plane{.shape = PhysicsStaticPlaneShape{{0, 1, 0}, 0},
                                                       .layer = *descriptor.selectors.requiredLayer,
                                                       .profile = descriptor.collisionProfile,
@@ -78,20 +97,6 @@ namespace {
                 roof.pose.translation = {0, 1.7F, 0};
                 REQUIRE(physics->CreateQueryFixture(roof).HasValue());
             }
-
-            controller = character->CreateController(descriptor).Value();
-            REQUIRE(character->Activate().HasValue());
-            CharacterPhysicsQueryAdapter adapter{*physics};
-            REQUIRE(character->SpawnController(controller, adapter.Context(Expectations(0))).HasValue());
-        }
-
-        ~CanonicalStepHost() {
-            if (gameplay)
-                gameplay->Shutdown();
-            if (character)
-                character->Shutdown();
-            if (physics)
-                physics->Shutdown();
         }
 
         [[nodiscard]] CharacterPhysicsQueryExpectations Expectations(const std::uint64_t tick) const {
@@ -102,6 +107,7 @@ namespace {
 
         [[nodiscard]] CharacterLocomotionSnapshot Move(const std::uint64_t tick, const Math::Vec3 velocity,
                                                        const std::int64_t nanoseconds = 16'666'667) {
+            const auto before = character->ControllerTransform(controller).Value().position;
             REQUIRE(character
                         ->QueueMovementCommand(
                             {.controller = controller, .tick = tick, .sequence = tick, .desiredVelocityMetersPerSecond = velocity})
@@ -115,6 +121,8 @@ namespace {
                         .HasValue());
             const auto snapshot = character->ControllerLocomotionSnapshot(controller).Value();
             REQUIRE(ValidateCharacterLocomotionSnapshot(snapshot, descriptor).HasValue());
+            const float seconds = static_cast<float>(nanoseconds) / 1'000'000'000.0F;
+            REQUIRE(snapshot.transform.position.x - before.x <= velocity.x * seconds + 1.0e-5F);
             Runtime::SceneCommandBuffer commands;
             Math::Transform transform;
             transform.translation = snapshot.transform.position;
@@ -149,6 +157,7 @@ namespace {
             stepped = stepped || (static_cast<std::uint16_t>(snapshot.movement.collisions) &
                                   static_cast<std::uint16_t>(CharacterCollisionFlags::Step)) != 0;
         }
+        INFO("height=" << height << " final x=" << snapshot.transform.position.x << " y=" << snapshot.transform.position.y);
         REQUIRE(stepped);
         REQUIRE(snapshot.transform.position.x > 0.5F);
         REQUIRE(snapshot.transform.position.y == Catch::Approx(0.77F + height).margin(2.0e-3F));

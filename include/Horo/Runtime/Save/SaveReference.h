@@ -14,14 +14,7 @@
 #include <variant>
 
 namespace Horo::Runtime {
-    struct SaveAssetIdentityTag;
-    struct PersistentEntityIdentityTag;
     struct PrefabInstanceIdentityTag;
-
-    /** @brief Stable Asset Registry identity persisted without a filesystem path or runtime handle. */
-    using SaveAssetId = PersistentSaveIdentity<SaveAssetIdentityTag>;
-    /** @brief Stable runtime entity identity persisted without an ECS slot or generation. */
-    using PersistentEntityId = PersistentSaveIdentity<PersistentEntityIdentityTag>;
     /** @brief Stable identity of one durable prefab occurrence. */
     using SavePrefabInstanceId = PersistentSaveIdentity<PrefabInstanceIdentityTag>;
 

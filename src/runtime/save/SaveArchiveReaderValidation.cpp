@@ -64,7 +64,8 @@ namespace Horo::Runtime::SaveArchiveReaderDetail {
     }
 
     Result<ValidatedSaveChunkDirectory> BuildDirectory(const std::span<const std::byte> payload, const std::vector<RawEntry> &entries,
-                                                       const SaveGameManifest &manifest, const SaveArchiveReaderLimits &limits) {
+                                                       const SaveGameManifest &manifest, const SaveArchiveReaderLimits &limits,
+                                                       const std::uint32_t archiveVersion) {
         SaveChunkDirectory directory{.integrityAlgorithm = {},
                                      .payloadByteLength = payload.size(),
                                      .entries = {},
@@ -89,7 +90,9 @@ namespace Horo::Runtime::SaveArchiveReaderDetail {
                                          .codec = static_cast<SaveChunkCodec>(raw.codec),
                                          .decodedHash = raw.decodedHash});
         }
-        return ValidateSaveChunkDirectory(std::move(directory), manifest, limits.chunks);
+        const auto admission = archiveVersion == 2 && manifest.saveSchemaVersion.Value() == 2 ? DirectoryCodecAdmission::OptionalOpaque
+                                                                                              : DirectoryCodecAdmission::SupportedOnly;
+        return DirectoryAdmission::Validate(std::move(directory), manifest, limits.chunks, admission, archiveVersion);
     }
 
 }  // namespace Horo::Runtime::SaveArchiveReaderDetail

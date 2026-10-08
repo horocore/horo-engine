@@ -31,6 +31,11 @@ namespace Horo::Network {
         return object_;
     }
 
+    /** @copydoc ReplicationCapturedState::World */
+    const ReplicationWorldCaptureRead &ReplicationCapturedState::World() const noexcept {
+        return world_;
+    }
+
     /** @copydoc ReplicationCapturedState::SimulationTick */
     std::uint64_t ReplicationCapturedState::SimulationTick() const noexcept {
         return simulationTick_;

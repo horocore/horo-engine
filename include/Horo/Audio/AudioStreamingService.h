@@ -92,7 +92,11 @@ namespace Horo::Audio {
         AudioStreamRenderPort(const AudioStreamRenderPort &) = delete;
         AudioStreamRenderPort &operator=(const AudioStreamRenderPort &) = delete;
 
-        AudioStreamRenderPort(AudioStreamRenderPort &&other) noexcept : state_(std::exchange(other.state_, nullptr)) {}
+        /** @brief Release an optional retained-port pin on detached control only; never destroy on callback. */
+        ~AudioStreamRenderPort();
+
+        AudioStreamRenderPort(AudioStreamRenderPort &&other) noexcept
+            : state_(std::exchange(other.state_, nullptr)), retained_(std::exchange(other.retained_, false)) {}
 
         AudioStreamRenderPort &operator=(AudioStreamRenderPort &&) = delete;
         /**
@@ -107,9 +111,10 @@ namespace Horo::Audio {
     private:
         friend class AudioStreamingService;
 
-        explicit AudioStreamRenderPort(AudioStreamState *state) noexcept : state_(state) {}
+        explicit AudioStreamRenderPort(AudioStreamState *state, bool retained = false) noexcept : state_(state), retained_(retained) {}
 
         AudioStreamState *state_{};
+        bool retained_{}; /**< Control-only pin bookkeeping; Render never reads this flag. */
     };
 
     /** @brief Control-owner view of worker and callback facts. */
@@ -183,6 +188,18 @@ namespace Horo::Audio {
         [[nodiscard]] Result<AudioStreamHandle> Admit(AudioStreamRequest request);
         /** @brief Borrows the sole callback endpoint. @param handle Live stream identity. @return Port or stale/duplicate error. */
         [[nodiscard]] Result<AudioStreamRenderPort> RenderPort(AudioStreamHandle handle);
+        /** @brief Borrow the sole port with a control-owned retirement pin.
+         * @param handle Live exact stream generation.
+         * @return Port or typed stale/duplicate failure. Retire/Shutdown retain storage while this port exists.
+         * @details The service must outlive the port. Move/destruction occur only on detached control;
+         * destruction releases the pin without joining jobs or freeing ring storage. The host may then Retire.
+         * Existing RenderPort callers retain their explicit host-detachment contract.
+         */
+        [[nodiscard]] Result<AudioStreamRenderPort> RetainedRenderPort(AudioStreamHandle handle);
+        /** @brief Copy actual admitted decoder facts on control, never caller-trusted replacement metadata.
+         * @param handle Live exact stream identity. @return Owned facts or typed stale failure.
+         */
+        [[nodiscard]] Result<AudioStreamDecoderSpec> DecoderSpec(AudioStreamHandle handle) const;
         /** @brief Reaps completed fills and admits priority-ordered lookahead jobs without waiting. */
         void Pump();
         /** @brief Requests cancellation and closes further fill admission. @param handle Live identity. @return Success or stale-handle
@@ -220,6 +237,8 @@ namespace Horo::Audio {
         struct Slot;
         [[nodiscard]] AudioStreamState *Find(AudioStreamHandle handle) noexcept;
         [[nodiscard]] const AudioStreamState *Find(AudioStreamHandle handle) const noexcept;
+        /** @brief Issue the sole callback port after one shared liveness/duplicate check, with optional control retirement pin. */
+        [[nodiscard]] Result<AudioStreamRenderPort> IssueRenderPort(AudioStreamHandle handle, bool retained);
 
         JobSystem &jobs_;
         AudioStreamPackageSource source_;

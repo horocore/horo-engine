@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -73,6 +74,30 @@ namespace Horo::Extensions {
         bool operator==(const EditorSurfaceProviderIdentity &) const noexcept = default;
     };
 
+    /** @brief Host-owned rail for an activity destination and its bound drawer. */
+    enum class EditorActivitySide : std::uint8_t {
+        Left,
+        Right,
+        Bottom
+    };
+
+    /** @brief Inert binding to a same-provider workspace panel; no activation or drawing is performed. */
+    struct EditorActivityDestination final {
+        EditorActivitySide side{EditorActivitySide::Left};
+        std::uint8_t group{};     /**< Host activity group; bounded to the three workspace groups. */
+        std::string drawerId;     /**< Stable panel identity owned by the same exact provider activation. */
+        std::string iconResource; /**< Verified package-relative icon resource; never a renderer handle. */
+    };
+
+    /** @brief Bounded copied presentation state; badges never contain executable provider state. */
+    struct EditorActivityPresentation final {
+        bool visible{true};
+        bool enabled{true};
+        std::uint32_t badgeCount{};
+
+        bool operator==(const EditorActivityPresentation &) const noexcept = default;
+    };
+
     /** @brief Immutable, inert metadata for one extension-contributed editor surface. */
     struct EditorSurfaceDescriptor final {
         std::string id;
@@ -87,6 +112,7 @@ namespace Horo::Extensions {
         EditorSurfaceProviderIdentity provider;
         std::vector<EditorSurfaceEventId> requestedEditorEvents;
         std::vector<EditorSurfaceEventId> requestedProcessEvents;
+        std::optional<EditorActivityDestination> activity; /**< Required only for ActivityItem surfaces. */
     };
 
     /** @brief Bounds applied before a descriptor becomes visible to an editor host. */
