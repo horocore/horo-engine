@@ -206,6 +206,10 @@ namespace Horo::Network {
         Impl::TickWork work{worldRead, committedTick, cancellation, {.simulationTick = committedTick}};
         impl_->Schedule(work);
         work.report.deferred = impl_->targets.size() - work.report.considered;
+        if (impl_->debugger)
+            (void)impl_->debugger->Observe(impl_->diagnosticSource,
+                                           NetworkReplicationRecord{0, 0, work.report.considered, work.report.published, work.report.failed,
+                                                                    work.report.deferred});
         return Result<ReplicationCaptureReport>::Success(std::move(work.report));
     }
 

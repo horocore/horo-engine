@@ -13,8 +13,9 @@ namespace Horo::Network {
 
     /** @copydoc RpcGameplayDispatch::RpcGameplayDispatch */
     RpcGameplayDispatch::RpcGameplayDispatch(ConstructionKey, RpcDescriptorSnapshotPtr descriptors, ReplicationWorldLifecycle &world,
-                                             const RpcDispatchLimits &limits)
-        : descriptors_(std::move(descriptors)), world_(world), limits_(limits), owner_(std::this_thread::get_id()) {
+                                             const RpcDispatchLimits &limits, NetworkDebugger *debugger)
+        : descriptors_(std::move(descriptors)), world_(world), limits_(limits), owner_(std::this_thread::get_id()), debugger_(debugger),
+          diagnosticSource_(debugger ? debugger->Source() : NetworkDiagnosticSource{}) {
         peers_.reserve(limits.maximumPeers);
         objects_.reserve(limits.maximumObjects);
         bindings_.reserve(limits.maximumBindings);
@@ -33,7 +34,7 @@ namespace Horo::Network {
     /** @copydoc RpcGameplayDispatch::Create */
     Result<std::shared_ptr<RpcGameplayDispatch>> RpcGameplayDispatch::Create(RpcDescriptorSnapshotPtr descriptors,
                                                                              ReplicationWorldLifecycle &world,
-                                                                             const RpcDispatchLimits &limits) {
+                                                                             const RpcDispatchLimits &limits, NetworkDebugger *debugger) {
         if (!descriptors || limits.maximumPeers == 0 || limits.maximumPeers > 4096 || limits.maximumBindings == 0 ||
             limits.maximumBindings > 4096 || limits.maximumObjects == 0 || limits.maximumObjects > 65536 || limits.maximumPending == 0 ||
             limits.maximumPending > 4096 || limits.maximumReplayScopes == 0 || limits.maximumReplayScopes > 65536 ||
@@ -46,7 +47,7 @@ namespace Horo::Network {
             return Result<std::shared_ptr<RpcGameplayDispatch>>::Failure(MakeError(NetworkErrors::RpcDescriptorInvalid));
         try {
             return Result<std::shared_ptr<RpcGameplayDispatch>>::Success(
-                std::make_shared<RpcGameplayDispatch>(ConstructionKey{}, std::move(descriptors), world, limits));
+                std::make_shared<RpcGameplayDispatch>(ConstructionKey{}, std::move(descriptors), world, limits, debugger));
         } catch (const std::bad_alloc &) {
             return Result<std::shared_ptr<RpcGameplayDispatch>>::Failure(MakeError(NetworkErrors::RpcCapacityExceeded));
         }
@@ -223,6 +224,9 @@ namespace Horo::Network {
             return;
         stopped_ = true;
         terminals_.cancelled += pending_.size();
+        if (debugger_)
+            (void)debugger_->Observe(diagnosticSource_,
+                                     NetworkRpcRecord{terminals_.accepted, terminals_.succeeded, terminals_.failed, terminals_.cancelled});
         pending_.clear();
         replay_.clear();
         rates_.clear();

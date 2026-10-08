@@ -5,6 +5,7 @@
  * @brief Optional host-composed transport measurement adapter.
  */
 
+#include "Horo/Network/NetworkDebugger.h"
 #include "Horo/Network/NetworkMetrics.h"
 #include "Horo/Network/NetworkTransport.h"
 
@@ -21,8 +22,10 @@ namespace Horo::Network {
     public:
         /** @brief Takes a non-null unique backend and borrows an owner-thread metrics accumulator.
          * @param backend Non-null transport owned exclusively by this adapter.
-         * @param metrics Collector that outlives this adapter and is used on its owner thread. */
-        NetworkMetricTransport(std::unique_ptr<INetworkTransport> backend, NetworkMetrics &metrics) noexcept;
+         * @param metrics Collector that outlives this adapter and is used on its owner thread.
+         * @param debugger Optional host-owned diagnostics collector that outlives this adapter. */
+        NetworkMetricTransport(std::unique_ptr<INetworkTransport> backend, NetworkMetrics &metrics,
+                               NetworkDebugger *debugger = nullptr) noexcept;
         /** @copydoc INetworkTransport::Initialize */
         [[nodiscard]] Result<void> Initialize(const NetworkTransportConfig &config) override;
         /** @copydoc INetworkTransport::Listen */
@@ -50,5 +53,7 @@ namespace Horo::Network {
     private:
         std::unique_ptr<INetworkTransport> backend_;
         NetworkMetrics &metrics_;
+        NetworkDebugger *debugger_{};
+        NetworkDiagnosticSource source_{};
     };
 }  // namespace Horo::Network

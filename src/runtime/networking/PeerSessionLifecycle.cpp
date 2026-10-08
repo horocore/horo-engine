@@ -9,6 +9,19 @@
 #include <ranges>
 
 namespace Horo::Network {
+    /** @brief Publishes real session admission separately from native transport connectivity. */
+    void PeerSessionLifecycle::ObserveDiagnostic() const noexcept {
+        if (!debugger_)
+            return;
+        auto event = NetworkTransportEventKind::Connected;
+        if (state_ == PeerSessionState::Failed)
+            event = NetworkTransportEventKind::Failed;
+        else if (state_ == PeerSessionState::Closed || state_ == PeerSessionState::Closing)
+            event = NetworkTransportEventKind::Closed;
+        (void)debugger_->Observe(diagnosticSource_, NetworkConnectionRecord{connection_, event, 0, sessionGeneration_.Value(),
+                                                                            state_ == PeerSessionState::Active});
+    }
+
     namespace {
         [[nodiscard]] bool ValidDeadlines(const PeerSessionDeadlines &deadlines) noexcept {
             return deadlines.negotiationTick != 0 && deadlines.authenticationTick > deadlines.negotiationTick &&
@@ -65,16 +78,19 @@ namespace Horo::Network {
     }  // namespace
 
     PeerSessionLifecycle::PeerSessionLifecycle(const ConnectionHandle connection, const NetworkOperationGeneration sessionGeneration,
-                                               const PeerSessionDeadlines &deadlines, NetworkMetrics *metrics) noexcept
-        : connection_(connection), sessionGeneration_(sessionGeneration), deadlines_(deadlines), metrics_(metrics) {}
+                                               const PeerSessionDeadlines &deadlines, NetworkMetrics *metrics,
+                                               NetworkDebugger *debugger) noexcept
+        : connection_(connection), sessionGeneration_(sessionGeneration), deadlines_(deadlines), metrics_(metrics), debugger_(debugger),
+          diagnosticSource_(debugger ? debugger->Source() : NetworkDiagnosticSource{}) {}
 
     /** @copydoc PeerSessionLifecycle::Create */
     Result<PeerSessionLifecycle> PeerSessionLifecycle::Create(const ConnectionHandle connection,
                                                               const NetworkOperationGeneration sessionGeneration,
-                                                              const PeerSessionDeadlines &deadlines, NetworkMetrics *metrics) {
+                                                              const PeerSessionDeadlines &deadlines, NetworkMetrics *metrics,
+                                                              NetworkDebugger *debugger) {
         if (!connection.IsValid() || !sessionGeneration.IsValid() || !ValidDeadlines(deadlines))
             return Result<PeerSessionLifecycle>::Failure(MakeError(NetworkErrors::NetworkLifecycleInvalid));
-        return Result<PeerSessionLifecycle>::Success(PeerSessionLifecycle{connection, sessionGeneration, deadlines, metrics});
+        return Result<PeerSessionLifecycle>::Success(PeerSessionLifecycle{connection, sessionGeneration, deadlines, metrics, debugger});
     }
 
     bool PeerSessionLifecycle::Owns(const ConnectionHandle connection, const NetworkOperationGeneration sessionGeneration) const noexcept {
@@ -113,6 +129,7 @@ namespace Horo::Network {
         state_ = IsGracefulClose(kind) || kind == PeerSessionTerminalKind::LocalCancellation || kind == PeerSessionTerminalKind::Shutdown
                      ? PeerSessionState::Closed
                      : PeerSessionState::Failed;
+        ObserveDiagnostic();
         if (metrics_ && metrics_->IsCollecting()) {
             switch (kind) {
                 case PeerSessionTerminalKind::ProtocolRejected:
@@ -166,6 +183,7 @@ namespace Horo::Network {
         if (nowTick == 0 || nowTick >= deadlines_.negotiationTick)
             return Result<void>::Failure(MakeError(NetworkErrors::SessionTimedOut));
         state_ = PeerSessionState::Negotiating;
+        ObserveDiagnostic();
         return Result<void>::Success();
     }
 
@@ -181,6 +199,7 @@ namespace Horo::Network {
             return Result<void>::Failure(MakeError(NetworkErrors::HandshakeInvalid));
         negotiation_ = selection;
         state_ = PeerSessionState::Authenticating;
+        ObserveDiagnostic();
         return Result<void>::Success();
     }
 
@@ -196,6 +215,7 @@ namespace Horo::Network {
             return Result<void>::Failure(MakeError(NetworkErrors::AuthenticationInvalid));
         authentication_ = authentication;
         state_ = PeerSessionState::Activating;
+        ObserveDiagnostic();
         return Result<void>::Success();
     }
 
@@ -215,6 +235,7 @@ namespace Horo::Network {
         activityDeadlineTick_ = std::min(
             {deadlines_.lifetimeTick, authentication_->principal.expiresAtTick, SaturatingAdd(nowTick, deadlines_.inactivityTicks)});
         state_ = PeerSessionState::Active;
+        ObserveDiagnostic();
         return Result<void>::Success();
     }
 
@@ -258,6 +279,7 @@ namespace Horo::Network {
         pendingCloseKind_ = kind;
         pendingCloseReason_ = reason;
         state_ = Closing;
+        ObserveDiagnostic();
         activityDeadlineTick_ = 0;
         return Result<void>::Success();
     }
