@@ -121,34 +121,33 @@ namespace Horo::Render::Detail {
     }
 
     /** @copydoc CopyMetalBufferUpload */
-    Result<void> CopyMetalBufferUpload(void *destination, const std::size_t capacity, const std::span<const std::byte> data) {
+    Result<void> CopyMetalBufferUpload(std::byte *destination, const std::size_t capacity, const std::span<const std::byte> data) {
         if (data.size() > capacity || (!data.empty() && destination == nullptr)) {
             return Result<void>::Failure(
                 PolicyError(MetalBackendErrors::ResourceCreationFailed, "Metal upload exceeds its CPU-accessible native buffer."));
         }
         if (!data.empty())
-            std::ranges::copy(data, static_cast<std::byte *>(destination));
+            std::ranges::copy(data, destination);
         return Result<void>::Success();
     }
 
     /** @copydoc CopyMetalTextureUpload */
-    Result<void> CopyMetalTextureUpload(const RenderTextureDescriptor &descriptor, const std::size_t rowAlignment, void *destination,
+    Result<void> CopyMetalTextureUpload(const RenderTextureDescriptor &descriptor, const std::size_t rowAlignment, std::byte *destination,
                                         const std::size_t capacity, const std::span<const std::byte> data) {
         const auto planned = PlanMetalTextureUpload(descriptor, rowAlignment);
         if (planned.HasError())
             return Result<void>::Failure(planned.ErrorValue());
         const auto &layout = planned.Value();
-        const auto payloadBytes = CheckedProduct(layout.tightImageBytes, descriptor.layerCount);
-        if (!payloadBytes.has_value() || data.size() != *payloadBytes || destination == nullptr || capacity < layout.stagingBytes) {
+        if (const auto payloadBytes = CheckedProduct(layout.tightImageBytes, descriptor.layerCount);
+            !payloadBytes.has_value() || data.size() != *payloadBytes || destination == nullptr || capacity < layout.stagingBytes) {
             return Result<void>::Failure(
                 PolicyError(MetalBackendErrors::ResourceCreationFailed, "Metal texture upload has incomplete source or staging storage."));
         }
         // Both complete ranges are admitted before the first write; checked layout products bound every row offset.
-        auto *bytes = static_cast<std::byte *>(destination);
         for (std::size_t layer = 0; layer < descriptor.layerCount; ++layer) {
             for (std::size_t row = 0; row < descriptor.extent.height; ++row) {
                 const auto source = data.subspan(layer * layout.tightImageBytes + row * layout.tightRowBytes, layout.tightRowBytes);
-                std::ranges::copy(source, bytes + layer * layout.paddedImageBytes + row * layout.paddedRowBytes);
+                std::ranges::copy(source, destination + layer * layout.paddedImageBytes + row * layout.paddedRowBytes);
             }
         }
         return Result<void>::Success();

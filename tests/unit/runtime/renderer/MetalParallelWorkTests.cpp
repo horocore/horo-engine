@@ -66,7 +66,7 @@ namespace Horo::Render::MetalBackendTests {
 
     TEST_CASE("Real host workers record independent native slots and owner presents compiled order after source destruction",
               "[unit][renderer][parallel][native]") {
-        JobSystem jobs{{.workerCount = 2}};
+        const JobSystem jobs{{.workerCount = 2}};
         ParallelHostFixture fixture;
         auto frame = BeginParallelTestFrame(*fixture.frontend);
         {

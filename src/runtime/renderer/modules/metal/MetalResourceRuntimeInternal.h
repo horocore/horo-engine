@@ -97,6 +97,11 @@ namespace Horo::Render::Detail {
             __strong id<MTLBuffer> staging{nil};
             __strong id<MTLCommandBuffer> commands{nil};
             __strong id<MTLBlitCommandEncoder> blit{nil};
+
+            /** @brief Borrows writable staging bytes; the copy policy validates nullability and actual staging.length before writing. */
+            [[nodiscard]] std::byte *WritableBytes() const noexcept {
+                return static_cast<std::byte *>(staging.contents);
+            }
         };
 
         __strong id<MTLDevice> device{nil};
@@ -210,13 +215,13 @@ namespace Horo::Render::Detail {
                 return Result<void>::Failure(
                     ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal upload exceeds its resident buffer capacity."));
             if (storage == MetalResourceStorage::Shared)
-                return CopyMetalBufferUpload(buffer.contents, buffer.length, data);
+                return CopyMetalBufferUpload(static_cast<std::byte *>(buffer.contents), buffer.length, data);
             auto transfer = BeginStagingBlit(data.size());
             if (!transfer.HasValue()) {
                 Error error = std::move(transfer).ErrorValue();
                 return Result<void>::Failure(std::move(error));
             }
-            auto copied = CopyMetalBufferUpload(transfer.Value().staging.contents, transfer.Value().staging.length, data);
+            auto copied = CopyMetalBufferUpload(transfer.Value().WritableBytes(), transfer.Value().staging.length, data);
             if (copied.HasError()) {
                 [transfer.Value().blit endEncoding];
                 return copied;
@@ -241,7 +246,7 @@ namespace Horo::Render::Detail {
             if (transfer.HasError())
                 return Result<void>::Failure(std::move(transfer).ErrorValue());
             auto copied = CopyMetalTextureUpload(descriptor, RenderTextureTexelBytes(descriptor.format).value_or(0),
-                                                 transfer.Value().staging.contents, transfer.Value().staging.length, data);
+                                                 transfer.Value().WritableBytes(), transfer.Value().staging.length, data);
             if (copied.HasError()) {
                 [transfer.Value().blit endEncoding];
                 return copied;

@@ -99,7 +99,7 @@ namespace {
 TEST_CASE("Parallel captured execution contains standard and foreign executor exceptions and releases the frame",
           "[unit][renderer][parallel][exception]") {
     for (const bool foreign : {false, true}) {
-        Horo::JobSystem jobs{{.workerCount = 1}};
+        const Horo::JobSystem jobs{{.workerCount = 1}};
         ThrowingSnapshotExecutor executor{foreign};
         auto frontend = CreateFrontend();
         REQUIRE(frontend->AttachStaticMeshPassExecutor(executor).HasValue());
