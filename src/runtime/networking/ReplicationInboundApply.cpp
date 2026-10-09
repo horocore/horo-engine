@@ -14,7 +14,7 @@ namespace Horo::Network {
         /** @brief Closes reentrant staging/application while permitting explicit retirement. */
         struct BusyGuard final {
             explicit BusyGuard(bool &busy) : flag(busy) {
-                flag = true;
+                busy = true;
             }
 
             ~BusyGuard() {
@@ -117,8 +117,8 @@ namespace Horo::Network {
         const auto role = object.role->Snapshot();
         if (role.HasError())
             return Result<void>::Failure(role.ErrorValue());
-        const auto &recipient = object.codec->Recipient();
-        if (role.Value() != recipient || recipient.object != object.mapping.object || recipient.session != authority_.networkSession ||
+        if (const auto &recipient = object.codec->Recipient();
+            role.Value() != recipient || recipient.object != object.mapping.object || recipient.session != authority_.networkSession ||
             recipient.localPeer != authority_.localRecipient || recipient.role != world.Descriptor().role ||
             recipient.schema != object.mapping.provenance.schema || recipient.schemaVersion != object.mapping.provenance.schemaVersion)
             return Fail<void>(ReplicationStateErrors::Stale);
@@ -161,10 +161,11 @@ namespace Horo::Network {
         if (revision_ == std::numeric_limits<std::uint64_t>::max())
             return Shutdown();
         ++revision_;
-        const auto found = std::ranges::find(objects_, object, [](const Object &entry) {
+        if (const auto found = std::ranges::find(objects_, object,
+                                                 [](const Object &entry) {
             return entry.mapping.object;
         });
-        if (found != objects_.end()) {
+            found != objects_.end()) {
             found->pending.reset();
             found->baseline.reset();
             found->role.reset();
@@ -245,9 +246,8 @@ namespace Horo::Network {
             return Result<void>::Failure(current.ErrorValue());
         if (const auto valid = ValidateObject(objects_[index], current.Value()); valid.HasError())
             return valid;
-        const auto *latest = pinned.Latest();
-        if (latest && (decoded.Value().PublicationRevision() <= latest->PublicationRevision() ||
-                       decoded.Value().SimulationTick() < latest->SimulationTick()))
+        if (const auto *latest = pinned.Latest(); latest && (decoded.Value().PublicationRevision() <= latest->PublicationRevision() ||
+                                                             decoded.Value().SimulationTick() < latest->SimulationTick()))
             return Fail<void>(ReplicationStateErrors::Stale);
         if (const auto retained = AdmitRetainedState(index, decoded.Value()); retained.HasError())
             return retained;
@@ -272,7 +272,7 @@ namespace Horo::Network {
                 if (!retained)
                     continue;
                 const auto charge = Charge(*retained, limits_.maximumRetainedBytes - bytes);
-                if (!charge)
+                if (!charge.has_value())
                     return Fail<void>(ReplicationStateErrors::Capacity);
                 bytes += *charge;
             }
@@ -320,20 +320,35 @@ namespace Horo::Network {
             return Fail<ReplicationApplyReport>(ReplicationStateErrors::Closed);
         [[maybe_unused]] const auto self = shared_from_this();
         const BusyGuard guard{busy_};
-        try {
-            auto result = ApplyPending(*owner, lease.Value(), request, now);
-            if (result.HasError())
-                DiscardPending();
-            return result;
-        } catch (const std::bad_alloc &) {
+        auto attempt = InvokeApplyPending(*owner, lease.Value(), request, now);
+        if (attempt.fault == ApplyAttempt::Fault::Capacity) {
             DiscardPending();
             return Fail<ReplicationApplyReport>(ReplicationStateErrors::Capacity);
-        } catch (...) {
-            // Host-owned adapters may throw foreign exception types. Contain them before returning to
-            // the scheduler; detached candidates are destroyed and no delta root is acknowledged.
+        }
+        if (attempt.fault == ApplyAttempt::Fault::Callback) {
             DiscardPending();
             return Fail<ReplicationApplyReport>(ReplicationStateErrors::CallbackFault);
         }
+        if (attempt.result->HasError())
+            DiscardPending();
+        return std::move(*attempt.result);
+    }
+
+    /** @copydoc ReplicationInboundApply::InvokeApplyPending */
+    ReplicationInboundApply::ApplyAttempt ReplicationInboundApply::InvokeApplyPending(IReplicationApplyOwner &owner,
+                                                                                      const ReplicationWorldReadLease &world,
+                                                                                      const ReplicationWorldWorkRequest &request,
+                                                                                      const std::uint64_t now) noexcept {
+        ApplyAttempt attempt;
+        try {
+            attempt.result.emplace(ApplyPending(owner, world, request, now));
+        } catch (const std::bad_alloc &) {
+            attempt.fault = ApplyAttempt::Fault::Capacity;
+        } catch (...) {
+            // Foreign owner callbacks may throw non-standard types; only fixed fault state is created here.
+            attempt.fault = ApplyAttempt::Fault::Callback;
+        }
+        return attempt;
     }
 
     /** @copydoc ReplicationInboundApply::CollectPending */
@@ -342,7 +357,7 @@ namespace Horo::Network {
         updates.reserve(limits_.maximumPending);
         for (const auto &object : objects_)
             if (object.pending)
-                updates.push_back({object.mapping, object.codec->Recipient(), *object.pending, object.cancellation, worldCancellation});
+                updates.emplace_back(object.mapping, object.codec->Recipient(), *object.pending, object.cancellation, worldCancellation);
         return updates;
     }
 

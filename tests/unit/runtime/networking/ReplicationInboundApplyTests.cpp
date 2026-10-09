@@ -155,6 +155,36 @@ namespace Horo::Network {
                 return candidate;
             }
         };
+
+        /** @brief Binds one foreign owner to the fixture's exact authority and first object. */
+        std::shared_ptr<CallbackOwner> BindCallbackOwner(ApplyFixture &fixture) {
+            auto owner = std::make_shared<CallbackOwner>();
+            owner->target = fixture.owner;
+            const auto authority = ReplicationInboundAuthority{fixture.peer.session,
+                                                               fixture.peer.connection,
+                                                               fixture.peer.generation,
+                                                               World().scene,
+                                                               World().session,
+                                                               World().authority,
+                                                               *Recipient().localPeer,
+                                                               TestSupport::WireIdentity<ProtocolId>(1),
+                                                               TestSupport::WireIdentity<MessageTypeId>(2)};
+            fixture.inbound = ReplicationInboundApply::Create(authority, fixture.world, owner, 22).Value();
+            REQUIRE(fixture.inbound->RegisterObject(Object(), fixture.roles[0], fixture.codecs[0]).HasValue());
+            return owner;
+        }
+
+        /** @brief Verifies typed containment clears the pending projection and releases the busy guard. */
+        void CheckDiscardedOwnerFault(ApplyFixture &fixture, CallbackOwner &owner, const Result<ReplicationApplyReport> &result,
+                                      std::string_view expected) {
+            CHECK(result.ErrorValue().code.Value() == expected);
+            owner.throwFault = false;
+            owner.callback = {};
+            const auto retry = fixture.Apply();
+            REQUIRE(retry.HasValue());
+            CHECK(retry.Value().applied == 0);
+            CHECK(fixture.Value(0) == 0);
+        }
     }  // namespace
 
     TEST_CASE("Inbound receipt stages complete replicas and one Scene safe point atomically applies all objects", "[network][apply]") {
@@ -352,22 +382,11 @@ namespace Horo::Network {
 
     TEST_CASE("Owner preparation reentrancy cancellation and exceptions discard detached candidates", "[network][apply]") {
         ApplyFixture fixture;
-        auto owner = std::make_shared<CallbackOwner>();
-        owner->target = fixture.owner;
-        const auto authority = ReplicationInboundAuthority{fixture.peer.session,
-                                                           fixture.peer.connection,
-                                                           fixture.peer.generation,
-                                                           World().scene,
-                                                           World().session,
-                                                           World().authority,
-                                                           *Recipient().localPeer,
-                                                           TestSupport::WireIdentity<ProtocolId>(1),
-                                                           TestSupport::WireIdentity<MessageTypeId>(2)};
-        fixture.inbound = ReplicationInboundApply::Create(authority, fixture.world, owner, 22).Value();
-        REQUIRE(fixture.inbound->RegisterObject(Object(), fixture.roles[0], fixture.codecs[0]).HasValue());
+        auto owner = BindCallbackOwner(fixture);
         fixture.Capture(1, 3.0, 4.0);
         REQUIRE(fixture.Stage(fixture.Message(0)).HasValue());
         CancellationSource cancellation;
+        std::string_view expectedFault;
         SECTION("Cancellation during preparation") {
             owner->callback = [&] {
                 cancellation.RequestCancellation();
@@ -386,9 +405,25 @@ namespace Horo::Network {
         }
         SECTION("Non-standard owner exception") {
             owner->throwFault = true;
+            expectedFault = ReplicationStateErrors::CallbackFault.code.Value();
         }
-        REQUIRE(fixture.Apply(cancellation.Token()).HasError());
+        SECTION("Standard owner exception") {
+            owner->callback = [] {
+                throw std::runtime_error("owner fault");
+            };
+            expectedFault = ReplicationStateErrors::CallbackFault.code.Value();
+        }
+        SECTION("Owner allocation failure") {
+            owner->callback = [] {
+                throw std::bad_alloc{};
+            };
+            expectedFault = ReplicationStateErrors::Capacity.code.Value();
+        }
+        const auto result = fixture.Apply(cancellation.Token());
+        REQUIRE(result.HasError());
         REQUIRE(fixture.Value(0) == 0);
+        if (!expectedFault.empty())
+            CheckDiscardedOwnerFault(fixture, *owner, result, expectedFault);
     }
 
     TEST_CASE("Inbound bounds and owner affinity reject excess work while preserving an accepted projection", "[network][apply]") {

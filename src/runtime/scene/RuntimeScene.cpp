@@ -18,6 +18,19 @@ namespace Horo::Runtime {
         template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &code, std::string message) {
             return Result<T>::Failure(MakeError(code, std::move(message)));
         }
+
+        /** @brief Rechecks shared structural/owner cancellation and receiving Scene identity. */
+        Result<void> ValidateSceneAdmission(const SceneStructuralAdmission &admission, SceneRuntimeId scene,
+                                            std::optional<Assets::AssetRegistryRevision> registry = {}) {
+            if (admission.cancellation.IsCancellationRequested() || admission.ownerCancellation.IsCancellationRequested() ||
+                admission.scopeCancellation.IsCancellationRequested())
+                return JobCancelled();
+            if (admission.scene != scene)
+                return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
+            if (registry.has_value() && admission.registry != *registry)
+                return Result<void>::Failure(MakeError(SceneErrors::AssetRevisionStale));
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc SceneCommandBuffer::Create */
@@ -78,28 +91,14 @@ namespace Horo::Runtime {
         for (const auto &command : commands_) {
             const auto valid = std::visit([&]<typename T>(const T &value) -> Result<void> {
                 if constexpr (std::is_same_v<T, SetLocalTransformCommand>) {
-                    if (value.admission) {
-                        if (value.admission->cancellation.IsCancellationRequested() ||
-                            value.admission->ownerCancellation.IsCancellationRequested() ||
-                            value.admission->scopeCancellation.IsCancellationRequested())
-                            return JobCancelled();
-                        if (value.admission->scene != scene)
-                            return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
-                    }
-                }
-                if constexpr (std::is_same_v<T, CreateGroupCommand> || std::is_same_v<T, DestroyGroupCommand> ||
-                              std::is_same_v<T, AttachBaselineCommand> || std::is_same_v<T, DetachBaselineCommand>) {
-                    if (value.admission.cancellation.IsCancellationRequested() ||
-                        value.admission.ownerCancellation.IsCancellationRequested() ||
-                        value.admission.scopeCancellation.IsCancellationRequested())
-                        return JobCancelled();
-                    if (value.admission.scene != scene)
-                        return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
-                    if constexpr (std::is_same_v<T, CreateGroupCommand> || std::is_same_v<T, AttachBaselineCommand> ||
-                                  std::is_same_v<T, DetachBaselineCommand>) {
-                        if (value.admission.registry != registry)
-                            return Result<void>::Failure(MakeError(SceneErrors::AssetRevisionStale));
-                    }
+                    return value.admission ? ValidateSceneAdmission(*value.admission, scene) : Result<void>::Success();
+                } else if constexpr (std::is_same_v<T, CreateGroupCommand> || std::is_same_v<T, DestroyGroupCommand> ||
+                                     std::is_same_v<T, AttachBaselineCommand> || std::is_same_v<T, DetachBaselineCommand>) {
+                    constexpr bool checksRegistry = !std::is_same_v<T, DestroyGroupCommand>;
+                    if (const auto admitted =
+                            ValidateSceneAdmission(value.admission, scene, checksRegistry ? std::optional{registry} : std::nullopt);
+                        admitted.HasError())
+                        return admitted;
                     if constexpr (std::is_same_v<T, AttachBaselineCommand> || std::is_same_v<T, DetachBaselineCommand>)
                         return value.publicationCheck->ValidatePublication();
                 }

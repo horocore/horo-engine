@@ -165,6 +165,27 @@ namespace Horo::Network {
         [[nodiscard]] Result<void> DecodeAndStage(std::size_t index, const InboundMessageContext &context, std::span<const std::byte> wire);
         /** @brief Copies a complete call-owned immutable batch before invoking any mutation owner. */
         [[nodiscard]] std::vector<ReplicationApplyUpdate> CollectPending(const CancellationToken &worldCancellation) const;
+
+        /** @brief Allocation-free outcome separating callback containment from typed diagnostic construction. */
+        struct ApplyAttempt final {
+            enum class Fault {
+                None,
+                Capacity,
+                Callback
+            };
+            std::optional<Result<ReplicationApplyReport>> result;
+            Fault fault{Fault::None};
+        };
+
+        /** @brief Contains every foreign owner exception without allocating an error inside the nonthrowing boundary.
+         * @param owner Pinned declaring owner for this synchronous transaction.
+         * @param world Exact admitted receiving world lease.
+         * @param request Owner safe-point evidence and cancellation.
+         * @param now Current admission-clock tick.
+         * @return Stored result or fixed capacity/callback fault; caller discards pending state before creating errors.
+         */
+        [[nodiscard]] ApplyAttempt InvokeApplyPending(IReplicationApplyOwner &owner, const ReplicationWorldReadLease &world,
+                                                      const ReplicationWorldWorkRequest &request, std::uint64_t now) noexcept;
         /** @brief Runs the guarded owner transaction; committed roots advance only after complete publication. */
         [[nodiscard]] Result<ReplicationApplyReport> ApplyPending(IReplicationApplyOwner &owner, const ReplicationWorldReadLease &world,
                                                                   const ReplicationWorldWorkRequest &request, std::uint64_t now);

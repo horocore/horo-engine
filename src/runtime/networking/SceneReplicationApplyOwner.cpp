@@ -34,8 +34,7 @@ namespace Horo::Network {
                     commands.SetLocalTransform(replacement.entity, replacement.transform,
                                                {view_.RuntimeId(), {}, cancellation, replacement.receipt, replacement.world});
                 }
-                auto result = scene_->Commit(commands);
-                if (result.HasError())
+                if (auto result = scene_->Commit(commands); result.HasError())
                     return Result<void>::Failure(result.ErrorValue());
                 committed_ = true;
                 return Result<void>::Success();
@@ -101,14 +100,14 @@ namespace Horo::Network {
         try {
             std::vector<SceneReplicationFieldBinding> bindings{fields.begin(), fields.end()};
             std::ranges::sort(bindings, {}, &SceneReplicationFieldBinding::field);
-            std::uint8_t properties{};
+            std::byte properties{};
             for (std::size_t index{}; index < bindings.size(); ++index) {
                 const auto &field = bindings[index];
                 if (!field.field.IsValid() || field.property > SceneReplicationProperty::TranslationZ ||
                     (index > 0 && bindings[index - 1].field == field.field))
                     return Result<std::shared_ptr<SceneReplicationApplyOwner>>::Failure(MakeError(ReplicationStateErrors::Invalid));
-                const auto bit = static_cast<std::uint8_t>(1U << static_cast<std::uint8_t>(field.property));
-                if ((properties & bit) != 0)
+                const auto bit = std::byte{1} << static_cast<unsigned int>(field.property);
+                if ((properties & bit) != std::byte{})
                     return Result<std::shared_ptr<SceneReplicationApplyOwner>>::Failure(MakeError(ReplicationStateErrors::Invalid));
                 properties |= bit;
             }
@@ -141,7 +140,7 @@ namespace Horo::Network {
                 if (const auto set = SetField(transform, binding->property, field.value); set.HasError())
                     return Result<std::unique_ptr<IReplicationApplyCandidate>>::Failure(set.ErrorValue());
             }
-            replacements.push_back({update.mapping.entity, transform, update.cancellation, update.worldCancellation});
+            replacements.emplace_back(update.mapping.entity, transform, update.cancellation, update.worldCancellation);
         }
         return Result<std::unique_ptr<IReplicationApplyCandidate>>::Success(
             std::make_unique<SceneCandidate>(scene_, view, std::move(replacements)));
