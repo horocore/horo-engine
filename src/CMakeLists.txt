@@ -790,6 +790,7 @@ add_library(HoroNetworkRuntime STATIC
         runtime/networking/ReplicationCapturePreparation.cpp
         runtime/networking/ReplicationCaptureWriter.cpp
         runtime/networking/ReplicationStateCodec.cpp
+        runtime/networking/ReplicationSnapshotHistory.cpp
         runtime/networking/ReplicationStateEncode.cpp
         runtime/networking/ReplicationStateDecode.cpp
         runtime/networking/SceneReplicationCommitSource.cpp
