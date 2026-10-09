@@ -57,6 +57,35 @@ jobs:
       - name: Test Python tooling
         run: pytest tests/python/
 
+  android-storage:
+    name: Android Storage · NDK arm64 API 29
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - name: Select pinned adapter qualification NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          ndk_version=27.3.13750724
+          if [[ ! -d "$ANDROID_HOME/ndk/$ndk_version" ]]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk_version"
+          fi
+          printf 'HORO_STORAGE_NDK=%s\n' "$ANDROID_HOME/ndk/$ndk_version" >> "$GITHUB_ENV"
+
+      - name: Compile native adapter and standalone public header
+        shell: bash
+        run: |
+          set -euo pipefail
+          storage_compiler="$HORO_STORAGE_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++"
+          "$storage_compiler" --version
+          "$storage_compiler" -std=c++20 -fsyntax-only -Iinclude -Isrc/platform/android src/platform/android/AndroidStorage.cpp
+          "$storage_compiler" -std=c++20 -fsyntax-only -Iinclude -x c++ - <<'CPP'
+          #include <Horo/Platform/AndroidStorage.h>
+          CPP
+
   test:
     name: Test · ${{ matrix.name }}
     needs: tooling

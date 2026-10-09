@@ -137,6 +137,7 @@ add_library(HoroPlatform STATIC
         platform/ConfigurationFileStore.cpp
         platform/android/AndroidLifecycle.cpp
         platform/android/AndroidLifecycleAdapter.cpp
+        platform/android/AndroidStorage.cpp
 )
 
 if (WIN32)
@@ -154,6 +155,10 @@ else ()
     if (APPLE)
         target_link_libraries(HoroPlatform PRIVATE "-framework Security")
     endif ()
+endif ()
+
+if (ANDROID)
+    target_link_libraries(HoroPlatform PRIVATE android)
 endif ()
 
 add_library(HoroEngine::Platform ALIAS HoroPlatform)
