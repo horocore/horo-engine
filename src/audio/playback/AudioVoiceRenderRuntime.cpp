@@ -69,10 +69,7 @@ namespace Horo::Audio {
         const auto facts = service->DecoderSpec(stream);
         if (facts.HasError())
             return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(facts.ErrorValue());
-        if (conversion.inputRate != facts.Value().outputFormat.sampleRate ||
-            conversion.channels != facts.Value().outputFormat.layout.orderedChannels.size() ||
-            facts.Value().outputFormat.layout !=
-                MakeAudioSpeakerLayout(conversion.channels == 1 ? AudioSpeakerPreset::Mono : AudioSpeakerPreset::Stereo))
+        if (!State::ValidStreamFormat(conversion, facts.Value()))
             return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(MakeError(AudioErrors::ResamplerInvalid));
         try {
             auto state = std::make_unique<State>();
@@ -83,28 +80,44 @@ namespace Horo::Audio {
             state->coefficientBytes = maximumCoefficientBytes;
             state->sourceFrames = facts.Value().frameCount;
             state->seekable = facts.Value().seekable;
-            auto spatial = CoreStereoSpatialRenderer::Create(conversion, maximumCoefficientBytes);
-            if (spatial.HasError())
-                return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(spatial.ErrorValue());
-            state->spatial.emplace(std::move(spatial).Value());
-            auto voice = state->registry->CreateVoice();
-            if (voice.HasError())
-                return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(voice.ErrorValue());
-            state->voice = voice.Value();
-            state->streamVoice = true;
-            if (state->voice.owner != descriptor.scope.owner)
-                return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(MakeError(AudioErrors::HandleOwnerMismatch));
-            if (const auto ready = state->registry->Transition(state->voice, AudioVoiceState::Ready); ready.HasError())
-                return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(ready.ErrorValue());
-            auto port = state->service->RetainedRenderPort(stream);
-            if (port.HasError())
-                return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(port.ErrorValue());
-            state->stream.emplace(std::move(port).Value());
+            if (const auto prepared = state->PrepareStream(stream); prepared.HasError())
+                return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(prepared.ErrorValue());
             return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Success(
                 std::make_unique<AudioVoiceRenderRuntime>(ConstructionKey{}, std::move(state)));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(MakeError(AudioErrors::MemoryAllocationFailed));
         }
+    }
+
+    /** @copydoc AudioVoiceRenderRuntime::State::ValidStreamFormat */
+    bool AudioVoiceRenderRuntime::State::ValidStreamFormat(const AudioResamplerDescriptor &conversion,
+                                                           const AudioStreamDecoderSpec &facts) noexcept {
+        return conversion.inputRate == facts.outputFormat.sampleRate &&
+               conversion.channels == facts.outputFormat.layout.orderedChannels.size() &&
+               facts.outputFormat.layout ==
+                   MakeAudioSpeakerLayout(conversion.channels == 1 ? AudioSpeakerPreset::Mono : AudioSpeakerPreset::Stereo);
+    }
+
+    /** @copydoc AudioVoiceRenderRuntime::State::PrepareStream */
+    Result<void> AudioVoiceRenderRuntime::State::PrepareStream(const AudioStreamHandle streamHandle) {
+        auto preparedSpatial = CoreStereoSpatialRenderer::Create(conversion, coefficientBytes);
+        if (preparedSpatial.HasError())
+            return Result<void>::Failure(preparedSpatial.ErrorValue());
+        spatial.emplace(std::move(preparedSpatial).Value());
+        auto createdVoice = registry->CreateVoice();
+        if (createdVoice.HasError())
+            return Result<void>::Failure(createdVoice.ErrorValue());
+        voice = createdVoice.Value();
+        streamVoice = true;
+        if (voice.owner != descriptor.scope.owner)
+            return Result<void>::Failure(MakeError(AudioErrors::HandleOwnerMismatch));
+        if (const auto ready = registry->Transition(voice, AudioVoiceState::Ready); ready.HasError())
+            return ready;
+        auto port = service->RetainedRenderPort(streamHandle);
+        if (port.HasError())
+            return Result<void>::Failure(port.ErrorValue());
+        stream.emplace(std::move(port).Value());
+        return Result<void>::Success();
     }
 
     /** @copydoc AudioVoiceRenderRuntime::AudioVoiceRenderRuntime */
@@ -391,73 +404,6 @@ namespace Horo::Audio {
             scratch.output[1].samples[frame] = left * callback.residentMatrix[2] + right * callback.residentMatrix[3];
         }
         return {.terminal = rendered.terminal};
-    }
-
-    /** @copydoc AudioVoiceRenderRuntime::State::RenderStream */
-    AudioVoiceMixRenderResult AudioVoiceRenderRuntime::State::RenderStream(const std::uint32_t frames) noexcept {
-        if (const auto *error = registry->CheckState(voice, callback.streamState))
-            return {.error = error};
-        if (IsTerminalAudioVoiceState(callback.streamState)) {
-            const bool first = !streamPlayback.terminalReported;
-            streamPlayback.terminalReported = true;
-            return {.terminal = first};
-        }
-        if (callback.streamState == AudioVoiceState::Virtual)
-            return RenderVirtualStream(frames);
-        if (callback.streamState != AudioVoiceState::Playing)
-            return {};
-        return RenderStreamPcm(frames);
-    }
-
-    /** @copydoc AudioVoiceRenderRuntime::State::RenderStreamPcm */
-    AudioVoiceMixRenderResult AudioVoiceRenderRuntime::State::RenderStreamPcm(const std::uint32_t frames) noexcept {
-        std::array<AudioSample *, 2> rawPointers{scratch.raw[0].samples.data(), scratch.raw[1].samples.data()};
-        std::uint32_t produced{};
-        // Linear conversion admits at most 64 input frames per output frame. Each full chunk covers
-        // maximumFrames >= frames; 64 chunks plus two history/end-marker visits bound even high-ratio
-        // conversion without the short-block truncation of a frames+1 visit budget.
-        std::uint32_t visit{};
-        while (visit < 66 && produced < frames) {
-            ++visit;
-            if (callback.buffered == 0 && !callback.sourceEnded) {
-                const auto read = stream->Render({rawPointers.data(), conversion.channels}, descriptor.maximumFrames);
-                callback.buffered = read.availableFrames;
-                callback.sourceEnded = read.ended || read.stopped;
-                if (read.stopped) {
-                    (void)registry->TryCancel(voice);
-                    callback.streamState = AudioVoiceState::Cancelled;
-                    streamPlayback.terminalReported = true;
-                    return {.terminal = true};
-                }
-            }
-            std::array<std::span<const float>, 2> inputs{std::span<const float>{scratch.raw[0].samples}.first(callback.buffered),
-                                                         std::span<const float>{scratch.raw[1].samples}.first(callback.buffered)};
-            std::array<std::span<float>, 2> outputs{std::span{scratch.converted[0].samples}.first(frames - produced),
-                                                    std::span{scratch.converted[1].samples}.first(frames - produced)};
-            const auto progress = spatial->Process({{inputs.data(), conversion.channels}, callback.buffered, callback.sourceEnded},
-                                                   {outputs, frames - produced});
-            if (progress.status == AudioResamplerStatus::InvalidBuffer || progress.status == AudioResamplerStatus::InvalidState)
-                return {.error = &AudioErrors::ResamplerInvalid};
-            for (std::uint32_t channel = 0; channel < 2; ++channel)
-                std::copy_n(scratch.converted[channel].samples.begin(), progress.produced,
-                            scratch.output[channel].samples.begin() + produced);
-            produced += progress.produced;
-            AdvanceStream(progress.sourceAdvance);
-            callback.buffered -= progress.consumed;
-            for (std::uint32_t channel = 0; channel < conversion.channels; ++channel)
-                std::move(scratch.raw[channel].samples.begin() + progress.consumed,
-                          scratch.raw[channel].samples.begin() + progress.consumed + callback.buffered,
-                          scratch.raw[channel].samples.begin());
-            if (progress.status == AudioResamplerStatus::Complete) {
-                (void)registry->TryTransition(voice, AudioVoiceState::Finished);
-                callback.streamState = AudioVoiceState::Finished;
-                streamPlayback.terminalReported = true;
-                return {.terminal = true};
-            }
-            if (progress.produced == 0 && progress.consumed == 0)
-                break;  // Silence is already prepared; starvation never waits for a fill job.
-        }
-        return {};
     }
 
     /** @copydoc AudioVoiceRenderRuntime::Render */

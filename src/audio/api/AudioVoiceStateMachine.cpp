@@ -40,11 +40,9 @@ namespace Horo::Audio {
             return std::ranges::find(destinations, next) != destinations.end();
         }
 
-        [[nodiscard]] bool IsLegalTransition(const AudioVoiceState current, const AudioVoiceState next) noexcept {
+        /** @brief Check ordinary destinations for an already admitted nonterminal source state. */
+        bool AllowsActiveTransition(const AudioVoiceState current, const AudioVoiceState next) noexcept {
             using enum AudioVoiceState;
-            if (next == Failed && !IsTerminalAudioVoiceState(current))
-                return true;
-
             switch (current) {
                 case Created:
                     return next == Ready;
@@ -60,13 +58,16 @@ namespace Horo::Audio {
                     return Allows(next, {Playing, Paused, Stopping, Finished});
                 case Stopping:
                     return next == Stopped;
-                case Stopped:
-                case Finished:
-                case Cancelled:
-                case Failed:
+                default:
                     return false;
             }
-            return false;
+        }
+
+        /** @brief Terminal states cannot transition; failure is admitted from every nonterminal state. */
+        [[nodiscard]] bool IsLegalTransition(const AudioVoiceState current, const AudioVoiceState next) noexcept {
+            if (IsTerminalAudioVoiceState(current))
+                return false;
+            return next == AudioVoiceState::Failed || AllowsActiveTransition(current, next);
         }
 
         [[nodiscard]] bool ValidConfig(const AudioVoiceStateMachineConfig &config) noexcept {

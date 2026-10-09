@@ -171,6 +171,20 @@ namespace Horo::Audio {
             CHECK(scene.Target().pitch == 1.0);
         }
 
+        TEST_CASE("Spatial progress advances only emitted source steps through the prepared pitch ramp", "[audio][spatial][core]") {
+            auto renderer = Renderer();
+            Scene scene;
+            scene.Update(renderer);
+            auto target = scene.Target();
+            target.pitch = 2.0;
+            REQUIRE(renderer.ApplyPreparedTarget(target, 4, false));
+            Buffers buffers;
+            const auto progress = buffers.Run(renderer, 1, 32, 4);
+            REQUIRE(progress.produced == 4);
+            CHECK(progress.sourceAdvance == Catch::Approx(6.5));  // 1.25 + 1.5 + 1.75 + 2.0, not decoder look-ahead.
+            CHECK(progress.sourceAdvance != static_cast<double>(progress.consumed));
+        }
+
         TEST_CASE("Teleport revisions snap pitch and retain gain smoothing with no callback allocations", "[audio][spatial][core]") {
             Scene scene;
             scene.source.playback.enableDoppler = true;
