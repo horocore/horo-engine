@@ -247,6 +247,27 @@ namespace Horo::Character {
             REQUIRE(falling.transform.position.y == Catch::Approx(-0.04905F));
         }
 
+        TEST_CASE("An airborne continuation query failure rolls back the whole fixed tick after grounding",
+                  "[physics][character][geometry][airborne][cancellation][rollback]") {
+            auto host = GeometryWorld(1, {0, -9.81F, 0});
+            GeometryProbe probe;
+            const auto before = MoveGeometry(host, probe, {10, 0, 0});
+            probe.calls = 0;
+            probe.failCall = 2;
+            probe.cancelled = GENERATE(false, true);
+            auto command = Movement(host.controller, 2, 2);
+            command.desiredVelocityMetersPerSecond = Math::Vec3{};
+            REQUIRE(host.world->QueueMovementCommand(command).HasValue());
+            const auto advanced = host.world->AdvanceFixedTick(GeometryTick(host, probe, 2));
+            RequireError(advanced, probe.cancelled ? Physics::PhysicsErrors::QueryCancelled : Physics::PhysicsErrors::InvalidState);
+            REQUIRE(probe.calls == 2);
+            REQUIRE(host.world->PublishedTick().completedTick == 1);
+            const auto after = host.world->ControllerLocomotionSnapshot(host.controller).Value();
+            REQUIRE(after.stateRevision == before.stateRevision);
+            REQUIRE(after.transform.position == before.transform.position);
+            REQUIRE(after.movement.gravityVelocityMetersPerSecond == before.movement.gravityVelocityMetersPerSecond);
+        }
+
         TEST_CASE("Continuous capsule travel stays behind geometry at the admitted fixed-tick speed boundary",
                   "[physics][character][geometry][high-speed][boundary]") {
             const float speed = GENERATE(10.0F, 1279.0F, 1280.0F);

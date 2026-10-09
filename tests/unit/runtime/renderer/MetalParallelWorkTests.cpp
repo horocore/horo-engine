@@ -1,6 +1,69 @@
 #include "MetalParallelWorkTestSupport.h"
 
+#include <catch2/generators/catch_generators.hpp>
+
 namespace Horo::Render::MetalBackendTests {
+    TEST_CASE("Foreign worker recording exceptions preserve canonical completion and capsule pins until terminal acknowledgement",
+              "[unit][renderer][parallel][native][exception][lifetime]") {
+        for (const bool foreign : {false, true}) {
+            JobSystem jobs{{.workerCount = 2}};
+            ParallelHostFixture fixture;
+            fixture.observation->foreignException = foreign;
+            fixture.observation->throwRecordIndex = 1;
+            auto frame = BeginParallelTestFrame(*fixture.frontend);
+            const auto input = MakeParallelPrimaryGraph();
+            REQUIRE(frame.PrepareParallelGraphExecution(jobs, input.graph, input.workloads).HasValue());
+            AwaitWorker([&] {
+                return fixture.observation->entered[0].load() && fixture.observation->entered[1].load();
+            });
+            // A later failed worker cannot publish over an earlier nonterminal record or discard its retained capsule.
+            REQUIRE(frame.PollParallelExecution().Value() == RenderParallelExecutionProgress::Pending);
+            CHECK(fixture.observation->liveRecordings.load() == 1);
+            CHECK(fixture.observation->submitted.empty());
+            fixture.observation->releaseFirst.store(true);
+            const auto failed = AwaitOwner(frame);
+            REQUIRE(failed.HasError());
+            CHECK_FALSE(fixture.observation->accepted);
+            CHECK(fixture.state.abortCount == 1);
+            CHECK(frame.Present().HasError());
+            jobs.Shutdown(ShutdownPolicy::Drain);
+            CHECK(fixture.observation->liveRecordings.load() == 0);
+            REQUIRE(fixture.frontend->SubmitFrame({2, {64, 64}}, {}).HasValue());
+        }
+    }
+
+    TEST_CASE("Native capture and acceptance contain foreign exceptions and recover exact frame ownership",
+              "[unit][renderer][parallel][native][exception]") {
+        // Each combination must enter its failure boundary with a fresh fixture.
+        // A loop around SECTION skips completed sections on later iterations.
+        const bool foreign = GENERATE(false, true);
+        const bool captureFailure = GENERATE(false, true);
+        CAPTURE(foreign, captureFailure);
+        JobSystem jobs{{.workerCount = 1}};
+        ParallelHostFixture fixture;
+        fixture.observation->foreignException = foreign;
+        fixture.observation->releaseFirst.store(true);
+        auto frame = BeginParallelTestFrame(*fixture.frontend);
+        const auto input = MakeParallelPrimaryGraph();
+        static_assert(noexcept(frame.PrepareParallelGraphExecution(jobs, input.graph, input.workloads)));
+        if (captureFailure) {
+            fixture.observation->throwCapture = true;
+            Test::RequireError(frame.PrepareParallelGraphExecution(jobs, input.graph, input.workloads), "render.frontend.frame_exception");
+        } else {
+            fixture.observation->throwAccept = true;
+            REQUIRE(frame.PrepareParallelGraphExecution(jobs, input.graph, input.workloads).HasValue());
+            Test::RequireError(AwaitOwner(frame), "render.frontend.frame_exception");
+        }
+        CHECK(fixture.observation->captureCalls == 1);
+        CHECK(fixture.observation->acceptanceCalls == (captureFailure ? 0 : 1));
+        CHECK(fixture.state.abortCount == 1);
+        CHECK_FALSE(fixture.observation->accepted);
+        CHECK(fixture.observation->submitted.empty());
+        CHECK(frame.Present().HasError());
+        REQUIRE(fixture.frontend->SubmitFrame({2, {64, 64}}, {}).HasValue());
+        jobs.Shutdown(ShutdownPolicy::Drain);
+    }
+
     TEST_CASE("Real host workers record independent native slots and owner presents compiled order after source destruction",
               "[unit][renderer][parallel][native]") {
         JobSystem jobs{{.workerCount = 2}};

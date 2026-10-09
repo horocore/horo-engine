@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
 #include <new>
 
 namespace Horo::Runtime::Ui {
@@ -148,10 +149,9 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] bool Blocked(const Layer &target) const noexcept {
-            for (const auto &entry : active)
-                if (entry && Higher(*entry, target) && Excludes(*entry, target))
-                    return true;
-            return false;
+            return std::ranges::any_of(active, [&target](const auto &entry) {
+                return entry && Higher(*entry, target) && Excludes(*entry, target);
+            });
         }
 
         [[nodiscard]] static UiReloadCanvas *Canvas(Layer &layer) noexcept {
@@ -165,7 +165,7 @@ namespace Horo::Runtime::Ui {
                 return nullptr;
             const auto canvases = generation->Canvases();
             const auto found = std::ranges::find(canvases, layer.binding.canvas, &UiReloadCanvas::id);
-            return found == canvases.end() ? nullptr : &*found;
+            return found == canvases.end() ? nullptr : std::to_address(found);
         }
 
         /** @brief Fail closed when an outside owner operation invalidates the admitted composition. */
@@ -196,18 +196,18 @@ namespace Horo::Runtime::Ui {
 
         /** @brief A live layer owns a distinct mutable namespace even when views or players are shared. */
         [[nodiscard]] bool Conflicts(const UiOverlayLayerDescriptor &binding, const UiReloadCanvas &canvas) const noexcept {
-            for (const auto &entry : active) {
+            return std::ranges::any_of(active, [&binding, &canvas](const auto &entry) {
                 if (!entry)
-                    continue;
+                    return false;
                 if (entry->binding.context == binding.context)
                     return true;
-                const auto *other = Canvas(*entry);
-                if (other &&
+                if (const auto *other = Canvas(*entry);
+                    other &&
                     (other->tree.Instance() == canvas.tree.Instance() || other->tree.Canvas() == canvas.tree.Canvas() ||
                      (other->focus && other->focus->Owner().scope.presentationLayer == canvas.focus->Owner().scope.presentationLayer)))
                     return true;
-            }
-            return false;
+                return false;
+            });
         }
 
         /** @brief Cancels only this exact context's real pointer captures. */
@@ -217,14 +217,13 @@ namespace Horo::Runtime::Ui {
         }
 
         /** @brief Stores stable paths once on exclusion and delegates recovery to actual focus owners on uncover. */
-        void ReconcileLayer(Layer &layer) noexcept {
+        void ReconcileLayer(Layer &layer) const noexcept {
             const bool blocked = Blocked(layer);
             auto *canvas = Canvas(layer);
             if (!canvas || !canvas->focus)
                 return;
             if (blocked && !layer.blocked) {
-                const auto saved = canvas->focus->CaptureRestoration();
-                if (saved.HasValue()) {
+                if (const auto saved = canvas->focus->CaptureRestoration(); saved.HasValue()) {
                     layer.restoration = saved.Value();
                     (void)canvas->focus->ClearFocus();
                 }

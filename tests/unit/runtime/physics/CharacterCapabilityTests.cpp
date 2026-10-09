@@ -1,10 +1,21 @@
 #include "AllocationProbe.h"
+#include "CharacterCapabilityInternal.h"
 #include "CharacterWorldTestHelpers.h"
 #include "Horo/Physics/PhysicsWorld.h"
+
+#include <type_traits>
 
 namespace Horo::Character {
     namespace {
         using namespace TestDetail;
+
+        static_assert(std::is_default_constructible_v<Detail::CharacterCapabilityRegistry>);
+        static_assert(!std::is_copy_constructible_v<Detail::CharacterCapabilityRegistry>);
+        static_assert(!std::is_copy_assignable_v<Detail::CharacterCapabilityRegistry>);
+        static_assert(!std::is_move_constructible_v<Detail::CharacterCapabilityRegistry>);
+        static_assert(!std::is_move_assignable_v<Detail::CharacterCapabilityRegistry>);
+        static_assert(std::is_copy_constructible_v<CharacterCapability>);
+        static_assert(std::is_move_constructible_v<CharacterCapability>);
 
         /** @brief Exercises every public operation's common access fence without synthetic providers. */
         void RequireClosedClient(const CharacterCapability &client, const CharacterControllerHandle handle,
@@ -52,6 +63,30 @@ namespace Horo::Character {
             CharacterControllerDescriptor descriptor;
             CharacterControllerHandle handle;
         };
+
+        TEST_CASE("Character grant registry exclusively retires retained borrows without destroying the owner",
+                  "[character][capability][lifetime]") {
+            auto world = PreparedWorld(1);
+            std::shared_ptr<CharacterCapabilityState> retired;
+            std::shared_ptr<CharacterCapabilityState> replacement;
+            {
+                Detail::CharacterCapabilityRegistry registry;
+                retired = registry.Issue(*world, std::this_thread::get_id(), {}).Value();
+                REQUIRE(retired->world == world.get());
+                const auto identity = retired->identity;
+                registry.Retire();
+                registry.Retire();
+                REQUIRE(retired->world == nullptr);
+                REQUIRE(retired->identity.generation == identity.generation);
+                replacement = registry.Issue(*world, std::this_thread::get_id(), {}).Value();
+                REQUIRE(replacement->world == world.get());
+                REQUIRE(replacement->identity.generation > identity.generation);
+            }
+            REQUIRE(retired->world == nullptr);
+            REQUIRE(replacement->world == nullptr);
+            REQUIRE(world->State() == CharacterWorldState::Prepared);
+            REQUIRE(world->IssueCapability().HasValue());
+        }
 
         TEST_CASE("Character grants are explicit inert and owner-phase creation preserves bounded slots", "[character][capability]") {
             auto world = PreparedWorld(1);

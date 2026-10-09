@@ -13,12 +13,12 @@ namespace Horo::Character {
         [[nodiscard]] CharacterDebugProbeAvailability ProbeAvailability(const Detail::CharacterDebugTraceMetadata &metadata,
                                                                         const std::uint32_t storageCapacity,
                                                                         const std::uint32_t retained) noexcept {
+            using enum CharacterDebugProbeAvailability;
             if (!metadata.providerSupported)
-                return CharacterDebugProbeAvailability::UnsupportedProvider;
+                return UnsupportedProvider;
             if (storageCapacity == 0)
-                return CharacterDebugProbeAvailability::StorageUnavailable;
-            return metadata.observed > retained ? CharacterDebugProbeAvailability::CapacityLimited
-                                                : CharacterDebugProbeAvailability::Complete;
+                return StorageUnavailable;
+            return metadata.observed > retained ? CapacityLimited : Complete;
         }
 
         /** @brief Checks exact consumer fences without adopting another generation. */
@@ -31,17 +31,18 @@ namespace Horo::Character {
 
         /** @brief Rejects forbidden reads before touching owner-thread registry or publication storage. */
         [[nodiscard]] CharacterDebugCaptureStatus CaptureAdmission(const auto &impl, const CharacterDebugCaptureRequest &request) noexcept {
+            using enum CharacterDebugCaptureStatus;
             if (impl.ownerThread != std::this_thread::get_id())
-                return CharacterDebugCaptureStatus::WrongThread;
+                return WrongThread;
             if (impl.state.load() == CharacterWorldState::Destroyed)
-                return CharacterDebugCaptureStatus::Retired;
+                return Retired;
             if (impl.ticking.load() || impl.placementActive)
-                return CharacterDebugCaptureStatus::Busy;
+                return Busy;
             if (!IsCaptureRequestValid(request))
-                return CharacterDebugCaptureStatus::InvalidRequest;
+                return InvalidRequest;
             if (!MatchesCaptureWorld(request, impl.descriptor))
-                return CharacterDebugCaptureStatus::ForeignGeneration;
-            return CharacterDebugCaptureStatus::Captured;
+                return ForeignGeneration;
+            return Captured;
         }
     }  // namespace
 

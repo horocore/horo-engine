@@ -5,6 +5,38 @@ namespace Horo::Render::OpenGLBackendErrors {
         const ErrorDomainId Domain{"horo.render.opengl"};
     }  // namespace
 
+    const ErrorCodeDescriptor CommandFailed{.domain = Domain,
+                                            .code = ErrorCode{"render.opengl.command_failed"},
+                                            .defaultSeverity = ErrorSeverity::Error,
+                                            .summary = "OpenGL command execution failed.",
+                                            .remediationHint = "Inspect driver diagnostics and abort the active frame.",
+                                            .retryable = false,
+                                            .userActionable = false};
+
+    const ErrorCodeDescriptor SynchronizationFailed{.domain = Domain,
+                                                    .code = ErrorCode{"render.opengl.synchronization_failed"},
+                                                    .defaultSeverity = ErrorSeverity::Error,
+                                                    .summary = "OpenGL frame retirement failed.",
+                                                    .remediationHint = "Restart the backend after a synchronization failure.",
+                                                    .retryable = false,
+                                                    .userActionable = false};
+
+    const ErrorCodeDescriptor FrameBackpressure{.domain = Domain,
+                                                .code = ErrorCode{"render.opengl.frame_backpressure"},
+                                                .defaultSeverity = ErrorSeverity::Error,
+                                                .summary = "All OpenGL frame retirement slots are occupied.",
+                                                .remediationHint = "Retry frame admission after queued GPU work completes.",
+                                                .retryable = true,
+                                                .userActionable = false};
+
+    const ErrorCodeDescriptor WorkLimit{.domain = Domain,
+                                        .code = ErrorCode{"render.opengl.work_limit"},
+                                        .defaultSeverity = ErrorSeverity::Error,
+                                        .summary = "OpenGL execution plan exceeds its bounded pass budget.",
+                                        .remediationHint = "Split work into plans of at most 1024 passes.",
+                                        .retryable = false,
+                                        .userActionable = false};
+
     const ErrorCodeDescriptor AlreadyInitialized{.domain = Domain,
                                                  .code = ErrorCode{"render.backend.already_initialized"},
                                                  .defaultSeverity = ErrorSeverity::Error,

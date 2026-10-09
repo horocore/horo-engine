@@ -58,17 +58,18 @@ namespace Horo::Editor::Detail {
 
         /** @brief Maps observed newline families without normalizing source bytes. */
         SourceNewlines DecodeNewlines(const unsigned families) {
+            using enum SourceNewlines;
             switch (families) {
                 case 0:
-                    return SourceNewlines::None;
+                    return None;
                 case 1:
-                    return SourceNewlines::Lf;
+                    return Lf;
                 case 2:
-                    return SourceNewlines::CrLf;
+                    return CrLf;
                 case 4:
-                    return SourceNewlines::Cr;
+                    return Cr;
                 default:
-                    return SourceNewlines::Mixed;
+                    return Mixed;
             }
         }
 
@@ -77,7 +78,8 @@ namespace Horo::Editor::Detail {
             SourceTextMetadata metadata{.utf8Bom = bytes.starts_with("\xef\xbb\xbf")};
             unsigned families{};
             std::size_t nextCancellationCheck{};
-            for (std::size_t index = 0; index < bytes.size(); ++index) {
+            std::size_t index{};
+            while (index < bytes.size()) {
                 // Check one byte early if needed: CRLF consumption must not skip a 4 KiB fence.
                 if (index + 1 >= nextCancellationCheck) {
                     if (cancellation.IsCancellationRequested())
@@ -87,6 +89,7 @@ namespace Horo::Editor::Detail {
                 if (IsBinaryControl(static_cast<unsigned char>(bytes[index])))
                     return Failure<SourceTextMetadata>(SourceDocumentErrors::Binary);
                 families |= NewlineFamily(bytes, index);
+                ++index;
             }
             metadata.newlines = DecodeNewlines(families);
             return Result<SourceTextMetadata>::Success(metadata);
@@ -147,8 +150,7 @@ namespace Horo::Editor::Detail {
             return Result<std::shared_ptr<const SourceText>>::Failure(metadata.ErrorValue());
         if (cancellation.IsCancellationRequested())
             return Failure<std::shared_ptr<const SourceText>>(SourceDocumentErrors::Cancelled);
-        return Result<std::shared_ptr<const SourceText>>::Success(
-            std::make_shared<const SourceText>(SourceText{std::move(bytes), metadata.Value()}));
+        return Result<std::shared_ptr<const SourceText>>::Success(std::make_shared<const SourceText>(std::move(bytes), metadata.Value()));
     }
 
     /** @copydoc LoadSourceText */
@@ -167,8 +169,8 @@ namespace Horo::Editor::Detail {
             if (bytes.HasError())
                 return Result<std::shared_ptr<const SourceText>>::Failure(bytes.ErrorValue());
             std::error_code error;
-            const auto finalStamp = std::filesystem::last_write_time(path, error);
-            if (error || finalStamp != admission.Value().stamp || bytes.Value().size() != admission.Value().size)
+            if (const auto finalStamp = std::filesystem::last_write_time(path, error);
+                error || finalStamp != admission.Value().stamp || bytes.Value().size() != admission.Value().size)
                 return Failure<std::shared_ptr<const SourceText>>(SourceDocumentErrors::DiskChanged);
             return CaptureSourceText(std::move(bytes).Value(), maximumBytes, cancellation);
         } catch (const std::bad_alloc &) {

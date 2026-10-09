@@ -27,6 +27,8 @@ namespace Horo::Render::Detail {
     /** @brief One captured pass; descriptor spans refer only to storage in this value. */
     struct CapturedRenderPass final {
         CapturedRenderPass() = default;
+        /** @brief Invalidates borrowed descriptor views before destroying their owning containers. */
+        ~CapturedRenderPass();
         CapturedRenderPass(const CapturedRenderPass &) = delete;
         CapturedRenderPass &operator=(const CapturedRenderPass &) = delete;
         CapturedRenderPass(CapturedRenderPass &&other) noexcept;
