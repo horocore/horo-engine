@@ -67,6 +67,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroTerrainSourceArtifactPublicHeaderConsumer
     HoroTerrainPayloadManifestTests
     HoroTerrainPayloadManifestPublicHeaderConsumer
+    HoroTerrainProducerSnapshotTests
+    HoroTerrainProducerSnapshotPublicHeaderConsumer
 )
 
 set(HORO_CI_NAVIGATION_TARGETS
