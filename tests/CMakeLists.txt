@@ -3192,6 +3192,7 @@ add_executable(HoroRuntimeSceneCellPayloadTests
     unit/runtime/scene/RuntimeSceneCellAttachmentTests.cpp
     unit/runtime/scene/RuntimeSceneCellAssetAttachmentTests.cpp
     unit/runtime/scene/IncrementalSceneCellCookTests.cpp
+    unit/runtime/scene/WorldBuildValidationTests.cpp
     unit/runtime/scene/SceneCellContentHasherTests.cpp
 )
 target_compile_features(HoroRuntimeSceneCellPayloadTests PRIVATE cxx_std_20)

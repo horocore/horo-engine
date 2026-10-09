@@ -1795,6 +1795,7 @@ add_library(HoroSceneCellPayload STATIC
         runtime/scene/RuntimeSceneCellLayers.cpp
         runtime/scene/RuntimeSceneCellPayloadErrors.cpp
         runtime/scene/IncrementalSceneCellCook.cpp
+        runtime/scene/WorldBuildValidation.cpp
 )
 add_library(HoroEngine::SceneCellPayload ALIAS HoroSceneCellPayload)
 target_compile_features(HoroSceneCellPayload PUBLIC cxx_std_20)
