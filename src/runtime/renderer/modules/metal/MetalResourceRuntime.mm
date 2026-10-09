@@ -623,6 +623,25 @@ namespace Horo::Render::Detail {
     }
 
     namespace {
+        /** @brief Applies the complete typed color load/store contract to the native attachment. */
+        void ConfigureGraphColorAttachment(MTLRenderPassColorAttachmentDescriptor *attachment, const PrimaryOutputAttachment &operations) {
+            switch (operations.loadOperation) {
+                case AttachmentLoadOperation::Load:
+                    attachment.loadAction = MTLLoadActionLoad;
+                    break;
+                case AttachmentLoadOperation::Clear:
+                    attachment.loadAction = MTLLoadActionClear;
+                    break;
+                case AttachmentLoadOperation::DontCare:
+                    attachment.loadAction = MTLLoadActionDontCare;
+                    break;
+            }
+            attachment.storeAction =
+                operations.storeOperation == AttachmentStoreOperation::Store ? MTLStoreActionStore : MTLStoreActionDontCare;
+            const auto &clear = operations.clearColor;
+            attachment.clearColor = MTLClearColorMake(clear.red, clear.green, clear.blue, clear.alpha);
+        }
+
         /** @brief Finds only an exact graph-local resource binding; never guesses by slot or native address. */
         [[nodiscard]] std::uint64_t GraphInstance(const RenderGraphResourceId id,
                                                   const std::span<const RenderGraphResourceInstance> resources) {
@@ -684,21 +703,7 @@ namespace Horo::Render::Detail {
             MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
             auto *attachment = pass.colorAttachments[0];
             attachment.texture = texture->texture;
-            switch (color->operations.loadOperation) {
-                case AttachmentLoadOperation::Load:
-                    attachment.loadAction = MTLLoadActionLoad;
-                    break;
-                case AttachmentLoadOperation::Clear:
-                    attachment.loadAction = MTLLoadActionClear;
-                    break;
-                case AttachmentLoadOperation::DontCare:
-                    attachment.loadAction = MTLLoadActionDontCare;
-                    break;
-            }
-            attachment.storeAction =
-                color->operations.storeOperation == AttachmentStoreOperation::Store ? MTLStoreActionStore : MTLStoreActionDontCare;
-            const auto &clear = color->operations.clearColor;
-            attachment.clearColor = MTLClearColorMake(clear.red, clear.green, clear.blue, clear.alpha);
+            ConfigureGraphColorAttachment(attachment, color->operations);
             id<MTLRenderCommandEncoder> encoder = [commands renderCommandEncoderWithDescriptor:pass];
             if (encoder == nil) {
                 return Result<void>::Failure(

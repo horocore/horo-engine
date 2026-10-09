@@ -10,13 +10,31 @@
 #include <thread>
 
 namespace Horo::Render::Detail {
+    namespace {
+        /** @brief Creates and retains the native device/queue in the test runtime. */
+        id<MTLCommandQueue> InitializeSmokeRuntime(MetalResourceRuntime &runtime) {
+            id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+            REQUIRE(device != nil);
+            id<MTLCommandQueue> queue = [device newCommandQueue];
+            REQUIRE(queue != nil);
+            runtime.Initialize((__bridge void *)device, (__bridge void *)queue);
+            return queue;
+        }
+
+        /** @brief Requires exact native terminal completion within a finite smoke-test budget. */
+        void RequireNativeCompletion(id<MTLCommandBuffer> commands) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (commands.status != MTLCommandBufferStatusCompleted && commands.status != MTLCommandBufferStatusError &&
+                   std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            REQUIRE(commands.status == MTLCommandBufferStatusCompleted);
+        }
+    }  // namespace
+
     TEST_CASE("Metal graph buffer copy validates ranges and records actual resident bytes", "[integration][renderer][metal][gpu]") {
-        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-        REQUIRE(device != nil);
-        id<MTLCommandQueue> queue = [device newCommandQueue];
-        REQUIRE(queue != nil);
         MetalResourceRuntime runtime;
-        runtime.Initialize((__bridge void *)device, (__bridge void *)queue);
+        id<MTLCommandQueue> queue = InitializeSmokeRuntime(runtime);
         const std::array<std::byte, 16> sourceBytes{std::byte{0x12}, std::byte{0x34}, std::byte{0x56}, std::byte{0x78}};
         const RenderBufferDescriptor sourceDescriptor{.byteSize = sourceBytes.size(),
                                                       .usage = RenderBufferUsage::CopySource,
@@ -56,12 +74,7 @@ namespace Horo::Render::Detail {
         REQUIRE(runtime.ValidateGraphWorkload(workload, resources).HasError());
         REQUIRE(runtime.CreateBuffer(sourceDescriptor, sourceBytes, TestSupport::PlacementFor(sourceCost.Value(), 3, 1)).HasError());
         [commands commit];
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        while (commands.status != MTLCommandBufferStatusCompleted && commands.status != MTLCommandBufferStatusError &&
-               std::chrono::steady_clock::now() < deadline) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        REQUIRE(commands.status == MTLCommandBufferStatusCompleted);
+        RequireNativeCompletion(commands);
         auto *resident = reinterpret_cast<MetalBufferInstance *>(static_cast<std::uintptr_t>(destination.Value()));
         REQUIRE(std::memcmp(static_cast<const std::byte *>(resident->buffer.contents) + 4, sourceBytes.data(), 4) == 0);
         runtime.DrainGraphRetirements();
@@ -70,12 +83,8 @@ namespace Horo::Render::Detail {
     }
 
     TEST_CASE("Metal graph color clear and load preserve actual tracked heap contents", "[integration][renderer][metal][gpu]") {
-        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-        REQUIRE(device != nil);
-        id<MTLCommandQueue> queue = [device newCommandQueue];
-        REQUIRE(queue != nil);
         MetalResourceRuntime runtime;
-        runtime.Initialize((__bridge void *)device, (__bridge void *)queue);
+        id<MTLCommandQueue> queue = InitializeSmokeRuntime(runtime);
         const RenderTextureDescriptor descriptor{.extent = {1, 1},
                                                  .format = RenderTextureFormat::Rgba8Unorm,
                                                  .usage = RenderTextureUsage::RenderAttachment | RenderTextureUsage::CopySource};
@@ -113,12 +122,7 @@ namespace Horo::Render::Detail {
             destinationBytesPerImage:256];
         [blit endEncoding];
         [commands commit];
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        while (commands.status != MTLCommandBufferStatusCompleted && commands.status != MTLCommandBufferStatusError &&
-               std::chrono::steady_clock::now() < deadline) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        REQUIRE(commands.status == MTLCommandBufferStatusCompleted);
+        RequireNativeCompletion(commands);
         const auto *pixel = static_cast<const unsigned char *>(destination->buffer.contents);
         CHECK(pixel[0] == 255);
         CHECK(pixel[1] == 0);
