@@ -44,7 +44,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiGlyphAtlasGlyphKey::IsValid */
     bool UiGlyphAtlasGlyphKey::IsValid() const noexcept {
-        return face.IsValid() && variant.IsValid();
+        return face.IsValid() && variant.IsValid() && fontRevision.IsValid();
     }
 
     /** @copydoc UiGlyphAtlasPlacement::IsValid */

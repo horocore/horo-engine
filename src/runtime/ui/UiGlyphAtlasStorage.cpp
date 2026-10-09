@@ -1,6 +1,21 @@
 #include "UiGlyphAtlasStorage.h"
 
 namespace Horo::Runtime::Ui {
+    namespace {
+        /** @brief Checks byte/extent admission before any upload or entry reservation. */
+        [[nodiscard]] bool IsRasterWithinAtlas(const UiGlyphAtlasRasterData &raster, const UiGlyphAtlasDescriptor &descriptor) {
+            return raster.IsValid() && raster.format == descriptor.format && raster.width <= descriptor.tileExtent.width &&
+                   raster.height <= descriptor.tileExtent.height && raster.bytes.size() <= descriptor.limits.maximumPendingUploadBytes;
+        }
+
+        /** @brief Optional native font provenance must name the exact rasterized generation. */
+        [[nodiscard]] bool IsRasterFaceCurrent(const UiGlyphAtlasRasterData &raster) {
+            return raster.sourceFace == nullptr ||
+                   (raster.sourceFace->IsValid() && raster.sourceFace->Id().Bytes() == raster.key.face.Bytes() &&
+                    raster.sourceFace->Revision() == raster.key.fontRevision);
+        }
+    }  // namespace
+
     Result<void> UiGlyphAtlas::Storage::PublishUpload(const std::size_t uploadIndex, const std::size_t entryIndex,
                                                       const UiGlyphAtlasRasterData &raster, const std::size_t stagingOffset) {
         try {
@@ -14,6 +29,8 @@ namespace Horo::Runtime::Ui {
 
         auto &entry = entries[entryIndex];
         entry.key = raster.key;
+        if (raster.sourceFace != nullptr)
+            entry.sourceFace = *raster.sourceFace;
         entry.placement = Placement(entryIndex, raster.width, raster.height);
         entry.state = EntryState::Pending;
         entry.uploadSlot = static_cast<std::uint32_t>(uploadIndex + 1U);
@@ -40,8 +57,7 @@ namespace Horo::Runtime::Ui {
     }
 
     Result<UiGlyphAtlasUploadId> UiGlyphAtlas::Storage::AdmitUpload(const UiGlyphAtlasRasterData &raster) {
-        if (!raster.IsValid() || raster.format != descriptor.format || raster.width > descriptor.tileExtent.width ||
-            raster.height > descriptor.tileExtent.height || raster.bytes.size() > descriptor.limits.maximumPendingUploadBytes)
+        if (!IsRasterWithinAtlas(raster, descriptor) || !IsRasterFaceCurrent(raster))
             return UiGlyphAtlasStorageDetail::Failure<UiGlyphAtlasUploadId>(UiErrors::GlyphAtlasUploadInvalid);
 
         if (const auto existing = FindEntry(raster.key); existing.has_value()) {

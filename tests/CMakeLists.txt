@@ -2638,6 +2638,7 @@ add_executable(HoroRenderFrontendTests
         unit/runtime/renderer/RenderTransferTests.cpp
         unit/runtime/renderer/RenderResourceRegistryTests.cpp
         unit/runtime/renderer/UiRenderCompositionTests.cpp
+        unit/runtime/renderer/UiRenderSubmissionTests.cpp
 )
 
 target_compile_features(HoroRenderFrontendTests PRIVATE cxx_std_20)

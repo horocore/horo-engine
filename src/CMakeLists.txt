@@ -626,6 +626,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiTextLayoutShaped.cpp
         runtime/ui/UiTextLayoutTypes.cpp
         runtime/ui/UiGlyphAtlas.cpp
+        runtime/ui/UiGlyphAtlasFrameLease.cpp
         runtime/ui/UiGlyphAtlasStorage.cpp
         runtime/ui/UiGlyphAtlasValidation.cpp
         runtime/ui/UiStyle.cpp
@@ -1996,6 +1997,9 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderResourceRegistry.cpp
         runtime/renderer/frontend/RenderResourceSubmissionPins.cpp
         runtime/renderer/frontend/UiRenderComposition.cpp
+        runtime/renderer/frontend/UiRenderSubmission.cpp
+        runtime/renderer/frontend/UiRenderSubmissionRetention.cpp
+        runtime/renderer/frontend/UiRenderTextureRealization.cpp
 )
 add_library(HoroEngine::RenderFrontend ALIAS HoroRenderFrontend)
 
