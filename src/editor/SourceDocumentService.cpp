@@ -42,8 +42,12 @@ namespace Horo::Editor {
         storage_->limits = limits;
         std::error_code error;
         storage_->projectRoot = std::filesystem::canonical(projectRoot, error);
+        if (error) {
+            storage_->projectRoot.clear();
+            return;
+        }
         const SourceDocumentLimits ceiling;
-        if (error || !std::filesystem::is_directory(storage_->projectRoot, error) || error || limits.maximumDocumentBytes == 0 ||
+        if (!std::filesystem::is_directory(storage_->projectRoot, error) || error || limits.maximumDocumentBytes == 0 ||
             limits.maximumDocumentBytes > ceiling.maximumDocumentBytes || limits.maximumResidentBytes == 0 ||
             limits.maximumResidentBytes > ceiling.maximumResidentBytes || limits.maximumDocuments == 0 ||
             limits.maximumDocuments > ceiling.maximumDocuments)
@@ -157,7 +161,7 @@ namespace Horo::Editor {
         root->base = root->text;
         if (cancellation.IsCancellationRequested())
             return Failure<std::shared_ptr<const Detail::SourceDocumentRoot>>(SourceDocumentErrors::Cancelled);
-        records.push_back({path.Value(), root});
+        records.emplace_back(path.Value(), root);
         return Result<std::shared_ptr<const Detail::SourceDocumentRoot>>::Success(std::move(root));
     }
 
