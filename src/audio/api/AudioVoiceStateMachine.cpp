@@ -3,6 +3,8 @@
 #include "AudioHandleRegistry.h"
 #include "Horo/Audio/AudioErrors.h"
 
+#include <algorithm>
+#include <initializer_list>
 #include <memory>
 #include <new>
 #include <utility>
@@ -33,6 +35,11 @@ namespace Horo::Audio {
             return false;
         }
 
+        /** @brief Test a closed, stack-backed set of destinations without allocation or implicit fallback. */
+        bool Allows(const AudioVoiceState next, const std::initializer_list<AudioVoiceState> destinations) noexcept {
+            return std::ranges::find(destinations, next) != destinations.end();
+        }
+
         [[nodiscard]] bool IsLegalTransition(const AudioVoiceState current, const AudioVoiceState next) noexcept {
             using enum AudioVoiceState;
             if (next == Failed && !IsTerminalAudioVoiceState(current))
@@ -44,13 +51,13 @@ namespace Horo::Audio {
                 case Ready:
                     return next == Scheduled;
                 case Scheduled:
-                    return next == Playing || next == Stopping || next == Stopped;
+                    return Allows(next, {Playing, Virtual, Stopping, Stopped});
                 case Playing:
-                    return next == Paused || next == Virtual || next == Stopping || next == Stopped || next == Finished;
+                    return Allows(next, {Paused, Virtual, Stopping, Stopped, Finished});
                 case Paused:
-                    return next == Playing || next == Stopping;
+                    return Allows(next, {Playing, Virtual, Stopping});
                 case Virtual:
-                    return next == Playing || next == Stopping;
+                    return Allows(next, {Playing, Paused, Stopping, Finished});
                 case Stopping:
                     return next == Stopped;
                 case Stopped:

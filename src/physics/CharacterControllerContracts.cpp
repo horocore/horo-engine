@@ -1,5 +1,7 @@
 #include "Horo/Physics/CharacterControllerContracts.h"
 
+#include "CharacterPlatformAttachmentValidation.h"
+
 #include <algorithm>
 #include <cmath>
 #include <type_traits>
@@ -485,6 +487,8 @@ namespace Horo::Character {
             return bounds;
         if (const auto ground = ValidateGroundEvidence(result, descriptor); ground.HasError())
             return ground;
+        if (const auto attachment = Detail::ValidateCharacterPlatformAttachment(result, descriptor); attachment.HasError())
+            return attachment;
         for (std::uint32_t index = 0; index < result.contactCount; ++index) {
             const auto contact = ValidateContact(result.contacts[index], descriptor);
             if (contact.HasError())

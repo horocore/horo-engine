@@ -177,6 +177,7 @@ namespace Horo::Audio {
                 --pitchRamp;
             }
             const double advanced = fraction + step;
+            progress.sourceAdvance += step;
             needed = static_cast<std::uint32_t>(advanced);
             fraction = advanced - needed;
         }

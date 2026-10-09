@@ -9,8 +9,10 @@ namespace Horo::Tests::VoiceRenderFixture {
         std::shared_ptr<AudioStreamingService> service{Audio::StreamingTests::Service(jobs, package)};
         AudioStreamHandle stream;
 
-        StreamRig() {
-            auto admitted = service->Admit(Audio::StreamingTests::Request());
+        explicit StreamRig(const bool seekable = false) {
+            auto request = Audio::StreamingTests::Request();
+            request.decoder.seekable = seekable;
+            auto admitted = service->Admit(request);
             REQUIRE(admitted.HasValue());
             stream = admitted.Value();
         }
@@ -47,6 +49,14 @@ namespace Horo::Tests::VoiceRenderFixture {
             REQUIRE(runtime.Apply(ConsumePublished(staging)) == nullptr);
         }
 
+        /** @brief Prepare a seekable logical voice through real publication and FIFO start, without worker PCM. */
+        std::unique_ptr<AudioVoiceRenderRuntime> CreateVirtual(const MixerRenderPlan &plan, AudioCommandStaging &staging) const {
+            auto runtime = Create();
+            Publish(*runtime, plan, staging);
+            Control(*runtime, staging, AudioVoiceControl::StartVirtual);
+            return runtime;
+        }
+
         /** @brief Detach before retirement and verify whether this case actually acquired a provider source. */
         void Finish(AudioVoiceRenderRuntime &runtime, const std::uint32_t expectedOpens = 1) const {
             runtime.Close();
@@ -57,6 +67,107 @@ namespace Horo::Tests::VoiceRenderFixture {
             CHECK(package.releases.load() == expectedOpens);
         }
     };
+
+    TEST_CASE("Virtual stream realization positions the worker at the logical cursor", "[audio][virtualization][stream]") {
+        StreamRig rig{true};
+        auto plan = Plan(Asset());
+        auto staging = Staging();
+        auto runtime = rig.CreateVirtual(*plan, staging);
+        const auto silent = runtime->Render(3);
+        REQUIRE(silent.error == nullptr);
+        CHECK(runtime->Cursor().frame == 3);
+        for (std::uint32_t pump = 0; pump < 8; ++pump)
+            rig.service->Pump();
+        CHECK(rig.package.opens.load() == 0);
+        CHECK(rig.package.decodes.load() == 0);
+        CHECK(silent.input.samples.planes[0][0] == 0.0F);
+        StreamRig::Control(*runtime, staging, AudioVoiceControl::Realize);
+        REQUIRE(Audio::StreamingTests::PumpUntil(*rig.service, rig.stream, 4));
+        const auto physical = runtime->Render(1);
+        REQUIRE(physical.error == nullptr);
+        CHECK(physical.input.samples.planes[0][0] == 4.0F);
+        CHECK(runtime->Cursor().frame == 4);
+        StreamRig::Control(*runtime, staging, AudioVoiceControl::Virtualize);
+        CHECK(runtime->Render(4).terminal);
+        CHECK(runtime->Cursor().frame == 8);
+        CHECK_FALSE(runtime->Render(1).terminal);
+        rig.Finish(*runtime);
+    }
+
+    TEST_CASE("Virtual stream advances during preparation and catches up without callback decode", "[audio][virtualization][stream]") {
+        StreamRig rig{true};
+        auto plan = Plan(Asset());
+        auto staging = Staging();
+        auto runtime = rig.CreateVirtual(*plan, staging);
+        REQUIRE(runtime->Render(1).error == nullptr);
+        StreamRig::Control(*runtime, staging, AudioVoiceControl::Realize);
+        // No Pump: the accepted seek cannot have executed. Virtual time still advances.
+        REQUIRE(runtime->Render(2).error == nullptr);
+        CHECK(runtime->Cursor().frame == 3);
+        CHECK(rig.package.decodes.load() == 0);
+        REQUIRE(Audio::StreamingTests::PumpUntil(*rig.service, rig.stream, 4));
+        REQUIRE(runtime->Render(1).error == nullptr);
+        CHECK(runtime->Cursor().frame == 4);
+        rig.Finish(*runtime);
+    }
+
+    TEST_CASE("Nonseekable streams reject virtualization transactionally", "[audio][virtualization][stream]") {
+        StreamRig rig;
+        auto runtime = rig.Create();
+        auto plan = Plan(Asset());
+        auto staging = Staging();
+        StreamRig::Publish(*runtime, *plan, staging);
+        REQUIRE(staging.Submit({Scope, AudioVoiceControlRequest{runtime->Voice(), AudioVoiceControl::StartVirtual}}).status ==
+                AudioCommandStagingStatus::Ok);
+        CHECK(runtime->Apply(ConsumePublished(staging)) == &AudioErrors::OperationUnsupported);
+        CHECK(runtime->Cursor().frame == 0);
+        StreamRig::Start(*runtime, staging);
+        rig.Finish(*runtime, 0);
+    }
+
+    TEST_CASE("Virtual stream observes service stop during pending realization exactly once", "[audio][virtualization][stream]") {
+        StreamRig rig{true};
+        auto plan = Plan(Asset());
+        auto staging = Staging();
+        auto runtime = rig.CreateVirtual(*plan, staging);
+        REQUIRE(runtime->Render(2).error == nullptr);
+        StreamRig::Control(*runtime, staging, AudioVoiceControl::Realize);
+        REQUIRE(rig.service->Stop(rig.stream).HasValue());
+        const auto allocations = AllocationProbe::Count();
+        const auto frees = AllocationProbe::FreeCount();
+        const auto stopped = runtime->Render(4);
+        const auto repeated = runtime->Render(4);
+        const auto allocationEnd = AllocationProbe::Count();
+        const auto freeEnd = AllocationProbe::FreeCount();
+        CHECK(stopped.terminal);
+        CHECK_FALSE(repeated.terminal);
+        CHECK(runtime->Cursor().frame == 2);
+        CHECK(allocationEnd == allocations);
+        CHECK(freeEnd == frees);
+        rig.Finish(*runtime, 0);
+    }
+
+    TEST_CASE("Virtual stream loop phase realizes through worker wraps without source reopening", "[audio][virtualization][stream]") {
+        StreamRig rig{true};
+        auto plan = Plan(Asset());
+        auto staging = Staging();
+        auto runtime = rig.CreateVirtual(*plan, staging);
+        const AudioVoiceControlRequest loop{.voice = runtime->Voice(), .control = AudioVoiceControl::SetLoop, .loop = {true, 1, 4}};
+        REQUIRE(staging.Submit({Scope, loop}).status == AudioCommandStagingStatus::Ok);
+        REQUIRE(runtime->Apply(ConsumePublished(staging)) == nullptr);
+        REQUIRE(runtime->Render(13).error == nullptr);
+        CHECK(runtime->Cursor().frame == 1);
+        StreamRig::Control(*runtime, staging, AudioVoiceControl::Realize);
+        for (std::uint32_t frame = 0; frame < 9; ++frame) {
+            REQUIRE(Audio::StreamingTests::PumpUntil(*rig.service, rig.stream, 4));
+            const auto rendered = runtime->Render(1);
+            REQUIRE(rendered.error == nullptr);
+            CHECK_FALSE(rendered.terminal);
+            CHECK(rendered.input.samples.planes[0][0] == static_cast<float>(2 + frame % 3));
+        }
+        CHECK(runtime->Cursor().frame == 1);
+        rig.Finish(*runtime);
+    }
 
     TEST_CASE("Retained voice stream port prevents retirement until explicit detached cleanup", "[audio][voice_render][stream]") {
         StreamRig rig;

@@ -943,6 +943,8 @@ add_library(HoroAudioApi STATIC
         audio/api/AudioStreamDecoder.cpp
         audio/api/AudioStreamDecoderErrors.cpp
         audio/api/AudioStreamingService.cpp
+        audio/api/AudioStreamPosition.cpp
+        audio/api/AudioStreamState.h
         audio/api/AudioConcurrencyGroup.cpp
         audio/api/AudioVoiceAdmission.cpp
         audio/api/AudioVoiceStateMachine.cpp
@@ -1082,6 +1084,7 @@ target_link_libraries(HoroAudioMixer PUBLIC HoroEngine::AudioDsp HoroEngine::Aud
 
 add_library(HoroAudioVoiceRender STATIC
         audio/playback/AudioVoiceRenderRuntime.cpp
+        audio/playback/AudioVoiceVirtualStream.cpp
         audio/playback/AudioVoiceRenderState.h)
 add_library(HoroEngine::AudioVoiceRender ALIAS HoroAudioVoiceRender)
 target_compile_features(HoroAudioVoiceRender PUBLIC cxx_std_20)
@@ -1100,6 +1103,8 @@ add_library(HoroPhysics STATIC
         physics/CharacterClearanceQuery.cpp
         physics/CharacterControllerContracts.cpp
         physics/CharacterPhysicsQueryAdapter.cpp
+        physics/CharacterPlatformAttachmentValidation.cpp
+        physics/CharacterPlatformAttachmentValidation.h
         physics/CharacterDiagnostics.cpp
         physics/CharacterErrors.cpp
         physics/CharacterMetrics.cpp
@@ -1109,6 +1114,7 @@ add_library(HoroPhysics STATIC
         physics/CharacterWorldCommandPipeline.cpp
         physics/CharacterWorldCommandInternal.h
         physics/CharacterWorldMovementInternal.h
+        physics/CharacterWorldPlatformInternal.h
         physics/CharacterWorldInternal.h
         physics/CharacterWorldPlacementInternal.h
         physics/CharacterWorldShapeInternal.h

@@ -335,6 +335,7 @@ namespace Horo::Audio {
                                                    {{outputs.data(), descriptor_.channels}, 1});
             progress.consumed += result.consumed;
             progress.sanitizedSamples += result.sanitizedSamples;
+            progress.sourceAdvance += result.sourceAdvance;
             if (result.produced != 0)
                 EmitStereo(output, progress);
             if (result.status == Complete || result.status == InvalidState || result.status == InvalidBuffer ||

@@ -39,6 +39,10 @@ namespace Horo::Character {
         const CharacterSweepProbe sweep = [](auto *context, const CharacterSweepProbeRequest &request) noexcept {
             return static_cast<const CharacterPhysicsQueryAdapter *>(context)->Sweep(request);
         };
+        const CharacterPlatformBodyProbe platformBody = [](auto *context, const Physics::BodyHandle body, const Physics::ShapeHandle shape,
+                                                           const std::uint64_t revision) noexcept {
+            return static_cast<const CharacterPhysicsQueryAdapter *>(context)->PlatformBody(body, shape, revision);
+        };
         return {expected.sceneGeneration,
                 expected.characterWorld,
                 expected.physicsWorld,
@@ -48,7 +52,26 @@ namespace Horo::Character {
                 expected.originGeneration,
                 expected.tick,
                 expected.physicsSnapshotRevision,
-                sweep};
+                sweep,
+                platformBody};
+    }
+
+    /** @copydoc CharacterPhysicsQueryAdapter::PlatformBody */
+    Result<std::optional<CharacterPlatformBodyEvidence>> CharacterPhysicsQueryAdapter::PlatformBody(
+        const Physics::BodyHandle body, const Physics::ShapeHandle shape, const std::uint64_t physicsSnapshotRevision) const noexcept {
+        if (const auto published = world_->PublishedTick();
+            published.completedTick == 0 || physicsSnapshotRevision == 0 || published.publicationRevision != physicsSnapshotRevision)
+            return Result<std::optional<CharacterPlatformBodyEvidence>>::Failure(MakeError(Physics::PhysicsErrors::QuerySnapshotStale));
+        const auto evidence = world_->ReadSceneBodyReconciliation(body);
+        if (evidence.HasError()) {
+            if (evidence.ErrorValue().code.Value() == Physics::PhysicsErrors::HandleStale.code.Value())
+                return Result<std::optional<CharacterPlatformBodyEvidence>>::Success(std::nullopt);
+            return Result<std::optional<CharacterPlatformBodyEvidence>>::Failure(evidence.ErrorValue());
+        }
+        if (evidence.Value().observedShape != shape)
+            return Result<std::optional<CharacterPlatformBodyEvidence>>::Success(std::nullopt);
+        return Result<std::optional<CharacterPlatformBodyEvidence>>::Success(
+            CharacterPlatformBodyEvidence{body, shape, evidence.Value().observedMotion, evidence.Value().state.pose});
     }
 
     /** @copydoc CharacterPhysicsQueryAdapter::Overlap */

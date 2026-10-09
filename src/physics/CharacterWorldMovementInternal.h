@@ -290,6 +290,8 @@ namespace Horo::Character::Detail {
         result.groundDistanceMeters = 0.0F;
         result.groundRelativeVelocityMetersPerSecond = {};
         result.platformAttached = false;
+        result.platformAttachment.reset();
+        result.platformAttachmentChange = CharacterPlatformAttachmentChange::None;
         result.groundingRevalidationRequired = true;
     }
 
