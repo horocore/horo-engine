@@ -17,17 +17,21 @@ namespace Horo::Runtime::Ui::ReloadTests {
         }
 
         /** @brief Uses real encode/provider/async-load/decode contracts rather than manufacturing a terminal closure. */
-        UiRuntimeAssetLoadResult Load(std::uint64_t version, bool secondCanvas) {
+        UiRuntimeAssetLoadResult Load(std::uint64_t version, bool secondCanvas, const LayerOptions &layer) {
             UiDocumentBuilder builder{Stable<UiDocumentId>(1), Revision<UiDocumentRevision>(version)};
             const std::uint8_t count = secondCanvas ? 2 : 1;
             for (std::uint8_t i = 0; i < count; ++i) {
                 REQUIRE(builder.AddCanvas({Stable<UiCanvasId>(2 + i), Stable<UiElementId>(10 + i * 2)}).HasValue());
                 REQUIRE(builder.AddElement({Stable<UiElementId>(10 + i * 2), {}, Type("core.panel"), {}, {}}).HasValue());
-                REQUIRE(
-                    builder.AddElement({Stable<UiElementId>(11 + i * 2), Stable<UiElementId>(10 + i * 2), Type("core.text_input"), {}, {}})
-                        .HasValue());
+                REQUIRE(builder
+                            .AddElement({Stable<UiElementId>(layer.childMarker + i * 2),
+                                         Stable<UiElementId>(10 + i * 2),
+                                         Type("core.text_input"),
+                                         {},
+                                         {}})
+                            .HasValue());
             }
-            REQUIRE(builder.AddRoute({Stable<UiRouteId>(9), UiPresentationBand::Screen, 1, false}).HasValue());
+            REQUIRE(builder.AddRoute(layer.route).HasValue());
             auto document = std::move(builder).Build();
             REQUIRE(document.HasValue());
             const auto cooked = CookedUiDocument::Cook(document.Value());
@@ -89,13 +93,14 @@ namespace Horo::Runtime::Ui::ReloadTests {
         };
 
         UiReloadCanvas MakeCanvas(UiElementSlotAllocator &allocator, const CookedUiDocument &document, std::size_t index,
-                                  std::uint64_t version) {
+                                  std::uint64_t version, const LayerOptions &layer) {
             const auto &authored = document.Canvases()[index];
-            const UiCanvasInstanceId canvas{Owner(), static_cast<std::uint32_t>(index + 2), 1};
-            const auto child = Stable<UiElementId>(static_cast<std::uint8_t>(11 + index * 2));
+            const UiCanvasInstanceId canvas{layer.canvas.ownership, static_cast<std::uint32_t>(layer.canvas.slot + index),
+                                            layer.canvas.generation};
+            const auto child = Stable<UiElementId>(static_cast<std::uint8_t>(layer.childMarker + index * 2));
             const std::array elements{UiElementDescriptor{authored.rootElement, {}}, UiElementDescriptor{child, authored.rootElement}};
             auto tree = UiElementTree::Create(allocator,
-                                              {Instance(),
+                                              {layer.instance,
                                                canvas,
                                                document.Id(),
                                                document.SourceRevision(),
@@ -107,23 +112,19 @@ namespace Horo::Runtime::Ui::ReloadTests {
         }
 
         void InputOwners(UiReloadCanvas &canvas, const CookedUiDocument &document, std::size_t index, std::uint64_t version,
-                         std::uint16_t textLimit, std::uint32_t modalHighWater, std::uint32_t routeHighWater) {
+                         std::uint16_t textLimit, std::uint32_t modalHighWater, std::uint32_t routeHighWater, const LayerOptions &layer) {
             const auto root = canvas.tree.Root().Value();
-            const auto child = Stable<UiElementId>(static_cast<std::uint8_t>(11 + index * 2));
+            const auto child = Stable<UiElementId>(static_cast<std::uint8_t>(layer.childMarker + index * 2));
             const auto handle = canvas.tree.Find(child).Value();
-            const UiActionOwnerContext owner{Instance(),
-                                             canvas.tree.Canvas(),
-                                             document.Id(),
-                                             document.SourceRevision(),
-                                             canvas.tree.Revision(),
-                                             Revision<UiInteractionRevision>(version)};
+            const UiActionOwnerContext owner{canvas.tree.Instance(),    canvas.tree.Canvas(),   document.Id(),
+                                             document.SourceRevision(), canvas.tree.Revision(), Revision<UiInteractionRevision>(version)};
             UiFocusGraphDescriptor focus{{owner.instance,
                                           owner.canvas,
                                           owner.document,
                                           owner.documentRevision,
                                           owner.treeRevision,
                                           owner.interaction,
-                                          {UiFocusPlayerId{Owner(), 3, 1}, {Owner(), 4, 1}}},
+                                          {layer.player, layer.layer}},
                                          child,
                                          UiFocusRecoveryPolicy::AncestorThenDefaultThenFirst,
                                          8,
@@ -146,10 +147,10 @@ namespace Horo::Runtime::Ui::ReloadTests {
             canvas.captures.emplace(std::move(UiPointerCaptureStore::Create({Owner(), 8})).Value());
         }
 
-        void Geometry(UiReloadCanvas &canvas, std::uint64_t version, std::uint32_t concurrentSnapshots) {
+        void Geometry(UiReloadCanvas &canvas, std::uint64_t version, std::uint32_t concurrentSnapshots, UiRenderViewId view) {
             canvas.layoutEngine.emplace(
-                std::move(UiLayoutEngine::Create({Instance(), canvas.tree.Canvas(), canvas.tree.SourceDocument(), 8, 8, concurrentSnapshots,
-                                                  Revision<UiInteractionRevision>(version)}))
+                std::move(UiLayoutEngine::Create({canvas.tree.Instance(), canvas.tree.Canvas(), canvas.tree.SourceDocument(), 8, 8,
+                                                  concurrentSnapshots, Revision<UiInteractionRevision>(version)}))
                     .Value());
             Evaluator evaluator{version == 1 ? 300 : 150};
             const UiLayoutSourceRevisions sources{canvas.tree.SourceDocumentRevision(),   canvas.tree.Revision(),
@@ -159,29 +160,30 @@ namespace Horo::Runtime::Ui::ReloadTests {
             canvas.layout.emplace(
                 std::move(canvas.layoutEngine->Update(canvas.tree, {sources, {{0, 0}, {100, 100}}, {{0, 0}, {100, 100}}, &evaluator}))
                     .Value());
-            canvas.clipping.emplace(std::move(UiLayoutClipEngine::Create({Instance(), canvas.tree.Canvas(), canvas.tree.SourceDocument(), 8,
-                                                                          8, 8, concurrentSnapshots}))
+            canvas.clipping.emplace(std::move(UiLayoutClipEngine::Create({canvas.tree.Instance(), canvas.tree.Canvas(),
+                                                                          canvas.tree.SourceDocument(), 8, 8, 8, concurrentSnapshots}))
                                         .Value());
             const auto root = canvas.tree.Root().Value().handle;
             for (const auto &record : canvas.layout->Records())
                 canvas.clipPolicies.push_back(
                     {record.element, record.element == root ? UiLayoutOverflowPolicy::Scroll : UiLayoutOverflowPolicy::Visible, {}});
             canvas.clipped.emplace(std::move(canvas.clipping->Update(canvas.tree, *canvas.layout, {canvas.clipPolicies, {}})).Value());
-            canvas.presentations.push_back(UiPresentedInteractionState::Create({Owner(), 10, 1}, canvas.tree.Canvas()).Value());
+            canvas.presentations.push_back(UiPresentedInteractionState::Create(view, canvas.tree.Canvas()).Value());
         }
     }  // namespace
 
     UiReloadGeneration Generation(UiElementSlotAllocator &allocator, std::uint64_t version, std::uint16_t textLimit, bool secondCanvas,
-                                  std::uint32_t modalHighWater, std::uint32_t routeHighWater, std::uint32_t concurrentSnapshots) {
-        auto loaded = Load(version, secondCanvas);
+                                  std::uint32_t modalHighWater, std::uint32_t routeHighWater, std::uint32_t concurrentSnapshots,
+                                  const LayerOptions &layer) {
+        auto loaded = Load(version, secondCanvas, layer);
         std::vector<UiReloadCanvas> canvases;
         for (std::size_t i = 0; i < loaded.document.Canvases().size(); ++i) {
-            auto canvas = MakeCanvas(allocator, loaded.document, i, version);
-            InputOwners(canvas, loaded.document, i, version, textLimit, modalHighWater, routeHighWater);
-            Geometry(canvas, version, concurrentSnapshots);
+            auto canvas = MakeCanvas(allocator, loaded.document, i, version, layer);
+            InputOwners(canvas, loaded.document, i, version, textLimit, modalHighWater, routeHighWater, layer);
+            Geometry(canvas, version, concurrentSnapshots, layer.view);
             canvases.push_back(std::move(canvas));
         }
-        auto generation = UiReloadGeneration::Create(std::move(loaded), Instance(), std::move(canvases));
+        auto generation = UiReloadGeneration::Create(std::move(loaded), layer.instance, std::move(canvases));
         REQUIRE(generation.HasValue());
         return std::move(generation).Value();
     }
