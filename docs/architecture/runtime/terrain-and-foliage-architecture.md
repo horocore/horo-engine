@@ -426,6 +426,40 @@ host must retain exact GPU/artifact leases until queued frames retire; this CPU 
 neither destroys GPU resources nor waits for them. Tile extraction/upload and draw
 submission belong to TRF-003.3, rather than this material admission operation.
 
+### Immutable payload manifest integration (TRF-002.5)
+
+`HoroTerrainCook` owns `TerrainPayloadManifest.h` and the immutable HTPM v1
+descriptor root. Assembly consumes cook-issued terrain/source geometry and
+foliage roots, verifies exact membership, and captures declared consumer
+requirements separately from consumer readiness. Assets supplies the independently
+verified foliage dependency snapshot digest; computing a closure digest alone
+does not authenticate external foliage dependencies. The manifest contains no
+native resources, scheduling, activation or runtime budget authority.
+
+Assets publication remains host-owned: assemble a detached root, apply the pure
+publication gate against the exact selected predecessor and lifecycle, then use
+the existing Assets generation transaction to publish its bytes and payload
+leases atomically. This addition does not register a cooker, add durable storage,
+or claim that existing host composition automatically publishes HTPM. Producer
+snapshots and readiness receipts consume these descriptors rather than duplicating
+their representation. Failed, cancelled and closed admission retains the prior
+root; moved-from roots cannot be admitted.
+
+The header is assigned only to `HoroTerrainCook`; its isolated public-header
+consumer is registered with CTest. Existing tile/source-artifact verification
+calls remain source-compatible through a defaulted cancellation parameter.
+Consumers must rebuild for the changed function signatures; no HTIL, HTSG or
+foliage payload wire schema changes. Foliage adds a cancellable whole-root validator.
+
+Construction admits finite storage and conservative work ceilings before copying
+or encoding descriptors. Hash cancellation intervals are at most 4096 bytes,
+sample validation at most 256 samples, geometry validation/bounds one record,
+and encoding one descriptor. Remaining atomic steps are bounded: CRS text is at
+most 65535 bytes, dependency sorting at most 4096 records per closure, one tile
+edge at most 257 samples, and tile manifest digest generation at most 2048 tile
+records. These are tooling bounds, not WST work grants. Host owners cancel and
+join assembly before releasing borrowed inputs.
+
 See [terrain material composition migration](../../guides/terrain-material-composition-migration.md)
 for target ownership and host adoption.
 

@@ -5,6 +5,21 @@
 #include <limits>
 
 namespace Horo::Terrain::Detail {
+    /** @copydoc HashPayload */
+    Result<Sha256Digest> HashPayload(const std::span<const std::uint8_t> bytes, const CancellationToken &cancellation) {
+        Sha256Builder hash;
+        for (std::size_t offset = 0; offset < bytes.size();) {
+            if (cancellation.IsCancellationRequested())
+                return Result<Sha256Digest>::Failure(MakeError(TerrainTileCookErrors::Cancelled));
+            const auto count = std::min<std::size_t>(4'096, bytes.size() - offset);
+            static_cast<void>(hash.Update(std::as_bytes(bytes.subspan(offset, count))));
+            offset += count;
+        }
+        if (cancellation.IsCancellationRequested())
+            return Result<Sha256Digest>::Failure(MakeError(TerrainTileCookErrors::Cancelled));
+        return Result<Sha256Digest>::Success(hash.Finalize());
+    }
+
     bool Nonzero(const Sha256Digest &digest) {
         return std::ranges::any_of(digest.bytes, [](const auto byte) {
             return byte != 0;

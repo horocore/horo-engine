@@ -1,4 +1,5 @@
 #include "Horo/Terrain/TerrainSourceArtifacts.h"
+#include "TerrainTileCookCodec.h"
 
 #include <algorithm>
 #include <bit>
@@ -59,11 +60,15 @@ namespace Horo::Terrain {
         }
 
         /** @brief Validate all retained positions before any triangle dereferences them. */
-        bool ValidVertices(const std::span<const std::uint8_t> bytes, const std::size_t start, const std::uint64_t vertices) {
-            for (std::size_t vertex = 0; vertex < vertices; ++vertex)
+        bool ValidVertices(const std::span<const std::uint8_t> bytes, const std::size_t start, const std::uint64_t vertices,
+                           const CancellationToken &cancellation) {
+            for (std::size_t vertex = 0; vertex < vertices; ++vertex) {
+                if (cancellation.IsCancellationRequested())
+                    return false;
                 for (std::size_t axis = 0; axis < 3; ++axis)
                     if (!std::isfinite(Double(bytes, start + vertex * 24 + axis * 8)))
                         return false;
+            }
             return true;
         }
 
@@ -90,12 +95,12 @@ namespace Horo::Terrain {
         }
 
         bool ValidGeometry(const std::span<const std::uint8_t> bytes, const std::size_t start, const std::uint64_t vertices,
-                           const std::uint64_t triangles) {
-            if (!ValidVertices(bytes, start, vertices))
+                           const std::uint64_t triangles, const CancellationToken &cancellation) {
+            if (!ValidVertices(bytes, start, vertices, cancellation))
                 return false;
             const auto triangleStart = start + vertices * 24;
             for (std::size_t triangle = 0; triangle < triangles; ++triangle) {
-                if (!ValidTriangle(bytes, start, vertices, triangleStart + triangle * 28))
+                if (cancellation.IsCancellationRequested() || !ValidTriangle(bytes, start, vertices, triangleStart + triangle * 28))
                     return false;
             }
             return true;
@@ -117,7 +122,8 @@ namespace Horo::Terrain {
         }
 
         /** @brief Bound counts before multiplication and require an exact, fully consumed geometry span. */
-        bool ValidGeometryEnvelope(const std::span<const std::uint8_t> payload, const std::size_t crsLength) {
+        bool ValidGeometryEnvelope(const std::span<const std::uint8_t> payload, const std::size_t crsLength,
+                                   const CancellationToken &cancellation) {
             const auto error = Double(payload, 383 + crsLength);
             const auto vertices = Read(payload, 392 + crsLength);
             const auto triangles = Read(payload, 400 + crsLength);
@@ -126,24 +132,37 @@ namespace Horo::Terrain {
                 vertices > TerrainDescriptorHardLimits::WorkItems || triangles > TerrainDescriptorHardLimits::WorkItems * 2 ||
                 vertices * 24 + triangles * 28 != payload.size() - geometryStart)
                 return false;
-            return ValidGeometry(payload, geometryStart, vertices, triangles);
+            return ValidGeometry(payload, geometryStart, vertices, triangles, cancellation);
+        }
+    }  // namespace
+
+    namespace {
+        /** @brief Rejects bounded envelope/provenance failures before hashing any bulk geometry. */
+        bool AdmittedArtifact(const std::span<const std::uint8_t> payload) {
+            constexpr std::array<std::uint8_t, 10> prefix{4, 0, 'H', 'T', 'S', 'G', 1, 0, 0, 0};
+            return payload.size() >= 408 && payload.size() <= TerrainDescriptorHardLimits::StagingBytes &&
+                   std::equal(prefix.begin(), prefix.end(), payload.begin()) && ValidProvenance(payload);
         }
     }  // namespace
 
     /** @copydoc VerifyTerrainSourceArtifactPayload */
-    Result<void> VerifyTerrainSourceArtifactPayload(const std::span<const std::uint8_t> payload, const Sha256Digest &expectedDigest) {
-        const auto corrupt = [] {
-            return Result<void>::Failure(MakeError(TerrainTileCookErrors::CorruptPrevious));
+    Result<void> VerifyTerrainSourceArtifactPayload(const std::span<const std::uint8_t> payload, const Sha256Digest &expectedDigest,
+                                                    const CancellationToken &cancellation) {
+        const auto corrupt = [&cancellation] {
+            return Result<void>::Failure(MakeError(cancellation.IsCancellationRequested() ? TerrainTileCookErrors::Cancelled
+                                                                                          : TerrainTileCookErrors::CorruptPrevious));
         };
-        if (constexpr std::array<std::uint8_t, 10> prefix{4, 0, 'H', 'T', 'S', 'G', 1, 0, 0, 0};
-            payload.size() < 408 || payload.size() > TerrainDescriptorHardLimits::StagingBytes ||
-            !std::equal(prefix.begin(), prefix.end(), payload.begin()) || ComputeSha256(std::as_bytes(payload)) != expectedDigest ||
-            !ValidProvenance(payload))
+        if (cancellation.IsCancellationRequested())
+            return corrupt();
+        if (!AdmittedArtifact(payload))
+            return corrupt();
+        const auto digest = Detail::HashPayload(payload, cancellation);
+        if (digest.HasError() || digest.Value() != expectedDigest)
             return corrupt();
         const auto crsLength = Read(payload, 197, 2);
         if (crsLength > payload.size() - 408 || !ValidCoordinates(payload, crsLength))
             return corrupt();
-        if (!ValidGeometryEnvelope(payload, crsLength))
+        if (!ValidGeometryEnvelope(payload, crsLength, cancellation) || cancellation.IsCancellationRequested())
             return corrupt();
         return Result<void>::Success();
     }

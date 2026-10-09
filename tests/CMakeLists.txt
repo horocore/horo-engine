@@ -1151,6 +1151,17 @@ add_executable(HoroTerrainImportTests
 target_compile_features(HoroTerrainImportTests PRIVATE cxx_std_20)
 target_link_libraries(HoroTerrainImportTests PRIVATE HoroEngine::TerrainImport)
 horo_register_catch_test(HoroTerrainImportTests LABELS "unit;terrain;assets;headless")
+add_executable(HoroTerrainPayloadManifestTests unit/runtime/terrain/TerrainPayloadManifestTests.cpp)
+target_compile_features(HoroTerrainPayloadManifestTests PRIVATE cxx_std_20)
+target_include_directories(HoroTerrainPayloadManifestTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroTerrainPayloadManifestTests PRIVATE HoroEngine::TerrainCook)
+horo_register_catch_test(HoroTerrainPayloadManifestTests LABELS "unit;terrain;assets;headless")
+add_executable(HoroTerrainPayloadManifestPublicHeaderConsumer support/TerrainPayloadManifestPublicHeaderConsumer.cpp)
+target_compile_features(HoroTerrainPayloadManifestPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroTerrainPayloadManifestPublicHeaderConsumer PRIVATE HoroEngine::TerrainCook)
+add_test(NAME HoroTerrainPayloadManifestPublicHeaderConsumer COMMAND HoroTerrainPayloadManifestPublicHeaderConsumer)
+set_tests_properties(HoroTerrainPayloadManifestPublicHeaderConsumer PROPERTIES LABELS "unit;terrain;assets;headless;ci-windows")
+
 add_executable(HoroTerrainSourceArtifactTests
         unit/runtime/terrain/TerrainSourceArtifactTests.cpp
 )

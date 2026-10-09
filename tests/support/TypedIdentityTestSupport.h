@@ -3,10 +3,19 @@
 #include "Horo/Foundation/ErrorCode.h"
 #include "Horo/Foundation/Result.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 
 namespace Horo::Tests {
+    /** @brief Forms a portable nonzero 16-byte typed identity for artifact fixtures. */
+    template <typename Identity> [[nodiscard]] Identity ByteIdentity(const std::uint8_t marker) {
+        std::array<std::uint8_t, 16> bytes{marker};
+        const auto identity = Identity::Create(bytes);
+        REQUIRE(identity.HasValue());
+        return identity.Value();
+    }
+
     /** @brief Forms one non-zero typed identity and fails the active test if construction regresses. */
     template <typename Identity> [[nodiscard]] Identity IdentityValue(const std::uint64_t value) {
         auto result = Identity::Create(value);

@@ -90,7 +90,8 @@ namespace Horo::Terrain {
     /**
      * @brief Verifies payload hashes, canonical order, source provenance and complete manifest integrity.
      * @param cooked Candidate or cache result to verify before host publication or reuse.
+     * @param cancellation Cooperative observer checked between tiles, sample batches and hash chunks.
      * @return Success or typed corruption failure; does not repair a partial generation.
      */
-    [[nodiscard]] Result<void> VerifyCookedTerrainTiles(const CookedTerrainTileSet &cooked);
+    [[nodiscard]] Result<void> VerifyCookedTerrainTiles(const CookedTerrainTileSet &cooked, const CancellationToken &cancellation = {});
 }  // namespace Horo::Terrain
