@@ -1639,6 +1639,16 @@ add_library(HoroTerrainCook STATIC
 add_library(HoroEngine::TerrainCook ALIAS HoroTerrainCook)
 target_compile_features(HoroTerrainCook PUBLIC cxx_std_20)
 target_link_libraries(HoroTerrainCook PUBLIC HoroEngine::TerrainImport)
+add_library(HoroTerrainProducerIntegration STATIC
+        runtime/terrain/integration/TerrainProducerSnapshot.cpp
+        runtime/terrain/integration/TerrainProducerSnapshotValidation.cpp
+        runtime/terrain/integration/TerrainProducerSnapshotGeometry.cpp
+        runtime/terrain/integration/TerrainProducerSnapshotFoliage.cpp
+        runtime/terrain/integration/TerrainProducerSnapshotOwner.cpp
+)
+add_library(HoroEngine::TerrainProducerIntegration ALIAS HoroTerrainProducerIntegration)
+target_compile_features(HoroTerrainProducerIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroTerrainProducerIntegration PUBLIC HoroEngine::TerrainCook HoroEngine::WorldStreaming)
 add_library(HoroTerrainRender STATIC
         runtime/terrain/render/TerrainMaterialBinding.cpp
 )
