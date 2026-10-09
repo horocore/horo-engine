@@ -19,6 +19,7 @@
 #include <vector>
 
 namespace Horo::Runtime {
+    struct SavePresentationArchiveInput;
     /** @brief One local-storage operation supported independently by a backend. */
     enum class SaveStorageOperationKind : std::uint8_t {
         List,
@@ -152,11 +153,24 @@ namespace Horo::Runtime {
             OperationId operation, SaveStorageRequest request, CancellationToken cancellation = {},
             std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt) const;
 
+        /** @brief Queues presentation attachment, existing archive finalization and provider publication on a worker.
+         * @param operation Non-zero application correlation. @param address Exact namespace binding and slot.
+         * @param input Owned logical chunks and terminal capture; no GPU resources or owner references.
+         * @param cancellation Parent cancellation. @param deadline Finite storage deadline, independent of capture timeout.
+         * @return Polling operation or typed admission error. Required capture failure cannot reach the commit gate.
+         * @details The worker includes optional PNG/provenance in verified archive bytes before existing storage admission.
+         * Optional capture failure/omission clears its reference and still publishes a valid save. No owner-thread hashing/I/O.
+         */
+        [[nodiscard]] Result<SaveStorageOperation> SubmitPresentation(
+            OperationId operation, SaveStorageAddress address, SavePresentationArchiveInput input, CancellationToken cancellation = {},
+            std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt) const;
+
     private:
         /** @brief Validates and transfers an admitted request to worker ownership. */
-        [[nodiscard]] Result<SaveStorageOperation> SubmitRequest(OperationId operation, SaveStorageRequest request,
-                                                                 CancellationToken cancellation,
-                                                                 std::optional<std::chrono::steady_clock::time_point> deadline) const;
+        [[nodiscard]] Result<SaveStorageOperation> SubmitRequest(
+            OperationId operation, SaveStorageRequest request, CancellationToken cancellation,
+            std::optional<std::chrono::steady_clock::time_point> deadline,
+            std::shared_ptr<const SavePresentationArchiveInput> presentation = {}) const;
         JobSystem *jobs_{};
         std::shared_ptr<ISaveStorageProvider> provider_;
         SaveStorageLimits limits_;

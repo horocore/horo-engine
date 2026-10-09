@@ -3070,6 +3070,8 @@ target_compile_features(HoroRuntimeSaveReferenceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveReferenceTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveSlotMetadataTests
         unit/runtime/save/SaveSlotMetadataTests.cpp
+        unit/runtime/save/SaveThumbnailCaptureTests.cpp
+        unit/runtime/save/SaveThumbnailArchiveTests.cpp
 )
 target_compile_features(HoroRuntimeSaveSlotMetadataTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveSlotMetadataTests PRIVATE HoroEngine::Runtime)
@@ -3174,6 +3176,12 @@ add_executable(HoroRuntimeSaveSafePointCoordinatorTests
 target_compile_features(HoroRuntimeSaveSafePointCoordinatorTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSaveSafePointCoordinatorTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_link_libraries(HoroRuntimeSaveSafePointCoordinatorTests PRIVATE HoroEngine::Runtime)
+
+add_executable(HoroSaveThumbnailCapturePublicHeaderConsumer support/SaveThumbnailCapturePublicHeaderConsumer.cpp)
+target_compile_features(HoroSaveThumbnailCapturePublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroSaveThumbnailCapturePublicHeaderConsumer PRIVATE HoroEngine::Runtime)
+add_test(NAME HoroSaveThumbnailCapturePublicHeaderConsumer COMMAND HoroSaveThumbnailCapturePublicHeaderConsumer)
+set_tests_properties(HoroSaveThumbnailCapturePublicHeaderConsumer PROPERTIES LABELS "unit;save;headless")
 
 add_executable(HoroSaveCaptureBarrierPublicHeaderConsumer support/SaveCaptureBarrierPublicHeaderConsumer.cpp)
 target_compile_features(HoroSaveCaptureBarrierPublicHeaderConsumer PRIVATE cxx_std_20)
