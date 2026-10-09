@@ -258,6 +258,44 @@ must validate the actual context and required entry points before publishing
 readiness. Its compatibility product role does not allow legacy GL contexts,
 weaken parity, or make it another backend's implicit fallback.
 
+### OpenGL command adaptation and retirement
+
+The private OpenGL adapter consumes the established `RenderExecutionPlan` in
+its submitted order. It validates the entire plan before encoding native work,
+with a fixed limit of 1,024 passes. Graphics primary-output attachments support
+`Clear`, `Load`, and `DontCare`; `DontCare` permits retaining storage without
+promising its contents. Compute/copy passes, invalid identities, duplicate IDs,
+and malformed attachment operations return typed errors before encoding.
+Static-mesh payloads remain owned by the frontend's attached executor; their
+metadata reaches the backend after that executor has encoded them. The adapter
+does not encode those payloads a second time. Compiled graph queue/timeline
+lowering remains a separate contract and is not inferred from this pass view.
+
+Primary-output commands target the host's double-buffered default framebuffer.
+The adapter temporarily selects its backbuffer, exact frame viewport, and
+unmasked color writes with scissor, dither, rasterizer discard, and framebuffer
+sRGB disabled. It restores the inherited draw framebuffer, the default framebuffer's separate
+indexed draw-buffer selections, viewport, clear value, indexed write mask zero,
+and enable state on success or command failure. Higher indexed color masks are
+never changed. Only viewport/scissor index zero is changed; its fractional
+viewport bounds are restored without integer truncation, and higher indexed
+viewport/scissor state remains untouched. A fixed 64-slot draw-buffer capture budget avoids frame-time
+allocation; larger native draw-buffer limits fail before any state mutation.
+State restoration uses non-throwing private native callbacks. `BeginFrame` does not leak a viewport change into host/executor work.
+Native command errors become typed failures rather than successful execution.
+
+Frame admission is bounded by the configured `maxFramesInFlight` (one to eight).
+Each presented or aborted command stream owns one private completion fence;
+presentation fences include later host GUI/executor work. Admission polls fences
+with zero timeout and no wait/flush flag, retires completed fences, and reports
+retryable backpressure when every slot remains occupied. Encoding a fence and
+flushing the command stream do not wait for completion. Swap retries replace the
+active fence without releasing the frame token. Failed fence creation/polling
+requires backend shutdown and reinitialization. Abort retains a pending stream's
+retirement ownership; shutdown deletes all fences and relies on OpenGL's native
+queued-reference lifetime during resource/context destruction, without GPU-idle
+or command-completion waits. Native handles never enter the public Render API.
+
 ## Required Editor Rendering Lifecycle
 
 The editor uses one backend-neutral ordering regardless of the selected API:

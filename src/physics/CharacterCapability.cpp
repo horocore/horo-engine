@@ -45,21 +45,21 @@ namespace Horo::Character {
 
     /** @copydoc CharacterCapability::ControllerDescriptor */
     Result<CharacterControllerDescriptor> CharacterCapability::ControllerDescriptor(const CharacterControllerHandle &handle) const {
-        return WithWorld(state_, [&handle](CharacterWorld &world) {
+        return WithWorld(state_, [&handle](const CharacterWorld &world) {
             return world.ControllerDescriptor(handle);
         });
     }
 
     /** @copydoc CharacterCapability::ControllerTransform */
     Result<CharacterTransformPublication> CharacterCapability::ControllerTransform(const CharacterControllerHandle &handle) const {
-        return WithWorld(state_, [&handle](CharacterWorld &world) {
+        return WithWorld(state_, [&handle](const CharacterWorld &world) {
             return world.ControllerTransform(handle);
         });
     }
 
     /** @copydoc CharacterCapability::ControllerLocomotionSnapshot */
     Result<CharacterLocomotionSnapshot> CharacterCapability::ControllerLocomotionSnapshot(const CharacterControllerHandle &handle) const {
-        return WithWorld(state_, [&handle](CharacterWorld &world) {
+        return WithWorld(state_, [&handle](const CharacterWorld &world) {
             return world.ControllerLocomotionSnapshot(handle);
         });
     }

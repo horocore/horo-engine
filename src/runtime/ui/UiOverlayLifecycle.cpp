@@ -102,10 +102,11 @@ namespace Horo::Runtime::Ui {
     Result<std::size_t> UiOverlayLifecycle::Snapshot(std::span<UiOverlayLayerSnapshot> output) const {
         if (State() != UiOverlayLifecycleState::Active || storage_->collecting)
             return Failure<std::size_t>(UiErrors::InstanceStateInvalid);
-        const auto count = static_cast<std::size_t>(std::ranges::count_if(storage_->active, [](const auto &entry) {
+        if (const auto count = static_cast<std::size_t>(std::ranges::count_if(storage_->active,
+                                                                              [](const auto &entry) {
             return !!entry;
         }));
-        if (count > output.size())
+            count > output.size())
             return Failure<std::size_t>(UiErrors::CapacityExceeded);
         std::array<const Storage::Layer *, 64> ordered{};
         std::size_t written{};
@@ -192,9 +193,9 @@ namespace Horo::Runtime::Ui {
             return Result<UiReloadReconciliation>::Failure(route.ErrorValue());
         if (route.Value().metadata != entry->route.metadata)
             return Failure<UiReloadReconciliation>(UiErrors::RouteOperationInvalid);
-        auto *canvas = replacement->Canvas(entry->binding.canvas);
         // The private candidate may be retried after a cancelled/full-retention commit. Do not duplicate its modal trap.
-        if (entry->binding.exclusivity != UiModalExclusivity::None && canvas->focus->Snapshot().Value().modalDepth == 0) {
+        if (auto *canvas = replacement->Canvas(entry->binding.canvas);
+            entry->binding.exclusivity != UiModalExclusivity::None && canvas->focus->Snapshot().Value().modalDepth == 0) {
             if (auto focused = OverlayDetail::Focus(*canvas, entry->binding); focused.HasError())
                 return Result<UiReloadReconciliation>::Failure(focused.ErrorValue());
         }
@@ -210,32 +211,34 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiOverlayLifecycle::BeginRetirement */
     Result<void> UiOverlayLifecycle::BeginRetirement() {
-        if (State() == UiOverlayLifecycleState::Stopped || storage_->collecting)
+        using enum UiOverlayLifecycleState;
+        if (State() == Stopped || storage_->collecting)
             return Failure<void>(UiErrors::InstanceStateInvalid);
-        if (storage_->state == UiOverlayLifecycleState::Retiring)
+        if (storage_->state == Retiring)
             return Result<void>::Success();
         for (auto &entry : storage_->active)
             if (entry)
                 storage_->Retire(entry);
-        storage_->state = UiOverlayLifecycleState::Retiring;
+        storage_->state = Retiring;
         return Result<void>::Success();
     }
 
     /** @copydoc UiOverlayLifecycle::Shutdown */
     void UiOverlayLifecycle::Shutdown() noexcept {
+        using enum UiOverlayLifecycleState;
         if (!storage_)
             return;
         if (storage_->collecting) {
             storage_->shutdownRequested = true;
-            storage_->state = UiOverlayLifecycleState::Stopped;
+            storage_->state = Stopped;
             return;
         }
-        if (storage_->state == UiOverlayLifecycleState::Stopped && !storage_->shutdownRequested)
+        if (storage_->state == Stopped && !storage_->shutdownRequested)
             return;
         for (auto &entry : storage_->active)
             if (entry)
                 storage_->Retire(entry);
-        storage_->state = UiOverlayLifecycleState::Stopped;
+        storage_->state = Stopped;
         storage_->shutdownRequested = false;
     }
 
@@ -246,6 +249,13 @@ namespace Horo::Runtime::Ui {
         storage_->collecting = true;
 
         struct DrainGuard final {
+            DrainGuard(UiOverlayLifecycle &ownerValue, Storage &storageValue) noexcept : owner(ownerValue), storage(storageValue) {}
+
+            DrainGuard(const DrainGuard &) = delete;
+            DrainGuard &operator=(const DrainGuard &) = delete;
+            DrainGuard(DrainGuard &&) = delete;
+            DrainGuard &operator=(DrainGuard &&) = delete;
+
             UiOverlayLifecycle &owner;
             Storage &storage;
 
@@ -254,7 +264,9 @@ namespace Horo::Runtime::Ui {
                 if (storage.shutdownRequested)
                     owner.Shutdown();
             }
-        } guard{*this, *storage_};
+        };
+
+        const DrainGuard guard{*this, *storage_};
 
         std::size_t reclaimed{};
         for (auto &entry : storage_->retired) {

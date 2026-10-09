@@ -1499,6 +1499,37 @@ These are required implementation tests, not runtime changes delivered by this A
 - Multiplayer delayed/missing content, stale relevance commands and local budget
   rejection do not grant gameplay authority. Authoring pages survive runtime eviction.
 
+## Offline World Build Validation
+
+`HoroEngine::SceneCellPayload` owns `ValidateWorldBuild`, a pure synchronous
+WST-004.12 tooling boundary over an immutable partition descriptor, complete
+host-captured authored cell publications and cooked Scene payload leases. The
+host captures one positive build generation and supplies exact required object
+references; deferred optional references remain owned by `WorldDependencyPlan`.
+Object identities are scoped to their exact cell scene and revision, so equal
+local object IDs in separate cells are valid.
+
+A complete report diagnoses missing authored cells or payloads, multiple payload
+owners of one cell, stale publications, missing required reference endpoints,
+and per-cell/aggregate logical Scene payload byte estimates. This overlap check
+concerns competing payload ownership; spatially overlapping objects, layers and
+LOD coverage are legitimate and are not rejected. Estimates deliberately exclude
+HOROCELL encoding and feature/native allocations, whose owners retain their own
+validation. Each finding carries a stable `world.build.*` diagnostic code and an
+optional host-provided absolute source path, line and column in the shared
+`BuildOutputRecord` format. Cells follow topology order and required references
+follow exact endpoint identity order. The host appends these owned records to
+its `BuildOutputStore`; the validator never discovers or mutates a store.
+
+Mandatory cell/reference/object/source-byte/diagnostic ceilings bound traversal
+and owned output. Diagnostic overflow rejects the complete result rather than
+truncating it into an apparently publishable world. Cancellation and malformed
+capture likewise return typed errors without a partial report, cache mutation,
+I/O, background work or runtime activation. The host fences the echoed build
+revision against its current generation before appending or publishing output.
+All input borrows end synchronously at return; the returned diagnostic strings
+are owned. Shutdown cancels the caller-owned operation and waits for return.
+
 ## Incremental Scene Cell Baseline Cook
 
 `HoroEngine::SceneCellPayload` owns `IncrementalSceneCellCook`, a synchronous,

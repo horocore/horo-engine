@@ -14,8 +14,7 @@ namespace Horo::Character::Detail {
 
         /** @brief Retains exact distinct normals; an unrepresentable constraint must stop unswept travel. */
         [[nodiscard]] bool Add(const Math::Vec3 normal) noexcept {
-            const auto active = std::span{normals}.first(count);
-            if (std::ranges::find(active, normal) != active.end())
+            if (const auto active = std::span{normals}.first(count); std::ranges::find(active, normal) != active.end())
                 return true;
             if (count == normals.size())
                 return false;
