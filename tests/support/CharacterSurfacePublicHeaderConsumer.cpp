@@ -8,6 +8,8 @@ static_assert(std::is_trivially_copyable_v<Horo::Character::CharacterGroundSurfa
 static_assert(std::is_same_v<decltype(Horo::Character::CharacterMovementResult{}.gravityVelocityMetersPerSecond), Horo::Math::Vec3>);
 static_assert(std::is_trivially_copyable_v<Horo::Character::CharacterCollisionSelectors>);
 static_assert(std::is_trivially_copyable_v<Horo::Character::CharacterSurfaceContact>);
+static_assert(std::is_trivially_copyable_v<Horo::Character::CharacterPlatformAttachment>);
+static_assert(std::is_trivially_copyable_v<Horo::Character::CharacterPlatformBodyEvidence>);
 
 static_assert(std::is_same_v<decltype(std::declval<Horo::Physics::CharacterClearanceQuery &>().Context()),
                              Horo::Character::CharacterPhysicsQueryContext>);
