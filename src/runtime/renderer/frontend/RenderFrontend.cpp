@@ -2,8 +2,11 @@
 
 #include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
+#include "RenderFrameGraphResources.h"
 #include "RenderFrontendErrors.h"
 #include "RenderGraphResourceLeasePool.h"
+#include "RenderParallelWorkErrors.h"
+#include "RenderParallelWorkInternal.h"
 #include "RenderResourceOperations.h"
 #include "RenderResourceRegistry.h"
 #include "RenderResourceUploadQueue.h"
@@ -17,23 +20,6 @@
 
 namespace Horo::Render {
     namespace {
-        /** @brief Resolves bounded graph bindings against the resident registry before retaining a native submission. */
-        [[nodiscard]] Result<void> ResolveResidentGraphResources(const Detail::RenderResourceRegistry &registry,
-                                                                 const std::span<const RenderGraphResource> resources,
-                                                                 const std::span<RenderGraphResourceInstance> resolved) {
-            for (std::size_t index = 0; index < resources.size(); ++index) {
-                const auto &resource = resources[index];
-                const auto identity = Detail::ResolveGraphResidentIdentity(resource.binding);
-                if (identity.HasError())
-                    return Result<void>::Failure(identity.ErrorValue());
-                const auto instance = registry.BackendInstance(identity.Value().resourceClass, identity.Value().identity);
-                if (instance.HasError())
-                    return Result<void>::Failure(instance.ErrorValue());
-                resolved[index] = {resource.id, instance.Value()};
-            }
-            return Result<void>::Success();
-        }
-
         [[nodiscard]] Error MakeFrontendError(const ErrorCodeDescriptor &descriptor, std::string message) {
             return MakeError(descriptor, std::move(message));
         }
@@ -117,7 +103,8 @@ namespace Horo::Render {
     /** @copydoc RenderFrameScope::RenderFrameScope(RenderFrameScope&&) */
     RenderFrameScope::RenderFrameScope(RenderFrameScope &&other) noexcept
         : owner_(std::exchange(other.owner_, nullptr)), backend_(std::exchange(other.backend_, nullptr)),
-          frame_(std::exchange(other.frame_, {})), executed_(std::exchange(other.executed_, false)) {
+          frame_(std::exchange(other.frame_, {})), executed_(std::exchange(other.executed_, false)),
+          parallelWork_(std::move(other.parallelWork_)), parallelGraphWork_(std::move(other.parallelGraphWork_)) {
         if (owner_ != nullptr) {
             owner_->activeFrameScope_ = this;
         }
@@ -131,6 +118,8 @@ namespace Horo::Render {
             backend_ = std::exchange(other.backend_, nullptr);
             frame_ = std::exchange(other.frame_, {});
             executed_ = std::exchange(other.executed_, false);
+            parallelWork_ = std::move(other.parallelWork_);
+            parallelGraphWork_ = std::move(other.parallelGraphWork_);
             if (owner_ != nullptr) {
                 owner_->activeFrameScope_ = this;
             }
@@ -140,41 +129,17 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrameScope::Execute */
     Result<void> RenderFrameScope::Execute(const std::span<const RenderPassDescriptor> orderedPasses) {
-        if (backend_ == nullptr) {
-            return Result<void>::Failure(MakeFrontendError(FrontendErrors::FrameNotActive, "Renderer frame scope no longer owns a frame."));
-        }
-        if (executed_) {
-            return Result<void>::Failure(
-                MakeFrontendError(FrontendErrors::FrameAlreadyExecuted, "Renderer frame scope has already executed its pass sequence."));
-        }
+        if (const auto admitted = ValidateExecutionAdmission(); admitted.HasError())
+            return admitted;
 
         try {
             for (const RenderPassDescriptor &pass : orderedPasses) {
-                if (pass.primaryOutput.has_value() && pass.staticMesh.has_value()) {
+                if (const auto valid = ValidateStaticMeshBinding(pass); valid.HasError()) {
                     Abort();
-                    return Result<void>::Failure(
-                        MakeFrontendError(FrontendErrors::AmbiguousPassWorkload,
-                                          "A render pass cannot bind primary-output and static-mesh workloads together."));
+                    return valid;
                 }
-                if (!pass.staticMesh.has_value()) {
+                if (!pass.staticMesh)
                     continue;
-                }
-                if (owner_->staticMeshPassExecutor_ == nullptr) {
-                    Abort();
-                    return Result<void>::Failure(MakeFrontendError(FrontendErrors::StaticMeshExecutorMissing,
-                                                                   "Static-mesh pass requires an attached backend executor."));
-                }
-                if (!pass.staticMesh->IsValid()) {
-                    Abort();
-                    return Result<void>::Failure(
-                        MakeFrontendError(FrontendErrors::InvalidStaticMeshPass, "Static-mesh pass descriptor is invalid."));
-                }
-                if (!owner_->IsLiveTarget(pass.staticMesh->target, pass.staticMesh->extent)) {
-                    Abort();
-                    return Result<void>::Failure(
-                        MakeFrontendError(FrontendErrors::StaleRenderTarget,
-                                          "Static-mesh pass references a stale target or mismatched target extent."));
-                }
                 const Result<void> staticMeshExecuted = owner_->staticMeshPassExecutor_->ExecuteStaticMeshPass(*pass.staticMesh);
                 if (staticMeshExecuted.HasError()) {
                     Abort();
@@ -210,23 +175,13 @@ namespace Horo::Render {
     /** @copydoc RenderFrameScope::ExecuteGraphInternal */
     Result<void> RenderFrameScope::ExecuteGraphInternal(const CompiledRenderGraphExecution &graph,
                                                         const std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission *ui) {
-        if (backend_ == nullptr) {
-            return Result<void>::Failure(MakeError(FrontendErrors::FrameNotActive));
-        }
-        if (executed_) {
-            return Result<void>::Failure(MakeError(FrontendErrors::FrameAlreadyExecuted));
-        }
+        if (const auto admitted = ValidateExecutionAdmission(); admitted.HasError())
+            return admitted;
         try {
-            if (!graph.Owner().IsValid() || graph.Resources().size() > RenderGraphLimits::HardMaxResources) {
+            const auto resolved = Detail::ResolveFrameGraphResources(graph, *owner_->resourceRegistry_);
+            if (resolved.HasError()) {
                 Abort();
-                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
-            }
-            std::array<RenderGraphResourceInstance, RenderGraphLimits::HardMaxResources> resolved;
-            const auto instances = std::span{resolved}.first(graph.Resources().size());
-            if (const auto resolution = ResolveResidentGraphResources(*owner_->resourceRegistry_, graph.Resources(), instances);
-                resolution.HasError()) {
-                Abort();
-                return resolution;
+                return Result<void>::Failure(resolved.ErrorValue());
             }
             const auto leased = owner_->graphResourceLeases_->Acquire(graph.Resources(), ui);
             if (leased.HasError()) {
@@ -237,7 +192,8 @@ namespace Horo::Render {
                 lease->Release();
             };
             std::unique_ptr<IRenderGraphResourceLease, decltype(releaseLease)> lease{leased.Value(), releaseLease};
-            if (const auto result = backend_->ExecuteGraph({frame_, graph, workloads, instances, lease.get()}); result.HasError()) {
+            if (const auto result = backend_->ExecuteGraph({frame_, graph, workloads, resolved.Value().View(), lease.get()});
+                result.HasError()) {
                 Abort();
                 return result;
             }
@@ -284,6 +240,8 @@ namespace Horo::Render {
     }
 
     void RenderFrameScope::Abort() noexcept {
+        parallelWork_.reset();
+        parallelGraphWork_.reset();
         if (backend_ != nullptr) {
             backend_->AbortFrame(frame_);
         }
