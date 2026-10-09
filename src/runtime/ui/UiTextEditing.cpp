@@ -18,7 +18,8 @@ namespace Horo::Runtime::Ui {
             if (!text.IsValid())
                 return Result<Boundaries>::Failure(MakeError(UiErrors::TextInputInvalid));
             Boundaries result;
-            utf8proc_int32_t previous{}, state{};
+            utf8proc_int32_t previous{};
+            utf8proc_int32_t state{};
             std::uint16_t offset{};
             while (offset < text.size) {
                 utf8proc_int32_t scalar{};
@@ -37,14 +38,15 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Tests one decoded scalar against the closed complete-draft validation policy. */
         bool AllowsScalar(const UiTextValidation validation, const utf8proc_int32_t scalar) noexcept {
+            using enum UiTextValidation;
             switch (validation) {
-                case UiTextValidation::Any:
+                case Any:
                     return true;
-                case UiTextValidation::SingleLine:
+                case SingleLine:
                     return scalar != '\r' && scalar != '\n' && scalar != 0x85 && scalar != 0x2028 && scalar != 0x2029;
-                case UiTextValidation::AsciiDigits:
+                case AsciiDigits:
                     return scalar >= '0' && scalar <= '9';
-                case UiTextValidation::Count:
+                case Count:
                     return false;
             }
             return false;
@@ -129,7 +131,8 @@ namespace Horo::Runtime::Ui {
         state_ = {text, {count, count}, count};
         undo_ = {};
         redo_ = {};
-        undoCount_ = redoCount_ = 0;
+        undoCount_ = 0;
+        redoCount_ = 0;
         return Result<void>::Success();
     }
 
@@ -248,11 +251,11 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiTextEditBuffer::RestoreHistory */
     UiTextEditResult UiTextEditBuffer::RestoreHistory(const UiTextEditKind kind) noexcept {
         const bool undo = kind == UiTextEditKind::Undo;
-        auto &from = undo ? undo_ : redo_;
-        auto &to = undo ? redo_ : undo_;
         auto &fromCount = undo ? undoCount_ : redoCount_;
-        auto &toCount = undo ? redoCount_ : undoCount_;
         if (fromCount != 0) {
+            auto &from = undo ? undo_ : redo_;
+            auto &to = undo ? redo_ : undo_;
+            auto &toCount = undo ? redoCount_ : undoCount_;
             to[toCount++] = state_;
             state_ = from[--fromCount];
             from[fromCount] = {};
@@ -271,9 +274,10 @@ namespace Horo::Runtime::Ui {
             caret = 0;
         else if (command.kind == End)
             caret = state_.graphemeCount;
-        else if (command.kind == Previous)
-            caret = selected ? std::min(range.anchor, range.caret) : static_cast<std::uint16_t>(caret == 0 ? 0 : caret - 1);
-        else if (command.kind == Next)
+        else if (command.kind == Previous) {
+            const auto previous = static_cast<std::uint16_t>(caret == 0 ? 0 : caret - 1);
+            caret = selected ? std::min(range.anchor, range.caret) : previous;
+        } else if (command.kind == Next)
             caret =
                 selected ? std::max(range.anchor, range.caret) : static_cast<std::uint16_t>(std::min<int>(caret + 1, state_.graphemeCount));
         state_.selection = {command.extendSelection ? range.anchor : caret, caret};
@@ -309,6 +313,7 @@ namespace Horo::Runtime::Ui {
         state_ = {};
         undo_ = {};
         redo_ = {};
-        undoCount_ = redoCount_ = 0;
+        undoCount_ = 0;
+        redoCount_ = 0;
     }
 }  // namespace Horo::Runtime::Ui

@@ -234,7 +234,7 @@ namespace Horo::Terrain {
      */
     [[nodiscard]] Result<void> ValidateTerrainPayloadManifestPublication(const TerrainPayloadManifest &candidate,
                                                                          const TerrainPayloadManifest *current,
-                                                                         std::optional<Sha256Digest> expectedCurrent,
+                                                                         const std::optional<Sha256Digest> &expectedCurrent,
                                                                          TerrainRuntimeLifecycle lifecycle,
                                                                          const CancellationToken &cancellation = {});
 }  // namespace Horo::Terrain

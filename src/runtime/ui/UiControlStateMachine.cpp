@@ -219,8 +219,8 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiControlStateMachine::Storage::ReconcileSlider */
     Result<void> UiControlStateMachine::Storage::ReconcileSlider(const UiActionValue &value) {
         const auto *scalar = std::get_if<double>(&value);
-        const auto &slider = std::get<UiSliderControlDescriptor>(descriptor);
-        if (!scalar || !std::isfinite(*scalar) || *scalar < slider.minimum || *scalar > slider.maximum)
+        if (const auto &slider = std::get<UiSliderControlDescriptor>(descriptor);
+            !scalar || !std::isfinite(*scalar) || *scalar < slider.minimum || *scalar > slider.maximum)
             return Failure(UiErrors::ControlInputInvalid);
         std::get<UiSliderControlState>(state).value = *scalar;
         return Result<void>::Success();
@@ -229,8 +229,8 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiControlStateMachine::Storage::ReconcileText */
     Result<void> UiControlStateMachine::Storage::ReconcileText(const UiActionValue &value) {
         const auto *text = std::get_if<UiActionText>(&value);
-        const auto &input = std::get<UiTextInputControlDescriptor>(descriptor);
-        if (!text || !UiControlDetail::IsValidControlText(*text) || text->size > input.maximumTextBytes)
+        if (const auto &input = std::get<UiTextInputControlDescriptor>(descriptor);
+            !text || !UiControlDetail::IsValidControlText(*text) || text->size > input.maximumTextBytes)
             return Failure(UiErrors::ControlInputInvalid);
         if (const auto valid = textEditor->Reset(*text); valid.HasError())
             return valid;
@@ -243,15 +243,14 @@ namespace Horo::Runtime::Ui {
     Result<void> UiControlStateMachine::Storage::AdmitTextEdit(const UiActionSource &source, const std::uint64_t sequence) const {
         if (!textEditor)
             return Failure(UiErrors::ControlInputInvalid);
-        const auto &base = UiControlDetail::BaseOf(descriptor);
-        if (source.owner != base.owner || source.element != base.element)
+        if (const auto &base = UiControlDetail::BaseOf(descriptor); source.owner != base.owner || source.element != base.element)
             return Failure(UiErrors::ControlSourceStale);
         if (sequence == 0 || sequence <= lastSequence)
             return Failure(UiErrors::ControlSequenceInvalid);
         if (pending)
             return Failure(UiErrors::ControlDefaultPending);
-        const auto &input = std::get<UiTextInputControlState>(state);
-        if (!UiControlDetail::IsEnabled(state) || !input.focused || !input.editing)
+        if (const auto &input = std::get<UiTextInputControlState>(state);
+            !UiControlDetail::IsEnabled(state) || !input.focused || !input.editing)
             return Failure(UiErrors::ControlInputInvalid);
         return Result<void>::Success();
     }

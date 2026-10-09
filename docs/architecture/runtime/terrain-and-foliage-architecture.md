@@ -450,6 +450,9 @@ consumer is registered with CTest. Existing tile/source-artifact verification
 calls remain source-compatible through a defaulted cancellation parameter.
 Consumers must rebuild for the changed function signatures; no HTIL, HTSG or
 foliage payload wire schema changes. Foliage adds a cancellable whole-root validator.
+The new publication gate borrows its optional expected-current digest by const
+reference for the synchronous call. Existing source call syntax is unchanged;
+stacked native consumers must rebuild rather than reuse an earlier gate ABI.
 
 Construction admits finite storage and conservative work ceilings before copying
 or encoding descriptors. Hash cancellation intervals are at most 4096 bytes,
