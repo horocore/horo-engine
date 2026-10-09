@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CharacterCapabilityInternal.h"
 #include "CharacterControllerRegistry.h"
 #include "CharacterDebugStorageInternal.h"
 #include "CharacterFastPathStorage.h"
@@ -143,6 +144,7 @@ namespace Horo::Character {
         std::uint32_t tickQueries{}; /**< Owner-thread count, reset before each fixed-tick attempt. */
         bool placementActive{};
         bool shutdownRequested{};
+        Detail::CharacterCapabilityRegistry capabilities;
     };
 
     namespace Detail {

@@ -209,6 +209,7 @@ namespace Horo::Character {
         if (impl_->state.load() == CharacterWorldState::Destroyed)
             return;
         impl_->acceptingCommands.store(false);
+        impl_->capabilities.Retire();
         {
             const auto queueLock = impl_->synchronization.LockCommands();
             impl_->fastPath.ResetAll();

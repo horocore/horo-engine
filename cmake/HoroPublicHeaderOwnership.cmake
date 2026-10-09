@@ -560,6 +560,7 @@ horo_configure_target_header_boundary(HoroPhysicsModel PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
     Horo/Physics/CharacterClearanceQuery.h
+    Horo/Physics/CharacterCapability.h
     Horo/Physics/CharacterCommandPipeline.h
     Horo/Physics/CharacterControllerContracts.h
     Horo/Physics/CharacterDiagnostics.h

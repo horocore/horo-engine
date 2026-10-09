@@ -1112,6 +1112,8 @@ add_library(HoroPhysics STATIC
         physics/CharacterMetrics.cpp
         physics/CharacterControllerRegistry.h
         physics/CharacterFastPathStorage.h
+        physics/CharacterCapability.cpp
+        physics/CharacterCapabilityInternal.h
         physics/CharacterWorld.cpp
         physics/CharacterWorldCommandPipeline.cpp
         physics/CharacterWorldCommandInternal.h
