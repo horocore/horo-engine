@@ -2,9 +2,10 @@
 
 #include <algorithm>
 #include <bit>
-#include <exception>
 #include <format>
 #include <memory>
+#include <new>
+#include <stdexcept>
 
 namespace Horo::XR::OpenXRInternal {
     namespace {
@@ -299,16 +300,21 @@ namespace Horo::XR::OpenXRInternal {
         const auto retire = [](OpenXRActionBindings *owner) {
             (void)owner->Close();
         };
-        // Foreign exceptions unwind through retirement without translating their identity.
+        // Unsupported exceptions unwind through retirement without translating their identity.
         std::unique_ptr<OpenXRActionBindings, decltype(retire)> rollback{this, retire};
+        const auto preparationFailure = [] {
+            return Result<void>::Failure(
+                MakeError(XRErrors::OperationUnavailable, "OpenXR action preparation failed; rollback requested."));
+        };
         Result<void> prepared = Result<void>::Success();
         try {
             prepared = Resolve(request, native_.instance);
             if (prepared.HasValue())
                 prepared = Prepare(request.schema, request.catalog, request.overrides, request.profiles, request.controls, request.labels);
-        } catch (const std::exception &) {
-            prepared =
-                Result<void>::Failure(MakeError(XRErrors::OperationUnavailable, "OpenXR action preparation failed; rollback requested."));
+        } catch (const std::bad_alloc &) {
+            prepared = preparationFailure();
+        } catch (const std::runtime_error &) {
+            prepared = preparationFailure();
         }
         (void)rollback.release();
         if (prepared.HasError()) {

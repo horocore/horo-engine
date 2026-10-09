@@ -72,8 +72,9 @@ namespace Horo::XR::OpenXRInternal {
          * @brief Creates and attaches a fully validated native action candidate atomically.
          * @param session Exact current Horo session generation.
          * @param request Product schema, registered private paths, Input overrides, localized labels and official native dispatch.
-         * @return Success or typed validation/native/rollback error; failed retirement retains handles for Close retry.
-         * @throws Non-standard native callback exceptions after attempting rollback; the original exception propagates.
+         * @return Success or typed validation/native/rollback error; allocation and runtime exceptions become preparation errors.
+         * Failed retirement retains handles for Close retry.
+         * @throws Other native callback exceptions after attempting rollback; the original exception propagates unchanged.
          */
         [[nodiscard]] Result<void> Create(const XRSessionId &session, const NativeActionBindingRequest &request);
         /**

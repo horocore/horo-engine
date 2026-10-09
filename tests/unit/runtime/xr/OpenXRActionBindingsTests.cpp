@@ -1,6 +1,8 @@
 #include "OpenXRActionBindings.h"
 #include "support/OpenXRNativeTestSupport.h"
 
+#include <catch2/matchers/catch_matchers_exception.hpp>
+#include <new>
 #include <stdexcept>
 
 namespace {
@@ -20,6 +22,8 @@ namespace {
         unsigned attaches{};
         unsigned syncs{};
         bool throwStandard{};
+        bool throwAllocation{};
+        bool throwUnsupportedStandard{};
         bool throwForeign{};
 
         ActionScript() {
@@ -75,6 +79,10 @@ namespace {
                 *action = NativeHandle<XrAction>(200 + ++active->liveActions);
             if (active->throwStandard)
                 throw std::runtime_error("scripted action callback exception");
+            if (active->throwAllocation)
+                throw std::bad_alloc{};
+            if (active->throwUnsupportedStandard)
+                throw std::logic_error("unsupported scripted preparation exception");
             if (active->throwForeign)
                 throw std::uint32_t{7};
             return result;
@@ -299,11 +307,22 @@ namespace {
 
     TEST_CASE("OpenXR action callback exceptions roll back acquired ownership before returning or propagating", "[xr][native][lifecycle]") {
         ActionFixture fixture;
-        SECTION("standard allocation and host exceptions become typed preparation failure") {
+        SECTION("supported runtime errors become typed preparation failure") {
             fixture.script.throwStandard = true;
             const auto result = fixture.Create();
             REQUIRE(result.HasError());
             REQUIRE(result.ErrorValue().code.Value() == "xr.operation.unavailable");
+        }
+        SECTION("supported allocation errors become typed preparation failure") {
+            fixture.script.throwAllocation = true;
+            const auto result = fixture.Create();
+            REQUIRE(result.HasError());
+            REQUIRE(result.ErrorValue().code.Value() == "xr.operation.unavailable");
+        }
+        SECTION("unsupported standard exceptions preserve type and message") {
+            fixture.script.throwUnsupportedStandard = true;
+            REQUIRE_THROWS_MATCHES(fixture.Create(), std::logic_error,
+                                   Catch::Matchers::Message("unsupported scripted preparation exception"));
         }
         SECTION("foreign callback exceptions preserve their original identity") {
             fixture.script.throwForeign = true;
