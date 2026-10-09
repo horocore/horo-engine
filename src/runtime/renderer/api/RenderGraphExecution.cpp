@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Render/RenderGraphExecution.h"
 
 #include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
+#include "Horo/Runtime/Render/RenderGraphWorkload.h"
 
 #include <array>
 #include <new>
@@ -8,6 +9,11 @@
 #include <utility>
 
 namespace Horo::Render {
+    /** @copydoc IRenderBackend::ExecuteGraph */
+    Result<void> IRenderBackend::ExecuteGraph(const RenderGraphExecutionRequest &) {
+        return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+    }
+
     namespace {
         using RangeMember = RenderGraphExecutionRange RenderGraphExecutionPass::*;
 

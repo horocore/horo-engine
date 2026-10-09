@@ -1,5 +1,6 @@
 #include "MetalResourceRuntime.h"
 
+#include "MetalCommandCompletion.h"
 #include "MetalRenderBackendErrors.h"
 #include "MetalResourceFormats.h"
 #include "MetalResourceInstances.h"
@@ -13,6 +14,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <variant>
+#include <vector>
 
 namespace Horo::Render::Detail {
     namespace {
@@ -40,7 +43,8 @@ namespace Horo::Render::Detail {
         }
 
         [[nodiscard]] MTLResourceOptions NativeResourceOptions(const MetalResourceStorage storage) noexcept {
-            return storage == MetalResourceStorage::Shared ? MTLResourceStorageModeShared : MTLResourceStorageModePrivate;
+            return (storage == MetalResourceStorage::Shared ? MTLResourceStorageModeShared : MTLResourceStorageModePrivate) |
+                   MTLResourceHazardTrackingModeTracked;
         }
 
         [[nodiscard]] MTLTextureDescriptor *NativeTextureDescriptor(const RenderTextureDescriptor &descriptor) noexcept {
@@ -56,6 +60,7 @@ namespace Horo::Render::Detail {
             native.sampleCount = descriptor.sampleCount;
             native.usage = TextureUsage(descriptor.usage);
             native.storageMode = NativeStorageMode(MetalTextureStorage(descriptor));
+            native.hazardTrackingMode = MTLHazardTrackingModeTracked;
             return native;
         }
 
@@ -138,6 +143,39 @@ namespace Horo::Render::Detail {
     }  // namespace
 
     struct MetalResourceRuntime::Impl {
+        static constexpr std::size_t MaxResidentInstances = 65'535;
+        using RetiredResident = std::variant<MetalBufferInstance *, MetalTextureInstance *>;
+
+        Impl() {
+            retired.reserve(MaxResidentInstances);
+        }
+
+        std::vector<RetiredResident> retired;
+        std::size_t retirementCursor{0};
+
+        /** @brief Commands are safe to retire only after native terminal completion or explicit abandonment. */
+        [[nodiscard]] static bool Complete(id<MTLCommandBuffer> commands) noexcept {
+            return commands == nil || commands.status == MTLCommandBufferStatusCompleted || commands.status == MTLCommandBufferStatusError;
+        }
+
+        /** @brief Preserves the previously submitted use so abort cannot clear an older GPU dependency. */
+        static void TrackUse(MetalResidentUse &use, id<MTLCommandBuffer> commands) noexcept {
+            if (use.last != commands) {
+                use.previous = use.last;
+                use.last = commands;
+            }
+        }
+
+        /** @brief Resolves commit/abort ownership for a resource touched by the current command buffer. */
+        static void FinishUse(MetalResidentUse &use, id<MTLCommandBuffer> commands, const bool committed) noexcept {
+            if (use.last == commands) {
+                if (!committed) {
+                    use.last = use.previous;
+                }
+                use.previous = nil;
+            }
+        }
+
         struct PoolKey {
             std::uint64_t renderer{0};
             std::uint64_t pool{0};
@@ -186,6 +224,8 @@ namespace Horo::Render::Detail {
             descriptor.size = placement.backingBytes;
             descriptor.storageMode = NativeStorageMode(storage);
             descriptor.type = MTLHeapTypePlacement;
+            // Placement-heap defaults are untracked; graph hazards require explicit tracking.
+            descriptor.hazardTrackingMode = MTLHazardTrackingModeTracked;
             id<MTLHeap> heap = [device newHeapWithDescriptor:descriptor];
             if (heap == nil)
                 return Result<HeapRecord *>::Failure(
@@ -195,6 +235,19 @@ namespace Horo::Render::Detail {
                                                                     .compatibility = placement.compatibility,
                                                                     .backingBytes = placement.backingBytes}});
             return Result<HeapRecord *>::Success(&inserted.first->second);
+        }
+
+        /** @brief Rejects reuse while a retired resource still owns storage on this placement heap. */
+        [[nodiscard]] bool PlacementAvailable(const RenderMemoryPlacement &placement) {
+            DrainRetired(MaxResidentInstances);
+            for (const auto &entry : retired) {
+                if (std::visit([&](const auto *instance) {
+                    return instance->pool == placement.pool;
+                }, entry)) {
+                    return false;
+                }
+            }
+            return buffers.size() + textures.size() < MaxResidentInstances;
         }
 
         [[nodiscard]] Result<HeapRecord *> AcquireHeap(const RenderMemoryPlacement &placement, const MetalResourceStorage storage) {
@@ -327,8 +380,10 @@ namespace Horo::Render::Detail {
             }
             try {
                 Result<void> uploaded = std::forward<Upload>(upload)();
-                if (uploaded.HasValue())
+                if (uploaded.HasValue()) {
+                    instance->use.last = lastSubmittedUpload;
                     return Result<std::uint64_t>::Success(Identity(instance));
+                }
                 RollBackResident(instance, heap, placement, instances, resource, true);
                 return Result<std::uint64_t>::Failure(std::move(uploaded).ErrorValue());
             } catch (...) {
@@ -354,11 +409,16 @@ namespace Horo::Render::Detail {
         }
 
         template <typename Instance, typename Resource>
-        void DestroyResident(std::unordered_set<Instance *> &instances, const std::uint64_t identity,
-                             Resource Instance::*resource) noexcept {
+        void DestroyResident(std::unordered_set<Instance *> &instances, const std::uint64_t identity, Resource Instance::*resource,
+                             const bool force = false) noexcept {
             Instance *instance = Decode<Instance>(identity);
-            if (instance == nullptr || !instances.contains(instance))
+            if (instance == nullptr || !instances.contains(instance) || (instance->use.retired && !force))
                 return;
+            if (!force && !Complete(instance->use.last)) {
+                instance->use.retired = true;
+                retired.emplace_back(instance);  // Capacity is fixed before native initialization.
+                return;
+            }
             const PoolKey key = Key(instance->pool);
             instances.erase(instance);
             [(instance->*resource) makeAliasable];
@@ -366,6 +426,31 @@ namespace Horo::Render::Detail {
             auto heap = heaps.find(key);
             if (heap != heaps.end() && ReleaseMetalHeapResource(heap->second.state))
                 heaps.erase(heap);
+        }
+
+        /** @brief Polls a finite retirement budget without any GPU wait or completion callback. */
+        void DrainRetired(const std::size_t budget) noexcept {
+            for (std::size_t examined = 0; examined < budget && !retired.empty(); ++examined) {
+                retirementCursor %= retired.size();
+                const auto entry = retired[retirementCursor];
+                const bool complete = std::visit([](const auto *instance) {
+                    return Complete(instance->use.last);
+                }, entry);
+                if (!complete) {
+                    ++retirementCursor;
+                    continue;
+                }
+                std::visit([&](auto *instance) {
+                    using Instance = std::remove_pointer_t<decltype(instance)>;
+                    if constexpr (std::is_same_v<Instance, MetalBufferInstance>) {
+                        DestroyResident(buffers, Identity(instance), &MetalBufferInstance::buffer, true);
+                    } else {
+                        DestroyResident(textures, Identity(instance), &MetalTextureInstance::texture, true);
+                    }
+                }, entry);
+                retired[retirementCursor] = retired.back();
+                retired.pop_back();
+            }
         }
     };
 
@@ -408,6 +493,11 @@ namespace Horo::Render::Detail {
         if (!ValidBufferRequest(impl_->device != nil, descriptor, initialData, placement, cost))
             return Result<std::uint64_t>::Failure(
                 ResourceError(MetalBackendErrors::InvalidConfig, "Metal buffer creation request is invalid."));
+        if (!impl_->PlacementAvailable(placement)) {
+            return Result<std::uint64_t>::Failure(
+                MakeError(MetalBackendErrors::ResourceCreationFailed,
+                          "Metal placement remains owned by an outstanding retired resource command; retry after completion."));
+        }
         const MetalResourceStorage storage = MetalBufferStorage(descriptor);
         auto heap = impl_->AcquireHeap(placement, storage);
         if (heap.HasError())
@@ -436,7 +526,8 @@ namespace Horo::Render::Detail {
                                                            const std::uint64_t indexBuffer) {
         MetalBufferInstance *vertex = Decode<MetalBufferInstance>(vertexBuffer);
         MetalBufferInstance *index = Decode<MetalBufferInstance>(indexBuffer);
-        if (vertex == nullptr || index == nullptr || !impl_->buffers.contains(vertex) || !impl_->buffers.contains(index)) {
+        if (vertex == nullptr || index == nullptr || !impl_->buffers.contains(vertex) || !impl_->buffers.contains(index) ||
+            vertex->use.retired || index->use.retired) {
             return Result<std::uint64_t>::Failure(
                 ResourceError(MetalBackendErrors::ResourceIdentityInvalid, "Metal mesh references unknown buffer instances."));
         }
@@ -454,6 +545,11 @@ namespace Horo::Render::Detail {
         if (!ValidTextureRequest(impl_->device != nil, descriptor, initialData, placement, cost))
             return Result<std::uint64_t>::Failure(
                 ResourceError(MetalBackendErrors::InvalidConfig, "Metal texture creation request is invalid."));
+        if (!impl_->PlacementAvailable(placement)) {
+            return Result<std::uint64_t>::Failure(
+                MakeError(MetalBackendErrors::ResourceCreationFailed,
+                          "Metal placement remains owned by an outstanding retired resource command; retry after completion."));
+        }
         MTLTextureDescriptor *native = NativeTextureDescriptor(descriptor);
         auto heap = impl_->AcquireHeap(placement, MetalTextureStorage(descriptor));
         if (heap.HasError())
@@ -479,7 +575,7 @@ namespace Horo::Render::Detail {
     Result<std::uint64_t> MetalResourceRuntime::CreateTextureView(const RenderTextureViewDescriptor &descriptor,
                                                                   const std::uint64_t texture) {
         MetalTextureInstance *source = Decode<MetalTextureInstance>(texture);
-        if (!descriptor.IsValid() || source == nullptr || !impl_->textures.contains(source)) {
+        if (!descriptor.IsValid() || source == nullptr || !impl_->textures.contains(source) || source->use.retired) {
             return Result<std::uint64_t>::Failure(
                 ResourceError(MetalBackendErrors::ResourceIdentityInvalid, "Metal texture view source identity is invalid."));
         }
@@ -526,6 +622,132 @@ namespace Horo::Render::Detail {
         return impl_->TrackInstance(instance, impl_->renderTargets, "Metal render-target identity allocation failed.");
     }
 
+    namespace {
+        /** @brief Applies the complete typed color load/store contract to the native attachment. */
+        void ConfigureGraphColorAttachment(MTLRenderPassColorAttachmentDescriptor *attachment, const PrimaryOutputAttachment &operations) {
+            switch (operations.loadOperation) {
+                case AttachmentLoadOperation::Load:
+                    attachment.loadAction = MTLLoadActionLoad;
+                    break;
+                case AttachmentLoadOperation::Clear:
+                    attachment.loadAction = MTLLoadActionClear;
+                    break;
+                case AttachmentLoadOperation::DontCare:
+                    attachment.loadAction = MTLLoadActionDontCare;
+                    break;
+            }
+            attachment.storeAction =
+                operations.storeOperation == AttachmentStoreOperation::Store ? MTLStoreActionStore : MTLStoreActionDontCare;
+            const auto &clear = operations.clearColor;
+            attachment.clearColor = MTLClearColorMake(clear.red, clear.green, clear.blue, clear.alpha);
+        }
+
+        /** @brief Finds only an exact graph-local resource binding; never guesses by slot or native address. */
+        [[nodiscard]] std::uint64_t GraphInstance(const RenderGraphResourceId id,
+                                                  const std::span<const RenderGraphResourceInstance> resources) {
+            for (const auto &resource : resources) {
+                if (resource.resource == id) {
+                    return resource.instance;
+                }
+            }
+            return 0;
+        }
+    }  // namespace
+
+    /** @copydoc MetalResourceRuntime::ValidateGraphWorkload */
+    Result<void> MetalResourceRuntime::ValidateGraphWorkload(const RenderGraphWorkload &workload,
+                                                             const std::span<const RenderGraphResourceInstance> resources) const {
+        if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload)) {
+            auto *texture = Decode<MetalTextureInstance>(GraphInstance(color->texture, resources));
+            if (texture == nullptr || !impl_->textures.contains(texture) || texture->use.retired) {
+                return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid));
+            }
+            const auto &descriptor = texture->descriptor;
+            if (!color->operations.IsValid() || !HasTextureUsage(descriptor.usage, RenderTextureUsage::RenderAttachment) ||
+                descriptor.mipCount != 1 || descriptor.layerCount != 1 || descriptor.sampleCount != 1 ||
+                !MetalTextureAspectMatches(descriptor.format, RenderTextureAspect::Color)) {
+                return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution,
+                                                       "Metal graph color operations require a single color mip, layer and sample."));
+            }
+        } else if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&workload)) {
+            auto *source = Decode<MetalBufferInstance>(GraphInstance(copy->source, resources));
+            auto *destination = Decode<MetalBufferInstance>(GraphInstance(copy->destination, resources));
+            if (source == nullptr || destination == nullptr || !impl_->buffers.contains(source) || !impl_->buffers.contains(destination) ||
+                source->use.retired || destination->use.retired) {
+                return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid));
+            }
+            if (!HasBufferUsage(source->usage, RenderBufferUsage::CopySource) ||
+                !HasBufferUsage(destination->usage, RenderBufferUsage::CopyDestination) || source == destination || copy->byteCount == 0 ||
+                copy->sourceOffset > source->buffer.length || copy->byteCount > source->buffer.length - copy->sourceOffset ||
+                copy->destinationOffset > destination->buffer.length ||
+                copy->byteCount > destination->buffer.length - copy->destinationOffset) {
+                return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan,
+                                                       "Metal graph copy byte range exceeds its resolved resident buffer."));
+            }
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc MetalResourceRuntime::ExecuteGraphWorkload */
+    Result<void> MetalResourceRuntime::ExecuteGraphWorkload(void *commandBuffer, const RenderGraphWorkload &workload,
+                                                            const std::span<const RenderGraphResourceInstance> resources) {
+        if (const auto valid = ValidateGraphWorkload(workload, resources); valid.HasError()) {
+            return valid;
+        }
+        id<MTLCommandBuffer> commands = (__bridge id<MTLCommandBuffer>)commandBuffer;
+        if (commands == nil) {
+            return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
+        }
+        if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload)) {
+            auto *texture = Decode<MetalTextureInstance>(GraphInstance(color->texture, resources));
+            MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+            auto *attachment = pass.colorAttachments[0];
+            attachment.texture = texture->texture;
+            ConfigureGraphColorAttachment(attachment, color->operations);
+            id<MTLRenderCommandEncoder> encoder = [commands renderCommandEncoderWithDescriptor:pass];
+            if (encoder == nil) {
+                return Result<void>::Failure(
+                    MakeError(MetalBackendErrors::CommandSubmissionFailed, "Metal graph color encoder creation failed."));
+            }
+            [encoder endEncoding];
+            Impl::TrackUse(texture->use, commands);
+        } else if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&workload)) {
+            auto *source = Decode<MetalBufferInstance>(GraphInstance(copy->source, resources));
+            auto *destination = Decode<MetalBufferInstance>(GraphInstance(copy->destination, resources));
+            id<MTLBlitCommandEncoder> encoder = [commands blitCommandEncoder];
+            if (encoder == nil) {
+                return Result<void>::Failure(
+                    MakeError(MetalBackendErrors::CommandSubmissionFailed, "Metal graph copy encoder creation failed."));
+            }
+            [encoder copyFromBuffer:source->buffer
+                       sourceOffset:copy->sourceOffset
+                           toBuffer:destination->buffer
+                  destinationOffset:copy->destinationOffset
+                               size:copy->byteCount];
+            [encoder endEncoding];
+            Impl::TrackUse(source->use, commands);
+            Impl::TrackUse(destination->use, commands);
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc MetalResourceRuntime::FinishGraphCommands */
+    void MetalResourceRuntime::FinishGraphCommands(void *commandBuffer, const bool committed) noexcept {
+        id<MTLCommandBuffer> commands = (__bridge id<MTLCommandBuffer>)commandBuffer;
+        for (auto *buffer : impl_->buffers) {
+            Impl::FinishUse(buffer->use, commands, committed);
+        }
+        for (auto *texture : impl_->textures) {
+            Impl::FinishUse(texture->use, commands, committed);
+        }
+        impl_->DrainRetired(64);
+    }
+
+    /** @copydoc MetalResourceRuntime::DrainGraphRetirements */
+    void MetalResourceRuntime::DrainGraphRetirements() noexcept {
+        impl_->DrainRetired(64);
+    }
+
     void MetalResourceRuntime::DestroyBuffer(const std::uint64_t backendInstance) noexcept {
         impl_->DestroyResident(impl_->buffers, backendInstance, &MetalBufferInstance::buffer);
     }
@@ -547,14 +769,16 @@ namespace Horo::Render::Detail {
     }
 
     void MetalResourceRuntime::Shutdown() noexcept {
-        if (impl_->lastSubmittedUpload != nil)
-            [impl_->lastSubmittedUpload waitUntilCompleted];
+        // Timeout closes this native ownership domain; it does not establish reusable completion evidence.
+        static_cast<void>(ObserveMetalCommandForTeardown(impl_->lastSubmittedUpload));
         DestroyAll(impl_->renderTargets);
         DestroyAll(impl_->textureViews);
         DestroyAll(impl_->meshes);
         DestroyAll(impl_->textures);
         DestroyAll(impl_->buffers);
         impl_->heaps.clear();
+        impl_->retired.clear();
+        impl_->retirementCursor = 0;
         impl_->lastSubmittedUpload = nil;
         impl_->commandQueue = nil;
         impl_->device = nil;
