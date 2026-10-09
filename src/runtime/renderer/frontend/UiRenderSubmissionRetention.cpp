@@ -58,8 +58,8 @@ namespace Horo::Render::Detail {
             if (submission.geometry == nullptr || !submission.geometry->IsValid() ||
                 (!submission.fonts.empty() && !submission.atlas.Frame().IsValid()))
                 return InvalidSource();
-            const auto &snapshot = submission.geometry->SourceSnapshot();
-            if (snapshot.Resources().size() > MaximumUiSubmissionImages + MaximumUiSubmissionFonts ||
+            if (const auto &snapshot = submission.geometry->SourceSnapshot();
+                snapshot.Resources().size() > MaximumUiSubmissionImages + MaximumUiSubmissionFonts ||
                 snapshot.Glyphs().size() > MaximumUiSubmissionGlyphs)
                 return Result<void>::Failure(MakeError(UiErrors::RenderCompositionCapacityExceeded));
             return Result<void>::Success();
@@ -128,19 +128,25 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
+    /** @copydoc UiRenderSubmissionRetention::CountGlyphMatches */
+    std::size_t UiRenderSubmissionRetention::CountGlyphMatches(const UiRenderResourceReference &reference, const UiPositionedGlyph &glyph,
+                                                               const UiGlyphAtlas::FrameLease &atlas) const {
+        std::size_t matches{};
+        for (std::size_t index = 0; index < fonts_.size(); ++index) {
+            if (fonts_[index] && MatchesFont(reference, *fonts_[index]) &&
+                atlas.PinsGlyph(*fonts_[index], glyph.glyph, fontPages_[index], glyph.uv))
+                ++matches;
+        }
+        return matches;
+    }
+
     /** @copydoc UiRenderSubmissionRetention::ValidateGlyphCoverage */
     Result<void> UiRenderSubmissionRetention::ValidateGlyphCoverage(const UiRenderSnapshot &snapshot,
                                                                     const UiGlyphAtlas::FrameLease &atlas) const {
         for (const auto &run : snapshot.TextRuns()) {
             const auto &reference = snapshot.Resources()[run.fontResource];
             for (const auto &glyph : snapshot.Glyphs().subspan(run.firstGlyph, run.glyphCount)) {
-                std::size_t matches{};
-                for (std::size_t index = 0; index < fonts_.size(); ++index) {
-                    if (fonts_[index] && MatchesFont(reference, *fonts_[index]) &&
-                        atlas.PinsGlyph(*fonts_[index], glyph.glyph, fontPages_[index], glyph.uv))
-                        ++matches;
-                }
-                if (matches != 1)
+                if (CountGlyphMatches(reference, glyph, atlas) != 1)
                     return InvalidSource();
             }
         }

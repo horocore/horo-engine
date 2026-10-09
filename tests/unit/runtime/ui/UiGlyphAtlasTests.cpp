@@ -229,7 +229,7 @@ namespace Horo::Runtime::Ui {
             static_cast<void>(CompleteUpload(atlas, Key(1), bytes, 1));
             const auto frame = atlas.BeginFrame().Value();
             REQUIRE(atlas.Resolve(frame, Key(1)).HasValue());
-            auto sealed = atlas.SealFrame(frame);
+            auto sealed = std::as_const(atlas).SealFrame(frame);
             REQUIRE(sealed.HasValue());
             auto lease = std::move(sealed).Value();
             REQUIRE(lease.Frame() == frame);

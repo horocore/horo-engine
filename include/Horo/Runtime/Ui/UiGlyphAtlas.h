@@ -451,11 +451,12 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<UiGlyphAtlasLookup> Resolve(UiGlyphAtlasFrameId frame, const UiGlyphAtlasGlyphKey &requested);
         /**
          * @brief Seals a prepared pin set and transfers retirement authority to an owning submission lease.
+         * @details Const preserves the facade's storage identity, not the shared pin state; owner-thread admission still applies.
          * @param frame Exact active, not-yet-sealed frame.
          * @return Allocation-free owning lease or typed lifecycle/stale/already-sealed failure.
          * @post Resolve and RetireFrame reject this frame; only destruction of the transferred lease releases its pins.
          */
-        [[nodiscard]] Result<FrameLease> SealFrame(UiGlyphAtlasFrameId frame);
+        [[nodiscard]] Result<FrameLease> SealFrame(UiGlyphAtlasFrameId frame) const;
         /**
          * @brief Releases an unsealed frame after native completion or unsent abandonment, never merely presentation.
          * @details Submitted frames use SealFrame instead; their retirement authority cannot be bypassed with a raw ID.
