@@ -39,8 +39,8 @@ namespace Horo::Terrain {
                                               const CancellationToken &cancellation) {
         if (cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(TerrainPayloadManifestErrors::Cancelled));
-        constexpr std::array<std::uint8_t, 10> prefix{4, 0, 'H', 'T', 'P', 'M', 1, 0, 0, 0};
-        if (expected.Tiles().empty() || !expected.Provenance().dataset.IsValid() || !expected.Provenance().content.IsValid() ||
+        if (constexpr std::array<std::uint8_t, 10> prefix{4, 0, 'H', 'T', 'P', 'M', 1, 0, 0, 0};
+            expected.Tiles().empty() || !expected.Provenance().dataset.IsValid() || !expected.Provenance().content.IsValid() ||
             bytes.size() != expected.Bytes().size() || bytes.size() < prefix.size() ||
             !std::ranges::equal(bytes.first(prefix.size()), prefix))
             return Result<void>::Failure(MakeError(TerrainPayloadManifestErrors::Invalid));
@@ -54,24 +54,22 @@ namespace Horo::Terrain {
 
     /** @copydoc ValidateTerrainPayloadManifestPublication */
     Result<void> ValidateTerrainPayloadManifestPublication(const TerrainPayloadManifest &candidate, const TerrainPayloadManifest *current,
-                                                           const std::optional<Sha256Digest> expectedCurrent,
+                                                           const std::optional<Sha256Digest> &expectedCurrent,
                                                            const TerrainRuntimeLifecycle lifecycle, const CancellationToken &cancellation) {
         if (lifecycle != TerrainRuntimeLifecycle::Active)
             return Result<void>::Failure(MakeError(TerrainPayloadManifestErrors::Closed));
-        const auto checked = VerifyTerrainPayloadManifest(candidate, candidate.Bytes(), cancellation);
-        if (checked.HasError())
+        if (const auto checked = VerifyTerrainPayloadManifest(candidate, candidate.Bytes(), cancellation); checked.HasError())
             return checked;
         if (!current) {
             if (expectedCurrent)
                 return Result<void>::Failure(MakeError(TerrainPayloadManifestErrors::Stale));
             return Result<void>::Success();
         }
-        const auto prior = VerifyTerrainPayloadManifest(*current, current->Bytes(), cancellation);
-        if (prior.HasError())
+        if (const auto prior = VerifyTerrainPayloadManifest(*current, current->Bytes(), cancellation); prior.HasError())
             return prior;
         const auto &old = current->Provenance();
-        const auto &next = candidate.Provenance();
-        if (!expectedCurrent || *expectedCurrent != current->Digest() || !Detail::PayloadManifestSuccessor(old, next))
+        if (const auto &next = candidate.Provenance();
+            !expectedCurrent || *expectedCurrent != current->Digest() || !Detail::PayloadManifestSuccessor(old, next))
             return Result<void>::Failure(MakeError(TerrainPayloadManifestErrors::Stale));
         return Result<void>::Success();
     }

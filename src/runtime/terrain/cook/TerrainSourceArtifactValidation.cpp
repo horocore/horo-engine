@@ -156,8 +156,7 @@ namespace Horo::Terrain {
             return corrupt();
         if (!AdmittedArtifact(payload))
             return corrupt();
-        const auto digest = Detail::HashPayload(payload, cancellation);
-        if (digest.HasError() || digest.Value() != expectedDigest)
+        if (const auto digest = Detail::HashPayload(payload, cancellation); digest.HasError() || digest.Value() != expectedDigest)
             return corrupt();
         const auto crsLength = Read(payload, 197, 2);
         if (crsLength > payload.size() - 408 || !ValidCoordinates(payload, crsLength))

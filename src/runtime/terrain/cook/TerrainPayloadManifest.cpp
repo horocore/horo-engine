@@ -24,8 +24,8 @@ namespace Horo::Terrain {
 
         /** @brief Checks the closed requirement vocabulary without inventing fallback. */
         bool ValidRequirements(const TerrainPayloadRequirements &requirements) {
-            return requirements.visual < TerrainPayloadRequirement::Count && requirements.collision < TerrainPayloadRequirement::Count &&
-                   requirements.navigation < TerrainPayloadRequirement::Count;
+            using enum TerrainPayloadRequirement;
+            return requirements.visual < Count && requirements.collision < Count && requirements.navigation < Count;
         }
 
         /** @brief Enforces fixed safety ceilings before inspecting or allocating bulk data. */
@@ -123,8 +123,13 @@ namespace Horo::Terrain {
     struct TerrainPayloadManifestBuilder final {
         const TerrainPayloadManifestRequest &request;
         const CancellationToken &cancellation;
-        TerrainPayloadManifest root{};
-        std::uint64_t inputBytes{}, work{};
+        TerrainPayloadManifest root;
+        std::uint64_t inputBytes{};
+        std::uint64_t work{};
+
+        /** @brief Construct the cook-issued root in an explicit friend context, not aggregate initialization. */
+        TerrainPayloadManifestBuilder(const TerrainPayloadManifestRequest &input, const CancellationToken &token)
+            : request(input), cancellation(token), root() {}
 
         /** @brief Returns typed cancellation first when cooperative cancellation won. */
         Result<void> Fail(const ErrorCodeDescriptor &error = TerrainPayloadManifestErrors::Invalid) const {
@@ -146,7 +151,7 @@ namespace Horo::Terrain {
         }
 
         /** @brief Checks request vocabulary before dereferencing any borrowed root. */
-        Result<void> CheckRequest() {
+        Result<void> CheckRequest() const {
             if (cancellation.IsCancellationRequested())
                 return Fail();
             if (!request.terrain || !request.content.IsValid() || !ValidRequirements(request.terrainRequirements) ||
@@ -156,10 +161,10 @@ namespace Horo::Terrain {
         }
 
         /** @brief Bounds all input collection sizes before arithmetic or allocation. */
-        Result<void> CheckCounts() {
+        Result<void> CheckCounts() const {
             const auto &tiles = request.terrain->Tiles();
-            const auto clusters = request.foliage ? request.foliage->Clusters().size() : 0;
-            if (tiles.tiles.empty() || tiles.tiles.size() > request.limits.maximumTiles || clusters > request.limits.maximumClusters ||
+            if (const auto clusters = request.foliage ? request.foliage->Clusters().size() : 0;
+                tiles.tiles.empty() || tiles.tiles.size() > request.limits.maximumTiles || clusters > request.limits.maximumClusters ||
                 request.terrainDependencies.size() > request.limits.maximumDependencies ||
                 request.foliageDependencies.size() > request.limits.maximumDependencies ||
                 request.terrain->Artifacts().size() > tiles.tiles.size() * 3 || tiles.coordinates.projectedCrs.size() > 65'535)
@@ -254,10 +259,10 @@ namespace Horo::Terrain {
         }
 
         /** @brief Preserves exact predecessor provenance without mutating the retained root. */
-        Result<void> CheckPrevious() {
+        Result<void> CheckPrevious() const {
             if (request.previous) {
-                const auto checked = VerifyTerrainPayloadManifest(*request.previous, request.previous->Bytes(), cancellation);
-                if (checked.HasError())
+                if (const auto checked = VerifyTerrainPayloadManifest(*request.previous, request.previous->Bytes(), cancellation);
+                    checked.HasError())
                     return checked;
                 if (!Detail::PayloadManifestSuccessor(request.previous->Provenance(), root.provenance_))
                     return Fail(TerrainPayloadManifestErrors::Stale);
@@ -266,13 +271,13 @@ namespace Horo::Terrain {
         }
 
         /** @brief Finds exact selected tile membership in canonical order, with no coordinate-only aliasing. */
-        TerrainTilePayloadEntry *Find(const TerrainTileId &tile) {
+        const TerrainTilePayloadEntry *Find(const TerrainTileId &tile) const {
             if (tile.dataset != root.provenance_.dataset)
                 return nullptr;
             const auto found = std::ranges::lower_bound(root.tiles_, TileOrder(tile), {}, [](const auto &entry) {
                 return TileOrder(entry.tile);
             });
-            return found != root.tiles_.end() && found->tile == tile ? &*found : nullptr;
+            return found != root.tiles_.end() && found->tile == tile ? std::to_address(found) : nullptr;
         }
 
         /** @brief Copies complete verified sample membership without retaining source bytes. */
@@ -297,13 +302,14 @@ namespace Horo::Terrain {
 
         /** @brief Verifies and attaches one exact tile/role artifact to selected membership. */
         Result<void> AddGeometry(const TerrainSourceArtifact &artifact) {
-            auto *entry = Find(artifact.tile);
+            const auto *found = Find(artifact.tile);
+            auto *entry = found ? root.tiles_.data() + (found - root.tiles_.data()) : nullptr;
             const auto role = static_cast<std::size_t>(artifact.role);
             if (!entry || role >= entry->consumers.size() || entry->consumers[role] || artifact.seams != entry->seams ||
                 !artifact.requiresSameLodNeighbors)
                 return Fail();
-            const auto verified = VerifyTerrainSourceArtifactPayload(artifact.payload, artifact.digest, cancellation);
-            if (verified.HasError())
+            if (const auto verified = VerifyTerrainSourceArtifactPayload(artifact.payload, artifact.digest, cancellation);
+                verified.HasError())
                 return Result<void>::Failure(verified.ErrorValue());
             const auto bounds = GeometryBounds(artifact, cancellation);
             if (!bounds)
@@ -340,7 +346,8 @@ namespace Horo::Terrain {
 
         /** @brief Validates same-LOD neighbours and complete collision/navigation coverage at one common declared LOD. */
         Result<void> CheckSeams() {
-            constexpr std::array<std::size_t, 2> facing{1, 3}, opposite{0, 2};
+            constexpr std::array<std::size_t, 2> facing{1, 3};
+            constexpr std::array<std::size_t, 2> opposite{0, 2};
             for (const auto &entry : root.tiles_) {
                 if (cancellation.IsCancellationRequested())
                     return Fail();
@@ -359,7 +366,8 @@ namespace Horo::Terrain {
 
         /** @brief Tests one role/LOD coverage without silently dropping missing tiles. */
         bool CompleteCoverage(const std::size_t role, const std::uint8_t lod) const {
-            bool present = false, missing = false;
+            bool present = false;
+            bool missing = false;
             for (const auto &entry : root.tiles_)
                 if (entry.tile.tile.lod == lod) {
                     present = true;
@@ -369,7 +377,7 @@ namespace Horo::Terrain {
         }
 
         /** @brief Requires complete requested role membership at one common LOD. */
-        Result<void> CheckCoverage() {
+        Result<void> CheckCoverage() const {
             const auto &profile = request.terrain->Tiles().profile;
             const std::array requirements{request.terrainRequirements.visual, request.terrainRequirements.collision,
                                           request.terrainRequirements.navigation};
@@ -418,8 +426,7 @@ namespace Horo::Terrain {
             const auto &foliage = *request.foliage;
             if (!CompatibleFoliageProfile() || !CompatibleFoliageMembership())
                 return Fail();
-            const auto complete = foliage.Validate(cancellation);
-            if (complete.HasError())
+            if (const auto complete = foliage.Validate(cancellation); complete.HasError())
                 return Result<void>::Failure(complete.ErrorValue());
             root.provenance_.foliageFingerprint = foliage.Fingerprint();
             root.provenance_.foliageManifestDigest = foliage.ManifestDigest();
@@ -427,7 +434,7 @@ namespace Horo::Terrain {
         }
 
         /** @brief Matches one cluster to selected source/capability and authenticated geometry closure. */
-        bool CompatibleCluster(const CookedFoliageCluster &cluster) {
+        bool CompatibleCluster(const CookedFoliageCluster &cluster) const {
             const auto &provenance = root.provenance_;
             return Find(cluster.tile) && cluster.sourceRevision == provenance.source && cluster.capability == provenance.capability &&
                    std::ranges::any_of(root.foliageDependencies_, [&cluster](const auto &dependency) {
@@ -437,8 +444,7 @@ namespace Horo::Terrain {
 
         /** @brief Retains every selected cluster's exact placement and geometry provenance. */
         Result<void> BuildClusters() {
-            const auto checked = CheckFoliageRoot();
-            if (checked.HasError() || !request.foliage)
+            if (const auto checked = CheckFoliageRoot(); checked.HasError() || !request.foliage)
                 return checked;
             const auto &foliage = *request.foliage;
             root.clusters_.reserve(foliage.Clusters().size());
@@ -448,8 +454,7 @@ namespace Horo::Terrain {
                     return Fail();
                 if (!CompatibleCluster(cluster))
                     return Fail();
-                const auto verified = VerifyFoliageClusterPayload(cluster, cluster.payload, cancellation);
-                if (verified.HasError())
+                if (const auto verified = VerifyFoliageClusterPayload(cluster, cluster.payload, cancellation); verified.HasError())
                     return Result<void>::Failure(verified.ErrorValue());
                 FoliageClusterPayloadEntry entry{cluster.tile,
                                                  cluster.type,
