@@ -25,6 +25,8 @@ namespace Horo::Render::MetalBackendTests {
         bool throwCapture{false};
         bool throwAccept{false};
         bool foreignException{false};
+        std::size_t captureCalls{}; /**< Render-owner-only native boundary observations. */
+        std::size_t acceptanceCalls{};
         std::size_t throwRecordIndex{2};
         std::atomic<std::uint32_t> liveRecordings{};
     };
@@ -118,6 +120,7 @@ namespace Horo::Render::MetalBackendTests {
         }
 
         Result<std::shared_ptr<IRenderParallelGraphRecording>> PrepareParallelGraph(const RenderGraphExecutionRequest &request) override {
+            ++observation_->captureCalls;
             if (observation_->throwCapture) {
                 if (observation_->foreignException)
                     throw 354;
@@ -129,6 +132,7 @@ namespace Horo::Render::MetalBackendTests {
         }
 
         Result<void> AcceptParallelGraph(const std::shared_ptr<IRenderParallelGraphRecording> &recording) override {
+            ++observation_->acceptanceCalls;
             if (observation_->throwAccept) {
                 if (observation_->foreignException)
                     throw 354;
