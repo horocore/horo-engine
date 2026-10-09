@@ -77,7 +77,7 @@ namespace Horo::Render::OpenGLResourceTests {
         // This probe intentionally records no state.
     }
 
-    void ProbeViewport(std::int32_t, std::int32_t, std::int32_t, std::int32_t) noexcept {
+    void ProbeViewport(float, float, float, float) noexcept {
         // Viewport state is outside this resource test's scope.
     }
 

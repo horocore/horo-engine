@@ -6,7 +6,7 @@ namespace Horo::Render::Detail {
     /** @copydoc OpenGLExecutionState::OpenGLExecutionState */
     OpenGLExecutionState::OpenGLExecutionState(const OpenGLCommandFunctions &functions) noexcept : functions_(functions) {
         const auto &state = functions_.state;
-        state.getInteger(GL_VIEWPORT, viewport_);
+        state.getFloat(GL_VIEWPORT, viewport_);
         state.getInteger(GL_DRAW_FRAMEBUFFER_BINDING, std::span{&framebuffer_, 1});
         state.getFloat(GL_COLOR_CLEAR_VALUE, clearColor_);
         state.getBoolean(GL_COLOR_WRITEMASK, colorMask_);
@@ -38,7 +38,7 @@ namespace Horo::Render::Detail {
         state.setEnabled(GL_RASTERIZER_DISCARD, false);
         constexpr std::array<std::uint8_t, 4> unmasked{1, 1, 1, 1};
         state.colorMask(unmasked);
-        functions_.viewport(0, 0, static_cast<std::int32_t>(extent.width), static_cast<std::int32_t>(extent.height));
+        functions_.viewport(0, 0, static_cast<float>(extent.width), static_cast<float>(extent.height));
         return true;
     }
 

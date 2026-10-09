@@ -31,7 +31,7 @@ namespace Horo::Render::Detail {
 
     private:
         const OpenGLCommandFunctions &functions_;
-        std::array<std::int32_t, 4> viewport_{};
+        std::array<float, 4> viewport_{};
         std::array<float, 4> clearColor_{};
         std::array<std::uint8_t, 4> colorMask_{};
         std::int32_t framebuffer_{};

@@ -24,7 +24,8 @@ namespace Horo::Render::Detail {
      */
     [[nodiscard]] RenderCapabilitySnapshot MakeOpenGLCapabilitySnapshot(const OpenGLContextFacts &facts, bool resourcesAvailable) noexcept;
 
-    using OpenGLViewportFunction = void (*)(std::int32_t x, std::int32_t y, std::int32_t width, std::int32_t height) noexcept;
+    /** Sets viewport zero only, preserving fractional bounds and higher indexed viewports. */
+    using OpenGLViewportFunction = void (*)(float x, float y, float width, float height) noexcept;
     using OpenGLClearColorFunction = void (*)(float red, float green, float blue, float alpha) noexcept;
     using OpenGLClearFunction = void (*)(std::uint32_t mask) noexcept;
     using OpenGLGenerateObjectsFunction = void (*)(std::int32_t count, std::uint32_t *objects);
@@ -58,9 +59,12 @@ namespace Horo::Render::Detail {
     /** @brief Core state operations used only while the backend's context is current; callbacks must not throw. */
     struct OpenGLStateFunctions {
         void (*getInteger)(std::uint32_t, std::span<std::int32_t>) noexcept {nullptr};
+        /** VIEWPORT is queried at index zero without truncating fractional values. */
         void (*getFloat)(std::uint32_t, std::span<float>) noexcept {nullptr};
         void (*getBoolean)(std::uint32_t, std::span<std::uint8_t>) noexcept {nullptr};
+        /** SCISSOR_TEST is queried only at index zero. */
         bool (*isEnabled)(std::uint32_t) noexcept {nullptr};
+        /** SCISSOR_TEST changes only index zero; other capabilities are non-indexed. */
         void (*setEnabled)(std::uint32_t, bool) noexcept {nullptr};
         /** Changes only indexed color mask zero; higher masks remain untouched. */
         void (*colorMask)(std::span<const std::uint8_t, 4>) noexcept {nullptr};

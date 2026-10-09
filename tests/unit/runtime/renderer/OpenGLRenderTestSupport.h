@@ -133,7 +133,11 @@ namespace Horo::Render::OpenGLBackendTests {
         std::int32_t viewportHeight{0};
         ClearColor color{};
         std::uint32_t clearMask{0};
-        std::array<std::int32_t, 4> viewport{3, 4, 80, 90};
+        std::array<float, 4> viewport{3, 4, 80, 90};
+        std::array<float, 4> secondaryViewport{0.5F, 1.25F, 100.75F, 200.5F};
+        bool secondaryScissorEnabled{false};
+        std::array<float, 4> clearedSecondaryViewport{};
+        bool clearedSecondaryScissorEnabled{};
         std::array<std::uint8_t, 4> colorMask{0, 1, 0, 1};
         std::int32_t framebuffer{7};
         std::array<std::uint32_t, 64> defaultDrawBuffers{0x0404};
@@ -143,7 +147,7 @@ namespace Horo::Render::OpenGLBackendTests {
         std::array<std::uint8_t, 4> clearedSecondaryMask{};
         std::array<bool, 4> enabled{true, true, true, true};
         std::array<ClearColor, 16> clearedColors{};
-        std::array<std::int32_t, 4> clearedViewport{};
+        std::array<float, 4> clearedViewport{};
         std::array<std::uint8_t, 4> clearedMask{};
         std::int32_t clearedFramebuffer{-1};
         std::array<bool, 4> clearedEnabled{};
@@ -166,11 +170,11 @@ namespace Horo::Render::OpenGLBackendTests {
         return commandState.dispatchAvailable;
     }
 
-    inline void ProbeViewport(const std::int32_t x, const std::int32_t y, const std::int32_t width, const std::int32_t height) noexcept {
+    inline void ProbeViewport(const float x, const float y, const float width, const float height) noexcept {
         commandState.viewport = {x, y, width, height};
         ++commandState.viewportCount;
-        commandState.viewportWidth = width;
-        commandState.viewportHeight = height;
+        commandState.viewportWidth = static_cast<std::int32_t>(width);
+        commandState.viewportHeight = static_cast<std::int32_t>(height);
     }
 
     inline void ProbeClearColor(const float red, const float green, const float blue, const float alpha) noexcept {
@@ -188,6 +192,8 @@ namespace Horo::Render::OpenGLBackendTests {
         ++commandState.clearCount;
         commandState.clearMask = mask;
         commandState.clearedViewport = commandState.viewport;
+        commandState.clearedSecondaryViewport = commandState.secondaryViewport;
+        commandState.clearedSecondaryScissorEnabled = commandState.secondaryScissorEnabled;
         commandState.clearedMask = commandState.colorMask;
         commandState.clearedFramebuffer = commandState.framebuffer;
         commandState.clearedEnabled = commandState.enabled;
@@ -198,9 +204,7 @@ namespace Horo::Render::OpenGLBackendTests {
     }
 
     inline void ProbeGetInteger(const std::uint32_t name, const std::span<std::int32_t> values) noexcept {
-        if (name == 0x0BA2)
-            std::ranges::copy(commandState.viewport, values.begin());
-        else if (name == 0x8CA6)
+        if (name == 0x8CA6)
             values[0] = commandState.framebuffer;
         else if (name == 0x8824)
             values[0] = commandState.maxDrawBuffers;
@@ -208,7 +212,11 @@ namespace Horo::Render::OpenGLBackendTests {
             values[0] = static_cast<std::int32_t>(commandState.defaultDrawBuffers[name - 0x8825]);
     }
 
-    inline void ProbeGetFloat(const std::uint32_t, const std::span<float> values) noexcept {
+    inline void ProbeGetFloat(const std::uint32_t name, const std::span<float> values) noexcept {
+        if (name == 0x0BA2) {
+            std::ranges::copy(commandState.viewport, values.begin());
+            return;
+        }
         const ClearColor &color = commandState.color;
         const std::array<float, 4> channels{color.red, color.green, color.blue, color.alpha};
         std::ranges::copy(channels, values.begin());

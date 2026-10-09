@@ -25,6 +25,8 @@ namespace Horo::Render::OpenGLBackendTests {
 
         void CheckRestoredState(const CommandState &before) {
             Check(commandState.viewport == before.viewport);
+            Check(commandState.secondaryViewport == before.secondaryViewport);
+            Check(commandState.secondaryScissorEnabled == before.secondaryScissorEnabled);
             Check(commandState.colorMask == before.colorMask);
             Check(commandState.framebuffer == before.framebuffer);
             Check(commandState.defaultDrawBuffers == before.defaultDrawBuffers);
@@ -52,7 +54,7 @@ namespace Horo::Render::OpenGLBackendTests {
         Check(commandState.clearedColors[0].red == 0.1F);
         Check(commandState.clearedColors[1].red == 0.4F);
         Check(commandState.clearedFramebuffer == 0);
-        const std::array<std::int32_t, 4> viewport{0, 0, 640, 480};
+        const std::array<float, 4> viewport{0, 0, 640, 480};
         const std::array<std::uint8_t, 4> mask{1, 1, 1, 1};
         Check(commandState.clearedViewport == viewport);
         Check(commandState.clearedMask == mask);
@@ -105,6 +107,27 @@ namespace Horo::Render::OpenGLBackendTests {
         Check(executed.HasError());
         Check(executed.ErrorValue().code.Value() == "render.opengl.command_failed");
         Check(commandState.clearCount == 0);
+        CheckRestoredState(before);
+    }
+
+    TEST_CASE("OpenGL Restores Fractional Viewport And Preserves Higher Indexed Viewport And Scissor",
+              "[unit][runtime][renderer][opengl_commands]") {
+        CommandFixture fixture;
+        commandState.viewport = {0.25F, 1.5F, 80.75F, 90.125F};
+        SECTION("Higher scissor enabled") {
+            commandState.secondaryScissorEnabled = true;
+        }
+        SECTION("Higher scissor disabled") {
+            commandState.secondaryScissorEnabled = false;
+        }
+        const CommandState before = commandState;
+        const FrameToken frame = fixture.Begin();
+        const std::array passes{BackendTestSupport::MakeClearGraphicsPass(RenderPassId{1}, {})};
+        Check(fixture.backend->Execute({.frame = frame, .orderedPasses = passes}).HasValue());
+        Check(commandState.clearCount == 1);
+        Check(!commandState.clearedEnabled[0]);
+        Check(commandState.clearedSecondaryViewport == before.secondaryViewport);
+        Check(commandState.clearedSecondaryScissorEnabled == before.secondaryScissorEnabled);
         CheckRestoredState(before);
     }
 

@@ -8,19 +8,22 @@ namespace Horo::Render::Detail {
         /** @brief Checks the complete fixed native command/state/sync entry-point set after dispatch loading. */
         bool ProductionIsAvailable() noexcept {
             const std::array required{
-                glViewport != nullptr,  glClearColor != nullptr,  glClear != nullptr,           glGetIntegerv != nullptr,
-                glGetFloatv != nullptr, glGetBooleanv != nullptr, glIsEnabled != nullptr,       glEnable != nullptr,
-                glDisable != nullptr,   glColorMaski != nullptr,  glBindFramebuffer != nullptr, glDrawBuffer != nullptr,
-                glGetError != nullptr,  glFenceSync != nullptr,   glClientWaitSync != nullptr,  glDeleteSync != nullptr,
-                glFlush != nullptr,     glDrawBuffers != nullptr,
+                glViewportIndexedf != nullptr, glClearColor != nullptr,      glClear != nullptr,
+                glGetIntegerv != nullptr,      glGetFloatv != nullptr,       glGetBooleanv != nullptr,
+                glIsEnabled != nullptr,        glEnable != nullptr,          glDisable != nullptr,
+                glColorMaski != nullptr,       glBindFramebuffer != nullptr, glDrawBuffer != nullptr,
+                glGetError != nullptr,         glFenceSync != nullptr,       glClientWaitSync != nullptr,
+                glDeleteSync != nullptr,       glEnablei != nullptr,         glDisablei != nullptr,
+                glGetFloati_v != nullptr,      glIsEnabledi != nullptr,      glFlush != nullptr,
+                glDrawBuffers != nullptr,
             };
             return std::ranges::all_of(required, [](const bool available) {
                 return available;
             });
         }
 
-        void ProductionViewport(const std::int32_t x, const std::int32_t y, const std::int32_t width, const std::int32_t height) noexcept {
-            glViewport(x, y, width, height);
+        void ProductionViewport(const float x, const float y, const float width, const float height) noexcept {
+            glViewportIndexedf(0, x, y, width, height);
         }
 
         void ProductionClearColor(const float red, const float green, const float blue, const float alpha) noexcept {
@@ -36,7 +39,10 @@ namespace Horo::Render::Detail {
         }
 
         void ProductionGetFloat(const std::uint32_t name, const std::span<float> values) noexcept {
-            glGetFloatv(name, values.data());
+            if (name == GL_VIEWPORT)
+                glGetFloati_v(name, 0, values.data());
+            else
+                glGetFloatv(name, values.data());
         }
 
         void ProductionGetBoolean(const std::uint32_t name, const std::span<std::uint8_t> values) noexcept {
@@ -44,11 +50,16 @@ namespace Horo::Render::Detail {
         }
 
         bool ProductionIsEnabled(const std::uint32_t name) noexcept {
-            return glIsEnabled(name) == GL_TRUE;
+            return (name == GL_SCISSOR_TEST ? glIsEnabledi(name, 0) : glIsEnabled(name)) == GL_TRUE;
         }
 
         void ProductionSetEnabled(const std::uint32_t name, const bool enabled) noexcept {
-            if (enabled)
+            if (name == GL_SCISSOR_TEST) {
+                if (enabled)
+                    glEnablei(name, 0);
+                else
+                    glDisablei(name, 0);
+            } else if (enabled)
                 glEnable(name);
             else
                 glDisable(name);
