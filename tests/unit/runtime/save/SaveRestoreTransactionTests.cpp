@@ -4,6 +4,7 @@
 #include "Horo/Runtime/Save/SaveRestoreTransaction.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <cstdio>
 #include <memory>
 #include <new>
 #include <stdexcept>
@@ -86,7 +87,14 @@ namespace Horo::Runtime {
             ThrowNonStandard,
         };
 
+        /** @brief Flushes the one-shot injection site without C++ allocation during Windows timeout diagnosis. */
+        void ObserveAllocationFailure(const std::size_t byteCount) noexcept {
+            std::fprintf(stderr, "restore allocation probe: injecting failure for %zu bytes\n", byteCount);
+            std::fflush(stderr);
+        }
+
         struct ParticipantLog final {
+            bool allocationDiagnostics{};
             std::vector<std::string> phases;
             std::vector<std::string> published;
             std::vector<std::string> rolledBack;
@@ -142,7 +150,15 @@ namespace Horo::Runtime {
             }
 
             void RollbackPrepared() noexcept override {
+                if (log_.allocationDiagnostics) {
+                    std::fputs("restore allocation probe: rollback enter\n", stderr);
+                    std::fflush(stderr);
+                }
                 Finalize(false);
+                if (log_.allocationDiagnostics) {
+                    std::fputs("restore allocation probe: rollback exit\n", stderr);
+                    std::fflush(stderr);
+                }
             }
 
             void Observe(std::vector<SaveParticipantId> dependencies) {
@@ -485,20 +501,31 @@ namespace Horo::Runtime {
             bool admitted = false;
             for (std::size_t successfulAllocations{}; successfulAllocations < 32 && !admitted; ++successfulAllocations) {
                 ParticipantLog log;
+                log.allocationDiagnostics = true;
+                std::fprintf(stderr, "restore allocation probe: index %zu fixture enter\n", successfulAllocations);
+                std::fflush(stderr);
                 std::vector<std::unique_ptr<IStagedRestoreParticipant>> staged;
                 staged.push_back(Candidate("horo.test.scene", log));
                 auto operation = Operation(600 + successfulAllocations);
                 const auto handle = operation.Handle();
+                std::fputs("restore allocation probe: create enter\n", stderr);
+                std::fflush(stderr);
                 auto created = [&] {
-                    Tests::AllocationProbe::ScopedFailure failure{successfulAllocations};
+                    Tests::AllocationProbe::ScopedFailure failure{successfulAllocations, ObserveAllocationFailure};
                     return StagedRestoreTransaction::Create(Context(registry, handle.Id()), std::move(operation), registry,
                                                             std::move(staged));
                 }();
+                std::fputs("restore allocation probe: create exit\n", stderr);
+                std::fflush(stderr);
                 admitted = created.HasValue();
                 if (!admitted) {
                     CHECK(created.ErrorValue().code.Value() == SaveErrors::RestoreAllocationFailed.code.Value());
+                    std::fputs("restore allocation probe: terminal snapshot enter\n", stderr);
+                    std::fflush(stderr);
                     CHECK(Snapshot(handle).terminalError->code.Value() == SaveErrors::RestoreAllocationFailed.code.Value());
                     CHECK(log.rolledBack == std::vector<std::string>{"horo.test.scene"});
+                    std::fputs("restore allocation probe: checks exit\n", stderr);
+                    std::fflush(stderr);
                 }
             }
             CHECK(admitted);
