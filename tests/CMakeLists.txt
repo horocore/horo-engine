@@ -374,10 +374,18 @@ target_compile_features(HoroReplicationStateCodecTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReplicationStateCodecTests PRIVATE HoroEngine::NetworkRuntime)
 horo_register_catch_test(HoroReplicationStateCodecTests LABELS "unit;network;headless;replication_codec")
 
+add_executable(HoroReplicationInboundApplyTests
+        unit/runtime/networking/ReplicationInboundApplyTests.cpp
+)
+target_compile_features(HoroReplicationInboundApplyTests PRIVATE cxx_std_20)
+target_link_libraries(HoroReplicationInboundApplyTests PRIVATE HoroEngine::NetworkRuntime HoroEngine::NetworkTransportNull)
+horo_register_catch_test(HoroReplicationInboundApplyTests LABELS "unit;network;headless;replication_apply")
+
 add_executable(HoroReplicationSnapshotHistoryTests unit/runtime/networking/ReplicationSnapshotHistoryTests.cpp)
 target_compile_features(HoroReplicationSnapshotHistoryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReplicationSnapshotHistoryTests PRIVATE HoroEngine::NetworkRuntime)
 horo_register_catch_test(HoroReplicationSnapshotHistoryTests LABELS "unit;network;headless;replication_history")
+
 add_executable(HoroNetworkModePublicHeaderConsumer support/NetworkModePublicHeaderConsumer.cpp)
 target_compile_features(HoroNetworkModePublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkModePublicHeaderConsumer PRIVATE HoroEngine::NetworkRuntime)

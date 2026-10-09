@@ -794,6 +794,8 @@ add_library(HoroNetworkRuntime STATIC
         runtime/networking/ReplicationStateEncode.cpp
         runtime/networking/ReplicationStateDecode.cpp
         runtime/networking/SceneReplicationCommitSource.cpp
+        runtime/networking/ReplicationInboundApply.cpp
+        runtime/networking/SceneReplicationApplyOwner.cpp
         runtime/networking/RpcGameplayDispatch.cpp
         runtime/networking/RpcGameplayDispatchReceive.cpp
         runtime/networking/RpcGameplayDispatchGameplay.cpp
