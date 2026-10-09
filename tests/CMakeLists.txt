@@ -2976,6 +2976,7 @@ target_include_directories(HoroRuntimeUiFocusGraphTests PRIVATE ${CMAKE_CURRENT_
 target_link_libraries(HoroRuntimeUiFocusGraphTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiControlsTests
         unit/runtime/ui/UiControlsTests.cpp
+        unit/runtime/ui/UiTextEditingTests.cpp
         support/AllocationProbe.cpp
 )
 target_compile_features(HoroRuntimeUiControlsTests PRIVATE cxx_std_20)

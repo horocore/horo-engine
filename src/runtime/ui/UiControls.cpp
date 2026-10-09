@@ -189,7 +189,12 @@ namespace Horo::Runtime::Ui {
     bool UiTextInputControlDescriptor::IsValid() const noexcept {
         return base.IsValid() && base.payload.Size() < MaximumUiActionArguments && !base.repeat.enabled && maximumTextBytes > 0 &&
                maximumTextBytes <= MaximumUiActionTextBytes && UiControlDetail::IsValidControlText(initialText) &&
-               initialText.size <= maximumTextBytes;
+               initialText.size <= maximumTextBytes && ValidateUiTextEditValue(initialText, EditPolicy()).HasValue();
+    }
+
+    /** @copydoc UiTextInputControlDescriptor::EditPolicy */
+    UiTextEditPolicy UiTextInputControlDescriptor::EditPolicy() const noexcept {
+        return {maximumTextBytes, editing.maximumGraphemes, editing.undoDepth, editing.validation, editing.password};
     }
 
     /** @copydoc ValidateUiControlDescriptor */

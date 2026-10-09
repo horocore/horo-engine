@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Horo/Runtime/Ui/UiTextEditing.h"
+
 /**
  * @file UiControls.h
  * @brief Typed Runtime UI interactive-control state machines and default actions.
@@ -151,12 +153,25 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsValid() const noexcept;
     };
 
+    /** @brief Text-control editing options; the descriptor alone owns its UTF-8 byte ceiling. */
+    struct UiTextInputEditingOptions final {
+        std::uint16_t maximumGraphemes{MaximumUiActionTextBytes};
+        std::uint16_t undoDepth{MaximumUiTextUndoDepth};
+        UiTextValidation validation{UiTextValidation::Any};
+        bool password{};
+        [[nodiscard]] bool operator==(const UiTextInputEditingOptions &) const noexcept = default;
+    };
+
     /** @brief Typed descriptor for bounded text editing and submission. */
     struct UiTextInputControlDescriptor final {
         UiControlDescriptorBase base;                             /**< Shared owner and activation contract. */
         UiActionText initialText;                                 /**< Initial bounded UTF-8 value. */
         std::uint16_t maximumTextBytes{MaximumUiActionTextBytes}; /**< Maximum UTF-8 byte count. */
         bool submitEndsEditing{true};                             /**< Whether a successful submit leaves editing mode. */
+        UiTextInputEditingOptions editing;                        /**< Grapheme, validation, history and password policy. */
+
+        /** @brief Combines the single byte ceiling with editing options. @return Effective buffer policy. */
+        [[nodiscard]] UiTextEditPolicy EditPolicy() const noexcept;
 
         /** @brief Validates UTF-8, text capacity and submit policy. @return Whether it is valid. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -290,6 +305,7 @@ namespace Horo::Runtime::Ui {
         UiActionText editStartText_;
         std::uint64_t sequence_{};
         std::uint64_t tick_{};
+        std::uint64_t textResetRevision_{};
         bool pending_{};
     };
 
@@ -330,6 +346,24 @@ namespace Horo::Runtime::Ui {
          * @post A successful DefaultPending result must be resolved by ApplyDefault or SuppressDefault before another input.
          */
         [[nodiscard]] Result<UiControlEventResult> Handle(const UiControlInput &input);
+
+        /** @brief Applies normalized editing after the route has admitted its UI-local default.
+         * @param source Exact presented owner and element; no native input object is retained.
+         * @param sequence Strictly increasing sequence shared with Handle inputs.
+         * @param command Bounded edit or host clipboard copy.
+         * @return Edit/clipboard outcome or typed stale, disabled, unfocused, pending or validation failure.
+         * @post Text submission still uses Handle/ApplyDefault and never writes gameplay/provider state.
+         */
+        [[nodiscard]] Result<UiTextEditResult> EditText(const UiActionSource &source, std::uint64_t sequence,
+                                                        const UiTextEditCommand &command);
+        /** @brief Copies logical caret/selection and semantic text for the owning input adapter.
+         * @return Text edit state or typed kind/lifecycle failure; not a render projection.
+         */
+        [[nodiscard]] Result<UiTextEditSnapshot> TextEditSnapshot() const;
+        /** @brief Copies display-safe text for layout/accessibility/render extraction.
+         * @return Plain text or one password mask per grapheme, or typed kind/lifecycle failure.
+         */
+        [[nodiscard]] Result<UiTextEditDisplay> TextDisplay() const;
 
         /**
          * @brief Copies the staged default action without changing the control value or pending decision.
@@ -405,6 +439,8 @@ namespace Horo::Runtime::Ui {
     private:
         struct Storage;
         friend class UiAnimationOwner;
+        /** @brief Checks storage readiness and exact semantic audience before preparing an interaction-only replacement. */
+        [[nodiscard]] Result<void> CanPrepareInteractionReplacement(const UiActionOwnerContext &owner) const;
         /** @brief Load-time reservation for a distinct inactive immutable action-source generation. @return Reservation or failure. */
         [[nodiscard]] Result<void> ReserveInteractionReplacement();
         /** @brief Copies compatible logical state into a new source generation only after pending work is drained. @return Admission. */
