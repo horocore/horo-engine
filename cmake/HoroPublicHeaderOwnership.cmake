@@ -806,6 +806,9 @@ horo_configure_target_header_boundary(HoroXRRuntime PUBLIC_HEADERS
     Horo/XR/XRSessionErrors.h
     Horo/XR/XRSessionLifecycle.h
 )
+horo_configure_target_header_boundary(HoroXRInputBindings PUBLIC_HEADERS
+    Horo/XR/XRActionBindings.h
+)
 horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
     Horo/Terrain/FoliageDefinition.h
     Horo/Terrain/TerrainComposition.h

@@ -241,6 +241,54 @@ The descriptor set returned by `XRErrors::Descriptors()` is the complete bounded
 must extend this Horo-owned vocabulary through their owning module descriptors;
 they must not expose native result integers or branch on native message text.
 
+### Implemented action binding composition
+
+`HoroEngine::XRInputBindings` owns `XRActionBindings.h`, a deliberate host-composed
+integration between Input and XRApi. Neither Input nor XRApi depends back on this
+adapter. Its product action declarations carry existing canonical `Input::ActionId`,
+context and value types plus explicit controller role and native-set grouping.
+Admission joins selected metadata to the exact registered Input descriptor span;
+unregistered actions or mismatched context/type/required policy fail before native creation.
+Catalog profiles and physical controls use registered persistent Horo IDs; native
+paths, glyphs and localized labels are separate provider data. The initial action
+value vocabulary is digital, 1D and 2D, with one explicit controller role per action;
+pose/gesture/haptic action types are outside this initial binding contract.
+
+Schemas, suggestions, catalogs and persisted overrides have finite lifecycle-time
+bounds. Resolution validates all inputs before publishing canonical action order.
+Duplicate overrides, type/role mismatches and same-context physical-control conflicts
+fail atomically. A schema migration maps an exact older control directly to the
+current schema and preserves semantic action, role and value type; absent, ambiguous
+or incompatible migration requires explicit user repair rather than guessed identity.
+Unknown and partial profiles use only the declared generic fallback. Missing required
+actions remain actionable unsupported results, while optional absent actions are unbound.
+
+`XRActionBindingCoordinator` is an owner-thread publication boundary. The host supplies
+an Input neutralizer that releases the exact prior session/binding revision before
+new profiles become eligible for projection. Profile identity changes neutralize even
+when both profiles resolve to the same generic controls. Failed resolution also retires
+the prior publication, and shutdown closes admission and neutralizes exactly once.
+This owner does not assign players, bypass contexts or sample native action values.
+
+`OpenXRActionBindings.h` remains in the non-installed OpenXR host interface. Its native
+owner validates registered path mappings and every profile plan before creating action
+sets/actions, suggesting profiles in stable order and attaching once before Ready.
+Creation observes the exact session's negotiated action capacity. Native names are
+generated private identifiers; Input contexts never become per-frame native-set creation.
+The host supplies bounded localized native action/set labels separately from these
+generated names and canonical IDs; labels and glyphs never drive binding resolution.
+The host queries active profiles, updates the coordinator through its neutral boundary,
+then synchronizes/samples actions. Native schema/override changes require replacement
+of the attached native session; a second attachment to the same session is rejected.
+Binding coordinator validation alone does not reconfigure already attached native actions.
+
+Shutdown first quiesces sampling and neutralizes Input, closes the action owner in reverse
+action/set order, and only then destroys the native session/instance/loader. Failed native
+retirement closes admission and retains exact handles for explicit retry. Headless tests
+qualify deterministic policy and official-dispatch lifecycle behavior, not a headset or
+runtime's physical controller mapping. Existing users need no migration; this is a new
+typed integration contract and no native paths enter persisted Input profiles.
+
 `XRSessionLifecycle.h` is the new XRRuntime-owned public session boundary; existing
 XRApi headers stay owned by XRApi. Consumers needing lifecycle events or admission
 now depend on `HoroEngine::XRRuntime` instead of adding native policy to XRApi.

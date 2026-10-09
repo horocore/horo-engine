@@ -29,6 +29,7 @@ namespace Horo::XR::OpenXRInternal {
         XrInstance instance;
         XrSystemId system;
         XrSession session;
+        std::uint32_t maximumActions; /**< Exact negotiated feature-plan bound for downstream native action creation. */
     };
 
     /** @brief Exact host publication fence, called before acquisition and before exposing a native candidate. */

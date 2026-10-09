@@ -1,3 +1,4 @@
+#include "OpenXRActionBindings.h"
 #include "OpenXRHostBindings.h"
 #include "OpenXRNativeNames.h"
 #include "OpenXRNativeSession.h"
@@ -5,6 +6,7 @@
 #include <type_traits>
 
 static_assert(!std::is_copy_constructible_v<Horo::XR::OpenXRInternal::OpenXRNativeSession>);
+static_assert(!std::is_copy_constructible_v<Horo::XR::OpenXRInternal::OpenXRActionBindings>);
 static_assert(std::is_trivially_copyable_v<Horo::XR::OpenXRInternal::NativeSessionBorrow>);
 static_assert([] {
     char exact[3]{};
