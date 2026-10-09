@@ -48,9 +48,9 @@ namespace Horo::Render::Detail {
             return;
         const auto &state = functions_.state;
         state.bindDrawFramebuffer(0);
-        const std::uint32_t first = defaultDrawBuffers_[0];
         // Aggregate selectors are legal only for DrawBuffer; that API guarantees higher slots are NONE.
-        if (first == GL_FRONT || first == GL_BACK || first == GL_LEFT || first == GL_RIGHT || first == GL_FRONT_AND_BACK)
+        if (const std::uint32_t first = defaultDrawBuffers_[0];
+            first == GL_FRONT || first == GL_BACK || first == GL_LEFT || first == GL_RIGHT || first == GL_FRONT_AND_BACK)
             state.drawBuffer(first);
         else
             state.drawBuffers(std::span{defaultDrawBuffers_}.first(drawBufferCount_));
