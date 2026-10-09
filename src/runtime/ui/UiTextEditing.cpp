@@ -251,8 +251,7 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiTextEditBuffer::RestoreHistory */
     UiTextEditResult UiTextEditBuffer::RestoreHistory(const UiTextEditKind kind) noexcept {
         const bool undo = kind == UiTextEditKind::Undo;
-        auto &fromCount = undo ? undoCount_ : redoCount_;
-        if (fromCount != 0) {
+        if (auto &fromCount = undo ? undoCount_ : redoCount_; fromCount != 0) {
             auto &from = undo ? undo_ : redo_;
             auto &to = undo ? redo_ : undo_;
             auto &toCount = undo ? redoCount_ : undoCount_;
