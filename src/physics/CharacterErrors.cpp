@@ -63,12 +63,38 @@ namespace Horo::Character::CharacterErrors {
         Descriptor("character.query.snapshot_stale", "The Character Physics query snapshot is stale.",
                    "Capture the current scene, filter, origin, tick and Physics snapshot generations again.");
 
+    const ErrorCodeDescriptor CapabilityUnavailable =
+        Descriptor("character.capability.unavailable", "No Character capability was issued.", "Request an explicit host-admitted client.");
+    const ErrorCodeDescriptor CapabilityStale = Descriptor("character.capability.stale", "The Character capability world has retired.",
+                                                           "Acquire a grant for the replacement world.");
+    const ErrorCodeDescriptor CapabilityRevoked =
+        Descriptor("character.capability.revoked", "The Character capability grant was revoked.", "Discard this closed grant.");
+    const ErrorCodeDescriptor ThreadAffinityViolation =
+        Descriptor("character.thread.affinity_violation", "Character capability access requires its owner thread.",
+                   "Stage client operations at the Character owner boundary.");
+
     /** @copydoc Descriptors */
     std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept {
         static const std::array descriptors{
-            &WorldInvalid,   &HandleMalformed,      &HandleWorldMismatch, &HandleStale,           &DescriptorInvalid,
-            &RequestInvalid, &CommandOrderInvalid,  &CapacityExceeded,    &GenerationExhausted,   &PublicationRevisionExhausted,
-            &InvalidState,   &OperationUnsupported, &PlacementInvalid,    &OverlapRecoveryFailed, &QuerySnapshotStale,
+            &WorldInvalid,
+            &HandleMalformed,
+            &HandleWorldMismatch,
+            &HandleStale,
+            &DescriptorInvalid,
+            &RequestInvalid,
+            &CommandOrderInvalid,
+            &CapacityExceeded,
+            &GenerationExhausted,
+            &PublicationRevisionExhausted,
+            &InvalidState,
+            &OperationUnsupported,
+            &PlacementInvalid,
+            &OverlapRecoveryFailed,
+            &QuerySnapshotStale,
+            &CapabilityUnavailable,
+            &CapabilityStale,
+            &CapabilityRevoked,
+            &ThreadAffinityViolation,
         };
         return descriptors;
     }

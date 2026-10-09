@@ -1,6 +1,8 @@
 #pragma once
 
+#include "CharacterCapabilityInternal.h"
 #include "CharacterControllerRegistry.h"
+#include "CharacterDebugStorageInternal.h"
 #include "CharacterFastPathStorage.h"
 #include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsWorldSettings.h"
@@ -117,7 +119,7 @@ namespace Horo::Character {
              Detail::CharacterControllerRegistry<Detail::CharacterControllerRecord> &&controllerRegistry)
             : descriptor(owner), settings(worldSettings), controllers(std::move(controllerRegistry)), fastPath(settings),
               controllerGenerations(settings.Values().capacities.maximumControllers),
-              closedSequences(settings.Values().capacities.maximumControllers) {}
+              closedSequences(settings.Values().capacities.maximumControllers), debug(settings) {}
 
         CharacterWorldDescriptor descriptor;
         CharacterWorldSettings settings;
@@ -125,6 +127,7 @@ namespace Horo::Character {
         Detail::CharacterFastPathStorage fastPath;
         std::vector<std::uint32_t> controllerGenerations;
         std::vector<std::uint64_t> closedSequences;
+        Detail::CharacterDebugStorage debug;
         Detail::CharacterWorldSynchronization synchronization;
         CharacterPublishedTick published;
         std::atomic<std::uint64_t> closedTick{};
@@ -141,6 +144,7 @@ namespace Horo::Character {
         std::uint32_t tickQueries{}; /**< Owner-thread count, reset before each fixed-tick attempt. */
         bool placementActive{};
         bool shutdownRequested{};
+        Detail::CharacterCapabilityRegistry capabilities;
     };
 
     namespace Detail {

@@ -1152,8 +1152,12 @@ idle suspends future worker fills, without cancelling or reclaiming an already
 running bounded fill. No callback performs source open, seek, decode or I/O. On
 Realize, the sole retained render port publishes one position/loop request after
 ending ring reads. The serialized fill worker seeks, resets the ring publication,
-and acknowledges through lock-free SC atomics. Until acknowledgement and buffered
-PCM, the voice remains Virtual and advances its cursor in preparation silence,
+and acknowledges through lock-free SC atomics. The private `AudioStreamTransport`
+groups ring publication/consumption and position/loop/fill-admission mailboxes as
+one callback/worker handoff. Grouping
+does not change atomic types, initial values, SC ordering or stop/join ownership.
+Until acknowledgement and buffered PCM, the voice remains Virtual and advances
+its cursor in preparation silence,
 not recorded as a physical underrun. Bounded ring discard catches up elapsed
 virtual frames; a larger lag requests a fresh current position rather than an
 unbounded callback decode/scan. Worker loops cap each decode at the exclusive end

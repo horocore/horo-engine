@@ -62,6 +62,24 @@ namespace Horo::Character {
             return result;
         }
 
+        /** @brief Builds a coherent owned publication from movement evidence for contract-validator fixtures. */
+        CharacterLocomotionSnapshot SnapshotFromMovement(const CharacterMovementResult &movement) {
+            CharacterLocomotionSnapshot snapshot;
+            snapshot.controller = movement.controller;
+            snapshot.tick = movement.tick;
+            snapshot.stateRevision = 1;
+            snapshot.movement = movement;
+            snapshot.transform.controller = movement.controller;
+            snapshot.transform.sourceTick = movement.tick;
+            snapshot.transform.publicationRevision = 2;
+            snapshot.transform.position = movement.finalPosition;
+            snapshot.transform.heading = movement.finalHeading;
+            snapshot.transform.up = movement.up;
+            snapshot.transform.grounded = movement.grounded;
+            snapshot.transform.platformAttached = movement.platformAttached;
+            return snapshot;
+        }
+
         void RequireError(const Result<void> &result, const ErrorCodeDescriptor &expected) {
             REQUIRE(result.HasError());
             REQUIRE(result.ErrorValue().domain.Value() == expected.domain.Value());
@@ -331,23 +349,25 @@ namespace Horo::Character {
             movement.groundShape = Physics::ShapeHandle{descriptor.physicsWorld, {4, 8}};
             movement.groundDistanceMeters = descriptor.skinWidthMeters;
             movement.collisions = CharacterCollisionFlags::Ground | CharacterCollisionFlags::Sides;
+            movement.platformAttachment = CharacterPlatformAttachment{.body = *movement.groundBody,
+                                                                      .shape = movement.groundShape,
+                                                                      .localContactPoint = movement.groundPoint,
+                                                                      .localContactNormal = movement.groundNormal,
+                                                                      .localRoot = {movement.finalPosition, movement.finalHeading},
+                                                                      .sourceTick = movement.tick,
+                                                                      .physicsSnapshotRevision = 1};
+            movement.platformAttachmentChange = CharacterPlatformAttachmentChange::Attached;
 
-            CharacterLocomotionSnapshot snapshot;
-            snapshot.controller = movement.controller;
-            snapshot.tick = movement.tick;
-            snapshot.stateRevision = 1;
-            snapshot.movement = movement;
-            snapshot.transform.controller = movement.controller;
-            snapshot.transform.sourceTick = movement.tick;
-            snapshot.transform.publicationRevision = 2;
-            snapshot.transform.position = movement.finalPosition;
-            snapshot.transform.heading = movement.finalHeading;
-            snapshot.transform.up = movement.up;
-            snapshot.transform.grounded = movement.grounded;
-            snapshot.transform.platformAttached = movement.platformAttached;
-
+            auto snapshot = SnapshotFromMovement(movement);
             REQUIRE(ValidateCharacterLocomotionSnapshot(snapshot, descriptor).HasValue());
             static_assert(std::is_copy_constructible_v<CharacterLocomotionSnapshot>);
+
+            auto missingAttachment = snapshot;
+            missingAttachment.movement.platformAttachment.reset();
+            RequireError(ValidateCharacterLocomotionSnapshot(missingAttachment, descriptor), CharacterErrors::DescriptorInvalid);
+            auto mismatchedAttachment = snapshot;
+            ++mismatchedAttachment.movement.platformAttachment->body.slot.generation;
+            RequireError(ValidateCharacterLocomotionSnapshot(mismatchedAttachment, descriptor), CharacterErrors::DescriptorInvalid);
 
             snapshot.transform.position.x += 1;
             RequireError(ValidateCharacterLocomotionSnapshot(snapshot, descriptor), CharacterErrors::PlacementInvalid);
@@ -373,17 +393,7 @@ namespace Horo::Character {
                 movement.contacts[index].point.x = static_cast<float>(index);
             }
 
-            CharacterLocomotionSnapshot snapshot;
-            snapshot.controller = movement.controller;
-            snapshot.tick = movement.tick;
-            snapshot.stateRevision = 1;
-            snapshot.movement = movement;
-            snapshot.transform.controller = movement.controller;
-            snapshot.transform.sourceTick = movement.tick;
-            snapshot.transform.publicationRevision = 2;
-            snapshot.transform.position = movement.finalPosition;
-            snapshot.transform.heading = movement.finalHeading;
-            snapshot.transform.up = movement.up;
+            const auto snapshot = SnapshotFromMovement(movement);
             REQUIRE(ValidateCharacterLocomotionSnapshot(snapshot, descriptor).HasValue());
         }
 
@@ -409,7 +419,7 @@ namespace Horo::Character {
         }
 
         TEST_CASE("Character errors expose stable actionable identities", "[physics][character][errors]") {
-            REQUIRE(CharacterErrors::Descriptors().size() == 15);
+            REQUIRE(CharacterErrors::Descriptors().size() == 19);
             std::set<std::string_view> unique;
             for (const auto *descriptor : CharacterErrors::Descriptors()) {
                 REQUIRE(descriptor->domain.Value() == "horo.character");

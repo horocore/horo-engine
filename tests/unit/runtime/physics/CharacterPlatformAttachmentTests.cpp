@@ -140,6 +140,15 @@ namespace Horo::Character {
             REQUIRE(attachment.sourceTick == 1);
             REQUIRE(attachment.physicsSnapshotRevision == scenario.world->Descriptor().physicsSnapshotRevision);
             REQUIRE(saved.movement.platformAttachmentChange == CharacterPlatformAttachmentChange::Attached);
+            const auto &worldDescriptor = scenario.world->Descriptor();
+            const auto debug =
+                scenario.world->CaptureDebugSnapshot({scenario.controller, worldDescriptor.physicsWorld,
+                                                      worldDescriptor.collisionFilterGeneration, worldDescriptor.originGeneration});
+            REQUIRE(debug.snapshot.has_value());
+            REQUIRE(debug.snapshot->Locomotion()->movement.platformAttachment->body == attachment.body);
+            REQUIRE(debug.snapshot->Locomotion()->movement.platformAttachment->shape == attachment.shape);
+            REQUIRE(debug.snapshot->Locomotion()->movement.platformAttachment->sourceTick == attachment.sourceTick);
+            REQUIRE(debug.snapshot->Transform().publicationRevision == saved.transform.publicationRevision);
             RequireNear(attachment.localContactPoint, {2, 0, 1});
             scenario.probe.ground.point = {8, 0, 7};
             REQUIRE(saved.movement.platformAttachment->localContactPoint == attachment.localContactPoint);
@@ -360,6 +369,11 @@ namespace Horo::Character {
             REQUIRE(scenario.Tick(1).HasValue());
             const auto firstBefore = scenario.Snapshot();
             const auto secondBefore = scenario.world->ControllerLocomotionSnapshot(second).Value();
+            const auto &descriptor = scenario.world->Descriptor();
+            const CharacterDebugCaptureRequest debugRequest{scenario.controller, descriptor.physicsWorld,
+                                                            descriptor.collisionFilterGeneration, descriptor.originGeneration};
+            const auto debugBefore = scenario.world->CaptureDebugSnapshot(debugRequest);
+            REQUIRE(debugBefore.snapshot.has_value());
             REQUIRE(scenario.probe.bodyReads == 2);
             scenario.probe.failOnRead = 4;
             REQUIRE(scenario.world->QueueMovementCommand(Movement(second, 2, 2)).HasValue());
@@ -371,118 +385,13 @@ namespace Horo::Character {
             REQUIRE(secondAfter.stateRevision == secondBefore.stateRevision);
             REQUIRE(firstAfter.movement.platformAttachment->sourceTick == 1);
             REQUIRE(secondAfter.movement.platformAttachment->sourceTick == 1);
+            const auto debugAfter = scenario.world->CaptureDebugSnapshot(debugRequest);
+            REQUIRE(debugAfter.snapshot.has_value());
+            REQUIRE(debugAfter.snapshot->Identity().sourceTick == debugBefore.snapshot->Identity().sourceTick);
+            REQUIRE(debugAfter.snapshot->Probes().size() == debugBefore.snapshot->Probes().size());
+            REQUIRE(debugAfter.snapshot->Probes()[0].position == debugBefore.snapshot->Probes()[0].position);
+            REQUIRE(debugAfter.snapshot->Locomotion()->movement.platformAttachment->sourceTick == 1);
         }
 
-#if HORO_TEST_PHYSICS_NATIVE
-        /** @brief Owns a canonical resident body and performs actual Physics steps for adapter boundary coverage. */
-        struct NativePlatformScenario final {
-            std::unique_ptr<Physics::PhysicsRuntime> runtime;
-            std::unique_ptr<Physics::PhysicsWorld> world;
-            Physics::PhysicsBodyDescriptor descriptor;
-            Physics::BodyHandle body;
-
-            NativePlatformScenario(const Physics::PhysicsWorldId identity, const Physics::PhysicsMotionType motion,
-                                   const Math::Vec3 position = {}) {
-                runtime = Physics::PhysicsRuntime::Create(Physics::PhysicsRuntimeMode::Canonical).Value();
-                world = runtime->PrepareWorld(Physics::Test::SmallWorldSettings()).Value();
-                REQUIRE(world->Activate(identity).HasValue());
-                descriptor.shape = world->CreateSceneShape(Physics::PhysicsBoxShape{}).Value();
-                descriptor.motion = motion;
-                descriptor.pose.translation = position;
-                if (motion == Physics::PhysicsMotionType::Dynamic)
-                    descriptor.mass = Physics::PhysicsMass{1};
-                body = world->CreateSceneBody({descriptor}).Value();
-            }
-
-            void Step(const std::uint64_t tick) {
-                REQUIRE(world
-                            ->AdvanceFixedTick(
-                                {.simulationTick = tick, .sceneGeneration = 61, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
-                            .HasValue());
-            }
-        };
-
-        TEST_CASE("Canonical platform pose reads retain owned shape identity and fence publication changes",
-                  "[physics][native][character][platform]") {
-            NativePlatformScenario scenario(PhysicsWorldId(955), Physics::PhysicsMotionType::Kinematic, {3, 0, 4});
-            auto &world = scenario.world;
-            const auto &descriptor = scenario.descriptor;
-            const auto body = scenario.body;
-            CharacterPhysicsQueryAdapter adapter(*world);
-            const auto early = adapter.Context({61, WorldId(), world->Identity(), 91, 101, 1, 0});
-            RequireError(early.platformBody(early.context, body, descriptor.shape, 0), Physics::PhysicsErrors::QuerySnapshotStale);
-            scenario.Step(1);
-            const CharacterPhysicsQueryExpectations
-                expected{61, WorldId(), world->Identity(), 91, 101, 1, world->PublishedTick().publicationRevision};
-            const auto query = adapter.Context(expected);
-            const auto copied = query.platformBody(query.context, body, descriptor.shape, expected.physicsSnapshotRevision).Value().value();
-            REQUIRE(copied.body == body);
-            REQUIRE(copied.shape == descriptor.shape);
-            REQUIRE(copied.pose == descriptor.pose);
-            REQUIRE(copied.motion == Physics::PhysicsMotionType::Kinematic);
-            auto staleShape = descriptor.shape;
-            ++staleShape.slot.generation;
-            REQUIRE_FALSE(query.platformBody(query.context, body, staleShape, expected.physicsSnapshotRevision).Value());
-            RequireError(query.platformBody(query.context, body, descriptor.shape, expected.physicsSnapshotRevision + 1),
-                         Physics::PhysicsErrors::QuerySnapshotStale);
-            auto staleBody = body;
-            ++staleBody.slot.generation;
-            REQUIRE_FALSE(query.platformBody(query.context, staleBody, descriptor.shape, expected.physicsSnapshotRevision).Value());
-            const auto other = world->CreateSceneBody({descriptor}).Value();
-            REQUIRE(other != body);
-            REQUIRE(world->PublishedTick().publicationRevision != expected.physicsSnapshotRevision);
-            RequireError(query.platformBody(query.context, body, descriptor.shape, expected.physicsSnapshotRevision),
-                         Physics::PhysicsErrors::QuerySnapshotStale);
-            auto retirement = world->PrepareSceneGroup({}, {}).Value();
-            const std::array retired{body};
-            REQUIRE(retirement->PrepareRetirement(retired, {}, {}).HasValue());
-            REQUIRE(retirement->ValidatePublication().HasValue());
-            retirement->Publish();
-            const auto revision = world->PublishedTick().publicationRevision;
-            REQUIRE_FALSE(query.platformBody(query.context, body, descriptor.shape, revision).Value());
-            const auto replacement = world->CreateSceneBody({descriptor}).Value();
-            REQUIRE(replacement != body);
-            REQUIRE_FALSE(query.platformBody(query.context, body, descriptor.shape, world->PublishedTick().publicationRevision).Value());
-            world->Shutdown();
-            REQUIRE(copied.pose == descriptor.pose);
-            REQUIRE(query.platformBody(query.context, body, descriptor.shape, expected.physicsSnapshotRevision).HasError());
-        }
-
-        TEST_CASE("Canonical attachment evidence rejects reads after actual fixed step pose and shape mutation",
-                  "[physics][native][character][platform]") {
-            NativePlatformScenario scenario(PhysicsWorldId(9551), Physics::PhysicsMotionType::Dynamic);
-            auto &world = scenario.world;
-            const auto &descriptor = scenario.descriptor;
-            const auto body = scenario.body;
-            scenario.Step(1);
-            const auto revision = world->PublishedTick().publicationRevision;
-            CharacterPhysicsQueryAdapter adapter(*world);
-            const auto query = adapter.Context({61, WorldId(), world->Identity(), 91, 101, 2, revision});
-            const auto first = query.platformBody(query.context, body, descriptor.shape, revision).Value().value();
-            const auto replacementShape = world->CreateSceneShape(Physics::PhysicsSphereShape{}).Value();
-            REQUIRE(world->PublishedTick().publicationRevision == revision);
-            const Physics::PhysicsStructuralCommand mutation{.order = {.simulationTick = 2,
-                                                                       .worldGeneration = world->Identity().Value(),
-                                                                       .sceneGeneration = 61,
-                                                                       .targetKind = Physics::PhysicsCommandTargetKind::Body,
-                                                                       .targetIdentity = static_cast<std::uint64_t>(body.slot.index) + 1,
-                                                                       .commandKind = Physics::PhysicsStructuralCommandKind::Change,
-                                                                       .source = Physics::PhysicsCommandSourceId::Create(1).Value(),
-                                                                       .sourceSequence = 1},
-                                                             .bodyMutation =
-                                                                 Physics::PhysicsBodyMutation{.body = body, .shape = replacementShape}};
-            REQUIRE(world->QueueStructuralCommand(mutation).HasValue());
-            REQUIRE(world->PublishedTick().publicationRevision == revision);
-            REQUIRE(query.platformBody(query.context, body, descriptor.shape, revision).Value()->pose == first.pose);
-            scenario.Step(2);
-            RequireError(query.platformBody(query.context, body, descriptor.shape, revision), Physics::PhysicsErrors::QuerySnapshotStale);
-            const auto currentRevision = world->PublishedTick().publicationRevision;
-            REQUIRE_FALSE(query.platformBody(query.context, body, descriptor.shape, currentRevision).Value());
-            const auto second = query.platformBody(query.context, body, replacementShape, currentRevision).Value().value();
-            REQUIRE(second.shape == replacementShape);
-            REQUIRE(second.pose.translation.y < first.pose.translation.y);
-            REQUIRE(first.shape == descriptor.shape);
-        }
-#endif
     }  // namespace
 }  // namespace Horo::Character

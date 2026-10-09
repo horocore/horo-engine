@@ -57,6 +57,25 @@ namespace Horo::Tests::VoiceRenderFixture {
             return runtime;
         }
 
+        /** @brief Start worker preparation after virtual time, then advance without pumping the real service. */
+        std::unique_ptr<AudioVoiceRenderRuntime> CreateRealizing(const MixerRenderPlan &plan, AudioCommandStaging &staging,
+                                                                 const std::uint32_t preparationFrames) const {
+            auto runtime = CreateVirtual(plan, staging);
+            REQUIRE(runtime->Render(1).error == nullptr);
+            Control(*runtime, staging, AudioVoiceControl::Realize);
+            REQUIRE(runtime->Render(preparationFrames).error == nullptr);
+            return runtime;
+        }
+
+        /** @brief Admit one exclusive loop through the real typed FIFO before testing virtual execution. */
+        std::unique_ptr<AudioVoiceRenderRuntime> CreateLoopingVirtual(const MixerRenderPlan &plan, AudioCommandStaging &staging) const {
+            auto runtime = CreateVirtual(plan, staging);
+            const AudioVoiceControlRequest loop{.voice = runtime->Voice(), .control = AudioVoiceControl::SetLoop, .loop = {true, 1, 4}};
+            REQUIRE(staging.Submit({Scope, loop}).status == AudioCommandStagingStatus::Ok);
+            REQUIRE(runtime->Apply(ConsumePublished(staging)) == nullptr);
+            return runtime;
+        }
+
         /** @brief Detach before retirement and verify whether this case actually acquired a provider source. */
         void Finish(AudioVoiceRenderRuntime &runtime, const std::uint32_t expectedOpens = 1) const {
             runtime.Close();
@@ -98,16 +117,54 @@ namespace Horo::Tests::VoiceRenderFixture {
         StreamRig rig{true};
         auto plan = Plan(Asset());
         auto staging = Staging();
-        auto runtime = rig.CreateVirtual(*plan, staging);
-        REQUIRE(runtime->Render(1).error == nullptr);
-        StreamRig::Control(*runtime, staging, AudioVoiceControl::Realize);
         // No Pump: the accepted seek cannot have executed. Virtual time still advances.
-        REQUIRE(runtime->Render(2).error == nullptr);
+        auto runtime = rig.CreateRealizing(*plan, staging, 2);
         CHECK(runtime->Cursor().frame == 3);
         CHECK(rig.package.decodes.load() == 0);
         REQUIRE(Audio::StreamingTests::PumpUntil(*rig.service, rig.stream, 4));
         REQUIRE(runtime->Render(1).error == nullptr);
         CHECK(runtime->Cursor().frame == 4);
+        rig.Finish(*runtime);
+    }
+
+    TEST_CASE("Virtual realization retains preparation silence until all ring lag is discarded", "[audio][virtualization][stream]") {
+        StreamRig rig{true};
+        auto plan = Plan(Asset());
+        auto staging = Staging();
+        auto runtime = rig.CreateRealizing(*plan, staging, 5);
+        REQUIRE(Audio::StreamingTests::PumpUntil(*rig.service, rig.stream, 4));
+        const auto waiting = runtime->Render(1);
+        REQUIRE(waiting.error == nullptr);
+        CHECK(waiting.input.samples.planes[0][0] == 0.0F);
+        CHECK(runtime->Cursor().frame == 7);
+        REQUIRE(Audio::StreamingTests::PumpUntil(*rig.service, rig.stream, 3));
+        const auto realized = runtime->Render(1);
+        REQUIRE(realized.error == nullptr);
+        CHECK(realized.input.samples.planes[0][0] == 8.0F);
+        CHECK(runtime->Cursor().frame == 8);
+        rig.Finish(*runtime);
+    }
+
+    TEST_CASE("Virtual realization reseeks excessive lag before rendering current loop PCM", "[audio][virtualization][stream]") {
+        StreamRig rig{true};
+        auto plan = Plan(Asset());
+        auto staging = Staging();
+        auto runtime = rig.CreateLoopingVirtual(*plan, staging);
+        StreamRig::Control(*runtime, staging, AudioVoiceControl::Realize);
+        constexpr std::uint32_t BlockFrames = 16;  // The real fixture admits 16 output frames per call.
+        for (std::uint32_t block = 0; block <= MaximumAudioCallbackFrames * 64U / BlockFrames; ++block)
+            REQUIRE(runtime->Render(BlockFrames).error == nullptr);
+        CHECK(rig.package.decodes.load() == 0);
+        REQUIRE(Audio::StreamingTests::PumpUntil(*rig.service, rig.stream, 4));
+        const auto reseeking = runtime->Render(1);
+        REQUIRE(reseeking.error == nullptr);
+        CHECK(reseeking.input.samples.planes[0][0] == 0.0F);
+        const auto current = runtime->Cursor().frame;
+        REQUIRE(Audio::StreamingTests::PumpUntil(*rig.service, rig.stream, 4));
+        const auto realized = runtime->Render(1);
+        REQUIRE(realized.error == nullptr);
+        CHECK(realized.input.samples.planes[0][0] == static_cast<float>(current + 1));
+        CHECK_FALSE(realized.terminal);
         rig.Finish(*runtime);
     }
 
@@ -151,10 +208,7 @@ namespace Horo::Tests::VoiceRenderFixture {
         StreamRig rig{true};
         auto plan = Plan(Asset());
         auto staging = Staging();
-        auto runtime = rig.CreateVirtual(*plan, staging);
-        const AudioVoiceControlRequest loop{.voice = runtime->Voice(), .control = AudioVoiceControl::SetLoop, .loop = {true, 1, 4}};
-        REQUIRE(staging.Submit({Scope, loop}).status == AudioCommandStagingStatus::Ok);
-        REQUIRE(runtime->Apply(ConsumePublished(staging)) == nullptr);
+        auto runtime = rig.CreateLoopingVirtual(*plan, staging);
         REQUIRE(runtime->Render(13).error == nullptr);
         CHECK(runtime->Cursor().frame == 1);
         StreamRig::Control(*runtime, staging, AudioVoiceControl::Realize);

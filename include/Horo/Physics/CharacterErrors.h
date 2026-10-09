@@ -39,6 +39,14 @@ namespace Horo::Character::CharacterErrors {
     extern const ErrorCodeDescriptor OverlapRecoveryFailed;
     /** @brief A borrowed Physics query context targets a stale filter, origin or snapshot. */
     extern const ErrorCodeDescriptor QuerySnapshotStale;
+    /** @brief An inert or moved-from Character client has no issued authority. */
+    extern const ErrorCodeDescriptor CapabilityUnavailable;
+    /** @brief A retained Character client belongs to a retired world. */
+    extern const ErrorCodeDescriptor CapabilityStale;
+    /** @brief The client grant or host cancellation scope permanently closed admission. */
+    extern const ErrorCodeDescriptor CapabilityRevoked;
+    /** @brief A Character capability operation attempted access outside its owner thread. */
+    extern const ErrorCodeDescriptor ThreadAffinityViolation;
 
     /** @brief Returns the complete canonical Character error descriptor set. @return Stable process-lifetime descriptor view. */
     [[nodiscard]] std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept;

@@ -631,9 +631,11 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/CharacterFoundationQualificationTests.cpp
         unit/runtime/physics/CharacterControllerContractsTests.cpp
         unit/runtime/physics/CharacterDiagnosticsTests.cpp
+        unit/runtime/physics/CharacterDebugSnapshotTests.cpp
         unit/runtime/physics/CharacterFastPathStorageTests.cpp
         unit/runtime/physics/CharacterGroundingTests.cpp
         unit/runtime/physics/CharacterPlatformAttachmentTests.cpp
+        unit/runtime/physics/CharacterPlatformAdapterTests.cpp
         unit/runtime/physics/CharacterCollisionFilteringTests.cpp
         unit/runtime/physics/CharacterSlopeTests.cpp
         unit/runtime/physics/CharacterAirborneTests.cpp
@@ -642,6 +644,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/CharacterShapeChangeTests.cpp
         unit/runtime/physics/CharacterMetricsTests.cpp
         unit/runtime/physics/CharacterWorldSettingsTests.cpp
+        unit/runtime/physics/CharacterCapabilityTests.cpp
         unit/runtime/physics/CharacterWorldTests.cpp
         unit/runtime/physics/CharacterWorldCommandTests.cpp
         unit/runtime/physics/CanonicalSolverTests.cpp

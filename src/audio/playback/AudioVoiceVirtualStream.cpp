@@ -106,8 +106,7 @@ namespace Horo::Audio {
         const auto whole = static_cast<std::uint64_t>(advanced);
         position.fraction = advanced - static_cast<double>(whole);
         const auto frame = position.frame + whole;  // Admitted stream <=2^40, one call <=4096*64.
-        const auto loop = streamPlayback.loop;
-        if (loop.enabled && frame >= loop.end)
+        if (const auto loop = streamPlayback.loop; loop.enabled && frame >= loop.end)
             position.frame = loop.begin + (frame - loop.begin) % (loop.end - loop.begin);
         else if (frame >= sourceFrames)
             position = {.frame = sourceFrames};
@@ -130,27 +129,25 @@ namespace Horo::Audio {
 
     /** @copydoc AudioVoiceRenderRuntime::State::TryRealizeStream */
     AudioVoiceMixRenderResult AudioVoiceRenderRuntime::State::TryRealizeStream(const std::uint32_t frames, bool &rendered) noexcept {
-        auto &logical = streamPlayback;
-        if (logical.realizing && stream->PositionReady()) {
-            // Catch up only admitted ring frames, not elapsed wall time or unbounded PCM. If worker
-            // preparation fell farther behind, reseek the current logical phase and retain Virtual.
-            if (logical.catchupFrames > MaximumAudioCallbackFrames * 64ULL) {
-                if (stream->RequestPosition(logical.cursor.frame, logical.loop))
-                    logical.catchupFrames = 0;
-            } else {
-                logical.catchupFrames -= stream->Discard(static_cast<std::uint32_t>(logical.catchupFrames));
-                if (logical.catchupFrames == 0 && stream->AvailableFrames() != 0) {
-                    rendered = true;
-                    if (const auto *error = registry->TryTransition(voice, AudioVoiceState::Playing))
-                        return {.error = error};
-                    callback.streamState = AudioVoiceState::Playing;
-                    logical.virtualMode = false;
-                    logical.realizing = false;
-                    return RenderStream(frames);
-                }
-            }
+        if (const auto &logical = streamPlayback; !logical.realizing || !stream->PositionReady())
+            return {};
+        // Catch up only admitted ring frames, not elapsed wall time or unbounded PCM. If worker
+        // preparation fell farther behind, reseek the current logical phase and retain Virtual.
+        if (streamPlayback.catchupFrames > MaximumAudioCallbackFrames * 64ULL) {
+            if (stream->RequestPosition(streamPlayback.cursor.frame, streamPlayback.loop))
+                streamPlayback.catchupFrames = 0;
+            return {};
         }
-        return {};
+        streamPlayback.catchupFrames -= stream->Discard(static_cast<std::uint32_t>(streamPlayback.catchupFrames));
+        if (streamPlayback.catchupFrames != 0 || stream->AvailableFrames() == 0)
+            return {};
+        rendered = true;
+        if (const auto *error = registry->TryTransition(voice, AudioVoiceState::Playing))
+            return {.error = error};
+        callback.streamState = AudioVoiceState::Playing;
+        streamPlayback.virtualMode = false;
+        streamPlayback.realizing = false;
+        return RenderStream(frames);
     }
 
     /** @copydoc AudioVoiceRenderRuntime::State::RenderVirtualStream */
@@ -194,6 +191,7 @@ namespace Horo::Audio {
 
     /** @copydoc AudioVoiceRenderRuntime::State::RenderStreamPcm */
     AudioVoiceMixRenderResult AudioVoiceRenderRuntime::State::RenderStreamPcm(const std::uint32_t frames) noexcept {
+        using enum AudioResamplerStatus;
         std::array<AudioSample *, 2> rawPointers{scratch.raw[0].samples.data(), scratch.raw[1].samples.data()};
         std::uint32_t produced{};
         // Linear conversion admits at most 64 input frames per output frame. Each full chunk covers
@@ -205,10 +203,10 @@ namespace Horo::Audio {
             if (ReadStreamBlock({rawPointers.data(), conversion.channels}))
                 return {.terminal = true};
             const auto progress = ConvertStreamBlock(frames, produced);
-            if (progress.status == AudioResamplerStatus::InvalidBuffer || progress.status == AudioResamplerStatus::InvalidState)
+            if (progress.status == InvalidBuffer || progress.status == InvalidState)
                 return {.error = &AudioErrors::ResamplerInvalid};
             produced += progress.produced;
-            if (progress.status == AudioResamplerStatus::Complete) {
+            if (progress.status == Complete) {
                 (void)registry->TryTransition(voice, AudioVoiceState::Finished);
                 callback.streamState = AudioVoiceState::Finished;
                 streamPlayback.terminalReported = true;

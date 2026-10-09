@@ -27,8 +27,8 @@ namespace Horo::Character::Detail {
                (queued.tick > request.tick && queued.sequence <= request.sequence);
     }
 
-    /** @brief Revalidates lifecycle/order and exact duplication while queue ownership is held. */
-    [[nodiscard]] Result<void> ValidateLockedAdmission(const auto &impl, const CharacterMovementRequest &request) {
+    /** @brief Revalidates owner lifecycle, slot routing, sequence and filter identity under admission locks. */
+    [[nodiscard]] Result<void> ValidateLockedCommandRouting(const auto &impl, const CharacterMovementRequest &request) {
         if (!impl.acceptingCommands.load())
             return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
         const std::uint32_t slot = request.controller.slot.index;
@@ -41,18 +41,33 @@ namespace Horo::Character::Detail {
                 valid.HasError())
                 return valid;
         }
-        const auto record = impl.controllers.Resolve(request.controller);
-        if (record.HasError())
-            return Result<void>::Failure(record.ErrorValue());
-        if (!record.Value()->spawned &&
+        return Result<void>::Success();
+    }
+
+    /** @brief Requires resident placement state before staging geometry/filter edits or a move competing with teleport. */
+    [[nodiscard]] Result<void> ValidateCommandMutationState(const CharacterControllerRecord &record,
+                                                            const CharacterMovementRequest &request) {
+        if (!record.spawned &&
             (request.shapeChange.has_value() || request.stance != CharacterStanceIntent::Keep || request.filterChange.has_value()))
             return Result<void>::Failure(
                 MakeError(CharacterErrors::InvalidState, "Shape and filter changes require a spawned controller."));
-        if (record.Value()->reservedTeleportTick == request.tick || record.Value()->lastTeleportTick == request.tick)
+        if (record.reservedTeleportTick == request.tick || record.lastTeleportTick == request.tick)
             return Result<void>::Failure(
                 MakeError(CharacterErrors::CommandOrderInvalid, "Move and teleport cannot target one Character tick."));
-        if (std::ranges::any_of(impl.fastPath.Commands(), [&request](const CharacterMovementRequest &queued) {
-            return ConflictsWithQueuedCommand(queued, request);
+        return Result<void>::Success();
+    }
+
+    /** @brief Preserves admission error precedence while checking resident state and nonrevoked queue conflicts. */
+    [[nodiscard]] Result<void> ValidateLockedAdmission(const auto &impl, const CharacterMovementRequest &request) {
+        if (const auto routing = ValidateLockedCommandRouting(impl, request); routing.HasError())
+            return routing;
+        const auto record = impl.controllers.Resolve(request.controller);
+        if (record.HasError())
+            return Result<void>::Failure(record.ErrorValue());
+        if (const auto mutation = ValidateCommandMutationState(*record.Value(), request); mutation.HasError())
+            return mutation;
+        if (std::ranges::any_of(impl.fastPath.Commands(), [&request](const CharacterQueuedMovement &queued) {
+            return !queued.revocation.IsCancellationRequested() && ConflictsWithQueuedCommand(queued.request, request);
         }))
             return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
         return Result<void>::Success();
@@ -72,6 +87,7 @@ namespace Horo::Character::Detail {
         explicit TickGuard(Impl &impl) noexcept : impl_(impl), previous_(impl_.ticking.exchange(true)) {}
 
         ~TickGuard() noexcept {
+            impl_.debug.End();
             impl_.ticking.store(previous_);
             DrainDeferredShutdown(impl_);
         }
@@ -105,29 +121,33 @@ namespace Horo::Character::Detail {
     /** @brief Canonicalizes and removes one validated eligible frame while holding queue ownership. */
     [[nodiscard]] Result<void> FreezeCommandFrame(auto &impl, const CharacterFixedTickInput &input) {
         const auto queueLock = impl.synchronization.LockCommands();
-        if (std::ranges::any_of(impl.fastPath.Commands(), [&input](const CharacterMovementRequest &command) {
-            return command.tick < input.tick;
+        std::erase_if(impl.fastPath.Commands(), [](const CharacterQueuedMovement &queued) {
+            return queued.revocation.IsCancellationRequested();
+        });
+        impl.pendingCommands.store(static_cast<std::uint32_t>(impl.fastPath.Commands().size()));
+        if (std::ranges::any_of(impl.fastPath.Commands(), [&input](const CharacterQueuedMovement &queued) {
+            return queued.request.tick < input.tick;
         }))
             return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
         if (const auto eligible = static_cast<std::size_t>(std::ranges::count_if(impl.fastPath.Commands(),
-                                                                                 [&input](const CharacterMovementRequest &command) {
-            return command.tick == input.tick;
+                                                                                 [&input](const CharacterQueuedMovement &queued) {
+            return queued.request.tick == input.tick;
         }));
             eligible > impl.settings.Values().work.maximumCommandsPerTick)
             return Result<void>::Failure(MakeError(CharacterErrors::CapacityExceeded));
 
         impl.fastPath.CommandScratch().clear();
-        for (const CharacterMovementRequest &command : impl.fastPath.Commands()) {
-            if (command.tick == input.tick)
-                impl.fastPath.CommandScratch().push_back(command);
+        for (const CharacterQueuedMovement &queued : impl.fastPath.Commands()) {
+            if (queued.request.tick == input.tick)
+                impl.fastPath.CommandScratch().push_back(queued.request);
         }
         std::ranges::sort(impl.fastPath.CommandScratch(), CommandLess);
         if (const auto valid = ValidateFrozenCommands(impl); valid.HasError())
             return valid;
         for (const CharacterMovementRequest &command : impl.fastPath.CommandScratch())
             impl.closedSequences[command.controller.slot.index] = command.sequence;
-        std::erase_if(impl.fastPath.Commands(), [&input](const CharacterMovementRequest &command) {
-            return command.tick == input.tick;
+        std::erase_if(impl.fastPath.Commands(), [&input](const CharacterQueuedMovement &queued) {
+            return queued.request.tick == input.tick;
         });
         impl.pendingCommands.store(static_cast<std::uint32_t>(impl.fastPath.Commands().size()));
         impl.closedTick.store(input.tick);
@@ -362,7 +382,9 @@ namespace Horo::Character::Detail {
             if (impl.state.load() != CharacterWorldState::Active)
                 return Result<std::uint32_t>::Failure(MakeError(CharacterErrors::InvalidState));
             if (spawned) {
+                impl.debug.Begin(command.controller, input.query.sweep != nullptr);
                 const auto resolved = ResolveControllerMovement(impl, command, input, previous, descriptor);
+                impl.debug.End();
                 if (resolved.HasError())
                     return Result<std::uint32_t>::Failure(resolved.ErrorValue());
                 CharacterMovementResult movement = std::move(resolved).Value();
@@ -424,6 +446,7 @@ namespace Horo::Character::Detail {
         record.Value()->publication = committed.transform;
         record.Value()->stateRevision = committed.stateRevision;
         record.Value()->locomotion = std::move(committed);
+        impl.debug.Commit(command.controller, input.tick, impl.descriptor.physicsSnapshotRevision);
         return Result<void>::Success();
     }
 
