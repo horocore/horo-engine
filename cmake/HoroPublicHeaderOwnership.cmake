@@ -837,6 +837,9 @@ horo_configure_target_header_boundary(HoroTerrainCook PUBLIC_HEADERS
     Horo/Terrain/TerrainSourceArtifacts.h
     Horo/Terrain/TerrainTileCook.h
 )
+horo_configure_target_header_boundary(HoroTerrainProducerIntegration PUBLIC_HEADERS
+    Horo/Terrain/TerrainProducerSnapshot.h
+)
 horo_configure_target_header_boundary(HoroTerrainStreaming PUBLIC_HEADERS
     Horo/TerrainStreaming/TerrainResidencyCache.h
 )

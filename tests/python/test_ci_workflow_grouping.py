@@ -51,6 +51,7 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
         "HoroRuntimeUiUnicodeStartupTests", "HoroRuntimeUiUnicodeLifecycleTests", "HoroRuntimeUiPublicHeaderConsumer",
         "HoroTerrainSourceArtifactTests", "HoroTerrainSourceArtifactPublicHeaderConsumer",
         "HoroTerrainPayloadManifestTests", "HoroTerrainPayloadManifestPublicHeaderConsumer",
+        "HoroTerrainProducerSnapshotTests", "HoroTerrainProducerSnapshotPublicHeaderConsumer",
         "HoroRuntimeSaveEventTriggersTests", "HoroSaveEventTriggersPublicHeaderConsumer",
     }
     for workflow in ("prefab-foundation-windows", "extension-abi-windows", "mcp-session-windows", "save-path-windows"):
@@ -68,6 +69,26 @@ def test_windows_manifest_tests_and_consumer_share_the_build_closure() -> None:
     assert 'if(target IN_LIST HORO_CI_WINDOWS_TARGETS)\n        list(APPEND ARG_LABELS ci-windows)' in SUITES
     assert 'add_test(NAME HoroTerrainPayloadManifestPublicHeaderConsumer COMMAND HoroTerrainPayloadManifestPublicHeaderConsumer)' in tests_cmake
     assert 'set_tests_properties(HoroTerrainPayloadManifestPublicHeaderConsumer PROPERTIES LABELS "unit;terrain;assets;headless;ci-windows")' in tests_cmake
+    assert 'add_custom_target(HoroCiWindowsChecks DEPENDS ${HORO_CI_WINDOWS_TARGETS})' in SUITES
+
+
+def test_windows_producer_snapshot_selection_has_an_executable_build_closure() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    selected_targets = {
+        "HoroTerrainProducerSnapshotTests": (
+            'horo_register_catch_test(HoroTerrainProducerSnapshotTests '
+            'LABELS "unit;terrain;foliage;headless;lifecycle;ci-windows")'
+        ),
+        "HoroTerrainProducerSnapshotPublicHeaderConsumer": (
+            'set_tests_properties(HoroTerrainProducerSnapshotPublicHeaderConsumer '
+            'PROPERTIES LABELS "unit;terrain;headless;ci-windows")'
+        ),
+    }
+    build_closure = targets("HORO_CI_WINDOWS_TARGETS")
+    for executable, registration in selected_targets.items():
+        assert executable in build_closure, f"Windows selects {executable} without building it"
+        assert f"add_executable({executable}" in tests_cmake
+        assert registration in tests_cmake
     assert 'add_custom_target(HoroCiWindowsChecks DEPENDS ${HORO_CI_WINDOWS_TARGETS})' in SUITES
 
 
