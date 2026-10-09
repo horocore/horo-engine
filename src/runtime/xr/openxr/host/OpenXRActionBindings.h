@@ -40,6 +40,17 @@ namespace Horo::XR::OpenXRInternal {
         std::span<const NativeActionSetLabel> sets;
     };
 
+    /** @brief Synchronously borrowed native creation request; dispatch and catalogs stay inside the host boundary. */
+    struct NativeActionBindingRequest final {
+        PFN_xrGetInstanceProcAddr getProc; /**< Official dispatch for the exact retained loader/instance. */
+        const XRActionBindingSchema &schema;
+        std::span<const XRProfileControl> catalog;
+        std::span<const XRActionBindingOverride> overrides;
+        std::span<const NativeInteractionProfilePath> profiles;
+        std::span<const NativeActionControlPath> controls;
+        NativeActionLabels labels;
+    };
+
     /**
      * @brief Single-control-thread native action transaction; session/loader owner must outlive it.
      *
@@ -60,20 +71,11 @@ namespace Horo::XR::OpenXRInternal {
         /**
          * @brief Creates and attaches a fully validated native action candidate atomically.
          * @param session Exact current Horo session generation.
-         * @param getProc Official loader dispatch, retained only while the borrowed session owner lives.
-         * @param schema Product action declarations and suggested-binding schema.
-         * @param catalog Registered backend-neutral profile/control facts.
-         * @param overrides Accepted Input-owned overrides.
-         * @param profiles Private registered native profile paths.
-         * @param controls Private registered native component paths.
-         * @param labels Host-localized action/set labels; never used as binding or gameplay identities.
+         * @param request Product schema, registered private paths, Input overrides, localized labels and official native dispatch.
          * @return Success or typed validation/native/rollback error; failed retirement retains handles for Close retry.
+         * @throws Non-standard native callback exceptions after attempting rollback; the original exception propagates.
          */
-        [[nodiscard]] Result<void> Create(const XRSessionId &session, PFN_xrGetInstanceProcAddr getProc,
-                                          const XRActionBindingSchema &schema, std::span<const XRProfileControl> catalog,
-                                          std::span<const XRActionBindingOverride> overrides,
-                                          std::span<const NativeInteractionProfilePath> profiles,
-                                          std::span<const NativeActionControlPath> controls, NativeActionLabels labels);
+        [[nodiscard]] Result<void> Create(const XRSessionId &session, const NativeActionBindingRequest &request);
         /**
          * @brief Queries both active controller profiles as Horo IDs; unrecognized native paths map to unknown identity.
          * @param session Exact retained session generation.
@@ -118,11 +120,11 @@ namespace Horo::XR::OpenXRInternal {
             XrPath native{XR_NULL_PATH};
         };
 
-        [[nodiscard]] Result<void> Resolve(PFN_xrGetInstanceProcAddr getProc, XrInstance instance);
+        [[nodiscard]] Result<void> Resolve(const NativeActionBindingRequest &request, XrInstance instance);
         [[nodiscard]] Result<void> Prepare(const XRActionBindingSchema &schema, std::span<const XRProfileControl> catalog,
                                            std::span<const XRActionBindingOverride> overrides,
                                            std::span<const NativeInteractionProfilePath> profiles,
-                                           std::span<const NativeActionControlPath> controls, NativeActionLabels labels);
+                                           std::span<const NativeActionControlPath> controls, const NativeActionLabels &labels);
         [[nodiscard]] Result<void> CreateActions(const XRActionBindingSchema &schema, const NativeActionLabels &labels);
         [[nodiscard]] Result<void> Suggest(const XRActionBindingSchema &schema, std::span<const XRProfileControl> catalog,
                                            std::span<const XRActionBindingOverride> overrides,

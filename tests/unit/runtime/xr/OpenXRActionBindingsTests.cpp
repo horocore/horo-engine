@@ -1,6 +1,8 @@
 #include "OpenXRActionBindings.h"
 #include "support/OpenXRNativeTestSupport.h"
 
+#include <stdexcept>
+
 namespace {
     using namespace Horo;
     using namespace Horo::XR;
@@ -17,6 +19,8 @@ namespace {
         unsigned suggestions{};
         unsigned attaches{};
         unsigned syncs{};
+        bool throwStandard{};
+        bool throwForeign{};
 
         ActionScript() {
             REQUIRE(active == nullptr);
@@ -69,6 +73,10 @@ namespace {
             const auto result = Script::Record("create-action");
             if (XR_SUCCEEDED(result))
                 *action = NativeHandle<XrAction>(200 + ++active->liveActions);
+            if (active->throwStandard)
+                throw std::runtime_error("scripted action callback exception");
+            if (active->throwForeign)
+                throw std::uint32_t{7};
             return result;
         }
 
@@ -179,8 +187,13 @@ namespace {
         Result<void> Create() {
             const std::array labels{NativeActionLabel{Input::ActionId{"select"}, "Select"}};
             const std::array setLabels{NativeActionSetLabel{{1}, "Gameplay"}};
-            return owner.Create(session.Request().candidate, &ActionScript::GetProc, {1, actions, suggestions, {}, {1}, registered},
-                                controls, {}, profilePaths, controlPaths, {labels, setLabels});
+            return owner.Create(session.Request().candidate, {&ActionScript::GetProc,
+                                                              {1, actions, suggestions, {}, {1}, registered},
+                                                              controls,
+                                                              {},
+                                                              profilePaths,
+                                                              controlPaths,
+                                                              {labels, setLabels}});
         }
     };
 
@@ -282,6 +295,26 @@ namespace {
             fixture.session.script.failureResult = XR_SESSION_NOT_FOCUSED;
             REQUIRE(fixture.owner.Sync(fixture.session.Request().candidate).HasError());
         }
+    }
+
+    TEST_CASE("OpenXR action callback exceptions roll back acquired ownership before returning or propagating", "[xr][native][lifecycle]") {
+        ActionFixture fixture;
+        SECTION("standard allocation and host exceptions become typed preparation failure") {
+            fixture.script.throwStandard = true;
+            const auto result = fixture.Create();
+            REQUIRE(result.HasError());
+            REQUIRE(result.ErrorValue().code.Value() == "xr.operation.unavailable");
+        }
+        SECTION("foreign callback exceptions preserve their original identity") {
+            fixture.script.throwForeign = true;
+            REQUIRE_THROWS_AS(fixture.Create(), std::uint32_t);
+        }
+        REQUIRE(fixture.script.liveActions == 0);
+        REQUIRE(fixture.script.liveSets == 0);
+        REQUIRE(fixture.script.attaches == 0);
+        const auto sync = fixture.owner.Sync(fixture.session.Request().candidate);
+        REQUIRE(sync.HasError());
+        REQUIRE(sync.ErrorValue().code.Value() == "xr.operation.unavailable");
     }
 
     TEST_CASE("OpenXR failed action retirement closes admission and retains handles for explicit retry", "[xr][openxr][actions]") {

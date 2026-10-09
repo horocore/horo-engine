@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <exception>
 #include <format>
 
 namespace Horo::XR::OpenXRInternal {
@@ -15,11 +16,10 @@ namespace Horo::XR::OpenXRInternal {
         }
 
         /** @brief Resolves only official instance-scoped functions before acquiring any action handle. */
-        template <typename Function>
-        Result<void> Load(PFN_xrGetInstanceProcAddr getProc, XrInstance instance, const char *name, Function &function) {
+        template <typename GetProc, typename Function>
+        Result<void> Load(GetProc getProc, XrInstance instance, const char *name, Function &function) {
             PFN_xrVoidFunction raw{};
-            const XrResult result = getProc(instance, name, &raw);
-            if (XR_FAILED(result) || !raw)
+            if (const XrResult result = getProc(instance, name, &raw); XR_FAILED(result) || !raw)
                 return Result<void>::Failure(NativeFailure(name, XR_FAILED(result) ? result : XR_ERROR_FUNCTION_UNSUPPORTED));
             function = std::bit_cast<Function>(raw);
             return Result<void>::Success();
@@ -108,12 +108,13 @@ namespace Horo::XR::OpenXRInternal {
 
         /** @brief Maps the admitted existing Input value vocabulary to native action types privately. */
         XrActionType NativeType(Input::ActionValueType type) {
+            using enum Input::ActionValueType;
             switch (type) {
-                case Input::ActionValueType::Digital:
+                case Digital:
                     return XR_ACTION_TYPE_BOOLEAN_INPUT;
-                case Input::ActionValueType::Axis1D:
+                case Axis1D:
                     return XR_ACTION_TYPE_FLOAT_INPUT;
-                case Input::ActionValueType::Axis2D:
+                case Axis2D:
                     return XR_ACTION_TYPE_VECTOR2F_INPUT;
             }
             return XR_ACTION_TYPE_MAX_ENUM;
@@ -130,26 +131,26 @@ namespace Horo::XR::OpenXRInternal {
     }
 
     /** @brief Resolves complete native action lifecycle dispatch before acquiring handles. */
-    Result<void> OpenXRActionBindings::Resolve(PFN_xrGetInstanceProcAddr getProc, XrInstance instance) {
-        if (!getProc)
+    Result<void> OpenXRActionBindings::Resolve(const NativeActionBindingRequest &request, XrInstance instance) {
+        if (!request.getProc)
             return Result<void>::Failure(MakeError(XRErrors::LoaderIncompatible));
-        if (auto result = Load(getProc, instance, "xrDestroyActionSet", dispatch_.destroySet); result.HasError())
+        if (auto result = Load(request.getProc, instance, "xrDestroyActionSet", dispatch_.destroySet); result.HasError())
             return result;
-        if (auto result = Load(getProc, instance, "xrDestroyAction", dispatch_.destroyAction); result.HasError())
+        if (auto result = Load(request.getProc, instance, "xrDestroyAction", dispatch_.destroyAction); result.HasError())
             return result;
-        if (auto result = Load(getProc, instance, "xrStringToPath", dispatch_.stringToPath); result.HasError())
+        if (auto result = Load(request.getProc, instance, "xrStringToPath", dispatch_.stringToPath); result.HasError())
             return result;
-        if (auto result = Load(getProc, instance, "xrCreateActionSet", dispatch_.createSet); result.HasError())
+        if (auto result = Load(request.getProc, instance, "xrCreateActionSet", dispatch_.createSet); result.HasError())
             return result;
-        if (auto result = Load(getProc, instance, "xrCreateAction", dispatch_.createAction); result.HasError())
+        if (auto result = Load(request.getProc, instance, "xrCreateAction", dispatch_.createAction); result.HasError())
             return result;
-        if (auto result = Load(getProc, instance, "xrSuggestInteractionProfileBindings", dispatch_.suggest); result.HasError())
+        if (auto result = Load(request.getProc, instance, "xrSuggestInteractionProfileBindings", dispatch_.suggest); result.HasError())
             return result;
-        if (auto result = Load(getProc, instance, "xrAttachSessionActionSets", dispatch_.attach); result.HasError())
+        if (auto result = Load(request.getProc, instance, "xrAttachSessionActionSets", dispatch_.attach); result.HasError())
             return result;
-        if (auto result = Load(getProc, instance, "xrGetCurrentInteractionProfile", dispatch_.profile); result.HasError())
+        if (auto result = Load(request.getProc, instance, "xrGetCurrentInteractionProfile", dispatch_.profile); result.HasError())
             return result;
-        return Load(getProc, instance, "xrSyncActions", dispatch_.sync);
+        return Load(request.getProc, instance, "xrSyncActions", dispatch_.sync);
     }
 
     /** @brief Creates canonical action sets/actions with generated native names, never user semantic strings. */
@@ -186,7 +187,7 @@ namespace Horo::XR::OpenXRInternal {
             info.actionType = NativeType(action->valueType);
             info.countSubactionPaths = 1;
             info.subactionPaths = &hands_[role];
-            actions_.push_back({action->action, XR_NULL_HANDLE});
+            actions_.emplace_back(action->action, XR_NULL_HANDLE);
             const auto result = dispatch_.createAction(set->native, &info, &actions_.back().native);
             if (XR_FAILED(result) || actions_.back().native == XR_NULL_HANDLE)
                 return Result<void>::Failure(NativeFailure("create action", XR_FAILED(result) ? result : XR_ERROR_RUNTIME_FAILURE));
@@ -242,7 +243,7 @@ namespace Horo::XR::OpenXRInternal {
     Result<void> OpenXRActionBindings::Prepare(const XRActionBindingSchema &schema, const std::span<const XRProfileControl> catalog,
                                                const std::span<const XRActionBindingOverride> overrides,
                                                const std::span<const NativeInteractionProfilePath> profiles,
-                                               const std::span<const NativeActionControlPath> controls, const NativeActionLabels labels) {
+                                               const std::span<const NativeActionControlPath> controls, const NativeActionLabels &labels) {
         if (auto valid = ValidateXRActionBindings(schema, catalog, overrides); valid.HasError())
             return valid;
         if (schema.actions.size() > native_.maximumActions)
@@ -284,11 +285,7 @@ namespace Horo::XR::OpenXRInternal {
     }
 
     /** @copydoc OpenXRActionBindings::Create */
-    Result<void> OpenXRActionBindings::Create(const XRSessionId &session, PFN_xrGetInstanceProcAddr getProc,
-                                              const XRActionBindingSchema &schema, const std::span<const XRProfileControl> catalog,
-                                              const std::span<const XRActionBindingOverride> overrides,
-                                              const std::span<const NativeInteractionProfilePath> profiles,
-                                              const std::span<const NativeActionControlPath> controls, const NativeActionLabels labels) {
+    Result<void> OpenXRActionBindings::Create(const XRSessionId &session, const NativeActionBindingRequest &request) {
         if (owner_.IsValid() || session == attachedSession_)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible,
                                                    "OpenXR actions attach once per native session; close this owner and replace "
@@ -300,12 +297,15 @@ namespace Horo::XR::OpenXRInternal {
         owner_ = session;
         Result<void> prepared = Result<void>::Success();
         try {
-            prepared = Resolve(getProc, native_.instance);
+            prepared = Resolve(request, native_.instance);
             if (prepared.HasValue())
-                prepared = Prepare(schema, catalog, overrides, profiles, controls, labels);
-        } catch (...) {
+                prepared = Prepare(request.schema, request.catalog, request.overrides, request.profiles, request.controls, request.labels);
+        } catch (const std::exception &) {
             prepared =
                 Result<void>::Failure(MakeError(XRErrors::OperationUnavailable, "OpenXR action preparation failed; rollback requested."));
+        } catch (...) {
+            (void)Close();
+            throw;
         }
         if (prepared.HasError()) {
             const auto retired = Close();
@@ -359,8 +359,7 @@ namespace Horo::XR::OpenXRInternal {
             return XrActiveActionSet{set.native, XR_NULL_PATH};
         });
         const XrActionsSyncInfo info{XR_TYPE_ACTIONS_SYNC_INFO, nullptr, static_cast<std::uint32_t>(sets_.size()), sets.data()};
-        const auto result = dispatch_.sync(native.Value().session, &info);
-        if (result != XR_SUCCESS)
+        if (const auto result = dispatch_.sync(native.Value().session, &info); result != XR_SUCCESS)
             return Result<void>::Failure(NativeFailure("synchronize action sets", result));
         return session_->Validate(session);
     }

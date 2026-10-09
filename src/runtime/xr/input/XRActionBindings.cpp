@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
 
 namespace Horo::XR {
     namespace {
@@ -22,14 +23,14 @@ namespace Horo::XR {
 
         /** @brief Checks the existing canonical Input action value vocabulary. */
         bool ValueType(const Input::ActionValueType type) noexcept {
-            return type == Input::ActionValueType::Digital || type == Input::ActionValueType::Axis1D ||
-                   type == Input::ActionValueType::Axis2D;
+            using enum Input::ActionValueType;
+            return type == Digital || type == Axis1D || type == Axis2D;
         }
 
         /** @brief Performs bounded semantic action lookup without native name interpretation. */
         const XRActionDeclaration *Action(const XRActionBindingSchema &schema, const Input::ActionId &id) {
             const auto found = std::ranges::find(schema.actions, id, &XRActionDeclaration::action);
-            return found == schema.actions.end() ? nullptr : &*found;
+            return found == schema.actions.end() ? nullptr : std::to_address(found);
         }
 
         /** @brief Finds exact catalog type and role evidence for one persisted control identity. */
@@ -39,15 +40,15 @@ namespace Horo::XR {
                 return candidate.profile == profile && candidate.control == control && candidate.role == action.role &&
                        candidate.valueType == action.valueType;
             });
-            return found == catalog.end() ? nullptr : &*found;
+            return found == catalog.end() ? nullptr : std::to_address(found);
         }
 
         /** @brief Applies only an explicit direct migration; zero means incompatible and is never a fallback. */
-        XRPhysicalControlId MigratedControl(const XRActionBindingSchema &schema, const XRActionBindingOverride &override) {
-            if (override.schemaVersion == schema.version)
-                return override.control;
+        XRPhysicalControlId MigratedControl(const XRActionBindingSchema &schema, const XRActionBindingOverride &bindingOverride) {
+            if (bindingOverride.schemaVersion == schema.version)
+                return bindingOverride.control;
             const auto migration = std::ranges::find_if(schema.migrations, [&](const XRBindingMigration &candidate) {
-                return candidate.fromVersion == override.schemaVersion && candidate.previous == override.control;
+                return candidate.fromVersion == bindingOverride.schemaVersion && candidate.previous == bindingOverride.control;
             });
             return migration == schema.migrations.end() ? XRPhysicalControlId{} : migration->current;
         }
@@ -58,8 +59,8 @@ namespace Horo::XR {
             std::size_t setCount = 0;
             for (std::size_t index = 0; index < schema.actions.size(); ++index) {
                 const auto &action = schema.actions[index];
-                const auto registered = std::ranges::find(schema.registeredActions, action.action, &Input::ActionDescriptor::id);
-                if (registered == schema.registeredActions.end() || registered->context != action.context ||
+                if (const auto registered = std::ranges::find(schema.registeredActions, action.action, &Input::ActionDescriptor::id);
+                    registered == schema.registeredActions.end() || registered->context != action.context ||
                     registered->valueType != action.valueType || registered->required != action.required ||
                     std::ranges::count(schema.registeredActions, action.action, &Input::ActionDescriptor::id) != 1)
                     return Incompatible(
@@ -106,8 +107,8 @@ namespace Horo::XR {
         Result<void> ValidateSuggestions(const XRActionBindingSchema &schema, const std::span<const XRProfileControl> catalog) {
             for (std::size_t index = 0; index < schema.suggestions.size(); ++index) {
                 const auto &binding = schema.suggestions[index];
-                const auto *action = Action(schema, binding.action);
-                if (!action || !Control(catalog, binding.profile, binding.control, *action))
+                if (const auto *action = Action(schema, binding.action);
+                    !action || !Control(catalog, binding.profile, binding.control, *action))
                     return Incompatible(
                         "XR suggested binding references an unregistered action or incompatible profile/role/control type.");
                 if (std::ranges::any_of(schema.suggestions.first(index), [&](const XRSuggestedActionBinding &previous) {
@@ -135,15 +136,15 @@ namespace Horo::XR {
                     return Incompatible("XR binding migration has an ambiguous source control.");
             }
             for (std::size_t index = 0; index < overrides.size(); ++index) {
-                const auto &override = overrides[index];
-                const auto *action = Action(schema, override.action);
-                const auto control = MigratedControl(schema, override);
-                if (override.schemaVersion == 0 || override.schemaVersion > schema.version || !action ||
-                    !Control(catalog, override.profile, control, *action))
+                const auto &bindingOverride = overrides[index];
+                const auto *action = Action(schema, bindingOverride.action);
+                if (const auto control = MigratedControl(schema, bindingOverride);
+                    bindingOverride.schemaVersion == 0 || bindingOverride.schemaVersion > schema.version || !action ||
+                    !Control(catalog, bindingOverride.profile, control, *action))
                     return Incompatible(
                         "XR override cannot migrate with the same semantic action, role and value type; repair or remove it explicitly.");
                 if (std::ranges::any_of(overrides.first(index), [&](const XRActionBindingOverride &previous) {
-                    return previous.action == override.action && previous.profile == override.profile;
+                    return previous.action == bindingOverride.action && previous.profile == bindingOverride.profile;
                 }))
                     return Incompatible("XR overrides conflict for the same semantic action and interaction profile.");
             }
@@ -154,14 +155,14 @@ namespace Horo::XR {
         std::optional<XRResolvedActionBinding> ResolveOne(const XRActionBindingSchema &schema, const XRActionDeclaration &action,
                                                           const XRInteractionProfileId profile,
                                                           const std::span<const XRActionBindingOverride> overrides, const bool fallback) {
-            const auto override = std::ranges::find_if(overrides, [&](const XRActionBindingOverride &candidate) {
+            const auto bindingOverride = std::ranges::find_if(overrides, [&](const XRActionBindingOverride &candidate) {
                 return candidate.action == action.action && candidate.profile == profile;
             });
             XRPhysicalControlId control;
             bool migrated = false;
-            if (override != overrides.end()) {
-                control = MigratedControl(schema, *override);
-                migrated = override->schemaVersion != schema.version;
+            if (bindingOverride != overrides.end()) {
+                control = MigratedControl(schema, *bindingOverride);
+                migrated = bindingOverride->schemaVersion != schema.version;
             } else {
                 const auto suggestion = std::ranges::find_if(schema.suggestions, [&](const XRSuggestedActionBinding &candidate) {
                     return candidate.action == action.action && candidate.profile == profile;
