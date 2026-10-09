@@ -1103,6 +1103,8 @@ add_library(HoroPhysics STATIC
         physics/CharacterClearanceQuery.cpp
         physics/CharacterControllerContracts.cpp
         physics/CharacterPhysicsQueryAdapter.cpp
+        physics/CharacterPlatformAttachmentValidation.cpp
+        physics/CharacterPlatformAttachmentValidation.h
         physics/CharacterDiagnostics.cpp
         physics/CharacterErrors.cpp
         physics/CharacterMetrics.cpp
@@ -1112,6 +1114,7 @@ add_library(HoroPhysics STATIC
         physics/CharacterWorldCommandPipeline.cpp
         physics/CharacterWorldCommandInternal.h
         physics/CharacterWorldMovementInternal.h
+        physics/CharacterWorldPlatformInternal.h
         physics/CharacterWorldInternal.h
         physics/CharacterWorldPlacementInternal.h
         physics/CharacterWorldShapeInternal.h
