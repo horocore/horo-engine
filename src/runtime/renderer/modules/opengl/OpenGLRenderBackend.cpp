@@ -1,4 +1,5 @@
 #include "OpenGLBackendInternal.h"
+#include "OpenGLExecutionAdapter.h"
 #include "OpenGLRenderBackendErrors.h"
 
 #include <algorithm>
@@ -16,8 +17,6 @@
 
 namespace Horo::Render {
     namespace {
-        constexpr std::uint32_t colorBufferBit = 0x00004000U;
-
         [[nodiscard]] std::optional<std::size_t> ConservativeRequirement(const std::size_t payload) noexcept {
             constexpr std::size_t alignment = 256;
             constexpr std::size_t mask = alignment - 1;
@@ -126,65 +125,13 @@ namespace Horo::Render {
                    HasTextureUsage(view.usage, RenderTextureUsage::RenderAttachment);
         }
 
-        [[nodiscard]] bool VersionAtLeast(const OpenGLContextFacts &facts, const std::uint16_t major, const std::uint16_t minor) noexcept {
-            return facts.majorVersion > major || (facts.majorVersion == major && facts.minorVersion >= minor);
-        }
-
-        [[nodiscard]] Result<void> ValidateContextFacts(const OpenGLContextFacts &facts, const OpenGLBackendOptions &options) {
-            if (facts.apiFamily != OpenGLApiFamily::Desktop)
-                return Result<void>::Failure(MakeError(OpenGLBackendErrors::UnsupportedApiFamily, "Actual context is not desktop OpenGL."));
-            if (!VersionAtLeast(facts, options.majorVersion, options.minorVersion))
-                return Result<void>::Failure(
-                    MakeError(OpenGLBackendErrors::UnsupportedVersion, "Actual OpenGL context is below the requested version."));
-            if (facts.profile != OpenGLContextProfile::Core)
-                return Result<void>::Failure(
-                    MakeError(OpenGLBackendErrors::UnsupportedProfile, "Actual OpenGL context is not Core profile."));
-            if (!facts.requiredEntryPointsAvailable)
-                return Result<void>::Failure(
-                    MakeError(OpenGLBackendErrors::MissingRequiredEntryPoints, "OpenGL 4.1 Core command dispatch is incomplete."));
-            if (facts.maxTexture2DSize == 0 || facts.maxColorAttachments == 0 || facts.maxVertexAttributes == 0)
-                return Result<void>::Failure(
-                    MakeError(OpenGLBackendErrors::InvalidCapabilities, "OpenGL baseline limits must be non-zero."));
-            return Result<void>::Success();
-        }
-
-        [[nodiscard]] RenderCapabilitySnapshot MakeOpenGLCapabilitySnapshot(const OpenGLContextFacts &facts,
-                                                                            const bool resourcesAvailable) noexcept {
-            using enum RenderCapability;
-            using enum RenderTextureFormat;
-            using enum RenderTextureUsage;
-            RenderCapabilitySnapshot snapshot{
-                .deviceIncarnation = 1,
-                .capabilityRevision = 1,
-                .synthetic = false,
-                .features = {},
-                .queues = {.graphics = true, .compute = false, .copy = false, .present = true},
-                .limits = {.maxBufferBytes = resourcesAvailable ? 4ULL * 1024ULL * 1024ULL * 1024ULL : 0,
-                           .maxTextureDimension2D = resourcesAvailable ? facts.maxTexture2DSize : 0,
-                           .maxColorAttachments = resourcesAvailable ? facts.maxColorAttachments : 0,
-                           .maxVertexAttributes = resourcesAvailable ? facts.maxVertexAttributes : 0,
-                           .maxFramesInFlight = 8},
-                .formats = {},
-            };
-            snapshot.features.Enable(Presentation);
-            if (resourcesAvailable) {
-                for (const RenderCapability capability :
-                     {OffscreenTargets, BufferResources, MeshResources, TextureResources, RenderTargetResources})
-                    snapshot.features.Enable(capability);
-                snapshot.formats.usages[static_cast<std::size_t>(Rgba8Unorm)] = Sampled | RenderAttachment;
-                snapshot.formats.usages[static_cast<std::size_t>(Depth24Stencil8)] = RenderAttachment;
-                snapshot.formats.usages[static_cast<std::size_t>(Depth32Float)] = Sampled | RenderAttachment;
-                snapshot.formats.sampleCountMask = std::uint64_t{1} << 1U;
-            }
-            return snapshot;
-        }
-
         /** @brief OpenGL backend owning one presentation-port context lifecycle. */
         class OpenGLRenderBackend final : public IRenderBackend {  // NOSONAR(cpp:S1448)
         public:
             OpenGLRenderBackend(IOpenGLPresentationPort &presentationPort, const OpenGLBackendOptions options,
                                 const Detail::OpenGLCommandFunctions &functions, std::shared_ptr<OpenGLContextLease> contextLease) noexcept
-                : presentationPort_(&presentationPort), options_(options), functions_(functions), contextLease_(std::move(contextLease)) {}
+                : presentationPort_(&presentationPort), options_(options), functions_(functions), contextLease_(std::move(contextLease)),
+                  execution_(functions_) {}
 
             /** @brief Releases a remaining OpenGL context as a lifecycle fallback. */
             ~OpenGLRenderBackend() override {
@@ -227,6 +174,7 @@ namespace Horo::Render {
                         return Result<void>::Failure(WithCause(std::move(retryFailure), std::move(debugFailure)));
                     }
                 }
+                frameSlotCount_ = config.maxFramesInFlight;
                 initialized_ = true;
                 return Result<void>::Success();
             }
@@ -266,8 +214,11 @@ namespace Horo::Render {
                     return Result<FrameToken>::Failure(current.ErrorValue());
                 }
 
-                functions_.viewport(0, 0, static_cast<std::int32_t>(descriptor.outputExtent.width),
-                                    static_cast<std::int32_t>(descriptor.outputExtent.height));
+                const Result<std::size_t> slot = execution_.AdmitFrameSlot(frameSlotCount_);
+                if (slot.HasError())
+                    return Result<FrameToken>::Failure(slot.ErrorValue());
+                activeFrameSlot_ = slot.Value();
+                activeExtent_ = descriptor.outputExtent;
                 frameActive_ = true;
                 activeFrame_ = FrameToken{nextFrameToken_++};
                 return Result<FrameToken>::Success(activeFrame_);
@@ -281,18 +232,9 @@ namespace Horo::Render {
                     return valid;
                 }
 
-                for (const RenderPassDescriptor &pass : plan.orderedPasses) {
-                    if (!pass.primaryOutput.has_value()) {
-                        continue;
-                    }
-                    const PrimaryOutputAttachment &attachment = *pass.primaryOutput;
-                    if (attachment.loadOperation == AttachmentLoadOperation::Clear) {
-                        const ClearColor &color = attachment.clearColor;
-                        functions_.clearColor(color.red, color.green, color.blue, color.alpha);
-                        functions_.clear(colorBufferBit);
-                    }
-                }
-                return Result<void>::Success();
+                if (const Result<void> current = presentationPort_->MakeCurrent(); current.HasError())
+                    return current;
+                return execution_.Execute(plan, activeExtent_);
             }
 
             /** @copydoc IRenderBackend::Present */
@@ -303,11 +245,15 @@ namespace Horo::Render {
                     return state;
                 }
 
+                if (const Result<void> current = presentationPort_->MakeCurrent(); current.HasError())
+                    return current;
+                if (!execution_.FenceFrame(activeFrameSlot_))
+                    return SynchronizationFailure<void>();
                 if (const Result<void> presented = presentationPort_->SwapBuffers(); presented.HasError()) {
                     return Result<void>::Failure(presented.ErrorValue());
                 }
 
-                AbortActiveFrame();
+                CompleteActiveFrame();
                 return Result<void>::Success();
             }
 
@@ -324,8 +270,9 @@ namespace Horo::Render {
             void AbortActiveFrame() noexcept override {
                 if (!IsOwnerThread())
                     return;
-                frameActive_ = false;
-                activeFrame_ = {};
+                if (frameActive_)
+                    static_cast<void>(execution_.FenceFrame(activeFrameSlot_));
+                CompleteActiveFrame();
             }
 
             /** @copydoc IRenderBackend::Resize */
@@ -352,7 +299,9 @@ namespace Horo::Render {
                 // state so the host can dispatch shutdown back to the context owner.
                 if (ownerThread_ != std::thread::id{} && !IsOwnerThread())
                     return;
-                AbortActiveFrame();
+                // Context destruction owns queued native references; no normal-frame or teardown GPU wait is introduced.
+                CompleteActiveFrame();
+                execution_.Reset();
                 DestroyRemainingResources();
                 initialized_ = false;
                 DestroyContext();
@@ -360,6 +309,17 @@ namespace Horo::Render {
             }
 
         private:
+            void CompleteActiveFrame() noexcept {
+                frameActive_ = false;
+                activeFrame_ = {};
+                activeExtent_ = {};
+            }
+
+            template <typename T> [[nodiscard]] Result<T> SynchronizationFailure() const {
+                return Result<T>::Failure(MakeError(OpenGLBackendErrors::SynchronizationFailed,
+                                                    "OpenGL could not establish or poll a frame completion fence; shut down the backend."));
+            }
+
             [[nodiscard]] Result<void> InitializeAttempt(const RenderBackendConfig &config, const bool enableDebugContext) {
                 // Assume ownership before crossing the platform boundary. A typed failure is
                 // contractually non-retaining; an exception may occur after native creation,
@@ -380,17 +340,21 @@ namespace Horo::Render {
                     return RollbackAttempt(current.ErrorValue());
                 if (const Result<void> loaded = presentationPort_->LoadCommandDispatch(); loaded.HasError())
                     return RollbackAttempt(loaded.ErrorValue());
+                if (!functions_.isAvailable())
+                    return RollbackAttempt(
+                        MakeError(OpenGLBackendErrors::MissingRequiredEntryPoints,
+                                  "Required OpenGL state, command or synchronization entry points are absent after dispatch loading."));
                 const Result<OpenGLContextFacts> facts = presentationPort_->QueryContextFacts();
                 if (facts.HasError())
                     return RollbackAttempt(facts.ErrorValue());
-                if (const Result<void> admitted = ValidateContextFacts(facts.Value(), options_); admitted.HasError())
+                if (const Result<void> admitted = Detail::ValidateOpenGLContextFacts(facts.Value(), options_); admitted.HasError())
                     return RollbackAttempt(admitted.ErrorValue());
                 if (const Result<void> presentMode = presentationPort_->SetPresentMode(config.presentMode); presentMode.HasError())
                     return RollbackAttempt(presentMode.ErrorValue());
 
                 contextFacts_ = facts.Value();
                 const bool resourcesAvailable = functions_.HasResourceFunctions();
-                capabilities_.support = MakeOpenGLCapabilitySnapshot(contextFacts_, resourcesAvailable);
+                capabilities_.support = Detail::MakeOpenGLCapabilitySnapshot(contextFacts_, resourcesAvailable);
                 capabilities_.supportsOffscreenTargets = resourcesAvailable && contextFacts_.maxColorAttachments > 0;
                 capabilities_.supportsBufferResources = resourcesAvailable;
                 capabilities_.supportsMeshResources = resourcesAvailable && contextFacts_.maxVertexAttributes > 0;
@@ -490,32 +454,7 @@ namespace Horo::Render {
                     return state;
                 }
 
-                for (std::size_t index = 0; index < plan.orderedPasses.size(); ++index) {
-                    const RenderPassDescriptor &pass = plan.orderedPasses[index];
-                    if (!pass.id.IsValid()) {
-                        return Result<void>::Failure(
-                            MakeError(OpenGLBackendErrors::InvalidExecutionPlan, "Execution plan contains an invalid render pass ID."));
-                    }
-                    if (pass.kind != RenderPassKind::Graphics) {
-                        return Result<void>::Failure(
-                            MakeError(OpenGLBackendErrors::UnsupportedPassKind, "Initial OpenGL backend supports graphics passes only."));
-                    }
-                    for (std::size_t previous = 0; previous < index; ++previous) {
-                        if (pass.id == plan.orderedPasses[previous].id) {
-                            return Result<void>::Failure(
-                                MakeError(OpenGLBackendErrors::InvalidExecutionPlan, "Execution plan contains duplicate render pass IDs."));
-                        }
-                    }
-                    if (!pass.primaryOutput.has_value()) {
-                        continue;
-                    }
-
-                    if (!pass.primaryOutput->IsValid()) {
-                        return Result<void>::Failure(
-                            MakeError(OpenGLBackendErrors::InvalidExecutionPlan, "Primary output attachment operations are invalid."));
-                    }
-                }
-                return Result<void>::Success();
+                return Detail::ValidateOpenGLExecutionPlan(plan);
             }
 
             void DestroyContext() noexcept {
@@ -567,6 +506,10 @@ namespace Horo::Render {
             };
             OpenGLContextFacts contextFacts_{};
             std::thread::id ownerThread_{};
+            Detail::OpenGLExecutionAdapter execution_;
+            std::size_t frameSlotCount_{1};
+            std::size_t activeFrameSlot_{0};
+            FramebufferExtent activeExtent_{};
             FrameToken activeFrame_{};
             std::uint64_t nextFrameToken_{1};
             bool initialized_{false};

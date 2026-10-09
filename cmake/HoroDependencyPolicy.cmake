@@ -98,8 +98,9 @@ horo_allow_target_dependencies(TARGET HoroNavigationAssetSceneIntegration DEPEND
 horo_allow_target_dependencies(TARGET HoroNavigationContentIntegration DEPENDENCIES HoroApplication HoroNavigationAssetSceneIntegration)
 horo_allow_target_dependencies(TARGET HoroXRApi DEPENDENCIES HoroFoundation HoroRenderApi)
 horo_allow_target_dependencies(TARGET HoroXRRuntime DEPENDENCIES HoroXRApi)
+horo_allow_target_dependencies(TARGET HoroXRInputBindings DEPENDENCIES HoroXRApi HoroInput)
 if(HORO_BUILD_XR_OPENXR)
-    horo_allow_target_dependencies(TARGET HoroXROpenXRHostInterface DEPENDENCIES HoroXRRuntime HoroPlatform)
+    horo_allow_target_dependencies(TARGET HoroXROpenXRHostInterface DEPENDENCIES HoroXRRuntime HoroXRInputBindings HoroPlatform)
     horo_allow_target_dependencies(TARGET HoroXROpenXR DEPENDENCIES HoroXROpenXRHostInterface)
 endif()
 

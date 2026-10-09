@@ -53,7 +53,7 @@ namespace Horo::Render::Detail {
                 .capabilityRevision = 1,
                 .synthetic = false,
                 .features = {},
-                .queues = {.graphics = true, .compute = false, .copy = false, .present = facts.adapter.supportsPresentation},
+                .queues = {.graphics = true, .compute = false, .copy = true, .present = facts.adapter.supportsPresentation},
                 .limits = {.maxBufferBytes = facts.maxBufferLength,
                            .maxTextureDimension2D = facts.maxTextureDimension2D,
                            .maxColorAttachments = 8,

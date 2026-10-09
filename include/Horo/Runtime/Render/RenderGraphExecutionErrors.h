@@ -8,6 +8,7 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::Render::RenderGraphExecutionErrors {
+    extern const ErrorCodeDescriptor UnsupportedWorkload;
     extern const ErrorCodeDescriptor AllocationFailed;
     extern const ErrorCodeDescriptor InvalidGraph;
     extern const ErrorCodeDescriptor InvalidQueueTopology;

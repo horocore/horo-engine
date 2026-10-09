@@ -97,6 +97,8 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # One translation unit per registered public header verifies that consumers can
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
+target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderGraphWorkloadPublicHeaderConsumer.cpp)
+target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/RenderGraphFramePublicHeaderConsumer.cpp)
 target_sources(HoroRuntimeUiPublicHeaderConsumer PRIVATE support/RuntimeUiUnicodePublicContract.cpp)
 target_sources(HoroGameplayApiPublicHeaderConsumer PRIVATE support/PersistenceInstallationPublicHeaderConsumer.cpp)
 target_sources(HoroRuntimePublicHeaderConsumer PRIVATE support/SaveSceneCanonicalPublicHeaderConsumer.cpp)
@@ -372,10 +374,18 @@ target_compile_features(HoroReplicationStateCodecTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReplicationStateCodecTests PRIVATE HoroEngine::NetworkRuntime)
 horo_register_catch_test(HoroReplicationStateCodecTests LABELS "unit;network;headless;replication_codec")
 
+add_executable(HoroReplicationInboundApplyTests
+        unit/runtime/networking/ReplicationInboundApplyTests.cpp
+)
+target_compile_features(HoroReplicationInboundApplyTests PRIVATE cxx_std_20)
+target_link_libraries(HoroReplicationInboundApplyTests PRIVATE HoroEngine::NetworkRuntime HoroEngine::NetworkTransportNull)
+horo_register_catch_test(HoroReplicationInboundApplyTests LABELS "unit;network;headless;replication_apply")
+
 add_executable(HoroReplicationSnapshotHistoryTests unit/runtime/networking/ReplicationSnapshotHistoryTests.cpp)
 target_compile_features(HoroReplicationSnapshotHistoryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReplicationSnapshotHistoryTests PRIVATE HoroEngine::NetworkRuntime)
 horo_register_catch_test(HoroReplicationSnapshotHistoryTests LABELS "unit;network;headless;replication_history")
+
 add_executable(HoroNetworkModePublicHeaderConsumer support/NetworkModePublicHeaderConsumer.cpp)
 target_compile_features(HoroNetworkModePublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkModePublicHeaderConsumer PRIVATE HoroEngine::NetworkRuntime)
@@ -1116,8 +1126,13 @@ target_include_directories(HoroXRRuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 target_link_libraries(HoroXRRuntimeTests PRIVATE HoroEngine::XRRuntime)
 horo_register_catch_test(HoroXRRuntimeTests LABELS "unit;xr;headless;lifecycle")
 
+add_executable(HoroXRActionBindingTests unit/runtime/xr/XRActionBindingsTests.cpp)
+target_include_directories(HoroXRActionBindingTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroXRActionBindingTests PRIVATE HoroEngine::XRInputBindings)
+horo_register_catch_test(HoroXRActionBindingTests LABELS "unit;xr;input;headless;lifecycle")
+
 if(HORO_BUILD_XR_OPENXR)
-    add_executable(HoroXROpenXRTests unit/runtime/xr/OpenXRNativeSessionTests.cpp)
+    add_executable(HoroXROpenXRTests unit/runtime/xr/OpenXRNativeSessionTests.cpp unit/runtime/xr/OpenXRActionBindingsTests.cpp)
     target_include_directories(HoroXROpenXRTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(HoroXROpenXRTests PRIVATE HoroEngine::XROpenXR HoroXROpenXRHostInterface)
     horo_register_catch_test(HoroXROpenXRTests LABELS "unit;xr;headless;native;lifecycle")
@@ -2630,6 +2645,7 @@ target_compile_features(HoroShaderCompilerPipelineTests PRIVATE cxx_std_20)
 target_include_directories(HoroShaderCompilerPipelineTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroShaderCompilerPipelineTests PRIVATE HoroEngine::ShaderCompilerToolchain HoroEngine::Platform)
 add_executable(HoroRenderFrontendTests
+        unit/runtime/renderer/RenderGraphResourceLeaseTests.cpp
         unit/runtime/renderer/RenderFrontendTests.cpp
         unit/runtime/renderer/RenderReadbackTests.cpp
         unit/runtime/renderer/RenderTransferTests.cpp
@@ -3234,6 +3250,7 @@ add_executable(HoroRuntimeSceneCellPayloadTests
     unit/runtime/scene/RuntimeSceneCellAttachmentTests.cpp
     unit/runtime/scene/RuntimeSceneCellAssetAttachmentTests.cpp
     unit/runtime/scene/IncrementalSceneCellCookTests.cpp
+    unit/runtime/scene/WorldBuildValidationTests.cpp
     unit/runtime/scene/SceneCellContentHasherTests.cpp
 )
 target_compile_features(HoroRuntimeSceneCellPayloadTests PRIVATE cxx_std_20)
@@ -3697,6 +3714,7 @@ horo_register_catch_test(HoroAgentPolicyTests LABELS "unit;security;headless")
 if (HORO_BUILD_RENDER_OPENGL)
     add_executable(HoroRenderOpenGLTests
             unit/runtime/renderer/OpenGLRenderBackendTests.cpp
+            unit/runtime/renderer/OpenGLCommandAdaptationTests.cpp
             unit/runtime/renderer/OpenGLRenderBackendQualificationTests.cpp
             unit/runtime/renderer/OpenGLRenderResourceTests.cpp
     )
@@ -3744,11 +3762,13 @@ endif ()
 
 if (NOT HORO_BUILD_RENDER_METAL)
     add_executable(HoroMetalDeviceCapabilityTests
+            unit/runtime/renderer/MetalCommandExecutionTests.cpp
             unit/runtime/renderer/MetalDeviceCapabilityTests.cpp
             unit/runtime/renderer/MetalRenderBackendTests.cpp
             unit/runtime/renderer/MetalRenderBackendQualificationTests.cpp
             unit/runtime/renderer/MetalResourcePolicyTests.cpp
             ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/metal/MetalDeviceCapabilities.cpp
+            ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/metal/MetalCommandExecution.cpp
             ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/metal/MetalRenderBackend.cpp
             ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/metal/MetalRenderBackendErrors.cpp
             ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/metal/MetalResourcePolicy.cpp
@@ -3766,7 +3786,17 @@ if (NOT HORO_BUILD_RENDER_METAL)
 endif ()
 
 if (HORO_BUILD_RENDER_METAL)
+    add_executable(HoroMetalGraphExecutionSmoke integration/renderer/MetalGraphExecutionSmoke.mm)
+    target_compile_features(HoroMetalGraphExecutionSmoke PRIVATE cxx_std_20)
+    target_include_directories(HoroMetalGraphExecutionSmoke PRIVATE ${PROJECT_SOURCE_DIR}/src
+            ${PROJECT_SOURCE_DIR}/tests/unit/runtime/renderer)
+    target_link_libraries(HoroMetalGraphExecutionSmoke PRIVATE Catch2::Catch2WithMain HoroEngine::RenderMetal "-framework Metal")
+    if (HORO_ENABLE_GPU_SMOKE_TESTS)
+        add_test(NAME HoroMetalGraphExecutionSmoke COMMAND HoroMetalGraphExecutionSmoke)
+        set_tests_properties(HoroMetalGraphExecutionSmoke PROPERTIES LABELS "gpu;metal;renderer")
+    endif ()
     add_executable(HoroRenderMetalTests
+            unit/runtime/renderer/MetalCommandExecutionTests.cpp
             unit/runtime/renderer/MetalDeviceCapabilityTests.cpp
             unit/runtime/renderer/MetalRenderBackendTests.cpp
             unit/runtime/renderer/MetalRenderBackendQualificationTests.cpp

@@ -68,7 +68,7 @@ namespace Horo::Render::MetalBackendTests {
         PortState *state_{nullptr};
     };
 
-    class FakeMetalRuntime final : public Detail::IMetalRuntime {
+    class FakeMetalRuntime : public Detail::IMetalRuntime {
     public:
         FakeMetalRuntime(IMetalPresentationPort &presentationPort, PortState &state) noexcept
             : presentationPort_(&presentationPort), state_(&state) {}
@@ -165,16 +165,29 @@ namespace Horo::Render::MetalBackendTests {
             return Result<void>::Success();
         }
 
+        Result<void> RetainGraphResources(IRenderGraphResourceLease &lease) override {
+            graphLease_ = &lease;
+            return Result<void>::Success();
+        }
+
         Result<void> Present() override {
             ++state_->presentCount;
             if (state_->failure == PortFailure::Present) {
                 return Result<void>::Failure(MakePortError("render.test.present_failed", "Injected Metal present failure."));
+            }
+            if (graphLease_ != nullptr) {
+                graphLease_->Release();
+                graphLease_ = nullptr;
             }
             state_->frameActive = false;
             return Result<void>::Success();
         }
 
         void AbortFrame() noexcept override {
+            if (graphLease_ != nullptr) {
+                graphLease_->Release();
+                graphLease_ = nullptr;
+            }
             if (state_->frameActive) {
                 ++state_->abortCount;
                 state_->frameActive = false;
@@ -198,6 +211,7 @@ namespace Horo::Render::MetalBackendTests {
     private:
         IMetalPresentationPort *presentationPort_{nullptr};
         PortState *state_{nullptr};
+        IRenderGraphResourceLease *graphLease_{nullptr};
         std::uint64_t nextResourceIdentity_{1};
         bool initialized_{false};
     };
