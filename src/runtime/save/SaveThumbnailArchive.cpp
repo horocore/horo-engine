@@ -74,6 +74,8 @@ namespace Horo::Runtime {
             limits.chunks.maximumStoredChunkBytes = std::min(limits.chunks.maximumStoredChunkBytes, limits.maximumStoredPayloadBytes);
             limits.chunks.maximumEntries = std::min(limits.chunks.maximumEntries, limits.maximumEntries);
             limits.metadata.maximumTotalChunks = std::min(limits.metadata.maximumTotalChunks, limits.maximumEntries);
+            limits.metadata.maximumChunksPerParticipant =
+                std::min(limits.metadata.maximumChunksPerParticipant, limits.metadata.maximumTotalChunks);
             auto finalized = SaveArchiveContainerWriter::Write(input.header, manifest, chunks, input.version, limits);
             if (finalized.HasError() && input.capture.artifact && input.capture.request->policy == SaveThumbnailPolicy::Optional) {
                 finalized = SaveArchiveContainerWriter::Write(input.header, input.manifest, input.chunks, input.version, limits);

@@ -142,6 +142,8 @@ namespace Horo::Runtime {
                 input.limits.maximumArchiveBytes = archiveBytes;
                 input.limits.maximumEntries = input.chunks.size() + 2;
                 const auto bounded = PrepareSavePresentationWrite(input);
+                if (bounded.HasError())
+                    INFO(bounded.ErrorValue().code.Value());
                 REQUIRE(bounded.HasValue());
                 REQUIRE(*bounded.Value().archive.bytes == *logical.Value().archive.bytes);
                 REQUIRE_FALSE(bounded.Value().metadata.publication.thumbnail);
@@ -165,6 +167,9 @@ namespace Horo::Runtime {
                         else
                             input.limits.maximumEntries = input.chunks.size() + 2;
                         const auto prepared = PrepareSavePresentationWrite(input);
+                        CAPTURE(version, policy, byteBudget);
+                        if (prepared.HasError())
+                            INFO(prepared.ErrorValue().code.Value());
                         if (policy == SaveThumbnailPolicy::Required) {
                             REQUIRE(prepared.HasError());
                             REQUIRE(prepared.ErrorValue().code.Value() == SaveErrors::ArchiveFramingLimitExceeded.code.Value());
