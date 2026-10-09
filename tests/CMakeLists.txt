@@ -2042,6 +2042,14 @@ target_link_libraries(HoroWorkspaceSplitterInteractionTests PRIVATE HoroEngine::
 if (HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditorWorkspaceControllerTests
             unit/editor/EditorWorkspaceControllerTests.cpp
+            unit/editor/EditorWorkspaceControllerPersistenceTests.cpp
+            unit/editor/EditorWorkspaceControllerContentBrowserTests.cpp
+            unit/editor/EditorWorkspaceControllerDockingTests.cpp
+            unit/editor/EditorWorkspaceControllerInspectorTests.cpp
+            unit/editor/EditorWorkspaceControllerAssetMutationTests.cpp
+            unit/editor/EditorWorkspaceControllerAssetTransferTests.cpp
+            unit/editor/EditorWorkspaceControllerSourceNavigationTests.cpp
+            unit/editor/EditorWorkspaceControllerFilesystemTestSupport.h
             unit/editor/EditorWorkspaceControllerPolicyTests.cpp
             unit/editor/EditorWorkspaceControllerPolicyTestSupport.h
             unit/editor/EditorWorkspaceControllerTransferPolicyTests.cpp
