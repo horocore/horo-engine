@@ -15,6 +15,7 @@
 #include <optional>
 #include <ranges>
 #include <stdexcept>
+#include <tuple>
 #include <vector>
 
 namespace Horo::Runtime::Ui {
@@ -48,6 +49,7 @@ namespace Horo::Runtime::Ui {
             UiGlyphAtlasEntryId id;
             UiGlyphAtlasGlyphKey key;
             UiGlyphAtlasPlacement placement;
+            std::optional<UiFontFace> sourceFace;
             UiGlyphAtlasFrameId lastPinnedFrame;
             EntryState state{EntryState::Free};
             std::uint32_t pinCount{};
@@ -77,6 +79,7 @@ namespace Horo::Runtime::Ui {
             std::uint32_t generation{};
             bool everUsed{};
             bool active{};
+            bool sealed{};
         };
 
         struct KeyIndex final {
@@ -146,6 +149,18 @@ namespace Horo::Runtime::Ui {
             return Result<std::size_t>::Success(index);
         }
 
+        /** @brief Admits a glyph lookup only while the exact frame's pin set is still mutable. */
+        [[nodiscard]] Result<std::size_t> ResolveFrameIndex(const UiGlyphAtlasFrameId id, const UiGlyphAtlasGlyphKey &key) const {
+            const auto index = FrameIndex(id);
+            if (index.HasError())
+                return index;
+            if (frames[index.Value()].sealed)
+                return UiGlyphAtlasStorageDetail::Failure<std::size_t>(UiErrors::GlyphAtlasFrameInvalid);
+            if (!key.IsValid())
+                return UiGlyphAtlasStorageDetail::Failure<std::size_t>(UiErrors::GlyphAtlasInputInvalid);
+            return index;
+        }
+
         [[nodiscard]] std::optional<std::size_t> FindEntry(const UiGlyphAtlasGlyphKey &key) const {
             const auto position = std::ranges::lower_bound(entriesByKey, key, std::ranges::less{}, &KeyIndex::key);
             if (position == entriesByKey.end() || position->key != key)
@@ -206,6 +221,7 @@ namespace Horo::Runtime::Ui {
             EraseEntryKey(entry.key);
             entry.key = {};
             entry.placement = {};
+            entry.sourceFace.reset();
             entry.lastPinnedFrame = {};
             entry.state = EntryState::Free;
             entry.pinCount = 0;
@@ -360,6 +376,7 @@ namespace Horo::Runtime::Ui {
             frame.id = {descriptor.ownership, static_cast<std::uint32_t>(*free + 1U), frame.generation};
             frame.entries.clear();
             frame.active = true;
+            frame.sealed = false;
             nextFrame = (*free + 1U) % frames.size();
             return Result<std::size_t>::Success(*free);
         }
@@ -376,6 +393,25 @@ namespace Horo::Runtime::Ui {
             ++entry.pinCount;
             entry.lastUsed = Touch();
             return Result<void>::Success();
+        }
+
+        /** @brief Releases one exact frame's pins without touching a reused slot. */
+        void ReleaseFrame(const UiGlyphAtlasFrameId id) noexcept {
+            const auto index = FrameIndex(id);
+            if (index.HasError())
+                return;
+            auto &frame = frames[index.Value()];
+            for (const auto entryIndex : frame.entries)
+                --entries[entryIndex].pinCount;
+            frame.entries.clear();
+            frame.active = false;
+            frame.sealed = false;
+        }
+
+        /** @brief Exact sampled generation key used to seal and query frame pins in logarithmic bounded work. */
+        [[nodiscard]] auto PinIdentity(const std::uint32_t index) const noexcept {
+            const auto &entry = entries[index];
+            return std::tuple{entry.key.face, entry.key.fontRevision, entry.key.glyph, entry.placement.page, entry.placement.uv};
         }
 
         [[nodiscard]] Result<void> CancelPendingUpload(UploadRecord &upload) {

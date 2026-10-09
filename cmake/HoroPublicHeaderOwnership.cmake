@@ -1006,6 +1006,7 @@ horo_configure_target_header_boundary(HoroRenderFrontend PUBLIC_HEADERS
     Horo/Runtime/Render/RenderQuery.h
     Horo/Runtime/Render/RenderQueryErrors.h
     Horo/Runtime/Render/UiRenderComposition.h
+    Horo/Runtime/Render/UiRenderSubmission.h
 )
 horo_configure_target_header_boundary(HoroSceneModel PUBLIC_HEADERS
     Horo/Runtime/Scene/PropertyBindingErrors.h

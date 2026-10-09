@@ -5,6 +5,7 @@
  * @brief Backend-neutral Unicode shaping, fallback, measurement, and glyph-run contracts.
  */
 
+#include "Horo/Assets/AssetId.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Ui/UiIdentity.h"
 #include "Horo/Runtime/Ui/UiLayout.h"
@@ -33,10 +34,16 @@ namespace Horo::Runtime::Ui {
     inline constexpr std::uint32_t NoUiTextIndex = std::numeric_limits<std::uint32_t>::max();
     inline constexpr std::uint32_t NoUiTextFeatureEnd = std::numeric_limits<std::uint32_t>::max();
 
+    struct UiFontFaceRevisionTag;
+    /** @brief Exact immutable font source generation supplied by the load-time asset owner. */
+    using UiFontFaceRevision = UiRevision<UiFontFaceRevisionTag>;
+
     /** @brief Identifies one immutable cooked font face payload and collection face. */
     struct UiFontFaceDescriptor final {
         UiFontFaceId id;                 /**< Stable authored face identity. */
         std::uint32_t collectionIndex{}; /**< Zero-based face index in the immutable font container. */
+        Assets::AssetId sourceAsset;     /**< Optional source provenance; required together with revision for renderer admission. */
+        UiFontFaceRevision revision;     /**< Exact source generation; absent only for shaping-only callers. */
         /** @brief Checks stable identity representation. @return True when the face identity is valid. */
         [[nodiscard]] bool IsValid() const noexcept;
         [[nodiscard]] auto operator<=>(const UiFontFaceDescriptor &) const noexcept = default;
@@ -69,12 +76,20 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Returns the stable authored face identity. @return Stable face identity, or invalid when this is empty. */
         [[nodiscard]] UiFontFaceId Id() const noexcept;
+        /** @brief Returns copied load-time asset provenance, or invalid for shaping-only faces. @return Source asset. */
+        [[nodiscard]] Assets::AssetId SourceAsset() const noexcept;
+        /** @brief Returns copied immutable source generation, or invalid for shaping-only faces. @return Source revision. */
+        [[nodiscard]] UiFontFaceRevision Revision() const noexcept;
         /** @brief Returns the selected collection face index. @return Zero-based collection index. */
         [[nodiscard]] std::uint32_t CollectionIndex() const noexcept;
         /** @brief Returns the validated design-unit scale. @return Units per em, or zero when this is empty. */
         [[nodiscard]] std::uint32_t UnitsPerEm() const noexcept;
         /** @brief Checks that immutable face storage is present. @return True when this face can be used for shaping. */
         [[nodiscard]] bool IsValid() const noexcept;
+        /** @brief Compares actual immutable font payload ownership, not equal-looking source declarations.
+         * @param other Face retained by the atlas raster producer. @return Same non-empty generation object.
+         */
+        [[nodiscard]] bool SharesGeneration(const UiFontFace &other) const noexcept;
 
     private:
         struct Storage;

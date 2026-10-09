@@ -36,7 +36,7 @@ namespace Horo::Runtime::Ui {
         if (!descriptor.IsValid())
             return Failure<UiGlyphAtlas>(UiErrors::GlyphAtlasInputInvalid);
         try {
-            return Result<UiGlyphAtlas>::Success(UiGlyphAtlas{std::make_unique<Storage>(descriptor)});
+            return Result<UiGlyphAtlas>::Success(UiGlyphAtlas{std::make_shared<Storage>(descriptor)});
         } catch (const std::bad_alloc &) {
             return Failure<UiGlyphAtlas>(UiErrors::GlyphAtlasCapacityExceeded);
         } catch (const std::length_error &) {
@@ -44,17 +44,25 @@ namespace Horo::Runtime::Ui {
         }
     }
 
-    /** @copydoc UiGlyphAtlas::UiGlyphAtlas(std::unique_ptr<Storage>) */
-    UiGlyphAtlas::UiGlyphAtlas(std::unique_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
+    /** @copydoc UiGlyphAtlas::UiGlyphAtlas(std::shared_ptr<Storage>) */
+    UiGlyphAtlas::UiGlyphAtlas(std::shared_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
 
     /** @copydoc UiGlyphAtlas::~UiGlyphAtlas */
-    UiGlyphAtlas::~UiGlyphAtlas() = default;
+    UiGlyphAtlas::~UiGlyphAtlas() {
+        StopAdmission();
+    }
 
     /** @copydoc UiGlyphAtlas::UiGlyphAtlas(UiGlyphAtlas &&) */
     UiGlyphAtlas::UiGlyphAtlas(UiGlyphAtlas &&other) noexcept = default;
 
     /** @copydoc UiGlyphAtlas::operator= */
-    UiGlyphAtlas &UiGlyphAtlas::operator=(UiGlyphAtlas &&other) noexcept = default;
+    UiGlyphAtlas &UiGlyphAtlas::operator=(UiGlyphAtlas &&other) noexcept {
+        if (this != &other) {
+            StopAdmission();
+            storage_ = std::move(other.storage_);
+        }
+        return *this;
+    }
 
     /** @copydoc UiGlyphAtlas::Pages */
     std::span<const UiGlyphAtlasPageId> UiGlyphAtlas::Pages() const noexcept {
@@ -255,11 +263,9 @@ namespace Horo::Runtime::Ui {
     Result<UiGlyphAtlasLookup> UiGlyphAtlas::Resolve(const UiGlyphAtlasFrameId frame, const UiGlyphAtlasGlyphKey &requested) {
         if (!storage_ || !storage_->IsActive())
             return Failure<UiGlyphAtlasLookup>(UiErrors::GlyphAtlasLifecycleUnavailable);
-        const auto frameIndex = storage_->FrameIndex(frame);
+        const auto frameIndex = storage_->ResolveFrameIndex(frame, requested);
         if (frameIndex.HasError())
             return Result<UiGlyphAtlasLookup>::Failure(frameIndex.ErrorValue());
-        if (!requested.IsValid())
-            return Failure<UiGlyphAtlasLookup>(UiErrors::GlyphAtlasInputInvalid);
 
         const auto requestedEntry = storage_->FindEntry(requested);
         std::size_t resolvedIndex{};
@@ -291,14 +297,27 @@ namespace Horo::Runtime::Ui {
         const auto frameIndex = storage_->FrameIndex(frame);
         if (frameIndex.HasError())
             return Result<void>::Failure(frameIndex.ErrorValue());
-        auto &record = storage_->frames[frameIndex.Value()];
-        for (const auto entryIndex : record.entries) {
-            if (entryIndex < storage_->entries.size() && storage_->entries[entryIndex].pinCount > 0)
-                --storage_->entries[entryIndex].pinCount;
-        }
-        record.entries.clear();
-        record.active = false;
+        if (storage_->frames[frameIndex.Value()].sealed)
+            return Failure(UiErrors::GlyphAtlasFrameInvalid);
+        storage_->ReleaseFrame(frame);
         return Result<void>::Success();
+    }
+
+    /** @copydoc UiGlyphAtlas::SealFrame */
+    Result<UiGlyphAtlas::FrameLease> UiGlyphAtlas::SealFrame(const UiGlyphAtlasFrameId frame) {
+        if (!storage_ || !storage_->IsActive())
+            return Failure<FrameLease>(UiErrors::GlyphAtlasLifecycleUnavailable);
+        const auto index = storage_->FrameIndex(frame);
+        if (index.HasError())
+            return Result<FrameLease>::Failure(index.ErrorValue());
+        auto &record = storage_->frames[index.Value()];
+        if (record.sealed)
+            return Failure<FrameLease>(UiErrors::GlyphAtlasFrameInvalid);
+        std::ranges::sort(record.entries, {}, [&](const std::uint32_t index) {
+            return storage_->PinIdentity(index);
+        });
+        record.sealed = true;
+        return Result<FrameLease>::Success(FrameLease{storage_, frame});
     }
 
     /** @copydoc UiGlyphAtlas::Evict */

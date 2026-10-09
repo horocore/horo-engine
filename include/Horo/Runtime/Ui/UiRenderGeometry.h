@@ -172,6 +172,14 @@ namespace Horo::Runtime::Ui {
         /** @brief Replaces this plan by transfer. @param other Plan to transfer. @return This plan. */
         UiRenderGeometryPlan &operator=(UiRenderGeometryPlan &&other) noexcept;
 
+        /** @brief Checks retained immutable plan ownership before borrowing its tables.
+         * @details Only successful arena publication constructs a plan. Its lease prevents source/table reset until release.
+         * @return False after transfer; otherwise the retained source and tables are available.
+         */
+        [[nodiscard]] bool IsValid() const noexcept {
+            return storage_ != nullptr;
+        }
+
         /** @brief Returns exact view, source revision, and generated-count evidence. @return Borrowed immutable descriptor. */
         [[nodiscard]] const UiRenderGeometryPlanDescriptor &Descriptor() const noexcept;
         /** @brief Returns the immutable source snapshot retained by this plan. @return Borrowed source snapshot. */

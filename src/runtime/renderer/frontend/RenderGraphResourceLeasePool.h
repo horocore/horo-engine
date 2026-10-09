@@ -1,6 +1,7 @@
 #pragma once
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "RenderResourceRegistry.h"
+#include "UiRenderSubmissionRetention.h"
 
 #include <array>
 #include <vector>
@@ -25,7 +26,8 @@ namespace Horo::Render::Detail {
         /** @brief Reserves all pin storage before the first frame. */
         RenderGraphResourceLeasePool(RenderResourceRegistry &registry, std::size_t maximumPins);
         /** @brief Acquires a bounded lease, rolling back every acquired pin on failure. */
-        [[nodiscard]] Result<IRenderGraphResourceLease *> Acquire(std::span<const RenderGraphResource> resources);
+        [[nodiscard]] Result<IRenderGraphResourceLease *> Acquire(std::span<const RenderGraphResource> resources,
+                                                                  UiRenderSubmission *ui = nullptr);
 
     private:
         using Pin = RenderGraphResidentIdentity;
@@ -36,6 +38,7 @@ namespace Horo::Render::Detail {
             RenderGraphResourceLeasePool *pool{nullptr};
             bool active{false};
             std::vector<Pin> pins;
+            UiRenderSubmissionRetention ui;
         };
 
         RenderResourceRegistry *registry_;

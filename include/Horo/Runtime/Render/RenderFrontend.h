@@ -16,6 +16,21 @@ namespace Horo::Render {
     class RenderFrontend;
     class CompiledRenderGraphExecution;
     struct RenderGraphPassWorkload;
+    struct UiRenderSubmission;
+    class UiRenderImageTexture;
+    class UiRenderAtlasTexture;
+
+}  // namespace Horo::Render
+
+namespace Horo::Runtime::Ui {
+    class UiImageResourceRegistry;
+    class UiGlyphAtlas;
+    struct UiImageResourceHandleTag;
+    struct UiGlyphAtlasPageHandleTag;
+    template <typename Tag> struct UiRuntimeHandle;
+}  // namespace Horo::Runtime::Ui
+
+namespace Horo::Render {
 
     namespace Detail {
         class RenderResourceRegistry;
@@ -127,6 +142,17 @@ namespace Horo::Render {
                                                 std::span<const RenderGraphPassWorkload> workloads);
 
         /**
+         * @brief Executes an existing graph while transferring exact Runtime UI generation ownership to native completion.
+         * @param graph Compiled graph whose imported textures contain the host-resolved image/atlas resources.
+         * @param workloads Existing typed graph operations; this overload adds no UI draw operation.
+         * @param ui Synchronous UI source borrows and owned sealed atlas pins, consumed on success or abandonment.
+         * @return Success or typed resource, source-generation, capacity, stage or backend failure.
+         * @post On success the backend completion lease, not Present, owns every retained UI generation.
+         */
+        [[nodiscard]] Result<void> ExecuteGraph(const CompiledRenderGraphExecution &graph,
+                                                std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission ui);
+
+        /**
          * @brief Presents and consumes a successfully executed frame.
          * @return Success, a typed invalid-stage error, the original backend failure,
          * or a translated backend exception.
@@ -140,6 +166,9 @@ namespace Horo::Render {
         friend class RenderFrontend;
 
         RenderFrameScope(RenderFrontend &owner, IRenderBackend &backend, FrameToken frame) noexcept;
+        /** @brief Common graph admission preserving one authoritative native completion lease. */
+        [[nodiscard]] Result<void> ExecuteGraphInternal(const CompiledRenderGraphExecution &graph,
+                                                        std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission *ui);
         void Abort() noexcept;
         void Release() noexcept;
 
@@ -205,6 +234,41 @@ namespace Horo::Render {
          * @return Success, the original typed backend failure, or a translated backend exception.
          */
         [[nodiscard]] Result<void> SubmitFrame(const FrameDescriptor &descriptor, std::span<const RenderPassDescriptor> orderedPasses);
+
+        /**
+         * @brief Host handoff that begins, admits and presents one UI-owning graph without retiring submitted sources.
+         * @param descriptor Exact output frame identity and extent.
+         * @param graph Compiled graph borrowed until synchronous native admission returns.
+         * @param workloads Existing bounded native graph operations.
+         * @param ui Exact UI geometry/source generations and sealed atlas pins transferred into submission ownership.
+         * @return Success or typed original failure; unsent failures abandon the owned pin set exactly once.
+         */
+        [[nodiscard]] Result<void> SubmitUiGraph(const FrameDescriptor &descriptor, const CompiledRenderGraphExecution &graph,
+                                                 std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission ui);
+
+        /**
+         * @brief Realizes one exact current UI image page through the normal owned texture-upload path.
+         * @param registry Synchronously borrowed active image authority.
+         * @param image Exact current image generation. @param page Source page index.
+         * @param pixels One complete tightly packed RGBA8 page copied by the bounded renderer upload queue.
+         * @return Frontend-issued exact source/texture provenance and readiness operation, or typed original failure.
+         * @details Load/realization boundary; performs no provider discovery or I/O. New image revisions require new realization.
+         * Unsupported source formats/color spaces fail through normal texture admission without conversion or fallback.
+         */
+        [[nodiscard]] Result<UiRenderImageTexture> CreateUiImageTexture(
+            const Runtime::Ui::UiImageResourceRegistry &registry, Runtime::Ui::UiRuntimeHandle<Runtime::Ui::UiImageResourceHandleTag> image,
+            std::uint32_t page, std::span<const std::byte> pixels);
+        /**
+         * @brief Realizes one exact current glyph atlas page through the normal owned texture-upload path.
+         * @param atlas Synchronously borrowed active atlas authority. @param page Exact current atlas page generation.
+         * @param pixels One complete tightly packed Alpha8 or RGBA8 page copied by the bounded renderer upload queue.
+         * @return Frontend-issued page/texture provenance and readiness operation, or typed original failure.
+         * @details Load/realization boundary; no rasterization, provider discovery, new draw workload or normal-frame wait.
+         * A source encoding unsupported by current texture admission returns its typed failure, never an implicit conversion.
+         */
+        [[nodiscard]] Result<UiRenderAtlasTexture> CreateUiGlyphAtlasTexture(
+            const Runtime::Ui::UiGlyphAtlas &atlas, Runtime::Ui::UiRuntimeHandle<Runtime::Ui::UiGlyphAtlasPageHandleTag> page,
+            std::span<const std::byte> pixels);
 
         /**
          * @brief Commits a framebuffer resize through the owned backend.

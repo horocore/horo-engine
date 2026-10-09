@@ -1,3 +1,4 @@
+#include "../ui/UiRenderSnapshotTestSupport.h"
 #include "Horo/Runtime/Render/UiRenderComposition.h"
 #include "Horo/Runtime/Ui/UiErrors.h"
 #include "Horo/Runtime/Ui/UiPresentationReceipt.h"
@@ -48,15 +49,9 @@ namespace Horo::Render {
             auto extractorResult = UiRenderExtractor::Create({view, limits, 1});
             REQUIRE(extractorResult.HasValue());
             auto extractor = std::move(extractorResult).Value();
-            const UiRenderSnapshotDescriptor descriptor{.instance = tree.Instance(),
-                                                        .canvas = tree.Canvas(),
-                                                        .document = tree.SourceDocument(),
-                                                        .documentRevision = tree.SourceDocumentRevision(),
-                                                        .treeRevision = tree.Revision(),
-                                                        .interactionRevision = UiInteractionRevision::Create(interactionRevision).Value(),
-                                                        .snapshotRevision = UiRenderSnapshotRevision::Create(snapshotRevision).Value(),
-                                                        .view = view,
-                                                        .limits = limits};
+            const auto descriptor =
+                Runtime::Ui::Test::SnapshotDescriptor(tree, UiInteractionRevision::Create(interactionRevision).Value(),
+                                                      UiRenderSnapshotRevision::Create(snapshotRevision).Value(), view, limits);
             const std::array transforms{UiLogicalTransform{}};
             auto snapshot = extractor.Extract(tree, descriptor, {.transforms = transforms});
             REQUIRE(snapshot.HasValue());

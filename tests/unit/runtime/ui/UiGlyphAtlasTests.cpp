@@ -29,7 +29,7 @@ namespace Horo::Runtime::Ui {
         }
 
         UiGlyphAtlasGlyphKey Key(const std::uint32_t glyph) {
-            return {Face(), glyph, {UiTextScale::Create(UiTextLayoutScaleUnit).Value()}};
+            return {Face(), glyph, {UiTextScale::Create(UiTextLayoutScaleUnit).Value()}, RevisionValue<UiFontFaceRevision>(1)};
         }
 
         UiGlyphAtlasDescriptor Descriptor(const std::uint32_t maximumFramesInFlight = 2, const std::uint32_t maximumUsesPerFrame = 2) {
@@ -220,6 +220,55 @@ namespace Horo::Runtime::Ui {
             RequireError(atlas.Resolve({}, Key(1)), UiErrors::GlyphAtlasFrameInvalid);
             RequireError(atlas.Evict({0}), UiErrors::GlyphAtlasEvictionInvalid);
             RequireError(atlas.Reset(static_cast<UiGlyphAtlasResetReason>(255)), UiErrors::GlyphAtlasResetInvalid);
+        }
+
+        TEST_CASE("Sealed atlas pins survive presentation and reject raw retirement until completion",
+                  "[runtime_ui][glyph_atlas][submission_lifetime]") {
+            auto atlas = MakeAtlas();
+            std::array<std::byte, 16> bytes{};
+            static_cast<void>(CompleteUpload(atlas, Key(1), bytes, 1));
+            const auto frame = atlas.BeginFrame().Value();
+            REQUIRE(atlas.Resolve(frame, Key(1)).HasValue());
+            auto sealed = atlas.SealFrame(frame);
+            REQUIRE(sealed.HasValue());
+            auto lease = std::move(sealed).Value();
+            REQUIRE(lease.Frame() == frame);
+            REQUIRE(lease.Revision() == atlas.Revision());
+            RequireError(atlas.RetireFrame(frame, UiGlyphAtlasFrameOutcome::Presented), UiErrors::GlyphAtlasFrameInvalid);
+            RequireError(atlas.Resolve(frame, Key(1)), UiErrors::GlyphAtlasFrameInvalid);
+            RequireError(atlas.SealFrame(frame), UiErrors::GlyphAtlasFrameInvalid);
+            RequireError(atlas.Reset(UiGlyphAtlasResetReason::DeviceLost), UiErrors::GlyphAtlasResetBusy);
+            REQUIRE(atlas.Evict({1}).Value().evictedEntries == 0);
+            lease = {};
+            REQUIRE(atlas.IsDrained());
+            REQUIRE(atlas.Evict({1}).Value().evictedEntries == 1);
+            RequireError(atlas.SealFrame(frame), UiErrors::GlyphAtlasFrameInvalid);
+            REQUIRE(atlas.Reset(UiGlyphAtlasResetReason::Reload).HasValue());
+        }
+
+        TEST_CASE("Atlas submission lease owns old storage across shutdown and facade replacement",
+                  "[runtime_ui][glyph_atlas][submission_lifetime]") {
+            UiGlyphAtlas::FrameLease retained;
+            UiGlyphAtlasFrameId oldFrame;
+            {
+                auto atlas = MakeAtlas();
+                std::array<std::byte, 16> bytes{};
+                static_cast<void>(CompleteUpload(atlas, Key(1), bytes, 1));
+                oldFrame = atlas.BeginFrame().Value();
+                REQUIRE(atlas.Resolve(oldFrame, Key(1)).HasValue());
+                retained = std::move(atlas.SealFrame(oldFrame)).Value();
+                atlas.Shutdown();
+                REQUIRE_FALSE(atlas.IsDrained());
+                atlas = MakeAtlas();
+                REQUIRE(atlas.IsDrained());
+                REQUIRE(retained.Frame() == oldFrame);
+            }
+            REQUIRE(retained.Revision().IsValid());
+            auto transferred = std::move(retained);
+            REQUIRE_FALSE(retained.Frame().IsValid());
+            REQUIRE(transferred.Frame() == oldFrame);
+            transferred = {};
+            REQUIRE_FALSE(transferred.Revision().IsValid());
         }
     }  // namespace
 }  // namespace Horo::Runtime::Ui
