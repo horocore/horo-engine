@@ -52,9 +52,9 @@ namespace Horo::Render::OpenGLBackendTests {
         Check(begun.HasValue());
         const FrameToken frame = begun.Value();
         Check(portState.makeCurrentCount == 2);
-        Check(commandState.viewportCount == 1);
-        Check(commandState.viewportWidth == 1280);
-        Check(commandState.viewportHeight == 720);
+        Check(commandState.viewportCount == 0);
+        Check(commandState.viewportWidth == 0);
+        Check(commandState.viewportHeight == 0);
 
         const std::array passes{
             BackendTestSupport::MakeClearGraphicsPass(RenderPassId{1}, ClearColor{0.1F, 0.2F, 0.3F, 1.0F}),
@@ -66,13 +66,13 @@ namespace Horo::Render::OpenGLBackendTests {
             },
         };
         Check(backend.Execute(RenderExecutionPlan{.frame = frame, .orderedPasses = passes}).HasValue());
-        Check(commandState.clearColorCount == 1);
+        Check(commandState.clearColorCount == 2);
         Check(commandState.clearCount == 1);
         Check(commandState.clearMask == 0x00004000U);
-        Check(commandState.color.red == 0.1F);
-        Check(commandState.color.green == 0.2F);
-        Check(commandState.color.blue == 0.3F);
-        Check(commandState.color.alpha == 1.0F);
+        Check(commandState.clearedColors[0].red == 0.1F);
+        Check(commandState.clearedColors[0].green == 0.2F);
+        Check(commandState.clearedColors[0].blue == 0.3F);
+        Check(commandState.clearedColors[0].alpha == 1.0F);
         Check(backend.Present(frame).HasValue());
         Check(portState.swapCount == 1);
         Check(backend.Resize(FramebufferExtent{1920, 1080}).HasValue());

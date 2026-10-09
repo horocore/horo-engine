@@ -2029,6 +2029,9 @@ if (HORO_BUILD_RENDER_OPENGL)
     add_library(HoroRenderOpenGL STATIC
             runtime/renderer/modules/opengl/OpenGLBackendModule.cpp
             runtime/renderer/modules/opengl/OpenGLCommandFunctions.cpp
+            runtime/renderer/modules/opengl/OpenGLContextAdmission.cpp
+            runtime/renderer/modules/opengl/OpenGLExecutionState.cpp
+            runtime/renderer/modules/opengl/OpenGLExecutionAdapter.cpp
             runtime/renderer/modules/opengl/OpenGLRenderBackend.cpp
             runtime/renderer/modules/opengl/OpenGLRenderBackendErrors.cpp
             runtime/renderer/modules/opengl/OpenGLRenderBackendResources.inl
