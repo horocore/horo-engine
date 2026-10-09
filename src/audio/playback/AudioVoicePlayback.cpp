@@ -292,10 +292,11 @@ namespace Horo::Audio {
 
         /** @brief Switch execution without changing logical phase or allocating a new processing owner. */
         const ErrorCodeDescriptor *ChangeExecution(const AudioVoiceControl control, const AudioVoiceState current) noexcept {
+            using enum AudioVoiceState;
             const bool virtualizing = control == AudioVoiceControl::Virtualize;
-            if (current != (virtualizing ? AudioVoiceState::Playing : AudioVoiceState::Virtual))
+            if (current != (virtualizing ? Playing : Virtual))
                 return &AudioErrors::VoiceInvalidTransition;
-            if (const auto *error = registry.TryTransition(voice, virtualizing ? AudioVoiceState::Virtual : AudioVoiceState::Playing))
+            if (const auto *error = registry.TryTransition(voice, virtualizing ? Virtual : Playing))
                 return error;
             virtualPlayback = virtualizing;
             // Virtual time has no filter history. Rebuild at the integer cursor, retaining logical
