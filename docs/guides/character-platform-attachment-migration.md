@@ -28,15 +28,20 @@ no new query, following the existing command contract.
 
 The canonical adapter uses owner-thread `ReadSceneBodyReconciliation` between joined
 Physics steps. This copies **current** native body state, not an independently
-retained historical Physics snapshot. `PlatformBody` first requires a completed
-Physics publication and the exact captured nonzero revision. The same owner thread
+retained historical Physics snapshot. `PlatformBody` first resolves a resident
+scene-body binding without consuming its pose. Query-only fixtures and retired
+bindings supply no movement-base frame and return absence, not a snapshot failure.
+Every returned pose requires a completed Physics publication and the exact captured
+nonzero revision. The same owner thread
 cannot interleave a mutation between that check and the synchronous read; this path
 invokes no callback. A successful fixed step or immediate body/binding publication
 advances the revision. Stepping, failure, retirement and shutdown close the read.
 
 Before the first completed tick, Physics structural publication intentionally leaves
-revision zero unchanged, so the adapter explicitly rejects that pre-publication
-case. Queue admission and creation of an unused shape do not change the resident
+revision zero unchanged. Static support may still exist without a movement-base
+frame: the adapter returns absence and does not invent a pose or require a tick to
+permit static collision. Unpublished moving-body frame reads remain rejected.
+Queue admission and creation of an unused shape do not change the resident
 body pose/binding; they can retain the same revision. Prepared bodies are invisible
 until their publication fence. Regression coverage exercises real native body
 admission, shape mutation plus solver motion, retirement/replacement and stale

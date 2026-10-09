@@ -356,7 +356,7 @@ namespace Horo::Character {
         Result<CharacterOverlapProbeResult> Overlap(const CharacterOverlapProbeRequest &request) const noexcept;
         /** @brief Runs a filtered capsule sweep and copies only Horo-owned evidence. */
         Result<CharacterSweepProbeResult> Sweep(const CharacterSweepProbeRequest &request) const noexcept;
-        /** @brief Copies live resident body/shape pose evidence; stale bindings return absence. */
+        /** @brief Copies revision-fenced resident pose evidence; query-only/stale bindings and unpublished static frames return absence. */
         Result<std::optional<CharacterPlatformBodyEvidence>> PlatformBody(Physics::BodyHandle body, Physics::ShapeHandle shape,
                                                                           std::uint64_t physicsSnapshotRevision) const noexcept;
         Physics::PhysicsWorld *world_;

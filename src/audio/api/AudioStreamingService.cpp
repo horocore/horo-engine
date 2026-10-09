@@ -118,29 +118,28 @@ namespace Horo::Audio {
                 std::copy_n(state.decodeBuffer.data() + static_cast<std::size_t>(frame) * channels, channels,
                             state.ring.data() + destination);
             }
-            state.produced.store((written + progress.frames) | (progress.endOfStream ? EndMarker : 0), std::memory_order_seq_cst);
+            state.transport.produced.store((written + progress.frames) | (progress.endOfStream ? EndMarker : 0), std::memory_order_seq_cst);
         }
 
         /** @brief Commit a callback-requested position on the sole worker before acknowledging ring reuse. */
         Result<void> ApplyPosition(AudioStreamState &state, const CancellationToken &cancellation) {
-            const auto target = state.seekTarget.load();
-            if (target != std::numeric_limits<std::uint64_t>::max()) {
+            if (const auto target = state.transport.seekTarget.load(); target != std::numeric_limits<std::uint64_t>::max()) {
                 if (auto positioned = state.decoder->Seek(target); positioned.HasError())
                     return positioned;
                 if (cancellation.IsCancellationRequested() || state.stopped.load())
                     return JobCancelled();
-                state.produced.store(0);
-                const auto loop = state.requestedLoop.load();
+                state.transport.produced.store(0);
+                const auto loop = state.transport.requestedLoop.load();
                 state.workerLoop = {loop != 0, static_cast<std::uint32_t>(loop >> 32U), static_cast<std::uint32_t>(loop)};
-                state.seekTarget.store(std::numeric_limits<std::uint64_t>::max());
-                state.positionReady.store(true);
+                state.transport.seekTarget.store(std::numeric_limits<std::uint64_t>::max());
+                state.transport.positionReady.store(true);
             }
             return Result<void>::Success();
         }
 
         /** @brief Cap one decode at ring capacity and the exclusive loop boundary, wrapping only on the worker. */
         Result<std::uint32_t> DecodeFrames(AudioStreamState &state, const std::uint64_t written) {
-            const std::uint64_t read = state.consumed.load(std::memory_order_seq_cst);
+            const std::uint64_t read = state.transport.consumed.load(std::memory_order_seq_cst);
             const auto buffered = written >= read ? std::min<std::uint64_t>(written - read, state.request.ringFrames) : 0;
             const auto freeFrames = static_cast<std::uint32_t>(state.request.ringFrames - buffered);
             auto frames = std::min(freeFrames, state.request.decoder.maximumFramesPerDecode);
@@ -184,7 +183,7 @@ namespace Horo::Audio {
                 return ready;
             if (auto positioned = ApplyPosition(state, cancellation); positioned.HasError())
                 return positioned;
-            const std::uint64_t written = state.produced.load(std::memory_order_seq_cst) & CursorMask;
+            const std::uint64_t written = state.transport.produced.load(std::memory_order_seq_cst) & CursorMask;
             const auto admitted = DecodeFrames(state, written);
             if (admitted.HasError())
                 return Result<void>::Failure(admitted.ErrorValue());
@@ -250,18 +249,18 @@ namespace Horo::Audio {
         AudioStreamRenderResult result;
         if (!ValidOutput(state_, planes, frames))
             return result;
-        if (!state_->positionReady.load()) {
+        if (!state_->transport.positionReady.load()) {
             for (auto *plane : planes)
                 std::fill_n(plane, frames, 0.0F);
             return {.silentFrames = frames, .stopped = state_->stopped.load()};
         }
         const bool stopped = state_->stopped.load(std::memory_order_seq_cst);
-        const std::uint64_t read = state_->consumed.load(std::memory_order_seq_cst);
-        const std::uint64_t publication = state_->produced.load(std::memory_order_seq_cst);
+        const std::uint64_t read = state_->transport.consumed.load(std::memory_order_seq_cst);
+        const std::uint64_t publication = state_->transport.produced.load(std::memory_order_seq_cst);
         const std::uint64_t written = publication & CursorMask;
         const auto available = stopped || written < read ? 0U : static_cast<std::uint32_t>(std::min<std::uint64_t>(frames, written - read));
         CopyOutput(*state_, planes, read, available, frames);
-        state_->consumed.store(read + available, std::memory_order_seq_cst);
+        state_->transport.consumed.store(read + available, std::memory_order_seq_cst);
 
         const bool ended = (publication & EndMarker) != 0 && read + available == written;
         const std::uint32_t missing = frames - available;
@@ -392,12 +391,12 @@ namespace Horo::Audio {
     bool AudioStreamingService::Slot::NeedsFill() const {
         if (!state || fill || !state->FillAdmitted())
             return false;
-        if (state->seekTarget.load() != std::numeric_limits<std::uint64_t>::max())
+        if (state->transport.seekTarget.load() != std::numeric_limits<std::uint64_t>::max())
             return true;
-        if (const auto publication = state->produced.load(std::memory_order_seq_cst); (publication & EndMarker) != 0)
+        if (const auto publication = state->transport.produced.load(std::memory_order_seq_cst); (publication & EndMarker) != 0)
             return false;
-        const auto read = state->consumed.load(std::memory_order_seq_cst);
-        const auto written = state->produced.load(std::memory_order_seq_cst) & CursorMask;
+        const auto read = state->transport.consumed.load(std::memory_order_seq_cst);
+        const auto written = state->transport.produced.load(std::memory_order_seq_cst) & CursorMask;
         const auto buffered = written >= read ? written - read : 0;
         return buffered < state->request.lookaheadFrames && buffered < state->request.ringFrames;
     }
@@ -488,10 +487,10 @@ namespace Horo::Audio {
         const auto *state = Find(handle);
         if (state == nullptr)
             return Result<AudioStreamSnapshot>::Failure(MakeError(AudioErrors::HandleStale));
-        const auto read = state->consumed.load(std::memory_order_seq_cst);
-        const auto publication = state->produced.load(std::memory_order_seq_cst);
+        const auto read = state->transport.consumed.load(std::memory_order_seq_cst);
+        const auto publication = state->transport.produced.load(std::memory_order_seq_cst);
         const auto written = publication & CursorMask;
-        const auto ready = state->positionReady.load();
+        const auto ready = state->transport.positionReady.load();
         const auto buffered = ready && written >= read ? std::min<std::uint64_t>(written - read, state->request.ringFrames) : 0;
         return Result<AudioStreamSnapshot>::Success(
             {static_cast<std::uint32_t>(buffered), state->underrunFrames.load(std::memory_order_seq_cst),
