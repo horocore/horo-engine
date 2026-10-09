@@ -290,6 +290,36 @@ namespace {
         REQUIRE((controller.ViewModel().contentBrowserOperationError == "workspace.source_open.unsafe"));
     }
 
+    TEST_CASE("Workspace source snapshots outlive detached navigation and controller shutdown", "[unit][editor][source]") {
+        SourceProjectFixture project;
+        SourceDocumentSnapshot retained;
+        {
+            FocusedWorkspaceController controller{project.Root(), {}, [&](const SourceOpenResult &result) {
+                REQUIRE(result.sourceSnapshot.has_value());
+                retained = *result.sourceSnapshot;
+                return true;
+            }};
+            EditorWorkspaceViewCommandData command;
+            command.command = EditorWorkspaceViewCommand::OpenSourceFile;
+            command.sourceOpenRequest = SourceOpenRequest{.path = project.Source(), .mode = SourceOpenMode::EmbeddedOnly};
+            controller.ProcessCommand(command);
+            REQUIRE(retained.Revision() == 1);
+            const auto instance = retained.Identity().instance;
+            const auto edited = controller.SourceDocuments().Edit(instance, {1, 0, 3, "void"});
+            REQUIRE(edited.HasValue());
+            CHECK(edited.Value().Dirty());
+            CHECK(retained.Text() == "int Player() { return 0; }\n");
+            CancellationSource cancellation;
+            cancellation.RequestCancellation();
+            REQUIRE(controller.SourceDocuments().Reload(instance, 2, cancellation.Token()).HasError());
+            CHECK(controller.SourceDocuments().Snapshot(instance).Value().Revision() == 2);
+            REQUIRE(controller.SourceDocuments().Shutdown().HasValue());
+            CHECK(edited.Value().Text() == "void Player() { return 0; }\n");
+        }
+        CHECK(retained.Text() == "int Player() { return 0; }\n");
+        CHECK(retained.DiskBase() == retained.Text());
+    }
+
     TEST_CASE("Workspace source commands report an unavailable navigator", "[unit][editor][source]") {
         SourceProjectFixture project;
         std::vector<DocumentOpenDisposition> dispositions;

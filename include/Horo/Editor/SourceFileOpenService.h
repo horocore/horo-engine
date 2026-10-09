@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Editor/EditorSurfaceIdentity.h"
+#include "Horo/Editor/SourceDocumentService.h"
 #include "Horo/Foundation/Result.h"
 
 #include <cstdint>
@@ -113,6 +114,7 @@ namespace Horo::Editor {
         std::optional<DocumentOpenResult> document;                /**< Embedded identity result; empty for fallback. */
         std::uint32_t line{};                                      /**< Line copied from the request. */
         std::uint32_t column{};                                    /**< Column copied from the request. */
+        std::optional<SourceDocumentSnapshot> sourceSnapshot;      /**< Owned text lease for embedded Source routes only. */
     };
 
     /**
@@ -190,16 +192,34 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<SourceOpenResult> Open(const SourceOpenRequest &request);
 
+        /** @brief Returns the widget-independent owner for typed source queries and commands.
+         * @return Owner-thread service; only its immutable snapshots may cross threads.
+         */
+        [[nodiscard]] SourceDocumentService &Documents() noexcept {
+            return sourceDocuments_;
+        }
+
+        /** @brief Closes both text ownership and its routing identity after an explicit host close decision.
+         * @param instance Exact open session. @param discardDirty Explicit permission to discard unsaved text.
+         * @return Success or typed stale/dirty/thread failure; presentation-only destruction must not call this.
+         */
+        [[nodiscard]] Result<void> CloseDocument(DocumentInstanceId instance, bool discardDirty = false);
+
     private:
         SourceFileOpenService(const std::filesystem::path &projectRoot, DocumentIdentityRegistry *documentRegistry,
                               SourceFilePolicy policy);
         [[nodiscard]] std::filesystem::path NormalizeInputPath(const std::filesystem::path &path) const;
         [[nodiscard]] Result<SourceOpenLocation> ResolveLocation(const std::filesystem::path &path) const;
+        /** @brief Admits widget-independent text and routing identity with rollback on failed loading. */
+        [[nodiscard]] Result<SourceOpenResult> OpenEmbedded(const SourceOpenRequest &request,
+                                                            const SourceFileClassification &classification,
+                                                            const SourceOpenLocation &location);
 
         bool projectRootValid_{false};
         std::filesystem::path projectRoot_;
         SourceFilePolicy policy_;
         DocumentIdentityRegistry ownedDocumentRegistry_;
         DocumentIdentityRegistry *documentRegistry_{&ownedDocumentRegistry_};
+        SourceDocumentService sourceDocuments_;
     };
 }  // namespace Horo::Editor

@@ -12,6 +12,8 @@
 namespace {
     // Scoped stack-owned observation on the calling thread; fixture/framework allocations stay outside its window.
     thread_local Horo::Tests::AllocationProbe::Measurement *activeMeasurement{};
+    thread_local Horo::Tests::AllocationProbe::AllocationObserver activeObserver{};
+    thread_local void *observerContext{};
 
     class AllocationMeter final {
     public:
@@ -74,6 +76,8 @@ namespace {
     private:
         /** @brief Disable the one-shot failure before notifying or throwing, so exception cleanup can allocate. */
         static void RecordAllocation(const std::size_t byteCount) {
+            if (activeObserver != nullptr)
+                activeObserver(byteCount, observerContext);
             if (activeMeasurement != nullptr) {
                 ++activeMeasurement->requests;
                 const auto remaining = std::numeric_limits<std::size_t>::max() - activeMeasurement->requestedBytes;
@@ -152,6 +156,18 @@ void operator delete[](void *memory, std::size_t, const std::align_val_t) noexce
 }
 
 namespace Horo::Tests::AllocationProbe {
+    /** @copydoc ScopedObserver::ScopedObserver */
+    ScopedObserver::ScopedObserver(const AllocationObserver observer, void *context) noexcept
+        : previousObserver_(activeObserver), previousContext_(observerContext) {
+        activeObserver = observer;
+        observerContext = context;
+    }
+
+    ScopedObserver::~ScopedObserver() {
+        activeObserver = previousObserver_;
+        observerContext = previousContext_;
+    }
+
     ScopedMeasurement::ScopedMeasurement() noexcept : previous_(activeMeasurement) {
         activeMeasurement = &measurement_;
     }

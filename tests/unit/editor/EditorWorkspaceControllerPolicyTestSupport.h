@@ -75,6 +75,7 @@ namespace HoroEditorWorkspaceControllerPolicyTests {
         }
 
         [[nodiscard]] Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override {
+            ++atomicReplaceCalls;
             if (failReplace)
                 return Result<void>::Failure(MakeError(InjectedFilesystemFailure));
             return native_.AtomicReplace(prepared, destination);
@@ -92,6 +93,7 @@ namespace HoroEditorWorkspaceControllerPolicyTests {
 
         bool failSync{false};
         bool failReplace{false};
+        std::size_t atomicReplaceCalls{0}; /**< Counts attempted replacement, including injected failures, for autosave retry assertions. */
 
     private:
         NativeDurableFileSystem native_;
@@ -99,7 +101,8 @@ namespace HoroEditorWorkspaceControllerPolicyTests {
 
     class FocusedWorkspaceController final {
     public:
-        explicit FocusedWorkspaceController(const std::filesystem::path &projectRoot, DiagnosticSourceNavigator diagnosticNavigator = {},
+        explicit FocusedWorkspaceController(const std::filesystem::path &projectRoot = "test-project",
+                                            DiagnosticSourceNavigator diagnosticNavigator = {},
                                             SourceOpenNavigator sourceOpenNavigator = {})
             : controller_(projectRoot, runtimeScene_, {},
                           EditorWorkspaceDependencies{.sourceOpenNavigator = std::move(sourceOpenNavigator),
@@ -115,6 +118,26 @@ namespace HoroEditorWorkspaceControllerPolicyTests {
 
         [[nodiscard]] const EditorWorkspaceViewModel &ViewModel() const noexcept {
             return controller_.ViewModel();
+        }
+
+        [[nodiscard]] Horo::Editor::SourceDocumentService &SourceDocuments() noexcept {
+            return controller_.SourceDocuments();
+        }
+
+        [[nodiscard]] Horo::Editor::EditorDataBus &DataBus() noexcept {
+            return controller_.DataBus();
+        }
+
+        [[nodiscard]] Horo::Editor::ViewportRevision CurrentViewportRevision() const noexcept {
+            return controller_.CurrentViewportRevision();
+        }
+
+        [[nodiscard]] const Horo::Editor::EditorViewportSceneSnapshot &ViewportScene() const noexcept {
+            return controller_.ViewportScene();
+        }
+
+        void UpdateContentBrowser() {
+            controller_.UpdateContentBrowser();
         }
 
         void RefreshAssets(const Assets::AssetRegistrySnapshot &snapshot) {

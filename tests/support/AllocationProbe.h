@@ -3,6 +3,23 @@
 #include <cstddef>
 
 namespace Horo::Tests::AllocationProbe {
+    /** @brief Owner-thread allocation observer; must not allocate or throw. */
+    using AllocationObserver = void (*)(std::size_t byteCount, void *context) noexcept;
+
+    /** @brief Scoped synchronous allocator seam, isolated from allocations on other threads. */
+    class ScopedObserver final {
+    public:
+        /** @brief Observe requests until scope exit; context must outlive this scope. */
+        ScopedObserver(AllocationObserver observer, void *context) noexcept;
+        ~ScopedObserver();
+        ScopedObserver(const ScopedObserver &) = delete;
+        ScopedObserver &operator=(const ScopedObserver &) = delete;
+
+    private:
+        AllocationObserver previousObserver_{};
+        void *previousContext_{};
+    };
+
     /** @brief Ordinary/aligned C++ allocation requests in one owner-thread measurement window; not peak resident memory. */
     struct Measurement final {
         std::size_t requests{};

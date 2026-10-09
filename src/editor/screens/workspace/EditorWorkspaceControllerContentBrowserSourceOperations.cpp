@@ -73,7 +73,7 @@ namespace Horo::Editor {
             // result. A rejected navigation must not leave an unpresented identity in
             // the workspace registry.
             if (result.document.has_value() && result.document->disposition == DocumentOpenDisposition::Opened)
-                static_cast<void>(m_documentRegistry.Close(result.document->identity.instance));
+                static_cast<void>(m_sourceOpenService.CloseDocument(result.document->identity.instance));
             m_viewModel.contentBrowserOperationError = "workspace.source_open.unavailable";
         }
     }

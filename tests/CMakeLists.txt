@@ -2008,9 +2008,15 @@ target_compile_features(HoroEditorSurfaceIdentityTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorSurfaceIdentityTests PRIVATE HoroEngine::EditorServices)
 add_executable(HoroSourceFileOpenServiceTests
         unit/editor/SourceFileOpenServiceTests.cpp
+        unit/editor/SourceDocumentServiceTests.cpp
+        support/AllocationProbe.cpp
 )
 target_compile_features(HoroSourceFileOpenServiceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSourceFileOpenServiceTests PRIVATE HoroEngine::EditorServices)
+add_library(HoroSourceDocumentPublicHeaderConsumer OBJECT support/SourceDocumentPublicContract.cpp)
+target_compile_features(HoroSourceDocumentPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroSourceDocumentPublicHeaderConsumer PRIVATE HoroEngine::EditorServices)
+target_sources(HoroSourceFileOpenServiceTests PRIVATE $<TARGET_OBJECTS:HoroSourceDocumentPublicHeaderConsumer>)
 add_executable(HoroUiCanvasDocumentTests
         unit/editor/UiCanvasDocumentTests.cpp
 )
@@ -2037,6 +2043,14 @@ target_link_libraries(HoroWorkspaceSplitterInteractionTests PRIVATE HoroEngine::
 if (HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditorWorkspaceControllerTests
             unit/editor/EditorWorkspaceControllerTests.cpp
+            unit/editor/EditorWorkspaceControllerPersistenceTests.cpp
+            unit/editor/EditorWorkspaceControllerContentBrowserTests.cpp
+            unit/editor/EditorWorkspaceControllerDockingTests.cpp
+            unit/editor/EditorWorkspaceControllerInspectorTests.cpp
+            unit/editor/EditorWorkspaceControllerAssetMutationTests.cpp
+            unit/editor/EditorWorkspaceControllerAssetTransferTests.cpp
+            unit/editor/EditorWorkspaceControllerSourceNavigationTests.cpp
+            unit/editor/EditorWorkspaceControllerFilesystemTestSupport.h
             unit/editor/EditorWorkspaceControllerPolicyTests.cpp
             unit/editor/EditorWorkspaceControllerPolicyTestSupport.h
             unit/editor/EditorWorkspaceControllerTransferPolicyTests.cpp
