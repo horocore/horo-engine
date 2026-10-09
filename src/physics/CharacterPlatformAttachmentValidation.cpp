@@ -15,8 +15,8 @@ namespace Horo::Character::Detail {
         /** @brief Checks the closed support motion vocabulary against the controller's admission policy. */
         [[nodiscard]] bool PlatformMotionEligible(const Physics::PhysicsMotionType motion,
                                                   const CharacterControllerDescriptor &descriptor) noexcept {
-            return motion == Physics::PhysicsMotionType::Static || motion == Physics::PhysicsMotionType::Kinematic ||
-                   (motion == Physics::PhysicsMotionType::Dynamic && descriptor.allowDynamicPlatformAttachment);
+            using enum Physics::PhysicsMotionType;
+            return motion == Static || motion == Kinematic || (motion == Dynamic && descriptor.allowDynamicPlatformAttachment);
         }
 
         /** @brief Validates numeric evidence before quaternion rotation or point reconstruction. */
