@@ -215,7 +215,8 @@ namespace Horo::Runtime {
         REQUIRE(result.HasValue());
         CHECK(result.Value().State() == StagedRestoreTransactionState::ReadyToActivate);
         CHECK(source.state.live == 9);
-        REQUIRE(result.Value().Activate({registry.Generation(), 2, 3}).HasValue());
+        auto transaction = std::move(result).Value();
+        REQUIRE(transaction.Activate({registry.Generation(), 2, 3}).HasValue());
         CHECK(source.state.live == 42);
         CHECK(source.state.rollbacks == 0);
         REQUIRE(controller.Clear().HasValue());
@@ -271,7 +272,8 @@ namespace Horo::Runtime {
         SECTION("generation changed after preparation") {
             auto result = Restart(controller, registry, source);
             REQUIRE(result.HasValue());
-            CHECK(result.Value().Activate({registry.Generation(), 4, 3}).HasError());
+            auto transaction = std::move(result).Value();
+            CHECK(transaction.Activate({registry.Generation(), 4, 3}).HasError());
             CHECK(source.state.rollbacks == 1);
         }
         CHECK(source.state.live == 9);

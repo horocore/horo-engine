@@ -63,20 +63,21 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<StagedRestoreTransaction> PrepareStaging(StagedRestoreContext context, SaveOperationController operation,
                                                                       SaveParticipantRegistrySnapshot participants,
                                                                       GameplayCheckpointRestoreStaging staging) {
-            auto transaction =
+            auto created =
                 StagedRestoreTransaction::Create(context, std::move(operation), std::move(participants), std::move(staging.participants));
-            if (transaction.HasError())
-                return transaction;
+            if (created.HasError())
+                return created;
+            auto transaction = std::move(created).Value();
             if (staging.references) {
-                const auto resolver = transaction.Value().SetReferenceResolver(std::move(staging.references));
+                const auto resolver = transaction.SetReferenceResolver(std::move(staging.references));
                 if (resolver.HasError()) {
-                    transaction.Value().Rollback(resolver.ErrorValue());
+                    transaction.Rollback(resolver.ErrorValue());
                     return Result<StagedRestoreTransaction>::Failure(resolver.ErrorValue());
                 }
             }
-            if (const auto prepared = transaction.Value().Prepare(); prepared.HasError())
+            if (const auto prepared = transaction.Prepare(); prepared.HasError())
                 return Result<StagedRestoreTransaction>::Failure(prepared.ErrorValue());
-            return transaction;
+            return Result<StagedRestoreTransaction>::Success(std::move(transaction));
         }
     }  // namespace
 
@@ -99,12 +100,13 @@ namespace Horo::Runtime {
             return Result<GameplayCheckpoint>::Failure(MakeError(SaveErrors::RestoreContextInvalid));
         if (ValidateSaveSlotDisplayMetadata(metadata.display).HasError())
             metadata.display = {};
-        auto builder = RuntimeSaveCaptureBuilder::Create(provenance, std::move(participants), limits);
-        if (builder.HasError())
-            return Result<GameplayCheckpoint>::Failure(builder.ErrorValue());
-        if (const auto result = builder.Value().CaptureParticipants(); result.HasError())
+        auto created = RuntimeSaveCaptureBuilder::Create(provenance, std::move(participants), limits);
+        if (created.HasError())
+            return Result<GameplayCheckpoint>::Failure(created.ErrorValue());
+        auto builder = std::move(created).Value();
+        if (const auto result = builder.CaptureParticipants(); result.HasError())
             return Result<GameplayCheckpoint>::Failure(result.ErrorValue());
-        auto snapshot = builder.Value().Seal();
+        auto snapshot = builder.Seal();
         if (snapshot.HasError())
             return Result<GameplayCheckpoint>::Failure(snapshot.ErrorValue());
         const auto records = snapshot.Value().Records();
