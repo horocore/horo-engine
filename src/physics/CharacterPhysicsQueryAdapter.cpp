@@ -6,6 +6,13 @@
 
 namespace Horo::Character {
     namespace {
+        /** @brief Distinguishes an absent resident movement base from a typed owner/native failure. */
+        [[nodiscard]] Result<std::optional<CharacterPlatformBodyEvidence>> MissingPlatformBody(const Error &error) {
+            if (error.code.Value() == Physics::PhysicsErrors::HandleStale.code.Value())
+                return Result<std::optional<CharacterPlatformBodyEvidence>>::Success(std::nullopt);
+            return Result<std::optional<CharacterPlatformBodyEvidence>>::Failure(error);
+        }
+
         /** @brief Intersects typed selectors with the movement channel; no trigger or overlap can enter physical reduction. */
         [[nodiscard]] Physics::PhysicsQueryFilter MovementFilter(const Physics::PhysicsQueryChannelId channel,
                                                                  const CharacterCollisionSelectors &selectors) noexcept {
@@ -59,15 +66,21 @@ namespace Horo::Character {
     /** @copydoc CharacterPhysicsQueryAdapter::PlatformBody */
     Result<std::optional<CharacterPlatformBodyEvidence>> CharacterPhysicsQueryAdapter::PlatformBody(
         const Physics::BodyHandle body, const Physics::ShapeHandle shape, const std::uint64_t physicsSnapshotRevision) const noexcept {
-        if (const auto published = world_->PublishedTick();
-            published.completedTick == 0 || physicsSnapshotRevision == 0 || published.publicationRevision != physicsSnapshotRevision)
+        // Immediate-query fixtures supply collision identity but no resident scene-body frame.
+        // Determine eligibility without reading a pose before requiring an attachment snapshot.
+        const auto policy = world_->ReadSceneBodyPolicy(body);
+        if (policy.HasError())
+            return MissingPlatformBody(policy.ErrorValue());
+        const auto published = world_->PublishedTick();
+        // Static collision does not require a movement-base frame before Physics publishes one.
+        // Return no attachment, not an unfenced pose; moving bodies still require exact evidence.
+        if (published.completedTick == 0 && policy.Value().motion == Physics::PhysicsMotionType::Static)
+            return Result<std::optional<CharacterPlatformBodyEvidence>>::Success(std::nullopt);
+        if (published.completedTick == 0 || physicsSnapshotRevision == 0 || published.publicationRevision != physicsSnapshotRevision)
             return Result<std::optional<CharacterPlatformBodyEvidence>>::Failure(MakeError(Physics::PhysicsErrors::QuerySnapshotStale));
         const auto evidence = world_->ReadSceneBodyReconciliation(body);
-        if (evidence.HasError()) {
-            if (evidence.ErrorValue().code.Value() == Physics::PhysicsErrors::HandleStale.code.Value())
-                return Result<std::optional<CharacterPlatformBodyEvidence>>::Success(std::nullopt);
-            return Result<std::optional<CharacterPlatformBodyEvidence>>::Failure(evidence.ErrorValue());
-        }
+        if (evidence.HasError())
+            return MissingPlatformBody(evidence.ErrorValue());
         if (evidence.Value().observedShape != shape)
             return Result<std::optional<CharacterPlatformBodyEvidence>>::Success(std::nullopt);
         return Result<std::optional<CharacterPlatformBodyEvidence>>::Success(
