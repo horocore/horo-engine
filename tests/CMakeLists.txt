@@ -1334,7 +1334,9 @@ target_link_libraries(HoroPrefabTemplateCookPublicHeaderConsumer PRIVATE HoroEng
 add_test(NAME HoroPrefabTemplateCookPublicHeaderConsumer COMMAND HoroPrefabTemplateCookPublicHeaderConsumer)
 set_tests_properties(HoroPrefabTemplateCookPublicHeaderConsumer PROPERTIES LABELS "unit;prefab;headless")
 
-add_executable(HoroSceneRuntimeConversionTests unit/scene/SceneRuntimeConversionTests.cpp unit/scene/CookedSceneDefinitionTests.cpp)
+add_executable(HoroSceneRuntimeConversionTests unit/scene/SceneRuntimeConversionTests.cpp unit/scene/CookedSceneDefinitionTests.cpp
+        unit/scene/ScenePrefabExpansionTests.cpp unit/scene/ScenePrefabExpansionOwnerTests.cpp support/AllocationProbe.cpp)
+target_include_directories(HoroSceneRuntimeConversionTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_compile_features(HoroSceneRuntimeConversionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSceneRuntimeConversionTests PRIVATE HoroEngine::SceneRuntimeConversion HoroEngine::SceneCook)
 horo_register_catch_test(HoroSceneRuntimeConversionTests LABELS "unit;scene;prefab;headless")

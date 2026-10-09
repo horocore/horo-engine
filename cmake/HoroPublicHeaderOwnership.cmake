@@ -8,6 +8,7 @@ horo_configure_target_header_boundary(HoroSceneSource PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroSceneRuntimeConversion PUBLIC_HEADERS
     Horo/Scene/SceneRuntimeConversion.h
+    Horo/Scene/ScenePrefabExpansionOwner.h
 )
 horo_configure_target_header_boundary(HoroSceneCook PUBLIC_HEADERS
     Horo/Scene/CookedSceneDefinition.h
@@ -926,6 +927,7 @@ Horo/Prefab/PrefabAssetDependencyClosure.h
 Horo/Prefab/PrefabDependencyGraph.h
     Horo/Prefab/PrefabDiagnostics.h
     Horo/Prefab/PrefabDocument.h
+    Horo/Prefab/PrefabExpansionCache.h
     Horo/Prefab/PrefabSceneIdentityRemap.h
     Horo/Prefab/PrefabSourceResolver.h
     Horo/Prefab/PrefabTemplateCook.h

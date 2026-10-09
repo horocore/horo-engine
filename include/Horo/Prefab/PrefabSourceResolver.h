@@ -5,6 +5,7 @@
  * @brief Revision-pinned prefab source expansion and publication fencing.
  */
 
+#include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Prefab/PrefabDependencyGraph.h"
 
 #include <span>
@@ -44,6 +45,7 @@ namespace Horo::Prefab {
 
     private:
         friend class PrefabSourceResolverSnapshot;
+        friend class PrefabExpansionCache;
 
         EffectivePrefabCandidate(Assets::AssetId rootAsset, PrefabResolutionRevision revision,
                                  std::vector<ResolvedPrefabObject> objects) noexcept;
@@ -62,14 +64,25 @@ namespace Horo::Prefab {
         [[nodiscard]] std::span<const PrefabDependencySource> Sources() const noexcept;
 
         /**
+         * @brief Captures complete reachable revision evidence without materializing expanded objects.
+         * @param rootAsset Stable requested root.
+         * @param limits Immutable policy bounding graph inspection and allocation.
+         * @return Owned canonical revision evidence or the same typed graph/budget error as resolution.
+         */
+        [[nodiscard]] Result<PrefabResolutionRevision> CaptureResolutionRevision(Assets::AssetId rootAsset,
+                                                                                 const PrefabLimitProfile &limits) const;
+
+        /**
          * @brief Expands one root as a pure bounded transformation over this snapshot.
          * @param rootAsset Stable root prefab identity.
          * @param instance Stable containing instance identity used by every expanded object key.
          * @param limits Captured project policy bounding recursion, object count and work.
+         * @param cancellation Cooperative operation token checked between bounded source/object units.
          * @return Complete effective candidate, or a typed availability, cycle, depth or budget error.
          */
         [[nodiscard]] Result<EffectivePrefabCandidate> Resolve(Assets::AssetId rootAsset, PrefabInstanceId instance,
-                                                               const PrefabLimitProfile &limits) const;
+                                                               const PrefabLimitProfile &limits,
+                                                               const CancellationToken &cancellation = {}) const;
 
         /**
          * @brief Fences captured preview/cache evidence against this publication without invalidating unrelated roots.
