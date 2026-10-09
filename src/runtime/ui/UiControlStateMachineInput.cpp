@@ -263,8 +263,7 @@ namespace Horo::Runtime::Ui {
             return Result<UiControlTransitionKind>::Success(UiControlTransitionKind::IgnoredDisabled);
         if (!UiControlDetail::IsFocused(state) || !std::get<UiTextInputControlState>(state).editing)
             return Result<UiControlTransitionKind>::Success(UiControlTransitionKind::IgnoredUnfocused);
-        const auto edited = textEditor->Apply({UiTextEditKind::Insert, input.text});
-        if (edited.HasError())
+        if (const auto edited = textEditor->Apply({UiTextEditKind::Insert, input.text}); edited.HasError())
             return Result<UiControlTransitionKind>::Failure(edited.ErrorValue());
         std::get<UiTextInputControlState>(state).text = textEditor->Snapshot().Value().text;
         return Result<UiControlTransitionKind>::Success(UiControlTransitionKind::TextEdited);
