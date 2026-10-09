@@ -1,6 +1,7 @@
 #include "Horo/Physics/CharacterControllerContracts.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <limits>
 #include <set>
 #include <string_view>
@@ -147,7 +148,7 @@ namespace Horo::Character {
             result.truncated = true;
             for (std::uint32_t index = 1; index < result.hitCount; ++index)
                 result.hits[index] = result.hits[0];
-            REQUIRE(ValidateCharacterSweepProbeResult(result, request).HasValue());
+            RequireError(ValidateCharacterSweepProbeResult(result, request), CharacterErrors::CapacityExceeded);
             result.hitCount = MaximumCharacterSweepHits - 1;
             RequireError(ValidateCharacterSweepProbeResult(result, request), CharacterErrors::DescriptorInvalid);
         }
@@ -266,6 +267,16 @@ namespace Horo::Character {
             REQUIRE(ValidateCharacterMovementResult(result, descriptor).HasValue());
         }
 
+        TEST_CASE("Character solver-limit diagnostics cannot retain unswept gravity continuation", "[physics][character][result]") {
+            const auto descriptor = Descriptor();
+            auto result = MovementResult(descriptor);
+            result.termination = GENERATE(CharacterMovementTermination::IterationLimit, CharacterMovementTermination::ConstraintLimit);
+            result.gravityVelocityMetersPerSecond = {};
+            REQUIRE(ValidateCharacterMovementResult(result, descriptor).HasValue());
+            result.gravityVelocityMetersPerSecond = {0, -1, 0};
+            RequireError(ValidateCharacterMovementResult(result, descriptor), CharacterErrors::DescriptorInvalid);
+        }
+
         TEST_CASE("Character result rejects overflow unknown flags and incoherent surface evidence transactionally",
                   "[physics][character][result]") {
             auto descriptor = Descriptor();
@@ -280,6 +291,9 @@ namespace Horo::Character {
             RequireError(ValidateCharacterMovementResult(result, descriptor), CharacterErrors::OperationUnsupported);
             result.collisions = CharacterCollisionFlags::None;
             result.contactCount = 0;
+            result.termination = static_cast<CharacterMovementTermination>(255);
+            RequireError(ValidateCharacterMovementResult(result, descriptor), CharacterErrors::DescriptorInvalid);
+            result.termination = CharacterMovementTermination::Complete;
             result.truncated = true;
             RequireError(ValidateCharacterMovementResult(result, descriptor), CharacterErrors::DescriptorInvalid);
             result.contactCount = 1;

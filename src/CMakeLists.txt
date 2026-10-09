@@ -1116,7 +1116,10 @@ add_library(HoroPhysics STATIC
         physics/CharacterWorldCommandPipeline.cpp
         physics/CharacterWorldCommandInternal.h
         physics/CharacterWorldMovementInternal.h
+        physics/CharacterWorldSweepInternal.h
+        physics/CharacterWorldStepInternal.h
         physics/CharacterWorldPlatformInternal.h
+        physics/CharacterSweepPlanesInternal.h
         physics/CharacterWorldInternal.h
         physics/CharacterWorldPlacementInternal.h
         physics/CharacterWorldShapeInternal.h
