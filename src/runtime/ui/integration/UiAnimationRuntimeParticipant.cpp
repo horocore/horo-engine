@@ -179,6 +179,16 @@ namespace Horo::Runtime {
         return storage_->owner.HandleControl(view, input);
     }
 
+    /** @copydoc UiAnimationRuntimeParticipant::EditControlText */
+    Result<Ui::UiTextEditResult> UiAnimationRuntimeParticipant::EditControlText(const Ui::UiRenderViewId view,
+                                                                                const Ui::UiActionSource &source,
+                                                                                const std::uint64_t sequence,
+                                                                                const Ui::UiTextEditCommand &command) {
+        if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->stopped)
+            return Result<Ui::UiTextEditResult>::Failure(MakeError(Ui::UiErrors::AnimationLifecycleUnavailable));
+        return storage_->owner.EditControlText(view, source, sequence, command);
+    }
+
     /** @copydoc UiAnimationRuntimeParticipant::ApplyControlDefault */
     Result<std::optional<Ui::UiControlDefaultAction>> UiAnimationRuntimeParticipant::ApplyControlDefault(const Ui::UiRenderViewId view,
                                                                                                          const Ui::UiActionSource &source) {

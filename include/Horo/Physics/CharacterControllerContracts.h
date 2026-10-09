@@ -7,6 +7,7 @@
 #include "Horo/Foundation/Handles.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Physics/CharacterErrors.h"
+#include "Horo/Physics/PhysicsBodyDescriptor.h"
 #include "Horo/Physics/PhysicsQuery.h"
 #include "Horo/Physics/PhysicsShapeDescriptor.h"
 
@@ -172,6 +173,7 @@ namespace Horo::Character {
         CharacterCollisionSelectors selectors;                       /**< Initial movement, placement and clearance filter. */
         std::optional<Physics::PhysicsCapsuleShape> crouchedCapsule; /**< Same radius and lower cylindrical height than standing. */
         float jumpSpeedMetersPerSecond{5.0F};                        /**< Finite nonnegative impulse along up; zero disables jumping. */
+        bool allowDynamicPlatformAttachment{};                       /**< Dynamic support is ineligible unless explicitly admitted. */
     };
 
     /** @brief Operation that may publish a new collision-root transform. */
@@ -266,7 +268,8 @@ namespace Horo::Character {
      * @brief Fixed-capacity capsule-sweep evidence reduced by the private Physics adapter.
      *
      * Only the first `hitCount` entries are active. `truncated` reports that the adapter's fixed
-     * response capacity dropped later evidence; no callback may return an unbounded collection.
+     * response capacity dropped later evidence; validation rejects that incomplete inventory rather
+     * than certifying travel from a potentially missing blocker. No callback may return an unbounded collection.
      */
     struct CharacterSweepProbeResult final {
         std::array<CharacterSweepHit, MaximumCharacterSweepHits> hits{};
@@ -281,6 +284,25 @@ namespace Horo::Character {
      * @return Bounded sweep evidence or the original typed Physics failure.
      */
     using CharacterSweepProbe = Result<CharacterSweepProbeResult> (*)(void *context, const CharacterSweepProbeRequest &request) noexcept;
+
+    /** @brief Owned live body/shape pose evidence from the exact synchronous Character query view. */
+    struct CharacterPlatformBodyEvidence final {
+        Physics::BodyHandle body;
+        Physics::ShapeHandle shape;
+        Physics::PhysicsMotionType motion{Physics::PhysicsMotionType::Static};
+        Physics::PhysicsPose pose;
+    };
+
+    /**
+     * @brief Resolves an exact ground body and shape without retaining native state.
+     * @param context Borrowed adapter state, valid only during the owner-thread operation.
+     * @param body Exact generation-checked support body.
+     * @param shape Exact generation-checked support shape.
+     * @param physicsSnapshotRevision Exact captured Physics publication; a newer live pose is not interchangeable.
+     * @return Copied evidence, absence for a retired binding, or the original typed provider failure.
+     */
+    using CharacterPlatformBodyProbe = Result<std::optional<CharacterPlatformBodyEvidence>> (*)(
+        void *context, Physics::BodyHandle body, Physics::ShapeHandle shape, std::uint64_t physicsSnapshotRevision) noexcept;
 
     /**
      * @brief World- and tick-affine read-only query context for placement and movement resolution.
@@ -299,6 +321,7 @@ namespace Horo::Character {
         std::uint64_t tick{};
         std::uint64_t physicsSnapshotRevision{};
         CharacterSweepProbe sweep{};
+        CharacterPlatformBodyProbe platformBody{}; /**< Absent means attachment evidence is unavailable, not a static pose. */
     };
 
     /** @brief Exact world and snapshot identity expected by one Character query operation. */
@@ -333,6 +356,9 @@ namespace Horo::Character {
         Result<CharacterOverlapProbeResult> Overlap(const CharacterOverlapProbeRequest &request) const noexcept;
         /** @brief Runs a filtered capsule sweep and copies only Horo-owned evidence. */
         Result<CharacterSweepProbeResult> Sweep(const CharacterSweepProbeRequest &request) const noexcept;
+        /** @brief Copies revision-fenced resident pose evidence; query-only/stale bindings and unpublished static frames return absence. */
+        Result<std::optional<CharacterPlatformBodyEvidence>> PlatformBody(Physics::BodyHandle body, Physics::ShapeHandle shape,
+                                                                          std::uint64_t physicsSnapshotRevision) const noexcept;
         Physics::PhysicsWorld *world_;
     };
 
@@ -432,6 +458,37 @@ namespace Horo::Character {
             filterChange; /**< Applies to every probe of this command and persists only on tick commit. */
     };
 
+    /** @brief Fixed-tick outcome of movement-base tracking; no callback or presentation event is emitted. */
+    enum class CharacterPlatformAttachmentChange : std::uint8_t {
+        None,
+        Attached,
+        Detached,
+        BaseChanged,
+        Stale,
+        Unavailable
+    };
+
+    /**
+     * @brief Owned movement-base identity and contact/root frames in the supporting body's local space.
+     *
+     * Body, shape and optional authored child generations form one exact binding. The sampled pose
+     * is in the captured Physics origin frame. Full rotation transports these local values; it does
+     * not rotate capsule up or authorize a second Character move. Motion carry belongs to CHR-003.4.
+     * These process-local handles are not durable checkpoint identity and retain no body lifetime.
+     */
+    struct CharacterPlatformAttachment final {
+        Physics::BodyHandle body;
+        Physics::ShapeHandle shape;
+        std::optional<Physics::PhysicsShapeSubresourceId> subshape;
+        Math::Vec3 localContactPoint;
+        Math::Vec3 localContactNormal{0, 1, 0};
+        Physics::PhysicsPose localRoot;
+        Physics::PhysicsPose sampledBodyPose;
+        std::uint64_t sourceTick{};
+        std::uint64_t physicsSnapshotRevision{};
+        Physics::PhysicsMotionType motion{Physics::PhysicsMotionType::Static}; /**< Eligibility policy captured with the body pose. */
+    };
+
     /** @brief Whether physical identity was supplied by Physics or by the explicit controller fallback. */
     enum class CharacterMaterialSource : std::uint8_t {
         Query,
@@ -455,6 +512,14 @@ namespace Horo::Character {
         None,
         LeftGround,
         Landed,
+    };
+
+    /** @brief Committed bounded-solver diagnostic; a limit discards unswept travel and gravity continuation, never certifies an unchecked
+     * endpoint. */
+    enum class CharacterMovementTermination : std::uint8_t {
+        Complete,
+        IterationLimit,
+        ConstraintLimit,
     };
 
     /**
@@ -492,6 +557,10 @@ namespace Horo::Character {
         std::optional<CharacterShapeChangeResult> shapeChange; /**< Character-owned clearance outcome, never adapter authority. */
         bool jumpApplied{}; /**< This tick consumed committed grounded state and applied the configured impulse. */
         CharacterGroundTransition groundTransition{CharacterGroundTransition::None}; /**< Exactly one post-commit support fact. */
+        std::optional<CharacterPlatformAttachment> platformAttachment;               /**< Present exactly when platformAttached is true. */
+        CharacterPlatformAttachmentChange platformAttachmentChange{CharacterPlatformAttachmentChange::None};
+        CharacterMovementTermination termination{
+            CharacterMovementTermination::Complete}; /**< Owned solver-limit diagnostic, not contact truncation. */
     };
 
     /**

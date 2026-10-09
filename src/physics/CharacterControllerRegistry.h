@@ -54,6 +54,13 @@ namespace Horo::Character::Detail {
         }
 
         /** @brief Resolves one exact live record to a borrow bounded by registry mutation or destruction. */
+        [[nodiscard]] const Value *TryResolve(const CharacterControllerHandle &handle) const noexcept {
+            if (!handle.IsValid() || handle.sceneGeneration != sceneGeneration_ || handle.world != world_)
+                return nullptr;
+            return storage_.Resolve(handle.slot.index, handle.slot.generation);
+        }
+
+        /** @brief Resolves one exact live record to a borrow bounded by registry mutation or destruction. */
         [[nodiscard]] Result<const Value *> Resolve(const CharacterControllerHandle &handle) const {
             if (const Result<void> owner = ValidateCharacterControllerHandleOwner(handle, sceneGeneration_, world_); owner.HasError())
                 return Result<const Value *>::Failure(owner.ErrorValue());

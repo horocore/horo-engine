@@ -18,10 +18,10 @@ namespace Horo::Audio {
             return loop.enabled ? loop.begin < loop.end && loop.end <= frames : loop.begin == 0 && loop.end == 0;
         }
 
-        /** @brief Mutable resident playback controls are unavailable during terminal/virtual/scheduled states. */
+        /** @brief Logical playback controls remain available without a physical renderer. */
         bool Controllable(const AudioVoiceState state) noexcept {
             using enum AudioVoiceState;
-            return state == Ready || state == Playing || state == Paused;
+            return state == Ready || state == Playing || state == Paused || state == Virtual;
         }
 
         /** @brief Keep one deferred discontinuity's target together until the zero boundary. */
@@ -35,6 +35,13 @@ namespace Horo::Audio {
             float playbackGain{1.0F};
             std::array<float, 64> last{};
             std::array<float, 64> held{};
+        };
+
+        /** @brief Callback-owned fade counters share one admitted ramp duration; no cross-thread publication. */
+        struct FadeProgress final {
+            std::uint32_t rampFrames{};
+            std::uint32_t remaining{};
+            std::uint32_t fadeIn{};
         };
 
         /** @brief Check one output plane's extent and alignment before the overlap pass. */
@@ -102,12 +109,11 @@ namespace Horo::Audio {
         AudioVoiceLoop loop;
         AudioVoiceCursor cursor;
         std::uint32_t readFrame{};
-        std::uint32_t rampFrames{};
-        std::uint32_t remaining{};
-        std::uint32_t fadeIn{};
+        FadeProgress fade;
         AudioVoiceControl pending{AudioVoiceControl::Start};
         PendingTarget target;
         bool terminalReported{};
+        bool virtualPlayback{}; /**< Retained while Paused so Resume restores the admitted execution mode. */
         FadeSamples amplitudes;
         std::array<SampleCell, 64> inputCells;
         std::array<SampleCell, 64> outputCells;
@@ -119,7 +125,7 @@ namespace Horo::Audio {
               const AudioResamplerInput source)
             : registry(owner), converter(std::move(prepared)), plan(config.plan),
               pcm(static_cast<std::size_t>(source.frames) * plan.Descriptor().channels), sourceFrames(source.frames), loop(config.loop),
-              rampFrames(config.rampFrames), amplitudes{.playbackGain = config.gain} {
+              fade{.rampFrames = config.rampFrames}, amplitudes{.playbackGain = config.gain} {
             for (std::uint32_t channel = 0; channel < plan.Descriptor().channels; ++channel) {
                 std::ranges::copy(source.planes[channel].first(source.frames),
                                   pcm.begin() + static_cast<std::size_t>(channel) * source.frames);
@@ -153,7 +159,7 @@ namespace Horo::Audio {
             cursor.fraction = 0.0;
             if (loop.enabled && cursor.frame >= loop.end)
                 cursor.frame = loop.begin;
-            readFrame = cursor.frame;
+            readFrame = static_cast<std::uint32_t>(cursor.frame);
             amplitudes.last.fill(0.0F);
         }
 
@@ -177,30 +183,33 @@ namespace Horo::Audio {
                 AudioVoiceState current{};
                 (void)registry.CheckState(voice, current);
                 if (current == Paused)
-                    (void)registry.TryTransition(voice, Playing);
+                    (void)registry.TryTransition(voice, virtualPlayback ? Virtual : Playing);
                 if (current == Ready)
                     (void)StartOrResume(AudioVoiceControl::Start, current);
             }
             if (pending == SetLoop)
                 loop = target.loop;
             Reset();
-            fadeIn = rampFrames;
+            fade.fadeIn = fade.rampFrames;
             return false;
         }
 
         /** @brief Start and resume share fade-in while retaining distinct canonical preconditions. */
         const ErrorCodeDescriptor *StartOrResume(const AudioVoiceControl control, const AudioVoiceState current) noexcept {
+            using enum AudioVoiceControl;
             using enum AudioVoiceState;
-            const bool starting = control == AudioVoiceControl::Start;
+            const bool starting = control == Start || control == StartVirtual;
             if (current != (starting ? Ready : Paused))
                 return &AudioErrors::VoiceInvalidTransition;
             if (starting) {
                 if (const auto *error = registry.TryTransition(voice, Scheduled))
                     return error;
             }
-            if (const auto *error = registry.TryTransition(voice, Playing))
+            const bool nextVirtual = starting ? control == StartVirtual : virtualPlayback;
+            if (const auto *error = registry.TryTransition(voice, nextVirtual ? Virtual : Playing))
                 return error;
-            fadeIn = rampFrames;
+            virtualPlayback = nextVirtual;
+            fade.fadeIn = fade.rampFrames;
             return nullptr;
         }
 
@@ -210,7 +219,9 @@ namespace Horo::Audio {
             using enum AudioVoiceControl;
             switch (request.control) {
                 case Pause:
-                    return current == AudioVoiceState::Playing ? nullptr : &AudioErrors::VoiceInvalidTransition;
+                    return current == AudioVoiceState::Playing || current == AudioVoiceState::Virtual
+                               ? nullptr
+                               : &AudioErrors::VoiceInvalidTransition;
                 case Seek:
                     return request.seekFrame <= sourceFrames && (!loop.enabled || request.seekFrame < loop.end)
                                ? nullptr
@@ -237,25 +248,69 @@ namespace Horo::Audio {
             pending = control;
             target = next;
             amplitudes.held = amplitudes.last;
-            remaining = current == AudioVoiceState::Playing ? rampFrames : 0;
-            if (remaining == 0)
+            fade.remaining = current == AudioVoiceState::Playing ? fade.rampFrames : 0;
+            if (fade.remaining == 0)
                 (void)Commit();
         }
 
         /** @brief Execute already structurally valid intent on a controllable voice. */
         const ErrorCodeDescriptor *ApplyControl(const AudioVoiceControlRequest &request, const AudioVoiceState current) noexcept {
             using enum AudioVoiceControl;
-            if (request.control == Start || request.control == Resume)
-                return StartOrResume(request.control, current);
-            if (request.control == SetPlaybackSpeed)
-                return request.playbackSpeed == 1.0 ? nullptr : &AudioErrors::OperationUnsupported;
+            switch (request.control) {
+                case Start:
+                case StartVirtual:
+                case Resume:
+                    return StartOrResume(request.control, current);
+                case Virtualize:
+                case Realize:
+                    return ChangeExecution(request.control, current);
+                case SetPlaybackSpeed:
+                    return request.playbackSpeed == 1.0 ? nullptr : &AudioErrors::OperationUnsupported;
+                default:
+                    return ApplyDiscontinuity(request, current);
+            }
+        }
+
+        /** @brief Commit the existing seek/loop/stop discontinuity policy after control dispatch. */
+        const ErrorCodeDescriptor *ApplyDiscontinuity(const AudioVoiceControlRequest &request, const AudioVoiceState current) noexcept {
             if (const auto *error = ValidateDiscontinuity(request, current))
                 return error;
-            if (request.control == Stop) {
+            if (request.control == AudioVoiceControl::Stop) {
                 if (const auto *error = BeginStop(current))
                     return error;
             }
             BeginDiscontinuity(request.control, current, {request.seekFrame, request.loop});
+            return nullptr;
+        }
+
+        /** @brief Advance silent virtual time without reading PCM or draining a physical filter tail. */
+        bool RenderVirtualFrame(AudioVoiceState &current) noexcept {
+            if (!loop.enabled && cursor.frame == sourceFrames) {
+                (void)registry.TryTransition(voice, AudioVoiceState::Finished);
+                return false;
+            }
+            Advance();
+            if (!loop.enabled && cursor.frame == sourceFrames)
+                (void)registry.TryTransition(voice, AudioVoiceState::Finished);
+            (void)registry.CheckState(voice, current);
+            return true;
+        }
+
+        /** @brief Switch execution without changing logical phase or allocating a new processing owner. */
+        const ErrorCodeDescriptor *ChangeExecution(const AudioVoiceControl control, const AudioVoiceState current) noexcept {
+            using enum AudioVoiceState;
+            const bool virtualizing = control == AudioVoiceControl::Virtualize;
+            if (current != (virtualizing ? Playing : Virtual))
+                return &AudioErrors::VoiceInvalidTransition;
+            if (const auto *error = registry.TryTransition(voice, virtualizing ? Virtual : Playing))
+                return error;
+            virtualPlayback = virtualizing;
+            // Virtual time has no filter history. Rebuild at the integer cursor, retaining logical
+            // fraction: rendered signal phase differs by less than one source frame on realization.
+            converter.Reset();
+            readFrame = static_cast<std::uint32_t>(cursor.frame);
+            amplitudes.last.fill(0.0F);
+            fade.fadeIn = fade.rampFrames;
             return nullptr;
         }
 
@@ -311,12 +366,12 @@ namespace Horo::Audio {
 
         /** @brief Emit one held-sample ramp frame, committing its deferred action only at zero. */
         void RenderFade(const AudioResamplerOutput output, const std::uint32_t frame, AudioVoiceState &current) noexcept {
-            const auto gain = static_cast<float>(--remaining) / static_cast<float>(rampFrames);
+            const auto gain = static_cast<float>(--fade.remaining) / static_cast<float>(fade.rampFrames);
             for (std::size_t channel = 0; channel < output.planes.size(); ++channel) {
                 amplitudes.last[channel] = ApplyGain(amplitudes.held[channel], gain);
                 output.planes[channel][frame] = amplitudes.last[channel];
             }
-            if (remaining == 0) {
+            if (fade.remaining == 0) {
                 (void)Commit();
                 (void)registry.CheckState(voice, current);
             }
@@ -324,7 +379,8 @@ namespace Horo::Audio {
 
         /** @brief Write new PCM through fade-in and advance audible time once. */
         void RenderPcm(const AudioResamplerOutput output, const std::uint32_t frame) noexcept {
-            const float gain = fadeIn == 0 ? 1.0F : static_cast<float>(rampFrames - --fadeIn) / static_cast<float>(rampFrames);
+            const float gain =
+                fade.fadeIn == 0 ? 1.0F : static_cast<float>(fade.rampFrames - --fade.fadeIn) / static_cast<float>(fade.rampFrames);
             for (std::size_t channel = 0; channel < output.planes.size(); ++channel) {
                 amplitudes.last[channel] = ApplyGain(ApplyGain(outputCells[channel].samples[0], amplitudes.playbackGain), gain);
                 output.planes[channel][frame] = amplitudes.last[channel];
@@ -338,12 +394,14 @@ namespace Horo::Audio {
             using enum AudioVoiceState;
             if (IsTerminalAudioVoiceState(current) || current == Ready || current == Paused)
                 return false;
-            if (remaining != 0) {
+            if (fade.remaining != 0) {
                 RenderFade(output, frame, current);
                 ++result.produced;
                 return true;
             }
             if (current != Playing) {
+                if (current == Virtual)
+                    return RenderVirtualFrame(current);
                 result.error = &AudioErrors::VoiceInvalidTransition;
                 return false;
             }
@@ -423,7 +481,7 @@ namespace Horo::Audio {
             return state_->registry.TryCancel(request.voice);
         if (!Controllable(current))
             return &AudioErrors::VoiceInvalidTransition;
-        if (state_->remaining != 0 && request.control != AudioVoiceControl::Stop)
+        if (state_->fade.remaining != 0 && request.control != AudioVoiceControl::Stop)
             return &AudioErrors::VoiceInvalidTransition;
         return state_->ApplyControl(request, current);
     }
@@ -435,7 +493,7 @@ namespace Horo::Audio {
         AudioVoiceState current{};
         if (const auto *error = state_->Check(voice, current))
             return error;
-        return Controllable(current) && state_->remaining == 0 ? nullptr : &AudioErrors::VoiceInvalidTransition;
+        return Controllable(current) && state_->fade.remaining == 0 ? nullptr : &AudioErrors::VoiceInvalidTransition;
     }
 
     /** @copydoc AudioVoicePlayback::SwapPitch */
@@ -445,7 +503,7 @@ namespace Horo::Audio {
         AudioVoiceState current{};
         if (const auto *error = state_->Check(voice, current))
             return error;
-        if (!Controllable(current) || state_->remaining != 0)
+        if (!Controllable(current) || state_->fade.remaining != 0)
             return &AudioErrors::VoiceInvalidTransition;
         if (!replacement.IsFresh() || !replacement.Plan())
             return &AudioErrors::ResamplerInvalid;
@@ -454,7 +512,7 @@ namespace Horo::Audio {
             return &AudioErrors::ResamplerInvalid;
         std::swap(state_->converter, replacement);
         state_->plan = candidate;
-        state_->BeginDiscontinuity(AudioVoiceControl::Seek, current, {state_->cursor.frame, {}});
+        state_->BeginDiscontinuity(AudioVoiceControl::Seek, current, {static_cast<std::uint32_t>(state_->cursor.frame), {}});
         return nullptr;
     }
 

@@ -245,8 +245,10 @@
         "HoroXROpenXRHostInterfaceConsumer",
         "HoroXRApiTests",
         "HoroXRRuntimeTests",
+        "HoroXRActionBindingTests",
         "HoroXRApiPublicHeaderConsumer",
-        "HoroXRRuntimePublicHeaderConsumer"
+        "HoroXRRuntimePublicHeaderConsumer",
+        "HoroXRInputBindingsPublicHeaderConsumer"
       ],
       "jobs": 2
     },
@@ -364,7 +366,7 @@
       },
       "filter": {
         "include": {
-          "name": "^Horo(XROpenXR|XRApi|XRRuntime)Tests::"
+          "name": "^Horo(XROpenXR|XRApi|XRRuntime|XRActionBinding)Tests::"
         }
       },
       "execution": {

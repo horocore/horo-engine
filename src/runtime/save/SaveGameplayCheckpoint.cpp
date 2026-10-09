@@ -27,8 +27,8 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> ValidatePayload(const GameplayCheckpointPayloadDescriptor &payload,
                                                    const SaveParticipantRegistrySnapshot &participants) {
             const auto *binding = participants.Find(payload.participant);
-            const auto roles = SaveParticipantRole::Capture | SaveParticipantRole::Restore;
-            if (!binding || binding->Descriptor().schemaVersion != payload.schema || !binding->Descriptor().required ||
+            if (const auto roles = SaveParticipantRole::Capture | SaveParticipantRole::Restore;
+                !binding || binding->Descriptor().schemaVersion != payload.schema || !binding->Descriptor().required ||
                 binding->Descriptor().roles != roles ||
                 std::ranges::find(binding->Descriptor().ownedRecords, payload.record) == binding->Descriptor().ownedRecords.end())
                 return Result<void>::Failure(MakeError(SaveErrors::RestoreParticipantInvalid,
@@ -50,8 +50,8 @@ namespace Horo::Runtime {
         /** @brief Rejects malformed or already spent load authority before any source code runs. */
         [[nodiscard]] Result<void> ValidateOperation(const SaveOperationController &operation, const StagedRestoreContext &context,
                                                      const SaveParticipantRegistrySnapshot &participants) {
-            const auto state = operation.Handle().Snapshot();
-            if (!state || state->IsTerminal() || state->kind != SaveOperationKind::Load || state->operation != context.operation ||
+            if (const auto state = operation.Handle().Snapshot();
+                !state || state->IsTerminal() || state->kind != SaveOperationKind::Load || state->operation != context.operation ||
                 context.registryGeneration != participants.Generation() || context.sessionGeneration == 0 ||
                 context.sceneIncarnation == 0 || context.maximumParticipants == 0 ||
                 context.maximumParticipants > MaximumSaveParticipantCount)
@@ -60,7 +60,8 @@ namespace Horo::Runtime {
         }
 
         /** @brief Adopts detached source receipts, forwards aggregate references and prepares without publication. */
-        [[nodiscard]] Result<StagedRestoreTransaction> PrepareStaging(StagedRestoreContext context, SaveOperationController operation,
+        [[nodiscard]] Result<StagedRestoreTransaction> PrepareStaging(const StagedRestoreContext &context,
+                                                                      SaveOperationController operation,
                                                                       SaveParticipantRegistrySnapshot participants,
                                                                       GameplayCheckpointRestoreStaging staging) {
             auto created =
@@ -89,9 +90,11 @@ namespace Horo::Runtime {
           publication_(std::move(publication)) {}
 
     /** @copydoc GameplayCheckpoint::Capture */
-    Result<GameplayCheckpoint> GameplayCheckpoint::Capture(GameplayCheckpointMetadata metadata, RuntimeSaveCaptureProvenance provenance,
+    Result<GameplayCheckpoint> GameplayCheckpoint::Capture(GameplayCheckpointMetadata metadata,
+                                                           const RuntimeSaveCaptureProvenance &provenance,
                                                            const std::uint64_t sessionGeneration,
-                                                           SaveParticipantRegistrySnapshot participants, RuntimeSaveCaptureLimits limits) {
+                                                           SaveParticipantRegistrySnapshot participants,
+                                                           const RuntimeSaveCaptureLimits &limits) {
         if (const auto result = ValidateMetadata(metadata); result.HasError())
             return Result<GameplayCheckpoint>::Failure(result.ErrorValue());
         if (const auto result = ValidatePayload(metadata.payload, participants); result.HasError())
@@ -109,8 +112,7 @@ namespace Horo::Runtime {
         auto snapshot = builder.Seal();
         if (snapshot.HasError())
             return Result<GameplayCheckpoint>::Failure(snapshot.ErrorValue());
-        const auto records = snapshot.Value().Records();
-        if (std::ranges::none_of(records, [&metadata](const auto &record) {
+        if (const auto records = snapshot.Value().Records(); std::ranges::none_of(records, [&metadata](const auto &record) {
             return record.Record().participant == metadata.payload.participant && record.Record().record == metadata.payload.record;
         }))
             return Result<GameplayCheckpoint>::Failure(
@@ -195,9 +197,12 @@ namespace Horo::Runtime {
 
     /** @copydoc GameplayCheckpointController::Restart */
     Result<StagedRestoreTransaction> GameplayCheckpointController::Restart(const GameplayCheckpointBaseline &baseline,
-                                                                           StagedRestoreContext context, SaveOperationController operation,
+                                                                           const StagedRestoreContext &requestedContext,
+                                                                           SaveOperationController operation,
                                                                            SaveParticipantRegistrySnapshot participants,
                                                                            IGameplayCheckpointRestoreSource &source) const {
+        // Pin caller evidence before foreign staging can reenter and change its source.
+        const StagedRestoreContext context = requestedContext;
         const auto fail = [&operation](Error error) {
             if (operation.Handle().IsValid()) {
                 const auto failed = operation.Fail(error, SaveOperationCommitOutcome::NotCommitted);
@@ -220,7 +225,7 @@ namespace Horo::Runtime {
             return PrepareStaging(context, std::move(operation), std::move(participants), std::move(staged).Value());
         } catch (const std::bad_alloc &) {
             return fail(MakeError(SaveErrors::RestoreAllocationFailed));
-        } catch (...) {
+        } catch (...) {  // NOSONAR -- The foreign staging boundary must contain non-standard exceptions; regression-tested.
             return fail(MakeError(SaveErrors::RestoreAdapterContractInvalid, "Checkpoint staging source threw."));
         }
     }

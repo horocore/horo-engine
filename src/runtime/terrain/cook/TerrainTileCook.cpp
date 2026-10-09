@@ -77,11 +77,13 @@ namespace Horo::Terrain {
             return result;
         }
 
-        bool ValidTileSamples(const TerrainCookedTile &tile, const CookedTerrainTileSet &cooked) {
+        bool ValidTileSamples(const TerrainCookedTile &tile, const CookedTerrainTileSet &cooked, const CancellationToken &cancellation) {
             const auto sampleBytes = 5U + 2U * cooked.layerCount;
             const auto sampleCount = static_cast<std::size_t>(tile.samplesX) * tile.samplesZ;
             const auto start = tile.payload.size() - sampleCount * sampleBytes;
             for (std::size_t sample = 0; sample < sampleCount; ++sample) {
+                if (cancellation.IsCancellationRequested())
+                    return false;
                 const auto offset = start + sample * sampleBytes;
                 if (!std::isfinite(std::bit_cast<float>(ReadU32(tile.payload, offset))))
                     return false;
@@ -195,17 +197,17 @@ namespace Horo::Terrain {
         }
 
         bool ValidManifestLevel(const CookedTerrainTileSet &cooked, ManifestScan &scan, const ManifestLevel &level,
-                                const std::uint64_t countZ) {
+                                const std::uint64_t countZ, const CancellationToken &cancellation) {
             for (std::uint32_t z = 0; z < countZ; ++z) {
                 for (std::uint32_t x = 0; x < level.countX; ++x) {
-                    if (!ValidManifestTile(cooked, scan, level, x, z))
+                    if (cancellation.IsCancellationRequested() || !ValidManifestTile(cooked, scan, level, x, z))
                         return false;
                 }
             }
             return true;
         }
 
-        bool ManifestLayoutValid(const CookedTerrainTileSet &cooked) {
+        bool ManifestLayoutValid(const CookedTerrainTileSet &cooked, const CancellationToken &cancellation) {
             if (!ValidProfile(cooked.profile) || !ValidCoordinates(cooked.coordinates) || cooked.sourceWidth < 2 || cooked.sourceHeight < 2)
                 return false;
             const auto tier = GetTerrainTierProfile(cooked.profile.tier);
@@ -226,7 +228,7 @@ namespace Horo::Terrain {
                 if (!originX.has_value() || !originZ.has_value())
                     return false;
                 const ManifestLevel level{lod, stride, tileQuads, countX, *originX, *originZ};
-                if (!ValidManifestLevel(cooked, scan, level, countZ))
+                if (!ValidManifestLevel(cooked, scan, level, countZ, cancellation))
                     return false;
             }
             return scan.cursor == cooked.tiles.size() && scan.cursor <= cooked.profile.maximumTiles;
@@ -343,33 +345,55 @@ namespace Horo::Terrain {
         }
     }  // namespace
 
+    namespace {
+        /** @brief Admits exact tile shape and provenance before any payload hash or sample read. */
+        bool AdmittedTilePayload(const TerrainCookedTile &tile, const CookedTerrainTileSet &cooked) {
+            return tile.id.dataset == cooked.dataset && tile.id.tile.lod < TerrainDescriptorHardLimits::LodLevels && tile.samplesX >= 2 &&
+                   tile.samplesZ >= 2 && tile.samplesX <= TerrainDescriptorHardLimits::TileInteriorQuads + 1 &&
+                   tile.samplesZ <= TerrainDescriptorHardLimits::TileInteriorQuads + 1 && !tile.payload.empty() &&
+                   tile.payload.size() <= TerrainDescriptorHardLimits::StagingBytes && PayloadMatchesProvenance(tile, cooked);
+        }
+
+        /** @brief Verifies admitted payload bytes, samples and seams with bounded cooperative cancellation. */
+        bool VerifiedTilePayload(const TerrainCookedTile &tile, const CookedTerrainTileSet &cooked, const CancellationToken &cancellation) {
+            if (!AdmittedTilePayload(tile, cooked))
+                return false;
+            const auto digest = Detail::HashPayload(tile.payload, cancellation);
+            return digest.HasValue() && tile.digest == digest.Value() && ValidTileSamples(tile, cooked, cancellation) &&
+                   ValidTileSeams(tile, cooked);
+        }
+    }  // namespace
+
     /** @copydoc VerifyCookedTerrainTiles */
-    Result<void> VerifyCookedTerrainTiles(const CookedTerrainTileSet &cooked) {
+    Result<void> VerifyCookedTerrainTiles(const CookedTerrainTileSet &cooked, const CancellationToken &cancellation) {
+        const auto failure = [&cancellation] {
+            return Result<void>::Failure(MakeError(cancellation.IsCancellationRequested() ? TerrainTileCookErrors::Cancelled
+                                                                                          : TerrainTileCookErrors::CorruptPrevious));
+        };
+        if (cancellation.IsCancellationRequested())
+            return failure();
         if (!cooked.dataset.IsValid() || !cooked.sourceAsset.IsValid() || !cooked.sourceRevision.IsValid() ||
             !Nonzero(cooked.sourceDigest) || !Nonzero(cooked.fingerprint) || cooked.tiles.empty() ||
             cooked.tiles.size() > TerrainDescriptorHardLimits::ActiveTerrainTiles)
-            return Result<void>::Failure(MakeError(TerrainTileCookErrors::CorruptPrevious));
-        if (!ManifestLayoutValid(cooked))
-            return Result<void>::Failure(MakeError(TerrainTileCookErrors::CorruptPrevious));
+            return failure();
+        if (!ManifestLayoutValid(cooked, cancellation))
+            return failure();
         for (std::size_t index = 0; index < cooked.tiles.size(); ++index) {
             const auto &tile = cooked.tiles[index];
-            if (tile.id.dataset != cooked.dataset || tile.id.tile.lod >= TerrainDescriptorHardLimits::LodLevels || tile.samplesX < 2 ||
-                tile.samplesZ < 2 || tile.samplesX > TerrainDescriptorHardLimits::TileInteriorQuads + 1 ||
-                tile.samplesZ > TerrainDescriptorHardLimits::TileInteriorQuads + 1 || tile.payload.empty() ||
-                tile.payload.size() > TerrainDescriptorHardLimits::StagingBytes || !PayloadMatchesProvenance(tile, cooked) ||
-                tile.digest != ComputeSha256(std::as_bytes(std::span{tile.payload})) || !ValidTileSamples(tile, cooked) ||
-                !ValidTileSeams(tile, cooked))
-                return Result<void>::Failure(MakeError(TerrainTileCookErrors::CorruptPrevious));
+            if (cancellation.IsCancellationRequested())
+                return failure();
+            if (!VerifiedTilePayload(tile, cooked, cancellation))
+                return failure();
             if (index != 0) {
                 const auto &prior = cooked.tiles[index - 1].id.tile;
                 const auto &current = tile.id.tile;
                 if (prior.lod > current.lod ||
                     (prior.lod == current.lod && (prior.z > current.z || (prior.z == current.z && prior.x >= current.x))))
-                    return Result<void>::Failure(MakeError(TerrainTileCookErrors::CorruptPrevious));
+                    return failure();
             }
         }
-        if (cooked.manifestDigest != ManifestDigest(cooked))
-            return Result<void>::Failure(MakeError(TerrainTileCookErrors::CorruptPrevious));
+        if (cooked.manifestDigest != ManifestDigest(cooked) || cancellation.IsCancellationRequested())
+            return failure();
         return Result<void>::Success();
     }
 

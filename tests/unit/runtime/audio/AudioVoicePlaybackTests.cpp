@@ -1,5 +1,5 @@
 #include "AllocationProbe.h"
-#include "AudioPlaybackTestSupport.h"
+#include "AudioVoicePlaybackTestFixture.h"
 #include "Horo/Audio/AudioCommandBuffer.h"
 #include "Horo/Audio/AudioErrors.h"
 #include "Horo/Audio/AudioVoicePlayback.h"
@@ -19,40 +19,12 @@ namespace Horo::Audio {
         using enum AudioVoiceControl;
         using enum AudioResamplerQuality;
 
-        AudioRuntimeId Owner() {
-            return AudioRuntimeId::Create(553).Value();
-        }
-
-        AudioVoiceStateMachine Registry(const std::uint32_t capacity = 4) {
-            return std::move(AudioVoiceStateMachine::Create({.owner = Owner(), .maximumVoices = capacity}).Value());
-        }
-
-        AudioResamplerPlan Plan(const double pitch = 1.0, const AudioResamplerQuality quality = Linear) {
-            auto plan = AudioResamplerPlan::Prepare({.quality = quality,
-                                                     .inputRate = 48000,
-                                                     .outputRate = 48000,
-                                                     .channels = 1,
-                                                     .maximumOutputFrames = 256,
-                                                     .pitch = pitch},
-                                                    {1'000'000, 1'000'000, 4096});
-            REQUIRE(plan.HasValue());
-            return plan.Value();
-        }
-
-        using Samples = PlaybackTest::SampleBuffers;
-
-        AudioVoicePlayback Playback(AudioVoiceStateMachine &registry, const Samples &samples, const double pitch = 1.0,
-                                    const AudioVoiceLoop loop = {}, const AudioResamplerQuality quality = Linear,
-                                    const std::uint32_t sourceFrames = 512) {
-            auto voice =
-                AudioVoicePlayback::Create(registry, samples.Source(sourceFrames), {Plan(pitch, quality), loop, 4, 1'000'000, 40'000'000});
-            REQUIRE(voice.HasValue());
-            return std::move(voice).Value();
-        }
-
-        void Control(AudioVoicePlayback &playback, const AudioVoiceControl control) {
-            REQUIRE(playback.Apply({playback.Voice(), control}) == nullptr);
-        }
+        using PlaybackTest::Control;
+        using PlaybackTest::Owner;
+        using PlaybackTest::Plan;
+        using PlaybackTest::Playback;
+        using PlaybackTest::Registry;
+        using PlaybackTest::Samples;
 
         TEST_CASE("Resident voice controls render ramps and hold pause cursor", "[audio][voice_playback]") {
             auto registry = Registry();

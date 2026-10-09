@@ -69,10 +69,7 @@ namespace Horo::Audio {
         const auto facts = service->DecoderSpec(stream);
         if (facts.HasError())
             return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(facts.ErrorValue());
-        if (conversion.inputRate != facts.Value().outputFormat.sampleRate ||
-            conversion.channels != facts.Value().outputFormat.layout.orderedChannels.size() ||
-            facts.Value().outputFormat.layout !=
-                MakeAudioSpeakerLayout(conversion.channels == 1 ? AudioSpeakerPreset::Mono : AudioSpeakerPreset::Stereo))
+        if (!State::ValidStreamFormat(conversion, facts.Value()))
             return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(MakeError(AudioErrors::ResamplerInvalid));
         try {
             auto state = std::make_unique<State>();
@@ -81,28 +78,46 @@ namespace Horo::Audio {
             state->service = std::move(service);
             state->conversion = conversion;
             state->coefficientBytes = maximumCoefficientBytes;
-            auto spatial = CoreStereoSpatialRenderer::Create(conversion, maximumCoefficientBytes);
-            if (spatial.HasError())
-                return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(spatial.ErrorValue());
-            state->spatial.emplace(std::move(spatial).Value());
-            auto voice = state->registry->CreateVoice();
-            if (voice.HasError())
-                return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(voice.ErrorValue());
-            state->voice = voice.Value();
-            state->streamVoice = true;
-            if (state->voice.owner != descriptor.scope.owner)
-                return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(MakeError(AudioErrors::HandleOwnerMismatch));
-            if (const auto ready = state->registry->Transition(state->voice, AudioVoiceState::Ready); ready.HasError())
-                return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(ready.ErrorValue());
-            auto port = state->service->RetainedRenderPort(stream);
-            if (port.HasError())
-                return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(port.ErrorValue());
-            state->stream.emplace(std::move(port).Value());
+            state->sourceFrames = facts.Value().frameCount;
+            state->seekable = facts.Value().seekable;
+            if (const auto prepared = state->PrepareStream(stream); prepared.HasError())
+                return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(prepared.ErrorValue());
             return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Success(
                 std::make_unique<AudioVoiceRenderRuntime>(ConstructionKey{}, std::move(state)));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(MakeError(AudioErrors::MemoryAllocationFailed));
         }
+    }
+
+    /** @copydoc AudioVoiceRenderRuntime::State::ValidStreamFormat */
+    bool AudioVoiceRenderRuntime::State::ValidStreamFormat(const AudioResamplerDescriptor &conversion,
+                                                           const AudioStreamDecoderSpec &facts) noexcept {
+        return conversion.inputRate == facts.outputFormat.sampleRate &&
+               conversion.channels == facts.outputFormat.layout.orderedChannels.size() &&
+               facts.outputFormat.layout ==
+                   MakeAudioSpeakerLayout(conversion.channels == 1 ? AudioSpeakerPreset::Mono : AudioSpeakerPreset::Stereo);
+    }
+
+    /** @copydoc AudioVoiceRenderRuntime::State::PrepareStream */
+    Result<void> AudioVoiceRenderRuntime::State::PrepareStream(const AudioStreamHandle streamHandle) {
+        auto preparedSpatial = CoreStereoSpatialRenderer::Create(conversion, coefficientBytes);
+        if (preparedSpatial.HasError())
+            return Result<void>::Failure(preparedSpatial.ErrorValue());
+        spatial.emplace(std::move(preparedSpatial).Value());
+        auto createdVoice = registry->CreateVoice();
+        if (createdVoice.HasError())
+            return Result<void>::Failure(createdVoice.ErrorValue());
+        voice = createdVoice.Value();
+        streamVoice = true;
+        if (voice.owner != descriptor.scope.owner)
+            return Result<void>::Failure(MakeError(AudioErrors::HandleOwnerMismatch));
+        if (const auto ready = registry->Transition(voice, AudioVoiceState::Ready); ready.HasError())
+            return ready;
+        auto port = service->RetainedRenderPort(streamHandle);
+        if (port.HasError())
+            return Result<void>::Failure(port.ErrorValue());
+        stream.emplace(std::move(port).Value());
+        return Result<void>::Success();
     }
 
     /** @copydoc AudioVoiceRenderRuntime::AudioVoiceRenderRuntime */
@@ -114,6 +129,13 @@ namespace Horo::Audio {
     /** @copydoc AudioVoiceRenderRuntime::Voice */
     AudioVoiceHandle AudioVoiceRenderRuntime::Voice() const noexcept {
         return state_->voice;
+    }
+
+    /** @copydoc AudioVoiceRenderRuntime::Cursor */
+    AudioVoiceCursor AudioVoiceRenderRuntime::Cursor() const noexcept {
+        if (state_->released)
+            return {};
+        return state_->resident ? state_->resident->Cursor() : state_->streamPlayback.cursor;
     }
 
     /** @copydoc AudioVoiceRenderRuntime::Publish */
@@ -203,54 +225,84 @@ namespace Horo::Audio {
 
     /** @copydoc AudioVoiceRenderRuntime::State::Control */
     const ErrorCodeDescriptor *AudioVoiceRenderRuntime::State::Control(const AudioVoiceControlRequest &request) noexcept {
+        using enum AudioVoiceControl;
         if (request.voice != voice)
             return &AudioErrors::HandleStale;
         if (!ValidateAudioVoiceControlRequest(request))
             return &AudioErrors::PlaybackRequestInvalid;
         if (resident)
             return resident->Apply(request);
+        AudioVoiceState actual{};
+        if (const auto *error = registry->CheckState(voice, actual))
+            return error;
+        callback.streamState = actual;
+        if (IsTerminalAudioVoiceState(actual))
+            return &AudioErrors::VoiceInvalidTransition;
+        if (request.control >= StartVirtual || request.control == Seek || request.control == SetLoop)
+            return StreamControl(request);
+        return StreamLifecycle(request.control);
+    }
+
+    /** @copydoc AudioVoiceRenderRuntime::State::StreamLifecycle */
+    const ErrorCodeDescriptor *AudioVoiceRenderRuntime::State::StreamLifecycle(const AudioVoiceControl control) noexcept {
         using enum AudioVoiceControl;
         using enum AudioVoiceState;
-        AudioVoiceState next;
-        switch (request.control) {
+        switch (control) {
             case Start:
-                if (callback.streamState != Ready)
-                    return &AudioErrors::VoiceInvalidTransition;
-                if (const auto *error = registry->TryTransition(voice, Scheduled))
-                    return error;
-                next = Playing;
-                break;
-            case Pause:
-                if (callback.streamState != Playing)
-                    return &AudioErrors::VoiceInvalidTransition;
-                next = Paused;
-                break;
-            case Resume:
-                if (callback.streamState != Paused)
-                    return &AudioErrors::VoiceInvalidTransition;
-                next = Playing;
-                break;
             case Stop:
-                if (callback.streamState == Ready) {
-                    if (const auto *error = registry->TryTransition(voice, Scheduled))
-                        return error;
-                }
-                if (const auto *error = registry->TryTransition(voice, Stopping))
-                    return error;
-                next = Stopped;
-                break;
+                return StartStopStream(control);
+            case Pause:
+            case Resume:
+                return PauseResumeStream(control);
             case Cancel:
                 if (const auto *error = registry->TryCancel(voice))
                     return error;
                 callback.streamState = Cancelled;
+                stream->SuspendFills(true);
                 return nullptr;
             default:
                 return &AudioErrors::OperationUnsupported;
         }
+    }
+
+    /** @copydoc AudioVoiceRenderRuntime::State::CommitStreamState */
+    const ErrorCodeDescriptor *AudioVoiceRenderRuntime::State::CommitStreamState(const AudioVoiceState next) noexcept {
         if (const auto *error = registry->TryTransition(voice, next))
             return error;
         callback.streamState = next;
+        if (next == AudioVoiceState::Stopped)
+            stream->SuspendFills(true);
         return nullptr;
+    }
+
+    /** @copydoc AudioVoiceRenderRuntime::State::StartStopStream */
+    const ErrorCodeDescriptor *AudioVoiceRenderRuntime::State::StartStopStream(const AudioVoiceControl control) noexcept {
+        using enum AudioVoiceState;
+        const bool start = control == AudioVoiceControl::Start;
+        if (start && callback.streamState != Ready)
+            return &AudioErrors::VoiceInvalidTransition;
+        if (callback.streamState == Ready) {
+            if (const auto *error = registry->TryTransition(voice, Scheduled))
+                return error;
+        }
+        if (!start) {
+            if (const auto *error = registry->TryTransition(voice, Stopping))
+                return error;
+        }
+        return CommitStreamState(start ? Playing : Stopped);
+    }
+
+    /** @copydoc AudioVoiceRenderRuntime::State::PauseResumeStream */
+    const ErrorCodeDescriptor *AudioVoiceRenderRuntime::State::PauseResumeStream(const AudioVoiceControl control) noexcept {
+        using enum AudioVoiceState;
+        if (control == AudioVoiceControl::Pause) {
+            if (callback.streamState != Playing && callback.streamState != Virtual)
+                return &AudioErrors::VoiceInvalidTransition;
+            return CommitStreamState(Paused);
+        }
+        if (callback.streamState != Paused)
+            return &AudioErrors::VoiceInvalidTransition;
+        return CommitStreamState(streamPlayback.virtualMode ? Virtual : Playing);
     }
 
     /** @copydoc AudioVoiceRenderRuntime::Apply */
@@ -354,56 +406,6 @@ namespace Horo::Audio {
             scratch.output[1].samples[frame] = left * callback.residentMatrix[2] + right * callback.residentMatrix[3];
         }
         return {.terminal = rendered.terminal};
-    }
-
-    /** @copydoc AudioVoiceRenderRuntime::State::RenderStream */
-    AudioVoiceMixRenderResult AudioVoiceRenderRuntime::State::RenderStream(const std::uint32_t frames) noexcept {
-        if (callback.streamState != AudioVoiceState::Playing)
-            return {};
-        std::array<AudioSample *, 2> rawPointers{scratch.raw[0].samples.data(), scratch.raw[1].samples.data()};
-        std::uint32_t produced{};
-        // Linear conversion admits at most 64 input frames per output frame. Each full chunk covers
-        // maximumFrames >= frames; 64 chunks plus two history/end-marker visits bound even high-ratio
-        // conversion without the short-block truncation of a frames+1 visit budget.
-        std::uint32_t visit{};
-        while (visit < 66 && produced < frames) {
-            ++visit;
-            if (callback.buffered == 0 && !callback.sourceEnded) {
-                const auto read = stream->Render({rawPointers.data(), conversion.channels}, descriptor.maximumFrames);
-                callback.buffered = read.availableFrames;
-                callback.sourceEnded = read.ended || read.stopped;
-                if (read.stopped) {
-                    (void)registry->TryCancel(voice);
-                    callback.streamState = AudioVoiceState::Cancelled;
-                    return {.terminal = true};
-                }
-            }
-            std::array<std::span<const float>, 2> inputs{std::span<const float>{scratch.raw[0].samples}.first(callback.buffered),
-                                                         std::span<const float>{scratch.raw[1].samples}.first(callback.buffered)};
-            std::array<std::span<float>, 2> outputs{std::span{scratch.converted[0].samples}.first(frames - produced),
-                                                    std::span{scratch.converted[1].samples}.first(frames - produced)};
-            const auto progress = spatial->Process({{inputs.data(), conversion.channels}, callback.buffered, callback.sourceEnded},
-                                                   {outputs, frames - produced});
-            if (progress.status == AudioResamplerStatus::InvalidBuffer || progress.status == AudioResamplerStatus::InvalidState)
-                return {.error = &AudioErrors::ResamplerInvalid};
-            for (std::uint32_t channel = 0; channel < 2; ++channel)
-                std::copy_n(scratch.converted[channel].samples.begin(), progress.produced,
-                            scratch.output[channel].samples.begin() + produced);
-            produced += progress.produced;
-            callback.buffered -= progress.consumed;
-            for (std::uint32_t channel = 0; channel < conversion.channels; ++channel)
-                std::move(scratch.raw[channel].samples.begin() + progress.consumed,
-                          scratch.raw[channel].samples.begin() + progress.consumed + callback.buffered,
-                          scratch.raw[channel].samples.begin());
-            if (progress.status == AudioResamplerStatus::Complete) {
-                (void)registry->TryTransition(voice, AudioVoiceState::Finished);
-                callback.streamState = AudioVoiceState::Finished;
-                return {.terminal = true};
-            }
-            if (progress.produced == 0 && progress.consumed == 0)
-                break;  // Silence is already prepared; starvation never waits for a fill job.
-        }
-        return {};
     }
 
     /** @copydoc AudioVoiceRenderRuntime::Render */

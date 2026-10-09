@@ -5,8 +5,10 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Physics/CharacterCapability.h"
 #include "Horo/Physics/CharacterCommandPipeline.h"
 #include "Horo/Physics/CharacterControllerContracts.h"
+#include "Horo/Physics/CharacterDebugSnapshot.h"
 #include "Horo/Physics/CharacterWorldSettings.h"
 
 #include <compare>
@@ -76,6 +78,16 @@ namespace Horo::Character {
          */
         [[nodiscard]] Result<void> Activate();
 
+        /**
+         * @brief Explicitly issues one scoped creation/command/query grant without activating a consumer.
+         * @param revocation Optional host-owned reload/unload cancellation fence.
+         * @return Client or typed affinity, lifecycle, revocation, generation or bounded-capacity failure.
+         * @pre Prepared or Active owner thread, outside tick and placement callbacks. At most
+         * MaximumCharacterCapabilitiesPerWorld live grants; copies share one slot. Retired and
+         * revoked grants cannot be revived. No Gameplay/VM binding or permission is inferred.
+         */
+        [[nodiscard]] Result<CharacterCapability> IssueCapability(const CancellationToken &revocation = {});
+
         /** @brief Admits the paired Physics world's current query publication between synchronous operations.
          * @param world Exact paired Physics identity; another world cannot refresh this snapshot.
          * @param revision Non-zero, monotonically advancing Physics publication revision captured by the host.
@@ -144,6 +156,16 @@ namespace Horo::Character {
          */
         [[nodiscard]] Result<CharacterLocomotionSnapshot> ControllerLocomotionSnapshot(const CharacterControllerHandle &handle) const;
 
+        /** @brief Copies bounded committed debug evidence without taking locks, querying Physics or allocating.
+         * @param request Exact controller/Physics/filter/origin fences, tick-age ceiling and copied-prefix capacities.
+         * @return Closed capture outcome and an owned immutable snapshot on Captured or CapacityLimited.
+         * @pre Owner thread only, outside tick and placement callbacks. Other threads return WrongThread;
+         * reentrant attempts return Busy without reading candidate state. Detached copies may be consumed anywhere.
+         * @post Neither success, omission, age rejection nor unsupported probe evidence mutates simulation.
+         * Failed ticks preserve prior probes alongside prior state. This is not checkpoint or capability authority.
+         */
+        [[nodiscard]] CharacterDebugCapture CaptureDebugSnapshot(const CharacterDebugCaptureRequest &request) const noexcept;
+
         /**
          * @brief Copies one future tick-addressed movement request into bounded world storage without blocking.
          * @param request Immutable owned request; no live producer state is retained.
@@ -185,7 +207,11 @@ namespace Horo::Character {
         [[nodiscard]] std::size_t ControllerCapacity() const noexcept;
 
     private:
+        friend class CharacterCapability;
         struct Impl;
+        /** @brief Admits a copied intent with its grant fence, using the ordinary command ordering and capacity rules. */
+        [[nodiscard]] Result<CharacterCommandAdmission> QueueScopedMovementCommand(const CharacterMovementRequest &request,
+                                                                                   const CancellationToken &revocation);
         /** @brief Takes a completely prepared implementation. */
         explicit CharacterWorld(std::unique_ptr<Impl> impl) noexcept;
 

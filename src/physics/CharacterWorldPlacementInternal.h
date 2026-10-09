@@ -15,6 +15,7 @@ namespace Horo::Character::Detail {
         explicit PlacementOperationGuard(Impl &world) noexcept : impl(world), previous(std::exchange(impl.placementActive, true)) {}
 
         ~PlacementOperationGuard() noexcept {
+            impl.debug.End();
             impl.placementActive = previous;
             DrainDeferredShutdown(impl);
         }
@@ -108,6 +109,7 @@ namespace Horo::Character::Detail {
                 return Result<SpawnRecovery>::Failure(probe.ErrorValue());
             if (const auto valid = ValidateCharacterOverlapProbeResult(probe.Value()); valid.HasError())
                 return Result<SpawnRecovery>::Failure(valid.ErrorValue());
+            impl.debug.RecordOverlap(request, probe.Value(), CharacterDebugProbePurpose::SpawnRecovery);
             if (probe.Value().overlapCount == 0)
                 return Result<SpawnRecovery>::Success({position, iteration});
             if (iteration >= maximumIterations)
@@ -149,6 +151,7 @@ namespace Horo::Character::Detail {
             return Result<void>::Failure(probe.ErrorValue());
         if (const auto valid = ValidateCharacterOverlapProbeResult(probe.Value()); valid.HasError())
             return valid;
+        impl.debug.RecordOverlap(request, probe.Value(), CharacterDebugProbePurpose::TeleportRecovery);
         if (probe.Value().overlapCount != 0)
             return Result<void>::Failure(MakeError(CharacterErrors::PlacementInvalid, "Teleport target overlaps Physics geometry."));
         return Result<void>::Success();
@@ -167,8 +170,9 @@ namespace Horo::Character::Detail {
         if (impl.closedTick.load() == std::numeric_limits<std::uint64_t>::max() || request.tick != impl.closedTick.load() + 1 ||
             record.Value()->reservedTeleportTick.has_value() || record.Value()->lastTeleportTick >= request.tick)
             return Result<CharacterControllerDescriptor>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
-        if (std::ranges::any_of(impl.fastPath.Commands(), [&request](const CharacterMovementRequest &command) {
-            return command.controller == request.controller && command.tick == request.tick;
+        if (std::ranges::any_of(impl.fastPath.Commands(), [&request](const CharacterQueuedMovement &queued) {
+            return !queued.revocation.IsCancellationRequested() && queued.request.controller == request.controller &&
+                   queued.request.tick == request.tick;
         }))
             return Result<CharacterControllerDescriptor>::Failure(
                 MakeError(CharacterErrors::CommandOrderInvalid, "Move and teleport cannot target one Character tick."));
@@ -232,6 +236,7 @@ namespace Horo::Character::Detail {
             record->lastTeleportTick = tick;
             record->reservedTeleportTick.reset();
         }
+        impl.debug.Commit(handle, tick, impl.descriptor.physicsSnapshotRevision);
         return Result<CharacterPlacementResult>::Success({handle, operation, publication, recoveryIterations, recoveryIterations != 0});
     }
 

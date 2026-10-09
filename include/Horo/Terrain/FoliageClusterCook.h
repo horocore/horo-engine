@@ -115,6 +115,13 @@ namespace Horo::Terrain {
             return footprint_;
         }
 
+        /**
+         * @brief Revalidates complete cook-issued membership, provenance, payloads and manifest integrity.
+         * @param cancellation Cooperative observer checked throughout bounded validation.
+         * @return Success or typed invalid/cancelled failure, including moved-from nonempty generations.
+         */
+        [[nodiscard]] Result<void> Validate(const CancellationToken &cancellation = {}) const;
+
     private:
         friend struct FoliageClusterCookWorker;
         friend class FoliageClusterCookOwner;

@@ -153,6 +153,14 @@ namespace Horo::Audio::StreamingTests {
             context->fixture->releases.fetch_add(1);
     }
 
+    /** @brief Seekable fixture validates worker reposition without opening a second provider. */
+    inline Result<void> Seek(const BorrowedCallbackContext &borrowed, const std::uint64_t frame, const std::atomic<bool> &cancelled) {
+        const auto *context = borrowed.Get<DecoderContext>();
+        if (!context || frame > context->frameCount || cancelled.load())
+            return Result<void>::Failure(MakeError(AudioErrors::StreamReadFailed));
+        return Result<void>::Success();
+    }
+
     /** @brief Completes the fixture's held-open phase while preserving explicit late-open cancellation behavior. */
     inline bool AwaitPackageOpening(PackageFixture &fixture, const CancellationToken &cancelled) {
         while (fixture.holdOpen.load() && (fixture.ignoreCancellation.load() || !cancelled.IsCancellationRequested()))
@@ -182,7 +190,8 @@ namespace Horo::Audio::StreamingTests {
         if (fixture.wrongSpec)
             ++spec.frameCount;
         auto context = std::make_unique<DecoderContext>(DecoderContext{&fixture, spec.frameCount});
-        auto opened = AudioStreamDecoder::Create(spec, {BorrowedCallbackContext{context.get()}, &Decode, nullptr, &Release});
+        auto opened =
+            AudioStreamDecoder::Create(spec, {BorrowedCallbackContext{context.get()}, &Decode, spec.seekable ? &Seek : nullptr, &Release});
         if (opened.HasValue())
             (void)context.release();
         return opened;

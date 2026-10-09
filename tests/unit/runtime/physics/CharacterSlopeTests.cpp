@@ -254,7 +254,7 @@ namespace Horo::Character {
             }
         }
 
-        TEST_CASE("Character slide charges actual movement work and rejects exhausted iteration budgets transactionally",
+        TEST_CASE("Character slide charges actual movement work and diagnoses conservative iteration stops",
                   "[physics][character][slope][capacity]") {
             auto spawned = RampWorld(CharacterSteepSlopePolicy::Slide, {0, 1, 0}, true, 1);
             RampProbe probe{RampNormal(60)};
@@ -269,9 +269,14 @@ namespace Horo::Character {
                 auto input = FixedTick(1);
                 input.query = probe.Context(spawned.world->Descriptor(), 1);
                 REQUIRE(spawned.world->QueueMovementCommand(request).HasValue());
-                RequireError(spawned.world->AdvanceFixedTick(input), CharacterErrors::CapacityExceeded);
-                REQUIRE(spawned.world->PublishedTick().completedTick == 0);
-                REQUIRE(spawned.world->ControllerLocomotionSnapshot(spawned.controller).HasError());
+                const auto committed = spawned.world->AdvanceFixedTick(input);
+                REQUIRE(committed.HasValue());
+                const auto snapshot = spawned.world->ControllerLocomotionSnapshot(spawned.controller).Value();
+                REQUIRE(snapshot.tick == spawned.world->PublishedTick().completedTick);
+                REQUIRE(snapshot.tick == input.tick);
+                REQUIRE(snapshot.movement.termination == CharacterMovementTermination::IterationLimit);
+                REQUIRE(snapshot.movement.finalPosition.z == Catch::Approx(3.0F / 60).margin(1.0e-5F));
+                REQUIRE(snapshot.movement.gravityVelocityMetersPerSecond == Math::Vec3{});
             }
         }
 

@@ -274,6 +274,8 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/Save/SaveMigration.h
     Horo/Runtime/Save/SaveCanonicalCodec.h
     Horo/Runtime/Save/SaveReference.h
+    Horo/Runtime/Save/SaveThumbnailArchive.h
+    Horo/Runtime/Save/SaveThumbnailCapture.h
     Horo/Runtime/Save/SaveSlotMetadata.h
     Horo/Runtime/Save/SaveSlotIndex.h
     Horo/Runtime/Save/SaveCloudRevisionMetadata.h
@@ -333,6 +335,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiRenderGeometry.h
     Horo/Runtime/Ui/UiPresentationReceipt.h
     Horo/Runtime/Ui/UiTextShaping.h
+    Horo/Runtime/Ui/UiTextEditing.h
     Horo/Runtime/Ui/UiTextUnicode.h
 )
 horo_configure_target_header_boundary(HoroUiTemplateGraph PUBLIC_HEADERS
@@ -390,6 +393,8 @@ horo_configure_target_header_boundary(HoroNetworkRuntime PUBLIC_HEADERS
     Horo/Network/ReplicationWorldLifecycle.h
     Horo/Network/ReplicationStateCapture.h
     Horo/Network/ReplicationStateCodec.h
+    Horo/Network/ReplicationInboundApply.h
+    Horo/Network/SceneReplicationApplyOwner.h
     Horo/Network/ReplicationSnapshotHistory.h
     Horo/Network/SceneReplicationCommitSource.h
     Horo/Network/RpcGameplayDispatch.h
@@ -560,9 +565,11 @@ horo_configure_target_header_boundary(HoroPhysicsModel PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
     Horo/Physics/CharacterClearanceQuery.h
+    Horo/Physics/CharacterCapability.h
     Horo/Physics/CharacterCommandPipeline.h
     Horo/Physics/CharacterControllerContracts.h
     Horo/Physics/CharacterDiagnostics.h
+    Horo/Physics/CharacterDebugSnapshot.h
     Horo/Physics/CharacterMetrics.h
     Horo/Physics/CharacterErrors.h
     Horo/Physics/CharacterWorld.h
@@ -807,6 +814,9 @@ horo_configure_target_header_boundary(HoroXRRuntime PUBLIC_HEADERS
     Horo/XR/XRSessionErrors.h
     Horo/XR/XRSessionLifecycle.h
 )
+horo_configure_target_header_boundary(HoroXRInputBindings PUBLIC_HEADERS
+    Horo/XR/XRActionBindings.h
+)
 horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
     Horo/Terrain/FoliageDefinition.h
     Horo/Terrain/TerrainComposition.h
@@ -826,10 +836,14 @@ horo_configure_target_header_boundary(HoroTerrainAuthoring PUBLIC_HEADERS
     Horo/Editor/TerrainAuthoringDocument.h
 )
 horo_configure_target_header_boundary(HoroTerrainCook PUBLIC_HEADERS
+    Horo/Terrain/TerrainPayloadManifest.h
     Horo/Terrain/FoliageClusterCook.h
     Horo/Terrain/FoliagePlacementCook.h
     Horo/Terrain/TerrainSourceArtifacts.h
     Horo/Terrain/TerrainTileCook.h
+)
+horo_configure_target_header_boundary(HoroTerrainProducerIntegration PUBLIC_HEADERS
+    Horo/Terrain/TerrainProducerSnapshot.h
 )
 horo_configure_target_header_boundary(HoroTerrainStreaming PUBLIC_HEADERS
     Horo/TerrainStreaming/TerrainResidencyCache.h

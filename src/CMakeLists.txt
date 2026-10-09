@@ -440,6 +440,10 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveCanonicalCompositeWriter.cpp
         runtime/save/SaveCanonicalCompositeReader.cpp
         runtime/save/SaveReference.cpp
+        runtime/save/SaveThumbnailArchive.cpp
+        runtime/save/SaveThumbnailCodec.cpp
+        runtime/save/SaveThumbnailCapture.cpp
+        runtime/save/SaveThumbnailErrors.cpp
         runtime/save/SaveSlotMetadata.cpp
         runtime/save/SaveSlotIndex.cpp
         runtime/save/SaveCloudRevisionMetadata.cpp
@@ -664,6 +668,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiRenderGeometryInternal.cpp
         runtime/ui/UiPresentationReceipt.cpp
         runtime/ui/UiTextShaping.cpp
+        runtime/ui/UiTextEditing.cpp
         runtime/ui/UiTextErrors.cpp
         runtime/ui/UiTextShape.cpp
         runtime/ui/UiTextShaper.cpp
@@ -795,6 +800,8 @@ add_library(HoroNetworkRuntime STATIC
         runtime/networking/ReplicationStateEncode.cpp
         runtime/networking/ReplicationStateDecode.cpp
         runtime/networking/SceneReplicationCommitSource.cpp
+        runtime/networking/ReplicationInboundApply.cpp
+        runtime/networking/SceneReplicationApplyOwner.cpp
         runtime/networking/RpcGameplayDispatch.cpp
         runtime/networking/RpcGameplayDispatchReceive.cpp
         runtime/networking/RpcGameplayDispatchGameplay.cpp
@@ -943,6 +950,8 @@ add_library(HoroAudioApi STATIC
         audio/api/AudioStreamDecoder.cpp
         audio/api/AudioStreamDecoderErrors.cpp
         audio/api/AudioStreamingService.cpp
+        audio/api/AudioStreamPosition.cpp
+        audio/api/AudioStreamState.h
         audio/api/AudioConcurrencyGroup.cpp
         audio/api/AudioVoiceAdmission.cpp
         audio/api/AudioVoiceStateMachine.cpp
@@ -1082,6 +1091,7 @@ target_link_libraries(HoroAudioMixer PUBLIC HoroEngine::AudioDsp HoroEngine::Aud
 
 add_library(HoroAudioVoiceRender STATIC
         audio/playback/AudioVoiceRenderRuntime.cpp
+        audio/playback/AudioVoiceVirtualStream.cpp
         audio/playback/AudioVoiceRenderState.h)
 add_library(HoroEngine::AudioVoiceRender ALIAS HoroAudioVoiceRender)
 target_compile_features(HoroAudioVoiceRender PUBLIC cxx_std_20)
@@ -1099,16 +1109,26 @@ target_link_libraries(HoroAudioMetrics PUBLIC HoroEngine::AudioCommands HoroEngi
 add_library(HoroPhysics STATIC
         physics/CharacterClearanceQuery.cpp
         physics/CharacterControllerContracts.cpp
+        physics/CharacterDebugSnapshot.cpp
+        physics/CharacterDebugStorageInternal.h
         physics/CharacterPhysicsQueryAdapter.cpp
+        physics/CharacterPlatformAttachmentValidation.cpp
+        physics/CharacterPlatformAttachmentValidation.h
         physics/CharacterDiagnostics.cpp
         physics/CharacterErrors.cpp
         physics/CharacterMetrics.cpp
         physics/CharacterControllerRegistry.h
         physics/CharacterFastPathStorage.h
+        physics/CharacterCapability.cpp
+        physics/CharacterCapabilityInternal.h
         physics/CharacterWorld.cpp
         physics/CharacterWorldCommandPipeline.cpp
         physics/CharacterWorldCommandInternal.h
         physics/CharacterWorldMovementInternal.h
+        physics/CharacterWorldSweepInternal.h
+        physics/CharacterWorldStepInternal.h
+        physics/CharacterWorldPlatformInternal.h
+        physics/CharacterSweepPlanesInternal.h
         physics/CharacterWorldInternal.h
         physics/CharacterWorldPlacementInternal.h
         physics/CharacterWorldShapeInternal.h
@@ -1576,6 +1596,12 @@ add_library(HoroEngine::XRRuntime ALIAS HoroXRRuntime)
 target_compile_features(HoroXRRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroXRRuntime PUBLIC HoroEngine::XRApi)
 
+# Explicit host-composed XR/Input adapter; neither core module depends back on it.
+add_library(HoroXRInputBindings STATIC runtime/xr/input/XRActionBindings.cpp)
+add_library(HoroEngine::XRInputBindings ALIAS HoroXRInputBindings)
+target_compile_features(HoroXRInputBindings PUBLIC cxx_std_20)
+target_link_libraries(HoroXRInputBindings PUBLIC HoroEngine::XRApi HoroEngine::Input)
+
 if(HORO_BUILD_XR_OPENXR)
     # Deliberate non-installed native composition boundary. Only explicit host
     # adapters see native types; XRApi/XRRuntime remain backend-neutral.
@@ -1583,10 +1609,10 @@ if(HORO_BUILD_XR_OPENXR)
     target_include_directories(HoroXROpenXRHostInterface INTERFACE
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/xr/openxr/host>")
     target_link_libraries(HoroXROpenXRHostInterface INTERFACE
-        HoroEngine::XRRuntime HoroEngine::Platform HoroOpenXRHeaders)
+        HoroEngine::XRRuntime HoroEngine::XRInputBindings HoroEngine::Platform HoroOpenXRHeaders)
     target_compile_features(HoroXROpenXRHostInterface INTERFACE cxx_std_20)
 
-    add_library(HoroXROpenXR STATIC runtime/xr/openxr/OpenXRNativeSession.cpp)
+    add_library(HoroXROpenXR STATIC runtime/xr/openxr/OpenXRNativeSession.cpp runtime/xr/openxr/OpenXRActionBindings.cpp)
     add_library(HoroEngine::XROpenXR ALIAS HoroXROpenXR)
     target_link_libraries(HoroXROpenXR PRIVATE HoroXROpenXRHostInterface)
     target_compile_features(HoroXROpenXR PRIVATE cxx_std_20)
@@ -1624,6 +1650,9 @@ target_compile_features(HoroTerrainAuthoring PUBLIC cxx_std_20)
 target_link_libraries(HoroTerrainAuthoring PUBLIC HoroEngine::TerrainImport)
 
 add_library(HoroTerrainCook STATIC
+        runtime/terrain/cook/TerrainPayloadManifest.cpp
+        runtime/terrain/cook/TerrainPayloadManifestCodec.cpp
+        runtime/terrain/cook/TerrainPayloadManifestValidation.cpp
         runtime/terrain/cook/FoliageClusterCook.cpp
         runtime/terrain/cook/FoliageClusterCookOwner.cpp
         runtime/terrain/cook/FoliagePlacementCook.cpp
@@ -1636,6 +1665,16 @@ add_library(HoroTerrainCook STATIC
 add_library(HoroEngine::TerrainCook ALIAS HoroTerrainCook)
 target_compile_features(HoroTerrainCook PUBLIC cxx_std_20)
 target_link_libraries(HoroTerrainCook PUBLIC HoroEngine::TerrainImport)
+add_library(HoroTerrainProducerIntegration STATIC
+        runtime/terrain/integration/TerrainProducerSnapshot.cpp
+        runtime/terrain/integration/TerrainProducerSnapshotValidation.cpp
+        runtime/terrain/integration/TerrainProducerSnapshotGeometry.cpp
+        runtime/terrain/integration/TerrainProducerSnapshotFoliage.cpp
+        runtime/terrain/integration/TerrainProducerSnapshotOwner.cpp
+)
+add_library(HoroEngine::TerrainProducerIntegration ALIAS HoroTerrainProducerIntegration)
+target_compile_features(HoroTerrainProducerIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroTerrainProducerIntegration PUBLIC HoroEngine::TerrainCook HoroEngine::WorldStreaming)
 add_library(HoroTerrainRender STATIC
         runtime/terrain/render/TerrainMaterialBinding.cpp
 )

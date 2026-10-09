@@ -175,6 +175,21 @@ namespace Horo::Terrain {
         CHECK(VerifyCookedTerrainTiles(cooked.Value()).HasValue());
     }
 
+    TEST_CASE("Terrain verification rejects oversized layout and invalid counts before payload work", "[terrain][cook]") {
+        auto cooked = CookTerrainTiles(Source(), Profile(), {}, {});
+        REQUIRE(cooked.HasValue());
+        auto invalid = cooked.Value();
+        // Exact layout length is checked before hashing, without allocating the global staging ceiling.
+        invalid.tiles.front().payload.resize(invalid.tiles.front().payload.size() + 4096, 0);
+        RequireError(VerifyCookedTerrainTiles(invalid), TerrainTileCookErrors::CorruptPrevious);
+        invalid = cooked.Value();
+        invalid.tiles.front().samplesX = std::numeric_limits<std::uint32_t>::max();
+        RequireError(VerifyCookedTerrainTiles(invalid), TerrainTileCookErrors::CorruptPrevious);
+        CancellationSource cancellation;
+        cancellation.RequestCancellation();
+        RequireError(VerifyCookedTerrainTiles(cooked.Value(), cancellation.Token()), TerrainTileCookErrors::Cancelled);
+    }
+
     TEST_CASE("World tile addresses admit the last signed tile and reject overflow", "[terrain][cook]") {
         auto source = Source();
         source.coordinates.originX = static_cast<double>(std::numeric_limits<std::int32_t>::max()) - 1.0;

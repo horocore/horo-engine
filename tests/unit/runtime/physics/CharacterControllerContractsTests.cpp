@@ -1,6 +1,7 @@
 #include "Horo/Physics/CharacterControllerContracts.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <limits>
 #include <set>
 #include <string_view>
@@ -59,6 +60,24 @@ namespace Horo::Character {
             result.contacts[0] = Contact(descriptor);
             result.contactCount = 1;
             return result;
+        }
+
+        /** @brief Builds a coherent owned publication from movement evidence for contract-validator fixtures. */
+        CharacterLocomotionSnapshot SnapshotFromMovement(const CharacterMovementResult &movement) {
+            CharacterLocomotionSnapshot snapshot;
+            snapshot.controller = movement.controller;
+            snapshot.tick = movement.tick;
+            snapshot.stateRevision = 1;
+            snapshot.movement = movement;
+            snapshot.transform.controller = movement.controller;
+            snapshot.transform.sourceTick = movement.tick;
+            snapshot.transform.publicationRevision = 2;
+            snapshot.transform.position = movement.finalPosition;
+            snapshot.transform.heading = movement.finalHeading;
+            snapshot.transform.up = movement.up;
+            snapshot.transform.grounded = movement.grounded;
+            snapshot.transform.platformAttached = movement.platformAttached;
+            return snapshot;
         }
 
         void RequireError(const Result<void> &result, const ErrorCodeDescriptor &expected) {
@@ -129,7 +148,7 @@ namespace Horo::Character {
             result.truncated = true;
             for (std::uint32_t index = 1; index < result.hitCount; ++index)
                 result.hits[index] = result.hits[0];
-            REQUIRE(ValidateCharacterSweepProbeResult(result, request).HasValue());
+            RequireError(ValidateCharacterSweepProbeResult(result, request), CharacterErrors::CapacityExceeded);
             result.hitCount = MaximumCharacterSweepHits - 1;
             RequireError(ValidateCharacterSweepProbeResult(result, request), CharacterErrors::DescriptorInvalid);
         }
@@ -248,6 +267,16 @@ namespace Horo::Character {
             REQUIRE(ValidateCharacterMovementResult(result, descriptor).HasValue());
         }
 
+        TEST_CASE("Character solver-limit diagnostics cannot retain unswept gravity continuation", "[physics][character][result]") {
+            const auto descriptor = Descriptor();
+            auto result = MovementResult(descriptor);
+            result.termination = GENERATE(CharacterMovementTermination::IterationLimit, CharacterMovementTermination::ConstraintLimit);
+            result.gravityVelocityMetersPerSecond = {};
+            REQUIRE(ValidateCharacterMovementResult(result, descriptor).HasValue());
+            result.gravityVelocityMetersPerSecond = {0, -1, 0};
+            RequireError(ValidateCharacterMovementResult(result, descriptor), CharacterErrors::DescriptorInvalid);
+        }
+
         TEST_CASE("Character result rejects overflow unknown flags and incoherent surface evidence transactionally",
                   "[physics][character][result]") {
             auto descriptor = Descriptor();
@@ -262,6 +291,9 @@ namespace Horo::Character {
             RequireError(ValidateCharacterMovementResult(result, descriptor), CharacterErrors::OperationUnsupported);
             result.collisions = CharacterCollisionFlags::None;
             result.contactCount = 0;
+            result.termination = static_cast<CharacterMovementTermination>(255);
+            RequireError(ValidateCharacterMovementResult(result, descriptor), CharacterErrors::DescriptorInvalid);
+            result.termination = CharacterMovementTermination::Complete;
             result.truncated = true;
             RequireError(ValidateCharacterMovementResult(result, descriptor), CharacterErrors::DescriptorInvalid);
             result.contactCount = 1;
@@ -317,23 +349,25 @@ namespace Horo::Character {
             movement.groundShape = Physics::ShapeHandle{descriptor.physicsWorld, {4, 8}};
             movement.groundDistanceMeters = descriptor.skinWidthMeters;
             movement.collisions = CharacterCollisionFlags::Ground | CharacterCollisionFlags::Sides;
+            movement.platformAttachment = CharacterPlatformAttachment{.body = *movement.groundBody,
+                                                                      .shape = movement.groundShape,
+                                                                      .localContactPoint = movement.groundPoint,
+                                                                      .localContactNormal = movement.groundNormal,
+                                                                      .localRoot = {movement.finalPosition, movement.finalHeading},
+                                                                      .sourceTick = movement.tick,
+                                                                      .physicsSnapshotRevision = 1};
+            movement.platformAttachmentChange = CharacterPlatformAttachmentChange::Attached;
 
-            CharacterLocomotionSnapshot snapshot;
-            snapshot.controller = movement.controller;
-            snapshot.tick = movement.tick;
-            snapshot.stateRevision = 1;
-            snapshot.movement = movement;
-            snapshot.transform.controller = movement.controller;
-            snapshot.transform.sourceTick = movement.tick;
-            snapshot.transform.publicationRevision = 2;
-            snapshot.transform.position = movement.finalPosition;
-            snapshot.transform.heading = movement.finalHeading;
-            snapshot.transform.up = movement.up;
-            snapshot.transform.grounded = movement.grounded;
-            snapshot.transform.platformAttached = movement.platformAttached;
-
+            auto snapshot = SnapshotFromMovement(movement);
             REQUIRE(ValidateCharacterLocomotionSnapshot(snapshot, descriptor).HasValue());
             static_assert(std::is_copy_constructible_v<CharacterLocomotionSnapshot>);
+
+            auto missingAttachment = snapshot;
+            missingAttachment.movement.platformAttachment.reset();
+            RequireError(ValidateCharacterLocomotionSnapshot(missingAttachment, descriptor), CharacterErrors::DescriptorInvalid);
+            auto mismatchedAttachment = snapshot;
+            ++mismatchedAttachment.movement.platformAttachment->body.slot.generation;
+            RequireError(ValidateCharacterLocomotionSnapshot(mismatchedAttachment, descriptor), CharacterErrors::DescriptorInvalid);
 
             snapshot.transform.position.x += 1;
             RequireError(ValidateCharacterLocomotionSnapshot(snapshot, descriptor), CharacterErrors::PlacementInvalid);
@@ -359,17 +393,7 @@ namespace Horo::Character {
                 movement.contacts[index].point.x = static_cast<float>(index);
             }
 
-            CharacterLocomotionSnapshot snapshot;
-            snapshot.controller = movement.controller;
-            snapshot.tick = movement.tick;
-            snapshot.stateRevision = 1;
-            snapshot.movement = movement;
-            snapshot.transform.controller = movement.controller;
-            snapshot.transform.sourceTick = movement.tick;
-            snapshot.transform.publicationRevision = 2;
-            snapshot.transform.position = movement.finalPosition;
-            snapshot.transform.heading = movement.finalHeading;
-            snapshot.transform.up = movement.up;
+            const auto snapshot = SnapshotFromMovement(movement);
             REQUIRE(ValidateCharacterLocomotionSnapshot(snapshot, descriptor).HasValue());
         }
 
@@ -395,7 +419,7 @@ namespace Horo::Character {
         }
 
         TEST_CASE("Character errors expose stable actionable identities", "[physics][character][errors]") {
-            REQUIRE(CharacterErrors::Descriptors().size() == 15);
+            REQUIRE(CharacterErrors::Descriptors().size() == 19);
             std::set<std::string_view> unique;
             for (const auto *descriptor : CharacterErrors::Descriptors()) {
                 REQUIRE(descriptor->domain.Value() == "horo.character");

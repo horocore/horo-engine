@@ -4,6 +4,7 @@
  * @brief Target-private fixed-capacity Character command, query and output storage.
  */
 
+#include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Physics/CharacterControllerContracts.h"
 #include "Horo/Physics/CharacterWorldSettings.h"
 #include "Horo/Physics/PhysicsQuery.h"
@@ -22,6 +23,11 @@
 #include <vector>
 
 namespace Horo::Character::Detail {
+    /** @brief Owned intent plus a producer-lifetime fence sampled once at command closure. */
+    struct CharacterQueuedMovement final {
+        CharacterMovementRequest request;
+        CancellationToken revocation;
+    };
     /** @brief Result of one owner-thread append into a bounded Character collection. */
     enum class CharacterFastPathAppendStatus : std::uint8_t {
         Appended,
@@ -176,12 +182,12 @@ namespace Horo::Character::Detail {
         CharacterFastPathStorage &operator=(CharacterFastPathStorage &&) = delete;
 
         /** @brief Returns the prepared command queue storage owned by the Character world. */
-        [[nodiscard]] std::vector<CharacterMovementRequest> &Commands() noexcept {
+        [[nodiscard]] std::vector<CharacterQueuedMovement> &Commands() noexcept {
             return commands_;
         }
 
         /** @brief Returns the prepared command queue storage through a read-only view. */
-        [[nodiscard]] const std::vector<CharacterMovementRequest> &Commands() const noexcept {
+        [[nodiscard]] const std::vector<CharacterQueuedMovement> &Commands() const noexcept {
             return commands_;
         }
 
@@ -461,7 +467,7 @@ namespace Horo::Character::Detail {
             return left.impulse < right.impulse;
         }
 
-        std::vector<CharacterMovementRequest> commands_;
+        std::vector<CharacterQueuedMovement> commands_;
         std::vector<CharacterMovementRequest> commandScratch_;
         std::vector<CharacterMovementResult> movementResults_;
         std::vector<CharacterSurfaceContact> contacts_;

@@ -1107,7 +1107,7 @@ scratch. There are no allocations, frees, locks, callback waits, I/O or ordinary
 logs. This conservative scalar composition has no measured aggregate deadline
 qualification; hosts must budget its buffer validation, feed and ramp costs in
 addition to sample products before admitting a device voice workload. It does not
-implement streaming fills/underruns, mixer routing, spatialization, virtualization
+implement streaming fills/underruns, mixer routing or spatialization
 or an application audio service; those retain their declared owning tickets.
 
 This is an additive execution contract. Existing registry callers keep their
@@ -1116,6 +1116,70 @@ borrowed canonical registry alive through detachment and terminal reconciliation
 The new AudioCommandPayload alternative requires exhaustive visitors to handle
 AudioVoiceControlRequest; in-tree normalization covers it. The generated Api,
 Dsp, Commands and Playback public-header consumers enforce each staged boundary.
+
+### AUD-003.6 virtual cursor execution and realization
+
+`StartVirtual`, `Virtualize` and `Realize` extend the existing typed voice-control
+vocabulary. They use the same FIFO records and retained scheduled batches as
+Start/Stop; the host dispatcher applies them at the admitted buffer/sample
+boundary. They do not select voices, reserve physical capacity or override the
+AUD-003.5 evaluator. Control must first admit a logical voice, release its physical
+reservation when virtualizing, and acquire capacity before dispatching Realize.
+Counted-instance and cooldown constraints still apply to virtual admission.
+
+Resident virtual execution emits positive-zero silence without feeding PCM to a
+resampler. One admitted output frame advances logical source time by the prepared
+rate ratio times pitch. Exclusive-end loops retain intro and fractional phase,
+including multiple wraps. Pause freezes this cursor; Resume retains the virtual
+mode. Seek/SetLoop and supported restart operations retain their existing typed
+validation; virtual discontinuities commit immediately without an audible ramp.
+Nonlooping virtual EOF clamps at the source end and publishes Finished exactly
+once, with no physical filter tail. Cancel/Stop retain canonical dispositions and
+defer storage reclamation to detached control as before.
+
+Realization resets physical conversion/history at the integer logical cursor,
+retaining its fractional logical phase. The first physical sample's phase may
+differ by strictly less than one source frame; this is the declared realization
+tolerance, not a sample-exact resampler-history reconstruction. Subsequent emitted
+frames advance the logical cursor using actual converter step accumulation,
+excluding decoder look-ahead. Virtual time uses the current prepared target pitch;
+there is no hidden silence-processing DSP ramp. No physical reservation is created
+by either playback owner.
+
+Stream virtualization requires the admitted decoder to be seekable; nonseekable
+streams reject it transactionally and retain normal physical playback. Virtual
+idle suspends future worker fills, without cancelling or reclaiming an already
+running bounded fill. No callback performs source open, seek, decode or I/O. On
+Realize, the sole retained render port publishes one position/loop request after
+ending ring reads. The serialized fill worker seeks, resets the ring publication,
+and acknowledges through lock-free SC atomics. The private `AudioStreamTransport`
+groups ring publication/consumption and position/loop/fill-admission mailboxes as
+one callback/worker handoff. Grouping
+does not change atomic types, initial values, SC ordering or stop/join ownership.
+Until acknowledgement and buffered PCM, the voice remains Virtual and advances
+its cursor in preparation silence,
+not recorded as a physical underrun. Bounded ring discard catches up elapsed
+virtual frames; a larger lag requests a fresh current position rather than an
+unbounded callback decode/scan. Worker loops cap each decode at the exclusive end
+and seek to begin while retaining the same decoder/package lease.
+
+Control must continue Pump and reconcile worker failure/cancellation through the
+existing stream snapshot, issuing Stop when execution cannot continue. A stopped
+port is observed without reading PCM and publishes canonical cancellation once.
+Pending position work, virtual silence and terminal facts do not prove callback
+detachment or authorize ring/decoder/lease retirement. Existing Close, stop/join,
+CompleteShutdown and service Retire ordering remains mandatory.
+
+Migration: the three controls append enum values without renumbering existing
+operations; exhaustive visitors must recognize them. `AudioVoiceCursor::frame`
+is now 64-bit to represent admitted stream lengths independently of 32-bit seek
+and loop intent. `AudioResamplerProgress::sourceAdvance` reports emitted source
+steps, not consumed look-ahead. Rebuild native Api/Dsp/Commands/Playback/VoiceRender
+consumers for these public layout changes; there is no serialized media change.
+The port's new positioning/suspension queries are sole-consumer operations, not
+additional service ownership or multi-reader permission. Existing physical-only
+ports retain their default fill behavior. Public headers remain owned by their
+existing targets; the new stream execution source is private to AudioVoiceRender.
 
 A voice represents one active playback instance with:
 

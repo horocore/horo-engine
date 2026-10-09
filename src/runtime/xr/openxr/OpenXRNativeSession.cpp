@@ -555,7 +555,8 @@ namespace Horo::XR::OpenXRInternal {
     /** @copydoc OpenXRNativeSession::Borrow */
     Result<NativeSessionBorrow> OpenXRNativeSession::Borrow(const XRSessionId &session) const {
         const auto current = Validate(session);
-        return current.HasError() ? Result<NativeSessionBorrow>::Failure(current.ErrorValue())
-                                  : Result<NativeSessionBorrow>::Success({instance_, system_, session_});
+        return current.HasError()
+                   ? Result<NativeSessionBorrow>::Failure(current.ErrorValue())
+                   : Result<NativeSessionBorrow>::Success({instance_, system_, session_, retainedPlan_->Limits().maximumActions});
     }
 }  // namespace Horo::XR::OpenXRInternal

@@ -64,6 +64,14 @@ namespace Horo::Character {
 
     /** @copydoc CharacterWorld::QueueMovementCommand */
     Result<CharacterCommandAdmission> CharacterWorld::QueueMovementCommand(const CharacterMovementRequest &request) {
+        return QueueScopedMovementCommand(request, {});
+    }
+
+    /** @copydoc CharacterWorld::QueueScopedMovementCommand */
+    Result<CharacterCommandAdmission> CharacterWorld::QueueScopedMovementCommand(const CharacterMovementRequest &request,
+                                                                                 const CancellationToken &revocation) {
+        if (revocation.IsCancellationRequested())
+            return Result<CharacterCommandAdmission>::Failure(MakeError(CharacterErrors::CapabilityRevoked));
         const auto rejected = [this](const CharacterCommandAdmissionStatus status) {
             impl_->rejectedCommands.fetch_add(1);
             return Result<CharacterCommandAdmission>::Success({status, impl_->pendingCommands.load()});
@@ -84,7 +92,7 @@ namespace Horo::Character {
                     return rejected(CharacterCommandAdmissionStatus::RejectedFull);
                 }
 
-                impl_->fastPath.Commands().push_back(request);
+                impl_->fastPath.Commands().emplace_back(request, revocation);
                 const auto depth = static_cast<std::uint32_t>(impl_->fastPath.Commands().size());
                 impl_->pendingCommands.store(depth);
                 impl_->maximumCommandDepth.store(std::max(depth, impl_->maximumCommandDepth.load()));

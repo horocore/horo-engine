@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CharacterWorldMovementInternal.h"
+#include "CharacterWorldPlatformInternal.h"
 #include "CharacterWorldShapeInternal.h"
 
 namespace Horo::Character::Detail {
@@ -26,8 +27,8 @@ namespace Horo::Character::Detail {
                (queued.tick > request.tick && queued.sequence <= request.sequence);
     }
 
-    /** @brief Revalidates lifecycle/order and exact duplication while queue ownership is held. */
-    [[nodiscard]] Result<void> ValidateLockedAdmission(const auto &impl, const CharacterMovementRequest &request) {
+    /** @brief Revalidates owner lifecycle, slot routing, sequence and filter identity under admission locks. */
+    [[nodiscard]] Result<void> ValidateLockedCommandRouting(const auto &impl, const CharacterMovementRequest &request) {
         if (!impl.acceptingCommands.load())
             return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
         const std::uint32_t slot = request.controller.slot.index;
@@ -40,18 +41,33 @@ namespace Horo::Character::Detail {
                 valid.HasError())
                 return valid;
         }
-        const auto record = impl.controllers.Resolve(request.controller);
-        if (record.HasError())
-            return Result<void>::Failure(record.ErrorValue());
-        if (!record.Value()->spawned &&
+        return Result<void>::Success();
+    }
+
+    /** @brief Requires resident placement state before staging geometry/filter edits or a move competing with teleport. */
+    [[nodiscard]] Result<void> ValidateCommandMutationState(const CharacterControllerRecord &record,
+                                                            const CharacterMovementRequest &request) {
+        if (!record.spawned &&
             (request.shapeChange.has_value() || request.stance != CharacterStanceIntent::Keep || request.filterChange.has_value()))
             return Result<void>::Failure(
                 MakeError(CharacterErrors::InvalidState, "Shape and filter changes require a spawned controller."));
-        if (record.Value()->reservedTeleportTick == request.tick || record.Value()->lastTeleportTick == request.tick)
+        if (record.reservedTeleportTick == request.tick || record.lastTeleportTick == request.tick)
             return Result<void>::Failure(
                 MakeError(CharacterErrors::CommandOrderInvalid, "Move and teleport cannot target one Character tick."));
-        if (std::ranges::any_of(impl.fastPath.Commands(), [&request](const CharacterMovementRequest &queued) {
-            return ConflictsWithQueuedCommand(queued, request);
+        return Result<void>::Success();
+    }
+
+    /** @brief Preserves admission error precedence while checking resident state and nonrevoked queue conflicts. */
+    [[nodiscard]] Result<void> ValidateLockedAdmission(const auto &impl, const CharacterMovementRequest &request) {
+        if (const auto routing = ValidateLockedCommandRouting(impl, request); routing.HasError())
+            return routing;
+        const auto record = impl.controllers.Resolve(request.controller);
+        if (record.HasError())
+            return Result<void>::Failure(record.ErrorValue());
+        if (const auto mutation = ValidateCommandMutationState(*record.Value(), request); mutation.HasError())
+            return mutation;
+        if (std::ranges::any_of(impl.fastPath.Commands(), [&request](const CharacterQueuedMovement &queued) {
+            return !queued.revocation.IsCancellationRequested() && ConflictsWithQueuedCommand(queued.request, request);
         }))
             return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
         return Result<void>::Success();
@@ -71,6 +87,7 @@ namespace Horo::Character::Detail {
         explicit TickGuard(Impl &impl) noexcept : impl_(impl), previous_(impl_.ticking.exchange(true)) {}
 
         ~TickGuard() noexcept {
+            impl_.debug.End();
             impl_.ticking.store(previous_);
             DrainDeferredShutdown(impl_);
         }
@@ -104,29 +121,33 @@ namespace Horo::Character::Detail {
     /** @brief Canonicalizes and removes one validated eligible frame while holding queue ownership. */
     [[nodiscard]] Result<void> FreezeCommandFrame(auto &impl, const CharacterFixedTickInput &input) {
         const auto queueLock = impl.synchronization.LockCommands();
-        if (std::ranges::any_of(impl.fastPath.Commands(), [&input](const CharacterMovementRequest &command) {
-            return command.tick < input.tick;
+        std::erase_if(impl.fastPath.Commands(), [](const CharacterQueuedMovement &queued) {
+            return queued.revocation.IsCancellationRequested();
+        });
+        impl.pendingCommands.store(static_cast<std::uint32_t>(impl.fastPath.Commands().size()));
+        if (std::ranges::any_of(impl.fastPath.Commands(), [&input](const CharacterQueuedMovement &queued) {
+            return queued.request.tick < input.tick;
         }))
             return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
         if (const auto eligible = static_cast<std::size_t>(std::ranges::count_if(impl.fastPath.Commands(),
-                                                                                 [&input](const CharacterMovementRequest &command) {
-            return command.tick == input.tick;
+                                                                                 [&input](const CharacterQueuedMovement &queued) {
+            return queued.request.tick == input.tick;
         }));
             eligible > impl.settings.Values().work.maximumCommandsPerTick)
             return Result<void>::Failure(MakeError(CharacterErrors::CapacityExceeded));
 
         impl.fastPath.CommandScratch().clear();
-        for (const CharacterMovementRequest &command : impl.fastPath.Commands()) {
-            if (command.tick == input.tick)
-                impl.fastPath.CommandScratch().push_back(command);
+        for (const CharacterQueuedMovement &queued : impl.fastPath.Commands()) {
+            if (queued.request.tick == input.tick)
+                impl.fastPath.CommandScratch().push_back(queued.request);
         }
         std::ranges::sort(impl.fastPath.CommandScratch(), CommandLess);
         if (const auto valid = ValidateFrozenCommands(impl); valid.HasError())
             return valid;
         for (const CharacterMovementRequest &command : impl.fastPath.CommandScratch())
             impl.closedSequences[command.controller.slot.index] = command.sequence;
-        std::erase_if(impl.fastPath.Commands(), [&input](const CharacterMovementRequest &command) {
-            return command.tick == input.tick;
+        std::erase_if(impl.fastPath.Commands(), [&input](const CharacterQueuedMovement &queued) {
+            return queued.request.tick == input.tick;
         });
         impl.pendingCommands.store(static_cast<std::uint32_t>(impl.fastPath.Commands().size()));
         impl.closedTick.store(input.tick);
@@ -216,41 +237,72 @@ namespace Horo::Character::Detail {
         Physics::PhysicsCapsuleShape capsule;
         CharacterStance stance{CharacterStance::Standing};
         Math::Vec3 gravityVelocity{};
+        std::optional<CharacterPlatformAttachment> platformAttachment;
     };
+
+    /** @brief Copies the last committed motion and geometry while the caller holds registry ownership. */
+    [[nodiscard]] CharacterControllerMotionInput CaptureControllerMotion(const CharacterControllerRecord &record) {
+        CharacterControllerMotionInput result{record.publication, record.capsule, record.stance};
+        if (record.locomotion) {
+            result.gravityVelocity = record.locomotion->movement.gravityVelocityMetersPerSecond;
+            result.platformAttachment = record.locomotion->movement.platformAttachment;
+        }
+        return result;
+    }
+
+    /** @brief Owns staged shape clearance and its bottom-preserving root without changing controller storage. */
+    struct CharacterShapeMovementCandidate final {
+        CharacterTransformPublication publication;
+        Physics::PhysicsCapsuleShape capsule;
+        std::optional<CharacterShapeChangeResult> change;
+        bool geometryChanged{};
+    };
+
+    /** @brief Resolves the command's effective collision geometry before the movement and support queries. */
+    [[nodiscard]] Result<CharacterShapeMovementCandidate> ResolveMovementShape(auto &impl, const CharacterMovementRequest &command,
+                                                                               const CharacterFixedTickInput &input,
+                                                                               const CharacterControllerMotionInput &previous,
+                                                                               const CharacterControllerDescriptor &descriptor) {
+        CharacterShapeMovementCandidate candidate{previous.publication, previous.capsule};
+        if (!command.shapeChange && command.stance == CharacterStanceIntent::Keep)
+            return Result<CharacterShapeMovementCandidate>::Success(candidate);
+        const auto shape = ResolveShapeChange(impl, command, input, previous.publication, descriptor, previous.capsule, previous.stance);
+        if (shape.HasError())
+            return Result<CharacterShapeMovementCandidate>::Failure(shape.ErrorValue());
+        candidate.change = shape.Value();
+        candidate.geometryChanged = !SameCapsule(previous.capsule, candidate.change->effectiveCapsule);
+        if (candidate.geometryChanged)
+            candidate.publication.position = BottomPreservingPosition(previous.publication.position, descriptor.up, previous.capsule,
+                                                                      candidate.change->effectiveCapsule);
+        candidate.capsule = candidate.change->effectiveCapsule;
+        return Result<CharacterShapeMovementCandidate>::Success(candidate);
+    }
 
     /** @brief Stages shape clearance and resolves movement with the candidate capsule before any publication. */
     [[nodiscard]] Result<CharacterMovementResult> ResolveControllerMovement(auto &impl, const CharacterMovementRequest &command,
                                                                             const CharacterFixedTickInput &input,
                                                                             const CharacterControllerMotionInput &previous,
                                                                             CharacterControllerDescriptor descriptor) {
-        Physics::PhysicsCapsuleShape capsule = previous.capsule;
         if (command.filterChange)
             descriptor.selectors = *command.filterChange;
-        std::optional<CharacterShapeChangeResult> shapeChange;
-        bool geometryChanged{};
-        auto candidate = previous.publication;
-        if (command.shapeChange.has_value() || command.stance != CharacterStanceIntent::Keep) {
-            const auto shape = ResolveShapeChange(impl, command, input, previous.publication, descriptor, capsule, previous.stance);
-            if (shape.HasError())
-                return Result<CharacterMovementResult>::Failure(shape.ErrorValue());
-            shapeChange = shape.Value();
-            geometryChanged = !SameCapsule(capsule, shapeChange->effectiveCapsule);
-            if (geometryChanged)
-                candidate.position =
-                    BottomPreservingPosition(previous.publication.position, descriptor.up, capsule, shapeChange->effectiveCapsule);
-            capsule = shapeChange->effectiveCapsule;
-        }
-        descriptor.capsule = capsule;
+        const auto shape = ResolveMovementShape(impl, command, input, previous, descriptor);
+        if (shape.HasError())
+            return Result<CharacterMovementResult>::Failure(shape.ErrorValue());
+        const auto &candidate = shape.Value();
+        descriptor.capsule = candidate.capsule;
         // The crouch profile is authored against standing geometry, not the temporary query capsule.
         descriptor.crouchedCapsule.reset();
-        const auto resolved = ResolveMovementResult(impl, command, candidate, input, descriptor, previous.gravityVelocity);
+        const auto resolved = ResolveMovementResult(impl, command, candidate.publication, input, descriptor, previous.gravityVelocity);
         if (resolved.HasError())
             return Result<CharacterMovementResult>::Failure(resolved.ErrorValue());
         CharacterMovementResult movement = std::move(resolved).Value();
-        movement.shapeChange = shapeChange;
-        if (geometryChanged && !input.query.sweep) {
+        movement.shapeChange = candidate.change;
+        if (candidate.geometryChanged && !input.query.sweep) {
             ClearGroundEvidence(movement, descriptor.up);
         }
+        if (const auto attachment = ResolveValidatedPlatformAttachment(impl, movement, input, descriptor, previous.platformAttachment);
+            attachment.HasError())
+            return Result<CharacterMovementResult>::Failure(attachment.ErrorValue());
         // Derive facts from the final support state, including geometry revalidation.
         if (previous.publication.grounded != movement.grounded)
             movement.groundTransition = movement.grounded ? CharacterGroundTransition::Landed : CharacterGroundTransition::LeftGround;
@@ -297,6 +349,14 @@ namespace Horo::Character::Detail {
         return Result<CharacterLocomotionSnapshot>::Success(snapshot);
     }
 
+    /** @brief Appends one candidate's bounded contact prefix and accounts for its observed contacts. */
+    void AccumulateMovementContacts(auto &impl, const CharacterMovementResult &movement, const CharacterFixedTickInput &input) {
+        if (input.metrics != nullptr)
+            input.metrics->snapshot.contacts += movement.contactCount;
+        for (std::uint32_t contactIndex{}; contactIndex < movement.contactCount; ++contactIndex)
+            static_cast<void>(impl.fastPath.TryAppendContact(movement.contacts[contactIndex]));
+    }
+
     /** @brief Resolves final commands into validated movement candidates without mutating records. */
     [[nodiscard]] Result<std::uint32_t> ResolveCommandFrame(auto &impl, const CharacterFixedTickInput &input) {
         std::uint32_t applied{};
@@ -314,26 +374,21 @@ namespace Horo::Character::Detail {
                 if (record.HasError())
                     return Result<std::uint32_t>::Failure(record.ErrorValue());
                 descriptor = record.Value()->descriptor;
-                previous.publication = record.Value()->publication;
-                if (record.Value()->locomotion.has_value())
-                    previous.gravityVelocity = record.Value()->locomotion->movement.gravityVelocityMetersPerSecond;
+                previous = CaptureControllerMotion(*record.Value());
                 spawned = record.Value()->spawned;
-                previous.capsule = record.Value()->capsule;
-                previous.stance = record.Value()->stance;
             }
             if (input.observer.movement)
                 input.observer.movement(input.observer.context, command);
             if (impl.state.load() != CharacterWorldState::Active)
                 return Result<std::uint32_t>::Failure(MakeError(CharacterErrors::InvalidState));
             if (spawned) {
+                impl.debug.Begin(command.controller, input.query.sweep != nullptr);
                 const auto resolved = ResolveControllerMovement(impl, command, input, previous, descriptor);
+                impl.debug.End();
                 if (resolved.HasError())
                     return Result<std::uint32_t>::Failure(resolved.ErrorValue());
                 CharacterMovementResult movement = std::move(resolved).Value();
-                if (input.metrics != nullptr)
-                    input.metrics->snapshot.contacts += movement.contactCount;
-                for (std::uint32_t contactIndex{}; contactIndex < movement.contactCount; ++contactIndex)
-                    static_cast<void>(impl.fastPath.TryAppendContact(movement.contacts[contactIndex]));
+                AccumulateMovementContacts(impl, movement, input);
                 movementResults.push_back(std::move(movement));
             }
             ++applied;
@@ -391,6 +446,7 @@ namespace Horo::Character::Detail {
         record.Value()->publication = committed.transform;
         record.Value()->stateRevision = committed.stateRevision;
         record.Value()->locomotion = std::move(committed);
+        impl.debug.Commit(command.controller, input.tick, impl.descriptor.physicsSnapshotRevision);
         return Result<void>::Success();
     }
 

@@ -129,6 +129,7 @@ namespace Horo::Runtime {
             int calls{};
             bool reject{};
             bool throws{};
+            bool throwsNonStandard{};
             bool durable{};
             GameplayCheckpointController *clearSelection{};
 
@@ -137,6 +138,8 @@ namespace Horo::Runtime {
                 ++calls;
                 if (clearSelection)
                     REQUIRE(clearSelection->Clear().HasValue());
+                if (throwsNonStandard)
+                    throw 1452;  // NOSONAR -- Exercises foreign non-standard exception containment.
                 if (throws)
                     throw std::runtime_error("staging failure");
                 durable = checkpoint.Publication() != nullptr;
@@ -268,6 +271,12 @@ namespace Horo::Runtime {
         SECTION("source throws") {
             source.throws = true;
             CHECK(Restart(controller, registry, source).HasError());
+        }
+        SECTION("source throws a non-standard exception") {
+            source.throwsNonStandard = true;
+            const auto result = Restart(controller, registry, source);
+            REQUIRE(result.HasError());
+            CHECK(result.ErrorValue().code.Value() == SaveErrors::RestoreAdapterContractInvalid.code.Value());
         }
         SECTION("generation changed after preparation") {
             auto result = Restart(controller, registry, source);

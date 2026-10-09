@@ -1848,3 +1848,11 @@ The host publishes only by calling that transaction's `Activate` with fresh runt
 and registry evidence under the exclusive lifecycle commit boundary. No checkpoint
 path bypasses the ordinary restore transaction or performs post-publication spawn
 callbacks. Controller access is confined to its constructing thread.
+
+Checkpoint API input migration: `Capture` borrows its read-only provenance and
+limits for the synchronous builder call; the builder owns those values before
+participant callbacks. `Restart` borrows context only to copy it into owned
+operation evidence before any staging callback. Existing call expressions remain
+valid; callers retaining function/member pointers must update these parameter
+types and rebuild. Runtime checkpoint regressions and the staged public-header
+consumer qualify these signatures. Archive formats and metadata are unchanged.

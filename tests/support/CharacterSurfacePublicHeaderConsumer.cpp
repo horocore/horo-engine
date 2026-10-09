@@ -1,5 +1,7 @@
+#include "Horo/Physics/CharacterCapability.h"
 #include "Horo/Physics/CharacterClearanceQuery.h"
 #include "Horo/Physics/CharacterControllerContracts.h"
+#include "Horo/Physics/CharacterDebugSnapshot.h"
 #include "Horo/Physics/CharacterWorld.h"
 
 #include <type_traits>
@@ -8,6 +10,18 @@ static_assert(std::is_trivially_copyable_v<Horo::Character::CharacterGroundSurfa
 static_assert(std::is_same_v<decltype(Horo::Character::CharacterMovementResult{}.gravityVelocityMetersPerSecond), Horo::Math::Vec3>);
 static_assert(std::is_trivially_copyable_v<Horo::Character::CharacterCollisionSelectors>);
 static_assert(std::is_trivially_copyable_v<Horo::Character::CharacterSurfaceContact>);
+static_assert(std::is_trivially_copyable_v<Horo::Character::CharacterPlatformAttachment>);
+static_assert(std::is_trivially_copyable_v<Horo::Character::CharacterPlatformBodyEvidence>);
+static_assert(std::is_trivially_copyable_v<Horo::Character::CharacterDebugProbe>);
+static_assert(std::is_copy_constructible_v<Horo::Character::CharacterDebugSnapshot>);
+static_assert(std::is_same_v<decltype(std::declval<const Horo::Character::CharacterWorld &>().CaptureDebugSnapshot(
+                                 std::declval<const Horo::Character::CharacterDebugCaptureRequest &>())),
+                             Horo::Character::CharacterDebugCapture>);
+static_assert(std::is_copy_constructible_v<Horo::Character::CharacterCapability>);
+static_assert(std::is_trivially_copyable_v<Horo::Character::CharacterCapabilityIdentity>);
+static_assert(std::is_same_v<decltype(std::declval<const Horo::Character::CharacterCapability &>().ControllerLocomotionSnapshot(
+                                 std::declval<Horo::Character::CharacterControllerHandle>())),
+                             Horo::Result<Horo::Character::CharacterLocomotionSnapshot>>);
 
 static_assert(std::is_same_v<decltype(std::declval<Horo::Physics::CharacterClearanceQuery &>().Context()),
                              Horo::Character::CharacterPhysicsQueryContext>);

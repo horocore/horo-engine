@@ -118,6 +118,12 @@ namespace Horo::Audio {
          * @param progress Exact frame cursor and sanitization counter, advanced by one frame.
          */
         void EmitStereo(AudioResamplerOutput output, AudioResamplerProgress &progress) noexcept;
+        /** @brief Stage at most one admitted source frame without consuming it.
+         * @param input Validated borrowed source.
+         * @param consumed Number of frames already consumed in this call.
+         * @return One when a source frame was staged, otherwise zero.
+         */
+        [[nodiscard]] std::uint32_t StageInputFrame(AudioResamplerInput input, std::uint32_t consumed) noexcept;
         AudioResampler converter_;
         AudioResamplerDescriptor descriptor_;
         AudioStereoSpatialTarget target_;

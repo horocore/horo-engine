@@ -332,6 +332,60 @@ The controller resolves movement in passes:
 
 All sweeps use the physics query API, not direct transform mutation.
 
+### Geometric Robustness (CHR-002.6)
+
+The ordinary fixed-tick pipeline uses continuous whole-capsule casts, including for
+thin obstacles: it does not sample only endpoints or replace collision with a center
+ray. Every negative approach to a blocking normal participates, including grazing
+approaches below the old `0.00001` normal threshold. Travel stops at the nearest
+cast boundary minus skin; each subsequent projected displacement is cast again.
+Only complete, finite, generation-valid query inventories authorize movement.
+Truncated sweeps fail with `CapacityExceeded` before candidate publication because
+the omitted evidence cannot be assumed farther away. Contact presentation may still
+truncate independently; it does not remove solver constraints.
+
+Each attempted movement owns at most 32 distinct blocking normals across its
+successive casts. Exact duplicates from coplanar seams share one constraint. Existing
+slope/step policy runs first, then a bounded feasible-cone projection preserves valid
+face or two-plane crease travel without scaling clipped movement back through a wall.
+Candidate enumeration is canonical: at most 32 face and 496 pair candidates, each
+checked against at most 32 normals. Closed corners stop; a feasible crease is not
+collapsed merely because sequential projections conflict. The set is tick-local
+scratch, not retained contacts, another state authority or a per-frame allocation.
+
+The admitted speed envelope is `length(desiredVelocity) * fixedDelta <=
+maximumDisplacementMetersPerTick` (default 128 m); a 60-Hz tick therefore permits
+at most 7680 m/s of requested vector magnitude before other Physics scale limits.
+This is a safety ceiling, not recommended locomotion tuning. Non-finite or excessive
+intent fails before movement queries. Gravity travel and the final combined motion
+must also satisfy the existing envelope. Continuous evidence must come from the
+captured coherent Physics snapshot; this does not infer future obstacle motion or
+replace Physics rigid-body CCD.
+
+The immutable world movement-iteration limit (default 8) is shared by commanded
+travel, gravity and steep sliding. If further travel cannot be cast within that
+limit, the result retains only already checked travel and publishes
+`CharacterMovementTermination::IterationLimit`. Constraint storage exhaustion
+likewise discards unswept travel and publishes `ConstraintLimit`. Both reset unswept
+gravity continuation rather than accumulating pressure behind the stop. Complete
+resolution reports `Complete`; reaching a limit with no remaining travel is not
+exhaustion. These closed, controller/tick-correlated result values are owned solver
+diagnostics, distinct from contact truncation. Ground classification still uses its
+own budgeted cast at the checked pose. Query-budget exhaustion, malformed evidence,
+provider failure or lifecycle retirement continues to abort the whole candidate
+tick and preserves all committed controller state.
+
+Migration: the existing Physics-owned movement result appends the termination
+diagnostic and rejects unknown discriminants or nonzero gravity continuation on a
+limited result. Custom sweep adapters must no longer
+return truncated inventories as successful travel evidence. In-process consumers
+rebuild; no additional public header, target dependency, serialized schema or native
+controller authority is introduced. This changes the prior exhausted-gravity/slide
+iteration failure into a successful conservative pose plus diagnostic, without
+weakening query failure, rollback or geometric admission. Unit fixed-tick oracles
+and canonical Physics/Gameplay/Scene cases qualify corners, grazing casts, coplanar
+seams, high-speed thin boxes, valid final capsule clearance and limit diagnostics.
+
 ## Ground Detection
 
 Ground detection determines whether the character is standing on a surface.
@@ -388,8 +442,8 @@ changing capsule geometry alone cannot cancel airborne velocity.
 Slide displacement uses the same collision sweeps and remaining movement-iteration
 budget, including for sub-minimum ordinary movement distances. Zero ordinary
 movement consumes no movement iteration. A required slide with no remaining
-movement iterations rejects the entire candidate tick with `CapacityExceeded`,
-which preserves the committed state. The shared query budget includes both support
+movement iterations retains the checked pose and publishes `IterationLimit`,
+with no unswept gravity continuation. The shared query budget includes both support
 probes. A steep surface does not publish grounded or
 platform support, and the reducer never snaps through the nearest steep face to a
 deeper walkable surface. Failed queries or shutdown discard all candidate motion
@@ -825,6 +879,38 @@ declared hold/reject result.
   silent clamp is permitted.
 
 ## Diagnostics
+
+`CharacterWorld::CaptureDebugSnapshot` copies a detached, immutable, backend-neutral
+debug value on the world owner thread between operations. It does not acquire
+publication/registry locks, invoke adapters, allocate, or publish simulation state.
+Capture during a tick or placement returns `Busy`; off-owner capture returns
+`WrongThread`. Owned copies can subsequently be read on any thread and survive
+world retirement. They are neither restore checkpoints nor mutation authority.
+
+The snapshot projects the actual capsule and transform publication and, when
+present, its committed locomotion/contact/ground/platform evidence. Spawn and
+teleport do not fabricate locomotion evidence. Probe geometry is copied at actual
+validated query returns, including the query's exact selectors; visualization
+must not reconstruct unexecuted rays or step arcs from solver parameters.
+Candidate traces are adopted only by successful state publication, so placement
+failure and whole-frame rollback retain the previous committed trace.
+
+Preparation reserves separate candidate and committed probe prefixes. Their
+per-controller capacity is `min(32, maximumDebugPrimitives / (2 * maximumControllers))`
+using integer division, exposed by `ProbeRetentionCapacity()`. Metadata is bounded
+by controller capacity. Observation overflow never changes query admission or
+movement: omitted counts and typed availability expose incomplete evidence.
+A derived zero capacity reports `StorageUnavailable`; an external movement provider
+without the capsule-sweep seam reports `UnsupportedProvider`, never invented probes.
+Consumer probe/contact prefix limits are independent of solver constraints.
+
+Capture requires exact controller, Physics world, filter, and origin generation
+fences. Its source tick and Physics revision belong to the retained publication,
+not a subsequently refreshed query context. Observation tick is the greater of
+that source tick and the world's completed tick; age is their difference. An
+explicit maximum age rejects stale evidence without replacing it. Public header
+ownership remains with `HoroPhysics`; existing callers need no migration because
+capture is an additive contract, not a replacement for locomotion publication.
 
 Debug visualization:
 

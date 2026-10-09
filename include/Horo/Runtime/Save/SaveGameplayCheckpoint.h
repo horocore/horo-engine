@@ -62,9 +62,10 @@ namespace Horo::Runtime {
          * @pre The host holds the same capture barrier used by ordinary saves.
          */
         [[nodiscard]] static Result<GameplayCheckpoint> Capture(GameplayCheckpointMetadata metadata,
-                                                                RuntimeSaveCaptureProvenance provenance, std::uint64_t sessionGeneration,
+                                                                const RuntimeSaveCaptureProvenance &provenance,
+                                                                std::uint64_t sessionGeneration,
                                                                 SaveParticipantRegistrySnapshot participants,
-                                                                RuntimeSaveCaptureLimits limits = {});
+                                                                const RuntimeSaveCaptureLimits &limits = {});
         /** @brief Reopens durable metadata obtained from a verified committed checkpoint archive.
          * @param metadata Decoded project checkpoint participant metadata.
          * @param publication Trusted exact committed slot publication.
@@ -151,15 +152,15 @@ namespace Horo::Runtime {
                                             const SaveParticipantRegistrySnapshot &participants);
         /** @brief Prepares the selected retry point through the same transaction as ordinary slot load.
          * @param baseline Current trusted baseline revalidated before staging.
-         * @param context Load operation and runtime generation evidence.
+         * @param context Load operation and runtime generation evidence, copied before source callbacks.
          * @param operation Sole producer for an admitted nonterminal Load operation.
          * @param participants Current pinned restore registry.
          * @param source Trusted slot-load staging composition.
          * @return ReadyToActivate transaction or typed failure; no live state changes here.
          * The host must call transaction.Activate with fresh evidence under its exclusive commit boundary.
          */
-        [[nodiscard]] Result<StagedRestoreTransaction> Restart(const GameplayCheckpointBaseline &baseline, StagedRestoreContext context,
-                                                               SaveOperationController operation,
+        [[nodiscard]] Result<StagedRestoreTransaction> Restart(const GameplayCheckpointBaseline &baseline,
+                                                               const StagedRestoreContext &context, SaveOperationController operation,
                                                                SaveParticipantRegistrySnapshot participants,
                                                                IGameplayCheckpointRestoreSource &source) const;
         /** @brief Returns the selected retry point on the owner thread. @return Checkpoint or null when absent/wrong thread. */

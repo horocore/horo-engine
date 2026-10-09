@@ -162,6 +162,13 @@ namespace Horo::Network {
             return fingerprint_;
         }
 
+        /** @brief Returns the immutable recipient role publication bound into every record.
+         * @return Exact object/session/schema/role evidence; no mutation authority.
+         */
+        [[nodiscard]] const ReplicationRoleBinding &Recipient() const noexcept {
+            return recipient_;
+        }
+
         /** @brief Returns the negotiated generation for validated acknowledgements. @return Positive descriptor generation. */
         [[nodiscard]] std::uint64_t DescriptorGeneration() const noexcept {
             return generation_;

@@ -157,6 +157,13 @@ namespace Horo::Runtime {
          * @param view Presented view. @param input Exact normalized source edge. @return Transition or typed failure.
          */
         [[nodiscard]] Result<Ui::UiControlEventResult> HandleControl(Ui::UiRenderViewId view, const Ui::UiControlInput &input);
+        /** @brief Forwards a routed text default to the runtime-owned presented control; no native session is retained.
+         * @param view Presented view. @param source Exact current control source.
+         * @param sequence Increasing input sequence. @param command Owned normalized edit/clipboard value.
+         * @return Edit/clipboard outcome or typed owner/source/lifecycle/validation failure.
+         */
+        [[nodiscard]] Result<Ui::UiTextEditResult> EditControlText(Ui::UiRenderViewId view, const Ui::UiActionSource &source,
+                                                                   std::uint64_t sequence, const Ui::UiTextEditCommand &command);
         /** @brief Admits a real pointer lease through the current-frame receipt gate. @param request Copied normalized route.
          * @return Actual capture lease or typed source/lifecycle failure; no mutable canvas owner escapes.
          */

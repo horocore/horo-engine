@@ -107,4 +107,6 @@ namespace Horo::Terrain::Detail {
                                            const TerrainTileCookProfile &profile,
                                            const std::vector<TerrainTileCookDependency> &dependencies);
     [[nodiscard]] Sha256Digest ManifestDigest(const CookedTerrainTileSet &cooked);
+    /** @brief Hashes borrowed bytes in cooperative 4096-byte chunks, without allocation. */
+    [[nodiscard]] Result<Sha256Digest> HashPayload(std::span<const std::uint8_t> bytes, const CancellationToken &cancellation);
 }  // namespace Horo::Terrain::Detail
