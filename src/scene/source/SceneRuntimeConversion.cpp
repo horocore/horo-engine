@@ -4,18 +4,22 @@
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabSceneExpansion.h"
 #include "NavigationAgentJson.h"
+#include "ScenePrefabProjectionContext.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <format>
 #include <iterator>
 #include <limits>
+#include <new>
 #include <nlohmann/json.hpp>
 #include <span>
 #include <string>
 #include <string_view>
 
 namespace Horo::SceneSource {
+    using Detail::AddInstanceContext;
+
     namespace {
         const ErrorDomainId SceneConversionDomain{"horo.editor.scene_conversion"};
         const ErrorCodeDescriptor PrefabResolutionRequired{
@@ -147,12 +151,6 @@ namespace Horo::SceneSource {
                 .sensor = true,
             }};
             return Result<void>::Success();
-        }
-
-        /** @brief Preserves instance identity while adding scene-conversion context to a resolver failure. */
-        void AddInstanceContext(Error &error, const ScenePrefabInstanceProjection &projection) {
-            error.message = std::format("Required prefab instance {} ({}) failed: {}", projection.authored.instanceId.Value(),
-                                        projection.authored.sourcePrefab.Asset().ToString(), error.message);
         }
 
         /** @brief Preserves typed failure and identifies its required instance at the runtime boundary. */
@@ -517,4 +515,5 @@ namespace Horo::SceneSource {
             return Result<Runtime::RuntimeSceneDefinition>::Failure(projection.ErrorValue());
         return ConvertScenePrefabProjectionToRuntime(document, sceneId, revision, projection.Value(), resolver, limits);
     }
+
 }  // namespace Horo::SceneSource

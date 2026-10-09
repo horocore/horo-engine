@@ -44,6 +44,7 @@ namespace Horo::Prefab {
             std::vector<Assets::AssetId> &failureChain;
             PrefabExpansionBudget &budget;
             const PrefabLimitProfile &limits;
+            const CancellationToken &cancellation;
         };
 
         /** @brief Records the complete source path that made a required expansion fail. */
@@ -81,14 +82,23 @@ namespace Horo::Prefab {
             return ExpandSource(state, *parent, nestedDepth, variantDepth + 1, mountParent, mountTransform);
         }
 
+        /** @brief Admits one object before identity allocation or output mutation. */
+        Result<void> AdmitLocalObject(ExpansionState &state) {
+            if (state.cancellation.IsCancellationRequested())
+                return Fail(state, MakeError(PrefabErrors::Cancelled));
+            if (state.objects.size() >= state.limits.Policy().maximumObjectCount)
+                return Fail(state, MakeError(PrefabErrors::ObjectCountExceeded));
+            if (const auto charged = state.budget.Consume(1); charged.HasError())
+                return Fail(state, charged.ErrorValue());
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> MaterializeLocalObjects(ExpansionState &state, const PrefabDocumentData &document,
                                                            const std::optional<ExpandedPrefabObjectKey> &mountParent,
                                                            const Math::Transform &mountTransform) {
             for (const PrefabObjectNode &object : document.objects) {
-                if (state.objects.size() >= state.limits.Policy().maximumObjectCount)
-                    return Fail(state, MakeError(PrefabErrors::ObjectCountExceeded));
-                if (const auto charged = state.budget.Consume(1); charged.HasError())
-                    return Fail(state, charged.ErrorValue());
+                if (const auto admitted = AdmitLocalObject(state); admitted.HasError())
+                    return admitted;
                 auto address = PrefabObjectAddress::Create(state.scope, object.localId);
                 if (address.HasError())
                     return Fail(state, address.ErrorValue());
@@ -119,6 +129,8 @@ namespace Horo::Prefab {
             if (!document.composition)
                 return Result<void>::Success();
             for (const NestedPrefabPlacement &placement : document.composition->nestedPlacements) {
+                if (state.cancellation.IsCancellationRequested())
+                    return Fail(state, MakeError(PrefabErrors::Cancelled));
                 if (nestedDepth >= state.limits.Policy().maximumNestedPrefabDepth)
                     return Fail(state, MakeError(PrefabErrors::HierarchyDepthExceeded));
                 const Assets::AssetId nestedAsset = placement.sourcePrefab.Asset();
@@ -145,6 +157,8 @@ namespace Horo::Prefab {
         [[nodiscard]] Result<void> ExpandSource(ExpansionState &state, const PrefabDependencySource &source, const std::size_t nestedDepth,
                                                 const std::size_t variantDepth, const std::optional<ExpandedPrefabObjectKey> &mountParent,
                                                 const Math::Transform &mountTransform) {
+            if (state.cancellation.IsCancellationRequested())
+                return Fail(state, MakeError(PrefabErrors::Cancelled));
             if (const Assets::AssetId sourceAsset = source.document.Data().assetId;
                 std::ranges::find(state.active, sourceAsset) != state.active.end())
                 return Fail(state, MakeError(PrefabErrors::DependencyGraphInvalid), sourceAsset);
@@ -201,7 +215,10 @@ namespace Horo::Prefab {
 
     /** @copydoc PrefabSourceResolverSnapshot::Resolve */
     Result<EffectivePrefabCandidate> PrefabSourceResolverSnapshot::Resolve(const Assets::AssetId rootAsset, const PrefabInstanceId instance,
-                                                                           const PrefabLimitProfile &limits) const {
+                                                                           const PrefabLimitProfile &limits,
+                                                                           const CancellationToken &cancellation) const {
+        if (cancellation.IsCancellationRequested())
+            return Result<EffectivePrefabCandidate>::Failure(MakeError(PrefabErrors::Cancelled));
         if (!instance.IsValid())
             return Result<EffectivePrefabCandidate>::Failure(MakeError(PrefabErrors::IdentityInvalid));
         const PrefabDependencySource *root = FindSource(sources_, rootAsset);
@@ -214,7 +231,7 @@ namespace Horo::Prefab {
         std::vector<Assets::AssetId> failureChain;
         std::vector<ResolvedPrefabObject> objects;
         objects.reserve(std::min<std::size_t>(sources_.size(), limits.Policy().maximumObjectCount));
-        ExpansionState state{sources_, instance, scope, active, objects, failureChain, budget, limits};
+        ExpansionState state{sources_, instance, scope, active, objects, failureChain, budget, limits, cancellation};
         if (auto expanded = ExpandSource(state, *root, 1, 1); expanded.HasError()) {
             Error error = expanded.ErrorValue();
             if (failureChain.empty())
@@ -226,8 +243,17 @@ namespace Horo::Prefab {
         auto revision = CaptureRevision(rootAsset, budget);
         if (revision.HasError())
             return Result<EffectivePrefabCandidate>::Failure(revision.ErrorValue());
+        if (cancellation.IsCancellationRequested())
+            return Result<EffectivePrefabCandidate>::Failure(MakeError(PrefabErrors::Cancelled));
         return Result<EffectivePrefabCandidate>::Success(
             EffectivePrefabCandidate{rootAsset, std::move(revision).Value(), std::move(objects)});
+    }
+
+    /** @copydoc PrefabSourceResolverSnapshot::CaptureResolutionRevision */
+    Result<PrefabResolutionRevision> PrefabSourceResolverSnapshot::CaptureResolutionRevision(const Assets::AssetId rootAsset,
+                                                                                             const PrefabLimitProfile &limits) const {
+        PrefabExpansionBudget budget{limits};
+        return CaptureRevision(rootAsset, budget);
     }
 
     /** @copydoc PrefabSourceResolverSnapshot::CaptureRevision */
