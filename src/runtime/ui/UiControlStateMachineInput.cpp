@@ -65,8 +65,11 @@ namespace Horo::Runtime::Ui {
         : descriptor(std::move(source)), state(UiControlDetail::InitialState(descriptor)) {
         configuredAvailability =
             UiControlDetail::BaseOf(descriptor).initiallyEnabled ? UiControlAvailability::Enabled : UiControlAvailability::Disabled;
-        if (const auto *text = std::get_if<UiTextInputControlDescriptor>(&descriptor); text != nullptr)
+        if (const auto *text = std::get_if<UiTextInputControlDescriptor>(&descriptor); text != nullptr) {
             editStartText = text->initialText;
+            textEditor =
+                std::make_unique<UiTextEditBuffer>(std::move(UiTextEditBuffer::Create(text->EditPolicy(), text->initialText)).Value());
+        }
     }
 
     /** @brief Clears press, repeat, editing, pending and optionally focus state. */
@@ -80,6 +83,11 @@ namespace Horo::Runtime::Ui {
         repeatArmed = false;
         repeatNextTick = 0;
         adjustment = UiControlAdjustment::Count;
+        if (textEditor) {
+            (void)textEditor->Reset(std::get<UiTextInputControlState>(state).text);
+            if (textResetRevision != std::numeric_limits<std::uint64_t>::max())
+                ++textResetRevision;
+        }
     }
 
     /** @brief Projects an availability transition into the typed state variant. */
@@ -247,7 +255,7 @@ namespace Horo::Runtime::Ui {
         return Result<UiControlTransitionKind>::Success(UiControlTransitionKind::DefaultPending);
     }
 
-    /** @brief Appends bounded UTF-8 text to a focused editing control without allocation. */
+    /** @brief Inserts normalized UTF-8 at the grapheme-safe current selection without allocation. */
     Result<UiControlTransitionKind> UiControlStateMachine::Storage::HandleTextInput(const UiControlInput &input) {
         if (UiControlDetail::KindOf(descriptor) != UiControlKind::TextInput)
             return Failure<UiControlTransitionKind>(UiErrors::ControlInputInvalid);
@@ -255,13 +263,10 @@ namespace Horo::Runtime::Ui {
             return Result<UiControlTransitionKind>::Success(UiControlTransitionKind::IgnoredDisabled);
         if (!UiControlDetail::IsFocused(state) || !std::get<UiTextInputControlState>(state).editing)
             return Result<UiControlTransitionKind>::Success(UiControlTransitionKind::IgnoredUnfocused);
-        const auto &text = std::get<UiTextInputControlState>(state).text;
-        const auto &descriptor = std::get<UiTextInputControlDescriptor>(this->descriptor);
-        if (input.text.size > descriptor.maximumTextBytes - text.size)
-            return Failure<UiControlTransitionKind>(UiErrors::ControlCapacityExceeded);
-        auto &mutableText = std::get<UiTextInputControlState>(state).text;
-        std::copy(input.text.View().begin(), input.text.View().end(), mutableText.bytes.begin() + mutableText.size);
-        mutableText.size = static_cast<std::uint16_t>(mutableText.size + input.text.size);
+        const auto edited = textEditor->Apply({UiTextEditKind::Insert, input.text});
+        if (edited.HasError())
+            return Result<UiControlTransitionKind>::Failure(edited.ErrorValue());
+        std::get<UiTextInputControlState>(state).text = textEditor->Snapshot().Value().text;
         return Result<UiControlTransitionKind>::Success(UiControlTransitionKind::TextEdited);
     }
 

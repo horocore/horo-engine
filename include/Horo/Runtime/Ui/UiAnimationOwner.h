@@ -268,6 +268,14 @@ namespace Horo::Runtime::Ui {
          * @return Actual control transition or typed stale/lifecycle/budget failure; no control owner escapes.
          */
         [[nodiscard]] Result<UiControlEventResult> HandleControl(UiRenderViewId view, const UiControlInput &input);
+        /** @brief Applies a routed text default to an actual receipt-fenced control under the owner's command budget.
+         * @param view Successfully presented view. @param source Exact current control source.
+         * @param sequence Increasing input sequence shared with HandleControl. @param command Owned normalized edit.
+         * @return Edit/clipboard value or typed admission, source, lifecycle or validation failure.
+         * @pre The input route has admitted this UI-local default; platform clipboard I/O stays outside this call.
+         */
+        [[nodiscard]] Result<UiTextEditResult> EditControlText(UiRenderViewId view, const UiActionSource &source, std::uint64_t sequence,
+                                                               const UiTextEditCommand &command);
         /** @brief Admits pointer capture only against the exact successfully presented current frame.
          * @param request Normalized pointer and copied typed route evidence.
          * @return Actual move-only capture lease or typed stale/lifecycle/capacity failure.

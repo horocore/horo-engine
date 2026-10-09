@@ -663,6 +663,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiRenderGeometryInternal.cpp
         runtime/ui/UiPresentationReceipt.cpp
         runtime/ui/UiTextShaping.cpp
+        runtime/ui/UiTextEditing.cpp
         runtime/ui/UiTextErrors.cpp
         runtime/ui/UiTextShape.cpp
         runtime/ui/UiTextShaper.cpp

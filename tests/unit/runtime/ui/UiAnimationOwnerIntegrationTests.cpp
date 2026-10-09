@@ -73,6 +73,37 @@ TEST_CASE("Actual presented control replacement preserves draft Cancel baseline 
     CHECK(std::get<UiTextInputControlState>(current.Controls().front().state).text.View() == "basedraft");
 }
 
+TEST_CASE("Presented text commands preserve selection and history across interaction publication", "[runtime_ui][text_edit][integration]") {
+    HostFixture fixture;
+    auto &participant = *fixture.participant;
+    REQUIRE(participant.Start(Stable<UiAnimationId>(1)).HasValue());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    auto first = Frame(participant);
+    const auto source = first.Controls().front().source;
+    auto receipt = Receipt(first, 1);
+    CHECK(participant.EditControlText(receipt.view, source, 1, {UiTextEditKind::Home}).HasError());
+    REQUIRE(participant.ApplyPresentation(receipt).HasValue());
+    REQUIRE(participant.HandleControl(receipt.view, Edge(source, UiControlInputKind::FocusGained, 1)).HasValue());
+    REQUIRE(participant.EditControlText(receipt.view, source, 2, {UiTextEditKind::Home}).HasValue());
+    REQUIRE(participant.EditControlText(receipt.view, source, 3, {UiTextEditKind::Insert, Text("x")}).HasValue());
+    fixture.clock.Advance(Duration::FromMilliseconds(10));
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    auto current = Frame(participant);
+    const auto currentSource = current.Controls().front().source;
+    REQUIRE(currentSource.owner != source.owner);
+    CHECK(std::get<UiTextInputControlState>(current.Controls().front().state).text.View() == "xbase");
+    CHECK(participant.EditControlText(receipt.view, currentSource, 4, {UiTextEditKind::Undo}).HasError());
+    receipt = Receipt(current, 2);
+    REQUIRE(participant.ApplyPresentation(receipt).HasValue());
+    CHECK(participant.EditControlText(receipt.view, source, 4, {UiTextEditKind::Undo}).HasError());
+    REQUIRE(participant.EditControlText(receipt.view, currentSource, 4, {UiTextEditKind::Undo}).Value().textChanged);
+    const auto copied = participant.EditControlText(receipt.view, currentSource, 5, {UiTextEditKind::SelectAll});
+    REQUIRE(copied.HasValue());
+    REQUIRE(participant.EditControlText(receipt.view, currentSource, 6, {UiTextEditKind::Copy}).Value().clipboard->View() == "base");
+    fixture.host->Shutdown();
+    CHECK(participant.EditControlText(receipt.view, currentSource, 7, {UiTextEditKind::Undo}).HasError());
+}
+
 TEST_CASE("Real host animation preserves capture on stable geometry and cancels it before changed geometry becomes eligible",
           "[runtime_ui][animation][integration][capture]") {
     HostFixture fixture;
