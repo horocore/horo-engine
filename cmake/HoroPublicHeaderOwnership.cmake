@@ -391,6 +391,8 @@ horo_configure_target_header_boundary(HoroNetworkRuntime PUBLIC_HEADERS
     Horo/Network/ReplicationWorldLifecycle.h
     Horo/Network/ReplicationStateCapture.h
     Horo/Network/ReplicationStateCodec.h
+    Horo/Network/ReplicationInboundApply.h
+    Horo/Network/SceneReplicationApplyOwner.h
     Horo/Network/ReplicationSnapshotHistory.h
     Horo/Network/SceneReplicationCommitSource.h
     Horo/Network/RpcGameplayDispatch.h
@@ -810,6 +812,9 @@ horo_configure_target_header_boundary(HoroXRRuntime PUBLIC_HEADERS
     Horo/XR/XRSessionErrors.h
     Horo/XR/XRSessionLifecycle.h
 )
+horo_configure_target_header_boundary(HoroXRInputBindings PUBLIC_HEADERS
+    Horo/XR/XRActionBindings.h
+)
 horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
     Horo/Terrain/FoliageDefinition.h
     Horo/Terrain/TerrainComposition.h
@@ -933,6 +938,7 @@ horo_configure_target_header_boundary(HoroSceneCellPayload PUBLIC_HEADERS
     Horo/Runtime/Scene/RuntimeSceneCellPayload.h
     Horo/Runtime/Scene/RuntimeSceneCellLayers.h
     Horo/Runtime/Scene/IncrementalSceneCellCook.h
+    Horo/Runtime/Scene/WorldBuildValidation.h
 )
 
 horo_configure_target_header_boundary(HoroPrefabSceneExpansion PUBLIC_HEADERS

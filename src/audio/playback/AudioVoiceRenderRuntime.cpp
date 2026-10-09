@@ -225,6 +225,7 @@ namespace Horo::Audio {
 
     /** @copydoc AudioVoiceRenderRuntime::State::Control */
     const ErrorCodeDescriptor *AudioVoiceRenderRuntime::State::Control(const AudioVoiceControlRequest &request) noexcept {
+        using enum AudioVoiceControl;
         if (request.voice != voice)
             return &AudioErrors::HandleStale;
         if (!ValidateAudioVoiceControlRequest(request))
@@ -237,8 +238,7 @@ namespace Horo::Audio {
         callback.streamState = actual;
         if (IsTerminalAudioVoiceState(actual))
             return &AudioErrors::VoiceInvalidTransition;
-        if (request.control >= AudioVoiceControl::StartVirtual || request.control == AudioVoiceControl::Seek ||
-            request.control == AudioVoiceControl::SetLoop)
+        if (request.control >= StartVirtual || request.control == Seek || request.control == SetLoop)
             return StreamControl(request);
         return StreamLifecycle(request.control);
     }
