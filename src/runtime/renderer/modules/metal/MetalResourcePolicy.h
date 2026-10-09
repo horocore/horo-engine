@@ -57,24 +57,24 @@ namespace Horo::Render::Detail {
 
     /**
      * @brief Copies a borrowed upload into CPU-accessible native storage after checking its actual capacity.
-     * @param destination Native contents pointer, nullable only for an empty payload.
+     * @param destination Writable native byte storage, nullable only for an empty payload.
      * @param capacity Actual native buffer length, not the requested allocation length.
      * @param data Borrowed, non-overlapping payload valid for this synchronous call.
      * @return Success or a typed error before any destination mutation.
      */
-    [[nodiscard]] Result<void> CopyMetalBufferUpload(void *destination, std::size_t capacity, std::span<const std::byte> data);
+    [[nodiscard]] Result<void> CopyMetalBufferUpload(std::byte *destination, std::size_t capacity, std::span<const std::byte> data);
 
     /**
      * @brief Copies all tightly packed texture layers into checked, padded native staging storage.
      * @param descriptor Validated texture shape and format.
      * @param rowAlignment Required staging row alignment.
-     * @param destination Native staging contents, owned by the caller throughout this synchronous call.
+     * @param destination Writable native staging bytes, owned by the caller throughout this synchronous call.
      * @param capacity Actual staging buffer length.
      * @param data Borrowed, non-overlapping base-level payload; padding is not copied.
      * @return Success or a typed error before any row is written; destination padding remains unchanged.
      */
     [[nodiscard]] Result<void> CopyMetalTextureUpload(const RenderTextureDescriptor &descriptor, std::size_t rowAlignment,
-                                                      void *destination, std::size_t capacity, std::span<const std::byte> data);
+                                                      std::byte *destination, std::size_t capacity, std::span<const std::byte> data);
 
     /** @brief Validates the typed buffer bindings required by a Metal mesh. */
     [[nodiscard]] Result<void> ValidateMetalMeshBindings(const RenderMeshDescriptor &descriptor, RenderBufferUsage vertexUsage,

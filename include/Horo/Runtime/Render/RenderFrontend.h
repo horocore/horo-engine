@@ -145,7 +145,7 @@ namespace Horo::Render {
                                                 std::span<const RenderGraphPassWorkload> workloads);
         /**
          * @brief Freezes borrowed inputs and schedules bounded preparation and CPU command recording.
-         * @param jobs Host worker pool; it must continue servicing accepted jobs until host shutdown.
+         * @param jobs Const facade of the host worker pool; its owned scheduler continues servicing accepted jobs until host shutdown.
          * @param orderedPasses Immutable source views borrowed only during this call; all arrays are copied.
          * @param limits Finite input/output payload and job-count envelope.
          * @param cancellation Parent cancellation checked again before owner publication.
@@ -154,13 +154,13 @@ namespace Horo::Render {
          * Workers retain owned CPU bytes only; neither backend nor attached executor is borrowed.
          * A failed partial admission cancels its accepted siblings and leaves this frame unexecuted.
          */
-        [[nodiscard]] Result<void> PrepareParallelExecution(JobSystem &jobs, std::span<const RenderPassDescriptor> orderedPasses,
+        [[nodiscard]] Result<void> PrepareParallelExecution(const JobSystem &jobs, std::span<const RenderPassDescriptor> orderedPasses,
                                                             const RenderParallelWorkLimits &limits = {},
                                                             const CancellationToken &cancellation = {});
 
         /**
          * @brief Freezes native graph payload on the owner and records it through the host worker pool.
-         * @param jobs Host scheduler owning callback admission, execution and cancellation acknowledgement.
+         * @param jobs Const host scheduler facade; its owned state performs callback admission, execution and cancellation acknowledgement.
          * @param graph Exact compiled graph borrowed only during this call; not retained by workers.
          * @param workloads One operation per compiled pass, borrowed only during owner capture.
          * @param cancellation Parent token checked during worker recording and before owner acceptance.
@@ -173,7 +173,7 @@ namespace Horo::Render {
          * and return render.frontend.frame_exception. No exception escapes; inability to construct
          * an error under catastrophic allocation failure follows the process noexcept contract.
          */
-        [[nodiscard]] Result<void> PrepareParallelGraphExecution(JobSystem &jobs, const CompiledRenderGraphExecution &graph,
+        [[nodiscard]] Result<void> PrepareParallelGraphExecution(const JobSystem &jobs, const CompiledRenderGraphExecution &graph,
                                                                  std::span<const RenderGraphPassWorkload> workloads,
                                                                  const CancellationToken &cancellation = {}) noexcept;
 

@@ -72,7 +72,7 @@ namespace Horo::Render::Detail {
     }
 
     /** @copydoc RenderParallelWorkState::Start */
-    Result<std::unique_ptr<RenderParallelWorkState>> RenderParallelWorkState::Start(JobSystem &jobs, const FrameToken frame,
+    Result<std::unique_ptr<RenderParallelWorkState>> RenderParallelWorkState::Start(const JobSystem &jobs, const FrameToken frame,
                                                                                     const std::span<const RenderPassDescriptor> passes,
                                                                                     const RenderFrameInputLimits &limits,
                                                                                     const CancellationToken &parentCancellation) {

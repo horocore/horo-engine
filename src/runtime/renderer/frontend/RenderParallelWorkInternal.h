@@ -54,7 +54,7 @@ namespace Horo::Render::Detail {
 
     public:
         /** @brief Captures and admits ordered pass jobs; partial admission failure cancels accepted siblings. */
-        [[nodiscard]] static Result<std::unique_ptr<RenderParallelWorkState>> Start(JobSystem &jobs, FrameToken frame,
+        [[nodiscard]] static Result<std::unique_ptr<RenderParallelWorkState>> Start(const JobSystem &jobs, FrameToken frame,
                                                                                     std::span<const RenderPassDescriptor> passes,
                                                                                     const RenderFrameInputLimits &limits,
                                                                                     const CancellationToken &parentCancellation);

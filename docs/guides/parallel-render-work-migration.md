@@ -8,6 +8,14 @@ fallback is introduced. Consumers rebuild for the appended backend virtual
 methods and frame-scope state. `RenderParallelWork.h` belongs to `HoroRenderApi`;
 the frontend and native implementations depend on that contract, not each other.
 
+Both preparation methods borrow `const JobSystem&`, matching the scheduler's
+existing const `SubmitResult` facade. This does not make submission pure: the
+host-owned shared scheduler state still admits and executes callbacks, with the
+same render-owner producer role, bounds and cancellation. Ordinary callers with
+mutable pools remain source-compatible; consumers must rebuild for the changed
+method symbols and update explicit member-function pointer signatures. No
+scheduler reference escapes preparation into worker callbacks.
+
 `PrepareParallelExecution` copies borrowed mesh, instance, material and light
 arrays into a move-only owning handoff. Containers are frozen before descriptors
 are rebound, including short strings. Input/output metadata and payload are

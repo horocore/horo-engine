@@ -60,7 +60,8 @@ namespace Horo::Render {
     }
 
     /** @copydoc RenderFrameScope::PrepareParallelExecution */
-    Result<void> RenderFrameScope::PrepareParallelExecution(JobSystem &jobs, const std::span<const RenderPassDescriptor> orderedPasses,
+    Result<void> RenderFrameScope::PrepareParallelExecution(const JobSystem &jobs,
+                                                            const std::span<const RenderPassDescriptor> orderedPasses,
                                                             const RenderParallelWorkLimits &limits, const CancellationToken &cancellation) {
         if (const auto admitted = ValidateExecutionAdmission(); admitted.HasError())
             return admitted;
@@ -75,7 +76,7 @@ namespace Horo::Render {
     }
 
     /** @copydoc RenderFrameScope::PrepareParallelGraphExecution */
-    Result<void> RenderFrameScope::PrepareParallelGraphExecution(JobSystem &jobs, const CompiledRenderGraphExecution &graph,
+    Result<void> RenderFrameScope::PrepareParallelGraphExecution(const JobSystem &jobs, const CompiledRenderGraphExecution &graph,
                                                                  const std::span<const RenderGraphPassWorkload> workloads,
                                                                  const CancellationToken &cancellation) noexcept {
         try {
