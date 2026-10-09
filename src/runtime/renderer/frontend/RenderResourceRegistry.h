@@ -155,6 +155,7 @@ namespace Horo::Render::Detail {
         std::size_t completionScanCursor_{0};
         std::uint64_t nextOperation_{1};
         std::uint32_t pendingRequests_{0};
+        std::uint32_t activeSubmissionPins_{0};
         bool acceptingRequests_{true};
         BackendResourceRelease releaseBackendResource_;
     };

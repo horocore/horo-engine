@@ -15,7 +15,7 @@ namespace Horo::Render::Test {
             .capabilityRevision = 1,
             .synthetic = true,
             .features = {},
-            .queues = {.graphics = true, .compute = false, .copy = false, .present = true},
+            .queues = {.graphics = true, .compute = false, .copy = true, .present = true},
             .limits = {.maxBufferBytes = 1U << 30U,
                        .maxTextureDimension2D = 16'384,
                        .maxColorAttachments = 8,

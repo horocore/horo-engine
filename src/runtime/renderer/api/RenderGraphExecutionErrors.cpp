@@ -7,6 +7,10 @@ namespace Horo::Render::RenderGraphExecutionErrors {
         const ErrorDomainId Domain{"render.graph.execution"};
     }
 
+    const ErrorCodeDescriptor UnsupportedWorkload =
+        Detail::MakeErrorDescriptor(Domain, "render.graph.execution.workload_unsupported", ErrorSeverity::Error,
+                                    "The selected backend cannot execute this graph workload or resource class.",
+                                    "Use an admitted workload and resolved resident resources; no backend fallback is performed.");
     const ErrorCodeDescriptor AllocationFailed =
         Detail::MakeErrorDescriptor(Domain, "render.graph.execution.allocation_failed", ErrorSeverity::Error,
                                     "Compiled graph execution storage allocation failed.",
