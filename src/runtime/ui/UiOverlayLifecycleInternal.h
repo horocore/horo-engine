@@ -201,8 +201,8 @@ namespace Horo::Runtime::Ui {
                     return false;
                 if (entry->binding.context == binding.context)
                     return true;
-                const auto *other = Canvas(*entry);
-                if (other &&
+                if (const auto *other = Canvas(*entry);
+                    other &&
                     (other->tree.Instance() == canvas.tree.Instance() || other->tree.Canvas() == canvas.tree.Canvas() ||
                      (other->focus && other->focus->Owner().scope.presentationLayer == canvas.focus->Owner().scope.presentationLayer)))
                     return true;

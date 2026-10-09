@@ -46,6 +46,9 @@ and duplicate coverage fail before backend execution. Glyph checking is bounded
 by the 4,096-glyph submission ceiling and fixed binding capacity.
 
 `SealFrame` transfers retirement responsibility to the move-only frame lease.
+It is const on the facade but changes the shared frame pin state; this is not
+permission for concurrent calls or observation-only use. Existing ordinary calls
+remain source-compatible; rebuild linked callers for the const-qualified symbol.
 Do not call raw `RetireFrame` on a sealed frame or retire pins merely because
 presentation returned. Failure before native acceptance abandons the lease once;
 successful submission delegates release to native completion ownership.

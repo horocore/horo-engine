@@ -304,7 +304,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiGlyphAtlas::SealFrame */
-    Result<UiGlyphAtlas::FrameLease> UiGlyphAtlas::SealFrame(const UiGlyphAtlasFrameId frame) {
+    Result<UiGlyphAtlas::FrameLease> UiGlyphAtlas::SealFrame(const UiGlyphAtlasFrameId frame) const {
         if (!storage_ || !storage_->IsActive())
             return Failure<FrameLease>(UiErrors::GlyphAtlasLifecycleUnavailable);
         const auto index = storage_->FrameIndex(frame);
@@ -313,8 +313,8 @@ namespace Horo::Runtime::Ui {
         auto &record = storage_->frames[index.Value()];
         if (record.sealed)
             return Failure<FrameLease>(UiErrors::GlyphAtlasFrameInvalid);
-        std::ranges::sort(record.entries, {}, [&](const std::uint32_t index) {
-            return storage_->PinIdentity(index);
+        std::ranges::sort(record.entries, {}, [this](const std::uint32_t entryIndex) {
+            return storage_->PinIdentity(entryIndex);
         });
         record.sealed = true;
         return Result<FrameLease>::Success(FrameLease{storage_, frame});
