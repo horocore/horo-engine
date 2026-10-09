@@ -86,13 +86,15 @@ namespace Horo::Character {
         }
 
         TEST_CASE("Jump consumes committed ground once and landing publishes one transition", "[physics][character][airborne]") {
-            auto host = AirWorld();
-            AirProbe probe;
+            const auto up = GENERATE(Math::Vec3{0, 1, 0}, Math::Vec3{0, 0, 1});
+            auto host = AirWorld(up, up * -9.81F);
+            AirProbe probe{up};
             REQUIRE(MoveAir(host, probe, 1).movement.grounded);
             const auto jump = MoveAir(host, probe, 2, true);
             REQUIRE(jump.movement.jumpApplied);
+            REQUIRE_FALSE(jump.movement.grounded);
             REQUIRE(jump.movement.groundTransition == CharacterGroundTransition::LeftGround);
-            REQUIRE(jump.movement.gravityVelocityMetersPerSecond.y == Catch::Approx(5.0F - 9.81F / 60.0F));
+            REQUIRE(Math::Dot(jump.movement.gravityVelocityMetersPerSecond, up) == Catch::Approx(5.0F - 9.81F / 60.0F));
             std::uint32_t landed{};
             for (std::uint64_t tick = 3; tick <= 90; ++tick) {
                 const auto next = MoveAir(host, probe, tick, tick < 20);
@@ -167,8 +169,9 @@ namespace Horo::Character {
 
         TEST_CASE("Airborne shape changes preserve velocity and malformed transition facts fail validation",
                   "[physics][character][airborne][shape][validation]") {
-            auto host = AirWorld();
-            AirProbe probe;
+            const auto up = GENERATE(Math::Vec3{0, 1, 0}, Math::Vec3{0, 0, 1});
+            auto host = AirWorld(up, up * -9.81F);
+            AirProbe probe{up};
             static_cast<void>(MoveAir(host, probe, 1));
             const auto jumped = MoveAir(host, probe, 2, true);
             auto request = Movement(host.controller, 3, 3);
@@ -181,8 +184,10 @@ namespace Horo::Character {
                 UNSCOPED_INFO(advanced.ErrorValue().message);
             REQUIRE(advanced.HasValue());
             const auto resized = host.world->ControllerLocomotionSnapshot(host.controller).Value();
-            REQUIRE(resized.movement.gravityVelocityMetersPerSecond.y ==
-                    Catch::Approx(jumped.movement.gravityVelocityMetersPerSecond.y - 9.81F / 60.0F));
+            REQUIRE_FALSE(resized.movement.grounded);
+            REQUIRE(resized.movement.groundTransition == CharacterGroundTransition::None);
+            REQUIRE(Math::Dot(resized.movement.gravityVelocityMetersPerSecond, up) ==
+                    Catch::Approx(Math::Dot(jumped.movement.gravityVelocityMetersPerSecond, up) - 9.81F / 60.0F));
             auto malformed = resized.movement;
             malformed.groundTransition = static_cast<CharacterGroundTransition>(255);
             REQUIRE(ValidateCharacterMovementResult(malformed, host.world->ControllerDescriptor(host.controller).Value()).HasError());

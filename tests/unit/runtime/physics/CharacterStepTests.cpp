@@ -246,8 +246,16 @@ namespace Horo::Character {
                 REQUIRE(snapshot.movement.grounded);
                 REQUIRE(snapshot.movement.finalPosition.y == Catch::Approx(1.02F - drop));
             } else {
+                const auto descriptor = spawned.world->ControllerDescriptor(spawned.controller).Value();
+                const float seconds = static_cast<float>(FixedTick(1).fixedDelta.ToNanoseconds()) / 1'000'000'000.0F;
                 REQUIRE_FALSE(snapshot.movement.grounded);
-                REQUIRE(snapshot.movement.finalPosition.y == Catch::Approx(1.02F));
+                REQUIRE(snapshot.movement.finalPosition.y == Catch::Approx(1.02F + 0.5F * descriptor.gravity.y * seconds * seconds));
+                REQUIRE(snapshot.movement.gravityVelocityMetersPerSecond.y == Catch::Approx(descriptor.gravity.y * seconds));
+                REQUIRE(MoveStep(spawned, probe, 2, {}).HasValue());
+                const auto falling = spawned.world->ControllerLocomotionSnapshot(spawned.controller).Value();
+                REQUIRE_FALSE(falling.movement.grounded);
+                REQUIRE(falling.movement.finalPosition.y == Catch::Approx(1.02F + 2.0F * descriptor.gravity.y * seconds * seconds));
+                REQUIRE(falling.movement.gravityVelocityMetersPerSecond.y == Catch::Approx(2.0F * descriptor.gravity.y * seconds));
             }
         }
 

@@ -805,7 +805,10 @@ namespace Horo::Character::Detail {
         }
         result.gravityVelocityMetersPerSecond = motion.gravityVelocity;
         std::optional<CharacterSweepHit> steepSupport;
-        if (const auto support = ResolveGrounding(impl, result, command, input, supportDescriptor, motion.position, steepSupport);
+        // Free flight can acquire touching support but cannot restart step-height snapping.
+        auto landingDescriptor = supportDescriptor;
+        landingDescriptor.maximumStepHeightMeters = 0.0F;
+        if (const auto support = ResolveGrounding(impl, result, command, input, landingDescriptor, motion.position, steepSupport);
             support.HasError())
             return support;
         if (result.grounded)
@@ -888,9 +891,9 @@ namespace Horo::Character::Detail {
             supportDescriptor.maximumStepHeightMeters = 0.0F;
         // A complete step already proved its actual contact, support plane and overlap clearance.
         // Ordinary snap must not replace that proof with the capsule's rounded-edge collision normal.
-        const bool stepped =
-            (static_cast<std::uint16_t>(result.collisions) & static_cast<std::uint16_t>(CharacterCollisionFlags::Step)) != 0;
-        if (!stepped) {
+        if (const bool stepped =
+                (static_cast<std::uint16_t>(result.collisions) & static_cast<std::uint16_t>(CharacterCollisionFlags::Step)) != 0;
+            !stepped) {
             if (const auto grounded = ResolveGrounding(impl, result, command, input, supportDescriptor, motion.position, steepSupport);
                 grounded.HasError())
                 return Result<CharacterMovementResult>::Failure(grounded.ErrorValue());
