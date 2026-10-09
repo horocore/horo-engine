@@ -28,10 +28,22 @@ namespace Horo::Runtime::Ui::ReloadTests {
         return UiActionText::Create(value).Value();
     }
 
+    /** @brief Real cooked route and independently scoped owner composition for cross-layer contract coverage. */
+    struct LayerOptions final {
+        UiRouteMetadata route{Stable<UiRouteId>(9), UiPresentationBand::Screen, 1, false};
+        RuntimeUiInstanceId instance{Instance()};
+        UiCanvasInstanceId canvas{Owner(), 2, 1};
+        std::optional<UiFocusPlayerId> player{UiFocusPlayerId{Owner(), 3, 1}};
+        UiFocusPresentationLayerId layer{Owner(), 4, 1};
+        UiRenderViewId view{Owner(), 10, 1};
+        std::uint8_t childMarker{11}; /**< Change the real authored target ID to exercise removal across cooked reload. */
+    };
+
     /** @brief Produces real cooked/provider-loaded closures and actual typed owner compositions. */
     [[nodiscard]] UiReloadGeneration Generation(UiElementSlotAllocator &allocator, std::uint64_t version, std::uint16_t textLimit = 32,
                                                 bool secondCanvas = false, std::uint32_t modalHighWater = 0,
-                                                std::uint32_t routeHighWater = 0, std::uint32_t concurrentSnapshots = 3);
+                                                std::uint32_t routeHighWater = 0, std::uint32_t concurrentSnapshots = 3,
+                                                const LayerOptions &layer = {});
     [[nodiscard]] UiReloadCanvas &Canvas(UiHotReload &publisher);
     [[nodiscard]] UiControlInput Input(const UiControlStateMachine &control, UiControlInputKind kind, std::uint64_t sequence,
                                        std::string_view text = {});

@@ -2803,6 +2803,15 @@ add_executable(HoroRuntimeUiHotReloadTests
 target_compile_features(HoroRuntimeUiHotReloadTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeUiHotReloadTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroRuntimeUiHotReloadTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiOverlayLifecycleTests
+        unit/runtime/ui/UiOverlayLifecycleTests.cpp
+        unit/runtime/ui/UiHotReloadTestFixture.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeUiOverlayLifecycleTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiOverlayLifecycleTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRuntimeUiOverlayLifecycleTests PRIVATE HoroEngine::RuntimeUi)
+target_sources(HoroRuntimeUiPublicHeaderConsumer PRIVATE support/RuntimeUiOverlayPublicContract.cpp)
 add_executable(HoroRuntimeUiHotReloadPublicHeaderConsumer support/RuntimeUiHotReloadPublicHeaderConsumer.cpp)
 target_compile_features(HoroRuntimeUiHotReloadPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiHotReloadPublicHeaderConsumer PRIVATE HoroEngine::RuntimeUi)
@@ -4022,6 +4031,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiBindingWriteTests
         HoroRuntimeUiDocumentTests
         HoroRuntimeUiHotReloadTests
+        HoroRuntimeUiOverlayLifecycleTests
         HoroRuntimeUiLocalizationTests
         HoroRuntimeUiCanvasSpaceTests
         HoroRuntimeUiDiagnosticsTests

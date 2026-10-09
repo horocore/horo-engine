@@ -1297,3 +1297,51 @@ See [the host migration and lifetime contract](../../guides/runtime-ui-hot-reloa
 This implements the typed RuntimeUi backend responsibility; the aggregate
 RuntimeUiService and host semantic-scope registry remain separate composition
 work. No concrete backend or host scope rebind is selected by reload.
+
+## Overlay, modal and restoration lifecycle
+
+`UiOverlayLifecycle` belongs to `HoroEngine::RuntimeUi`. It transfers entire
+privately prepared, Assets-backed `UiHotReload` publishers for independently
+owned layers. The selected canvas must contain exactly one actual active route;
+the route's cooked band/order/modal metadata remains authoritative. Host-issued
+context, logical viewport, player and render-view associations are explicit.
+`UiOverlayViewportId` is a logical UI audience identity, not a renderer view or
+an Input device/player index; multiple render views may share one logical viewport.
+The owner never discovers those associations or installs an Input context token.
+
+Priority is deterministic by core band, cooked order, then never-reused layer
+activation. Viewport/Player/GameInstance exclusion applies to associated lower
+contexts even before a modal's first successful presentation. Passive overlays
+do not consume input or steal focus. Hosts gate their existing navigation/text/
+pointer adapters through `InputStatus`, neutralize held input and dispatch the
+existing focus-loss/control cancellation contract when eligibility changes.
+Gameplay blocking and safety passthrough remain the Input host's ADR-078 policy;
+neither this owner nor a widget mutates gameplay or assigns a device.
+
+Opening a modal installs the existing focus graph's inclusive trap/default and
+saves lower focus as bounded stable-ID ancestry. It cancels real lower-context
+pointer capture. Closing an exact uncovered modal restores only surviving,
+unblocked scopes. Missing/destroyed/disabled targets use the existing graph's
+ancestor/default/first recovery policy, never a saved transient handle. Covered
+modals cannot be dismissed out of order. Reload uses whole-generation preparation
+and the ADR-073 commit point; cancellation or invalid modal composition preserves
+the last-good layer. A new interaction requires fresh presentation evidence.
+
+Active slots (at most 64), ordinary retirement slots (at most 64), and an
+independent shutdown reserve are allocated at creation. Frame operations use
+bounded scans, fixed snapshot scratch, and value-only restoration paths; no I/O,
+backend selection, callback or generation reclamation occurs on those paths.
+Dismissal can backpressure without removing a modal barrier. Shutdown closes
+admission idempotently and retains actual generations until producer/render/read
+leases drain. Explicit load-time `CollectRetired` invokes existing deferred
+abandonment; reentrant layer mutation is rejected and reentrant shutdown closes
+admission immediately, deferring transfers until the callback borrow ends.
+
+Migration is additive: existing public owners and durable UI schema/version are
+unchanged. The new header has one RuntimeUi CMake owner and standalone-header
+consumer coverage. `UiFocusGraph::CaptureRestoration` and `Restore` export/import
+copied stable ancestry under exact static scope and nonfuture revision checks.
+Rebuild RuntimeUi consumers for the new symbols. Hosts carry the EVER-issued
+layer incarnation when recreating an owner. No aggregate RuntimeUiService,
+frontend/editor composition, durable authoring schema or renderer activation is
+claimed by this backend contract.
