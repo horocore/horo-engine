@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Runtime/Ui/UiTextLayout.h"
+#include "Horo/Runtime/Ui/UiTextShaping.h"
 
 #include <array>
 #include <cstddef>
@@ -110,9 +111,10 @@ namespace Horo::Runtime::Ui {
 
     /** @brief Stable face and glyph identity used for atlas lookup; never a page or GPU slot. */
     struct UiGlyphAtlasGlyphKey final {
-        UiTextFaceId face;           /**< Immutable Runtime UI face identity. */
-        std::uint32_t glyph{};       /**< Backend-neutral glyph identity. */
-        UiGlyphAtlasVariant variant; /**< Raster scale variant. */
+        UiTextFaceId face;               /**< Immutable Runtime UI face identity. */
+        std::uint32_t glyph{};           /**< Backend-neutral glyph identity. */
+        UiGlyphAtlasVariant variant;     /**< Raster scale variant. */
+        UiFontFaceRevision fontRevision; /**< Exact immutable source generation; stable face identity alone cannot authorize reuse. */
 
         /** @brief Checks face, glyph, and variant identity. @return Whether the key is valid. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -205,6 +207,7 @@ namespace Horo::Runtime::Ui {
         std::uint32_t height{};                                            /**< Raster height in pixels. */
         std::uint32_t rowBytes{};                                          /**< Bytes between consecutive rows. */
         std::span<const std::byte> bytes;                                  /**< Caller-owned bytes valid for admission only. */
+        const UiFontFace *sourceFace{}; /**< Borrowed during admission; exact owned payload required for renderer submission. */
 
         /** @brief Validates row stride, payload size, and non-empty raster evidence. @return Whether the payload is well formed. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -295,7 +298,86 @@ namespace Horo::Runtime::Ui {
      *          cannot invalidate a glyph used by an in-flight frame.
      */
     class UiGlyphAtlas final {
+        struct Storage;
+
     public:
+        class FrameLease;
+
+        /** @brief Owned exact atlas/page provenance issued only by the active atlas authority.
+         * @details Copies retain source storage without pinning glyphs. Reset/shutdown invalidate new admission while existing
+         * submission frame leases remain safe. Equal-looking numeric page IDs from another atlas do not share this authority.
+         */
+        class PageLease final {
+        public:
+            /** @brief Creates an empty provenance lease. */
+            PageLease() noexcept = default;
+            /** @brief Returns the exact captured page generation. @return Page identity. */
+            [[nodiscard]] UiGlyphAtlasPageId Page() const noexcept;
+            /** @brief Returns the captured source revision. @return Atlas revision. */
+            [[nodiscard]] UiGlyphAtlasRevision Revision() const noexcept;
+            /** @brief Checks active exact source generation for new synchronous admission. @return Current owner/page. */
+            [[nodiscard]] bool IsCurrent() const noexcept;
+
+        private:
+            friend class UiGlyphAtlas;
+            friend class FrameLease;
+            /** @brief Captures current source ownership without frame-hot allocation. */
+            PageLease(std::shared_ptr<const Storage> storage, UiGlyphAtlasPageId page, UiGlyphAtlasRevision revision) noexcept;
+            std::shared_ptr<const Storage> storage_;
+            UiGlyphAtlasPageId page_;
+            UiGlyphAtlasRevision revision_;
+        };
+
+        /**
+         * @brief Move-only ownership of one sealed frame's exact atlas generation and entry pins.
+         * @details The renderer submission retains this lease until native completion, terminal device loss, or unsent
+         * abandonment. Presentation alone must not release it. All moves and destruction run on the atlas owner thread;
+         * no atlas facade pointer is borrowed, so destroying or replacing that facade cannot invalidate submitted pins.
+         */
+        class FrameLease final {
+        public:
+            /** @brief Creates an empty, inert lease. */
+            FrameLease() noexcept = default;
+            /** @brief Releases the sealed pin set exactly once. */
+            ~FrameLease();
+            /** @brief Transfers pin ownership and makes the source inert. @param other Lease to transfer. */
+            FrameLease(FrameLease &&other) noexcept;
+            /** @brief Releases old pins then transfers ownership. @param other Lease to transfer. @return This lease. */
+            FrameLease &operator=(FrameLease &&other) noexcept;
+            FrameLease(const FrameLease &) = delete;
+            FrameLease &operator=(const FrameLease &) = delete;
+
+            /** @brief Returns the sealed frame identity, or an invalid identity after transfer. @return Exact frame. */
+            [[nodiscard]] UiGlyphAtlasFrameId Frame() const noexcept;
+            /** @brief Returns the retained atlas revision, or an invalid revision when empty. @return Exact revision. */
+            [[nodiscard]] UiGlyphAtlasRevision Revision() const noexcept;
+            /** @brief Checks exact retained page ownership and generation. @param page Frontend-realized atlas page.
+             * @param revision Realized atlas revision. @return Whether this sealed frame owns that exact page generation.
+             */
+            [[nodiscard]] bool OwnsPage(UiGlyphAtlasPageId page, UiGlyphAtlasRevision revision) const noexcept;
+            /** @brief Verifies actual storage identity as well as page/revision evidence.
+             * @param page Owning provenance issued by the realized atlas. @return Exact same storage and generation.
+             */
+            [[nodiscard]] bool OwnsPage(const PageLease &page) const noexcept;
+            /** @brief Checks exact font/glyph/source generation, page and sampling correspondence in the sealed pin set.
+             * @param face Exact immutable font payload retained by the raster producer.
+             * @param glyph Resolved glyph being sampled, including a resolved fallback rather than the original missing glyph.
+             * @param page Exact realized page generation. @param uv Exact normalized rectangle from Resolve.
+             * @return Whether this frame pins the exact sampled generation. No borrow or allocation escapes the call.
+             */
+            [[nodiscard]] bool PinsGlyph(const UiFontFace &face, std::uint32_t glyph, UiGlyphAtlasPageId page,
+                                         const std::array<float, 4> &uv) const noexcept;
+
+        private:
+            friend class UiGlyphAtlas;
+            /** @brief Adopts a sealed frame without allocating or borrowing the atlas facade. */
+            explicit FrameLease(std::shared_ptr<Storage> storage, UiGlyphAtlasFrameId frame) noexcept;
+            /** @brief Releases the exact retained frame and makes this lease inert. */
+            void Release() noexcept;
+            std::shared_ptr<Storage> storage_;
+            UiGlyphAtlasFrameId frame_;
+        };
+
         /**
          * @brief Creates an atlas with all page, entry, frame, upload, and staging storage reserved.
          * @param descriptor Fixed owner, page geometry, fallback identity, and work bounds.
@@ -321,6 +403,10 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] UiGlyphAtlasRasterFormat Format() const noexcept;
         /** @brief Returns the current logical atlas revision. */
         [[nodiscard]] UiGlyphAtlasRevision Revision() const noexcept;
+        /** @brief Captures owned exact current page provenance for renderer realization.
+         * @param page Exact page from this atlas. @return Allocation-free page lease or typed owner/lifecycle/stale failure.
+         */
+        [[nodiscard]] Result<PageLease> AcquirePage(UiGlyphAtlasPageId page) const;
 
         /**
          * @brief Copies one bounded raster payload into a preallocated upload record.
@@ -363,7 +449,18 @@ namespace Horo::Runtime::Ui {
          * @return Resident glyph lookup, fallback lookup, or typed frame/fallback failure.
          */
         [[nodiscard]] Result<UiGlyphAtlasLookup> Resolve(UiGlyphAtlasFrameId frame, const UiGlyphAtlasGlyphKey &requested);
-        /** @brief Releases every distinct entry pinned by a frame after presentation, skip, failure, or device loss. */
+        /**
+         * @brief Seals a prepared pin set and transfers retirement authority to an owning submission lease.
+         * @details Const preserves the facade's storage identity, not the shared pin state; owner-thread admission still applies.
+         * @param frame Exact active, not-yet-sealed frame.
+         * @return Allocation-free owning lease or typed lifecycle/stale/already-sealed failure.
+         * @post Resolve and RetireFrame reject this frame; only destruction of the transferred lease releases its pins.
+         */
+        [[nodiscard]] Result<FrameLease> SealFrame(UiGlyphAtlasFrameId frame) const;
+        /**
+         * @brief Releases an unsealed frame after native completion or unsent abandonment, never merely presentation.
+         * @details Submitted frames use SealFrame instead; their retirement authority cannot be bypassed with a raw ID.
+         */
         [[nodiscard]] Result<void> RetireFrame(UiGlyphAtlasFrameId frame, UiGlyphAtlasFrameOutcome outcome);
 
         /** @brief Evicts at most the requested number of safe least-recently-used entries. */
@@ -391,8 +488,7 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] UiGlyphAtlasState State() const noexcept;
 
     private:
-        struct Storage;
-        explicit UiGlyphAtlas(std::unique_ptr<Storage> storage) noexcept;
-        std::unique_ptr<Storage> storage_;
+        explicit UiGlyphAtlas(std::shared_ptr<Storage> storage) noexcept;
+        std::shared_ptr<Storage> storage_;
     };
 }  // namespace Horo::Runtime::Ui

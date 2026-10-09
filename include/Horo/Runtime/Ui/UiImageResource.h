@@ -279,6 +279,10 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Reports whether this object retains a published generation. @return True for a live snapshot. */
         [[nodiscard]] bool IsValid() const noexcept;
+        /** @brief Checks actual immutable publication ownership, not merely equal-looking caller-issued handles.
+         * @param other Source realization's owned lease. @return True only for the same non-empty generation object.
+         */
+        [[nodiscard]] bool SharesGeneration(const UiImageResourceSnapshot &other) const noexcept;
         /** @brief Returns the exact registry handle captured by this lease. @return Published handle evidence. */
         [[nodiscard]] UiImageResourceHandle Handle() const noexcept;
         /** @brief Returns the exact source revision captured by this lease. @return Published image revision. */

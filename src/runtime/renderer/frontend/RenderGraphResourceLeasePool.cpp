@@ -40,11 +40,13 @@ namespace Horo::Render::Detail {
         }
         pool->activePins_ -= pins.size();
         pins.clear();
+        ui.Release();
         active = false;
     }
 
     /** @copydoc RenderGraphResourceLeasePool::Acquire */
-    Result<IRenderGraphResourceLease *> RenderGraphResourceLeasePool::Acquire(const std::span<const RenderGraphResource> resources) {
+    Result<IRenderGraphResourceLease *> RenderGraphResourceLeasePool::Acquire(const std::span<const RenderGraphResource> resources,
+                                                                              UiRenderSubmission *ui) {
         if (resources.size() > RenderGraphLimits::HardMaxResources || resources.size() > maximumPins_ - activePins_) {
             return Result<IRenderGraphResourceLease *>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
         }
@@ -66,6 +68,12 @@ namespace Horo::Render::Detail {
                 }
                 lease.pins.push_back(pin);
                 ++activePins_;
+            }
+            if (ui != nullptr) {
+                if (const auto captured = lease.ui.Capture(*ui, resources); captured.HasError()) {
+                    lease.Release();
+                    return Result<IRenderGraphResourceLease *>::Failure(captured.ErrorValue());
+                }
             }
             return Result<IRenderGraphResourceLease *>::Success(&lease);
         }

@@ -291,6 +291,11 @@ namespace Horo::Runtime::Ui {
         return static_cast<bool>(generation_);
     }
 
+    /** @copydoc UiImageResourceSnapshot::SharesGeneration */
+    bool UiImageResourceSnapshot::SharesGeneration(const UiImageResourceSnapshot &other) const noexcept {
+        return generation_ && generation_ == other.generation_;
+    }
+
     /** @copydoc UiImageResourceSnapshot::Handle */
     UiImageResourceHandle UiImageResourceSnapshot::Handle() const noexcept {
         return generation_ ? generation_->handle : UiImageResourceHandle{};
