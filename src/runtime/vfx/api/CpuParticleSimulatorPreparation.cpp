@@ -192,19 +192,20 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
         }
 
         [[nodiscard]] Result<void> ValidateCollision(const ParticleSystemDescriptorData &data, const CpuParticleSimulatorCreateInfo &info) {
+            using enum ParticleCollisionMode;
             for (const auto &plane : info.planes) {
                 if (!Finite(plane.point) || !Finite(plane.normal) || !Finite(plane.restitution) || plane.restitution < 0.0F ||
                     plane.restitution > 1.0F || !Finite(Math::LengthSquared(plane.normal)) ||
                     Math::LengthSquared(plane.normal) <= std::numeric_limits<float>::epsilon())
                     return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
             }
-            if (data.collisionMode == ParticleCollisionMode::Planes && info.planes.empty())
+            if (data.collisionMode == Planes && info.planes.empty())
                 return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
             if (auto depth = ValidateDepth(info.sceneDepth); depth.HasError())
                 return depth;
-            if ((data.collisionMode == ParticleCollisionMode::SceneDepth && (info.sceneDepth.required || info.requiredGameplay) &&
+            if ((data.collisionMode == SceneDepth && (info.sceneDepth.required || info.requiredGameplay) &&
                  info.sceneDepth.samples.empty()) ||
-                (data.collisionMode == ParticleCollisionMode::PhysicsWorld && (info.physicsWorld.required || info.requiredGameplay) &&
+                (data.collisionMode == PhysicsWorld && (info.physicsWorld.required || info.requiredGameplay) &&
                  info.physicsWorld.probe == nullptr))
                 return Failure<void>(VfxErrors::ParticleCollisionQueryUnavailable);
             return Result<void>::Success();
