@@ -2077,6 +2077,18 @@ if (HORO_BUILD_RENDER_METAL)
     )
 endif ()
 
+add_library(HoroRenderD3D12 STATIC
+        runtime/renderer/modules/d3d12/D3D12Initialization.cpp
+        runtime/renderer/modules/d3d12/D3D12NativeInitialization.cpp
+)
+add_library(HoroEngine::RenderD3D12 ALIAS HoroRenderD3D12)
+target_compile_features(HoroRenderD3D12 PRIVATE cxx_std_20)
+target_link_libraries(HoroRenderD3D12 PRIVATE HoroEngine::RenderApi)
+if (WIN32)
+    target_compile_definitions(HoroRenderD3D12 PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
+    target_link_libraries(HoroRenderD3D12 PRIVATE d3d12 dxgi ole32)
+endif ()
+
 if (HORO_BUILD_RENDER_VULKAN)
     add_library(HoroRenderVulkan STATIC
             runtime/renderer/modules/vulkan/VulkanAdapterDiscovery.cpp

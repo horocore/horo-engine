@@ -3792,6 +3792,15 @@ if (HORO_BUILD_RENDER_METAL)
     endif ()
 endif ()
 
+add_executable(HoroD3D12InitializationTests
+        unit/runtime/renderer/D3D12InitializationTests.cpp
+)
+target_compile_features(HoroD3D12InitializationTests PRIVATE cxx_std_20)
+target_include_directories(HoroD3D12InitializationTests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(HoroD3D12InitializationTests PRIVATE
+        Catch2::Catch2WithMain HoroEngine::RenderD3D12 HoroEngine::RenderApi)
+horo_register_catch_test(HoroD3D12InitializationTests LABELS "native;renderer;d3d12;qualification")
+
 if (HORO_BUILD_RENDER_VULKAN)
     add_executable(HoroRenderVulkanTests
             unit/runtime/renderer/VulkanRenderBackendTests.cpp

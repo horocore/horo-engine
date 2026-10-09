@@ -159,6 +159,7 @@ horo_allow_target_dependencies(TARGET HoroRenderNull DEPENDENCIES HoroRenderApi)
 horo_allow_target_dependencies(TARGET HoroRenderOpenGL)
 horo_allow_target_dependencies(TARGET HoroRenderMetal)
 horo_allow_target_dependencies(TARGET HoroRenderVulkan)
+horo_allow_target_dependencies(TARGET HoroRenderD3D12 DEPENDENCIES HoroRenderApi)
 
 horo_allow_target_dependencies(TARGET HoroSceneSourceModel
     DEPENDENCIES HoroFoundation HoroAI HoroPrefab HoroRuntimeScene)

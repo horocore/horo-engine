@@ -1012,6 +1012,7 @@ horo_configure_target_header_boundary(HoroRenderNull PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroRenderOpenGL)
 horo_configure_target_header_boundary(HoroRenderMetal)
 horo_configure_target_header_boundary(HoroRenderVulkan)
+horo_configure_target_header_boundary(HoroRenderD3D12)
 
 horo_configure_target_header_boundary(HoroEditorModel PUBLIC_HEADERS
     Horo/Editor/EditorDataBus.h
