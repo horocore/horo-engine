@@ -925,6 +925,7 @@ horo_configure_target_header_boundary(HoroSceneCellPayload PUBLIC_HEADERS
     Horo/Runtime/Scene/RuntimeSceneCellPayload.h
     Horo/Runtime/Scene/RuntimeSceneCellLayers.h
     Horo/Runtime/Scene/IncrementalSceneCellCook.h
+    Horo/Runtime/Scene/WorldBuildValidation.h
 )
 
 horo_configure_target_header_boundary(HoroPrefabSceneExpansion PUBLIC_HEADERS
