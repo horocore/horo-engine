@@ -5,8 +5,23 @@
 #include "RenderResourceOperations.h"
 
 #include <algorithm>
+#include <type_traits>
 
 namespace Horo::Render::Detail {
+    /** @copydoc ResolveGraphResidentIdentity */
+    Result<RenderGraphResidentIdentity> ResolveGraphResidentIdentity(const RenderGraphResourceBinding &binding) {
+        return std::visit([](const auto &handle) -> Result<RenderGraphResidentIdentity> {
+            using Handle = std::remove_cvref_t<decltype(handle)>;
+            if constexpr (std::is_same_v<Handle, RenderBufferHandle>) {
+                return Result<RenderGraphResidentIdentity>::Success({RenderResourceClass::Buffer, Identity(handle)});
+            } else if constexpr (std::is_same_v<Handle, RenderTextureHandle>) {
+                return Result<RenderGraphResidentIdentity>::Success({RenderResourceClass::Texture, Identity(handle)});
+            } else {
+                return Result<RenderGraphResidentIdentity>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+            }
+        }, binding);
+    }
+
     /** @copydoc RenderGraphResourceLeasePool::RenderGraphResourceLeasePool */
     RenderGraphResourceLeasePool::RenderGraphResourceLeasePool(RenderResourceRegistry &registry, const std::size_t maximumPins)
         : registry_(&registry), maximumPins_(maximumPins) {
@@ -40,15 +55,12 @@ namespace Horo::Render::Detail {
             }
             lease.active = true;
             for (const auto &resource : resources) {
-                Pin pin{};
-                if (const auto *buffer = std::get_if<RenderBufferHandle>(&resource.binding)) {
-                    pin = {RenderResourceClass::Buffer, Identity(*buffer)};
-                } else if (const auto *texture = std::get_if<RenderTextureHandle>(&resource.binding)) {
-                    pin = {RenderResourceClass::Texture, Identity(*texture)};
-                } else {
+                const auto resolved = ResolveGraphResidentIdentity(resource.binding);
+                if (resolved.HasError()) {
                     lease.Release();
-                    return Result<IRenderGraphResourceLease *>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+                    return Result<IRenderGraphResourceLease *>::Failure(resolved.ErrorValue());
                 }
+                const auto &pin = resolved.Value();
                 if (const auto pinned = registry_->AddSubmissionPin(pin.resourceClass, pin.identity); pinned.HasError()) {
                     lease.Release();
                     return Result<IRenderGraphResourceLease *>::Failure(pinned.ErrorValue());

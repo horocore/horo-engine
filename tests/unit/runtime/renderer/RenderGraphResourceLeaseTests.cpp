@@ -80,4 +80,34 @@ namespace Horo::Render::Detail {
         REQUIRE(registry.AcknowledgeCompletion({{1}, 1}).Value() == 1);
         REQUIRE(registry.DrainRetirements() == 1);
     }
+
+    TEST_CASE("Graph binding visitor preserves typed buffer and texture identity and rejects unbound resources",
+              "[renderer][render-graph][resource]") {
+        const RenderBufferHandle buffer{{11}, 23, 7};
+        const RenderTextureHandle texture{{13}, 29, 5};
+        const auto resolvedBuffer = ResolveGraphResidentIdentity(buffer);
+        const auto resolvedTexture = ResolveGraphResidentIdentity(texture);
+        REQUIRE(resolvedBuffer.HasValue());
+        REQUIRE(resolvedTexture.HasValue());
+        CHECK(resolvedBuffer.Value().resourceClass == RenderResourceClass::Buffer);
+        CHECK(resolvedBuffer.Value().identity == RenderResourceIdentity{buffer.owner, buffer.slot, buffer.generation});
+        CHECK(resolvedTexture.Value().resourceClass == RenderResourceClass::Texture);
+        CHECK(resolvedTexture.Value().identity == RenderResourceIdentity{texture.owner, texture.slot, texture.generation});
+        const auto unbound = ResolveGraphResidentIdentity(std::monostate{});
+        REQUIRE(unbound.HasError());
+        CHECK(unbound.ErrorValue().code.Value() == "render.graph.execution.workload_unsupported");
+    }
+
+    TEST_CASE_METHOD(ResourceLeaseFixture, "Unsupported graph binding rolls back the already pinned resident prefix",
+                     "[renderer][render-graph][resource]") {
+        auto unbound = resource;
+        unbound.binding = std::monostate{};
+        const std::array resources{resource, unbound};
+        const auto rejected = pool.Acquire(resources);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == "render.graph.execution.workload_unsupported");
+        REQUIRE(registry.Release(RenderResourceClass::Buffer, identity).HasValue());
+        REQUIRE(registry.DrainRetirements() == 1);
+        CHECK(destroyed == 1);
+    }
 }  // namespace Horo::Render::Detail

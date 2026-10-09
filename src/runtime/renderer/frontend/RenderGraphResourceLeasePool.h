@@ -6,6 +6,19 @@
 #include <vector>
 
 namespace Horo::Render::Detail {
+    /** @brief Typed imported resident identity shared by graph resolution and submission pinning. */
+    struct RenderGraphResidentIdentity {
+        RenderResourceClass resourceClass;
+        RenderResourceIdentity identity;
+    };
+
+    /**
+     * @brief Maps an imported binding without touching registry or lease state.
+     * @param binding Typed buffer/texture binding, or an unsupported unbound resource.
+     * @return Exact resource class/generation, or UnsupportedWorkload for an unbound resource.
+     */
+    [[nodiscard]] Result<RenderGraphResidentIdentity> ResolveGraphResidentIdentity(const RenderGraphResourceBinding &binding);
+
     /** @brief Preallocated owner-thread leases preserving resident generations and memory charges during graph submission. */
     class RenderGraphResourceLeasePool final {
     public:
@@ -15,10 +28,7 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<IRenderGraphResourceLease *> Acquire(std::span<const RenderGraphResource> resources);
 
     private:
-        struct Pin {
-            RenderResourceClass resourceClass;
-            RenderResourceIdentity identity;
-        };
+        using Pin = RenderGraphResidentIdentity;
 
         class Lease final : public IRenderGraphResourceLease {
         public:

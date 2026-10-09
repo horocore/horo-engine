@@ -194,12 +194,12 @@ namespace Horo::Render {
             std::array<RenderGraphResourceInstance, RenderGraphLimits::HardMaxResources> resolved;
             std::size_t count = 0;
             for (const RenderGraphResource &resource : graph.Resources()) {
-                Result<std::uint64_t> instance = Result<std::uint64_t>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
-                if (const auto *buffer = std::get_if<RenderBufferHandle>(&resource.binding)) {
-                    instance = owner_->resourceRegistry_->BackendInstance(Detail::RenderResourceClass::Buffer, Identity(*buffer));
-                } else if (const auto *texture = std::get_if<RenderTextureHandle>(&resource.binding)) {
-                    instance = owner_->resourceRegistry_->BackendInstance(Detail::RenderResourceClass::Texture, Identity(*texture));
+                const auto identity = Detail::ResolveGraphResidentIdentity(resource.binding);
+                if (identity.HasError()) {
+                    Abort();
+                    return Result<void>::Failure(identity.ErrorValue());
                 }
+                const auto instance = owner_->resourceRegistry_->BackendInstance(identity.Value().resourceClass, identity.Value().identity);
                 if (instance.HasError()) {
                     Abort();
                     return Result<void>::Failure(instance.ErrorValue());
@@ -215,8 +215,8 @@ namespace Horo::Render {
                 lease->Release();
             };
             std::unique_ptr<IRenderGraphResourceLease, decltype(releaseLease)> lease{leased.Value(), releaseLease};
-            const auto result = backend_->ExecuteGraph({frame_, graph, workloads, std::span{resolved}.first(count), lease.get()});
-            if (result.HasError()) {
+            if (const auto result = backend_->ExecuteGraph({frame_, graph, workloads, std::span{resolved}.first(count), lease.get()});
+                result.HasError()) {
                 Abort();
                 return result;
             }
