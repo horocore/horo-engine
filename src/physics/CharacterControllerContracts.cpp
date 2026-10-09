@@ -129,16 +129,41 @@ namespace Horo::Character {
                    std::isfinite(capsule.radiusMeters + capsule.cylindricalHalfHeightMeters);
         }
 
+        /** @brief A solver limit cannot carry unswept gravity pressure or an unknown diagnostic. */
+        [[nodiscard]] bool IsTerminationValid(const CharacterMovementResult &result) noexcept {
+            using enum CharacterMovementTermination;
+            return result.termination == Complete || ((result.termination == IterationLimit || result.termination == ConstraintLimit) &&
+                                                      result.gravityVelocityMetersPerSecond == Math::Vec3{});
+        }
+
+        /** @brief Checks the finite pose/velocity tuple independently of result diagnostics and optional shape changes. */
+        [[nodiscard]] bool IsMovementPoseValid(const CharacterMovementResult &result) noexcept {
+            return result.tick != 0 && result.sequence != 0 && Math::IsFinite(result.finalPosition) && IsUnit(result.finalHeading) &&
+                   Math::IsFinite(result.achievedVelocityMetersPerSecond) && Math::IsFinite(result.gravityVelocityMetersPerSecond) &&
+                   IsUnit(result.up) && IsFiniteNonNegative(result.groundSlopeDegrees) && result.groundSlopeDegrees <= 180;
+        }
+
+        /** @brief Validates the closed transition vocabulary against the committed grounding fact. */
+        [[nodiscard]] bool IsGroundTransitionValid(const CharacterMovementResult &result) noexcept {
+            switch (result.groundTransition) {
+                using enum CharacterGroundTransition;
+                case None:
+                    return true;
+                case LeftGround:
+                    return !result.grounded;
+                case Landed:
+                    return result.grounded;
+            }
+            return false;
+        }
+
         /** @brief Checks movement metadata before flags, capacities and surface evidence. */
         [[nodiscard]] Result<void> ValidateResultMetadata(const CharacterMovementResult &result) {
-            if (result.tick == 0 || result.sequence == 0 || !Math::IsFinite(result.finalPosition) || !IsUnit(result.finalHeading) ||
-                !Math::IsFinite(result.achievedVelocityMetersPerSecond) || !Math::IsFinite(result.gravityVelocityMetersPerSecond) ||
-                !IsUnit(result.up) || !std::isfinite(result.groundSlopeDegrees) || result.groundSlopeDegrees < 0 ||
-                result.groundSlopeDegrees > 180)
+            if (!IsTerminationValid(result))
+                return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
+            if (!IsMovementPoseValid(result))
                 return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid, "Movement result metadata is invalid."));
-            using enum CharacterGroundTransition;
-            if ((result.groundTransition != None && result.groundTransition != LeftGround && result.groundTransition != Landed) ||
-                (result.groundTransition == LeftGround && result.grounded) || (result.groundTransition == Landed && !result.grounded))
+            if (!IsGroundTransitionValid(result))
                 return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
             if (result.shapeChange.has_value()) {
                 using enum CharacterShapeChangeStatus;
@@ -431,6 +456,9 @@ namespace Horo::Character {
             if (const auto hit = ValidateSweepHit(result.hits[index], request); hit.HasError())
                 return hit;
         }
+        if (result.truncated)
+            return Result<void>::Failure(
+                MakeError(CharacterErrors::CapacityExceeded, "Incomplete sweep evidence cannot certify conservative Character travel."));
         return Result<void>::Success();
     }
 

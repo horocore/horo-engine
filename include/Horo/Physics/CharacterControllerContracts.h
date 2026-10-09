@@ -268,7 +268,8 @@ namespace Horo::Character {
      * @brief Fixed-capacity capsule-sweep evidence reduced by the private Physics adapter.
      *
      * Only the first `hitCount` entries are active. `truncated` reports that the adapter's fixed
-     * response capacity dropped later evidence; no callback may return an unbounded collection.
+     * response capacity dropped later evidence; validation rejects that incomplete inventory rather
+     * than certifying travel from a potentially missing blocker. No callback may return an unbounded collection.
      */
     struct CharacterSweepProbeResult final {
         std::array<CharacterSweepHit, MaximumCharacterSweepHits> hits{};
@@ -513,6 +514,14 @@ namespace Horo::Character {
         Landed,
     };
 
+    /** @brief Committed bounded-solver diagnostic; a limit discards unswept travel and gravity continuation, never certifies an unchecked
+     * endpoint. */
+    enum class CharacterMovementTermination : std::uint8_t {
+        Complete,
+        IterationLimit,
+        ConstraintLimit,
+    };
+
     /**
      * @brief Owned bounded movement evidence for one committed controller tick.
      *
@@ -550,6 +559,8 @@ namespace Horo::Character {
         CharacterGroundTransition groundTransition{CharacterGroundTransition::None}; /**< Exactly one post-commit support fact. */
         std::optional<CharacterPlatformAttachment> platformAttachment;               /**< Present exactly when platformAttached is true. */
         CharacterPlatformAttachmentChange platformAttachmentChange{CharacterPlatformAttachmentChange::None};
+        CharacterMovementTermination termination{
+            CharacterMovementTermination::Complete}; /**< Owned solver-limit diagnostic, not contact truncation. */
     };
 
     /**

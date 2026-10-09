@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CharacterSweepPlanesInternal.h"
 #include "CharacterWorldInternal.h"
 
 #include <algorithm>
@@ -165,6 +166,8 @@ namespace Horo::Character::Detail {
         std::uint32_t iteration{};
         Math::Vec3 gravityVelocity{};
         bool airbornePass{};
+        SweepPlanes planes{};
+        bool steepConstraint{};
     };
 
     /** @brief Applies identical physical eligibility to movement, contact projection and ground selection. */
@@ -181,10 +184,9 @@ namespace Horo::Character::Detail {
                                                               const float distance,
                                                               const CharacterControllerDescriptor &descriptor) noexcept {
         SweepBlockSelection selection{distance};
-        constexpr float NormalEpsilon = 1.0e-5F;
         for (std::uint32_t index{}; index < evidence.hitCount; ++index) {
             const auto &hit = evidence.hits[index];
-            if (!IsBlockingSweepHit(hit, descriptor) || Math::Dot(hit.normal, direction) >= -NormalEpsilon)
+            if (!IsBlockingSweepHit(hit, descriptor) || Math::Dot(hit.normal, direction) >= 0.0F)
                 continue;
             // The active prefix is sorted by distance before this reducer runs, so the first valid
             // blocking hit is the nearest one and no later evidence can change the selection.
@@ -222,14 +224,42 @@ namespace Horo::Character::Detail {
         return motion - normal * intoSurface;
     }
 
+    /** @brief Complete blocking normal inventory, separate from the bounded presentation contact prefix. */
+    struct SweepNormals final {
+        std::array<Math::Vec3, MaximumCharacterSweepHits> active{};
+        std::uint32_t count{};
+        bool steep{};
+    };
+
+    /** @brief Retains every physically eligible nearest constraint before slope response or cone projection. */
+    [[nodiscard]] SweepNormals RetainSweepConstraints(CharacterMovementResult &result, const CharacterSweepProbeResult &evidence,
+                                                      const CharacterControllerDescriptor &descriptor, const Math::Vec3 direction,
+                                                      const float nearest, const float walkableCosine, SweepMotionState &motion) {
+        constexpr float DistanceEpsilon = 1.0e-5F;
+        SweepNormals normals;
+        for (std::uint32_t index{}; index < evidence.hitCount; ++index) {
+            const auto &hit = evidence.hits[index];
+            if (!IsBlockingSweepHit(hit, descriptor) || hit.distanceMeters > nearest + DistanceEpsilon ||
+                Math::Dot(hit.normal, direction) >= 0.0F)
+                continue;
+            normals.steep = normals.steep || (Math::Dot(hit.normal, descriptor.up) > 0.0F &&
+                                              !IsWalkableGroundNormal(hit.normal, descriptor.up, walkableCosine));
+            result.collisions = result.collisions | CollisionFlagForNormal(hit.normal, descriptor.up, walkableCosine);
+            RetainSweepContact(result, hit, descriptor);
+            if (normals.count < normals.active.size())
+                normals.active[normals.count++] = hit.normal;
+            if (!motion.planes.Add(hit.normal))
+                result.termination = CharacterMovementTermination::ConstraintLimit;
+        }
+        return normals;
+    }
+
     /** @brief Advances to a blocking skin boundary and projects remaining travel against its canonical normals. */
     void ApplySweepBlock(CharacterMovementResult &result, const CharacterSweepProbeResult &evidence,
                          const CharacterControllerDescriptor &descriptor, const Math::Vec3 direction, const float nearest,
                          const float maximumAscent, SweepMotionState &motion) {
         auto &position = motion.position;
         auto &remaining = motion.remaining;
-        constexpr float DistanceEpsilon = 1.0e-5F;
-        constexpr float NormalEpsilon = 1.0e-5F;
         // An obstructed gravity slide starts from rest next tick, independently of the
         // retained contact capacity. Never accumulate pressure behind a clipped displacement.
         if (!motion.airbornePass)
@@ -240,40 +270,34 @@ namespace Horo::Character::Detail {
         const float slopeRadians = descriptor.maximumSlopeDegrees * Math::Pi / 180.0F;
         const float walkableCosine = std::cos(slopeRadians);
 
-        std::array<Math::Vec3, MaximumCharacterSweepHits> activeNormals{};
-        std::uint32_t activeNormalCount{};
-        bool steepContact{};
-        for (std::uint32_t index{}; index < evidence.hitCount; ++index) {
-            const auto &hit = evidence.hits[index];
-            if (!IsBlockingSweepHit(hit, descriptor) || hit.distanceMeters > nearest + DistanceEpsilon ||
-                Math::Dot(hit.normal, direction) >= -NormalEpsilon)
-                continue;
-            steepContact = steepContact || (Math::Dot(hit.normal, descriptor.up) > 0.0F &&
-                                            !IsWalkableGroundNormal(hit.normal, descriptor.up, walkableCosine));
-            result.collisions = result.collisions | CollisionFlagForNormal(hit.normal, descriptor.up, walkableCosine);
-            RetainSweepContact(result, hit, descriptor);
-            if (activeNormalCount < activeNormals.size())
-                activeNormals[activeNormalCount++] = hit.normal;
-        }
-
-        for (std::uint32_t index{}; index < activeNormalCount; ++index) {
-            remaining = ClipSlopeMotion(remaining, activeNormals[index], descriptor, walkableCosine);
+        const auto normals = RetainSweepConstraints(result, evidence, descriptor, direction, nearest, walkableCosine, motion);
+        for (std::uint32_t index{}; index < normals.count; ++index) {
+            remaining = ClipSlopeMotion(remaining, normals.active[index], descriptor, walkableCosine);
             if (motion.airbornePass) {
-                const float forbidden = Math::Dot(motion.gravityVelocity, activeNormals[index]);
+                const float forbidden = Math::Dot(motion.gravityVelocity, normals.active[index]);
                 if (forbidden < 0.0F)
-                    motion.gravityVelocity -= activeNormals[index] * forbidden;
+                    motion.gravityVelocity -= normals.active[index] * forbidden;
             }
         }
-        if (const float ascent = Math::Dot(remaining, descriptor.up); steepContact && ascent > maximumAscent)
-            remaining -= descriptor.up * (ascent - maximumAscent);
-        // A later plane can invalidate an earlier constraint in a corner. Fail closed rather
-        // than preserving speed through geometry or repeatedly amplifying ramp projections.
-        for (std::uint32_t index{}; index < activeNormalCount; ++index) {
-            if (Math::Dot(remaining, activeNormals[index]) < -NormalEpsilon)
-                remaining = {};
-            if (motion.airbornePass && Math::Dot(motion.gravityVelocity, activeNormals[index]) < -NormalEpsilon)
-                motion.gravityVelocity = {};
+        motion.steepConstraint = motion.steepConstraint || normals.steep;
+        // Use the post-slope intent, but preserve constraints from earlier casts as well as
+        // this hit set. A two-plane crease is valid travel, not a reason to stop indefinitely.
+        remaining = motion.planes.ClipTravel(remaining, descriptor.up, maximumAscent, motion.steepConstraint);
+        if (motion.airbornePass)
+            motion.gravityVelocity = motion.planes.Clip(motion.gravityVelocity);
+        if (result.termination == CharacterMovementTermination::ConstraintLimit) {
+            remaining = {};
+            motion.gravityVelocity = {};
         }
+    }
+
+    /** @brief Discards unswept travel and continuation at the last checked pose while preserving a committed typed diagnostic. */
+    void StopAtMovementLimit(CharacterMovementResult &result, SweepMotionState &motion) noexcept {
+        if (result.termination == CharacterMovementTermination::Complete)
+            result.termination = CharacterMovementTermination::IterationLimit;
+        motion.remaining = {};
+        motion.gravityVelocity = {};
+        result.gravityVelocityMetersPerSecond = {};
     }
 
     /** @brief Clears all optional support evidence while retaining the explicit up basis. */
@@ -433,8 +457,14 @@ namespace Horo::Character::Detail {
         float descent{};
     };
 
-    /** @brief Executes a budgeted cast and validates evidence and owner liveness before reduction. */
-    [[nodiscard]] Result<CharacterSweepProbeResult> ProbeStep(auto &impl, const StepQueryContext &query, const StepCast &cast) {
+    enum class SweepPurpose {
+        Step,
+        Movement
+    };
+
+    /** @brief Executes one admitted synchronous cast, retaining only validated copied evidence after owner-liveness checks. */
+    [[nodiscard]] Result<CharacterSweepProbeResult> ReadCapsuleSweep(auto &impl, const StepQueryContext &query, const StepCast &cast,
+                                                                     const SweepPurpose purpose) {
         const auto &[command, input, descriptor] = query;
         const auto &[position, direction, distance, iteration] = cast;
         const CharacterSweepProbeRequest request{command.controller,
@@ -452,8 +482,11 @@ namespace Horo::Character::Detail {
                                                  descriptor.selectors};
         if (const auto budget = ReserveTickQuery(impl); budget.HasError())
             return Result<CharacterSweepProbeResult>::Failure(budget.ErrorValue());
-        if (input.metrics != nullptr)
+        if (input.metrics != nullptr) {
             ++input.metrics->snapshot.queries;
+            if (purpose == SweepPurpose::Movement)
+                ++input.metrics->snapshot.movementIterations;
+        }
         auto probe = input.query.sweep(input.query.context, request);
         if (const auto valid = ValidateTickQueryContinuation(impl, probe); valid.HasError())
             return Result<CharacterSweepProbeResult>::Failure(valid.ErrorValue());
@@ -462,6 +495,11 @@ namespace Horo::Character::Detail {
             return Result<CharacterSweepProbeResult>::Failure(valid.ErrorValue());
         std::ranges::sort(evidence.hits.begin(), evidence.hits.begin() + evidence.hitCount, SweepHitLess);
         return Result<CharacterSweepProbeResult>::Success(std::move(evidence));
+    }
+
+    /** @brief Reads step-stage evidence without counting an ordinary movement iteration. */
+    [[nodiscard]] Result<CharacterSweepProbeResult> ProbeStep(auto &impl, const StepQueryContext &query, const StepCast &cast) {
+        return ReadCapsuleSweep(impl, query, cast, SweepPurpose::Step);
     }
 
     /** @brief Requires the lookahead to prove the actual contact's plane and exact stable surface identity. */
@@ -678,7 +716,17 @@ namespace Horo::Character::Detail {
         }
     }
 
-    /** @brief Resolves one bounded sweep query and returns whether another iteration may continue. */
+    /** @brief Admits one synchronous sweep and returns validated, canonically ordered copied evidence. */
+    [[nodiscard]] Result<CharacterSweepProbeResult> ReadMovementSweep(auto &impl, const CharacterMovementRequest &command,
+                                                                      const CharacterFixedTickInput &input,
+                                                                      const CharacterControllerDescriptor &descriptor,
+                                                                      const SweepMotionState &motion, const Math::Vec3 direction,
+                                                                      const float distance, const std::uint32_t iteration) {
+        return ReadCapsuleSweep(impl, StepQueryContext{command, input, descriptor},
+                                StepCast{motion.position, direction, distance, iteration}, SweepPurpose::Movement);
+    }
+
+    /** @brief Resolves one checked sweep, including step admission, without publishing a partial candidate. */
     [[nodiscard]] Result<bool> ResolveCapsuleSweepIteration(auto &impl, CharacterMovementResult &result,
                                                             const CharacterMovementRequest &command, const CharacterFixedTickInput &input,
                                                             const CharacterControllerDescriptor &descriptor, SweepMotionState &motion,
@@ -687,32 +735,10 @@ namespace Horo::Character::Detail {
         if (!std::isfinite(distance) || distance <= descriptor.minimumMoveDistanceMeters)
             return Result<bool>::Success(false);
         const Math::Vec3 direction = motion.remaining / distance;
-        const CharacterSweepProbeRequest request{command.controller,
-                                                 impl.descriptor.sceneGeneration,
-                                                 impl.descriptor.identity,
-                                                 impl.descriptor.physicsWorld,
-                                                 descriptor.capsule,
-                                                 motion.position,
-                                                 descriptor.up,
-                                                 direction,
-                                                 distance,
-                                                 descriptor.collisionProfile,
-                                                 descriptor.queryChannel,
-                                                 iteration,
-                                                 descriptor.selectors};
-        if (const auto budget = ReserveTickQuery(impl); budget.HasError())
-            return Result<bool>::Failure(budget.ErrorValue());
-        if (input.metrics != nullptr) {
-            ++input.metrics->snapshot.queries;
-            ++input.metrics->snapshot.movementIterations;
-        }
-        auto probe = input.query.sweep(input.query.context, request);
-        if (const auto continuation = ValidateTickQueryContinuation(impl, probe); continuation.HasError())
-            return Result<bool>::Failure(continuation.ErrorValue());
-        CharacterSweepProbeResult evidence = std::move(probe).Value();
-        if (const auto valid = ValidateCharacterSweepProbeResult(evidence, request); valid.HasError())
-            return Result<bool>::Failure(valid.ErrorValue());
-        std::ranges::sort(evidence.hits.begin(), evidence.hits.begin() + evidence.hitCount, SweepHitLess);
+        auto probe = ReadMovementSweep(impl, command, input, descriptor, motion, direction, distance, iteration);
+        if (probe.HasError())
+            return Result<bool>::Failure(probe.ErrorValue());
+        const auto &evidence = probe.Value();
         const auto selection = SelectNearestSweepBlock(evidence, direction, distance, descriptor);
         if (!selection.blocked) {
             motion.position += motion.remaining;
@@ -737,28 +763,50 @@ namespace Horo::Character::Detail {
         return Result<bool>::Success(true);
     }
 
+    /** @brief Admits finite steep gravity travel or records a conservative shared-budget stop before issuing a cast. */
+    [[nodiscard]] Result<bool> BeginSteepMotion(auto &impl, CharacterMovementResult &result,
+                                                const CharacterControllerDescriptor &descriptor, const Math::Vec3 normal,
+                                                SweepMotionState &motion) {
+        const Math::Vec3 tangentGravity = descriptor.gravity - normal * Math::Dot(descriptor.gravity, normal);
+        if (Math::Dot(tangentGravity, descriptor.up) >= 0.0F)
+            return Result<bool>::Success(false);
+        if (motion.iteration >= impl.settings.Values().work.maximumMovementIterations) {
+            StopAtMovementLimit(result, motion);
+            return Result<bool>::Success(false);
+        }
+        Math::Vec3 initialVelocity = motion.previousGravityVelocity - normal * Math::Dot(motion.previousGravityVelocity, normal);
+        if (Math::Dot(initialVelocity, descriptor.up) > 0.0F)
+            initialVelocity = {};
+        motion.gravityVelocity = initialVelocity + tangentGravity * motion.elapsedSeconds;
+        motion.remaining = (initialVelocity + motion.gravityVelocity) * (motion.elapsedSeconds * 0.5F);
+        if (!Math::IsFinite(motion.remaining))
+            return Result<bool>::Failure(MakeError(CharacterErrors::PlacementInvalid));
+        return Result<bool>::Success(true);
+    }
+
+    /** @brief Projects committed steep continuation without manufacturing ascent or changing the checked pose. */
+    void PublishSteepContinuation(CharacterMovementResult &result, const CharacterControllerDescriptor &descriptor,
+                                  const SweepMotionState &motion, const std::optional<CharacterSweepHit> &steepSupport) {
+        result.gravityVelocityMetersPerSecond = result.grounded ? Math::Vec3{} : motion.gravityVelocity;
+        if (steepSupport.has_value()) {
+            const float walkableCosine = std::cos(descriptor.maximumSlopeDegrees * Math::Pi / 180.0F);
+            const Math::Vec3 continuation = ClipSlopeMotion(motion.gravityVelocity, steepSupport->normal, descriptor, walkableCosine);
+            if (Math::Dot(continuation, descriptor.up) <= GroundNormalTolerance)
+                result.gravityVelocityMetersPerSecond = continuation;
+        }
+    }
+
     /** @brief Stages gravity continuation on one steep face within the remaining fixed-tick sweep budget. */
     [[nodiscard]] Result<void> ResolveSteepSliding(auto &impl, CharacterMovementResult &result, const CharacterMovementRequest &command,
                                                    const CharacterFixedTickInput &input, const CharacterControllerDescriptor &descriptor,
                                                    SweepMotionState &motion, std::optional<CharacterSweepHit> &steepSupport) {
         if (!steepSupport.has_value() || descriptor.steepSlopePolicy != CharacterSteepSlopePolicy::Slide)
             return Result<void>::Success();
-        const Math::Vec3 normal = steepSupport->normal;
-        const Math::Vec3 tangentGravity = descriptor.gravity - normal * Math::Dot(descriptor.gravity, normal);
-        // A custom gravity basis must still never turn the steep-slide policy into a climb.
-        if (Math::Dot(tangentGravity, descriptor.up) >= 0.0F)
+        const auto staged = BeginSteepMotion(impl, result, descriptor, steepSupport->normal, motion);
+        if (staged.HasError())
+            return Result<void>::Failure(staged.ErrorValue());
+        if (!staged.Value())
             return Result<void>::Success();
-        if (motion.iteration >= impl.settings.Values().work.maximumMovementIterations)
-            return Result<void>::Failure(
-                MakeError(CharacterErrors::CapacityExceeded, "Steep sliding exhausted the movement iteration budget."));
-        Math::Vec3 initialVelocity = motion.previousGravityVelocity - normal * Math::Dot(motion.previousGravityVelocity, normal);
-        if (Math::Dot(initialVelocity, descriptor.up) > 0.0F)
-            initialVelocity = {};
-        const Math::Vec3 finalVelocity = initialVelocity + tangentGravity * motion.elapsedSeconds;
-        motion.gravityVelocity = finalVelocity;
-        motion.remaining = (initialVelocity + finalVelocity) * (motion.elapsedSeconds * 0.5F);
-        if (!Math::IsFinite(motion.remaining))
-            return Result<void>::Failure(MakeError(CharacterErrors::PlacementInvalid));
         auto slideDescriptor = descriptor;
         slideDescriptor.minimumMoveDistanceMeters = 0.0F;
         for (; motion.iteration < impl.settings.Values().work.maximumMovementIterations; ++motion.iteration) {
@@ -768,18 +816,28 @@ namespace Horo::Character::Detail {
             if (!resolved.Value())
                 break;
         }
+        if (Math::LengthSquared(motion.remaining) > 0.0F)
+            StopAtMovementLimit(result, motion);
         steepSupport.reset();
         if (const auto grounded = ResolveGrounding(impl, result, command, input, descriptor, motion.position, steepSupport);
             grounded.HasError())
             return Result<void>::Failure(grounded.ErrorValue());
-        result.gravityVelocityMetersPerSecond = result.grounded ? Math::Vec3{} : motion.gravityVelocity;
-        if (steepSupport.has_value()) {
-            const float walkableCosine = std::cos(descriptor.maximumSlopeDegrees * Math::Pi / 180.0F);
-            const Math::Vec3 continuation = ClipSlopeMotion(motion.gravityVelocity, steepSupport->normal, descriptor, walkableCosine);
-            if (Math::Dot(continuation, descriptor.up) <= GroundNormalTolerance)
-                result.gravityVelocityMetersPerSecond = continuation;
-        }
+        PublishSteepContinuation(result, descriptor, motion, steepSupport);
         return Result<void>::Success();
+    }
+
+    /** @brief Publishes only the free-flight continuation allowed by the final copied support evidence. */
+    void PublishAirborneContinuation(CharacterMovementResult &result, const CharacterControllerDescriptor &descriptor,
+                                     const SweepMotionState &motion, const std::optional<CharacterSweepHit> &steepSupport) {
+        if (result.grounded)
+            result.gravityVelocityMetersPerSecond = {};
+        else if (steepSupport) {
+            if (descriptor.steepSlopePolicy == CharacterSteepSlopePolicy::Stop)
+                result.gravityVelocityMetersPerSecond = {};
+            else
+                result.gravityVelocityMetersPerSecond = ClipSlopeMotion(motion.gravityVelocity, steepSupport->normal, descriptor,
+                                                                        std::cos(descriptor.maximumSlopeDegrees * Math::Pi / 180.0F));
+        }
     }
 
     /** @brief Integrates the single committed free-flight velocity through the remaining bounded sweeps. */
@@ -797,8 +855,10 @@ namespace Horo::Character::Detail {
         // Acceleration below the ordinary intent threshold must not disappear each tick.
         airDescriptor.minimumMoveDistanceMeters = 0.0F;
         while (Math::LengthSquared(motion.remaining) > 0.0F) {
-            if (motion.iteration >= impl.settings.Values().work.maximumMovementIterations)
-                return Result<void>::Failure(MakeError(CharacterErrors::CapacityExceeded));
+            if (motion.iteration >= impl.settings.Values().work.maximumMovementIterations) {
+                StopAtMovementLimit(result, motion);
+                break;
+            }
             const auto swept = ResolveCapsuleSweepIteration(impl, result, command, input, airDescriptor, motion, motion.iteration++);
             if (swept.HasError())
                 return Result<void>::Failure(swept.ErrorValue());
@@ -813,15 +873,7 @@ namespace Horo::Character::Detail {
         if (const auto support = ResolveGrounding(impl, result, command, input, landingDescriptor, motion.position, steepSupport);
             support.HasError())
             return support;
-        if (result.grounded)
-            result.gravityVelocityMetersPerSecond = {};
-        else if (steepSupport) {
-            if (descriptor.steepSlopePolicy == CharacterSteepSlopePolicy::Stop)
-                result.gravityVelocityMetersPerSecond = {};
-            else
-                result.gravityVelocityMetersPerSecond = ClipSlopeMotion(motion.gravityVelocity, steepSupport->normal, descriptor,
-                                                                        std::cos(descriptor.maximumSlopeDegrees * Math::Pi / 180.0F));
-        }
+        PublishAirborneContinuation(result, descriptor, motion, steepSupport);
         return Result<void>::Success();
     }
 
@@ -840,7 +892,67 @@ namespace Horo::Character::Detail {
                 break;
             }
         }
+        if (Math::LengthSquared(motion.remaining) > descriptor.minimumMoveDistanceMeters * descriptor.minimumMoveDistanceMeters)
+            StopAtMovementLimit(result, motion);
         return Result<void>::Success();
+    }
+
+    /** @brief Completes only admitted post-intent gravity phases; a solver stop cannot restart unswept motion. */
+    [[nodiscard]] Result<void> ResolvePostSweepMotion(auto &impl, CharacterMovementResult &result, const CharacterMovementRequest &command,
+                                                      const CharacterFixedTickInput &input, const CharacterControllerDescriptor &descriptor,
+                                                      const CharacterControllerDescriptor &supportDescriptor, SweepMotionState &motion,
+                                                      std::optional<CharacterSweepHit> &steepSupport) {
+        const bool steepPass = steepSupport.has_value();
+        if (result.termination != CharacterMovementTermination::Complete) {
+            motion.gravityVelocity = {};
+            result.gravityVelocityMetersPerSecond = {};
+            steepSupport.reset();
+        }
+        if (const auto slide = ResolveSteepSliding(impl, result, command, input, descriptor, motion, steepSupport); slide.HasError())
+            return Result<void>::Failure(slide.ErrorValue());
+        if (result.termination == CharacterMovementTermination::Complete && !result.grounded && !steepSupport.has_value() && !steepPass) {
+            return ResolveAirborneMotion(impl, result, command, input, descriptor, supportDescriptor, motion);
+        }
+        if (result.grounded || descriptor.steepSlopePolicy == CharacterSteepSlopePolicy::Stop)
+            result.gravityVelocityMetersPerSecond = {};
+        return Result<void>::Success();
+    }
+
+    /** @brief Initializes the detached result correlation and committed jump continuation before movement begins. */
+    [[nodiscard]] CharacterMovementResult InitialSweepMovement(const CharacterMovementRequest &command,
+                                                               const CharacterTransformPublication &previous,
+                                                               const CharacterControllerDescriptor &descriptor,
+                                                               const Math::Vec3 previousGravityVelocity, const std::uint64_t tick) {
+        CharacterMovementResult result;
+        result.controller = command.controller;
+        result.tick = tick;
+        result.sequence = command.sequence;
+        result.finalPosition = previous.position;
+        result.finalHeading = command.desiredHeading.value_or(previous.heading);
+        result.up = descriptor.up;
+        ClearGroundEvidence(result, descriptor.up);
+        result.jumpApplied = command.jumpRequested && previous.grounded && descriptor.jumpSpeedMetersPerSecond > 0.0F;
+        result.gravityVelocityMetersPerSecond =
+            result.jumpApplied ? descriptor.up * descriptor.jumpSpeedMetersPerSecond : previousGravityVelocity;
+        return result;
+    }
+
+    /** @brief Admits finite requested travel before the first query, without creating publication state. */
+    [[nodiscard]] Result<SweepMotionState> AdmitSweepMotion(const CharacterMovementRequest &command,
+                                                            const CharacterTransformPublication &previous,
+                                                            const CharacterFixedTickInput &input, const Math::Vec3 previousGravityVelocity,
+                                                            const float maximumDisplacement) {
+        const double seconds = static_cast<double>(input.fixedDelta.ToNanoseconds()) / 1'000'000'000.0;
+        if (!std::isfinite(seconds) || seconds <= 0.0 || seconds > static_cast<double>(std::numeric_limits<float>::max()))
+            return Result<SweepMotionState>::Failure(
+                MakeError(CharacterErrors::PlacementInvalid, "Character fixed-tick delta cannot produce a finite movement result."));
+        const auto elapsedSeconds = static_cast<float>(seconds);
+        SweepMotionState motion{previous.position, command.desiredVelocityMetersPerSecond.value_or(Math::Vec3{}) * elapsedSeconds,
+                                elapsedSeconds, previousGravityVelocity};
+        if (!Math::IsFinite(motion.remaining) || Math::Length(motion.remaining) > maximumDisplacement)
+            return Result<SweepMotionState>::Failure(
+                MakeError(CharacterErrors::PlacementInvalid, "Character desired displacement exceeds the finite fixed-tick envelope."));
+        return Result<SweepMotionState>::Success(std::move(motion));
     }
 
     /**
@@ -862,28 +974,13 @@ namespace Horo::Character::Detail {
         if (const auto valid = ValidateCharacterPhysicsQueryContext(input.query, expected); valid.HasError())
             return Result<CharacterMovementResult>::Failure(valid.ErrorValue());
 
-        CharacterMovementResult result;
-        result.controller = command.controller;
-        result.tick = input.tick;
-        result.sequence = command.sequence;
-        result.finalPosition = previous.position;
-        result.finalHeading = command.desiredHeading.value_or(previous.heading);
-        result.up = descriptor.up;
-        ClearGroundEvidence(result, descriptor.up);
-        result.jumpApplied = command.jumpRequested && previous.grounded && descriptor.jumpSpeedMetersPerSecond > 0.0F;
-        result.gravityVelocityMetersPerSecond =
-            result.jumpApplied ? descriptor.up * descriptor.jumpSpeedMetersPerSecond : previousGravityVelocity;
+        auto result = InitialSweepMovement(command, previous, descriptor, previousGravityVelocity, input.tick);
 
-        const double seconds = static_cast<double>(input.fixedDelta.ToNanoseconds()) / 1'000'000'000.0;
-        if (!std::isfinite(seconds) || seconds <= 0.0 || seconds > static_cast<double>(std::numeric_limits<float>::max()))
-            return Result<CharacterMovementResult>::Failure(
-                MakeError(CharacterErrors::PlacementInvalid, "Character fixed-tick delta cannot produce a finite movement result."));
-        const auto elapsedSeconds = static_cast<float>(seconds);
-        SweepMotionState motion{previous.position, command.desiredVelocityMetersPerSecond.value_or(Math::Vec3{}) * elapsedSeconds,
-                                elapsedSeconds, previousGravityVelocity};
-        if (!Math::IsFinite(motion.remaining))
-            return Result<CharacterMovementResult>::Failure(
-                MakeError(CharacterErrors::PlacementInvalid, "Character desired displacement is not finite."));
+        auto admitted = AdmitSweepMotion(command, previous, input, previousGravityVelocity,
+                                         impl.settings.Values().work.maximumDisplacementMetersPerTick);
+        if (admitted.HasError())
+            return Result<CharacterMovementResult>::Failure(admitted.ErrorValue());
+        auto motion = std::move(admitted).Value();
 
         if (const auto moved = ResolveDesiredDisplacement(impl, result, command, input, descriptor, motion); moved.HasError())
             return Result<CharacterMovementResult>::Failure(moved.ErrorValue());
@@ -900,17 +997,12 @@ namespace Horo::Character::Detail {
                 grounded.HasError())
                 return Result<CharacterMovementResult>::Failure(grounded.ErrorValue());
         }
-        const bool steepPass = steepSupport.has_value();
-        if (const auto slide = ResolveSteepSliding(impl, result, command, input, descriptor, motion, steepSupport); slide.HasError())
-            return Result<CharacterMovementResult>::Failure(slide.ErrorValue());
-        if (!result.grounded && !steepSupport.has_value() && !steepPass) {
-            if (const auto air = ResolveAirborneMotion(impl, result, command, input, descriptor, supportDescriptor, motion); air.HasError())
-                return Result<CharacterMovementResult>::Failure(air.ErrorValue());
-        } else if (result.grounded || descriptor.steepSlopePolicy == CharacterSteepSlopePolicy::Stop) {
-            result.gravityVelocityMetersPerSecond = {};
-        }
+        if (const auto completed =
+                ResolvePostSweepMotion(impl, result, command, input, descriptor, supportDescriptor, motion, steepSupport);
+            completed.HasError())
+            return Result<CharacterMovementResult>::Failure(completed.ErrorValue());
         result.finalPosition = motion.position;
-        result.achievedVelocityMetersPerSecond = (motion.position - previous.position) / elapsedSeconds;
+        result.achievedVelocityMetersPerSecond = (motion.position - previous.position) / motion.elapsedSeconds;
         std::ranges::sort(result.contacts.begin(), result.contacts.begin() + result.contactCount, ContactLess);
         return Result<CharacterMovementResult>::Success(std::move(result));
     }
