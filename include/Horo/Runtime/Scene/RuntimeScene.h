@@ -469,6 +469,12 @@ namespace Horo::Runtime {
         void Destroy(EntityRef entity);
         /** @brief Queues a local-transform replacement validated when the batch commits. */
         void SetLocalTransform(EntityRef entity, Math::Transform localTransform);
+        /** @brief Queues a transform with exact Scene and cancellation admission checked before final publication.
+         * @param entity Exact receiving entity generation.
+         * @param localTransform Complete replacement copied into the command.
+         * @param admission Scene and cancellation evidence; transform updates do not depend on an asset registry revision.
+         */
+        void SetLocalTransform(EntityRef entity, Math::Transform localTransform, const SceneStructuralAdmission &admission);
         /** @brief Reports whether no structural commands are queued. @return True when the buffer has no commands. */
         [[nodiscard]] bool Empty() const noexcept;
 
@@ -488,6 +494,7 @@ namespace Horo::Runtime {
         struct SetLocalTransformCommand {
             EntityRef entity;
             Math::Transform localTransform;
+            std::optional<SceneStructuralAdmission> admission;
         };
 
         struct CreateGroupCommand {

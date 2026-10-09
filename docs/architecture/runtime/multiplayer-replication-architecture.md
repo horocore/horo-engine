@@ -355,6 +355,52 @@ downgrade or layout-derived compatibility.
 
 ## Validated Apply Path
 
+### Implemented transactional inbound owner boundary
+
+NET-004.6 provides `ReplicationInboundApply` and `SceneReplicationApplyOwner` in
+`HoroNetworkRuntime`. The host pins an authenticated server authority channel and
+registers each exact object mapping, client role publication and negotiated codec.
+No packet field grants authority or creates an object. Register this handler with
+`InboundMessageDispatcher` on a negotiated snapshot lane. NetworkPoll receipt only
+validates and reconstructs complete immutable values; it never invokes the declaring
+mutation owner or writes Scene/component storage.
+
+The host's RuntimeLifecycle participant calls `ApplyAtSafePoint` only during
+`CommitDeferredLifecycleChanges`, with the exact world/session and a positive local
+simulation tick. Admission-clock ticks are separate from authoritative state ticks.
+The boundary revalidates session, world, mappings, roles, codec pins and cancellation
+before and after owner preparation. A declaring Scene/Gameplay owner prepares one
+detached candidate for the complete pending batch and publishes it atomically.
+Foreign owner exceptions reject the batch; owner adapters must preserve the
+all-or-none commit invariant even when throwing, and retain their module code lease
+through candidate destruction. Shutdown precedes session/module retirement.
+
+The Scene adapter binds explicit field IDs to typed translation properties for one
+exact schema/version. It validates finite float-representable scalars and every
+entity generation, preserves other transform members, then submits one
+`SceneCommandBuffer` transaction. Its admission evidence is sampled again by
+RuntimeScene immediately before publication, after fallible candidate preparation.
+No later invalid object, stale entity or cancellation can expose earlier updates.
+Other Gameplay schemas supply their own declaring transactional owner; Network
+never infers component/property access from schema names.
+
+Registry size (including retired identity tombstones), pending objects, wire bytes
+and persistent decoded backing are independently bounded. Each object retains at
+most one committed delta root and one pending complete projection. Newer pending
+updates replace that projection; exact wire duplicates are idempotent and older
+publications are rejected. Missing delta roots require a full-state resend. Failed
+apply batches discard pending values without advancing committed roots. Explicit
+object revocation and shutdown release decoded/module pins. Temporary decoding and
+owner preparation remain bounded by record limits and the finite pending count;
+this load/owner-thread path does not claim allocation-free execution.
+
+Migration: both new headers belong exclusively to `HoroNetworkRuntime` and are
+covered by the network public-header consumer. `ReplicationStateCodec::Recipient`
+adds immutable projection evidence. The admitted `SetLocalTransform` overload is
+additive; existing unadmitted local Scene command callers keep their semantics.
+There is no wire-format change or new dependency edge. Hosts must explicitly wire
+receipt and safe-point apply, rather than treating successful staging as commit.
+
 ### Implemented bounded state codec
 
 `ReplicationStateCodec` is the NetworkRuntime-owned NET-004.4 consumer of the
@@ -394,7 +440,7 @@ validated field suffix before foreign callbacks can alter the borrowed input, th
 reconstructs a complete typed network value. Re-encoding each decoded field proves
 canonical bytes. Errors, callback faults, cancellation or shutdown publish no partial
 candidate and preserve prior decoded state. This operation has no Scene mutation
-authority: NET-004.6 still owns admission, staging and atomic owner-safe-point apply.
+authority: the inbound owner boundary owns admission, staging and atomic owner-safe-point apply.
 Foreign codec transactions execute inside an allocation-free `noexcept` exception
 boundary. It classifies allocation failures separately from other callback faults;
 typed diagnostic construction remains outside that boundary so allocation during

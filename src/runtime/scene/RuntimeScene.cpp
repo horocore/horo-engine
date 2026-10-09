@@ -77,6 +77,16 @@ namespace Horo::Runtime {
     Result<void> SceneCommandBuffer::ValidateAdmission(SceneRuntimeId scene, Assets::AssetRegistryRevision registry) const {
         for (const auto &command : commands_) {
             const auto valid = std::visit([&]<typename T>(const T &value) -> Result<void> {
+                if constexpr (std::is_same_v<T, SetLocalTransformCommand>) {
+                    if (value.admission) {
+                        if (value.admission->cancellation.IsCancellationRequested() ||
+                            value.admission->ownerCancellation.IsCancellationRequested() ||
+                            value.admission->scopeCancellation.IsCancellationRequested())
+                            return JobCancelled();
+                        if (value.admission->scene != scene)
+                            return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
+                    }
+                }
                 if constexpr (std::is_same_v<T, CreateGroupCommand> || std::is_same_v<T, DestroyGroupCommand> ||
                               std::is_same_v<T, AttachBaselineCommand> || std::is_same_v<T, DetachBaselineCommand>) {
                     if (value.admission.cancellation.IsCancellationRequested() ||
@@ -122,7 +132,13 @@ namespace Horo::Runtime {
 
     /** @copydoc SceneCommandBuffer::SetLocalTransform */
     void SceneCommandBuffer::SetLocalTransform(const EntityRef entity, Math::Transform localTransform) {
-        commands_.emplace_back(SetLocalTransformCommand{entity, std::move(localTransform)});
+        commands_.emplace_back(SetLocalTransformCommand{entity, std::move(localTransform), std::nullopt});
+    }
+
+    /** @copydoc SceneCommandBuffer::SetLocalTransform */
+    void SceneCommandBuffer::SetLocalTransform(const EntityRef entity, Math::Transform localTransform,
+                                               const SceneStructuralAdmission &admission) {
+        commands_.emplace_back(SetLocalTransformCommand{entity, std::move(localTransform), admission});
     }
 
     /** @copydoc SceneCommandBuffer::Empty */
