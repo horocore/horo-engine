@@ -27,15 +27,27 @@ namespace Horo::Runtime::Ui {
         }
     }
 
-    /** @copydoc UiControlStateMachine::PrepareInteractionReplacement */
-    Result<void> UiControlStateMachine::PrepareInteractionReplacement(const UiActionOwnerContext &owner) {
+    /** @copydoc UiControlStateMachine::CanPrepareInteractionReplacement */
+    Result<void> UiControlStateMachine::CanPrepareInteractionReplacement(const UiActionOwnerContext &owner) const {
         if (!storage_ || !replacement_ || replacementSource_ || storage_->lifecycle != UiControlLifecycleState::Active)
             return Result<void>::Failure(MakeError(UiErrors::ControlLifecycleUnavailable));
         if (!owner.IsValid() || !SameAudience(Owner(), owner) ||
             owner.interaction.Compare(Owner().interaction) == UiRevisionRelation::Older)
             return Result<void>::Failure(MakeError(UiErrors::ControlSourceStale));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiControlStateMachine::Storage::BlocksInteractionReplacement */
+    bool UiControlStateMachine::Storage::BlocksInteractionReplacement() const noexcept {
+        return pending || (asyncAction && asyncAction->Busy());
+    }
+
+    /** @copydoc UiControlStateMachine::PrepareInteractionReplacement */
+    Result<void> UiControlStateMachine::PrepareInteractionReplacement(const UiActionOwnerContext &owner) {
+        if (const auto admitted = CanPrepareInteractionReplacement(owner); admitted.HasError())
+            return admitted;
         const bool swap = Owner() != owner;
-        if (swap && (replacement_->asyncAction || storage_->pending || (storage_->asyncAction && storage_->asyncAction->Busy())))
+        if (swap && (replacement_->asyncAction || storage_->BlocksInteractionReplacement()))
             return Result<void>::Failure(MakeError(UiErrors::ControlDefaultPending));
         auto stamp = CaptureReloadStamp();
         if (stamp.HasError())
@@ -51,10 +63,13 @@ namespace Horo::Runtime::Ui {
         }, replacement_->descriptor);
         replacement_->state = storage_->state;
         replacement_->editStartText = storage_->editStartText;
+        if (replacement_->textEditor)
+            *replacement_->textEditor = *storage_->textEditor;
         replacement_->configuredAvailability = storage_->configuredAvailability;
         replacement_->asyncAction.reset();
         replacement_->lastSequence = storage_->lastSequence;
         replacement_->lastTick = storage_->lastTick;
+        replacement_->textResetRevision = storage_->textResetRevision;
         replacement_->pending = false;
         replacement_->repeatArmed = false;
         replacement_->repeatNextTick = 0;

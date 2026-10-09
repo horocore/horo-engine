@@ -54,6 +54,24 @@ namespace Horo::Runtime::Ui {
         return handled;
     }
 
+    /** @copydoc UiAnimationOwner::EditControlText */
+    Result<UiTextEditResult> UiAnimationOwner::EditControlText(const UiRenderViewId view, const UiActionSource &source,
+                                                               const std::uint64_t sequence, const UiTextEditCommand &command) {
+        if (!storage_)
+            return Result<UiTextEditResult>::Failure(MakeError(UiErrors::ControlLifecycleUnavailable));
+        if (const auto admitted = AdmitCommand(*storage_); admitted.HasError())
+            return Result<UiTextEditResult>::Failure(admitted.ErrorValue());
+        const auto control = PresentedControl(*storage_, view, source);
+        if (control.HasError())
+            return Result<UiTextEditResult>::Failure(control.ErrorValue());
+        auto edited = control.Value()->EditText(source, sequence, command);
+        if (edited.HasValue()) {
+            ++storage_->commandRevision;
+            ++storage_->pendingCommands;
+        }
+        return edited;
+    }
+
     /** @copydoc UiAnimationOwner::ApplyControlDefault */
     Result<std::optional<UiControlDefaultAction>> UiAnimationOwner::ApplyControlDefault(const UiRenderViewId view,
                                                                                         const UiActionSource &source) {

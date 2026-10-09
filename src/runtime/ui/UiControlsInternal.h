@@ -48,6 +48,18 @@ namespace Horo::Runtime::Ui {
         void SetAvailabilityProjection(UiControlAvailability availability) noexcept;
         [[nodiscard]] Result<void> ArmRepeat(const UiControlRepeatPolicy &policy, std::uint64_t tick);
         [[nodiscard]] Result<void> Queue(const UiControlDetail::PendingDefault &queued);
+        /** @brief Reconciles a typed owner value after lifecycle admission, preserving all state on rejection. */
+        [[nodiscard]] Result<void> ReconcileValue(const UiActionValue &value);
+        /** @brief Validates and reconciles the toggle's boolean value. */
+        [[nodiscard]] Result<void> ReconcileToggle(const UiActionValue &value);
+        /** @brief Validates and reconciles the slider's finite constrained scalar. */
+        [[nodiscard]] Result<void> ReconcileSlider(const UiActionValue &value);
+        /** @brief Validates and reconciles the complete text draft and cancellation baseline. */
+        [[nodiscard]] Result<void> ReconcileText(const UiActionValue &value);
+        /** @brief Checks text kind, exact source, ordering and edit admission without mutation. */
+        [[nodiscard]] Result<void> AdmitTextEdit(const UiActionSource &source, std::uint64_t sequence) const;
+        /** @brief Detects a pending default or a busy asynchronous action that prevents interaction replacement. */
+        [[nodiscard]] bool BlocksInteractionReplacement() const noexcept;
 
         [[nodiscard]] Result<UiControlTransitionKind> ApplyInput(const UiControlInput &input);
         [[nodiscard]] Result<UiControlTransitionKind> HandleFocusGained();
@@ -65,11 +77,13 @@ namespace Horo::Runtime::Ui {
         std::optional<UiAsyncActionSnapshot> asyncAction;
         UiControlAvailability configuredAvailability{UiControlAvailability::Enabled};
         UiActionText editStartText;
+        std::unique_ptr<UiTextEditBuffer> textEditor;
         UiControlDetail::PendingDefault pendingDefault;
         UiControlActivationSource pressSource{UiControlActivationSource::Programmatic};
         UiControlAdjustment adjustment{UiControlAdjustment::Count};
         std::uint64_t lastSequence{};
         std::uint64_t lastTick{};
+        std::uint64_t textResetRevision{}; /**< Owner-thread reset fence; saturation permanently rejects new reload stamps. */
         std::uint64_t repeatNextTick{};
         bool pending{};
         bool repeatArmed{};

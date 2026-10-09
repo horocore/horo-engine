@@ -1176,6 +1176,19 @@ target_link_libraries(HoroTerrainSourceArtifactPublicHeaderConsumer PRIVATE Horo
 add_test(NAME HoroTerrainSourceArtifactPublicHeaderConsumer COMMAND HoroTerrainSourceArtifactPublicHeaderConsumer)
 set_tests_properties(HoroTerrainSourceArtifactPublicHeaderConsumer PROPERTIES LABELS "unit;terrain;assets;headless;ci-windows")
 
+add_executable(HoroTerrainProducerSnapshotTests
+        unit/runtime/terrain/TerrainProducerSnapshotTests.cpp
+        unit/runtime/terrain/TerrainProducerSnapshotFoliageTests.cpp
+)
+target_compile_features(HoroTerrainProducerSnapshotTests PRIVATE cxx_std_20)
+target_link_libraries(HoroTerrainProducerSnapshotTests PRIVATE HoroEngine::TerrainProducerIntegration)
+horo_register_catch_test(HoroTerrainProducerSnapshotTests LABELS "unit;terrain;foliage;headless;lifecycle;ci-windows")
+add_executable(HoroTerrainProducerSnapshotPublicHeaderConsumer support/TerrainProducerSnapshotPublicHeaderConsumer.cpp)
+target_compile_features(HoroTerrainProducerSnapshotPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroTerrainProducerSnapshotPublicHeaderConsumer PRIVATE HoroEngine::TerrainProducerIntegration)
+add_test(NAME HoroTerrainProducerSnapshotPublicHeaderConsumer COMMAND HoroTerrainProducerSnapshotPublicHeaderConsumer)
+set_tests_properties(HoroTerrainProducerSnapshotPublicHeaderConsumer PROPERTIES LABELS "unit;terrain;headless;ci-windows")
+
 add_executable(HoroTerrainAuthoringTests unit/editor/TerrainAuthoringDocumentTests.cpp)
 target_compile_features(HoroTerrainAuthoringTests PRIVATE cxx_std_20)
 target_link_libraries(HoroTerrainAuthoringTests PRIVATE HoroEngine::TerrainAuthoring)
@@ -2960,6 +2973,7 @@ target_include_directories(HoroRuntimeUiFocusGraphTests PRIVATE ${CMAKE_CURRENT_
 target_link_libraries(HoroRuntimeUiFocusGraphTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiControlsTests
         unit/runtime/ui/UiControlsTests.cpp
+        unit/runtime/ui/UiTextEditingTests.cpp
         support/AllocationProbe.cpp
 )
 target_compile_features(HoroRuntimeUiControlsTests PRIVATE cxx_std_20)
