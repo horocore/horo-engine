@@ -112,6 +112,8 @@ namespace Horo::Platform {
         std::filesystem::path appPrivate;
         std::filesystem::path cache;
         std::thread::id owner{std::this_thread::get_id()};
+        // Handles retain only this identity, preventing service-address reuse from reviving retired capabilities.
+        std::shared_ptr<const std::byte> identity{std::make_shared<const std::byte>()};
         std::array<Document, MaximumDocuments> documents{};
         // Owner publishes initialized immutable slots; callback threads only set revoked.
         // The owner alone consumes/closes descriptors, including on cancellation and teardown.
@@ -414,7 +416,8 @@ namespace Horo::Platform {
             return Result<std::vector<std::byte>>::Failure(owned.ErrorValue());
         if (maximumBytes == 0 || maximumBytes > MaximumBytes)
             return Result<std::vector<std::byte>>::Failure(TooLarge());
-        if (handle.owner_ != this || handle.value_ == 0 || handle.value_ > state_->documentCount.load(std::memory_order_acquire))
+        if (handle.owner_ != state_->identity || handle.value_ == 0 ||
+            handle.value_ > state_->documentCount.load(std::memory_order_acquire))
             return Result<std::vector<std::byte>>::Failure(Android::AndroidStorageAdapter::AccessFailure(false, true));
         auto &document = state_->documents[static_cast<std::size_t>(handle.value_ - 1)];
         return ReadDocumentStream(document, maximumBytes);
@@ -478,7 +481,7 @@ namespace Horo::Platform {
             document.descriptor = descriptor;
             document.lifetime = lifetime;
             storage.state_->documentCount.store(count + 1, std::memory_order_release);
-            return Result<AndroidDocumentHandle>::Success(AndroidDocumentHandle{count + 1, &storage});
+            return Result<AndroidDocumentHandle>::Success(AndroidDocumentHandle{count + 1, storage.state_->identity});
 #else
             static_cast<void>(storage);
             static_cast<void>(descriptor);
@@ -489,7 +492,7 @@ namespace Horo::Platform {
 
         /** @copydoc AndroidStorageAdapter::Revoke */
         Result<void> AndroidStorageAdapter::Revoke(AndroidStorage &storage, const AndroidDocumentHandle handle) {
-            if (handle.owner_ != &storage || handle.value_ == 0 ||
+            if (handle.owner_ != storage.state_->identity || handle.value_ == 0 ||
                 handle.value_ > storage.state_->documentCount.load(std::memory_order_acquire))
                 return Result<void>::Failure(AccessFailure(false, true));
             storage.state_->documents[static_cast<std::size_t>(handle.value_ - 1)].revoked.store(true, std::memory_order_release);

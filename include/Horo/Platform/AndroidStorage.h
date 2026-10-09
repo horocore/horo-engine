@@ -33,10 +33,11 @@ namespace Horo::Platform {
         friend class AndroidStorage;
         friend class Android::AndroidStorageAdapter;
 
-        AndroidDocumentHandle(std::uint64_t value, const AndroidStorage *owner) noexcept : value_(value), owner_(owner) {}
+        AndroidDocumentHandle(std::uint64_t value, std::shared_ptr<const std::byte> owner) noexcept
+            : value_(value), owner_(std::move(owner)) {}
 
         std::uint64_t value_{};
-        const AndroidStorage *owner_{};
+        std::shared_ptr<const std::byte> owner_;
     };
 
     /** @brief Lifetime admitted by the host after checking the actual Android URI permission grant. */

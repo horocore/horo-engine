@@ -194,6 +194,17 @@ namespace {
         REQUIRE(fixture.storage->ReadDocument(AndroidDocumentHandle{}, 4096).HasError());
         Fixture other;
         REQUIRE(other.storage->ReadDocument(admitted.Value(), 4096).HasError());
+        const auto retired = admitted.Value();
+        fixture.storage.reset();
+        auto replacement = AndroidStorageAdapter::Create(fixture.files, fixture.root / "private", fixture.root / "cache");
+        REQUIRE(replacement.HasValue());
+        fixture.storage = std::move(replacement).Value();
+        auto fresh =
+            AndroidStorageAdapter::AdoptDocument(*fixture.storage, open(path.c_str(), O_RDONLY), AndroidDocumentGrantLifetime::Persisted);
+        REQUIRE(fresh.HasValue());
+        REQUIRE(fixture.storage->ReadDocument(retired, 4096).HasError());
+        REQUIRE(AndroidStorageAdapter::Revoke(*fixture.storage, retired).HasError());
+        REQUIRE(fixture.storage->ReadDocument(fresh.Value(), 4096).HasValue());
         REQUIRE(AndroidStorageAdapter::AdoptDocument(*fixture.storage, -1, AndroidDocumentGrantLifetime::Activity).HasError());
     }
 
