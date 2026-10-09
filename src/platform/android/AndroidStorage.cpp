@@ -103,7 +103,9 @@ namespace Horo::Platform {
 
     struct AndroidStorage::State {
         struct Document {
+#if !defined(_WIN32)
             int descriptor{-1};
+#endif
             AndroidDocumentGrantLifetime lifetime{};
             std::atomic<bool> revoked{};
         };
