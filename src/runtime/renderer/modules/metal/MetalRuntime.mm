@@ -1,16 +1,19 @@
 #include "Horo/Runtime/Render/RenderAdapterErrors.h"
 #include "MetalBackendInternal.h"
+#include "MetalCommandCompletion.h"
 #include "MetalRenderBackendErrors.h"
 #include "MetalResourceRuntime.h"
 
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <format>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -286,6 +289,9 @@ namespace Horo::Render::Detail {
                 layer_.framebufferOnly = YES;
                 layer_.opaque = YES;
                 layer_.maximumDrawableCount = descriptor.maxFramesInFlight;
+                maxFramesInFlight_ = descriptor.maxFramesInFlight;
+                ownerThread_ = std::this_thread::get_id();
+                submittedCommands_ = [[NSMutableArray alloc] initWithCapacity:maxFramesInFlight_];
                 layer_.displaySyncEnabled = descriptor.presentMode == PresentMode::Fifo;
                 MetalEditorGraphicsAccess::PublishPersistent(*editorGraphicsBridge_, (__bridge void *)device_,
                                                              (__bridge void *)commandQueue_, this, &WaitUntilIdleThunk);
@@ -354,6 +360,10 @@ namespace Horo::Render::Detail {
                     return Result<void>::Failure(
                         MakeMetalRuntimeError("render.metal.frame_already_active", "A Metal presentation frame is already active."));
                 }
+                if (const Result<void> available = CheckSubmissionCapacity(); available.HasError()) {
+                    return available;
+                }
+                resources_.DrainGraphRetirements();
                 if (const Result<void> resized = Resize(extent); resized.HasError()) {
                     return resized;
                 }
@@ -377,6 +387,9 @@ namespace Horo::Render::Detail {
             }
 
             Result<void> ExecutePrimaryOutput(const PrimaryOutputAttachment &attachment) override {
+                if (std::this_thread::get_id() != ownerThread_) {
+                    return WrongThread();
+                }
                 if (commandBuffer_ == nil || renderPassDescriptor_ == nil) {
                     return Result<void>::Failure(
                         MakeMetalRuntimeError("render.metal.no_active_frame", "No Metal presentation frame is active."));
@@ -398,7 +411,44 @@ namespace Horo::Render::Detail {
                 return Result<void>::Success();
             }
 
+            Result<void> ValidateGraphWorkload(const RenderGraphWorkload &workload,
+                                               const std::span<const RenderGraphResourceInstance> resources) const override {
+                if (std::this_thread::get_id() != ownerThread_) {
+                    return WrongThread();
+                }
+                if (commandBuffer_ == nil) {
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
+                }
+                return resources_.ValidateGraphWorkload(workload, resources);
+            }
+
+            Result<void> ExecuteGraphWorkload(const RenderGraphWorkload &workload,
+                                              const std::span<const RenderGraphResourceInstance> resources) override {
+                if (const auto valid = ValidateGraphWorkload(workload, resources); valid.HasError()) {
+                    return valid;
+                }
+                if (const auto *primary = std::get_if<PrimaryOutputAttachment>(&workload)) {
+                    return ExecutePrimaryOutput(*primary);
+                }
+                EndPrimaryEncoder();
+                return resources_.ExecuteGraphWorkload((__bridge void *)commandBuffer_, workload, resources);
+            }
+
+            Result<void> RetainGraphResources(IRenderGraphResourceLease &lease) override {
+                if (std::this_thread::get_id() != ownerThread_) {
+                    return WrongThread();
+                }
+                if (commandBuffer_ == nil || activeGraphLease_ != nullptr) {
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
+                }
+                activeGraphLease_ = &lease;
+                return Result<void>::Success();
+            }
+
             Result<void> Present() override {
+                if (std::this_thread::get_id() != ownerThread_) {
+                    return WrongThread();
+                }
                 if (commandBuffer_ == nil || drawable_ == nil) {
                     return Result<void>::Failure(
                         MakeMetalRuntimeError("render.metal.no_active_frame", "No Metal presentation frame is active."));
@@ -406,6 +456,10 @@ namespace Horo::Render::Detail {
                 EndPrimaryEncoder();
                 [commandBuffer_ presentDrawable:drawable_];
                 lastSubmittedCommandBuffer_ = commandBuffer_;
+                submittedGraphLeases_[submittedCommands_.count] = activeGraphLease_;
+                activeGraphLease_ = nullptr;
+                [submittedCommands_ addObject:commandBuffer_];
+                resources_.FinishGraphCommands((__bridge void *)commandBuffer_, true);
                 [commandBuffer_ commit];
                 ClearActiveFrame();
                 return Result<void>::Success();
@@ -413,6 +467,11 @@ namespace Horo::Render::Detail {
 
             void AbortFrame() noexcept override {
                 EndPrimaryEncoder();
+                resources_.FinishGraphCommands((__bridge void *)commandBuffer_, false);
+                if (activeGraphLease_ != nullptr) {
+                    activeGraphLease_->Release();
+                    activeGraphLease_ = nullptr;
+                }
                 ClearActiveFrame();
             }
 
@@ -425,6 +484,9 @@ namespace Horo::Render::Detail {
                     return Result<void>::Failure(
                         MakeMetalRuntimeError("render.metal.not_initialized", "Metal runtime presentation resources are not initialized."));
                 }
+                if (std::this_thread::get_id() != ownerThread_) {
+                    return WrongThread();
+                }
                 layer_.drawableSize = CGSizeMake(static_cast<CGFloat>(extent.width), static_cast<CGFloat>(extent.height));
                 return Result<void>::Success();
             }
@@ -432,6 +494,12 @@ namespace Horo::Render::Detail {
             void Shutdown() noexcept override {
                 AbortFrame();
                 WaitUntilIdle();
+                for (auto *&lease : submittedGraphLeases_) {
+                    if (lease != nullptr) {
+                        lease->Release();
+                        lease = nullptr;
+                    }
+                }
                 resources_.Shutdown();
                 MetalEditorGraphicsAccess::Clear(*editorGraphicsBridge_);
                 if (layer_ != nil) {
@@ -439,6 +507,9 @@ namespace Horo::Render::Detail {
                     layer_ = nil;
                 }
                 lastSubmittedCommandBuffer_ = nil;
+                submittedCommands_ = nil;
+                submissionError_.reset();
+                ownerThread_ = {};
                 commandQueue_ = nil;
                 device_ = nil;
                 if (surfaceCreated_) {
@@ -448,6 +519,46 @@ namespace Horo::Render::Detail {
             }
 
         private:
+            /** @brief Rejects command access outside the initialized render thread without mutating native state. */
+            [[nodiscard]] static Result<void> WrongThread() {
+                return Result<void>::Failure(MakeError(MetalBackendErrors::WrongThread));
+            }
+
+            /** @brief Polls bounded retained submissions; ordinary frames never wait for GPU completion. */
+            [[nodiscard]] Result<void> CheckSubmissionCapacity() {
+                if (std::this_thread::get_id() != ownerThread_) {
+                    return WrongThread();
+                }
+                if (submissionError_) {
+                    return Result<void>::Failure(*submissionError_);
+                }
+                while (submittedCommands_.count != 0) {
+                    id<MTLCommandBuffer> submitted = submittedCommands_.firstObject;
+                    if (submitted.status == MTLCommandBufferStatusError) {
+                        const char *reason = submitted.error.localizedDescription.UTF8String;
+                        submissionError_ = MakeError(MetalBackendErrors::CommandSubmissionFailed,
+                                                     reason == nullptr ? "Metal GPU command submission failed; restart the backend."
+                                                                       : std::string{reason});
+                        return Result<void>::Failure(*submissionError_);
+                    }
+                    if (submitted.status != MTLCommandBufferStatusCompleted) {
+                        break;
+                    }
+                    if (submittedGraphLeases_[0] != nullptr) {
+                        submittedGraphLeases_[0]->Release();
+                    }
+                    for (std::size_t index = 1; index < submittedGraphLeases_.size(); ++index) {
+                        submittedGraphLeases_[index - 1] = submittedGraphLeases_[index];
+                    }
+                    submittedGraphLeases_.back() = nullptr;
+                    [submittedCommands_ removeObjectAtIndex:0];
+                }
+                if (submittedCommands_.count >= maxFramesInFlight_) {
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::SubmissionBusy));
+                }
+                return Result<void>::Success();
+            }
+
             [[nodiscard]] MetalResourceRuntime &Resources() noexcept {
                 return resources_;
             }
@@ -457,8 +568,10 @@ namespace Horo::Render::Detail {
             }
 
             void WaitUntilIdle() noexcept {
-                if (lastSubmittedCommandBuffer_ != nil) {
-                    [lastSubmittedCommandBuffer_ waitUntilCompleted];
+                if (ObserveMetalCommandForTeardown(lastSubmittedCommandBuffer_) != MetalCommandCompletion::Completed) {
+                    submissionError_ = MakeError(MetalBackendErrors::CommandSubmissionFailed,
+                                                 "Metal explicit idle/teardown did not observe successful completion within its finite "
+                                                 "budget; close or restart the backend.");
                 }
             }
 
@@ -493,6 +606,13 @@ namespace Horo::Render::Detail {
             __strong id<MTLRenderCommandEncoder> renderEncoder_{nil};
             __strong MTLRenderPassDescriptor *renderPassDescriptor_{nil};
             __strong id<MTLCommandBuffer> lastSubmittedCommandBuffer_{nil};
+            // Render-thread owned; command buffers retain queued native resources until retirement.
+            __strong NSMutableArray<id<MTLCommandBuffer>> *submittedCommands_{nil};
+            IRenderGraphResourceLease *activeGraphLease_{nullptr};
+            std::array<IRenderGraphResourceLease *, 3> submittedGraphLeases_{};
+            std::optional<Error> submissionError_;
+            std::thread::id ownerThread_;
+            std::uint32_t maxFramesInFlight_{0};
             MetalResourceRuntime resources_;
             bool surfaceCreated_{false};
         };

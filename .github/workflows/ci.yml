@@ -137,6 +137,32 @@ jobs:
         id: debug_build
         run: cmake --build --preset "${{ matrix.preset }}"
 
+      - name: Run Metal graph smoke when a device is available
+        if: ${{ !cancelled() && runner.os == 'macOS' && steps.debug_build.outcome == 'success' }}
+        run: |
+          probe_source="$RUNNER_TEMP/horo-metal-device-probe.m"
+          probe_binary="$RUNNER_TEMP/horo-metal-device-probe"
+          cat > "$probe_source" <<'OBJC'
+          #import <Metal/Metal.h>
+          int main(void) {
+            @autoreleasepool {
+              return MTLCreateSystemDefaultDevice() == nil ? 77 : 0;
+            }
+          }
+          OBJC
+          xcrun clang -fobjc-arc "$probe_source" -framework Metal -framework Foundation -o "$probe_binary"
+          if "$probe_binary"; then
+            build/ci/tests/HoroMetalGraphExecutionSmoke
+          else
+            probe_status=$?
+            if [ "$probe_status" -eq 77 ]; then
+              echo "::notice::Metal graph GPU smoke skipped: this macOS runner exposes no Metal device."
+              echo "Metal graph GPU smoke: skipped (no Metal device)." >> "$GITHUB_STEP_SUMMARY"
+            else
+              exit "$probe_status"
+            fi
+          fi
+
       # Debug audio is already in the build above. Release verifies NDEBUG
       # behavior using only the real-time audio group, on this same runner.
       - name: Configure Release audio checks

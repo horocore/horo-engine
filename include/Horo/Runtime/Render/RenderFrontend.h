@@ -14,11 +14,14 @@
 
 namespace Horo::Render {
     class RenderFrontend;
+    class CompiledRenderGraphExecution;
+    struct RenderGraphPassWorkload;
 
     namespace Detail {
         class RenderResourceRegistry;
         class RenderResourceUploadQueue;
         class RenderFrontendResourceAccess;
+        class RenderGraphResourceLeasePool;
     }  // namespace Detail
 
     /** @brief Finite frontend admission and per-drain limits for initial resource uploads. */
@@ -64,10 +67,11 @@ namespace Horo::Render {
 
     /** @brief Host-composed bounds for GPU-completion pins and owner-thread native destruction. */
     struct RenderResourceRetirementLimits {
-        std::uint32_t maximumSubmissionPins{4'096};    /**< Maximum accepted resource uses awaiting GPU completion. */
-        std::uint32_t maximumTrackedQueues{8};         /**< Maximum logical queue timelines tracked by one frontend. */
-        std::uint32_t maximumCompletionsPerDrain{128}; /**< Maximum submission pins inspected at one safe point. */
-        std::uint32_t maximumRetirementsPerDrain{64};  /**< Maximum native instances destroyed at one safe point. */
+        std::uint32_t maximumSubmissionPins{4'096}; /**< Maximum accepted resource uses awaiting GPU completion. */
+        std::uint32_t maximumTrackedQueues{8};      /**< Maximum logical queue timelines tracked by one frontend. */
+        std::uint32_t maximumCompletionsPerDrain{
+            128}; /**< Maximum timeline-pin records inspected per drain; complete graph leases use maximumSubmissionPins. */
+        std::uint32_t maximumRetirementsPerDrain{64}; /**< Maximum native instances destroyed at one safe point. */
 
         /** @brief Reports whether every completion and destruction bound is finite and non-zero. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
@@ -111,6 +115,16 @@ namespace Horo::Render {
          * or a translated backend exception.
          */
         [[nodiscard]] Result<void> Execute(std::span<const RenderPassDescriptor> orderedPasses);
+
+        /**
+         * @brief Resolves resident resources and executes one compiled graph exactly once.
+         * @param graph Intact compiled graph borrowed synchronously.
+         * @param workloads One typed operation per retained pass, in compiled order.
+         * @return Success or a typed stage, resource, unsupported or encoding failure.
+         * Transient materialization and multiple effective queues are rejected explicitly.
+         */
+        [[nodiscard]] Result<void> ExecuteGraph(const CompiledRenderGraphExecution &graph,
+                                                std::span<const RenderGraphPassWorkload> workloads);
 
         /**
          * @brief Presents and consumes a successfully executed frame.
@@ -372,6 +386,7 @@ namespace Horo::Render {
         RenderFrontendMemoryConfig memoryConfig_;
         std::unique_ptr<Detail::RenderResourceRegistry> resourceRegistry_;
         std::unique_ptr<Detail::RenderResourceUploadQueue> resourceUploadQueue_;
+        std::unique_ptr<Detail::RenderGraphResourceLeasePool> graphResourceLeases_;
         RenderFrameScope *activeFrameScope_{nullptr};
         IStaticMeshPassExecutor *staticMeshPassExecutor_{nullptr};
         std::vector<TargetRecord> targets_{{}};

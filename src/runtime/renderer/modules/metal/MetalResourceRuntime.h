@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Runtime/Render/RenderBackend.h"
+#include "Horo/Runtime/Render/RenderGraphWorkload.h"
 
 #include <memory>
 
@@ -31,6 +32,16 @@ namespace Horo::Render::Detail {
         void DestroyTexture(std::uint64_t backendInstance) noexcept;
         void DestroyTextureView(std::uint64_t backendInstance) noexcept;
         void DestroyRenderTarget(std::uint64_t backendInstance) noexcept;
+        /** @brief Validates exact native instances, resource policy and copy/attachment bounds. */
+        [[nodiscard]] Result<void> ValidateGraphWorkload(const RenderGraphWorkload &workload,
+                                                         std::span<const RenderGraphResourceInstance> resources) const;
+        /** @brief Encodes prevalidated resource work on a retained-reference command buffer. */
+        [[nodiscard]] Result<void> ExecuteGraphWorkload(void *commandBuffer, const RenderGraphWorkload &workload,
+                                                        std::span<const RenderGraphResourceInstance> resources);
+        /** @brief Commits active resource pins, or abandons them while preserving older submitted uses. */
+        void FinishGraphCommands(void *commandBuffer, bool committed) noexcept;
+        /** @brief Non-blockingly drains at most 64 native-complete retired instances. */
+        void DrainGraphRetirements() noexcept;
         void Shutdown() noexcept;
 
     private:
