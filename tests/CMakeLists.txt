@@ -1994,9 +1994,15 @@ target_compile_features(HoroEditorSurfaceIdentityTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorSurfaceIdentityTests PRIVATE HoroEngine::EditorServices)
 add_executable(HoroSourceFileOpenServiceTests
         unit/editor/SourceFileOpenServiceTests.cpp
+        unit/editor/SourceDocumentServiceTests.cpp
+        support/AllocationProbe.cpp
 )
 target_compile_features(HoroSourceFileOpenServiceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSourceFileOpenServiceTests PRIVATE HoroEngine::EditorServices)
+add_library(HoroSourceDocumentPublicHeaderConsumer OBJECT support/SourceDocumentPublicContract.cpp)
+target_compile_features(HoroSourceDocumentPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroSourceDocumentPublicHeaderConsumer PRIVATE HoroEngine::EditorServices)
+target_sources(HoroSourceFileOpenServiceTests PRIVATE $<TARGET_OBJECTS:HoroSourceDocumentPublicHeaderConsumer>)
 add_executable(HoroUiCanvasDocumentTests
         unit/editor/UiCanvasDocumentTests.cpp
 )

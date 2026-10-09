@@ -185,7 +185,7 @@ namespace Horo::Editor {
     SourceFileOpenService::SourceFileOpenService(const std::filesystem::path &projectRoot, DocumentIdentityRegistry *documentRegistry,
                                                  SourceFilePolicy policy)
         : projectRootValid_(false), projectRoot_(ResolveRoot(projectRoot, projectRootValid_)), policy_(std::move(policy)),
-          documentRegistry_(documentRegistry != nullptr ? documentRegistry : &ownedDocumentRegistry_) {
+          documentRegistry_(documentRegistry != nullptr ? documentRegistry : &ownedDocumentRegistry_), sourceDocuments_(projectRoot_) {
         policy_.nativeSourceExtensions = NormalizeValues(policy_.nativeSourceExtensions, true);
         policy_.horoScriptExtensions = NormalizeValues(policy_.horoScriptExtensions, true);
         policy_.projectTextExtensions = NormalizeValues(policy_.projectTextExtensions, true);
@@ -196,7 +196,10 @@ namespace Horo::Editor {
     SourceFileOpenService::SourceFileOpenService(SourceFileOpenService &&other) noexcept
         : projectRootValid_(other.projectRootValid_), projectRoot_(std::move(other.projectRoot_)), policy_(std::move(other.policy_)),
           ownedDocumentRegistry_(std::move(other.ownedDocumentRegistry_)),
-          documentRegistry_(other.documentRegistry_ == &other.ownedDocumentRegistry_ ? &ownedDocumentRegistry_ : other.documentRegistry_) {}
+          documentRegistry_(other.documentRegistry_ == &other.ownedDocumentRegistry_ ? &ownedDocumentRegistry_ : other.documentRegistry_),
+          sourceDocuments_(std::move(other.sourceDocuments_)) {
+        other.projectRootValid_ = false;
+    }
 
     SourceFileOpenService &SourceFileOpenService::operator=(SourceFileOpenService &&other) noexcept {
         if (this == &other)
@@ -207,6 +210,8 @@ namespace Horo::Editor {
         policy_ = std::move(other.policy_);
         ownedDocumentRegistry_ = std::move(other.ownedDocumentRegistry_);
         documentRegistry_ = otherUsesOwnedRegistry ? &ownedDocumentRegistry_ : other.documentRegistry_;
+        sourceDocuments_ = std::move(other.sourceDocuments_);
+        other.projectRootValid_ = false;
         return *this;
     }
 
@@ -294,19 +299,54 @@ namespace Horo::Editor {
             return Result<SourceOpenResult>::Failure(MakePathError(SourceOpenErrors::EditorUnavailable, location.Value().absolutePath));
         }
 
+        return OpenEmbedded(request, classification, location.Value());
+    }
+
+    /** @copydoc SourceFileOpenService::OpenEmbedded */
+    Result<SourceOpenResult> SourceFileOpenService::OpenEmbedded(const SourceOpenRequest &request,
+                                                                 const SourceFileClassification &classification,
+                                                                 const SourceOpenLocation &location) {
         const DocumentKind documentKind = classification.kind == SourceFileKind::UiCanvas ? DocumentKind::UiCanvas : DocumentKind::Source;
-        const DocumentOpenKey key{.kind = documentKind, .source = location.Value().document};
+        const DocumentOpenKey key{.kind = documentKind, .source = location.document};
         const Result<DocumentOpenResult> document = documentRegistry_->Open(key);
         if (document.HasError())
             return Result<SourceOpenResult>::Failure(document.ErrorValue());
+        std::optional<SourceDocumentSnapshot> source;
+        if (documentKind == DocumentKind::Source) {
+            auto admitted = sourceDocuments_.Open(document.Value().identity, location.absolutePath);
+            if (admitted.HasError()) {
+                if (document.Value().disposition == DocumentOpenDisposition::Opened)
+                    static_cast<void>(documentRegistry_->Close(document.Value().identity.instance));
+                return Result<SourceOpenResult>::Failure(admitted.ErrorValue());
+            }
+            source = std::move(admitted).Value();
+        }
         return Result<SourceOpenResult>::Success(SourceOpenResult{
             .origin = request.origin,
             .route = SourceOpenRoute::EmbeddedWorkspace,
             .classification = classification,
-            .location = location.Value(),
+            .location = location,
             .document = document.Value(),
             .line = request.line,
             .column = request.column,
+            .sourceSnapshot = std::move(source),
         });
+    }
+
+    /** @copydoc SourceFileOpenService::CloseDocument */
+    Result<void> SourceFileOpenService::CloseDocument(const DocumentInstanceId instance, const bool discardDirty) {
+        const auto identity = documentRegistry_->Find(instance);
+        if (!identity)
+            return Result<void>::Failure(MakeError(SourceDocumentErrors::Stale));
+        if (identity->key.kind == DocumentKind::Source) {
+            const auto snapshot = sourceDocuments_.Snapshot(instance);
+            if (snapshot.HasError())
+                return Result<void>::Failure(snapshot.ErrorValue());
+            if (snapshot.Value().Dirty() && !discardDirty)
+                return Result<void>::Failure(MakeError(SourceDocumentErrors::Invalid));
+            if (const auto closed = sourceDocuments_.Close(instance); closed.HasError())
+                return closed;
+        }
+        return documentRegistry_->Close(instance);
     }
 }  // namespace Horo::Editor

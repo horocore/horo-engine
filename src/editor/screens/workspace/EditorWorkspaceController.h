@@ -80,6 +80,13 @@ namespace Horo::Editor {
             return m_viewModel;
         }
 
+        /** @brief Returns the workspace-owned typed source query/edit capability, independently from widgets.
+         * @return Owner-thread document service; workers receive immutable snapshots only.
+         */
+        [[nodiscard]] SourceDocumentService &SourceDocuments() noexcept {
+            return m_sourceOpenService.Documents();
+        }
+
         [[nodiscard]] EditorDataBus &DataBus() noexcept {
             return m_dataBus;
         }

@@ -99,7 +99,8 @@ namespace HoroEditorWorkspaceControllerPolicyTests {
 
     class FocusedWorkspaceController final {
     public:
-        explicit FocusedWorkspaceController(const std::filesystem::path &projectRoot, DiagnosticSourceNavigator diagnosticNavigator = {},
+        explicit FocusedWorkspaceController(const std::filesystem::path &projectRoot = "test-project",
+                                            DiagnosticSourceNavigator diagnosticNavigator = {},
                                             SourceOpenNavigator sourceOpenNavigator = {})
             : controller_(projectRoot, runtimeScene_, {},
                           EditorWorkspaceDependencies{.sourceOpenNavigator = std::move(sourceOpenNavigator),
@@ -115,6 +116,26 @@ namespace HoroEditorWorkspaceControllerPolicyTests {
 
         [[nodiscard]] const EditorWorkspaceViewModel &ViewModel() const noexcept {
             return controller_.ViewModel();
+        }
+
+        [[nodiscard]] Horo::Editor::SourceDocumentService &SourceDocuments() noexcept {
+            return controller_.SourceDocuments();
+        }
+
+        [[nodiscard]] Horo::Editor::EditorDataBus &DataBus() noexcept {
+            return controller_.DataBus();
+        }
+
+        [[nodiscard]] Horo::Editor::ViewportRevision CurrentViewportRevision() const noexcept {
+            return controller_.CurrentViewportRevision();
+        }
+
+        [[nodiscard]] const Horo::Editor::EditorViewportSceneSnapshot &ViewportScene() const noexcept {
+            return controller_.ViewportScene();
+        }
+
+        void UpdateContentBrowser() {
+            controller_.UpdateContentBrowser();
         }
 
         void RefreshAssets(const Assets::AssetRegistrySnapshot &snapshot) {

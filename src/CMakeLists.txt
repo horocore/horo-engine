@@ -2325,6 +2325,10 @@ add_library(HoroEditorServices STATIC
         editor/data_bus/EditorSurfaceEventContext.cpp
         editor/EditorSurfaceIdentity.cpp
         editor/SourceFileOpenService.cpp
+        editor/SourceDocumentService.cpp
+        editor/SourceDocumentChanges.cpp
+        editor/SourceDocumentSnapshot.cpp
+        editor/SourceDocumentText.cpp
         editor/UiCanvasDocument.cpp
         editor/UiCanvasDocumentSerialization.cpp
         editor/document/SceneDocumentComparison.cpp

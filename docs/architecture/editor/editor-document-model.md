@@ -64,6 +64,64 @@ play-session, or panel lifetime; those remain in the workspace/application host.
 
 ## Document Model
 
+### Editable Source Ownership (EDT-003.4)
+
+`SourceFileOpenService` owns `SourceDocumentService` in the workspace controller,
+independently from the navigator, tab, or text widget. Embedded `DocumentKind::Source`
+opens load validated text before returning an identity plus `SourceDocumentSnapshot`;
+failed admission removes only a newly allocated routing identity. Equivalent paths
+focus the existing edited session without rereading or replacing its local text.
+UI Canvas and explicit external-editor routes remain separate and do not create text
+sessions. A failed initial presentation closes its newly admitted clean source session;
+failure to focus an existing session preserves it. Presentation detachment alone does
+not close or discard authored state. An explicit source close joins document and routing
+ownership and requires explicit permission to discard dirty text.
+
+The owner exposes revision-fenced `SourceTextEdit` byte patches. It never lends mutable
+buffers to widgets. Offsets cannot split a UTF-8 scalar or leading BOM; a complete
+replacement is validated and reserved before publication. Current bytes and last
+explicitly loaded disk-base bytes are immutable shared roots. Dirty compares their
+exact bytes, so restoring the base clears dirty despite a newer notification revision.
+Same-byte edits do not advance revision. Explicit reload establishes a new base revision;
+save publication, history, recovery and widget-specific integration remain owned by
+their separate source-editor tickets and cannot mark an unpersisted buffer saved.
+
+Snapshots retain validated UTF-8 bytes without normalization, including UTF-8 BOM and
+LF/CRLF/CR/mixed metadata. UTF-16/32, noncanonical UTF-8 and binary C0 controls other
+than tab, newline, carriage return and form feed fail explicitly. Empty text is valid.
+Limits default to 8 MiB per document, 64 owner sessions and 64 MiB of owner text/base
+reservation including preparation overlap; requested limits cannot exceed those bounds.
+Detached historical snapshots are charged and bounded by their consuming service, not
+silently attributed to the source owner after release. Reader handoff is synchronized
+by the host; readers touch only immutable roots and need no source-owner lock.
+
+Every service call and move stays on its creating thread. File loading/inspection/reload
+are explicit bounded use cases, not draw-loop polling. Reads check cancellation every
+4 KiB; text metadata inspection does likewise. Allocation, byte copying/comparison and
+the existing Foundation UTF-8 scalar validator are bounded atomic steps over at most
+8 MiB, fenced before publication. Failure, cancellation, close, owner destruction and
+shutdown preserve already issued reader snapshots; moved-from owners/snapshots are inert.
+
+`InspectDisk` never silently reloads local text or changes its disk base. Changed,
+removed and unreadable observations are published once as revisioned metadata;
+repeated identical dispositions do not advance revision. Removal returns typed
+`SourceDocumentErrors::Removed` while the prior text remains queryable. `Reload` is
+an explicit revision-fenced discard/reload decision. It rejects unreadable, cancelled,
+stale or unsafe input without partial base/current replacement.
+
+Disk access revalidates canonical project containment and exact source key, and bounded
+reads compare byte count and modification time before/after loading. Retargeting the
+stored path through an escaping symlink is rejected. These checks detect ordinary
+external changes; they are **not** atomic native file-identity capabilities or a guarantee
+against adversarial concurrent path substitution/same-metadata rewriting. No available
+generic bounded native-identity read contract is introduced or implied by this ticket.
+
+This is an in-memory C++ ownership/API addition, not a persistent project format.
+Consumers rebuild against `HoroEditorServices`, use `SourceOpenResult::sourceSnapshot`
+for read handoff and the workspace's typed source document capability for edits. Newly
+opened navigation rollback uses `SourceFileOpenService::CloseDocument`, not registry-only
+close. No frozen project-release contract or source-byte format is changed.
+
 The document stores authoring state:
 
 - stable scene object IDs and hierarchy
