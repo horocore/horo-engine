@@ -230,8 +230,8 @@ namespace Horo::Runtime {
             REQUIRE(capture.Advance(kStart, {}).HasValue());
         }
 
-        TEST_CASE("Thumbnail request validation is atomic and respects all qualified limits", "[unit][save][thumbnail]") {
-            for (const auto variant : {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}) {
+        TEST_CASE("Thumbnail request identity and policy validation is atomic", "[unit][save][thumbnail]") {
+            for (const auto variant : {0, 1, 2, 3, 4, 5}) {
                 SaveThumbnailCapture capture;
                 auto request = Request();
                 if (variant == 0)
@@ -245,19 +245,29 @@ namespace Horo::Runtime {
                 if (variant == 4)
                     request.source.view = 0;
                 if (variant == 5)
-                    request.width = 0;
-                if (variant == 6)
-                    request.height = 1'025;
-                if (variant == 7)
-                    request.limits.maximumDimension = 4'097;
-                if (variant == 8)
-                    request.limits.maximumEncodedBytes = 16U * 1024U * 1024U + 1U;
-                if (variant == 9)
-                    request.limits.timeout = std::chrono::milliseconds{0};
-                if (variant == 10)
-                    request.limits.timeout = std::chrono::milliseconds{60'001};
-                if (variant == 11)
                     request.policy = static_cast<SaveThumbnailPolicy>(255);
+                REQUIRE(capture.Request(request, SaveThumbnailAvailability::Available, kStart).HasError());
+                REQUIRE(capture.Snapshot().state == SaveThumbnailCaptureState::Idle);
+                REQUIRE(capture.Snapshot().requestSerial == 0);
+            }
+        }
+
+        TEST_CASE("Thumbnail request dimension and resource ceiling validation is atomic", "[unit][save][thumbnail]") {
+            for (const auto variant : {0, 1, 2, 3, 4, 5}) {
+                SaveThumbnailCapture capture;
+                auto request = Request();
+                if (variant == 0)
+                    request.width = 0;
+                if (variant == 1)
+                    request.height = 1'025;
+                if (variant == 2)
+                    request.limits.maximumDimension = 4'097;
+                if (variant == 3)
+                    request.limits.maximumEncodedBytes = 16U * 1024U * 1024U + 1U;
+                if (variant == 4)
+                    request.limits.timeout = std::chrono::milliseconds{0};
+                if (variant == 5)
+                    request.limits.timeout = std::chrono::milliseconds{60'001};
                 REQUIRE(capture.Request(request, SaveThumbnailAvailability::Available, kStart).HasError());
                 REQUIRE(capture.Snapshot().state == SaveThumbnailCaptureState::Idle);
                 REQUIRE(capture.Snapshot().requestSerial == 0);

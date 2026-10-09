@@ -328,15 +328,28 @@ namespace Horo::Runtime {
         }
     }
 
+    namespace {
+        /** @brief Admits a detached presentation write before its worker supplies finalized archive bytes. */
+        [[nodiscard]] bool ValidPresentationRequest(const SaveStorageRequest &request,
+                                                    const std::shared_ptr<const SavePresentationArchiveInput> &presentation) noexcept {
+            return presentation && request.kind == SaveStorageOperationKind::Write && ValidAddress(request.source) && !request.write &&
+                   !request.destination && presentation->publication.slot == request.source.slot;
+        }
+
+        /** @brief Selects detached presentation admission or the existing finalized-storage request contract. */
+        [[nodiscard]] bool ValidSubmissionRequest(const SaveStorageRequest &request, const SaveStorageLimits &limits,
+                                                  const std::shared_ptr<const SavePresentationArchiveInput> &presentation) noexcept {
+            const bool validPresentation = ValidPresentationRequest(request, presentation);
+            return presentation ? validPresentation : ValidRequest(request, limits);
+        }
+    }  // namespace
+
     /** @copydoc SaveStorageAdapter::SubmitRequest */
     Result<SaveStorageOperation> SaveStorageAdapter::SubmitRequest(const OperationId operation, SaveStorageRequest request,
                                                                    CancellationToken cancellation,
                                                                    const std::optional<std::chrono::steady_clock::time_point> deadline,
                                                                    std::shared_ptr<const SavePresentationArchiveInput> presentation) const {
-        if (const bool validPresentation = presentation && request.kind == SaveStorageOperationKind::Write &&
-                                           ValidAddress(request.source) && !request.write && !request.destination &&
-                                           presentation->publication.slot == request.source.slot;
-            !jobs_ || !provider_ || !ValidLimits(limits_) || (presentation ? !validPresentation : !ValidRequest(request, limits_)))
+        if (!jobs_ || !provider_ || !ValidLimits(limits_) || !ValidSubmissionRequest(request, limits_, presentation))
             return Result<SaveStorageOperation>::Failure(MakeError(SaveErrors::StorageOperationInvalid));
         if (!provider_->Capabilities().Supports(request.kind))
             return Result<SaveStorageOperation>::Failure(MakeError(SaveErrors::StorageCapabilityUnsupported));

@@ -66,20 +66,33 @@ namespace Horo::Runtime {
         [[nodiscard]] auto FinalizePresentationArchive(const SavePresentationArchiveInput &input, const SaveGameManifest &manifest,
                                                        const std::vector<PreservedSaveChunk> &chunks,
                                                        SaveSlotPublicationMetadata &publication) {
-            auto finalized = SaveArchiveContainerWriter::Write(input.header, manifest, chunks, input.version, input.limits);
+            auto limits = input.limits;
+            // A tighter archive/storage ceiling also bounds its payload; reader admission requires consistent ceilings.
+            limits.maximumStoredPayloadBytes =
+                std::min(limits.maximumStoredPayloadBytes, static_cast<std::uint64_t>(limits.maximumArchiveBytes));
+            limits.chunks.maximumPayloadBytes = std::min(limits.chunks.maximumPayloadBytes, limits.maximumStoredPayloadBytes);
+            limits.chunks.maximumStoredChunkBytes = std::min(limits.chunks.maximumStoredChunkBytes, limits.maximumStoredPayloadBytes);
+            limits.chunks.maximumEntries = std::min(limits.chunks.maximumEntries, limits.maximumEntries);
+            limits.metadata.maximumTotalChunks = std::min(limits.metadata.maximumTotalChunks, limits.maximumEntries);
+            auto finalized = SaveArchiveContainerWriter::Write(input.header, manifest, chunks, input.version, limits);
             if (finalized.HasError() && input.capture.artifact && input.capture.request->policy == SaveThumbnailPolicy::Optional) {
-                finalized = SaveArchiveContainerWriter::Write(input.header, input.manifest, input.chunks, input.version, input.limits);
+                finalized = SaveArchiveContainerWriter::Write(input.header, input.manifest, input.chunks, input.version, limits);
                 publication.thumbnail.reset();
             }
             return finalized;
+        }
+
+        /** @brief Admits supported image dimensions and encoded byte ceilings before archive payload selection. */
+        [[nodiscard]] bool ValidImageLimits(const SaveThumbnailLimits &limits) noexcept {
+            return limits.maximumDimension != 0 && limits.maximumDimension <= 4'096 && limits.maximumEncodedBytes != 0 &&
+                   limits.maximumEncodedBytes <= (16U << 20U);
         }
 
         /** @brief Admits only exact optional schema-1 raw records before selecting their payloads. */
         [[nodiscard]] bool ValidRecords(const ValidatedSaveArchive &archive, const SaveManifestParticipant &owner,
                                         const SaveThumbnailLimits &limits) {
             const std::vector expected{SaveThumbnailMetadataRecord(), SaveThumbnailImageRecord()};
-            if (owner.required || owner.schemaVersion.Value() != 1 || owner.chunks != expected || limits.maximumDimension == 0 ||
-                limits.maximumDimension > 4'096 || limits.maximumEncodedBytes == 0 || limits.maximumEncodedBytes > (16U << 20U))
+            if (owner.required || owner.schemaVersion.Value() != 1 || owner.chunks != expected || !ValidImageLimits(limits))
                 return false;
             return std::ranges::all_of(archive.Directory().Entries(), [&](const SaveChunkDirectoryEntry &entry) {
                 if (entry.owner != owner.participant)
@@ -87,6 +100,21 @@ namespace Horo::Runtime {
                 const auto bound = entry.record == expected.front() ? std::size_t{104} : limits.maximumEncodedBytes;
                 return entry.codec == SaveChunkCodec::Raw && entry.storedByteLength != 0 && entry.storedByteLength <= bound;
             });
+        }
+
+        /** @brief Selects the admitted metadata and image records in order before decoding detached presentation. */
+        [[nodiscard]] Result<std::shared_ptr<const SaveThumbnailArtifact>> DecodeArchiveThumbnail(
+            const ValidatedSaveArchive &archive, const SaveSlotPublicationMetadata &publication, const SaveThumbnailLimits &limits) {
+            using Return = Result<std::shared_ptr<const SaveThumbnailArtifact>>;
+            auto metadata = archive.SelectChunk(SaveThumbnailMetadataRecord());
+            if (metadata.HasError())
+                return Return::Failure(metadata.ErrorValue());
+            auto image = archive.SelectChunk(SaveThumbnailImageRecord());
+            if (image.HasError())
+                return Return::Failure(image.ErrorValue());
+            if (!metadata.Value() || !image.Value())
+                return Return::Failure(MakeError(SaveErrors::ThumbnailInvalid));
+            return SaveThumbnailDetail::Decode(*metadata.Value(), std::move(image).Value().value(), publication, limits);
         }
     }  // namespace
 
@@ -145,15 +173,7 @@ namespace Horo::Runtime {
                 return publication.thumbnail ? Return::Failure(MakeError(SaveErrors::ThumbnailStale)) : Return::Success(std::nullopt);
             if (!ValidRecords(archive, *owner, limits))
                 return Return::Failure(MakeError(SaveErrors::ThumbnailInvalid));
-            auto metadata = archive.SelectChunk(SaveThumbnailMetadataRecord());
-            if (metadata.HasError())
-                return Return::Failure(metadata.ErrorValue());
-            auto image = archive.SelectChunk(SaveThumbnailImageRecord());
-            if (image.HasError())
-                return Return::Failure(image.ErrorValue());
-            if (!metadata.Value() || !image.Value())
-                return Return::Failure(MakeError(SaveErrors::ThumbnailInvalid));
-            auto artifact = SaveThumbnailDetail::Decode(*metadata.Value(), std::move(image).Value().value(), publication, limits);
+            auto artifact = DecodeArchiveThumbnail(archive, publication, limits);
             if (artifact.HasError())
                 return Return::Failure(artifact.ErrorValue());
             return Return::Success(std::move(artifact).Value());

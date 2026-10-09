@@ -40,6 +40,19 @@ namespace Horo::Runtime::SaveThumbnailDetail {
                 return std::to_integer<std::uint8_t>(byte);
             });
         }
+
+        /** @brief Admits fixed metadata framing, then publication identity, then encoded length in wire validation order. */
+        [[nodiscard]] Result<void> ValidateMetadata(const std::span<const std::byte> metadata, const std::size_t imageBytes,
+                                                    const SaveSlotPublicationMetadata &publication) {
+            if (metadata.size() != kMetadataBytes || !std::ranges::equal(metadata.first(kMagic.size()), kMagic) || !publication.thumbnail)
+                return Result<void>::Failure(MakeError(SaveErrors::ThumbnailInvalid));
+            if (!Matches(metadata, 8, publication.slot.Bytes()) || !Matches(metadata, 24, publication.generation.Bytes()) ||
+                !Matches(metadata, 40, publication.thumbnail->Bytes()))
+                return Result<void>::Failure(MakeError(SaveErrors::ThumbnailStale));
+            if (Get(metadata, 96, 8) != imageBytes)
+                return Result<void>::Failure(MakeError(SaveErrors::ThumbnailInvalid));
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc Encode */
@@ -66,13 +79,8 @@ namespace Horo::Runtime::SaveThumbnailDetail {
                                                                 const SaveSlotPublicationMetadata &publication,
                                                                 const SaveThumbnailLimits &limits) {
         using Return = Result<std::shared_ptr<const SaveThumbnailArtifact>>;
-        if (metadata.size() != kMetadataBytes || !std::ranges::equal(metadata.first(kMagic.size()), kMagic) || !publication.thumbnail)
-            return Return::Failure(MakeError(SaveErrors::ThumbnailInvalid));
-        if (!Matches(metadata, 8, publication.slot.Bytes()) || !Matches(metadata, 24, publication.generation.Bytes()) ||
-            !Matches(metadata, 40, publication.thumbnail->Bytes()))
-            return Return::Failure(MakeError(SaveErrors::ThumbnailStale));
-        if (Get(metadata, 96, 8) != image.size())
-            return Return::Failure(MakeError(SaveErrors::ThumbnailInvalid));
+        if (const auto valid = ValidateMetadata(metadata, image.size(), publication); valid.HasError())
+            return Return::Failure(valid.ErrorValue());
         SaveThumbnailRequest request{.slot = publication.slot,
                                      .generation = publication.generation,
                                      .thumbnail = *publication.thumbnail,

@@ -13,18 +13,29 @@ namespace Horo::Runtime {
             return left.runtime == right.runtime && left.scene == right.scene && left.view == right.view;
         }
 
+        /** @brief Checks stable identity and supported capture policy before validating resource ceilings. */
+        [[nodiscard]] bool ValidRequestIdentity(const SaveThumbnailRequest &request,
+                                                const SaveThumbnailAvailability availability) noexcept {
+            return request.slot.IsValid() && request.generation.IsValid() && request.source.runtime != 0 && request.source.scene != 0 &&
+                   request.policy <= SaveThumbnailPolicy::Required && request.format == SaveThumbnailFormat::Png &&
+                   availability <= SaveThumbnailAvailability::RendererUnavailable;
+        }
+
+        /** @brief Checks qualified finite capture ceilings before dimensions or dispatch. */
+        [[nodiscard]] bool ValidLimits(const SaveThumbnailLimits &limits) noexcept {
+            return limits.maximumDimension != 0 && limits.maximumDimension <= 4'096 && limits.maximumEncodedBytes != 0 &&
+                   limits.maximumEncodedBytes <= (16U << 20U) && limits.timeout.count() > 0 && limits.timeout <= std::chrono::seconds{60};
+        }
+
+        /** @brief Checks requested image dimensions against the admitted dimension ceiling. */
+        [[nodiscard]] bool ValidDimensions(const SaveThumbnailRequest &request) noexcept {
+            return request.width != 0 && request.height != 0 && request.width <= request.limits.maximumDimension &&
+                   request.height <= request.limits.maximumDimension;
+        }
+
         /** @brief Checks request policy and qualified ceilings before any dispatch. */
         [[nodiscard]] bool ValidRequest(const SaveThumbnailRequest &request, const SaveThumbnailAvailability availability) noexcept {
-            const auto &limits = request.limits;
-            if (!request.slot.IsValid() || !request.generation.IsValid() || request.source.runtime == 0 || request.source.scene == 0 ||
-                request.policy > SaveThumbnailPolicy::Required || request.format != SaveThumbnailFormat::Png ||
-                availability > SaveThumbnailAvailability::RendererUnavailable)
-                return false;
-            if (limits.maximumDimension == 0 || limits.maximumDimension > 4'096 || limits.maximumEncodedBytes == 0 ||
-                limits.maximumEncodedBytes > (16U << 20U) || limits.timeout.count() <= 0 || limits.timeout > std::chrono::seconds{60})
-                return false;
-            if (request.width == 0 || request.height == 0 || request.width > limits.maximumDimension ||
-                request.height > limits.maximumDimension)
+            if (!ValidRequestIdentity(request, availability) || !ValidLimits(request.limits) || !ValidDimensions(request))
                 return false;
             return request.policy == SaveThumbnailPolicy::Disabled || availability != SaveThumbnailAvailability::Available ||
                    (request.thumbnail.IsValid() && request.source.view != 0 && request.source.frame != 0);
@@ -35,6 +46,36 @@ namespace Horo::Runtime {
             return SameSource(request.source, completion.source) && completion.source.frame >= request.source.frame &&
                    completion.format == request.format && completion.width == request.width && completion.height == request.height &&
                    !completion.encoded.empty() && completion.encoded.size() <= request.limits.maximumEncodedBytes;
+        }
+
+        /** @brief Fences a pending completion against the exact requested slot, generation and thumbnail. */
+        [[nodiscard]] bool MatchesCompletion(const SaveThumbnailRequest &request, const std::uint64_t serial,
+                                             const SaveThumbnailCompletion &completion) noexcept {
+            return completion.requestSerial == serial && completion.slot == request.slot && completion.generation == request.generation &&
+                   completion.thumbnail == request.thumbnail;
+        }
+
+        /** @brief Matches a captured artifact to its published generation without accepting an absent thumbnail. */
+        [[nodiscard]] bool MatchesCapturedPublication(const SaveSlotPublicationMetadata &publication,
+                                                      const SaveThumbnailCaptureSnapshot &capture) noexcept {
+            return capture.artifact && publication.thumbnail && *publication.thumbnail == capture.artifact->Request().thumbnail &&
+                   capture.artifact->Request().slot == publication.slot && capture.artifact->Request().generation == publication.generation;
+        }
+
+        /** @brief Validates terminal capture outcome after request identity admission, preserving its original failure cause. */
+        [[nodiscard]] Result<void> ValidateTerminalCapture(const SaveSlotPublicationMetadata &publication,
+                                                           const SaveThumbnailCaptureSnapshot &capture) {
+            using enum SaveThumbnailCaptureState;
+            if (capture.state == Failed)
+                return Result<void>::Failure(capture.error.value_or(MakeError(SaveErrors::ThumbnailInvalid)));
+            if (capture.state == Captured) {
+                if (!MatchesCapturedPublication(publication, capture))
+                    return Result<void>::Failure(MakeError(SaveErrors::ThumbnailStale));
+            } else if (capture.state != Omitted || capture.request->policy == SaveThumbnailPolicy::Required || publication.thumbnail ||
+                       capture.artifact) {
+                return Result<void>::Failure(MakeError(SaveErrors::ThumbnailInvalid));
+            }
+            return Result<void>::Success();
         }
     }  // namespace
 
@@ -85,9 +126,8 @@ namespace Horo::Runtime {
     /** @copydoc SaveThumbnailCapture::Complete */
     Result<bool> SaveThumbnailCapture::Complete(SaveThumbnailCompletion completion, const std::chrono::steady_clock::time_point now,
                                                 const SaveThumbnailSource &current) {
-        if (snapshot_.state != SaveThumbnailCaptureState::Pending || completion.requestSerial != snapshot_.requestSerial ||
-            completion.slot != snapshot_.request->slot || completion.generation != snapshot_.request->generation ||
-            completion.thumbnail != snapshot_.request->thumbnail)
+        if (snapshot_.state != SaveThumbnailCaptureState::Pending ||
+            !MatchesCompletion(*snapshot_.request, snapshot_.requestSerial, completion))
             return Result<bool>::Success(false);
         if (const auto advanced = Advance(now, current); advanced.HasError())
             return Result<bool>::Failure(advanced.ErrorValue());
@@ -148,17 +188,7 @@ namespace Horo::Runtime {
             return Result<void>::Failure(MakeError(SaveErrors::ThumbnailInvalid));
         if (capture.request->slot != publication.slot || capture.request->generation != publication.generation)
             return Result<void>::Failure(MakeError(SaveErrors::ThumbnailStale));
-        if (capture.state == Failed)
-            return Result<void>::Failure(capture.error.value_or(MakeError(SaveErrors::ThumbnailInvalid)));
-        if (capture.state == Captured) {
-            if (!capture.artifact || !publication.thumbnail || *publication.thumbnail != capture.artifact->Request().thumbnail ||
-                capture.artifact->Request().slot != publication.slot || capture.artifact->Request().generation != publication.generation)
-                return Result<void>::Failure(MakeError(SaveErrors::ThumbnailStale));
-        } else if (capture.state != Omitted || capture.request->policy == SaveThumbnailPolicy::Required || publication.thumbnail ||
-                   capture.artifact) {
-            return Result<void>::Failure(MakeError(SaveErrors::ThumbnailInvalid));
-        }
-        return Result<void>::Success();
+        return ValidateTerminalCapture(publication, capture);
     }
 
     /** @copydoc MakeSaveCommittedPresentation */

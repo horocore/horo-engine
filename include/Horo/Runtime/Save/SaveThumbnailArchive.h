@@ -33,6 +33,8 @@ namespace Horo::Runtime {
      * its attachment prevents the logical archive from satisfying the supplied limits; Required presentation still fails.
      * @details The reserved owner is optional, schema 1, and excluded from logical state/restore. Old readers preserve it
      * as unknown optional data; only an explicit sealed drop policy may omit it. No archive/container wire version changes.
+     * Nested payload/chunk and entry ceilings are capped by the supplied aggregate ceilings for reader admission;
+     * tighter caller-supplied nested limits remain effective. The input is unchanged.
      */
     [[nodiscard]] Result<SaveStorageWrite> PrepareSavePresentationWrite(const SavePresentationArchiveInput &input);
 

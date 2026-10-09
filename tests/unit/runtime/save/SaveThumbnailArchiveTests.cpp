@@ -131,6 +131,29 @@ namespace Horo::Runtime {
             }
         }
 
+        TEST_CASE("Logical presentation honors tight archive and payload ceilings without a thumbnail",
+                  "[unit][save][thumbnail][archive]") {
+            for (const auto version : {1U, 2U}) {
+                auto input = Input(false, version);
+                const auto logical = PrepareSavePresentationWrite(input);
+                REQUIRE(logical.HasValue());
+                const auto archiveBytes = logical.Value().archive.bytes->size();
+                const auto payloadBytes = archiveBytes - SaveArchivePreambleByteLength - SaveArchiveUnsignedTrailerByteLength;
+                input.limits.maximumArchiveBytes = archiveBytes;
+                input.limits.maximumEntries = input.chunks.size() + 2;
+                const auto bounded = PrepareSavePresentationWrite(input);
+                REQUIRE(bounded.HasValue());
+                REQUIRE(*bounded.Value().archive.bytes == *logical.Value().archive.bytes);
+                REQUIRE_FALSE(bounded.Value().metadata.publication.thumbnail);
+                input.limits.maximumStoredPayloadBytes = payloadBytes;
+                REQUIRE(PrepareSavePresentationWrite(input).HasValue());
+                --input.limits.maximumStoredPayloadBytes;
+                const auto tooSmall = PrepareSavePresentationWrite(input);
+                REQUIRE(tooSmall.HasError());
+                REQUIRE(tooSmall.ErrorValue().code.Value() == SaveErrors::ArchiveFramingLimitExceeded.code.Value());
+            }
+        }
+
         TEST_CASE("Optional presentation yields archive capacity to valid logical state", "[unit][save][thumbnail][archive]") {
             for (const auto version : {1U, 2U}) {
                 const auto logical = PrepareSavePresentationWrite(Input(false, version)).Value();
@@ -144,6 +167,7 @@ namespace Horo::Runtime {
                         const auto prepared = PrepareSavePresentationWrite(input);
                         if (policy == SaveThumbnailPolicy::Required) {
                             REQUIRE(prepared.HasError());
+                            REQUIRE(prepared.ErrorValue().code.Value() == SaveErrors::ArchiveFramingLimitExceeded.code.Value());
                             continue;
                         }
                         REQUIRE(prepared.HasValue());
@@ -177,6 +201,8 @@ namespace Horo::Runtime {
                 if (policy == SaveThumbnailPolicy::Required) {
                     REQUIRE(terminal.state == SaveOperationState::Failed);
                     REQUIRE(terminal.commit == SaveOperationCommitOutcome::NotCommitted);
+                    REQUIRE(terminal.terminalError);
+                    REQUIRE(terminal.terminalError->code.Value() == SaveErrors::ArchiveFramingLimitExceeded.code.Value());
                     REQUIRE_FALSE(provider->Write());
                     continue;
                 }
