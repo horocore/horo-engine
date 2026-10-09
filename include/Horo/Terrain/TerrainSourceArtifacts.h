@@ -138,11 +138,12 @@ namespace Horo::Terrain {
      * @brief Verifies independently loaded HTSG bytes before consumer-owned conversion.
      * @param payload Immutable artifact bytes from an Assets lease.
      * @param expectedDigest Exact digest selected by the verified generation manifest, never recomputed as a trust bypass.
+     * @param cancellation Cooperative observer checked between 4096-byte hash chunks and individual geometry records.
      * @return Success or typed corruption error for malformed version, provenance, coordinates, bounds or topology.
      *
      * The host also matches artifact tile/role membership to its selected manifest. This function performs no
      * allocation, native conversion, registration or repair and cannot prove runtime consumer readiness.
      */
-    [[nodiscard]] Result<void> VerifyTerrainSourceArtifactPayload(std::span<const std::uint8_t> payload,
-                                                                  const Sha256Digest &expectedDigest);
+    [[nodiscard]] Result<void> VerifyTerrainSourceArtifactPayload(std::span<const std::uint8_t> payload, const Sha256Digest &expectedDigest,
+                                                                  const CancellationToken &cancellation = {});
 }  // namespace Horo::Terrain

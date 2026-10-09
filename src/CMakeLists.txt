@@ -1631,6 +1631,9 @@ target_compile_features(HoroTerrainAuthoring PUBLIC cxx_std_20)
 target_link_libraries(HoroTerrainAuthoring PUBLIC HoroEngine::TerrainImport)
 
 add_library(HoroTerrainCook STATIC
+        runtime/terrain/cook/TerrainPayloadManifest.cpp
+        runtime/terrain/cook/TerrainPayloadManifestCodec.cpp
+        runtime/terrain/cook/TerrainPayloadManifestValidation.cpp
         runtime/terrain/cook/FoliageClusterCook.cpp
         runtime/terrain/cook/FoliageClusterCookOwner.cpp
         runtime/terrain/cook/FoliagePlacementCook.cpp

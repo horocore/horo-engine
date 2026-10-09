@@ -83,6 +83,16 @@ namespace Horo::Terrain {
                manifestDigest_ == FoliageClusterCookInternal::ManifestFingerprint(dataset_, content_, fingerprint_, clusters_);
     }
 
+    /** @copydoc CookedFoliageClusterSet::Validate */
+    Result<void> CookedFoliageClusterSet::Validate(const CancellationToken &cancellation) const {
+        if (cancellation.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(FoliageClusterCookErrors::Cancelled));
+        if (!IsWellFormed(cancellation))
+            return Result<void>::Failure(MakeError(cancellation.IsCancellationRequested() ? FoliageClusterCookErrors::Cancelled
+                                                                                          : FoliageClusterCookErrors::InvalidInput));
+        return Result<void>::Success();
+    }
+
     /** @copydoc FoliageClusterCookOwner::Publish */
     Result<void> FoliageClusterCookOwner::Publish(CookedFoliageClusterSet candidate,
                                                   const std::optional<TerrainContentRevision> expectedCurrent,
