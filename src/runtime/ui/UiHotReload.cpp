@@ -87,6 +87,11 @@ namespace Horo::Runtime::Ui {
         return prepared.storage_->replacement.get();
     }
 
+    /** @copydoc UiHotReload::OverlayReplacement */
+    UiReloadGeneration *UiHotReload::OverlayReplacement(const Prepared &prepared) noexcept {
+        return AnimationReplacement(prepared);
+    }
+
     /** @copydoc UiHotReload::Commit */
     Result<UiReloadReconciliation> UiHotReload::Commit(Prepared &prepared, const UiStructuralCommitPoint point) {
         if (!storage_ || storage_->stopped || storage_->collecting || !prepared.storage_ || prepared.storage_->consumed)
@@ -123,6 +128,11 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiHotReload::Current */
     UiReloadGeneration *UiHotReload::Current() noexcept {
+        return storage_ && !storage_->stopped && !storage_->collecting ? storage_->current.get() : nullptr;
+    }
+
+    /** @copydoc UiHotReload::OverlayCurrent */
+    const UiReloadGeneration *UiHotReload::OverlayCurrent() const noexcept {
         return storage_ && !storage_->stopped && !storage_->collecting ? storage_->current.get() : nullptr;
     }
 

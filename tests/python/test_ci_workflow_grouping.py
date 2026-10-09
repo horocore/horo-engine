@@ -49,6 +49,7 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
         "HoroRuntimePublicHeaderConsumer", "HoroMixerDocumentTests",
         "HoroRuntimeUiTextLayoutTests", "HoroRuntimeUiTextShapingTests", "HoroRuntimeUiTextUnicodeTests",
         "HoroRuntimeUiUnicodeStartupTests", "HoroRuntimeUiUnicodeLifecycleTests", "HoroRuntimeUiPublicHeaderConsumer",
+        "HoroRuntimeUiOverlayLifecycleTests",
         "HoroTerrainSourceArtifactTests", "HoroTerrainSourceArtifactPublicHeaderConsumer",
         "HoroTerrainPayloadManifestTests", "HoroTerrainPayloadManifestPublicHeaderConsumer",
         "HoroTerrainProducerSnapshotTests", "HoroTerrainProducerSnapshotPublicHeaderConsumer",
@@ -89,6 +90,22 @@ def test_windows_producer_snapshot_selection_has_an_executable_build_closure() -
         assert executable in build_closure, f"Windows selects {executable} without building it"
         assert f"add_executable({executable}" in tests_cmake
         assert registration in tests_cmake
+    assert 'add_custom_target(HoroCiWindowsChecks DEPENDS ${HORO_CI_WINDOWS_TARGETS})' in SUITES
+
+
+def test_windows_overlay_tests_and_owned_consumer_share_the_build_closure() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    closure = targets("HORO_CI_WINDOWS_TARGETS")
+    for target in ("HoroRuntimeUiOverlayLifecycleTests", "HoroRuntimeUiPublicHeaderConsumer"):
+        assert target in closure, f"Windows selects {target} without building it"
+    assert "add_executable(HoroRuntimeUiOverlayLifecycleTests" in tests_cmake
+    registration = re.search(r"set\(HORO_CATCH_TEST_TARGETS\s+(.*?)\n\)", tests_cmake, re.S)
+    assert registration, "Missing native Catch registration group"
+    assert "HoroRuntimeUiOverlayLifecycleTests" in registration.group(1).split()
+    assert 'foreach (target IN LISTS HORO_CATCH_TEST_TARGETS)' in tests_cmake
+    assert 'horo_register_catch_test(${target} LABELS "native")' in tests_cmake
+    assert 'target_sources(HoroRuntimeUiPublicHeaderConsumer PRIVATE support/RuntimeUiOverlayPublicContract.cpp)' in tests_cmake
+    assert 'if(target IN_LIST HORO_CI_WINDOWS_TARGETS)\n        list(APPEND ARG_LABELS ci-windows)' in SUITES
     assert 'add_custom_target(HoroCiWindowsChecks DEPENDS ${HORO_CI_WINDOWS_TARGETS})' in SUITES
 
 

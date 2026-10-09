@@ -5,6 +5,7 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Physics/CharacterCapability.h"
 #include "Horo/Physics/CharacterCommandPipeline.h"
 #include "Horo/Physics/CharacterControllerContracts.h"
 #include "Horo/Physics/CharacterDebugSnapshot.h"
@@ -76,6 +77,16 @@ namespace Horo::Character {
          * @return Success, or CharacterErrors::InvalidState unless the world is prepared.
          */
         [[nodiscard]] Result<void> Activate();
+
+        /**
+         * @brief Explicitly issues one scoped creation/command/query grant without activating a consumer.
+         * @param revocation Optional host-owned reload/unload cancellation fence.
+         * @return Client or typed affinity, lifecycle, revocation, generation or bounded-capacity failure.
+         * @pre Prepared or Active owner thread, outside tick and placement callbacks. At most
+         * MaximumCharacterCapabilitiesPerWorld live grants; copies share one slot. Retired and
+         * revoked grants cannot be revived. No Gameplay/VM binding or permission is inferred.
+         */
+        [[nodiscard]] Result<CharacterCapability> IssueCapability(const CancellationToken &revocation = {});
 
         /** @brief Admits the paired Physics world's current query publication between synchronous operations.
          * @param world Exact paired Physics identity; another world cannot refresh this snapshot.
@@ -196,7 +207,11 @@ namespace Horo::Character {
         [[nodiscard]] std::size_t ControllerCapacity() const noexcept;
 
     private:
+        friend class CharacterCapability;
         struct Impl;
+        /** @brief Admits a copied intent with its grant fence, using the ordinary command ordering and capacity rules. */
+        [[nodiscard]] Result<CharacterCommandAdmission> QueueScopedMovementCommand(const CharacterMovementRequest &request,
+                                                                                   const CancellationToken &revocation);
         /** @brief Takes a completely prepared implementation. */
         explicit CharacterWorld(std::unique_ptr<Impl> impl) noexcept;
 

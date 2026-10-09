@@ -592,6 +592,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiScreenStack.cpp
         runtime/ui/UiRouteOperations.cpp
         runtime/ui/UiFocusGraph.cpp
+        runtime/ui/UiFocusRestoration.cpp
         runtime/ui/UiFocusGraphOperations.cpp
         runtime/ui/UiFocusGraphParticipation.cpp
         runtime/ui/UiFocusSpatialNavigation.cpp
@@ -600,6 +601,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiControlStateMachinePresentation.cpp
     runtime/ui/UiControlStateMachineReload.cpp
         runtime/ui/UiHotReload.cpp
+        runtime/ui/UiOverlayLifecycle.cpp
         runtime/ui/UiHotReloadGeneration.cpp
         runtime/ui/UiHotReloadValidation.cpp
         runtime/ui/UiHotReloadReconciliation.cpp
@@ -1112,6 +1114,8 @@ add_library(HoroPhysics STATIC
         physics/CharacterMetrics.cpp
         physics/CharacterControllerRegistry.h
         physics/CharacterFastPathStorage.h
+        physics/CharacterCapability.cpp
+        physics/CharacterCapabilityInternal.h
         physics/CharacterWorld.cpp
         physics/CharacterWorldCommandPipeline.cpp
         physics/CharacterWorldCommandInternal.h

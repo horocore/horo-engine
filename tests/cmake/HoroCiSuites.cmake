@@ -51,6 +51,7 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroRuntimeUiTextShapingTests
     HoroRuntimeUiTextLayoutTests
     HoroRuntimeUiPublicHeaderConsumer
+    HoroRuntimeUiOverlayLifecycleTests
     HoroInputPublicHeaderConsumer
     HoroExtensionManagerTests
     HoroEditorActivityBoundaryTests

@@ -305,6 +305,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiDocument.h
     Horo/Runtime/Ui/UiAssetLoading.h
     Horo/Runtime/Ui/UiHotReload.h
+    Horo/Runtime/Ui/UiOverlayLifecycle.h
     Horo/Runtime/Ui/UiDocumentSerialization.h
     Horo/Runtime/Ui/UiDiagnostics.h
     Horo/Runtime/Ui/UiElementTree.h
@@ -560,6 +561,7 @@ horo_configure_target_header_boundary(HoroPhysicsModel PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
     Horo/Physics/CharacterClearanceQuery.h
+    Horo/Physics/CharacterCapability.h
     Horo/Physics/CharacterCommandPipeline.h
     Horo/Physics/CharacterControllerContracts.h
     Horo/Physics/CharacterDiagnostics.h

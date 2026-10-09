@@ -170,8 +170,9 @@ namespace Horo::Character::Detail {
         if (impl.closedTick.load() == std::numeric_limits<std::uint64_t>::max() || request.tick != impl.closedTick.load() + 1 ||
             record.Value()->reservedTeleportTick.has_value() || record.Value()->lastTeleportTick >= request.tick)
             return Result<CharacterControllerDescriptor>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
-        if (std::ranges::any_of(impl.fastPath.Commands(), [&request](const CharacterMovementRequest &command) {
-            return command.controller == request.controller && command.tick == request.tick;
+        if (std::ranges::any_of(impl.fastPath.Commands(), [&request](const CharacterQueuedMovement &queued) {
+            return !queued.revocation.IsCancellationRequested() && queued.request.controller == request.controller &&
+                   queued.request.tick == request.tick;
         }))
             return Result<CharacterControllerDescriptor>::Failure(
                 MakeError(CharacterErrors::CommandOrderInvalid, "Move and teleport cannot target one Character tick."));

@@ -96,6 +96,67 @@ namespace Horo::Runtime::Ui {
             CHECK(result.ErrorValue().code.Value() == expected.code.Value());
         }
 
+        /** @brief Retain the authored nodes and their actual focused graph together for replacement/restoration tests. */
+        struct RestorationRig final {
+            std::array<UiFocusNodeDescriptor, 3> nodes{BasicNodes(Owner())};
+            UiFocusGraph graph{CreateGraph(Descriptor(Context(), Stable<UiElementId>(2)), nodes)};
+
+            RestorationRig() {
+                REQUIRE(graph.SetFocus(nodes[2].element).HasValue());
+            }
+        };
+
+        TEST_CASE("Stable focus restoration resolves new handles and rejects foreign or future evidence", "[runtime_ui][focus][restore]") {
+            RestorationRig rig;
+            auto &graph = rig.graph;
+            auto &nodes = rig.nodes;
+            const auto before = ::Horo::Tests::AllocationProbe::Count();
+            const auto saved = graph.CaptureRestoration();
+            const auto after = ::Horo::Tests::AllocationProbe::Count();
+            REQUIRE(saved.HasValue());
+            CHECK(after == before);
+            REQUIRE(graph.ClearFocus().HasValue());
+            for (auto &node : nodes)
+                ++node.element.generation;
+            REQUIRE(graph.Reload(Descriptor(Context(73, 4), Stable<UiElementId>(2)), nodes).HasValue());
+            const auto restored = graph.Restore(saved.Value());
+            REQUIRE(restored.HasValue());
+            REQUIRE(restored.Value().current);
+            CHECK(restored.Value().current->element == nodes[2].element);
+            auto foreign = saved.Value();
+            foreign.source.scope.presentationLayer.slot = 99;
+            ExpectError(graph.Restore(foreign), UiErrors::FocusScopeMismatch);
+            auto future = saved.Value();
+            future.source.interaction = RevisionValue<UiInteractionRevision>(99);
+            ExpectError(graph.Restore(future), UiErrors::FocusSourceStale);
+            CHECK(graph.CurrentFocus().Value()->element == nodes[2].element);
+        }
+
+        TEST_CASE("Stable focus restoration uses actual invalid-target fallback and fails closed after retirement",
+                  "[runtime_ui][focus][restore]") {
+            RestorationRig rig;
+            auto &graph = rig.graph;
+            auto &nodes = rig.nodes;
+            const auto saved = graph.CaptureRestoration().Value();
+            nodes[2].enabled = false;
+            REQUIRE(graph.Reload(Descriptor(Context(73, 4), Stable<UiElementId>(2)), nodes).HasValue());
+            const auto before = ::Horo::Tests::AllocationProbe::Count();
+            const auto restored = graph.Restore(saved);
+            const auto after = ::Horo::Tests::AllocationProbe::Count();
+            REQUIRE(restored.HasValue());
+            CHECK(after == before);
+            CHECK(restored.Value().current->id == Stable<UiElementId>(2));
+            auto malformed = saved;
+            malformed.ancestorCount = MaximumUiFocusGraphDepth + 1;
+            ExpectError(graph.Restore(malformed), UiErrors::FocusInvalid);
+            REQUIRE(graph.BeginRetirement().HasValue());
+            ExpectError(graph.Restore(saved), UiErrors::FocusLifecycleUnavailable);
+            ExpectError(graph.CaptureRestoration(), UiErrors::FocusLifecycleUnavailable);
+            graph.Shutdown();
+            graph.Shutdown();
+            ExpectError(graph.Restore(saved), UiErrors::FocusLifecycleUnavailable);
+        }
+
         TEST_CASE("Focus graph scopes defaults and explicit links without frame-hot allocation", "[runtime_ui][focus]") {
             const UiOwnershipGeneration owner = Owner();
             auto nodes = BasicNodes(owner);
