@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -31,6 +32,21 @@ namespace {
         std::vector<Horo::Render::MeshVertex> vertices;
         std::vector<std::uint32_t> indices;
         std::string material;
+    };
+
+    /** @brief Injects both standard and foreign exceptions at the real owner execution boundary. */
+    class ThrowingSnapshotExecutor final : public Horo::Render::IStaticMeshPassExecutor {
+    public:
+        explicit ThrowingSnapshotExecutor(const bool foreign) : foreign_(foreign) {}
+
+        Horo::Result<void> ExecuteStaticMeshPass(const Horo::Render::StaticMeshPassDescriptor &) override {
+            if (foreign_)
+                throw 743;
+            throw std::runtime_error{"injected parallel owner execution failure"};
+        }
+
+    private:
+        bool foreign_;
     };
 
     [[nodiscard]] std::unique_ptr<Horo::Render::RenderFrontend> CreateFrontend() {
@@ -80,6 +96,35 @@ namespace {
     }
 }  // namespace
 
+TEST_CASE("Parallel captured execution contains standard and foreign executor exceptions and releases the frame",
+          "[unit][renderer][parallel][exception]") {
+    for (const bool foreign : {false, true}) {
+        Horo::JobSystem jobs{{.workerCount = 1}};
+        ThrowingSnapshotExecutor executor{foreign};
+        auto frontend = CreateFrontend();
+        REQUIRE(frontend->AttachStaticMeshPassExecutor(executor).HasValue());
+        const auto target = frontend->CreateOffscreenTarget({32, 32});
+        REQUIRE(target.HasValue());
+        auto frame = BeginTestFrame(*frontend);
+        const Horo::Render::RenderMeshSourceHandle handle{{7}, 3};
+        const auto vertices = Horo::Render::Test::MakeParallelTriangle();
+        const std::array<std::uint32_t, 3> indices{0, 1, 2};
+        const std::array resources{Horo::Render::RenderMeshResourceView{.handle = handle, .vertices = vertices, .indices = indices}};
+        const std::array instances{Horo::Render::RenderStaticMeshInstance{.mesh = handle}};
+        Horo::Render::RenderPassDescriptor pass;
+        pass.id = {1};
+        pass.staticMesh = Horo::Render::StaticMeshPassDescriptor{.target = target.Value(),
+                                                                 .extent = {32, 32},
+                                                                 .scene = {.meshResources = resources, .instances = instances}};
+        REQUIRE(frame.PrepareParallelExecution(jobs, std::span{&pass, std::size_t{1}}).HasValue());
+        const auto terminal = PollUntilTerminal(frame);
+        REQUIRE(terminal.HasError());
+        CHECK(terminal.ErrorValue().code.Value() == "render.frontend.frame_exception");
+        CHECK(frame.Present().HasError());
+        CHECK(frontend->BeginFrame({.frameNumber = 2, .outputExtent = {32, 32}}).HasValue());
+    }
+}
+
 TEST_CASE("Parallel frame freezes source geometry and material bytes before real worker recording",
           "[unit][renderer][parallel][lifetime]") {
     Horo::JobSystem jobs{{.workerCount = 1}};
@@ -113,6 +158,8 @@ TEST_CASE("Parallel frame freezes source geometry and material bytes before real
         vertices[0].position.x = 999;
         indices[0] = 99;
         material.assign(material.size(), 'x');
+        CHECK(vertices.front().position.x == 999);
+        CHECK(indices.front() == 99);
     }
 
     auto moved = std::move(frame);

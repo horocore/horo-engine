@@ -206,16 +206,21 @@ namespace Horo::Render::Detail {
                                                 const MetalResourceStorage storage) {
             if (data.empty())
                 return Result<void>::Success();
-            if (storage == MetalResourceStorage::Shared) {
-                std::memcpy(buffer.contents, data.data(), data.size());
-                return Result<void>::Success();
-            }
+            if (buffer == nil || data.size() > buffer.length)
+                return Result<void>::Failure(
+                    ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal upload exceeds its resident buffer capacity."));
+            if (storage == MetalResourceStorage::Shared)
+                return CopyMetalBufferUpload(buffer.contents, buffer.length, data);
             auto transfer = BeginStagingBlit(data.size());
             if (!transfer.HasValue()) {
                 Error error = std::move(transfer).ErrorValue();
                 return Result<void>::Failure(std::move(error));
             }
-            std::memcpy(transfer.Value().staging.contents, data.data(), data.size());
+            auto copied = CopyMetalBufferUpload(transfer.Value().staging.contents, transfer.Value().staging.length, data);
+            if (copied.HasError()) {
+                [transfer.Value().blit endEncoding];
+                return copied;
+            }
             [transfer.Value().blit copyFromBuffer:transfer.Value().staging
                                      sourceOffset:0
                                          toBuffer:buffer
@@ -235,13 +240,11 @@ namespace Horo::Render::Detail {
             auto transfer = BeginStagingBlit(static_cast<NSUInteger>(layout.Value().stagingBytes));
             if (transfer.HasError())
                 return Result<void>::Failure(std::move(transfer).ErrorValue());
-            auto *destination = static_cast<std::byte *>(transfer.Value().staging.contents);
-            for (std::size_t layer = 0; layer < descriptor.layerCount; ++layer) {
-                for (std::size_t row = 0; row < descriptor.extent.height; ++row) {
-                    std::memcpy(destination + layer * layout.Value().paddedImageBytes + row * layout.Value().paddedRowBytes,
-                                data.data() + layer * layout.Value().tightImageBytes + row * layout.Value().tightRowBytes,
-                                layout.Value().tightRowBytes);
-                }
+            auto copied = CopyMetalTextureUpload(descriptor, RenderTextureTexelBytes(descriptor.format).value_or(0),
+                                                 transfer.Value().staging.contents, transfer.Value().staging.length, data);
+            if (copied.HasError()) {
+                [transfer.Value().blit endEncoding];
+                return copied;
             }
             for (std::size_t layer = 0; layer < descriptor.layerCount; ++layer) {
                 [transfer.Value().blit copyFromBuffer:transfer.Value().staging
