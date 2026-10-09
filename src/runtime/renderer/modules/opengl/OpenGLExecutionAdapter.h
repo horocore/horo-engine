@@ -28,7 +28,7 @@ namespace Horo::Render::Detail {
          * @return Typed native command/state failure or success.
          * @pre Owning backend context is current on its owner thread.
          */
-        [[nodiscard]] Result<void> Execute(const RenderExecutionPlan &plan, FramebufferExtent extent);
+        [[nodiscard]] Result<void> Execute(const RenderExecutionPlan &plan, FramebufferExtent extent) const;
         /** @brief Polls pending streams without waiting and returns a free slot.
          * @param slotCount Validated frames-in-flight budget, from one to eight.
          * @return Free slot or typed backpressure/synchronization failure.

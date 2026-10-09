@@ -27,7 +27,8 @@ namespace Horo::Render::OpenGLBackendTests {
             Check(commandState.viewport == before.viewport);
             Check(commandState.colorMask == before.colorMask);
             Check(commandState.framebuffer == before.framebuffer);
-            Check(commandState.defaultDrawBuffer == before.defaultDrawBuffer);
+            Check(commandState.defaultDrawBuffers == before.defaultDrawBuffers);
+            Check(commandState.secondaryColorMask == before.secondaryColorMask);
             Check(commandState.enabled == before.enabled);
             Check(commandState.color.red == before.color.red);
             Check(commandState.color.green == before.color.green);
@@ -55,8 +56,55 @@ namespace Horo::Render::OpenGLBackendTests {
         const std::array<std::uint8_t, 4> mask{1, 1, 1, 1};
         Check(commandState.clearedViewport == viewport);
         Check(commandState.clearedMask == mask);
-        const std::array<bool, 3> disabled{false, false, false};
+        const std::array<bool, 4> disabled{false, false, false, false};
         Check(commandState.clearedEnabled == disabled);
+        CheckRestoredState(before);
+    }
+
+    TEST_CASE("OpenGL Clears Execute Despite Inherited Rasterizer Discard And Restore It", "[unit][runtime][renderer][opengl_commands]") {
+        CommandFixture fixture;
+        SECTION("Inherited discard enabled") {
+            commandState.enabled[3] = true;
+        }
+        SECTION("Inherited discard disabled") {
+            commandState.enabled[3] = false;
+        }
+        const CommandState before = commandState;
+        const FrameToken frame = fixture.Begin();
+        const std::array passes{BackendTestSupport::MakeClearGraphicsPass(RenderPassId{1}, {0.25F, 0.5F, 0.75F, 1.0F})};
+        Check(fixture.backend->Execute({.frame = frame, .orderedPasses = passes}).HasValue());
+        Check(commandState.clearCount == 1);
+        Check(!commandState.clearedEnabled[3]);
+        Check(commandState.clearedColors[0].red == 0.25F);
+        CheckRestoredState(before);
+    }
+
+    TEST_CASE("OpenGL Restores Indexed Output Selections And Preserves Higher Color Masks", "[unit][runtime][renderer][opengl_commands]") {
+        CommandFixture fixture;
+        commandState.defaultDrawBuffers = {0x0400, 0x0402};  // FRONT_LEFT, BACK_LEFT
+        const CommandState before = commandState;
+        const FrameToken frame = fixture.Begin();
+        const std::array passes{BackendTestSupport::MakeClearGraphicsPass(RenderPassId{1}, {0.25F, 0.5F, 0.75F, 1.0F})};
+        Check(fixture.backend->Execute({.frame = frame, .orderedPasses = passes}).HasValue());
+        Check(commandState.clearCount == 1);
+        Check(commandState.clearedDrawBuffers[0] == 0x0405);  // BACK
+        Check(commandState.clearedDrawBuffers[1] == 0);
+        const std::array<std::uint8_t, 4> unmasked{1, 1, 1, 1};
+        Check(commandState.clearedMask == unmasked);
+        Check(commandState.clearedSecondaryMask == before.secondaryColorMask);
+        CheckRestoredState(before);
+    }
+
+    TEST_CASE("OpenGL Rejects Draw Buffer Counts Outside Fixed Isolation Storage", "[unit][runtime][renderer][opengl_commands]") {
+        CommandFixture fixture;
+        commandState.maxDrawBuffers = 65;
+        const CommandState before = commandState;
+        const FrameToken frame = fixture.Begin();
+        const std::array passes{BackendTestSupport::MakeClearGraphicsPass(RenderPassId{1}, {})};
+        const auto executed = fixture.backend->Execute({.frame = frame, .orderedPasses = passes});
+        Check(executed.HasError());
+        Check(executed.ErrorValue().code.Value() == "render.opengl.command_failed");
+        Check(commandState.clearCount == 0);
         CheckRestoredState(before);
     }
 
@@ -131,15 +179,15 @@ namespace Horo::Render::OpenGLBackendTests {
         Check(fixture.backend->Execute({.frame = frame, .orderedPasses = std::span{passes}.first(1024)}).HasValue());
     }
 
-    TEST_CASE("OpenGL Restores State On Typed Driver Failure And Native Exception", "[unit][runtime][renderer][opengl_commands]") {
+    TEST_CASE("OpenGL Restores State On Typed Driver Failures", "[unit][runtime][renderer][opengl_commands]") {
         CommandFixture fixture;
         const CommandState before = commandState;
         const FrameToken frame = fixture.Begin();
         SECTION("Driver error before encoding") {
             commandState.error = 0x0502;
         }
-        SECTION("Native exception during encoding") {
-            commandState.clearThrows = true;
+        SECTION("Driver error preparing output") {
+            commandState.errorOnPrepare = true;
         }
         SECTION("Driver error during encoding") {
             commandState.errorOnClear = true;
@@ -149,6 +197,8 @@ namespace Horo::Render::OpenGLBackendTests {
         Check(executed.HasError());
         Check(executed.ErrorValue().code.Value() == "render.opengl.command_failed");
         CheckRestoredState(before);
+        if (commandState.errorOnPrepare)
+            Check(commandState.clearCount == 0);
         fixture.backend->AbortFrame(frame);
         Check(fixture.backend->BeginFrame({.frameNumber = 2, .outputExtent = {640, 480}}).HasValue());
     }

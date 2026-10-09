@@ -17,16 +17,17 @@ namespace Horo::Render::Detail {
          * @param functions Borrowed non-throwing state dispatch, which must outlive the guard.
          */
         explicit OpenGLExecutionState(const OpenGLCommandFunctions &functions) noexcept;
-        /** @brief Restores captured state after Apply, including during command exception unwinding. */
+        /** @brief Restores captured state after Apply, on every native command failure. */
         ~OpenGLExecutionState() noexcept;
         OpenGLExecutionState(const OpenGLExecutionState &) = delete;
         OpenGLExecutionState &operator=(const OpenGLExecutionState &) = delete;
 
         /** @brief Selects deterministic, unmasked primary backbuffer commands for the exact active extent.
          * @param extent Validated active-frame extent representable by signed native dimensions.
+         * @return False if native draw-buffer count exceeds the fixed 64-slot isolation budget.
          * @pre Called at most once on a current double-buffered presentation context.
          */
-        void Apply(FramebufferExtent extent) noexcept;
+        [[nodiscard]] bool Apply(FramebufferExtent extent) noexcept;
 
     private:
         const OpenGLCommandFunctions &functions_;
@@ -34,10 +35,12 @@ namespace Horo::Render::Detail {
         std::array<float, 4> clearColor_{};
         std::array<std::uint8_t, 4> colorMask_{};
         std::int32_t framebuffer_{};
-        std::int32_t defaultDrawBuffer_{};
+        std::array<std::uint32_t, 64> defaultDrawBuffers_{};
+        std::size_t drawBufferCount_{};
         bool scissor_{};
         bool dither_{};
         bool srgb_{};
+        bool rasterizerDiscard_{};
         bool applied_{};
     };
 }  // namespace Horo::Render::Detail

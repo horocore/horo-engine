@@ -13,21 +13,33 @@ namespace Horo::Render::Detail {
         scissor_ = state.isEnabled(GL_SCISSOR_TEST);
         dither_ = state.isEnabled(GL_DITHER);
         srgb_ = state.isEnabled(GL_FRAMEBUFFER_SRGB);
+        rasterizerDiscard_ = state.isEnabled(GL_RASTERIZER_DISCARD);
     }
 
     /** @copydoc OpenGLExecutionState::Apply */
-    void OpenGLExecutionState::Apply(const FramebufferExtent extent) noexcept {
+    bool OpenGLExecutionState::Apply(const FramebufferExtent extent) noexcept {
         const auto &state = functions_.state;
+        std::int32_t count{};
+        state.getInteger(GL_MAX_DRAW_BUFFERS, std::span{&count, 1});
+        if (count <= 0 || static_cast<std::size_t>(count) > defaultDrawBuffers_.size())
+            return false;
+        drawBufferCount_ = static_cast<std::size_t>(count);
         state.bindDrawFramebuffer(0);
-        state.getInteger(GL_DRAW_BUFFER, std::span{&defaultDrawBuffer_, 1});
+        for (std::size_t index = 0; index < drawBufferCount_; ++index) {
+            std::int32_t buffer{};
+            state.getInteger(GL_DRAW_BUFFER0 + static_cast<std::uint32_t>(index), std::span{&buffer, 1});
+            defaultDrawBuffers_[index] = static_cast<std::uint32_t>(buffer);
+        }
         applied_ = true;
         state.drawBuffer(GL_BACK);
         state.setEnabled(GL_SCISSOR_TEST, false);
         state.setEnabled(GL_DITHER, false);
         state.setEnabled(GL_FRAMEBUFFER_SRGB, false);
+        state.setEnabled(GL_RASTERIZER_DISCARD, false);
         constexpr std::array<std::uint8_t, 4> unmasked{1, 1, 1, 1};
         state.colorMask(unmasked);
         functions_.viewport(0, 0, static_cast<std::int32_t>(extent.width), static_cast<std::int32_t>(extent.height));
+        return true;
     }
 
     /** @copydoc OpenGLExecutionState::~OpenGLExecutionState */
@@ -36,7 +48,12 @@ namespace Horo::Render::Detail {
             return;
         const auto &state = functions_.state;
         state.bindDrawFramebuffer(0);
-        state.drawBuffer(static_cast<std::uint32_t>(defaultDrawBuffer_));
+        const std::uint32_t first = defaultDrawBuffers_[0];
+        // Aggregate selectors are legal only for DrawBuffer; that API guarantees higher slots are NONE.
+        if (first == GL_FRONT || first == GL_BACK || first == GL_LEFT || first == GL_RIGHT || first == GL_FRONT_AND_BACK)
+            state.drawBuffer(first);
+        else
+            state.drawBuffers(std::span{defaultDrawBuffers_}.first(drawBufferCount_));
         state.bindDrawFramebuffer(static_cast<std::uint32_t>(framebuffer_));
         functions_.viewport(viewport_[0], viewport_[1], viewport_[2], viewport_[3]);
         functions_.clearColor(clearColor_[0], clearColor_[1], clearColor_[2], clearColor_[3]);
@@ -44,5 +61,6 @@ namespace Horo::Render::Detail {
         state.setEnabled(GL_SCISSOR_TEST, scissor_);
         state.setEnabled(GL_DITHER, dither_);
         state.setEnabled(GL_FRAMEBUFFER_SRGB, srgb_);
+        state.setEnabled(GL_RASTERIZER_DISCARD, rasterizerDiscard_);
     }
 }  // namespace Horo::Render::Detail

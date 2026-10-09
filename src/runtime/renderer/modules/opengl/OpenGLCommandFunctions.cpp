@@ -10,9 +10,9 @@ namespace Horo::Render::Detail {
             const std::array required{
                 glViewport != nullptr,  glClearColor != nullptr,  glClear != nullptr,           glGetIntegerv != nullptr,
                 glGetFloatv != nullptr, glGetBooleanv != nullptr, glIsEnabled != nullptr,       glEnable != nullptr,
-                glDisable != nullptr,   glColorMask != nullptr,   glBindFramebuffer != nullptr, glDrawBuffer != nullptr,
+                glDisable != nullptr,   glColorMaski != nullptr,  glBindFramebuffer != nullptr, glDrawBuffer != nullptr,
                 glGetError != nullptr,  glFenceSync != nullptr,   glClientWaitSync != nullptr,  glDeleteSync != nullptr,
-                glFlush != nullptr,
+                glFlush != nullptr,     glDrawBuffers != nullptr,
             };
             return std::ranges::all_of(required, [](const bool available) {
                 return available;
@@ -27,7 +27,7 @@ namespace Horo::Render::Detail {
             glClearColor(red, green, blue, alpha);
         }
 
-        void ProductionClear(const std::uint32_t mask) {
+        void ProductionClear(const std::uint32_t mask) noexcept {
             glClear(mask);
         }
 
@@ -55,7 +55,7 @@ namespace Horo::Render::Detail {
         }
 
         void ProductionColorMask(const std::span<const std::uint8_t, 4> mask) noexcept {
-            glColorMask(mask[0], mask[1], mask[2], mask[3]);
+            glColorMaski(0, mask[0], mask[1], mask[2], mask[3]);
         }
 
         void ProductionBindDrawFramebuffer(const std::uint32_t object) noexcept {
@@ -64,6 +64,10 @@ namespace Horo::Render::Detail {
 
         void ProductionStateDrawBuffer(const std::uint32_t buffer) noexcept {
             glDrawBuffer(buffer);
+        }
+
+        void ProductionStateDrawBuffers(const std::span<const std::uint32_t> buffers) noexcept {
+            glDrawBuffers(static_cast<GLsizei>(buffers.size()), buffers.data());
         }
 
         std::uint32_t ProductionError() noexcept {
@@ -192,6 +196,7 @@ namespace Horo::Render::Detail {
                       .colorMask = &ProductionColorMask,
                       .bindDrawFramebuffer = &ProductionBindDrawFramebuffer,
                       .drawBuffer = &ProductionStateDrawBuffer,
+                      .drawBuffers = &ProductionStateDrawBuffers,
                       .error = &ProductionError},
             .sync = {.fence = &ProductionFence, .poll = &ProductionPoll, .destroy = &ProductionDestroyFence, .flush = &ProductionFlush},
             .buffers = {.generateBuffers = &ProductionGenerateBuffers,

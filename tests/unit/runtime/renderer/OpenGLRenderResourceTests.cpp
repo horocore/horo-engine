@@ -73,7 +73,7 @@ namespace Horo::Render::OpenGLResourceTests {
 
     ResourceCommandState resourceCommandState;
 
-    void ProbeNoOp(std::uint32_t) {
+    void ProbeNoOp(std::uint32_t) noexcept {
         // This probe intentionally records no state.
     }
 

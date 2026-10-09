@@ -136,14 +136,18 @@ namespace Horo::Render::OpenGLBackendTests {
         std::array<std::int32_t, 4> viewport{3, 4, 80, 90};
         std::array<std::uint8_t, 4> colorMask{0, 1, 0, 1};
         std::int32_t framebuffer{7};
-        std::int32_t defaultDrawBuffer{0x0404};
-        std::array<bool, 3> enabled{true, true, true};
+        std::array<std::uint32_t, 64> defaultDrawBuffers{0x0404};
+        std::int32_t maxDrawBuffers{8};
+        std::array<std::uint8_t, 4> secondaryColorMask{1, 0, 1, 0};
+        std::array<std::uint32_t, 64> clearedDrawBuffers{};
+        std::array<std::uint8_t, 4> clearedSecondaryMask{};
+        std::array<bool, 4> enabled{true, true, true, true};
         std::array<ClearColor, 16> clearedColors{};
         std::array<std::int32_t, 4> clearedViewport{};
         std::array<std::uint8_t, 4> clearedMask{};
         std::int32_t clearedFramebuffer{-1};
-        std::array<bool, 3> clearedEnabled{};
-        bool clearThrows{false};
+        std::array<bool, 4> clearedEnabled{};
+        bool errorOnPrepare{false};
         bool errorOnClear{false};
         std::uint32_t error{0};
         std::uint32_t pollStatus{0x911A};
@@ -174,9 +178,10 @@ namespace Horo::Render::OpenGLBackendTests {
         commandState.color = ClearColor{red, green, blue, alpha};
     }
 
-    inline void ProbeClear(const std::uint32_t mask) {
-        if (commandState.clearThrows)
-            throw std::runtime_error{"Injected native command failure."};
+    inline void ProbeClear(const std::uint32_t mask) noexcept {
+        // Model core GL's ignored clear, rather than merely recording a dispatch attempt.
+        if (commandState.enabled[3])
+            return;
         const auto index = static_cast<std::size_t>(commandState.clearCount);
         if (index < commandState.clearedColors.size())
             commandState.clearedColors[index] = commandState.color;
@@ -186,6 +191,8 @@ namespace Horo::Render::OpenGLBackendTests {
         commandState.clearedMask = commandState.colorMask;
         commandState.clearedFramebuffer = commandState.framebuffer;
         commandState.clearedEnabled = commandState.enabled;
+        commandState.clearedDrawBuffers = commandState.defaultDrawBuffers;
+        commandState.clearedSecondaryMask = commandState.secondaryColorMask;
         if (commandState.errorOnClear)
             commandState.error = 0x0502;
     }
@@ -195,8 +202,10 @@ namespace Horo::Render::OpenGLBackendTests {
             std::ranges::copy(commandState.viewport, values.begin());
         else if (name == 0x8CA6)
             values[0] = commandState.framebuffer;
-        else if (name == 0x0C01)
-            values[0] = commandState.defaultDrawBuffer;
+        else if (name == 0x8824)
+            values[0] = commandState.maxDrawBuffers;
+        else if (name >= 0x8825 && name < 0x8825 + commandState.defaultDrawBuffers.size())
+            values[0] = static_cast<std::int32_t>(commandState.defaultDrawBuffers[name - 0x8825]);
     }
 
     inline void ProbeGetFloat(const std::uint32_t, const std::span<float> values) noexcept {
@@ -212,7 +221,9 @@ namespace Horo::Render::OpenGLBackendTests {
     inline std::size_t CapabilityIndex(const std::uint32_t name) noexcept {
         if (name == 0x0C11)
             return 0;
-        return name == 0x0BD0 ? 1 : 2;
+        if (name == 0x0BD0)
+            return 1;
+        return name == 0x8DB9 ? 2 : 3;
     }
 
     inline bool ProbeIsEnabled(const std::uint32_t name) noexcept {
@@ -232,7 +243,15 @@ namespace Horo::Render::OpenGLBackendTests {
     }
 
     inline void ProbeDrawBuffer(const std::uint32_t buffer) noexcept {
-        commandState.defaultDrawBuffer = static_cast<std::int32_t>(buffer);
+        commandState.defaultDrawBuffers.fill(0);
+        commandState.defaultDrawBuffers[0] = buffer;
+        if (commandState.errorOnPrepare && buffer == 0x0405)
+            commandState.error = 0x0502;
+    }
+
+    inline void ProbeDrawBuffers(const std::span<const std::uint32_t> buffers) noexcept {
+        commandState.defaultDrawBuffers.fill(0);
+        std::ranges::copy(buffers, commandState.defaultDrawBuffers.begin());
     }
 
     inline std::uint32_t ProbeError() noexcept {
@@ -271,6 +290,7 @@ namespace Horo::Render::OpenGLBackendTests {
                       .colorMask = &ProbeColorMask,
                       .bindDrawFramebuffer = &ProbeBindDrawFramebuffer,
                       .drawBuffer = &ProbeDrawBuffer,
+                      .drawBuffers = &ProbeDrawBuffers,
                       .error = &ProbeError},
             .sync = {.fence = &ProbeFence, .poll = &ProbePoll, .destroy = &ProbeDestroyFence, .flush = &ProbeFlush},
         };

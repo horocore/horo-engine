@@ -3,7 +3,6 @@
 #include "OpenGLExecutionState.h"
 #include "OpenGLRenderBackendErrors.h"
 
-#include <exception>
 #include <glad/gl.h>
 #include <optional>
 #include <utility>
@@ -24,8 +23,7 @@ namespace Horo::Render::Detail {
 
     /** @copydoc ValidateOpenGLExecutionPlan */
     Result<void> ValidateOpenGLExecutionPlan(const RenderExecutionPlan &plan) {
-        constexpr std::size_t maxPasses = 1024;
-        if (plan.orderedPasses.size() > maxPasses)
+        if (constexpr std::size_t maxPasses = 1024; plan.orderedPasses.size() > maxPasses)
             return Result<void>::Failure(
                 MakeError(OpenGLBackendErrors::WorkLimit, "OpenGL executes at most 1024 ordered passes per plan."));
         for (std::size_t index = 0; index < plan.orderedPasses.size(); ++index) {
@@ -57,14 +55,17 @@ namespace Horo::Render::Detail {
     }
 
     /** @copydoc OpenGLExecutionAdapter::Execute */
-    Result<void> OpenGLExecutionAdapter::Execute(const RenderExecutionPlan &plan, const FramebufferExtent extent) {
+    Result<void> OpenGLExecutionAdapter::Execute(const RenderExecutionPlan &plan, const FramebufferExtent extent) const {
         if (functions_.state.error() != GL_NO_ERROR)
             return CommandFailure("OpenGL reported an error before execution.");
-        try {
+        {
             Detail::OpenGLExecutionState state{functions_};
             if (functions_.state.error() != GL_NO_ERROR)
                 return CommandFailure("OpenGL could not capture the caller's command state.");
-            state.Apply(extent);
+            if (!state.Apply(extent))
+                return CommandFailure("OpenGL draw-buffer count exceeds the fixed 64-slot isolation budget.");
+            if (functions_.state.error() != GL_NO_ERROR)
+                return CommandFailure("OpenGL could not prepare primary-output command state.");
             for (const RenderPassDescriptor &pass : plan.orderedPasses) {
                 if (pass.primaryOutput.has_value() && pass.primaryOutput->loadOperation == AttachmentLoadOperation::Clear) {
                     const ClearColor &color = pass.primaryOutput->clearColor;
@@ -72,8 +73,6 @@ namespace Horo::Render::Detail {
                     functions_.clear(GL_COLOR_BUFFER_BIT);
                 }
             }
-        } catch (const std::exception &exception) {
-            return CommandFailure(exception.what());
         }
         if (functions_.state.error() != GL_NO_ERROR)
             return CommandFailure("OpenGL reported an error during execution or state restoration.");

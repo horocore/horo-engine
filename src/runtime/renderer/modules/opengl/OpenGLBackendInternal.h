@@ -26,7 +26,7 @@ namespace Horo::Render::Detail {
 
     using OpenGLViewportFunction = void (*)(std::int32_t x, std::int32_t y, std::int32_t width, std::int32_t height) noexcept;
     using OpenGLClearColorFunction = void (*)(float red, float green, float blue, float alpha) noexcept;
-    using OpenGLClearFunction = void (*)(std::uint32_t mask);
+    using OpenGLClearFunction = void (*)(std::uint32_t mask) noexcept;
     using OpenGLGenerateObjectsFunction = void (*)(std::int32_t count, std::uint32_t *objects);
     using OpenGLDeleteObjectsFunction = void (*)(std::int32_t count, const std::uint32_t *objects);
     using OpenGLBindObjectFunction = void (*)(std::uint32_t target, std::uint32_t object);
@@ -62,14 +62,16 @@ namespace Horo::Render::Detail {
         void (*getBoolean)(std::uint32_t, std::span<std::uint8_t>) noexcept {nullptr};
         bool (*isEnabled)(std::uint32_t) noexcept {nullptr};
         void (*setEnabled)(std::uint32_t, bool) noexcept {nullptr};
+        /** Changes only indexed color mask zero; higher masks remain untouched. */
         void (*colorMask)(std::span<const std::uint8_t, 4>) noexcept {nullptr};
         void (*bindDrawFramebuffer)(std::uint32_t) noexcept {nullptr};
         void (*drawBuffer)(std::uint32_t) noexcept {nullptr};
+        void (*drawBuffers)(std::span<const std::uint32_t>) noexcept {nullptr};
         std::uint32_t (*error)() noexcept {nullptr};
 
         [[nodiscard]] bool IsValid() const noexcept {
             return getInteger && getFloat && getBoolean && isEnabled && setEnabled && colorMask && bindDrawFramebuffer && drawBuffer &&
-                   error;
+                   drawBuffers && error;
         }
     };
 

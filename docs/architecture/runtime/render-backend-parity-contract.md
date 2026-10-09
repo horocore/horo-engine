@@ -273,11 +273,13 @@ lowering remains a separate contract and is not inferred from this pass view.
 
 Primary-output commands target the host's double-buffered default framebuffer.
 The adapter temporarily selects its backbuffer, exact frame viewport, and
-unmasked color writes with scissor, dither, and framebuffer sRGB disabled. It
-restores the inherited draw framebuffer, the default framebuffer's separate
-draw-buffer selection, viewport, clear value, write mask, and enable state on
-success or command failure. State restoration uses non-throwing private native
-callbacks. `BeginFrame` does not leak a viewport change into host/executor work.
+unmasked color writes with scissor, dither, rasterizer discard, and framebuffer
+sRGB disabled. It restores the inherited draw framebuffer, the default framebuffer's separate
+indexed draw-buffer selections, viewport, clear value, indexed write mask zero,
+and enable state on success or command failure. Higher indexed color masks are
+never changed. A fixed 64-slot draw-buffer capture budget avoids frame-time
+allocation; larger native draw-buffer limits fail before any state mutation.
+State restoration uses non-throwing private native callbacks. `BeginFrame` does not leak a viewport change into host/executor work.
 Native command errors become typed failures rather than successful execution.
 
 Frame admission is bounded by the configured `maxFramesInFlight` (one to eight).
@@ -724,3 +726,4 @@ No-renderer repair routing: PASS
 
 Until this gate is met, backend selection remains an engineering/debug control
 and is not exposed as a completed Project Settings feature.
+
