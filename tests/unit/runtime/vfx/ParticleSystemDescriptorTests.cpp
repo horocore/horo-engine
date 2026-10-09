@@ -56,6 +56,23 @@ namespace Horo::Vfx {
         }
     }  // namespace
 
+    TEST_CASE("Particle descriptors decode collision response while preserving legacy bounce", "[unit][vfx][particle-descriptor]") {
+        CHECK(ParseParticleSystemDescriptor(ValidJson()).Value().collisionResponse == ParticleCollisionResponse::Bounce);
+        auto source = ValidJson();
+        source.insert(source.rfind('}'), ",\"collisionResponse\":\"die\"");
+        const auto parsed = ParseParticleSystemDescriptor(source);
+        REQUIRE(parsed.HasValue());
+        CHECK(parsed.Value().collisionResponse == ParticleCollisionResponse::Die);
+        REQUIRE(ValidateParticleSystemDescriptor(parsed.Value(), Registry()).Value().Accepted());
+        auto invalid = ValidData();
+        invalid.collisionResponse = ParticleCollisionResponse::Count;
+        CHECK_FALSE(ValidateParticleSystemDescriptor(invalid, Registry()).Value().Accepted());
+        source.replace(source.find("\"die\""), 5, "\"unknown\"");
+        const auto unknown = ParseParticleSystemDescriptor(source);
+        REQUIRE(unknown.HasValue());
+        CHECK_FALSE(ValidateParticleSystemDescriptor(unknown.Value(), Registry()).Value().Accepted());
+    }
+
     TEST_CASE("Particle descriptor parses and admits canonical source", "[unit][vfx][particle-descriptor]") {
         auto parsed = ParseParticleSystemDescriptor(ValidJson());
         REQUIRE(parsed.HasValue());

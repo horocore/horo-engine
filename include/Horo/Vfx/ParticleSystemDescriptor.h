@@ -85,6 +85,13 @@ namespace Horo::Vfx {
         Count
     };
 
+    /** @brief Authored response shared by every CPU collision source. */
+    enum class ParticleCollisionResponse : std::uint8_t {
+        Bounce,
+        Die,
+        Count
+    };
+
     /** @brief Terminal particle condition required by infinite-lifetime emitters. */
     enum class ParticleKillCondition : std::uint8_t {
         None,
@@ -126,6 +133,8 @@ namespace Horo::Vfx {
         ParticleRenderMode renderMode{ParticleRenderMode::Billboard};               /**< Backend-neutral output topology. */
         ParticleSortMode sortMode{ParticleSortMode::ByDistance};                    /**< Authored ordering policy. */
         ParticleCollisionMode collisionMode{ParticleCollisionMode::None};           /**< Authored collision source. */
+        ParticleCollisionResponse collisionResponse{
+            ParticleCollisionResponse::Bounce}; /**< Optional source field; legacy sources bounce. */
         constexpr bool operator==(const ParticleSystemDescriptorData &) const = default;
     };
 

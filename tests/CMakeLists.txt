@@ -796,6 +796,7 @@ horo_register_catch_test(HoroPCGTerrainAdapterTests LABELS "unit;pcg;terrain;hea
 add_executable(HoroVfxApiTests
         support/AllocationProbe.cpp
         unit/runtime/vfx/CpuParticleBufferTests.cpp
+        unit/runtime/vfx/CpuParticleCollisionTests.cpp
         unit/runtime/vfx/CpuParticleSimulatorTests.cpp
         unit/runtime/vfx/CpuSimulationQualificationTests.cpp
         unit/runtime/vfx/CpuParticleForceQualificationTests.cpp

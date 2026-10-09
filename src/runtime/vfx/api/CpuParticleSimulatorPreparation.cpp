@@ -62,7 +62,7 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                 info.maximumBurstParticles > CpuParticleSimulationHardLimits::BurstParticles || !Finite(info.maximumDeltaSeconds) ||
                 info.maximumDeltaSeconds <= 0.0F || info.maximumDeltaSeconds > CpuParticleSimulationHardLimits::DeltaSeconds ||
                 data.maximumParticles == 0 || data.maximumParticles > CpuParticleBufferHardLimits::Particles ||
-                data.collisionMode >= ParticleCollisionMode::Count || info.collisionResponse >= CpuParticleCollisionResponse::Count ||
+                data.collisionMode >= ParticleCollisionMode::Count || data.collisionResponse >= ParticleCollisionResponse::Count ||
                 info.forces.size() > CpuParticleSimulationHardLimits::ForceModules ||
                 info.planes.size() > CpuParticleSimulationHardLimits::Planes ||
                 info.payloadChannels.size() > CpuParticleSimulationHardLimits::PayloadChannels ||
@@ -170,19 +170,45 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
             return Result<void>::Success();
         }
 
+        /** @brief Validates the bounded canonical CPU depth view before copying any sample. */
+        [[nodiscard]] Result<void> ValidateDepth(const CpuParticleSceneDepthSnapshot &depth) {
+            if (depth.samples.empty()) {
+                if (depth.width != 0 || depth.height != 0)
+                    return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
+                return Result<void>::Success();
+            }
+            const std::uint64_t count = static_cast<std::uint64_t>(depth.width) * depth.height;
+            if (depth.width == 0 || depth.height == 0 || count != depth.samples.size() ||
+                count > CpuParticleSimulationHardLimits::DepthSamples || !Finite(depth.restitution) || depth.restitution < 0.0F ||
+                depth.restitution > 1.0F || Math::TryInverse(depth.worldToClip).HasError())
+                return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
+            for (const auto &sample : depth.samples) {
+                if (sample.covered && (!Finite(sample.depth) || sample.depth < 0.0F || sample.depth > 1.0F || !Finite(sample.normal) ||
+                                       !Finite(Math::LengthSquared(sample.normal)) ||
+                                       Math::LengthSquared(sample.normal) <= std::numeric_limits<float>::epsilon()))
+                    return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
+            }
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> ValidateCollision(const ParticleSystemDescriptorData &data, const CpuParticleSimulatorCreateInfo &info) {
             for (const auto &plane : info.planes) {
                 if (!Finite(plane.point) || !Finite(plane.normal) || !Finite(plane.restitution) || plane.restitution < 0.0F ||
-                    plane.restitution > 1.0F || Math::LengthSquared(plane.normal) <= std::numeric_limits<float>::epsilon())
+                    plane.restitution > 1.0F || !Finite(Math::LengthSquared(plane.normal)) ||
+                    Math::LengthSquared(plane.normal) <= std::numeric_limits<float>::epsilon())
                     return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
             }
             if (data.collisionMode == ParticleCollisionMode::Planes && info.planes.empty())
                 return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
+            if (auto depth = ValidateDepth(info.sceneDepth); depth.HasError())
+                return depth;
             const auto seamUnavailable = [](const CpuParticleCollisionQuerySeam &seam) {
                 return seam.required && seam.probe == nullptr;
             };
-            if ((data.collisionMode == ParticleCollisionMode::SceneDepth && seamUnavailable(info.sceneDepth)) ||
-                (data.collisionMode == ParticleCollisionMode::PhysicsWorld && seamUnavailable(info.physicsWorld)))
+            if ((data.collisionMode == ParticleCollisionMode::SceneDepth && (info.sceneDepth.required || info.requiredGameplay) &&
+                 info.sceneDepth.samples.empty()) ||
+                (data.collisionMode == ParticleCollisionMode::PhysicsWorld &&
+                 (seamUnavailable(info.physicsWorld) || (info.requiredGameplay && info.physicsWorld.probe == nullptr))))
                 return Failure<void>(VfxErrors::ParticleCollisionQueryUnavailable);
             return Result<void>::Success();
         }
@@ -219,8 +245,11 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
             state.maximumDeltaSeconds = info.maximumDeltaSeconds;
             state.maximumBurstParticles = info.maximumBurstParticles;
             state.sceneDepth = info.sceneDepth;
+            state.depthSamples.assign(info.sceneDepth.samples.begin(), info.sceneDepth.samples.end());
+            state.sceneDepth.samples = state.depthSamples;
+            if (!state.depthSamples.empty())
+                state.clipToWorld = Math::TryInverse(info.sceneDepth.worldToClip).Value();
             state.physicsWorld = info.physicsWorld;
-            state.collisionResponse = info.collisionResponse;
             state.stageObserver = info.stageObserver;
             state.stageObserverContext = info.stageObserverContext;
         }

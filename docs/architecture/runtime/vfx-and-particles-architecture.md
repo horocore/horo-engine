@@ -164,6 +164,49 @@ writers, private/render payload access from gameplay, GPU authoritative output a
 unbounded occurrences. Runtime violations discard the candidate and return a typed
 stage/schema/access result; Shipping never continues a half-updated buffer.
 
+### CPU Collision Modes And Source Migration
+
+`ParticleSystemDescriptorData::collisionResponse` owns the authored `Bounce` or
+`Die` choice for every collision source. JSON 1.0 accepts the optional
+`collisionResponse` field (`bounce`/`die`); sources omitting it keep the original
+bounce behavior. Unknown policy values fail semantic admission. A collision kill
+condition still makes a hit terminal. The runtime create-info response field and
+`CpuParticleCollisionResponse` type are removed: callers set the descriptor field
+before validation instead, so there is one response authority.
+
+Planes are normalized during preparation and tested as one-sided segment crossings.
+Stationary/tangential contact is not a new hit. Earliest crossing wins, with declared
+plane order breaking ties. Bounce scales the inward normal component by restitution
+and preserves tangential motion; die flags the candidate for the following Kill stage.
+
+CPU SceneDepth is self-contained in `HoroVfxApi`: `CpuParticleSceneDepthSnapshot`
+replaces the former scene-depth callback. Composition provides one frozen canonical
+view-projection matrix and bounded row-major depth/world-normal pixels. Create copies
+pixels, validates dimensions/ranges/normals and the inverse transform, and owns them
+until shutdown. The kernel samples the integrated endpoint's pixel, reconstructs
+its surface point, and tests a crossing of that pixel's tangent plane. Canonical
+x/y are [-1,1], depth is [0,1] increasing away from the camera, and row zero is
+NDC y=-1; composition converts native/reversed depth conventions before submission.
+This is cosmetic sampled collision, not full swept geometry: lateral motion across
+multiple pixels may miss geometry. Behind-camera/out-of-view/uncovered pixels produce
+no hit. The view is deliberately frozen for this simulator activation; composition
+recreates it when selecting new view/origin evidence, never reads a live renderer or
+current GPU pass from a particle kernel. This CPU path does not provide GPU readback
+or renderer resource ownership.
+
+PhysicsWorld retains a non-owning typed immutable query seam, with particle, tick and
+scene/snapshot identities. The host adapter owns the context for the full simulator
+lifetime and reduces native candidates by distance, stable target and feature before
+returning one hit. VFX has no Physics target, concrete solver or renderer dependency.
+Absent optional Physics/depth sources produce no hit; required sources (including
+required gameplay compositions) reject admission with `ParticleCollisionQueryUnavailable`.
+A provider error or invalid collision evidence fails the whole candidate with a typed
+query error, preserving the committed generation and the provider error cause.
+
+Public ownership remains on `HoroVfxApi`; no new public header or target dependency
+is introduced. Existing create-info SceneDepth callers migrate from callbacks to
+canonical snapshots; Physics adapters keep their existing seam.
+
 ### Stable Identity, RNG And Parallel Reproduction
 
 `ParticleSimulationId` derives from effect/emitter/activation identity and a checked
