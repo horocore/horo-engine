@@ -60,8 +60,8 @@ namespace Horo::Network {
          * @param limits Explicit finite storage, lifetime and overflow policy.
          * @return Sole owner or typed state Invalid/Capacity failure.
          */
-        [[nodiscard]] static Result<std::unique_ptr<ReplicationSnapshotHistory>> Create(ReplicationHistoryScope scope,
-                                                                                        ReplicationHistoryLimits limits = {});
+        [[nodiscard]] static Result<std::unique_ptr<ReplicationSnapshotHistory>> Create(const ReplicationHistoryScope &scope,
+                                                                                        const ReplicationHistoryLimits &limits = {});
         ReplicationSnapshotHistory(const ReplicationSnapshotHistory &) = delete;
         ReplicationSnapshotHistory &operator=(const ReplicationSnapshotHistory &) = delete;
         /** @brief Reserves exact provenance and correlation for one completely encoded source projection.
@@ -127,7 +127,7 @@ namespace Horo::Network {
             bool acknowledged{};
         };
 
-        ReplicationSnapshotHistory(ReplicationHistoryScope scope, ReplicationHistoryLimits limits);
+        ReplicationSnapshotHistory(const ReplicationHistoryScope &scope, const ReplicationHistoryLimits &limits);
         /** @brief Checks admission and monotonic time before pruning expired or revoked pins. */
         [[nodiscard]] Result<void> Advance(std::uint64_t now, const CancellationToken &cancellation);
         /** @brief Checks exact captured session/Scene authority eligibility. */

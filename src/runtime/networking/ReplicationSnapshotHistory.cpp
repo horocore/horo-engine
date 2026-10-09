@@ -32,23 +32,25 @@ namespace Horo::Network {
     }  // namespace
 
     /** @copydoc ReplicationSnapshotHistory::Create */
-    Result<std::unique_ptr<ReplicationSnapshotHistory>> ReplicationSnapshotHistory::Create(const ReplicationHistoryScope scope,
-                                                                                           const ReplicationHistoryLimits limits) {
+    Result<std::unique_ptr<ReplicationSnapshotHistory>> ReplicationSnapshotHistory::Create(const ReplicationHistoryScope &scope,
+                                                                                           const ReplicationHistoryLimits &limits) {
         if (!scope.connection.IsValid() || !scope.session.IsValid() || !scope.scene.IsValid() || scope.incarnation == 0 ||
             limits.maximumEntries == 0 || limits.maximumEntries > 4096 || limits.maximumRetainedBytes == 0 ||
             limits.maximumRetainedBytes > 64 * 1024 * 1024 || limits.leaseTicks == 0 ||
             (limits.overflow != ReplicationHistoryOverflow::FullSnapshot && limits.overflow != ReplicationHistoryOverflow::Disconnect))
             return Fail<std::unique_ptr<ReplicationSnapshotHistory>>(ReplicationStateErrors::Invalid);
         try {
-            return Result<std::unique_ptr<ReplicationSnapshotHistory>>::Success(
-                std::unique_ptr<ReplicationSnapshotHistory>(new ReplicationSnapshotHistory(scope, limits)));
+            // make_unique cannot invoke the private constructor that fences validated factory creation.
+            auto history =
+                std::unique_ptr<ReplicationSnapshotHistory>(new ReplicationSnapshotHistory(scope, limits));  // NOSONAR(cpp:S5950)
+            return Result<std::unique_ptr<ReplicationSnapshotHistory>>::Success(std::move(history));
         } catch (const std::bad_alloc &) {
             return Fail<std::unique_ptr<ReplicationSnapshotHistory>>(ReplicationStateErrors::Capacity);
         }
     }
 
     /** @copydoc ReplicationSnapshotHistory::ReplicationSnapshotHistory */
-    ReplicationSnapshotHistory::ReplicationSnapshotHistory(const ReplicationHistoryScope scope, const ReplicationHistoryLimits limits)
+    ReplicationSnapshotHistory::ReplicationSnapshotHistory(const ReplicationHistoryScope &scope, const ReplicationHistoryLimits &limits)
         : scope_(scope), limits_(limits), owner_(std::this_thread::get_id()) {
         entries_.reserve(limits.maximumEntries);
     }
@@ -84,8 +86,7 @@ namespace Horo::Network {
     Result<ReplicationSnapshotAcknowledgement> ReplicationSnapshotHistory::RetainSent(ReplicationAcknowledgedBaseline sent,
                                                                                       const std::uint64_t now,
                                                                                       const CancellationToken &cancellation) {
-        const auto admitted = Advance(now, cancellation);
-        if (admitted.HasError())
+        if (const auto admitted = Advance(now, cancellation); admitted.HasError())
             return Result<ReplicationSnapshotAcknowledgement>::Failure(admitted.ErrorValue());
         if (!Current(sent.state) || sent.publicationRevision != sent.state->PublicationRevision() || !sent.roleRevision.IsValid() ||
             sent.descriptorGeneration == 0)
@@ -103,7 +104,7 @@ namespace Horo::Network {
             return Fail<ReplicationSnapshotAcknowledgement>(ReplicationStateErrors::Capacity);
         }
         const ReplicationSnapshotAcknowledgement token{scope_, ++sequence_, sent.state->Object().object, sent.publicationRevision};
-        entries_.push_back({token, std::move(sent), now + limits_.leaseTicks, *charge, false});
+        entries_.emplace_back(token, std::move(sent), now + limits_.leaseTicks, *charge, false);
         bytes_ += *charge;
         return Result<ReplicationSnapshotAcknowledgement>::Success(token);
     }
@@ -114,8 +115,7 @@ namespace Horo::Network {
         // Reject foreign routing before maintenance so an old session cannot release current pins.
         if (owner_ != std::this_thread::get_id() || ack.scope != scope_)
             return Fail<void>(ReplicationStateErrors::Stale);
-        const auto admitted = Advance(now, cancellation);
-        if (admitted.HasError())
+        if (const auto admitted = Advance(now, cancellation); admitted.HasError())
             return admitted;
         const auto found = std::ranges::find(entries_, ack, &Entry::token);
         if (found == entries_.end())
@@ -130,8 +130,7 @@ namespace Horo::Network {
                                                                                  const std::uint64_t generation,
                                                                                  const Sha256Digest &projection, const std::uint64_t now,
                                                                                  const CancellationToken &cancellation) {
-        const auto admitted = Advance(now, cancellation);
-        if (admitted.HasError())
+        if (const auto admitted = Advance(now, cancellation); admitted.HasError())
             return Result<ReplicationAcknowledgedBaseline>::Failure(admitted.ErrorValue());
         if (!Current(source))
             return Fail<ReplicationAcknowledgedBaseline>(ReplicationStateErrors::Stale);
@@ -154,8 +153,7 @@ namespace Horo::Network {
     Result<void> ReplicationSnapshotHistory::CancelSent(const ReplicationSnapshotAcknowledgement &token, const std::uint64_t now) {
         if (owner_ != std::this_thread::get_id() || token.scope != scope_)
             return Fail<void>(ReplicationStateErrors::Stale);
-        const auto admitted = Advance(now, {});
-        if (admitted.HasError())
+        if (const auto admitted = Advance(now, {}); admitted.HasError())
             return admitted;
         const auto found = std::ranges::find(entries_, token, &Entry::token);
         if (found == entries_.end())
@@ -173,8 +171,7 @@ namespace Horo::Network {
 
     /** @copydoc ReplicationSnapshotHistory::ReleaseForMemoryPressure */
     Result<void> ReplicationSnapshotHistory::ReleaseForMemoryPressure() {
-        const auto admitted = Advance(clock_, {});
-        if (admitted.HasError())
+        if (const auto admitted = Advance(clock_, {}); admitted.HasError())
             return admitted;
         Clear();
         return Result<void>::Success();
