@@ -798,6 +798,8 @@ add_library(HoroNetworkRuntime STATIC
         runtime/networking/ReplicationStateEncode.cpp
         runtime/networking/ReplicationStateDecode.cpp
         runtime/networking/SceneReplicationCommitSource.cpp
+        runtime/networking/ReplicationInboundApply.cpp
+        runtime/networking/SceneReplicationApplyOwner.cpp
         runtime/networking/RpcGameplayDispatch.cpp
         runtime/networking/RpcGameplayDispatchReceive.cpp
         runtime/networking/RpcGameplayDispatchGameplay.cpp
@@ -1592,6 +1594,12 @@ add_library(HoroEngine::XRRuntime ALIAS HoroXRRuntime)
 target_compile_features(HoroXRRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroXRRuntime PUBLIC HoroEngine::XRApi)
 
+# Explicit host-composed XR/Input adapter; neither core module depends back on it.
+add_library(HoroXRInputBindings STATIC runtime/xr/input/XRActionBindings.cpp)
+add_library(HoroEngine::XRInputBindings ALIAS HoroXRInputBindings)
+target_compile_features(HoroXRInputBindings PUBLIC cxx_std_20)
+target_link_libraries(HoroXRInputBindings PUBLIC HoroEngine::XRApi HoroEngine::Input)
+
 if(HORO_BUILD_XR_OPENXR)
     # Deliberate non-installed native composition boundary. Only explicit host
     # adapters see native types; XRApi/XRRuntime remain backend-neutral.
@@ -1599,10 +1607,10 @@ if(HORO_BUILD_XR_OPENXR)
     target_include_directories(HoroXROpenXRHostInterface INTERFACE
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/xr/openxr/host>")
     target_link_libraries(HoroXROpenXRHostInterface INTERFACE
-        HoroEngine::XRRuntime HoroEngine::Platform HoroOpenXRHeaders)
+        HoroEngine::XRRuntime HoroEngine::XRInputBindings HoroEngine::Platform HoroOpenXRHeaders)
     target_compile_features(HoroXROpenXRHostInterface INTERFACE cxx_std_20)
 
-    add_library(HoroXROpenXR STATIC runtime/xr/openxr/OpenXRNativeSession.cpp)
+    add_library(HoroXROpenXR STATIC runtime/xr/openxr/OpenXRNativeSession.cpp runtime/xr/openxr/OpenXRActionBindings.cpp)
     add_library(HoroEngine::XROpenXR ALIAS HoroXROpenXR)
     target_link_libraries(HoroXROpenXR PRIVATE HoroXROpenXRHostInterface)
     target_compile_features(HoroXROpenXR PRIVATE cxx_std_20)
@@ -1825,6 +1833,7 @@ add_library(HoroSceneCellPayload STATIC
         runtime/scene/RuntimeSceneCellLayers.cpp
         runtime/scene/RuntimeSceneCellPayloadErrors.cpp
         runtime/scene/IncrementalSceneCellCook.cpp
+        runtime/scene/WorldBuildValidation.cpp
 )
 add_library(HoroEngine::SceneCellPayload ALIAS HoroSceneCellPayload)
 target_compile_features(HoroSceneCellPayload PUBLIC cxx_std_20)
@@ -2063,6 +2072,9 @@ if (HORO_BUILD_RENDER_OPENGL)
     add_library(HoroRenderOpenGL STATIC
             runtime/renderer/modules/opengl/OpenGLBackendModule.cpp
             runtime/renderer/modules/opengl/OpenGLCommandFunctions.cpp
+            runtime/renderer/modules/opengl/OpenGLContextAdmission.cpp
+            runtime/renderer/modules/opengl/OpenGLExecutionState.cpp
+            runtime/renderer/modules/opengl/OpenGLExecutionAdapter.cpp
             runtime/renderer/modules/opengl/OpenGLRenderBackend.cpp
             runtime/renderer/modules/opengl/OpenGLRenderBackendErrors.cpp
             runtime/renderer/modules/opengl/OpenGLRenderBackendResources.inl

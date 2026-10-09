@@ -374,10 +374,18 @@ target_compile_features(HoroReplicationStateCodecTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReplicationStateCodecTests PRIVATE HoroEngine::NetworkRuntime)
 horo_register_catch_test(HoroReplicationStateCodecTests LABELS "unit;network;headless;replication_codec")
 
+add_executable(HoroReplicationInboundApplyTests
+        unit/runtime/networking/ReplicationInboundApplyTests.cpp
+)
+target_compile_features(HoroReplicationInboundApplyTests PRIVATE cxx_std_20)
+target_link_libraries(HoroReplicationInboundApplyTests PRIVATE HoroEngine::NetworkRuntime HoroEngine::NetworkTransportNull)
+horo_register_catch_test(HoroReplicationInboundApplyTests LABELS "unit;network;headless;replication_apply")
+
 add_executable(HoroReplicationSnapshotHistoryTests unit/runtime/networking/ReplicationSnapshotHistoryTests.cpp)
 target_compile_features(HoroReplicationSnapshotHistoryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReplicationSnapshotHistoryTests PRIVATE HoroEngine::NetworkRuntime)
 horo_register_catch_test(HoroReplicationSnapshotHistoryTests LABELS "unit;network;headless;replication_history")
+
 add_executable(HoroNetworkModePublicHeaderConsumer support/NetworkModePublicHeaderConsumer.cpp)
 target_compile_features(HoroNetworkModePublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkModePublicHeaderConsumer PRIVATE HoroEngine::NetworkRuntime)
@@ -1118,8 +1126,13 @@ target_include_directories(HoroXRRuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 target_link_libraries(HoroXRRuntimeTests PRIVATE HoroEngine::XRRuntime)
 horo_register_catch_test(HoroXRRuntimeTests LABELS "unit;xr;headless;lifecycle")
 
+add_executable(HoroXRActionBindingTests unit/runtime/xr/XRActionBindingsTests.cpp)
+target_include_directories(HoroXRActionBindingTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroXRActionBindingTests PRIVATE HoroEngine::XRInputBindings)
+horo_register_catch_test(HoroXRActionBindingTests LABELS "unit;xr;input;headless;lifecycle")
+
 if(HORO_BUILD_XR_OPENXR)
-    add_executable(HoroXROpenXRTests unit/runtime/xr/OpenXRNativeSessionTests.cpp)
+    add_executable(HoroXROpenXRTests unit/runtime/xr/OpenXRNativeSessionTests.cpp unit/runtime/xr/OpenXRActionBindingsTests.cpp)
     target_include_directories(HoroXROpenXRTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(HoroXROpenXRTests PRIVATE HoroEngine::XROpenXR HoroXROpenXRHostInterface)
     horo_register_catch_test(HoroXROpenXRTests LABELS "unit;xr;headless;native;lifecycle")
@@ -3238,6 +3251,7 @@ add_executable(HoroRuntimeSceneCellPayloadTests
     unit/runtime/scene/RuntimeSceneCellAttachmentTests.cpp
     unit/runtime/scene/RuntimeSceneCellAssetAttachmentTests.cpp
     unit/runtime/scene/IncrementalSceneCellCookTests.cpp
+    unit/runtime/scene/WorldBuildValidationTests.cpp
     unit/runtime/scene/SceneCellContentHasherTests.cpp
 )
 target_compile_features(HoroRuntimeSceneCellPayloadTests PRIVATE cxx_std_20)
@@ -3701,6 +3715,7 @@ horo_register_catch_test(HoroAgentPolicyTests LABELS "unit;security;headless")
 if (HORO_BUILD_RENDER_OPENGL)
     add_executable(HoroRenderOpenGLTests
             unit/runtime/renderer/OpenGLRenderBackendTests.cpp
+            unit/runtime/renderer/OpenGLCommandAdaptationTests.cpp
             unit/runtime/renderer/OpenGLRenderBackendQualificationTests.cpp
             unit/runtime/renderer/OpenGLRenderResourceTests.cpp
     )
