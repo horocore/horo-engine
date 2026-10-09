@@ -43,6 +43,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroPrefabSceneExpansionContractConsumer
     HoroAssetRegistryTests
     HoroInputTests
+    HoroCharacterInputTests
+    HoroCharacterInputPublicHeaderConsumer
     HoroInputSdlTests
     HoroRuntimeUiInputTests
     HoroRuntimeUiTextUnicodeTests

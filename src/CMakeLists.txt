@@ -1233,6 +1233,11 @@ add_library(HoroEngine::PhysicsSceneIntegration ALIAS HoroPhysicsSceneIntegratio
 target_compile_features(HoroPhysicsSceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroPhysicsSceneIntegration PUBLIC HoroEngine::Physics HoroEngine::RuntimeScene HoroEngine::SceneCellPayload)
 
+add_library(HoroCharacterInput STATIC runtime/character/input/DesiredMotionAdapter.cpp)
+add_library(HoroEngine::CharacterInput ALIAS HoroCharacterInput)
+target_compile_features(HoroCharacterInput PUBLIC cxx_std_20)
+target_link_libraries(HoroCharacterInput PUBLIC HoroEngine::Input HoroEngine::Physics)
+
 add_library(HoroAI STATIC
         runtime/ai/api/AICanonicalErrors.cpp
         runtime/ai/api/AICanonicalState.cpp

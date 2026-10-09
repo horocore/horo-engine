@@ -608,6 +608,9 @@ horo_configure_target_header_boundary(HoroPhysicsSceneIntegration PUBLIC_HEADERS
     Horo/Physics/PhysicsCellAttachments.h
     Horo/Physics/PhysicsSceneActivation.h
 )
+horo_configure_target_header_boundary(HoroCharacterInput PUBLIC_HEADERS
+    Horo/CharacterInput/DesiredMotionAdapter.h
+)
 horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/AICanonicalState.h
     Horo/AI/AIErrors.h

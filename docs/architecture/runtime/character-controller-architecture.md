@@ -119,6 +119,58 @@ after the tick returns, with exact world, scene and host revision validation.
 The binding closes before the world retires; presentation consumers never borrow
 mutable controller records or query adapters.
 
+### Desired-motion producer boundary
+
+`HoroEngine::CharacterInput` owns `Horo/CharacterInput/DesiredMotionAdapter.h`.
+It is an explicit downstream integration target depending on Input and Physics;
+neither subsystem depends on it or discovers the other. Navigation producers may
+translate their own types into `DesiredMotionIntent` through an explicitly granted
+`ExternalIntent` principal. No Navigation type enters a Character contract.
+
+The host issues a dedicated `CharacterCapability`, selects the live controller and
+principal, and explicitly grants permission (default denied). Gameplay capture
+borrows the host-selected router/context after higher-priority input consumers and
+before fixed simulation. It retains bounded action evidence, held world-space
+velocity and one pending jump edge, not devices or mutable router state. The router
+address is retained solely for capture-owner identity; the host closes this adapter
+before destroying/replacing the router to exclude address reuse. At load time the
+adapter admits at most 512 actions/overrides and 32 effective bindings per selected
+action; capture admits at most 64 contexts and 16 current/previous gamepads.
+
+`ConsumeInput` assigns the exact host tick and producer correlation. Presentation
+frames with no simulation tick retain pending edges; catch-up ticks retain axes but
+consume jump once. Focus or priority loss clears held intent and pending edges even
+when the committed presentation frame has not changed. Duplicate captures never
+read action edges again. An eligible neutral axis authors a present zero velocity;
+an uncaptured/ineligible producer authors absence, not an implicit stop command.
+The input basis/speed are finite, admitted host policy, not camera or Navigation
+state discovered by Character.
+
+`DesiredMotionFrame` is an immutable fixed-size value carrying exact tick,
+correlation, principal, controller and grant generation. Submission and replay use
+that value without reading a router; replay requires the same live grant and does
+not remap stale identities implicitly. Non-absent frames use the existing
+`QueueMovementCommand`, preserving correlation as command sequence. Missing
+consumers, wrong principals, late/duplicate commands and revoked grants remain
+typed failures. Full/busy admissions retain no hidden backlog and do not advance
+the adapter submission watermark, permitting exact caller-owned retry. Absent
+frames enqueue nothing but still validate the live capability and advance the
+adapter watermark. Simulation advancement and published results remain solely
+CharacterWorld/host-owned.
+
+Input context/configuration/assignment replacement closes the adapter's dedicated
+grant and clears pending input. Reload prepares a fresh adapter/grant completely
+before moving it over the prior owner; failed preparation leaves prior authority
+unchanged. Shutdown/destruction revokes before releasing local state; moved-from
+owners fail closed. Existing Character command-closure semantics remain unchanged:
+revocation discards queued commands before freeze, never rewrites a frozen tick.
+Successful capture/translation/admission adds no heap allocation; creation is
+load-time and may throw `std::bad_alloc` without adopting or revoking the caller's
+grant. The boundary adds no serialized representation or asset version and changes
+no existing Input/Physics public signature; callers opt in through the new owning
+target and its staged-header consumer. This is not a cinematic lease arbiter or a
+Navigation runtime implementation.
+
 The public lifecycle surfaces are `Horo/Physics/CharacterWorld.h` and the
 `HoroPhysicsSceneIntegration` adapter owning the
 `Horo/Physics/PhysicsSceneActivation.h` participant. The adapter is the explicit

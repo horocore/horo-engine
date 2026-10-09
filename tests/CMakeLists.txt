@@ -102,6 +102,7 @@ target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/RenderGrap
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderParallelWorkPublicHeaderConsumer.cpp)
 target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/RenderParallelFrontendPublicHeaderConsumer.cpp)
 target_sources(HoroRuntimeUiPublicHeaderConsumer PRIVATE support/RuntimeUiUnicodePublicContract.cpp)
+target_sources(HoroCharacterInputPublicHeaderConsumer PRIVATE support/DesiredMotionPublicContract.cpp)
 target_sources(HoroGameplayApiPublicHeaderConsumer PRIVATE support/PersistenceInstallationPublicHeaderConsumer.cpp)
 target_sources(HoroRuntimePublicHeaderConsumer PRIVATE support/SaveSceneCanonicalPublicHeaderConsumer.cpp)
 target_sources(HoroRuntimeScenePublicHeaderConsumer PRIVATE support/SaveContentWorldPublicHeaderConsumer.cpp)
@@ -628,6 +629,14 @@ target_compile_features(HoroCharacterSurfacePublicHeaderConsumer PRIVATE cxx_std
 target_link_libraries(HoroCharacterSurfacePublicHeaderConsumer PRIVATE HoroEngine::Physics)
 add_test(NAME HoroCharacterSurfacePublicHeaderConsumer COMMAND HoroCharacterSurfacePublicHeaderConsumer)
 set_tests_properties(HoroCharacterSurfacePublicHeaderConsumer PROPERTIES LABELS "unit;physics;headless")
+
+add_executable(HoroCharacterInputTests unit/runtime/character_input/DesiredMotionAdapterTests.cpp
+    unit/runtime/character_input/DesiredMotionAdmissionTests.cpp support/AllocationProbe.cpp)
+target_compile_features(HoroCharacterInputTests PRIVATE cxx_std_20)
+target_include_directories(HoroCharacterInputTests PRIVATE ${PROJECT_SOURCE_DIR}/src/physics)
+target_include_directories(HoroCharacterInputTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroCharacterInputTests PRIVATE HoroEngine::CharacterInput)
+horo_register_catch_test(HoroCharacterInputTests LABELS "unit;character;input;headless")
 
 add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsCellAttachmentsTests.cpp
