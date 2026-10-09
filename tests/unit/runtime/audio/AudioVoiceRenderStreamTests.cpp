@@ -207,6 +207,12 @@ namespace Horo::Tests::VoiceRenderFixture {
         conversion.inputRate = 24'000;
         CHECK(AudioVoiceRenderRuntime::CreateStream(Registry(), rig.service, rig.stream, conversion, 4096, Descriptor()).HasError());
         conversion.inputRate = 48'000;
+        conversion.channels = 1;
+        const auto channelFailure =
+            AudioVoiceRenderRuntime::CreateStream(Registry(), rig.service, rig.stream, conversion, CoefficientBytes, Descriptor());
+        REQUIRE(channelFailure.HasError());
+        CHECK(channelFailure.ErrorValue().code.Value() == AudioErrors::ResamplerInvalid.code.Value());
+        conversion.channels = 2;
         const auto insufficientCoefficients =
             AudioVoiceRenderRuntime::CreateStream(Registry(), rig.service, rig.stream, conversion, 4096, Descriptor());
         REQUIRE(insufficientCoefficients.HasError());

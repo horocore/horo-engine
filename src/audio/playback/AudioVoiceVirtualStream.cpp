@@ -175,4 +175,85 @@ namespace Horo::Audio {
         }
         return {};
     }
+
+    /** @copydoc AudioVoiceRenderRuntime::State::RenderStream */
+    AudioVoiceMixRenderResult AudioVoiceRenderRuntime::State::RenderStream(const std::uint32_t frames) noexcept {
+        if (const auto *error = registry->CheckState(voice, callback.streamState))
+            return {.error = error};
+        if (IsTerminalAudioVoiceState(callback.streamState)) {
+            const bool first = !streamPlayback.terminalReported;
+            streamPlayback.terminalReported = true;
+            return {.terminal = first};
+        }
+        if (callback.streamState == AudioVoiceState::Virtual)
+            return RenderVirtualStream(frames);
+        if (callback.streamState != AudioVoiceState::Playing)
+            return {};
+        return RenderStreamPcm(frames);
+    }
+
+    /** @copydoc AudioVoiceRenderRuntime::State::RenderStreamPcm */
+    AudioVoiceMixRenderResult AudioVoiceRenderRuntime::State::RenderStreamPcm(const std::uint32_t frames) noexcept {
+        std::array<AudioSample *, 2> rawPointers{scratch.raw[0].samples.data(), scratch.raw[1].samples.data()};
+        std::uint32_t produced{};
+        // Linear conversion admits at most 64 input frames per output frame. Each full chunk covers
+        // maximumFrames >= frames; 64 chunks plus two history/end-marker visits bound even high-ratio
+        // conversion without the short-block truncation of a frames+1 visit budget.
+        std::uint32_t visit{};
+        while (visit < 66 && produced < frames) {
+            ++visit;
+            if (ReadStreamBlock({rawPointers.data(), conversion.channels}))
+                return {.terminal = true};
+            const auto progress = ConvertStreamBlock(frames, produced);
+            if (progress.status == AudioResamplerStatus::InvalidBuffer || progress.status == AudioResamplerStatus::InvalidState)
+                return {.error = &AudioErrors::ResamplerInvalid};
+            produced += progress.produced;
+            if (progress.status == AudioResamplerStatus::Complete) {
+                (void)registry->TryTransition(voice, AudioVoiceState::Finished);
+                callback.streamState = AudioVoiceState::Finished;
+                streamPlayback.terminalReported = true;
+                return {.terminal = true};
+            }
+            if (progress.produced == 0 && progress.consumed == 0)
+                break;  // Silence is already prepared; starvation never waits for a fill job.
+        }
+        return {};
+    }
+
+    /** @copydoc AudioVoiceRenderRuntime::State::ReadStreamBlock */
+    bool AudioVoiceRenderRuntime::State::ReadStreamBlock(const std::span<AudioSample *const> rawPointers) noexcept {
+        if (callback.buffered != 0 || callback.sourceEnded)
+            return false;
+        const auto read = stream->Render(rawPointers, descriptor.maximumFrames);
+        callback.buffered = read.availableFrames;
+        callback.sourceEnded = read.ended || read.stopped;
+        if (!read.stopped)
+            return false;
+        (void)registry->TryCancel(voice);
+        callback.streamState = AudioVoiceState::Cancelled;
+        streamPlayback.terminalReported = true;
+        return true;
+    }
+
+    /** @copydoc AudioVoiceRenderRuntime::State::ConvertStreamBlock */
+    AudioResamplerProgress AudioVoiceRenderRuntime::State::ConvertStreamBlock(const std::uint32_t frames,
+                                                                              const std::uint32_t produced) noexcept {
+        std::array<std::span<const float>, 2> inputs{std::span<const float>{scratch.raw[0].samples}.first(callback.buffered),
+                                                     std::span<const float>{scratch.raw[1].samples}.first(callback.buffered)};
+        std::array<std::span<float>, 2> outputs{std::span{scratch.converted[0].samples}.first(frames - produced),
+                                                std::span{scratch.converted[1].samples}.first(frames - produced)};
+        const auto progress =
+            spatial->Process({{inputs.data(), conversion.channels}, callback.buffered, callback.sourceEnded}, {outputs, frames - produced});
+        if (progress.status == AudioResamplerStatus::InvalidBuffer || progress.status == AudioResamplerStatus::InvalidState)
+            return progress;
+        for (std::uint32_t channel = 0; channel < 2; ++channel)
+            std::copy_n(scratch.converted[channel].samples.begin(), progress.produced, scratch.output[channel].samples.begin() + produced);
+        AdvanceStream(progress.sourceAdvance);
+        callback.buffered -= progress.consumed;
+        for (std::uint32_t channel = 0; channel < conversion.channels; ++channel)
+            std::move(scratch.raw[channel].samples.begin() + progress.consumed,
+                      scratch.raw[channel].samples.begin() + progress.consumed + callback.buffered, scratch.raw[channel].samples.begin());
+        return progress;
+    }
+
 }  // namespace Horo::Audio

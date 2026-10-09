@@ -104,6 +104,21 @@ namespace Horo::Audio {
             REQUIRE(voices.BeginShutdown().HasValue());
         }
 
+        TEST_CASE("Virtual destinations preserve pause resume EOF and terminal rejection", "[unit][audio][voice][virtualization]") {
+            for (const auto terminal : {AudioVoiceState::Finished, AudioVoiceState::Failed}) {
+                auto voices = Prepared(1);
+                const auto voice = voices.CreateVoice().Value();
+                for (const auto next : {AudioVoiceState::Ready, AudioVoiceState::Scheduled, AudioVoiceState::Virtual,
+                                        AudioVoiceState::Paused, AudioVoiceState::Virtual})
+                    REQUIRE(voices.Transition(voice, next).HasValue());
+                REQUIRE(voices.Transition(voice, terminal).HasValue());
+                CHECK(voices.State(voice).Value() == terminal);
+                RequireError(voices.Transition(voice, AudioVoiceState::Playing), AudioErrors::VoiceInvalidTransition);
+                RequireError(voices.Transition(voice, AudioVoiceState::Failed), AudioErrors::VoiceInvalidTransition);
+                CHECK(voices.State(voice).Value() == terminal);
+            }
+        }
+
         TEST_CASE("Stale voice generations cannot mutate replacement voices", "[unit][audio][voice][generation]") {
             auto voices = Prepared(1);
             const auto original = voices.CreateVoice().Value();
@@ -127,12 +142,18 @@ namespace Horo::Audio {
             const auto playing = voices.Transition(voice, AudioVoiceState::Playing);
             const auto paused = voices.Transition(voice, AudioVoiceState::Paused);
             const auto resumed = voices.Transition(voice, AudioVoiceState::Playing);
+            const auto virtualized = voices.Transition(voice, AudioVoiceState::Virtual);
+            const auto virtualPause = voices.Transition(voice, AudioVoiceState::Paused);
+            const auto virtualResume = voices.Transition(voice, AudioVoiceState::Virtual);
             const auto snapshot = voices.Snapshot(voice);
             REQUIRE(ready.HasValue());
             REQUIRE(scheduled.HasValue());
             REQUIRE(playing.HasValue());
             REQUIRE(paused.HasValue());
             REQUIRE(resumed.HasValue());
+            REQUIRE(virtualized.HasValue());
+            REQUIRE(virtualPause.HasValue());
+            REQUIRE(virtualResume.HasValue());
             REQUIRE(snapshot.HasValue());
         }
     }  // namespace
