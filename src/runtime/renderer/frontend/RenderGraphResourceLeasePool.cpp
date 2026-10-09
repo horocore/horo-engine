@@ -10,8 +10,7 @@
 namespace Horo::Render::Detail {
     /** @copydoc ResolveGraphResidentIdentity */
     Result<RenderGraphResidentIdentity> ResolveGraphResidentIdentity(const RenderGraphResourceBinding &binding) {
-        return std::visit([](const auto &handle) -> Result<RenderGraphResidentIdentity> {
-            using Handle = std::remove_cvref_t<decltype(handle)>;
+        return std::visit([]<typename Handle>(const Handle &handle) -> Result<RenderGraphResidentIdentity> {
             if constexpr (std::is_same_v<Handle, RenderBufferHandle>) {
                 return Result<RenderGraphResidentIdentity>::Success({RenderResourceClass::Buffer, Identity(handle)});
             } else if constexpr (std::is_same_v<Handle, RenderTextureHandle>) {
