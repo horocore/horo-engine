@@ -177,8 +177,8 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                     return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
                 return Result<void>::Success();
             }
-            const std::uint64_t count = static_cast<std::uint64_t>(depth.width) * depth.height;
-            if (depth.width == 0 || depth.height == 0 || count != depth.samples.size() ||
+            if (const std::uint64_t count = static_cast<std::uint64_t>(depth.width) * depth.height;
+                depth.width == 0 || depth.height == 0 || count != depth.samples.size() ||
                 count > CpuParticleSimulationHardLimits::DepthSamples || !Finite(depth.restitution) || depth.restitution < 0.0F ||
                 depth.restitution > 1.0F || Math::TryInverse(depth.worldToClip).HasError())
                 return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
@@ -202,13 +202,10 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                 return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
             if (auto depth = ValidateDepth(info.sceneDepth); depth.HasError())
                 return depth;
-            const auto seamUnavailable = [](const CpuParticleCollisionQuerySeam &seam) {
-                return seam.required && seam.probe == nullptr;
-            };
             if ((data.collisionMode == ParticleCollisionMode::SceneDepth && (info.sceneDepth.required || info.requiredGameplay) &&
                  info.sceneDepth.samples.empty()) ||
-                (data.collisionMode == ParticleCollisionMode::PhysicsWorld &&
-                 (seamUnavailable(info.physicsWorld) || (info.requiredGameplay && info.physicsWorld.probe == nullptr))))
+                (data.collisionMode == ParticleCollisionMode::PhysicsWorld && (info.physicsWorld.required || info.requiredGameplay) &&
+                 info.physicsWorld.probe == nullptr))
                 return Failure<void>(VfxErrors::ParticleCollisionQueryUnavailable);
             return Result<void>::Success();
         }
