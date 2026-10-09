@@ -37,6 +37,41 @@ namespace Horo::Render::MetalBackendErrors {
                                                          .retryable = true,
                                                          .userActionable = false};
 
+    const ErrorCodeDescriptor CommandSubmissionFailed{.domain = Domain,
+                                                      .code = ErrorCode{"render.metal.command_submission_failed"},
+                                                      .defaultSeverity = ErrorSeverity::Error,
+                                                      .summary = "Metal GPU command submission failed.",
+                                                      .remediationHint =
+                                                          "Inspect GPU diagnostics, then shut down and reinitialize the backend.",
+                                                      .retryable = false,
+                                                      .userActionable = false};
+
+    const ErrorCodeDescriptor SubmissionBusy{.domain = Domain,
+                                             .code = ErrorCode{"render.metal.submission_busy"},
+                                             .defaultSeverity = ErrorSeverity::Error,
+                                             .summary = "Metal frames-in-flight capacity is occupied.",
+                                             .remediationHint = "Retry frame admission after GPU progress.",
+                                             .retryable = true,
+                                             .userActionable = false};
+
+    const ErrorCodeDescriptor WrongThread{.domain = Domain,
+                                          .code = ErrorCode{"render.metal.wrong_thread"},
+                                          .defaultSeverity = ErrorSeverity::Error,
+                                          .summary = "Metal commands were accessed from another thread.",
+                                          .remediationHint = "Use the render thread that initialized this Metal runtime.",
+                                          .retryable = false,
+                                          .userActionable = false};
+
+    const ErrorCodeDescriptor
+        UnsupportedGraphExecution{.domain = Domain,
+                                  .code = ErrorCode{"render.metal.unsupported_graph_execution"},
+                                  .defaultSeverity = ErrorSeverity::Error,
+                                  .summary = "Metal graph execution requires unavailable workload or submission bindings.",
+                                  .remediationHint =
+                                      "Provide supported graphics/buffer-copy workloads and resident resources on one effective queue.",
+                                  .retryable = false,
+                                  .userActionable = false};
+
     const ErrorCodeDescriptor FrameActive{.domain = Domain,
                                           .code = ErrorCode{"render.backend.frame_active"},
                                           .defaultSeverity = ErrorSeverity::Error,

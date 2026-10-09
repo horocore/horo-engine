@@ -6,10 +6,18 @@
 #import <Metal/Metal.h>
 
 namespace Horo::Render::Detail {
+    /** @brief Owner-thread command evidence protecting placed storage against early aliasing. */
+    struct MetalResidentUse {
+        __strong id<MTLCommandBuffer> last{nil};
+        __strong id<MTLCommandBuffer> previous{nil};
+        bool retired{false};
+    };
+
     struct MetalBufferInstance {
         __strong id<MTLBuffer> buffer{nil};
         RenderBufferUsage usage{RenderBufferUsage::None};
         RenderMemoryPoolId pool;
+        MetalResidentUse use;
     };
 
     struct MetalMeshInstance {
@@ -21,6 +29,7 @@ namespace Horo::Render::Detail {
         __strong id<MTLTexture> texture{nil};
         RenderTextureDescriptor descriptor;
         RenderMemoryPoolId pool;
+        MetalResidentUse use;
     };
 
     struct MetalTextureViewInstance {

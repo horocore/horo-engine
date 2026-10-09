@@ -7,6 +7,10 @@ namespace Horo::Render::MetalBackendErrors {
     extern const ErrorCodeDescriptor AdapterNotFound;
     extern const ErrorCodeDescriptor AdapterUnavailable;
     extern const ErrorCodeDescriptor CommandQueueCreationFailed;
+    extern const ErrorCodeDescriptor CommandSubmissionFailed;
+    extern const ErrorCodeDescriptor SubmissionBusy;
+    extern const ErrorCodeDescriptor WrongThread;
+    extern const ErrorCodeDescriptor UnsupportedGraphExecution;
     extern const ErrorCodeDescriptor FrameActive;
     extern const ErrorCodeDescriptor FrameAlreadyActive;
     extern const ErrorCodeDescriptor FrameTokenExhausted;

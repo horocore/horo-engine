@@ -97,6 +97,8 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # One translation unit per registered public header verifies that consumers can
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
+target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderGraphWorkloadPublicHeaderConsumer.cpp)
+target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/RenderGraphFramePublicHeaderConsumer.cpp)
 target_sources(HoroRuntimeUiPublicHeaderConsumer PRIVATE support/RuntimeUiUnicodePublicContract.cpp)
 target_sources(HoroGameplayApiPublicHeaderConsumer PRIVATE support/PersistenceInstallationPublicHeaderConsumer.cpp)
 target_sources(HoroRuntimePublicHeaderConsumer PRIVATE support/SaveSceneCanonicalPublicHeaderConsumer.cpp)
@@ -2593,6 +2595,7 @@ target_compile_features(HoroShaderCompilerPipelineTests PRIVATE cxx_std_20)
 target_include_directories(HoroShaderCompilerPipelineTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroShaderCompilerPipelineTests PRIVATE HoroEngine::ShaderCompilerToolchain HoroEngine::Platform)
 add_executable(HoroRenderFrontendTests
+        unit/runtime/renderer/RenderGraphResourceLeaseTests.cpp
         unit/runtime/renderer/RenderFrontendTests.cpp
         unit/runtime/renderer/RenderReadbackTests.cpp
         unit/runtime/renderer/RenderTransferTests.cpp
@@ -3697,11 +3700,13 @@ endif ()
 
 if (NOT HORO_BUILD_RENDER_METAL)
     add_executable(HoroMetalDeviceCapabilityTests
+            unit/runtime/renderer/MetalCommandExecutionTests.cpp
             unit/runtime/renderer/MetalDeviceCapabilityTests.cpp
             unit/runtime/renderer/MetalRenderBackendTests.cpp
             unit/runtime/renderer/MetalRenderBackendQualificationTests.cpp
             unit/runtime/renderer/MetalResourcePolicyTests.cpp
             ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/metal/MetalDeviceCapabilities.cpp
+            ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/metal/MetalCommandExecution.cpp
             ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/metal/MetalRenderBackend.cpp
             ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/metal/MetalRenderBackendErrors.cpp
             ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/metal/MetalResourcePolicy.cpp
@@ -3719,7 +3724,17 @@ if (NOT HORO_BUILD_RENDER_METAL)
 endif ()
 
 if (HORO_BUILD_RENDER_METAL)
+    add_executable(HoroMetalGraphExecutionSmoke integration/renderer/MetalGraphExecutionSmoke.mm)
+    target_compile_features(HoroMetalGraphExecutionSmoke PRIVATE cxx_std_20)
+    target_include_directories(HoroMetalGraphExecutionSmoke PRIVATE ${PROJECT_SOURCE_DIR}/src
+            ${PROJECT_SOURCE_DIR}/tests/unit/runtime/renderer)
+    target_link_libraries(HoroMetalGraphExecutionSmoke PRIVATE Catch2::Catch2WithMain HoroEngine::RenderMetal "-framework Metal")
+    if (HORO_ENABLE_GPU_SMOKE_TESTS)
+        add_test(NAME HoroMetalGraphExecutionSmoke COMMAND HoroMetalGraphExecutionSmoke)
+        set_tests_properties(HoroMetalGraphExecutionSmoke PROPERTIES LABELS "gpu;metal;renderer")
+    endif ()
     add_executable(HoroRenderMetalTests
+            unit/runtime/renderer/MetalCommandExecutionTests.cpp
             unit/runtime/renderer/MetalDeviceCapabilityTests.cpp
             unit/runtime/renderer/MetalRenderBackendTests.cpp
             unit/runtime/renderer/MetalRenderBackendQualificationTests.cpp

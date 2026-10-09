@@ -21,6 +21,8 @@
 #include <utility>
 
 namespace Horo::Render {
+    struct RenderGraphExecutionRequest;
+
     /** @brief Stable renderer backend identity used by configuration and registries. */
     class RenderBackendId {
     public:
@@ -383,6 +385,13 @@ namespace Horo::Render {
 
         /** @brief Validates and executes the ordered plan associated with the active frame. */
         [[nodiscard]] virtual Result<void> Execute(const RenderExecutionPlan &plan) = 0;
+
+        /**
+         * @brief Executes typed workloads through the intact compiled graph for the active frame.
+         * @param request Borrowed graph, exact workloads and frontend-resolved resource instances.
+         * @return Success or a typed unsupported/admission/encoding failure, without fallback.
+         */
+        [[nodiscard]] virtual Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request);
 
         /** @brief Completes the active frame and presents when the backend supports presentation. */
         [[nodiscard]] virtual Result<void> Present(FrameToken frame) = 0;

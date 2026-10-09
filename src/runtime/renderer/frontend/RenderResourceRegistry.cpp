@@ -260,40 +260,6 @@ namespace Horo::Render::Detail {
         return Result<std::uint64_t>::Success(entry.backendInstance);
     }
 
-    Result<void> RenderResourceRegistry::AddSubmissionPin(const RenderResourceClass resourceClass, const RenderResourceIdentity identity) {
-        const auto validated = Validate(resourceClass, identity);
-        if (validated.HasError()) {
-            return Result<void>::Failure(validated.ErrorValue());
-        }
-        Entry &entry = entries_[validated.Value()];
-        if (entry.state != RenderResourceState::Ready) {
-            return Result<void>::Failure(
-                RegistryError(FrontendErrors::ResourceNotReady, "Only a ready resource may enter a new submission."));
-        }
-        if (entry.submissionPins == std::numeric_limits<std::uint32_t>::max()) {
-            return Result<void>::Failure(
-                RegistryError(FrontendErrors::ResourceCapacityExhausted, "The renderer resource submission pin count is exhausted."));
-        }
-        ++entry.submissionPins;
-        return Result<void>::Success();
-    }
-
-    Result<void> RenderResourceRegistry::ReleaseSubmissionPin(const RenderResourceClass resourceClass,
-                                                              const RenderResourceIdentity identity) {
-        const auto validated = Validate(resourceClass, identity);
-        if (validated.HasError()) {
-            return Result<void>::Failure(validated.ErrorValue());
-        }
-        Entry &entry = entries_[validated.Value()];
-        if (entry.submissionPins == 0) {
-            return Result<void>::Failure(
-                RegistryError(FrontendErrors::ResourceHandleMalformed, "The renderer resource has no submission pin to release."));
-        }
-        --entry.submissionPins;
-        QueueRetirementIfEligible(identity.slot);
-        return Result<void>::Success();
-    }
-
     Result<void> RenderResourceRegistry::TrackSubmission(const RenderResourceClass resourceClass, const RenderResourceIdentity identity,
                                                          const RenderTimelinePoint completion) {
         if (!completion.IsValid()) {
@@ -397,6 +363,7 @@ namespace Horo::Render::Detail {
         acceptingRequests_ = false;
         pendingRequests_ = 0;
         submissionPins_.clear();
+        activeSubmissionPins_ = 0;
         queueProgress_.clear();
         completionScanCursor_ = 0;
         for (std::size_t slot = 1; slot < entries_.size(); ++slot) {

@@ -1948,6 +1948,7 @@ target_link_libraries(HoroRenderBackendRegistry PUBLIC HoroEngine::RenderApi)
 add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/BoundedRenderQueueCore.h
         runtime/renderer/frontend/RenderTransferErrorDescriptor.h
+        runtime/renderer/frontend/RenderGraphResourceLeasePool.cpp
         runtime/renderer/frontend/RenderFrontend.cpp
         runtime/renderer/frontend/RenderFrontendResourceAccess.cpp
         runtime/renderer/frontend/RenderFrontendResourceValidation.cpp
@@ -1963,6 +1964,7 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderQueryErrors.cpp
         runtime/renderer/frontend/RenderResourceOperations.cpp
         runtime/renderer/frontend/RenderResourceRegistry.cpp
+        runtime/renderer/frontend/RenderResourceSubmissionPins.cpp
         runtime/renderer/frontend/UiRenderComposition.cpp
 )
 add_library(HoroEngine::RenderFrontend ALIAS HoroRenderFrontend)
@@ -2050,6 +2052,7 @@ endif ()
 
 if (HORO_BUILD_RENDER_METAL)
     add_library(HoroRenderMetal STATIC
+            runtime/renderer/modules/metal/MetalCommandExecution.cpp
             runtime/renderer/modules/metal/MetalDeviceCapabilities.cpp
             runtime/renderer/modules/metal/MetalRenderBackend.cpp
             runtime/renderer/modules/metal/MetalRenderBackendErrors.cpp

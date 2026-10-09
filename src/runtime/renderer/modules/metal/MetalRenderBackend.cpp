@@ -1,4 +1,5 @@
 #include "MetalBackendInternal.h"
+#include "MetalCommandExecution.h"
 #include "MetalRenderBackendErrors.h"
 
 #include <limits>
@@ -211,10 +212,32 @@ namespace Horo::Render {
                     }
                     const Result<void> encoded = runtime_->ExecutePrimaryOutput(*pass.primaryOutput);
                     if (encoded.HasError()) {
+                        AbortActiveFrame();
                         return Result<void>::Failure(encoded.ErrorValue());
                     }
                 }
                 return Result<void>::Success();
+            }
+
+            /** @copydoc IRenderBackend::ExecuteGraph */
+            Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request) override {
+                if (const auto state = ValidateActiveFrame(request.frame); state.HasError()) {
+                    return state;
+                }
+                if (!request.resources.empty() && request.lease == nullptr) {
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan,
+                                                           "Resident graph execution requires a frontend-owned resource lease."));
+                }
+                if (request.lease != nullptr) {
+                    if (const auto retained = runtime_->RetainGraphResources(*request.lease); retained.HasError()) {
+                        return retained;
+                    }
+                }
+                const auto executed = Detail::ExecuteMetalRenderGraph(*runtime_, request);
+                if (executed.HasError()) {
+                    AbortActiveFrame();
+                }
+                return executed;
             }
 
             /** @copydoc IRenderBackend::Present */
