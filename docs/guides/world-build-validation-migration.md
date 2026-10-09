@@ -23,3 +23,7 @@ or stores. No background task, service registration or runtime state is owned
 by this function. Existing callers of `IncrementalSceneCellCook` remain valid;
 this validation is an explicit build publication step, separate from cache
 replacement and runtime attachment.
+
+`ValidateWorldBuild` borrows `WorldBuildValidationLimits` by const reference for the
+synchronous call. Ordinary value callers are unchanged; stored function-pointer
+contracts must use the const-reference parameter. The limits are never mutated.

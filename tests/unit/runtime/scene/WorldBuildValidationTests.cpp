@@ -92,6 +92,21 @@ namespace Horo::Runtime {
             CHECK(Has(result.Value(), "world.build.cell_budget"));
             CHECK(Has(result.Value(), "world.build.world_budget"));
         }
+        SECTION("stale payload accounting precedes cell and aggregate budget findings") {
+            ++fixture.cells[0].expected.revision.value;
+            const auto bytes = fixture.payloads[0]->RetainedBytes();
+            fixture.limits.maximumCellBytes = bytes - 1;
+            fixture.limits.maximumWorldBytes = 3 * bytes - 1;
+            auto result = fixture.Run();
+            REQUIRE(result.HasValue());
+            CHECK(result.Value().estimatedBytes == 3 * bytes);
+            REQUIRE(result.Value().diagnostics.size() == 5);
+            CHECK(result.Value().diagnostics[0].code.Value() == "world.build.stale_payload");
+            CHECK(result.Value().diagnostics[1].code.Value() == "world.build.cell_budget");
+            CHECK(result.Value().diagnostics[4].code.Value() == "world.build.world_budget");
+            CHECK(fixture.limits.maximumCellBytes == bytes - 1);
+            CHECK(fixture.limits.maximumWorldBytes == 3 * bytes - 1);
+        }
         SECTION("reference generation is exact") {
             auto target = fixture.cells[1].expected;
             ++target.revision.value;

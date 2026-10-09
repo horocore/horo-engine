@@ -68,5 +68,5 @@ namespace Horo::Runtime {
     [[nodiscard]] Result<WorldBuildValidationReport> ValidateWorldBuild(
         const WorldStreaming::WorldPartitionDescriptor &partition, std::uint64_t revision, std::span<const WorldBuildCell> cells,
         std::span<const std::shared_ptr<const RuntimeSceneCellPayload>> payloads, std::span<const WorldBuildReference> references,
-        WorldBuildValidationLimits limits, const CancellationToken &cancellation = {});
+        const WorldBuildValidationLimits &limits, const CancellationToken &cancellation = {});
 }  // namespace Horo::Runtime

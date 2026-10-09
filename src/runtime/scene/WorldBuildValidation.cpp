@@ -11,7 +11,7 @@ namespace Horo::Runtime {
             const WorldStreaming::WorldPartitionDescriptor &partition;
             std::span<const WorldBuildCell> cells;
             std::span<const std::shared_ptr<const RuntimeSceneCellPayload>> payloads;
-            WorldBuildValidationLimits limits;
+            const WorldBuildValidationLimits &limits;
             const CancellationToken &cancellation;
             WorldBuildValidationReport report;
             std::size_t copiedSourceBytes{};
@@ -38,8 +38,7 @@ namespace Horo::Runtime {
             bool Contains(const WorldBuildEndpoint &endpoint) const {
                 if (!endpoint.object.IsValid())
                     return false;
-                const auto authored = std::ranges::find(cells, endpoint.cell, &WorldBuildCell::expected);
-                if (authored == cells.end())
+                if (const auto authored = std::ranges::find(cells, endpoint.cell, &WorldBuildCell::expected); authored == cells.end())
                     return false;
                 return std::ranges::any_of(payloads, [&](const auto &payload) {
                     return payload && payload->Identity() == endpoint.cell &&
@@ -49,51 +48,52 @@ namespace Horo::Runtime {
                 });
             }
 
-            /** @brief Validates complete authored coverage and unique cooked ownership in canonical topology order. */
+            /** @brief Accounts for one unique payload even when its publication is stale. */
+            Result<void> CheckPayload(const RuntimeSceneCellPayload &payload, const WorldBuildCell &authored) {
+                if (payload.Identity() != authored.expected) {
+                    if (auto result = Add("world.build.stale_payload", "The cooked payload does not match the captured cell publication.",
+                                          authored.source);
+                        result.HasError())
+                        return result;
+                }
+                const auto bytes = payload.RetainedBytes();
+                if (bytes > std::numeric_limits<std::size_t>::max() - report.estimatedBytes)
+                    return Result<void>::Failure(MakeError(SceneCellPayloadErrors::CapacityExceeded));
+                report.estimatedBytes += bytes;
+                if (bytes > limits.maximumCellBytes)
+                    return Add("world.build.cell_budget", "The Scene payload logical byte estimate exceeds the cell budget.",
+                               authored.source);
+                return Result<void>::Success();
+            }
+
+            /** @brief Validates one topology cell without counting absent or ambiguous cooked output. */
+            Result<void> CheckCell(const WorldStreaming::StreamingCellId &id) {
+                const auto authored = std::ranges::find(cells, id, [](const auto &entry) {
+                    return entry.expected.cell;
+                });
+                if (authored == cells.end())
+                    return Add("world.build.missing_source", "A partition cell has no captured authored publication.", {});
+                if (const auto count = std::ranges::count_if(payloads,
+                                                             [&](const auto &payload) {
+                    return payload && payload->Identity().cell == id;
+                });
+                    count != 1)
+                    return Add(count == 0 ? "world.build.missing_payload" : "world.build.overlap",
+                               count == 0 ? "The cell has no cooked Scene payload." : "Multiple Scene payloads claim the same cell.",
+                               authored->source);
+                const auto payload = std::ranges::find_if(payloads, [&](const auto &value) {
+                    return value && value->Identity().cell == id;
+                });
+                return CheckPayload(**payload, *authored);
+            }
+
+            /** @brief Validates complete coverage in canonical topology order, then the aggregate budget. */
             Result<void> CheckCells() {
                 for (const auto &cell : partition.Cells()) {
                     if (cancellation.IsCancellationRequested())
                         return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Cancelled));
-                    const auto authored = std::ranges::find(cells, cell.id, [](const auto &entry) {
-                        return entry.expected.cell;
-                    });
-                    if (authored == cells.end()) {
-                        if (auto result = Add("world.build.missing_source", "A partition cell has no captured authored publication.", {});
-                            result.HasError())
-                            return result;
-                        continue;
-                    }
-                    const auto count = std::ranges::count_if(payloads, [&](const auto &payload) {
-                        return payload && payload->Identity().cell == cell.id;
-                    });
-                    if (count != 1) {
-                        if (auto result =
-                                Add(count == 0 ? "world.build.missing_payload" : "world.build.overlap",
-                                    count == 0 ? "The cell has no cooked Scene payload." : "Multiple Scene payloads claim the same cell.",
-                                    authored->source);
-                            result.HasError())
-                            return result;
-                        continue;
-                    }
-                    const auto payload = std::ranges::find_if(payloads, [&](const auto &value) {
-                        return value && value->Identity().cell == cell.id;
-                    });
-                    if ((*payload)->Identity() != authored->expected) {
-                        if (auto result = Add("world.build.stale_payload",
-                                              "The cooked payload does not match the captured cell publication.", authored->source);
-                            result.HasError())
-                            return result;
-                    }
-                    const auto bytes = (*payload)->RetainedBytes();
-                    if (bytes > std::numeric_limits<std::size_t>::max() - report.estimatedBytes)
-                        return Result<void>::Failure(MakeError(SceneCellPayloadErrors::CapacityExceeded));
-                    report.estimatedBytes += bytes;
-                    if (bytes > limits.maximumCellBytes) {
-                        if (auto result = Add("world.build.cell_budget", "The Scene payload logical byte estimate exceeds the cell budget.",
-                                              authored->source);
-                            result.HasError())
-                            return result;
-                    }
+                    if (auto result = CheckCell(cell.id); result.HasError())
+                        return result;
                 }
                 if (report.estimatedBytes > limits.maximumWorldBytes)
                     return Add("world.build.world_budget", "The aggregate Scene payload logical byte estimate exceeds the world budget.",
@@ -115,8 +115,59 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
+        /** @brief Rejects malformed or duplicate authored identities before location admission. */
+        Result<void> AdmitCells(const Validation &validation, std::size_t &bytes) {
+            for (const auto &cell : validation.cells) {
+                if (validation.cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Cancelled));
+                if (const auto &id = cell.expected; id.partition != validation.partition.Partition() || !id.scene.IsValid() ||
+                                                    !id.revision.value ||
+                                                    std::ranges::none_of(validation.partition.Cells(), [&](const auto &item) {
+                    return item.id == id.cell;
+                }) || std::ranges::count(validation.cells, id.cell, [](const auto &item) {
+                    return item.expected.cell;
+                }) != 1)
+                    return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Invalid));
+                if (const auto location = AdmitLocation(cell.source, bytes, validation.limits.maximumSourceBytes); location.HasError())
+                    return location;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Admits reference navigation storage after authored source storage. */
+        Result<void> AdmitReferences(const Validation &validation, std::span<const WorldBuildReference> references, std::size_t &bytes) {
+            for (const auto &reference : references) {
+                if (validation.cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Cancelled));
+                if (const auto location = AdmitLocation(reference.location, bytes, validation.limits.maximumSourceBytes);
+                    location.HasError())
+                    return location;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Bounds object traversal and checks cooked topology membership, retaining null missing leases. */
+        Result<void> AdmitPayloads(const Validation &validation) {
+            std::size_t objects{};
+            for (const auto &payload : validation.payloads) {
+                if (validation.cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Cancelled));
+                if (!payload)
+                    continue;
+                if (payload->Definition().Entities().size() > validation.limits.maximumObjects - objects)
+                    return Result<void>::Failure(MakeError(SceneCellPayloadErrors::CapacityExceeded));
+                objects += payload->Definition().Entities().size();
+                if (payload->Identity().partition != validation.partition.Partition() ||
+                    std::ranges::none_of(validation.partition.Cells(), [&](const auto &cell) {
+                    return cell.id == payload->Identity().cell;
+                }))
+                    return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Invalid));
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Checks structural capture validity before any owned diagnostics are allocated. */
-        Result<void> Admit(Validation &validation, std::span<const WorldBuildReference> references) {
+        Result<void> Admit(const Validation &validation, std::span<const WorldBuildReference> references) {
             const auto &limits = validation.limits;
             if (!validation.report.revision || !limits.maximumCells || !limits.maximumDiagnostics || !limits.maximumSourceBytes ||
                 !limits.maximumObjects || !limits.maximumCellBytes || !limits.maximumWorldBytes)
@@ -125,43 +176,11 @@ namespace Horo::Runtime {
                 validation.payloads.size() > limits.maximumCells || references.size() > limits.maximumReferences)
                 return Result<void>::Failure(MakeError(SceneCellPayloadErrors::CapacityExceeded));
             std::size_t bytes{};
-            for (const auto &cell : validation.cells) {
-                if (validation.cancellation.IsCancellationRequested())
-                    return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Cancelled));
-                const auto &id = cell.expected;
-                if (id.partition != validation.partition.Partition() || !id.scene.IsValid() || !id.revision.value ||
-                    std::ranges::none_of(validation.partition.Cells(),
-                                         [&](const auto &item) {
-                    return item.id == id.cell;
-                }) ||
-                    std::ranges::count(validation.cells, id.cell, [](const auto &item) {
-                    return item.expected.cell;
-                }) != 1)
-                    return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Invalid));
-                if (const auto location = AdmitLocation(cell.source, bytes, limits.maximumSourceBytes); location.HasError())
-                    return location;
-            }
-            for (const auto &reference : references) {
-                if (validation.cancellation.IsCancellationRequested())
-                    return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Cancelled));
-                if (const auto location = AdmitLocation(reference.location, bytes, limits.maximumSourceBytes); location.HasError())
-                    return location;
-            }
-            std::size_t objects{};
-            for (const auto &payload : validation.payloads) {
-                if (validation.cancellation.IsCancellationRequested())
-                    return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Cancelled));
-                if (payload && payload->Definition().Entities().size() > limits.maximumObjects - objects)
-                    return Result<void>::Failure(MakeError(SceneCellPayloadErrors::CapacityExceeded));
-                if (payload)
-                    objects += payload->Definition().Entities().size();
-                if (payload && (payload->Identity().partition != validation.partition.Partition() ||
-                                std::ranges::none_of(validation.partition.Cells(), [&](const auto &cell) {
-                    return cell.id == payload->Identity().cell;
-                })))
-                    return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Invalid));
-            }
-            return Result<void>::Success();
+            if (auto result = AdmitCells(validation, bytes); result.HasError())
+                return result;
+            if (auto result = AdmitReferences(validation, references, bytes); result.HasError())
+                return result;
+            return AdmitPayloads(validation);
         }
     }  // namespace
 
@@ -170,7 +189,7 @@ namespace Horo::Runtime {
                                                           std::span<const WorldBuildCell> cells,
                                                           std::span<const std::shared_ptr<const RuntimeSceneCellPayload>> payloads,
                                                           std::span<const WorldBuildReference> references,
-                                                          WorldBuildValidationLimits limits, const CancellationToken &cancellation) {
+                                                          const WorldBuildValidationLimits &limits, const CancellationToken &cancellation) {
         Validation validation{partition, cells, payloads, limits, cancellation, {.revision = revision}};
         if (const auto admitted = Admit(validation, references); admitted.HasError())
             return Result<WorldBuildValidationReport>::Failure(admitted.ErrorValue());
