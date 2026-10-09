@@ -378,6 +378,12 @@ add_executable(HoroReplicationInboundApplyTests
 target_compile_features(HoroReplicationInboundApplyTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReplicationInboundApplyTests PRIVATE HoroEngine::NetworkRuntime HoroEngine::NetworkTransportNull)
 horo_register_catch_test(HoroReplicationInboundApplyTests LABELS "unit;network;headless;replication_apply")
+
+add_executable(HoroReplicationSnapshotHistoryTests unit/runtime/networking/ReplicationSnapshotHistoryTests.cpp)
+target_compile_features(HoroReplicationSnapshotHistoryTests PRIVATE cxx_std_20)
+target_link_libraries(HoroReplicationSnapshotHistoryTests PRIVATE HoroEngine::NetworkRuntime)
+horo_register_catch_test(HoroReplicationSnapshotHistoryTests LABELS "unit;network;headless;replication_history")
+
 add_executable(HoroNetworkModePublicHeaderConsumer support/NetworkModePublicHeaderConsumer.cpp)
 target_compile_features(HoroNetworkModePublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkModePublicHeaderConsumer PRIVATE HoroEngine::NetworkRuntime)
@@ -3793,6 +3799,15 @@ if (HORO_BUILD_RENDER_METAL)
         endif ()
     endif ()
 endif ()
+
+add_executable(HoroD3D12InitializationTests
+        unit/runtime/renderer/D3D12InitializationTests.cpp
+)
+target_compile_features(HoroD3D12InitializationTests PRIVATE cxx_std_20)
+target_include_directories(HoroD3D12InitializationTests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(HoroD3D12InitializationTests PRIVATE
+        Catch2::Catch2WithMain HoroEngine::RenderD3D12 HoroEngine::RenderApi)
+horo_register_catch_test(HoroD3D12InitializationTests LABELS "native;renderer;d3d12;qualification")
 
 if (HORO_BUILD_RENDER_VULKAN)
     add_executable(HoroRenderVulkanTests

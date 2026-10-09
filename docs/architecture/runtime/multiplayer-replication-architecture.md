@@ -446,8 +446,33 @@ boundary. It classifies allocation failures separately from other callback fault
 typed diagnostic construction remains outside that boundary so allocation during
 error reporting cannot terminate the host. The operation guard releases admission
 on all failure paths, allowing a later valid transaction to retry.
-NET-004.5 owns per-connection acknowledgement windows, retention and overflow policy;
-this codec contains no hidden history or retry state.
+`ReplicationSnapshotHistory` owns the NET-004.5 per-connection selective
+acknowledgement window. Each prepared owner is scoped to one connection handle,
+session, Scene and host-issued non-reused history incarnation. Its finite entry
+and retained-source byte budgets bound pins; fixed send-time leases expire during
+the host's connection poll through `Expire`, including idle and loss periods.
+The host reserves correlation after complete encoding and before submission,
+attaches the non-local correlation (never the connection handle) to outgoing
+framing, and calls `CancelSent` when
+submission fails or is cancelled. Only exact retained sends with peer receipt can
+become baseline roots. Duplicates do not refresh
+leases and reordered acknowledgements never downgrade selection or imply receipt
+of other sends. Role/projection/descriptor changes select full state.
+
+Memory pressure releases all pins while preserving the sequence high-water mark.
+Overflow clears the window and requires a newly encoded full-state retry, or
+permanently closes admission under the explicit disconnect policy. The host
+performs the transport disconnect. Clock/sequence exhaustion closes admission
+without wrapping. Disconnect and Scene replacement call `Shutdown` before
+composing a fresh incarnation. Short-lived selected baseline copies must drain
+before maintenance/retirement. Source revocation prevents further selection;
+no operation grants Scene mutation or recaptures Gameplay. The codec itself
+contains no hidden history or retry state.
+
+Migration is additive: `ReplicationSnapshotHistory.h` is owned only by
+`HoroNetworkRuntime`, with public-header consumer coverage. Existing codec callers
+need no source changes. Hosts opting in replace their acknowledgement storage and
+route authenticated peer evidence through the current exact local scope.
 
 Hosts charge a finite per-record allowance before each owner-thread call. The existing
 serializer API allocates bounded encoded and decoded values; the codec additionally
