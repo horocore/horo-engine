@@ -55,6 +55,7 @@ TEST_CASE("Metal device admission publishes queried identity limits formats and 
     CHECK(admitted.Value().implemented.support.IsValid());
     CHECK(admitted.Value().implemented.support.features.Supports(RenderCapability::TextureResources));
     CHECK(admitted.Value().implemented.support.queues.Supports(RenderQueueKind::Graphics));
+    CHECK(admitted.Value().implemented.support.queues.Supports(RenderQueueKind::Copy));
     CHECK_FALSE(admitted.Value().implemented.support.queues.Supports(RenderQueueKind::Compute));
     CHECK(admitted.Value().implemented.support.limits.maxBufferBytes == facts.maxBufferLength);
     CHECK_FALSE(admitted.Value().implemented.supportsCompute);

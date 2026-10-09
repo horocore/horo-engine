@@ -269,7 +269,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiFontFaceDescriptor::IsValid */
     bool UiFontFaceDescriptor::IsValid() const noexcept {
-        return id.IsValid();
+        return id.IsValid() && sourceAsset.IsValid() == revision.IsValid();
     }
 
     /** @brief Releases the native face before the immutable font blob. */
@@ -324,6 +324,16 @@ namespace Horo::Runtime::Ui {
         return storage_ ? storage_->descriptor.id : UiFontFaceId{};
     }
 
+    /** @copydoc UiFontFace::SourceAsset */
+    Assets::AssetId UiFontFace::SourceAsset() const noexcept {
+        return storage_ ? storage_->descriptor.sourceAsset : Assets::AssetId{};
+    }
+
+    /** @copydoc UiFontFace::Revision */
+    UiFontFaceRevision UiFontFace::Revision() const noexcept {
+        return storage_ ? storage_->descriptor.revision : UiFontFaceRevision{};
+    }
+
     /** @copydoc UiFontFace::CollectionIndex */
     std::uint32_t UiFontFace::CollectionIndex() const noexcept {
         return storage_ ? storage_->descriptor.collectionIndex : 0;
@@ -337,6 +347,11 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiFontFace::IsValid */
     bool UiFontFace::IsValid() const noexcept {
         return storage_ != nullptr && storage_->face != nullptr && storage_->descriptor.IsValid() && UnitsPerEm() != 0;
+    }
+
+    /** @copydoc UiFontFace::SharesGeneration */
+    bool UiFontFace::SharesGeneration(const UiFontFace &other) const noexcept {
+        return storage_ && storage_ == other.storage_;
     }
 
     /** @copydoc UiFontFallbackChain::Create */

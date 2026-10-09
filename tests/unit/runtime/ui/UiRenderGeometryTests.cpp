@@ -1,4 +1,5 @@
 #include "Horo/Runtime/Ui/UiRenderGeometry.h"
+#include "UiRenderSnapshotTestSupport.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -146,15 +147,8 @@ namespace Horo::Runtime::Ui {
             const std::array<UiClip, 0> clips{};
             const std::array<UiMask, 0> masks{};
             const auto commands = MakeCommands(root, child, borderWidth, includeNineSlice);
-            const UiRenderSnapshotDescriptor descriptor{.instance = tree.Instance(),
-                                                        .canvas = tree.Canvas(),
-                                                        .document = tree.SourceDocument(),
-                                                        .documentRevision = tree.SourceDocumentRevision(),
-                                                        .treeRevision = tree.Revision(),
-                                                        .interactionRevision = UiInteractionRevision::Create(8).Value(),
-                                                        .snapshotRevision = UiRenderSnapshotRevision::Create(revision).Value(),
-                                                        .view = {Owner(), 9, 1},
-                                                        .limits = limits};
+            const auto descriptor = Test::SnapshotDescriptor(tree, UiInteractionRevision::Create(8).Value(),
+                                                             UiRenderSnapshotRevision::Create(revision).Value(), {Owner(), 9, 1}, limits);
             auto snapshot = extractor.Extract(tree, descriptor, {commands, textRuns, glyphs, clips, masks, transforms, resources});
             REQUIRE(snapshot.HasValue());
             return std::move(snapshot).Value();
@@ -318,6 +312,27 @@ namespace Horo::Runtime::Ui {
 
             retained.reset();
             REQUIRE(arena.Build(snapshot).HasValue());
+        }
+
+        TEST_CASE("UI geometry ownership validity follows transfer and survives arena destruction",
+                  "[runtime_ui][render_geometry][lifecycle]") {
+            std::optional<UiRenderGeometryPlan> retained;
+            {
+                auto arena = MakeArena(1);
+                auto built = arena.Build(MakeSnapshot(2));
+                REQUIRE(built.HasValue());
+                auto source = std::move(built).Value();
+                REQUIRE(source.IsValid());
+                retained.emplace(std::move(source));
+                REQUIRE_FALSE(source.IsValid());
+                REQUIRE(retained->IsValid());
+                REQUIRE(arena.Build(MakeSnapshot(3)).HasError());
+                arena.Close();
+                REQUIRE(retained->IsValid());
+            }
+            REQUIRE(retained->IsValid());
+            REQUIRE(retained->SourceSnapshot().IsValid());
+            REQUIRE(retained->Descriptor().snapshotRevision == UiRenderSnapshotRevision::Create(2).Value());
         }
 
         TEST_CASE("UI geometry plans retain source leases across reload and shutdown", "[runtime_ui][render_geometry][lifecycle]") {

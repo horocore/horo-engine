@@ -1,10 +1,14 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 
+#include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
+#include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "RenderFrontendErrors.h"
+#include "RenderGraphResourceLeasePool.h"
 #include "RenderResourceOperations.h"
 #include "RenderResourceRegistry.h"
 #include "RenderResourceUploadQueue.h"
 
+#include <array>
 #include <new>
 #include <optional>
 #include <stdexcept>
@@ -13,6 +17,23 @@
 
 namespace Horo::Render {
     namespace {
+        /** @brief Resolves bounded graph bindings against the resident registry before retaining a native submission. */
+        [[nodiscard]] Result<void> ResolveResidentGraphResources(const Detail::RenderResourceRegistry &registry,
+                                                                 const std::span<const RenderGraphResource> resources,
+                                                                 const std::span<RenderGraphResourceInstance> resolved) {
+            for (std::size_t index = 0; index < resources.size(); ++index) {
+                const auto &resource = resources[index];
+                const auto identity = Detail::ResolveGraphResidentIdentity(resource.binding);
+                if (identity.HasError())
+                    return Result<void>::Failure(identity.ErrorValue());
+                const auto instance = registry.BackendInstance(identity.Value().resourceClass, identity.Value().identity);
+                if (instance.HasError())
+                    return Result<void>::Failure(instance.ErrorValue());
+                resolved[index] = {resource.id, instance.Value()};
+            }
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Error MakeFrontendError(const ErrorCodeDescriptor &descriptor, std::string message) {
             return MakeError(descriptor, std::move(message));
         }
@@ -173,6 +194,62 @@ namespace Horo::Render {
         }
     }
 
+    /** @copydoc RenderFrameScope::ExecuteGraph */
+    Result<void> RenderFrameScope::ExecuteGraph(const CompiledRenderGraphExecution &graph,
+                                                const std::span<const RenderGraphPassWorkload> workloads) {
+        return ExecuteGraphInternal(graph, workloads, nullptr);
+    }
+
+    /** @copydoc RenderFrameScope::ExecuteGraph(const CompiledRenderGraphExecution &, std::span<const RenderGraphPassWorkload>,
+     * UiRenderSubmission) */
+    Result<void> RenderFrameScope::ExecuteGraph(const CompiledRenderGraphExecution &graph,
+                                                const std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission ui) {
+        return ExecuteGraphInternal(graph, workloads, &ui);
+    }
+
+    /** @copydoc RenderFrameScope::ExecuteGraphInternal */
+    Result<void> RenderFrameScope::ExecuteGraphInternal(const CompiledRenderGraphExecution &graph,
+                                                        const std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission *ui) {
+        if (backend_ == nullptr) {
+            return Result<void>::Failure(MakeError(FrontendErrors::FrameNotActive));
+        }
+        if (executed_) {
+            return Result<void>::Failure(MakeError(FrontendErrors::FrameAlreadyExecuted));
+        }
+        try {
+            if (!graph.Owner().IsValid() || graph.Resources().size() > RenderGraphLimits::HardMaxResources) {
+                Abort();
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
+            }
+            std::array<RenderGraphResourceInstance, RenderGraphLimits::HardMaxResources> resolved;
+            const auto instances = std::span{resolved}.first(graph.Resources().size());
+            if (const auto resolution = ResolveResidentGraphResources(*owner_->resourceRegistry_, graph.Resources(), instances);
+                resolution.HasError()) {
+                Abort();
+                return resolution;
+            }
+            const auto leased = owner_->graphResourceLeases_->Acquire(graph.Resources(), ui);
+            if (leased.HasError()) {
+                Abort();
+                return Result<void>::Failure(leased.ErrorValue());
+            }
+            const auto releaseLease = [](IRenderGraphResourceLease *lease) {
+                lease->Release();
+            };
+            std::unique_ptr<IRenderGraphResourceLease, decltype(releaseLease)> lease{leased.Value(), releaseLease};
+            if (const auto result = backend_->ExecuteGraph({frame_, graph, workloads, instances, lease.get()}); result.HasError()) {
+                Abort();
+                return result;
+            }
+            static_cast<void>(lease.release());
+            executed_ = true;
+            return Result<void>::Success();
+        } catch (...) {  // NOSONAR(cpp:S2738) Frame ownership must recover across an arbitrary backend exception.
+            Abort();
+            return Result<void>::Failure(MakeError(FrontendErrors::FrameException));
+        }
+    }
+
     /** @copydoc RenderFrameScope::Present */
     Result<void> RenderFrameScope::Present() {
         if (backend_ == nullptr) {
@@ -285,7 +362,9 @@ namespace Horo::Render {
                                                       ReleaseResource(*backend_, *memoryBudget_, resourceClass, backendInstance,
                                                                       memoryAllocation, releaseMode);
                                                   })),
-          resourceUploadQueue_(std::make_unique<Detail::RenderResourceUploadQueue>(uploadLimits)) {}
+          resourceUploadQueue_(std::make_unique<Detail::RenderResourceUploadQueue>(uploadLimits)),
+          graphResourceLeases_(
+              std::make_unique<Detail::RenderGraphResourceLeasePool>(*resourceRegistry_, retirementLimits.maximumSubmissionPins)) {}
 
     /** @copydoc RenderFrontend::~RenderFrontend */
     RenderFrontend::~RenderFrontend() {

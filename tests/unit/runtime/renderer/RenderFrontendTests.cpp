@@ -1,7 +1,9 @@
 #include "Horo/Runtime/Render/NullBackendModule.h"
 #include "Horo/Runtime/Render/RenderBackendRegistry.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
+#include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "Horo/Runtime/Render/RenderMemoryBudgetErrors.h"
+#include "RenderGraphTestUtils.h"
 #include "RenderMemoryTestSupport.h"
 
 #include <array>
@@ -68,6 +70,9 @@ namespace {  // NOSONAR(cpp:S1000) File-local test doubles and shared fixture st
         bool frameActive{false};
         FrameToken activeFrame{};
         std::uint64_t nextResourceInstance{1};
+        std::vector<RenderGraphResourceInstance> graphResources;
+        IRenderGraphResourceLease *graphLease{nullptr};
+        bool completeGraphOnPresent{true};
         bool failResourceCreation{false};
         bool throwDuringResourceCreation{false};
         bool supportsBufferResources{true};
@@ -199,6 +204,12 @@ namespace {  // NOSONAR(cpp:S1000) File-local test doubles and shared fixture st
             return Result<void>::Success();
         }
 
+        Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request) override {
+            lifecycleState.graphResources.assign(request.resources.begin(), request.resources.end());
+            lifecycleState.graphLease = request.lease;
+            return Execute({request.frame, {}});
+        }
+
         Result<void> Present(const FrameToken frame) override {
             ++lifecycleState.presentCount;
             Check(lifecycleState.frameActive);
@@ -213,6 +224,10 @@ namespace {  // NOSONAR(cpp:S1000) File-local test doubles and shared fixture st
                                               "Injected presentation failure.",
                                               {}});
             }
+            if (lifecycleState.completeGraphOnPresent && lifecycleState.graphLease != nullptr) {
+                lifecycleState.graphLease->Release();
+                lifecycleState.graphLease = nullptr;
+            }
             lifecycleState.frameActive = false;
             lifecycleState.activeFrame = {};
             return Result<void>::Success();
@@ -221,6 +236,10 @@ namespace {  // NOSONAR(cpp:S1000) File-local test doubles and shared fixture st
         void AbortFrame(const FrameToken frame) noexcept override {
             if (lifecycleState.frameActive && frame == lifecycleState.activeFrame) {
                 ++lifecycleState.abortCount;
+                if (lifecycleState.graphLease != nullptr) {
+                    lifecycleState.graphLease->Release();
+                    lifecycleState.graphLease = nullptr;
+                }
                 lifecycleState.frameActive = false;
                 lifecycleState.activeFrame = {};
             }
@@ -229,6 +248,10 @@ namespace {  // NOSONAR(cpp:S1000) File-local test doubles and shared fixture st
         void AbortActiveFrame() noexcept override {
             if (lifecycleState.frameActive) {
                 ++lifecycleState.abortCount;
+                if (lifecycleState.graphLease != nullptr) {
+                    lifecycleState.graphLease->Release();
+                    lifecycleState.graphLease = nullptr;
+                }
                 lifecycleState.frameActive = false;
                 lifecycleState.activeFrame = {};
             }
@@ -250,6 +273,10 @@ namespace {  // NOSONAR(cpp:S1000) File-local test doubles and shared fixture st
         }
 
         void Shutdown() noexcept override {
+            if (lifecycleState.graphLease != nullptr) {
+                lifecycleState.graphLease->Release();
+                lifecycleState.graphLease = nullptr;
+            }
             if (initialized_) {
                 ++lifecycleState.shutdownCount;
                 initialized_ = false;
@@ -1361,3 +1388,76 @@ namespace {  // NOSONAR(cpp:S1000) File-local test doubles and shared fixture st
         Check(replacement.Value().generation == target.Value().generation + 1);
     }
 }  // namespace
+
+namespace {
+    /** @brief Compiles an imported-resource graph to exercise frontend owner/generation resolution. */
+    CompiledRenderGraphExecution CompileImportedBufferGraph(const RenderBufferHandle handle, RenderGraphPassRef &pass) {
+        auto builder = Horo::Render::Test::RequireBuilder();
+        pass = Horo::Render::Test::RequirePass(builder, RenderPassKind::Graphics, RenderQueueRole::Graphics);
+        const auto resource = Horo::Render::Test::RequireResource(builder.ImportBuffer(handle, RenderGraphResourceClass::Persistent));
+        auto graph = Horo::Render::Test::RequireGraph(builder);
+        auto schedule = Horo::Render::Test::RequireSchedule(graph);
+        const std::array queues{RenderQueueAssignment{RenderQueueRole::Graphics, {1}}};
+        const std::array initial{RenderGraphImportedState{resource,
+                                                          {RenderGraphSynchronizationAccess::Read,
+                                                           RenderGraphSynchronizationOperation::CopySource,
+                                                           RenderGraphPipelineScope::Transfer,
+                                                           RenderGraphTextureLayout::NotApplicable,
+                                                           {1}}}};
+        auto sync = SynthesizeRenderGraphSynchronization(graph, schedule, queues, initial);
+        REQUIRE(sync.HasValue());
+        auto execution = CompileRenderGraphExecution(graph, schedule, sync.Value(), queues);
+        REQUIRE(execution.HasValue());
+        return std::move(execution).Value();
+    }
+}  // namespace
+
+TEST_CASE("Compiled graph frame execution resolves only ready generations owned by its frontend", "[renderer][render-graph][frontend]") {
+    lifecycleState = {};
+    lifecycleState.completeGraphOnPresent = false;
+    auto frontend = CreateTrackingFrontend();
+    const std::array<std::byte, 16> bytes{};
+    const auto created = frontend->CreateBuffer({.byteSize = bytes.size(),
+                                                 .usage = RenderBufferUsage::CopySource,
+                                                 .access = RenderBufferAccess::HostVisible},
+                                                bytes);
+    REQUIRE(created.HasValue());
+    auto handle = created.Value().handle;
+    SECTION("foreign owner") {
+        ++handle.owner.value;
+    }
+    SECTION("stale generation") {
+        ++handle.generation;
+    }
+    SECTION("live generation") {}
+    SECTION("backend exception aborts frame") {
+        lifecycleState.frameThrowPoint = FrameThrowPoint::Execute;
+    }
+    RenderGraphPassRef pass;
+    auto execution = CompileImportedBufferGraph(handle, pass);
+    const std::array bindings{RenderGraphPassWorkload{pass, std::monostate{}}};
+    auto begun = frontend->BeginFrame({1, {64, 64}});
+    REQUIRE(begun.HasValue());
+    auto frame = std::move(begun).Value();
+    const auto result = frame.ExecuteGraph(execution, bindings);
+    if (handle != created.Value().handle || lifecycleState.frameThrowPoint == FrameThrowPoint::Execute) {
+        REQUIRE(result.HasError());
+        REQUIRE(lifecycleState.abortCount == 1);
+        REQUIRE_FALSE(lifecycleState.frameActive);
+        REQUIRE(frame.Present().HasError());
+    } else {
+        REQUIRE(result.HasValue());
+        REQUIRE(lifecycleState.graphResources.size() == 1);
+        REQUIRE(lifecycleState.graphResources[0].instance != 0);
+        REQUIRE(frontend->ReleaseBuffer(created.Value().handle).HasError());
+        REQUIRE(frame.ExecuteGraph(execution, bindings).HasError());
+        REQUIRE(frame.Present().HasValue());
+        REQUIRE(frontend->ReleaseBuffer(created.Value().handle).HasValue());
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        REQUIRE(lifecycleState.destroyBufferCount == 0);
+        lifecycleState.graphLease->Release();
+        lifecycleState.graphLease = nullptr;
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        REQUIRE(lifecycleState.destroyBufferCount == 1);
+    }
+}

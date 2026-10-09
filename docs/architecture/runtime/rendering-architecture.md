@@ -211,6 +211,69 @@ Each shipped variant needs separate qualification. OS, GPU family, shader
 language, implemented operations, and product profiles remain distinct checks;
 neither a non-null device nor the `metal` identifier grants effective support.
 
+The current Metal presentation runtime encodes primary-output graphics passes on
+one ordered command queue. Commands belong to the thread that initializes the
+runtime; frame abort, resize and shutdown also remain on that owner thread.
+Submitted command buffers retain their native references until completion.
+Admission polls at most the configured frames-in-flight count and returns a
+typed retryable-capacity diagnostic without waiting when all slots are occupied.
+A GPU command failure prevents further frame admission until shutdown and
+reinitialization. Only explicit idle/teardown paths poll for queued completion with a positive
+five-second budget. Timeout records a command fault; teardown closes and abandons
+the native ownership domain without asserting successful GPU completion.
+Encoding failure aborts the frame instead of permitting presentation of partial
+work.
+
+`RenderFrameScope::ExecuteGraph` consumes one immutable compiled graph and one
+`RenderGraphPassWorkload` per retained pass. The frontend resolves exact ready
+resident buffer/texture generations through its owning registry, using bounded
+scratch storage; graph-local resource identities never substitute for resident
+generation checks. The complete ordered binding set, declared uses, effective
+queue and native ranges are admitted before the first command. Resource-backed
+Metal operations currently include finite distinct-buffer copies and whole
+single-mip, single-layer, single-sample color attachment clear/load operations.
+Color writes must preserve their contents; undefined/discarded contents cannot
+silently initialize subsequent reads. Empty graphics passes express ordering only. Hosts that compose the editor GUI
+subsequently place a primary-output graphics workload last, so the private GUI
+bridge observes the final active primary encoder; the backend does not reorder
+graph work or invent a hidden composition pass.
+
+Metal closes encoders between resource operations and uses explicitly tracked
+resource/placement-heap hazards on its ordered `MTLCommandQueue`. This realizes
+compiled RAW/WAR/WAW transitions without CPU waits or hidden queue remapping.
+Apple's [heap hazard tracking contract](https://developer.apple.com/documentation/metal/mtlheapdescriptor/hazardtrackingmode)
+requires setting tracking explicitly because the heap default is untracked.
+The frontend acquires a preallocated resource lease before graph admission. Graph
+leases and timeline-tracked uses share the configured maximum submission-pin
+budget. Polling inspects at most the admitted frames-in-flight count and releases
+each completed graph lease as one bounded batch (at most the graph resource
+limit and remaining pin budget); the timeline-record drain keeps its separate
+configured per-record inspection limit. Its
+registry submission pins preserve both resident generations and backing-budget
+charges until the backend polls exact native command completion; presentation and
+frame indices are not completion evidence. Abort releases unsent leases, and
+shutdown drains native commands before releasing remaining leases. Native
+resident wrappers also retain exact command-use evidence, defer `makeAliasable`
+and heap release, and reject reuse of a heap with pending retired resource uses.
+Abandoning a newly encoded command restores any older submitted use instead of
+clearing its GPU dependency. Retirement polls finite batches without callbacks,
+per-frame storage growth or CPU waits. Transient allocation,
+compute/shader dispatch, texture copies, subresource attachments and multiple
+queues remain unsupported with typed errors. Effective queue ownership transfers
+require the separate submission partition/timeline contract (#352).
+
+The shared API change is deliberate: the previous ordered-pass interface carried
+neither the compiled schedule/transitions nor graph-local workload bindings.
+Graph callers now author and compile the graph, then supply typed operations to
+`ExecuteGraph`; backend implementations receive only the frontend-resolved request.
+Existing primary-output/editor static-mesh callers continue using `Execute`, whose
+ordered immediate workloads are a separate frame operation and cannot be combined
+with a graph execution in the same `RenderFrameScope`. Both paths share exactly-once
+frame execution and abort/presentation ownership. There are no external API users
+or persisted execution plans requiring data migration. Backends without a graph
+executor return the shared typed unsupported result; they do not discard graph
+metadata and execute the immediate path as a compatibility fallback.
+
 [ADR-029](../../adr/029-opengl-core-profile-and-platform-policy.md) owns
 the `opengl` component's native version, platform, and deprecation policy:
 desktop OpenGL 4.1 Core minimum, actual-context validation, and qualified desktop
