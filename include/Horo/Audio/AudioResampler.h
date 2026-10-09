@@ -43,6 +43,7 @@ namespace Horo::Audio {
         std::uint32_t consumed{};
         std::uint32_t produced{};
         std::uint32_t sanitizedSamples{}; /**< Non-finite input or overflowing/non-finite output replaced with silence. */
+        double sourceAdvance{}; /**< Source-frame time advanced by emitted samples, including the actual pitch ramp; excludes look-ahead. */
     };
 
     /** @brief Prepared single-thread-owned DSP state, independent of any device or runtime lifecycle. */

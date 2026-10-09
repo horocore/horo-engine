@@ -7,6 +7,7 @@
 
 #include "Horo/Assets/AssetId.h"
 #include "Horo/Audio/AudioStreamDecoder.h"
+#include "Horo/Audio/AudioVoiceControls.h"
 #include "Horo/Foundation/JobSystem.h"
 
 #include <atomic>
@@ -107,6 +108,39 @@ namespace Horo::Audio {
          * @pre Plane count and capacities match the admitted format; the host retains output storage.
          */
         [[nodiscard]] AudioStreamRenderResult Render(std::span<AudioSample *const> planes, std::uint32_t frames) const noexcept;
+
+        /** @brief Request one worker-side reposition without decoding, waiting or allocating on callback.
+         * @param frame Exact source frame in [0, admitted frameCount]; requires a seekable decoder.
+         * @param loop Exclusive worker loop; disabled endpoints are zero, enabled end is within the source.
+         * @return True if accepted; false for moved/stopped/nonseekable/out-of-range or outstanding work.
+         * @details The sole callback consumer stops reading the ring before publishing this request.
+         * Render emits uncounted preparation silence until PositionReady; control must continue Pump.
+         * Pending work retains the port, ring, decoder and package lease through normal cancellation/join.
+         */
+        [[nodiscard]] bool RequestPosition(std::uint64_t frame, AudioVoiceLoop loop = {}) const noexcept;
+        /** @brief Read worker acknowledgement, not a guarantee of buffered PCM.
+         * @return True when no reposition is outstanding; a worker failure remains pending until control reconciles it.
+         */
+        [[nodiscard]] bool PositionReady() const noexcept;
+        /** @brief Suspend future fills while retaining the ring and any already-running bounded fill.
+         * @param suspended True for a virtual voice not awaiting realization; false before worker preparation.
+         * @pre Sole callback owner; this is not cancellation or permission to reclaim storage.
+         */
+        void SuspendFills(bool suspended) const noexcept;
+        /** @brief Observe control/underrun stop without consuming PCM.
+         * @return True after stop or for a moved port. Worker failures remain control-owned snapshot facts.
+         */
+        [[nodiscard]] bool IsStopped() const noexcept;
+        /** @brief Discard at most the currently published frames without reading PCM or recording an underrun.
+         * @param frames Maximum bounded ring frames to consume.
+         * @return Exact frames discarded; zero during reposition, on stop or for a moved port.
+         * @pre Sole callback consumption, serialized with Render and RequestPosition.
+         */
+        [[nodiscard]] std::uint32_t Discard(std::uint32_t frames) const noexcept;
+        /** @brief Read acquired available ring frames on the sole consumer, without advancing it.
+         * @return Bounded available count, zero during positioning, stop or after move.
+         */
+        [[nodiscard]] std::uint32_t AvailableFrames() const noexcept;
 
     private:
         friend class AudioStreamingService;

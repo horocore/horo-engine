@@ -530,6 +530,8 @@ horo_register_catch_test(HoroAudioDspTests LABELS "unit;audio;headless")
 add_executable(HoroAudioPlaybackTests
     support/AllocationProbe.cpp
     unit/runtime/audio/AudioVoicePlaybackTests.cpp
+    unit/runtime/audio/AudioVoiceVirtualizationTests.cpp
+    unit/runtime/audio/AudioVoicePlaybackTestFixture.h
     unit/runtime/audio/AudioRepeatedPlaybackTests.cpp
     unit/runtime/audio/AudioRepeatedPlaybackTestFixture.h
     unit/runtime/audio/AudioPlaybackTestSupport.h

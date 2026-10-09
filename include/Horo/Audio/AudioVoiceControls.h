@@ -16,8 +16,8 @@ namespace Horo::Audio {
 
     /** @brief Exact rendered source position, independent of resampler look-ahead consumption. */
     struct AudioVoiceCursor final {
-        std::uint32_t frame{};
-        double fraction{}; /**< In [0,1); frozen during pause and discontinuity fade-out. */
+        std::uint64_t frame{}; /**< Resident or streamed source position, never decoder look-ahead. */
+        double fraction{};     /**< In [0,1); frozen during pause and discontinuity fade-out. */
     };
 
     /** @brief Operations applied only at an admitted sample/buffer boundary on the exclusive processing owner. */
@@ -30,7 +30,10 @@ namespace Horo::Audio {
         SetLoop,
         SetPlaybackSpeed,
         Cancel,
-        Restart
+        Restart,
+        StartVirtual, /**< Start an admitted logical voice without a physical reservation. */
+        Virtualize,   /**< Release physical execution at the dispatched boundary; control owns retirement/accounting. */
+        Realize       /**< Resume physical execution only after control has reserved capacity and prepared resources. */
     };
 
     /** @brief Fixed-size typed operation; unused fields must remain at their defaults. */
