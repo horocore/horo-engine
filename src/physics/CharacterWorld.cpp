@@ -106,6 +106,7 @@ namespace Horo::Character {
             descriptor = record.Value()->descriptor;
         }
         const auto sourceTick = impl_->closedTick.load();
+        impl_->debug.Begin(handle, true);
         const auto recovery = Detail::RecoverSpawnPosition(*impl_, handle, descriptor, query, sourceTick, descriptor.collisionRootPosition);
         if (recovery.HasError())
             return Result<CharacterPlacementResult>::Failure(recovery.ErrorValue());
@@ -136,6 +137,7 @@ namespace Horo::Character {
         const auto descriptor = Detail::ReserveTeleport(*impl_, request);
         if (descriptor.HasError())
             return Result<CharacterPlacementResult>::Failure(descriptor.ErrorValue());
+        impl_->debug.Begin(request.controller, true);
         if (const auto valid = Detail::ValidateTeleportClearance(*impl_, request.controller, descriptor.Value(), query, request.tick,
                                                                  request.targetPosition);
             valid.HasError()) {

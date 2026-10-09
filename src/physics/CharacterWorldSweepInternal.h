@@ -425,6 +425,7 @@ namespace Horo::Character::Detail {
         CharacterSweepProbeResult evidence = std::move(probe).Value();
         if (const auto valid = ValidateCharacterSweepProbeResult(evidence, request); valid.HasError())
             return valid;
+        impl.debug.RecordSweep(request, evidence, CharacterDebugProbePurpose::Ground);
         std::ranges::sort(evidence.hits.begin(), evidence.hits.begin() + evidence.hitCount, SweepHitLess);
         if (RetainNearestSteepSupport(evidence, descriptor, result, steepSupport))
             return Result<void>::Success();

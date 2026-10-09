@@ -880,6 +880,38 @@ declared hold/reject result.
 
 ## Diagnostics
 
+`CharacterWorld::CaptureDebugSnapshot` copies a detached, immutable, backend-neutral
+debug value on the world owner thread between operations. It does not acquire
+publication/registry locks, invoke adapters, allocate, or publish simulation state.
+Capture during a tick or placement returns `Busy`; off-owner capture returns
+`WrongThread`. Owned copies can subsequently be read on any thread and survive
+world retirement. They are neither restore checkpoints nor mutation authority.
+
+The snapshot projects the actual capsule and transform publication and, when
+present, its committed locomotion/contact/ground/platform evidence. Spawn and
+teleport do not fabricate locomotion evidence. Probe geometry is copied at actual
+validated query returns, including the query's exact selectors; visualization
+must not reconstruct unexecuted rays or step arcs from solver parameters.
+Candidate traces are adopted only by successful state publication, so placement
+failure and whole-frame rollback retain the previous committed trace.
+
+Preparation reserves separate candidate and committed probe prefixes. Their
+per-controller capacity is `min(32, maximumDebugPrimitives / (2 * maximumControllers))`
+using integer division, exposed by `ProbeRetentionCapacity()`. Metadata is bounded
+by controller capacity. Observation overflow never changes query admission or
+movement: omitted counts and typed availability expose incomplete evidence.
+A derived zero capacity reports `StorageUnavailable`; an external movement provider
+without the capsule-sweep seam reports `UnsupportedProvider`, never invented probes.
+Consumer probe/contact prefix limits are independent of solver constraints.
+
+Capture requires exact controller, Physics world, filter, and origin generation
+fences. Its source tick and Physics revision belong to the retained publication,
+not a subsequently refreshed query context. Observation tick is the greater of
+that source tick and the world's completed tick; age is their difference. An
+explicit maximum age rejects stale evidence without replacing it. Public header
+ownership remains with `HoroPhysics`; existing callers need no migration because
+capture is an additive contract, not a replacement for locomotion publication.
+
 Debug visualization:
 
 - capsule shape

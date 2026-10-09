@@ -140,6 +140,15 @@ namespace Horo::Character {
             REQUIRE(attachment.sourceTick == 1);
             REQUIRE(attachment.physicsSnapshotRevision == scenario.world->Descriptor().physicsSnapshotRevision);
             REQUIRE(saved.movement.platformAttachmentChange == CharacterPlatformAttachmentChange::Attached);
+            const auto &worldDescriptor = scenario.world->Descriptor();
+            const auto debug =
+                scenario.world->CaptureDebugSnapshot({scenario.controller, worldDescriptor.physicsWorld,
+                                                      worldDescriptor.collisionFilterGeneration, worldDescriptor.originGeneration});
+            REQUIRE(debug.snapshot.has_value());
+            REQUIRE(debug.snapshot->Locomotion()->movement.platformAttachment->body == attachment.body);
+            REQUIRE(debug.snapshot->Locomotion()->movement.platformAttachment->shape == attachment.shape);
+            REQUIRE(debug.snapshot->Locomotion()->movement.platformAttachment->sourceTick == attachment.sourceTick);
+            REQUIRE(debug.snapshot->Transform().publicationRevision == saved.transform.publicationRevision);
             RequireNear(attachment.localContactPoint, {2, 0, 1});
             scenario.probe.ground.point = {8, 0, 7};
             REQUIRE(saved.movement.platformAttachment->localContactPoint == attachment.localContactPoint);
@@ -360,6 +369,11 @@ namespace Horo::Character {
             REQUIRE(scenario.Tick(1).HasValue());
             const auto firstBefore = scenario.Snapshot();
             const auto secondBefore = scenario.world->ControllerLocomotionSnapshot(second).Value();
+            const auto &descriptor = scenario.world->Descriptor();
+            const CharacterDebugCaptureRequest debugRequest{scenario.controller, descriptor.physicsWorld,
+                                                            descriptor.collisionFilterGeneration, descriptor.originGeneration};
+            const auto debugBefore = scenario.world->CaptureDebugSnapshot(debugRequest);
+            REQUIRE(debugBefore.snapshot.has_value());
             REQUIRE(scenario.probe.bodyReads == 2);
             scenario.probe.failOnRead = 4;
             REQUIRE(scenario.world->QueueMovementCommand(Movement(second, 2, 2)).HasValue());
@@ -371,6 +385,12 @@ namespace Horo::Character {
             REQUIRE(secondAfter.stateRevision == secondBefore.stateRevision);
             REQUIRE(firstAfter.movement.platformAttachment->sourceTick == 1);
             REQUIRE(secondAfter.movement.platformAttachment->sourceTick == 1);
+            const auto debugAfter = scenario.world->CaptureDebugSnapshot(debugRequest);
+            REQUIRE(debugAfter.snapshot.has_value());
+            REQUIRE(debugAfter.snapshot->Identity().sourceTick == debugBefore.snapshot->Identity().sourceTick);
+            REQUIRE(debugAfter.snapshot->Probes().size() == debugBefore.snapshot->Probes().size());
+            REQUIRE(debugAfter.snapshot->Probes()[0].position == debugBefore.snapshot->Probes()[0].position);
+            REQUIRE(debugAfter.snapshot->Locomotion()->movement.platformAttachment->sourceTick == 1);
         }
 
     }  // namespace

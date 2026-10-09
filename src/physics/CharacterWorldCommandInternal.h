@@ -72,6 +72,7 @@ namespace Horo::Character::Detail {
         explicit TickGuard(Impl &impl) noexcept : impl_(impl), previous_(impl_.ticking.exchange(true)) {}
 
         ~TickGuard() noexcept {
+            impl_.debug.End();
             impl_.ticking.store(previous_);
             DrainDeferredShutdown(impl_);
         }
@@ -362,7 +363,9 @@ namespace Horo::Character::Detail {
             if (impl.state.load() != CharacterWorldState::Active)
                 return Result<std::uint32_t>::Failure(MakeError(CharacterErrors::InvalidState));
             if (spawned) {
+                impl.debug.Begin(command.controller, input.query.sweep != nullptr);
                 const auto resolved = ResolveControllerMovement(impl, command, input, previous, descriptor);
+                impl.debug.End();
                 if (resolved.HasError())
                     return Result<std::uint32_t>::Failure(resolved.ErrorValue());
                 CharacterMovementResult movement = std::move(resolved).Value();
@@ -424,6 +427,7 @@ namespace Horo::Character::Detail {
         record.Value()->publication = committed.transform;
         record.Value()->stateRevision = committed.stateRevision;
         record.Value()->locomotion = std::move(committed);
+        impl.debug.Commit(command.controller, input.tick, impl.descriptor.physicsSnapshotRevision);
         return Result<void>::Success();
     }
 
