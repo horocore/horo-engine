@@ -79,6 +79,7 @@ namespace Horo::Character::Detail {
             if (const auto valid = ValidateCharacterOverlapProbeResult(probe.Value()); valid.HasError())
                 return Result<bool>::Failure(valid.ErrorValue());
         }
+        impl.debug.RecordOverlap(probeRequest, probe.Value(), CharacterDebugProbePurpose::ShapeClearance);
         return Result<bool>::Success(probe.Value().overlapCount == 0);
     }
 

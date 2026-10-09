@@ -631,6 +631,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/CharacterFoundationQualificationTests.cpp
         unit/runtime/physics/CharacterControllerContractsTests.cpp
         unit/runtime/physics/CharacterDiagnosticsTests.cpp
+        unit/runtime/physics/CharacterDebugSnapshotTests.cpp
         unit/runtime/physics/CharacterFastPathStorageTests.cpp
         unit/runtime/physics/CharacterGroundingTests.cpp
         unit/runtime/physics/CharacterPlatformAttachmentTests.cpp

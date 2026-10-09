@@ -7,6 +7,7 @@
 #include "Horo/Foundation/Result.h"
 #include "Horo/Physics/CharacterCommandPipeline.h"
 #include "Horo/Physics/CharacterControllerContracts.h"
+#include "Horo/Physics/CharacterDebugSnapshot.h"
 #include "Horo/Physics/CharacterWorldSettings.h"
 
 #include <compare>
@@ -143,6 +144,16 @@ namespace Horo::Character {
          * @post Mutating the returned copy cannot feed back into Character, Scene or Physics state.
          */
         [[nodiscard]] Result<CharacterLocomotionSnapshot> ControllerLocomotionSnapshot(const CharacterControllerHandle &handle) const;
+
+        /** @brief Copies bounded committed debug evidence without taking locks, querying Physics or allocating.
+         * @param request Exact controller/Physics/filter/origin fences, tick-age ceiling and copied-prefix capacities.
+         * @return Closed capture outcome and an owned immutable snapshot on Captured or CapacityLimited.
+         * @pre Owner thread only, outside tick and placement callbacks. Other threads return WrongThread;
+         * reentrant attempts return Busy without reading candidate state. Detached copies may be consumed anywhere.
+         * @post Neither success, omission, age rejection nor unsupported probe evidence mutates simulation.
+         * Failed ticks preserve prior probes alongside prior state. This is not checkpoint or capability authority.
+         */
+        [[nodiscard]] CharacterDebugCapture CaptureDebugSnapshot(const CharacterDebugCaptureRequest &request) const noexcept;
 
         /**
          * @brief Copies one future tick-addressed movement request into bounded world storage without blocking.

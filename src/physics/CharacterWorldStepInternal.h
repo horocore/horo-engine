@@ -65,6 +65,8 @@ namespace Horo::Character::Detail {
         auto evidence = std::move(probe).Value();
         if (const auto valid = ValidateCharacterSweepProbeResult(evidence, request); valid.HasError())
             return Result<CharacterSweepProbeResult>::Failure(valid.ErrorValue());
+        impl.debug.RecordSweep(request, evidence,
+                               purpose == SweepPurpose::Movement ? CharacterDebugProbePurpose::Movement : CharacterDebugProbePurpose::Step);
         std::ranges::sort(evidence.hits.begin(), evidence.hits.begin() + evidence.hitCount, SweepHitLess);
         return Result<CharacterSweepProbeResult>::Success(std::move(evidence));
     }
@@ -212,6 +214,7 @@ namespace Horo::Character::Detail {
             return Result<bool>::Failure(valid.ErrorValue());
         if (const auto valid = ValidateCharacterOverlapProbeResult(overlap.Value()); valid.HasError())
             return Result<bool>::Failure(valid.ErrorValue());
+        impl.debug.RecordOverlap(clearance, overlap.Value(), CharacterDebugProbePurpose::Step);
         return Result<bool>::Success(overlap.Value().overlapCount == 0);
     }
 

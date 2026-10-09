@@ -1,5 +1,6 @@
 #include "Horo/Physics/CharacterClearanceQuery.h"
 #include "Horo/Physics/CharacterControllerContracts.h"
+#include "Horo/Physics/CharacterDebugSnapshot.h"
 #include "Horo/Physics/CharacterWorld.h"
 
 #include <type_traits>
@@ -10,6 +11,11 @@ static_assert(std::is_trivially_copyable_v<Horo::Character::CharacterCollisionSe
 static_assert(std::is_trivially_copyable_v<Horo::Character::CharacterSurfaceContact>);
 static_assert(std::is_trivially_copyable_v<Horo::Character::CharacterPlatformAttachment>);
 static_assert(std::is_trivially_copyable_v<Horo::Character::CharacterPlatformBodyEvidence>);
+static_assert(std::is_trivially_copyable_v<Horo::Character::CharacterDebugProbe>);
+static_assert(std::is_copy_constructible_v<Horo::Character::CharacterDebugSnapshot>);
+static_assert(std::is_same_v<decltype(std::declval<const Horo::Character::CharacterWorld &>().CaptureDebugSnapshot(
+                                 std::declval<const Horo::Character::CharacterDebugCaptureRequest &>())),
+                             Horo::Character::CharacterDebugCapture>);
 
 static_assert(std::is_same_v<decltype(std::declval<Horo::Physics::CharacterClearanceQuery &>().Context()),
                              Horo::Character::CharacterPhysicsQueryContext>);

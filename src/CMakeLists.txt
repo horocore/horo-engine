@@ -1102,6 +1102,8 @@ target_link_libraries(HoroAudioMetrics PUBLIC HoroEngine::AudioCommands HoroEngi
 add_library(HoroPhysics STATIC
         physics/CharacterClearanceQuery.cpp
         physics/CharacterControllerContracts.cpp
+        physics/CharacterDebugSnapshot.cpp
+        physics/CharacterDebugStorageInternal.h
         physics/CharacterPhysicsQueryAdapter.cpp
         physics/CharacterPlatformAttachmentValidation.cpp
         physics/CharacterPlatformAttachmentValidation.h
