@@ -1,6 +1,7 @@
 #include "D3D12Initialization.h"
 
 #include <algorithm>
+#include <format>
 #include <set>
 
 namespace Horo::Render {
@@ -19,8 +20,7 @@ namespace Horo::Render {
                     return Result<RenderAdapterId>::Failure(
                         D3D12InitializationError("render.d3d12.cancelled", "D3D12 adapter qualification was cancelled."));
                 }
-                auto admitted = host.AdmitDriver(adapter.id, adapter.driverVersion);
-                if (admitted.HasError()) {
+                if (auto admitted = host.AdmitDriver(adapter.id, adapter.driverVersion); admitted.HasError()) {
                     return Result<RenderAdapterId>::Failure(std::move(admitted).ErrorValue());
                 }
                 if (request.cancellation.IsCancellationRequested()) {
@@ -31,8 +31,8 @@ namespace Horo::Render {
                 if (created.HasValue()) {
                     return Result<RenderAdapterId>::Success(adapter.id);
                 }
-                const Error &error = created.ErrorValue();
-                if (request.adapter || (error.code.Value() != "render.d3d12.feature_level_unsupported" &&
+                if (const Error &error = created.ErrorValue();
+                    request.adapter || (error.code.Value() != "render.d3d12.feature_level_unsupported" &&
                                         error.code.Value() != "render.d3d12.shader_model_unsupported")) {
                     return Result<RenderAdapterId>::Failure(error);
                 }
@@ -45,9 +45,9 @@ namespace Horo::Render {
 
         /** @brief Creates only explicitly required queues with cancellation between native calls. */
         Result<void> CreateQueues(ID3D12InitializationRuntime &runtime, const D3D12InitializationRequest &request) {
-            for (const auto kind : {D3D12QueueKind::Direct, D3D12QueueKind::Compute, D3D12QueueKind::Copy}) {
-                if ((kind == D3D12QueueKind::Compute && !request.enableComputeQueue) ||
-                    (kind == D3D12QueueKind::Copy && !request.enableCopyQueue)) {
+            using enum D3D12QueueKind;
+            for (const auto kind : {Direct, Compute, Copy}) {
+                if ((kind == Compute && !request.enableComputeQueue) || (kind == Copy && !request.enableCopyQueue)) {
                     continue;
                 }
                 if (request.cancellation.IsCancellationRequested()) {
@@ -68,8 +68,7 @@ namespace Horo::Render {
             const auto fail = [](const char *code, const char *message) {
                 return Result<RenderAdapterId>::Failure(D3D12InitializationError(code, message));
             };
-            auto opened = runtime.Open(request.enableDebugLayer);
-            if (opened.HasError()) {
+            if (auto opened = runtime.Open(request.enableDebugLayer); opened.HasError()) {
                 return Result<RenderAdapterId>::Failure(std::move(opened).ErrorValue());
             }
             if (request.cancellation.IsCancellationRequested()) {
@@ -80,8 +79,8 @@ namespace Horo::Render {
                 return Result<RenderAdapterId>::Failure(std::move(enumeration).ErrorValue());
             }
             const auto &adapters = enumeration.Value();
-            std::set<RenderAdapterId> identities;
-            if (adapters.size() > request.maxAdapters || !std::ranges::all_of(adapters, [&](const auto &adapter) {
+            if (std::set<RenderAdapterId> identities;
+                adapters.size() > request.maxAdapters || !std::ranges::all_of(adapters, [&](const auto &adapter) {
                 return adapter.id.IsValid() && identities.insert(adapter.id).second;
             })) {
                 return fail("render.d3d12.invalid_adapters",
@@ -91,8 +90,7 @@ namespace Horo::Render {
             if (device.HasError()) {
                 return Result<RenderAdapterId>::Failure(std::move(device).ErrorValue());
             }
-            auto queues = CreateQueues(runtime, request);
-            if (queues.HasError()) {
+            if (auto queues = CreateQueues(runtime, request); queues.HasError()) {
                 return Result<RenderAdapterId>::Failure(std::move(queues).ErrorValue());
             }
             if (request.cancellation.IsCancellationRequested()) {
@@ -106,14 +104,37 @@ namespace Horo::Render {
     Error D3D12InitializationError(const char *code, const char *message, const std::int64_t nativeCause) {
         Error error{ErrorCode{code}, ErrorDomainId{"horo.render.d3d12"}, ErrorSeverity::Error, message, {}};
         if (nativeCause != 0) {
-            error.message += " (HRESULT " + std::to_string(nativeCause) + ").";
+            error.message += std::format(" (HRESULT {}).", nativeCause);
         }
         return error;
     }
 
+    /** @brief Keeps failed attempts retryable and releases acquired state exactly once. */
+    struct D3D12Initialization::Rollback {
+        ID3D12InitializationRuntime &runtime;
+        State &state;
+        bool acquired{false};
+        bool committed{false};
+
+        Rollback(ID3D12InitializationRuntime &ownedRuntime, State &sessionState) : runtime(ownedRuntime), state(sessionState) {}
+
+        Rollback(const Rollback &) = delete;
+        Rollback &operator=(const Rollback &) = delete;
+        Rollback(Rollback &&) = delete;
+        Rollback &operator=(Rollback &&) = delete;
+
+        ~Rollback() {
+            if (!committed) {
+                if (acquired) {
+                    runtime.Release();
+                }
+                state = State::Idle;
+            }
+        }
+    };
+
     /** @copydoc D3D12Initialization::D3D12Initialization */
-    D3D12Initialization::D3D12Initialization(std::unique_ptr<ID3D12InitializationRuntime> runtime)
-        : runtime_(std::move(runtime)), owner_(std::this_thread::get_id()) {
+    D3D12Initialization::D3D12Initialization(std::unique_ptr<ID3D12InitializationRuntime> runtime) : runtime_(std::move(runtime)) {
         HORO_INVARIANT_MSG(runtime_ != nullptr, "D3D12 initialization requires an owned runtime.");
     }
 
@@ -141,24 +162,9 @@ namespace Horo::Render {
         }
         state_ = State::Initializing;
 
-        struct Rollback {
-            ID3D12InitializationRuntime &runtime;
-            State &state;
-            bool acquired{false};
-            bool committed{false};
+        Rollback rollback{*runtime_, state_};
 
-            ~Rollback() {
-                if (!committed) {
-                    if (acquired) {
-                        runtime.Release();
-                    }
-                    state = State::Idle;
-                }
-            }
-        } rollback{*runtime_, state_};
-
-        auto verified = host.VerifyRuntime();
-        if (verified.HasError()) {
+        if (auto verified = host.VerifyRuntime(); verified.HasError()) {
             return Result<RenderAdapterId>::Failure(std::move(verified).ErrorValue());
         }
         if (request.cancellation.IsCancellationRequested()) {

@@ -113,8 +113,9 @@ namespace Horo::Render {
             Ready,
             Stopped
         };
+        struct Rollback;
         std::unique_ptr<ID3D12InitializationRuntime> runtime_;
-        std::thread::id owner_;
+        std::thread::id owner_{std::this_thread::get_id()};
         State state_{State::Idle};
     };
 

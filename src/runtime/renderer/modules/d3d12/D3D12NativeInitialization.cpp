@@ -208,7 +208,9 @@ namespace Horo::Render {
                 return Unsupported();
             }
 
-            void Release() noexcept override {}
+            void Release() noexcept override {
+                // Unsupported hosts never acquire native state to release.
+            }
 
         private:
             static Result<void> Unsupported() {
