@@ -891,9 +891,9 @@ namespace Horo::Character::Detail {
             supportDescriptor.maximumStepHeightMeters = 0.0F;
         // A complete step already proved its actual contact, support plane and overlap clearance.
         // Ordinary snap must not replace that proof with the capsule's rounded-edge collision normal.
-        const bool stepped =
-            (static_cast<std::uint16_t>(result.collisions) & static_cast<std::uint16_t>(CharacterCollisionFlags::Step)) != 0;
-        if (!stepped) {
+        if (const bool stepped =
+                (static_cast<std::uint16_t>(result.collisions) & static_cast<std::uint16_t>(CharacterCollisionFlags::Step)) != 0;
+            !stepped) {
             if (const auto grounded = ResolveGrounding(impl, result, command, input, supportDescriptor, motion.position, steepSupport);
                 grounded.HasError())
                 return Result<CharacterMovementResult>::Failure(grounded.ErrorValue());
