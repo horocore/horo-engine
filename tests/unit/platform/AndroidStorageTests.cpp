@@ -11,6 +11,7 @@
 
 #if !defined(_WIN32)
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -177,6 +178,23 @@ namespace {
     }
 
 #if !defined(_WIN32)
+    TEST_CASE("Android filesystem locations promptly reject actual FIFO nodes without opening them", "[unit][platform][android]") {
+        Fixture fixture;
+        REQUIRE(mkfifo((fixture.root / "private/pipe").c_str(), 0600) == 0);
+        REQUIRE(mkfifo((fixture.root / "cache/pipe").c_str(), 0600) == 0);
+        const auto started = std::chrono::steady_clock::now();
+        const auto privateRead = fixture.storage->Read(AndroidStorageRoot::AppPrivate, "pipe", 32);
+        const auto cacheRead = fixture.storage->Read(AndroidStorageRoot::Cache, "pipe", 32);
+        REQUIRE(privateRead.HasError());
+        REQUIRE(cacheRead.HasError());
+        REQUIRE(privateRead.ErrorValue().code.Value() == "android_storage.invalid_name");
+        REQUIRE(cacheRead.ErrorValue().code.Value() == "android_storage.invalid_name");
+        REQUIRE(std::chrono::steady_clock::now() - started < std::chrono::seconds(1));
+        AtomicFileReplacementReceipt receipt;
+        REQUIRE(fixture.storage->Publish(AndroidStorageRoot::AppPrivate, "pipe", {}, receipt).HasError());
+        REQUIRE_FALSE(receipt.WasCommitted());
+    }
+
     TEST_CASE("Android document capability consumes actual ContentResolver style descriptors without path conversion",
               "[unit][platform][android]") {
         Fixture fixture;

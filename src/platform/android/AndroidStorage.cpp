@@ -67,21 +67,27 @@ namespace Horo::Platform {
                                 "Use a relative asset name without traversal, URI text or reserved transaction suffixes.");
         }
 
-        /** @brief Rejects every symlink in an existing path prefix, including final transaction sidecars. */
+        /** @brief Admits ordinary directories, absent nodes and single-link files; rejects links, pipes and devices. */
+        [[nodiscard]] bool SafeNode(const std::filesystem::path &path) {
+            std::error_code error;
+            const auto status = std::filesystem::symlink_status(path, error);
+            if (error)
+                return error == std::errc::no_such_file_or_directory;
+            if (std::filesystem::is_directory(status))
+                return true;
+            if (!std::filesystem::is_regular_file(status))
+                return !std::filesystem::exists(status);
+            const auto links = std::filesystem::hard_link_count(path, error);
+            return links == 1 && !error;
+        }
+
+        /** @brief Validates every native path component, including final transaction sidecars, before blocking file access. */
         [[nodiscard]] bool SafePath(const std::filesystem::path &path) {
             std::filesystem::path prefix;
             for (const auto &part : path) {
                 prefix /= part;
-                std::error_code error;
-                const auto status = std::filesystem::symlink_status(prefix, error);
-                if (error && error != std::errc::no_such_file_or_directory)
+                if (!SafeNode(prefix))
                     return false;
-                if (std::filesystem::is_symlink(status))
-                    return false;
-                if (!error && std::filesystem::is_regular_file(status)) {
-                    if (std::filesystem::hard_link_count(prefix, error) != 1 || error)
-                        return false;
-                }
             }
             return true;
         }
