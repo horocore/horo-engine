@@ -66,12 +66,11 @@ namespace Horo::Terrain::ProducerDetail {
 
         /** @brief Requires exact consumer capability; visual or another consumer role never substitutes. */
         Result<void> ValidateCapabilities(const TerrainProducerSnapshotRequest &request) {
-            const auto capability = request.header.consumer == TerrainProducerConsumer::Collision
-                                        ? TerrainFoliageCapability::PhysicsCollision
-                                        : TerrainFoliageCapability::NavigationBlocking;
-            if (!request.header.capabilities.Contains(TerrainFoliageCapability::TerrainRuntime) ||
-                !request.header.capabilities.Contains(capability) ||
-                (!request.clusters.empty() && !request.header.capabilities.Contains(TerrainFoliageCapability::FoliageRuntime)))
+            using enum TerrainFoliageCapability;
+            if (const auto capability =
+                    request.header.consumer == TerrainProducerConsumer::Collision ? PhysicsCollision : NavigationBlocking;
+                !request.header.capabilities.Contains(TerrainRuntime) || !request.header.capabilities.Contains(capability) ||
+                (!request.clusters.empty() && !request.header.capabilities.Contains(FoliageRuntime)))
                 return Result<void>::Failure(Failure(request, TerrainProducerErrors::Unavailable));
             return Result<void>::Success();
         }
@@ -134,18 +133,18 @@ namespace Horo::Terrain::ProducerDetail {
                                                                const TerrainProducerTileSelection &selection, Budget &budget,
                                                                const CancellationToken &cancellation) {
             using Membership = Result<const TerrainTilePayloadEntry *>;
-            const auto requirement = request.header.consumer == TerrainProducerConsumer::Collision
-                                         ? request.manifest->TerrainRequirements().collision
-                                         : request.manifest->TerrainRequirements().navigation;
-            if (requirement == TerrainPayloadRequirement::NotRequested)
+            if (const auto requirement = request.header.consumer == TerrainProducerConsumer::Collision
+                                             ? request.manifest->TerrainRequirements().collision
+                                             : request.manifest->TerrainRequirements().navigation;
+                requirement == TerrainPayloadRequirement::NotRequested)
                 return Membership::Failure(Failure(request, TerrainProducerErrors::Unavailable));
-            auto entry = FindMember(request.manifest->Tiles(), request, budget, cancellation, [&](const auto &value) {
+            auto entry = FindMember(request.manifest->Tiles(), request, budget, cancellation, [&selection](const auto &value) {
                 return value.tile == selection.tile;
             });
             if (!entry.HasValue())
                 return Membership::Failure(entry.ErrorValue());
-            const auto &artifact = entry.Value()->consumers[static_cast<std::size_t>(Role(request))];
-            if (!artifact || artifact->digest != selection.digest)
+            if (const auto &artifact = entry.Value()->consumers[static_cast<std::size_t>(Role(request))];
+                !artifact || artifact->digest != selection.digest)
                 return Membership::Failure(Failure(request, TerrainProducerErrors::Invalid));
             return entry;
         }
@@ -201,7 +200,8 @@ namespace Horo::Terrain::ProducerDetail {
             auto entry = TileMembership(request, selection, budget, cancellation);
             if (!entry.HasValue())
                 return Result<const TerrainSourceArtifact *>::Failure(entry.ErrorValue());
-            auto mesh = FindMember(request.terrain->Artifacts(), request, budget, cancellation, [&](const auto &artifact) {
+            auto mesh =
+                FindMember(request.terrain->Artifacts(), request, budget, cancellation, [&selection, &request](const auto &artifact) {
                 return artifact.tile == selection.tile && artifact.role == Role(request);
             });
             if (!mesh.HasValue())
@@ -215,14 +215,14 @@ namespace Horo::Terrain::ProducerDetail {
         Result<const CookedFoliageCluster *> ResolveCluster(const TerrainProducerSnapshotRequest &request,
                                                             const TerrainProducerClusterSelection &selection, Budget &budget,
                                                             const CancellationToken &cancellation) {
-            auto cluster = FindMember(request.foliage->Clusters(), request, budget, cancellation, [&](const auto &value) {
+            auto cluster = FindMember(request.foliage->Clusters(), request, budget, cancellation, [&selection](const auto &value) {
                 return value.id == selection.cluster;
             });
             if (!cluster.HasValue())
                 return cluster;
             if (cluster.Value()->digest != selection.digest)
                 return Result<const CookedFoliageCluster *>::Failure(Failure(request, TerrainProducerErrors::Invalid));
-            auto entry = FindMember(request.manifest->Clusters(), request, budget, cancellation, [&](const auto &value) {
+            auto entry = FindMember(request.manifest->Clusters(), request, budget, cancellation, [&selection](const auto &value) {
                 return value.cluster == selection.cluster;
             });
             if (!entry.HasValue())
@@ -254,8 +254,8 @@ namespace Horo::Terrain::ProducerDetail {
     Result<void> VerifyManifest(const TerrainProducerSnapshotRequest &request, Budget &budget, const CancellationToken &cancellation) {
         if (!budget.Work(request.manifest->Bytes().size() / 4096 + 1))
             return Result<void>::Failure(Failure(request, TerrainProducerErrors::Limit));
-        auto verified = VerifyTerrainPayloadManifest(*request.manifest, request.manifest->Bytes(), cancellation);
-        if (!verified.HasValue())
+        if (const auto verified = VerifyTerrainPayloadManifest(*request.manifest, request.manifest->Bytes(), cancellation);
+            !verified.HasValue())
             return Result<void>::Failure(
                 WrapError(cancellation.IsCancellationRequested() ? TerrainProducerErrors::Cancelled : TerrainProducerErrors::Invalid,
                           verified.ErrorValue()));
@@ -265,7 +265,12 @@ namespace Horo::Terrain::ProducerDetail {
     /** @copydoc SelectMeshes */
     Result<std::vector<const TerrainSourceArtifact *>> SelectMeshes(const TerrainProducerSnapshotRequest &request, Budget &budget,
                                                                     const CancellationToken &cancellation) {
-        return SelectMembers(request, request.tiles, budget, cancellation, ResolveMesh, [](const auto *artifact) {
+        return SelectMembers<TerrainSourceArtifact>(request, request.tiles, budget, cancellation,
+                                                    [](const auto &invocation, const auto &selection, Budget &admission,
+                                                       const CancellationToken &observer) {
+            return ResolveMesh(invocation, selection, admission, observer);
+        },
+                                                    [](const auto *artifact) {
             return std::tuple{artifact->tile.tile.lod, artifact->tile.tile.z, artifact->tile.tile.x};
         }, &TerrainSourceArtifact::tile);
     }
@@ -273,7 +278,12 @@ namespace Horo::Terrain::ProducerDetail {
     /** @copydoc SelectClusters */
     Result<std::vector<const CookedFoliageCluster *>> SelectClusters(const TerrainProducerSnapshotRequest &request, Budget &budget,
                                                                      const CancellationToken &cancellation) {
-        return SelectMembers(request, request.clusters, budget, cancellation, ResolveCluster, [](const auto *cluster) {
+        return SelectMembers<CookedFoliageCluster>(request, request.clusters, budget, cancellation,
+                                                   [](const auto &invocation, const auto &selection, Budget &admission,
+                                                      const CancellationToken &observer) {
+            return ResolveCluster(invocation, selection, admission, observer);
+        },
+                                                   [](const auto *cluster) {
             return std::tuple{cluster->tile, cluster->type, cluster->id};
         }, &CookedFoliageCluster::id);
     }

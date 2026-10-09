@@ -172,12 +172,13 @@ namespace Horo::Terrain {
         /**
          * @brief Adopts one complete capture or exact successor without changing existing reader leases.
          * @param candidate Detached validated snapshot.
-         * @param expectedCurrent Absent for insertion; exact complete current header for replacement.
+         * @param expectedCurrent Synchronously borrowed only; absent for insertion or exact complete current header for replacement.
          * @param cancellation Cancellation wins before publication.
          * @return Success or typed closed/cancelled/stale failure preserving the prior root.
          * @pre Owner lane only; request advances exactly once and semantic revisions never regress.
          */
-        [[nodiscard]] Result<void> Publish(TerrainProducerSnapshot candidate, std::optional<TerrainProducerSnapshotHeader> expectedCurrent,
+        [[nodiscard]] Result<void> Publish(TerrainProducerSnapshot candidate,
+                                           const std::optional<TerrainProducerSnapshotHeader> &expectedCurrent,
                                            const CancellationToken &cancellation = {});
         /** @brief Captures a reader lease. @return Immutable current root, or typed closed/unavailable failure. */
         [[nodiscard]] Result<TerrainProducerSnapshot> Snapshot() const;

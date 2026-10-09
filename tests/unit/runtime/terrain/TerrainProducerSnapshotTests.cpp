@@ -180,7 +180,12 @@ namespace Horo::Terrain {
         ErrorIs(owner.Publish(next.Value(), request.header, cancelled.Token()), TerrainProducerErrors::Cancelled);
         CHECK(owner.Snapshot().Value().Header() == request.header);
         ErrorIs(owner.Publish(next.Value(), std::nullopt), TerrainProducerErrors::Stale);
-        REQUIRE(owner.Publish(next.Value(), request.header).HasValue());
+        std::optional<TerrainProducerSnapshotHeader> expectedCurrent{request.header};
+        REQUIRE(owner.Publish(next.Value(), expectedCurrent).HasValue());
+        expectedCurrent->request = Rev<TerrainProducerRequestGeneration>(99);
+        CHECK(owner.Snapshot().Value().Header() == nextRequest.header);
+        expectedCurrent.reset();
+        CHECK(owner.Snapshot().Value().Header() == nextRequest.header);
         ErrorIs(reader.Value().ValidateCurrent(nextRequest.header), TerrainProducerErrors::Stale);
         CHECK(reader.Value().Meshes().front().vertices.front().y == 1);
         ErrorIs(owner.Publish(first.Value(), nextRequest.header), TerrainProducerErrors::Stale);

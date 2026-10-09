@@ -69,8 +69,7 @@ namespace Horo::Terrain {
                                    const Sha256Digest &digest, Budget &budget, const CancellationToken &cancellation) {
             Sha256Builder hash;
             for (std::size_t offset = 0; offset < payload.size();) {
-                auto step = budget.Step(request, cancellation);
-                if (!step.HasValue())
+                if (const auto step = budget.Step(request, cancellation); !step.HasValue())
                     return step;
                 const auto count = std::min<std::size_t>(4096, payload.size() - offset);
                 if (!hash.Update(std::as_bytes(payload.subspan(offset, count))))

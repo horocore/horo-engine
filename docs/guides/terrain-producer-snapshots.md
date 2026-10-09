@@ -41,6 +41,13 @@ Readers retain copied memory but must compare complete authoritative current evi
 with `ValidateCurrent` before consumer adoption; retained memory never proves freshness.
 Moved-from leases have invalid headers and empty views and cannot be cached.
 
+`Publish` borrows its optional expected header by const reference only for the
+synchronous call; it never stores that reference. Temporary headers remain valid
+inputs, and candidate snapshots still transfer an owned immutable lease. This
+changes the initial by-value signature's ABI: rebuild linked consumers and update
+any member-function pointer signature to the const-reference parameter. No caller
+must retain the expected header after return, and no publication authority changes.
+
 Focused regression and public consumer targets are
 `HoroTerrainProducerSnapshotTests` and
 `HoroTerrainProducerSnapshotPublicHeaderConsumer`. Their implementation depends on

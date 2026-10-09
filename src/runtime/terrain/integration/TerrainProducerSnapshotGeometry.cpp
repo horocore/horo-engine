@@ -9,8 +9,7 @@ namespace Horo::Terrain::ProducerDetail {
                                   TerrainProducerMesh &mesh, Budget &budget, const CancellationToken &cancellation) {
             mesh.vertices.reserve(artifact.vertices.size());
             for (const auto &vertex : artifact.vertices) {
-                auto step = budget.Step(request, cancellation);
-                if (!step.HasValue())
+                if (const auto step = budget.Step(request, cancellation); !step.HasValue())
                     return step;
                 if (!std::isfinite(vertex.x) || !std::isfinite(vertex.y) || !std::isfinite(vertex.z))
                     return Result<void>::Failure(Failure(request, TerrainProducerErrors::Invalid));
@@ -46,8 +45,7 @@ namespace Horo::Terrain::ProducerDetail {
                                    TerrainProducerMesh &mesh, Budget &budget, const CancellationToken &cancellation) {
             mesh.triangles.reserve(artifact.triangles.size());
             for (const auto &triangle : artifact.triangles) {
-                auto step = budget.Step(request, cancellation);
-                if (!step.HasValue())
+                if (const auto step = budget.Step(request, cancellation); !step.HasValue())
                     return step;
                 if (!ValidTriangle(triangle, mesh))
                     return Result<void>::Failure(Failure(request, TerrainProducerErrors::Invalid));
@@ -64,8 +62,7 @@ namespace Horo::Terrain::ProducerDetail {
                 !budget.Bytes(artifact.vertices.size() * sizeof(TerrainSourceVertex)) ||
                 !budget.Bytes(artifact.triangles.size() * sizeof(TerrainSourceTriangle)))
                 return Result<TerrainProducerMesh>::Failure(Failure(request, TerrainProducerErrors::Limit));
-            auto verified = VerifyPayload(request, artifact.payload, artifact.digest, budget, cancellation);
-            if (!verified.HasValue())
+            if (const auto verified = VerifyPayload(request, artifact.payload, artifact.digest, budget, cancellation); !verified.HasValue())
                 return Result<TerrainProducerMesh>::Failure(verified.ErrorValue());
             const auto &source = request.terrain->Tiles();
             TerrainProducerMesh mesh;

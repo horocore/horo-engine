@@ -8,8 +8,7 @@ namespace Horo::Terrain::ProducerDetail {
                                                              const CancellationToken &cancellation) {
             const FoliageTypeDefinitionData *found{};
             for (const auto &definition : request.definitions) {
-                auto step = budget.Step(request, cancellation);
-                if (!step.HasValue())
+                if (const auto step = budget.Step(request, cancellation); !step.HasValue())
                     return Result<const FoliageTypeDefinitionData *>::Failure(step.ErrorValue());
                 if (definition.Data().type == cluster.type) {
                     if (found || definition.Data().revision != cluster.definitionRevision)
@@ -41,8 +40,7 @@ namespace Horo::Terrain::ProducerDetail {
                                        const FoliageTypeDefinitionData &definition, Budget &budget, const CancellationToken &cancellation) {
             FoliageInstanceId previous{};
             for (const auto &instance : cluster.instances) {
-                auto step = budget.Step(request, cancellation);
-                if (!step.HasValue())
+                if (const auto step = budget.Step(request, cancellation); !step.HasValue())
                     return step;
                 if (!ValidInstance(instance, cluster, definition) || (previous.IsValid() && previous >= instance.id))
                     return Result<void>::Failure(Failure(request, TerrainProducerErrors::Invalid));
@@ -64,8 +62,7 @@ namespace Horo::Terrain::ProducerDetail {
                 return Result<std::uint64_t>::Failure(Failure(request, TerrainProducerErrors::Stale));
             if (!Charge(budget.instances, cluster.instances.size(), budget.limits.maximumInstances))
                 return Result<std::uint64_t>::Failure(Failure(request, TerrainProducerErrors::Limit));
-            auto verified = VerifyPayload(request, cluster.payload, cluster.digest, budget, cancellation);
-            if (!verified.HasValue())
+            if (const auto verified = VerifyPayload(request, cluster.payload, cluster.digest, budget, cancellation); !verified.HasValue())
                 return Result<std::uint64_t>::Failure(verified.ErrorValue());
             auto definition = Definition(request, cluster, budget, cancellation);
             if (!definition.HasValue())
@@ -73,8 +70,8 @@ namespace Horo::Terrain::ProducerDetail {
             const bool relevant = Relevant(*definition.Value(), request.header.consumer);
             if (relevant && Requirement(request) == TerrainPayloadRequirement::NotRequested)
                 return Result<std::uint64_t>::Failure(Failure(request, TerrainProducerErrors::Unavailable));
-            auto instances = ValidateInstances(request, cluster, *definition.Value(), budget, cancellation);
-            if (!instances.HasValue())
+            if (const auto instances = ValidateInstances(request, cluster, *definition.Value(), budget, cancellation);
+                !instances.HasValue())
                 return Result<std::uint64_t>::Failure(instances.ErrorValue());
             return Result<std::uint64_t>::Success(relevant ? cluster.instances.size() : 0);
         }
@@ -106,13 +103,13 @@ namespace Horo::Terrain::ProducerDetail {
             if (!Relevant(*definition.Value(), request.header.consumer))
                 continue;
             for (const auto &instance : cluster->instances) {
-                auto step = budget.Step(request, cancellation);
-                if (!step.HasValue())
+                if (const auto step = budget.Step(request, cancellation); !step.HasValue())
                     return step;
-                output.push_back({cluster->tile, cluster->id, cluster->type, cluster->sourceRevision, cluster->placementRevision,
-                                  cluster->definitionRevision, cluster->digest, cluster->placementFingerprint, cluster->placementDigest,
-                                  cluster->geometryDigest, cluster->profileFingerprint, cluster->bounds, cluster->geometryRadiusMillimeters,
-                                  instance, definition.Value()->collision, definition.Value()->placement.alignment});
+                output.emplace_back(cluster->tile, cluster->id, cluster->type, cluster->sourceRevision, cluster->placementRevision,
+                                    cluster->definitionRevision, cluster->digest, cluster->placementFingerprint, cluster->placementDigest,
+                                    cluster->geometryDigest, cluster->profileFingerprint, cluster->bounds,
+                                    cluster->geometryRadiusMillimeters, instance, definition.Value()->collision,
+                                    definition.Value()->placement.alignment);
             }
         }
         return Result<void>::Success();

@@ -16,7 +16,11 @@ namespace Horo::Terrain::ProducerDetail {
     /** @brief Invocation-local accounting shared by membership and projection; owns no inputs or publication authority. */
     struct Budget final {
         const TerrainProducerSnapshotLimits &limits;
-        std::uint64_t bytes{}, work{}, vertices{}, triangles{}, instances{};
+        std::uint64_t bytes{};
+        std::uint64_t work{};
+        std::uint64_t vertices{};
+        std::uint64_t triangles{};
+        std::uint64_t instances{};
 
         /** @brief Charges examined work; zero-sized selections remain bounded. */
         bool Work(std::uint64_t count);
@@ -51,8 +55,7 @@ namespace Horo::Terrain::ProducerDetail {
     Result<const Member *> FindMember(std::span<const Member> members, const TerrainProducerSnapshotRequest &request, Budget &budget,
                                       const CancellationToken &cancellation, Predicate matches) {
         for (const auto &member : members) {
-            auto step = budget.Step(request, cancellation);
-            if (!step.HasValue())
+            if (const auto step = budget.Step(request, cancellation); !step.HasValue())
                 return Result<const Member *>::Failure(step.ErrorValue());
             if (matches(member))
                 return Result<const Member *>::Success(&member);
@@ -70,13 +73,10 @@ namespace Horo::Terrain::ProducerDetail {
      * @param identity Duplicate identity key.
      * @return Canonical invocation-local index or contextual failure; allocates only its precharged index.
      */
-    template <typename Selection, typename Member, typename Order, typename Identity>
+    template <typename Member, typename Selection, typename Resolver, typename Order, typename Identity>
     Result<std::vector<const Member *>> SelectMembers(const TerrainProducerSnapshotRequest &request, std::span<const Selection> selections,
-                                                      Budget &budget, const CancellationToken &cancellation,
-                                                      Result<const Member *> (*resolve)(const TerrainProducerSnapshotRequest &,
-                                                                                        const Selection &, Budget &,
-                                                                                        const CancellationToken &),
-                                                      Order order, Identity identity) {
+                                                      Budget &budget, const CancellationToken &cancellation, Resolver resolve, Order order,
+                                                      Identity identity) {
         using Selected = Result<std::vector<const Member *>>;
         std::vector<const Member *> selected;
         selected.reserve(selections.size());
@@ -86,8 +86,8 @@ namespace Horo::Terrain::ProducerDetail {
                 return Selected::Failure(member.ErrorValue());
             selected.push_back(member.Value());
         }
-        auto admitted = budget.Step(request, cancellation, selected.size() * (std::bit_width(selected.size()) + 1));
-        if (!admitted.HasValue())
+        if (const auto admitted = budget.Step(request, cancellation, selected.size() * (std::bit_width(selected.size()) + 1));
+            !admitted.HasValue())
             return Selected::Failure(admitted.ErrorValue());
         std::ranges::sort(selected, {}, order);
         for (std::size_t index = 1; index < selected.size(); ++index)

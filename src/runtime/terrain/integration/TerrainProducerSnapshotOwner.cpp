@@ -26,7 +26,7 @@ namespace Horo::Terrain {
 
     /** @copydoc TerrainProducerSnapshotOwner::Publish */
     Result<void> TerrainProducerSnapshotOwner::Publish(TerrainProducerSnapshot candidate,
-                                                       const std::optional<TerrainProducerSnapshotHeader> expectedCurrent,
+                                                       const std::optional<TerrainProducerSnapshotHeader> &expectedCurrent,
                                                        const CancellationToken &cancellation) {
         if (closed_)
             return Result<void>::Failure(MakeError(TerrainProducerErrors::Closed));
