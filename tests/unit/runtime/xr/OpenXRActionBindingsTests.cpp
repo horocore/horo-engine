@@ -2,6 +2,7 @@
 #include "support/OpenXRNativeTestSupport.h"
 
 #include <catch2/matchers/catch_matchers_exception.hpp>
+#include <format>
 #include <new>
 #include <stdexcept>
 
@@ -21,7 +22,8 @@ namespace {
         unsigned suggestions{};
         unsigned attaches{};
         unsigned syncs{};
-        bool throwStandard{};
+        bool throwFormat{};
+        bool throwRuntime{};
         bool throwAllocation{};
         bool throwUnsupportedStandard{};
         bool throwForeign{};
@@ -77,8 +79,10 @@ namespace {
             const auto result = Script::Record("create-action");
             if (XR_SUCCEEDED(result))
                 *action = NativeHandle<XrAction>(200 + ++active->liveActions);
-            if (active->throwStandard)
-                throw std::runtime_error("scripted action callback exception");
+            if (active->throwFormat)
+                throw std::format_error("scripted action formatting exception");
+            if (active->throwRuntime)
+                throw std::runtime_error("unsupported scripted runtime exception");
             if (active->throwAllocation)
                 throw std::bad_alloc{};
             if (active->throwUnsupportedStandard)
@@ -307,8 +311,8 @@ namespace {
 
     TEST_CASE("OpenXR action callback exceptions roll back acquired ownership before returning or propagating", "[xr][native][lifecycle]") {
         ActionFixture fixture;
-        SECTION("supported runtime errors become typed preparation failure") {
-            fixture.script.throwStandard = true;
+        SECTION("supported format errors become typed preparation failure") {
+            fixture.script.throwFormat = true;
             const auto result = fixture.Create();
             REQUIRE(result.HasError());
             REQUIRE(result.ErrorValue().code.Value() == "xr.operation.unavailable");
@@ -318,6 +322,11 @@ namespace {
             const auto result = fixture.Create();
             REQUIRE(result.HasError());
             REQUIRE(result.ErrorValue().code.Value() == "xr.operation.unavailable");
+        }
+        SECTION("unrelated runtime exceptions preserve type and message") {
+            fixture.script.throwRuntime = true;
+            REQUIRE_THROWS_MATCHES(fixture.Create(), std::runtime_error,
+                                   Catch::Matchers::Message("unsupported scripted runtime exception"));
         }
         SECTION("unsupported standard exceptions preserve type and message") {
             fixture.script.throwUnsupportedStandard = true;

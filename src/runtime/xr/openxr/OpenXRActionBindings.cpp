@@ -5,7 +5,6 @@
 #include <format>
 #include <memory>
 #include <new>
-#include <stdexcept>
 
 namespace Horo::XR::OpenXRInternal {
     namespace {
@@ -313,7 +312,7 @@ namespace Horo::XR::OpenXRInternal {
                 prepared = Prepare(request.schema, request.catalog, request.overrides, request.profiles, request.controls, request.labels);
         } catch (const std::bad_alloc &) {
             prepared = preparationFailure();
-        } catch (const std::runtime_error &) {
+        } catch (const std::format_error &) {
             prepared = preparationFailure();
         }
         (void)rollback.release();
