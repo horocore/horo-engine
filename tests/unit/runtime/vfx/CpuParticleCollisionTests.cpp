@@ -14,6 +14,7 @@ namespace Horo::Vfx {
             auto data = Tests::ValidParticleDescriptorData();
             data.simulationPreference = SimulationPreference::RequireCPU;
             data.maximumParticles = 16;
+            data.shape = ParticleEmitterShape::Point;
             data.spawnRate = {};
             data.initialSpeed = {};
             data.lifetimeSeconds = {10.0, 10.0};
