@@ -419,7 +419,7 @@ namespace Horo::Character {
         }
 
         TEST_CASE("Character errors expose stable actionable identities", "[physics][character][errors]") {
-            REQUIRE(CharacterErrors::Descriptors().size() == 15);
+            REQUIRE(CharacterErrors::Descriptors().size() == 19);
             std::set<std::string_view> unique;
             for (const auto *descriptor : CharacterErrors::Descriptors()) {
                 REQUIRE(descriptor->domain.Value() == "horo.character");
