@@ -1,6 +1,7 @@
 #include "BackendTestSupport.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "OpenGLBackendInternal.h"
+#include "OpenGLRenderTestSupport.h"
 #include "RenderMemoryTestSupport.h"
 
 #include <array>
@@ -76,11 +77,11 @@ namespace Horo::Render::OpenGLResourceTests {
         // This probe intentionally records no state.
     }
 
-    void ProbeViewport(std::int32_t, std::int32_t, std::int32_t, std::int32_t) {
+    void ProbeViewport(std::int32_t, std::int32_t, std::int32_t, std::int32_t) noexcept {
         // Viewport state is outside this resource test's scope.
     }
 
-    void ProbeClearColor(float, float, float, float) {
+    void ProbeClearColor(float, float, float, float) noexcept {
         // Clear color state is outside this resource test's scope.
     }
 
@@ -164,9 +165,15 @@ namespace Horo::Render::OpenGLResourceTests {
 
     [[nodiscard]] Detail::OpenGLCommandFunctions ResourceProbeFunctions() noexcept {
         return {
+            .isAvailable =
+                +[]() noexcept {
+            return true;
+        },
             .viewport = &ProbeViewport,
             .clearColor = &ProbeClearColor,
             .clear = &ProbeNoOp,
+            .state = OpenGLBackendTests::ProbeFunctions().state,
+            .sync = OpenGLBackendTests::ProbeFunctions().sync,
             .buffers = {.generateBuffers = &ProbeGenerateBuffers,
                         .deleteBuffers = &ProbeDeleteBuffers,
                         .bindBuffer = &ProbeBindObject,

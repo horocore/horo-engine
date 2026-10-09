@@ -4,9 +4,12 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "OpenGLBackendInternal.h"
 
+#include <algorithm>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
 #include <stdexcept>
+#include <utility>
 
 namespace Horo::Render::OpenGLBackendTests {
     using BackendTestSupport::Check;
@@ -130,31 +133,146 @@ namespace Horo::Render::OpenGLBackendTests {
         std::int32_t viewportHeight{0};
         ClearColor color{};
         std::uint32_t clearMask{0};
+        std::array<std::int32_t, 4> viewport{3, 4, 80, 90};
+        std::array<std::uint8_t, 4> colorMask{0, 1, 0, 1};
+        std::int32_t framebuffer{7};
+        std::int32_t defaultDrawBuffer{0x0404};
+        std::array<bool, 3> enabled{true, true, true};
+        std::array<ClearColor, 16> clearedColors{};
+        std::array<std::int32_t, 4> clearedViewport{};
+        std::array<std::uint8_t, 4> clearedMask{};
+        std::int32_t clearedFramebuffer{-1};
+        std::array<bool, 3> clearedEnabled{};
+        bool clearThrows{false};
+        bool errorOnClear{false};
+        std::uint32_t error{0};
+        std::uint32_t pollStatus{0x911A};
+        std::uintptr_t nextFence{1};
+        int fenceCount{0};
+        int pollCount{0};
+        int deleteFenceCount{0};
+        int flushCount{0};
+        bool fenceFails{false};
+        bool dispatchAvailable{true};
     };
 
     inline CommandState commandState;
 
-    inline void ProbeViewport(const std::int32_t, const std::int32_t, const std::int32_t width, const std::int32_t height) {
+    inline bool ProbeIsAvailable() noexcept {
+        return commandState.dispatchAvailable;
+    }
+
+    inline void ProbeViewport(const std::int32_t x, const std::int32_t y, const std::int32_t width, const std::int32_t height) noexcept {
+        commandState.viewport = {x, y, width, height};
         ++commandState.viewportCount;
         commandState.viewportWidth = width;
         commandState.viewportHeight = height;
     }
 
-    inline void ProbeClearColor(const float red, const float green, const float blue, const float alpha) {
+    inline void ProbeClearColor(const float red, const float green, const float blue, const float alpha) noexcept {
         ++commandState.clearColorCount;
         commandState.color = ClearColor{red, green, blue, alpha};
     }
 
     inline void ProbeClear(const std::uint32_t mask) {
+        if (commandState.clearThrows)
+            throw std::runtime_error{"Injected native command failure."};
+        const auto index = static_cast<std::size_t>(commandState.clearCount);
+        if (index < commandState.clearedColors.size())
+            commandState.clearedColors[index] = commandState.color;
         ++commandState.clearCount;
         commandState.clearMask = mask;
+        commandState.clearedViewport = commandState.viewport;
+        commandState.clearedMask = commandState.colorMask;
+        commandState.clearedFramebuffer = commandState.framebuffer;
+        commandState.clearedEnabled = commandState.enabled;
+        if (commandState.errorOnClear)
+            commandState.error = 0x0502;
+    }
+
+    inline void ProbeGetInteger(const std::uint32_t name, const std::span<std::int32_t> values) noexcept {
+        if (name == 0x0BA2)
+            std::ranges::copy(commandState.viewport, values.begin());
+        else if (name == 0x8CA6)
+            values[0] = commandState.framebuffer;
+        else if (name == 0x0C01)
+            values[0] = commandState.defaultDrawBuffer;
+    }
+
+    inline void ProbeGetFloat(const std::uint32_t, const std::span<float> values) noexcept {
+        const ClearColor &color = commandState.color;
+        const std::array<float, 4> channels{color.red, color.green, color.blue, color.alpha};
+        std::ranges::copy(channels, values.begin());
+    }
+
+    inline void ProbeGetBoolean(const std::uint32_t, const std::span<std::uint8_t> values) noexcept {
+        std::ranges::copy(commandState.colorMask, values.begin());
+    }
+
+    inline std::size_t CapabilityIndex(const std::uint32_t name) noexcept {
+        if (name == 0x0C11)
+            return 0;
+        return name == 0x0BD0 ? 1 : 2;
+    }
+
+    inline bool ProbeIsEnabled(const std::uint32_t name) noexcept {
+        return commandState.enabled[CapabilityIndex(name)];
+    }
+
+    inline void ProbeSetEnabled(const std::uint32_t name, const bool enabled) noexcept {
+        commandState.enabled[CapabilityIndex(name)] = enabled;
+    }
+
+    inline void ProbeColorMask(const std::span<const std::uint8_t, 4> mask) noexcept {
+        std::ranges::copy(mask, commandState.colorMask.begin());
+    }
+
+    inline void ProbeBindDrawFramebuffer(const std::uint32_t framebuffer) noexcept {
+        commandState.framebuffer = static_cast<std::int32_t>(framebuffer);
+    }
+
+    inline void ProbeDrawBuffer(const std::uint32_t buffer) noexcept {
+        commandState.defaultDrawBuffer = static_cast<std::int32_t>(buffer);
+    }
+
+    inline std::uint32_t ProbeError() noexcept {
+        return std::exchange(commandState.error, 0);
+    }
+
+    inline std::uintptr_t ProbeFence() noexcept {
+        ++commandState.fenceCount;
+        return commandState.fenceFails ? 0 : commandState.nextFence++;
+    }
+
+    inline std::uint32_t ProbePoll(const std::uintptr_t) noexcept {
+        ++commandState.pollCount;
+        return commandState.pollStatus;
+    }
+
+    inline void ProbeDestroyFence(const std::uintptr_t) noexcept {
+        ++commandState.deleteFenceCount;
+    }
+
+    inline void ProbeFlush() noexcept {
+        ++commandState.flushCount;
     }
 
     [[nodiscard]] inline Detail::OpenGLCommandFunctions ProbeFunctions() noexcept {
         return Detail::OpenGLCommandFunctions{
+            .isAvailable = &ProbeIsAvailable,
             .viewport = &ProbeViewport,
             .clearColor = &ProbeClearColor,
             .clear = &ProbeClear,
+            .state = {.getInteger = &ProbeGetInteger,
+                      .getFloat = &ProbeGetFloat,
+                      .getBoolean = &ProbeGetBoolean,
+                      .isEnabled = &ProbeIsEnabled,
+                      .setEnabled = &ProbeSetEnabled,
+                      .colorMask = &ProbeColorMask,
+                      .bindDrawFramebuffer = &ProbeBindDrawFramebuffer,
+                      .drawBuffer = &ProbeDrawBuffer,
+                      .error = &ProbeError},
+            .sync = {.fence = &ProbeFence, .poll = &ProbePoll, .destroy = &ProbeDestroyFence, .flush = &ProbeFlush},
         };
     }
 
