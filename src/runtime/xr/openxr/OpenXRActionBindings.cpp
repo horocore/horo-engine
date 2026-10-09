@@ -4,6 +4,7 @@
 #include <bit>
 #include <exception>
 #include <format>
+#include <memory>
 
 namespace Horo::XR::OpenXRInternal {
     namespace {
@@ -295,6 +296,11 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(borrowed.ErrorValue());
         native_ = borrowed.Value();
         owner_ = session;
+        const auto retire = [](OpenXRActionBindings *owner) {
+            (void)owner->Close();
+        };
+        // Foreign exceptions unwind through retirement without translating their identity.
+        std::unique_ptr<OpenXRActionBindings, decltype(retire)> rollback{this, retire};
         Result<void> prepared = Result<void>::Success();
         try {
             prepared = Resolve(request, native_.instance);
@@ -303,10 +309,8 @@ namespace Horo::XR::OpenXRInternal {
         } catch (const std::exception &) {
             prepared =
                 Result<void>::Failure(MakeError(XRErrors::OperationUnavailable, "OpenXR action preparation failed; rollback requested."));
-        } catch (...) {
-            (void)Close();
-            throw;
         }
+        (void)rollback.release();
         if (prepared.HasError()) {
             const auto retired = Close();
             return retired.HasError() ? retired : prepared;

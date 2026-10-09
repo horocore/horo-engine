@@ -329,4 +329,19 @@ namespace {
         REQUIRE(fixture.script.liveActions == 0);
         REQUIRE(fixture.script.liveSets == 0);
     }
+
+    TEST_CASE("OpenXR foreign preparation exceptions preserve retryable retirement failure", "[xr][native][lifecycle]") {
+        ActionFixture fixture;
+        fixture.script.throwForeign = true;
+        fixture.session.script.fail = "destroy-action";
+        REQUIRE_THROWS_AS(fixture.Create(), std::uint32_t);
+        REQUIRE(fixture.script.liveActions == 1);
+        REQUIRE(fixture.script.liveSets == 1);
+        REQUIRE(fixture.script.attaches == 0);
+        REQUIRE(fixture.owner.Sync(fixture.session.Request().candidate).HasError());
+        fixture.session.script.fail = {};
+        REQUIRE(fixture.owner.Close().HasValue());
+        REQUIRE(fixture.script.liveActions == 0);
+        REQUIRE(fixture.script.liveSets == 0);
+    }
 }  // namespace
