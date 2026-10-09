@@ -20,6 +20,20 @@ namespace Horo::Audio {
         std::uint64_t sampleFrame{};
     };
 
+    /** @brief Ring publication and position handoff between the sole callback and serialized worker.
+     * The callback ends ring reads before publishing seekTarget. The worker resets produced after Seek
+     * and acknowledges reuse with positionReady. All mailboxes retain sequentially consistent ordering;
+     * fillsSuspended controls future admission, not cancellation or the lifetime of an existing fill.
+     */
+    struct AudioStreamTransport final {
+        std::atomic<std::uint64_t> produced{};
+        std::atomic<std::uint64_t> consumed{};
+        std::atomic<std::uint64_t> seekTarget{std::numeric_limits<std::uint64_t>::max()};
+        std::atomic<bool> positionReady{true};
+        std::atomic<bool> fillsSuspended{};
+        std::atomic<std::uint64_t> requestedLoop{};
+    };
+
     /** @brief Control retains storage through callback detachment and serialized worker completion.
      * Only atomic mailboxes cross lanes; decoder/workerLoop belong to the worker, reporting/failure/pins to control.
      */
@@ -31,13 +45,7 @@ namespace Horo::Audio {
         std::unique_ptr<AudioStreamDecoder> decoder;
         std::atomic<AudioStreamDecoder *> publishedDecoder{nullptr};
         CancellationSource cancellation;
-        std::atomic<std::uint64_t> produced{};
-        std::atomic<std::uint64_t> consumed{};
-        // Sole callback ends ring reads before requesting position. The sole worker acknowledges ring reuse after Seek.
-        std::atomic<std::uint64_t> seekTarget{std::numeric_limits<std::uint64_t>::max()};
-        std::atomic<bool> positionReady{true};
-        std::atomic<bool> fillsSuspended{};
-        std::atomic<std::uint64_t> requestedLoop{};
+        AudioStreamTransport transport;
         AudioVoiceLoop workerLoop;
         std::atomic<std::uint64_t> underrunFrames{};
         std::atomic<std::uint64_t> underrunCallbacks{};
@@ -60,7 +68,8 @@ namespace Horo::Audio {
 
         /** @brief Control-only eligibility: terminal, cancelled or virtually idle streams do not admit future jobs. */
         bool FillAdmitted() const noexcept {
-            return !failed && !cancelled && !stopped.load() && !cancellation.Token().IsCancellationRequested() && !fillsSuspended.load();
+            return !failed && !cancelled && !stopped.load() && !cancellation.Token().IsCancellationRequested() &&
+                   !transport.fillsSuspended.load();
         }
     };
 }  // namespace Horo::Audio

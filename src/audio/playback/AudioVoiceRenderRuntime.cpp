@@ -133,7 +133,9 @@ namespace Horo::Audio {
 
     /** @copydoc AudioVoiceRenderRuntime::Cursor */
     AudioVoiceCursor AudioVoiceRenderRuntime::Cursor() const noexcept {
-        return state_->released ? AudioVoiceCursor{} : state_->resident ? state_->resident->Cursor() : state_->streamPlayback.cursor;
+        if (state_->released)
+            return {};
+        return state_->resident ? state_->resident->Cursor() : state_->streamPlayback.cursor;
     }
 
     /** @copydoc AudioVoiceRenderRuntime::Publish */
