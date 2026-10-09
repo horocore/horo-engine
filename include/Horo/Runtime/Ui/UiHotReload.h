@@ -208,6 +208,11 @@ namespace Horo::Runtime::Ui {
     private:
         struct Storage;
         friend class UiAnimationOwner;
+        friend class UiOverlayLifecycle;
+        /** @brief Borrows immutable active composition solely for fail-closed overlay audience/route checks. */
+        [[nodiscard]] const UiReloadGeneration *OverlayCurrent() const noexcept;
+        /** @brief Borrows this publisher's private candidate solely for checked layer composition before publication. */
+        [[nodiscard]] UiReloadGeneration *OverlayReplacement(const Prepared &prepared) noexcept;
         /** @brief Borrows a solely owned inactive replacement for animation composition before structural publication. */
         [[nodiscard]] UiReloadGeneration *AnimationReplacement(const Prepared &prepared) noexcept;
 

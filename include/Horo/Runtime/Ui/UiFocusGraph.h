@@ -243,6 +243,14 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsValid() const noexcept;
     };
 
+    /** @brief Owned stable-ID recovery path; contains no tree pointer or transient element handle. */
+    struct UiFocusRestoration final {
+        UiFocusOwnerContext source; /**< Exact original player/layer and source revisions. */
+        UiElementId focused;
+        std::array<UiElementId, MaximumUiFocusGraphDepth> ancestors{};
+        std::uint32_t ancestorCount{};
+    };
+
     /**
      * @brief Owner-thread bounded focus graph for one exact player/presentation-layer scope.
      * @details Creation and reload copy a complete candidate. Successful focus operations scan only the predeclared node and
@@ -290,6 +298,17 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<UiElementHandle> Find(UiElementId id) const;
         /** @brief Returns current focus, if any, without allocating. @return Optional target or lifecycle failure. */
         [[nodiscard]] Result<std::optional<UiFocusTarget>> CurrentFocus() const;
+
+        /** @brief Copies a bounded restoration path before a context loses focus.
+         * @return Owned stable identities or typed lifecycle failure; no allocation or retained borrow.
+         */
+        [[nodiscard]] Result<UiFocusRestoration> CaptureRestoration() const;
+        /** @brief Restores a compatible context through the graph's existing declared recovery policy.
+         * @param restoration Owned evidence from this exact instance/canvas/document/player/layer; older revisions may reconcile.
+         * @return Focus recovery or typed malformed, foreign, future-revision or lifecycle failure without mutation.
+         * @details Resolves only current allowed targets. Recycled handles and deleted/disabled targets cannot regain focus.
+         */
+        [[nodiscard]] Result<UiFocusChange> Restore(const UiFocusRestoration &restoration);
 
         /**
          * @brief Replaces the complete tree/interaction candidate and reconciles state by stable authored identity.
