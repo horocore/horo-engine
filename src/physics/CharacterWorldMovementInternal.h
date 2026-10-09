@@ -11,13 +11,10 @@
 
 namespace Horo::Character::Detail {
     /** @brief Admits one synchronous sweep and returns validated, canonically ordered copied evidence. */
-    [[nodiscard]] Result<CharacterSweepProbeResult> ReadMovementSweep(auto &impl, const CharacterMovementRequest &command,
-                                                                      const CharacterFixedTickInput &input,
-                                                                      const CharacterControllerDescriptor &descriptor,
+    [[nodiscard]] Result<CharacterSweepProbeResult> ReadMovementSweep(auto &impl, const StepQueryContext &query,
                                                                       const SweepMotionState &motion, const Math::Vec3 direction,
                                                                       const float distance, const std::uint32_t iteration) {
-        return ReadCapsuleSweep(impl, StepQueryContext{command, input, descriptor},
-                                StepCast{motion.position, direction, distance, iteration}, SweepPurpose::Movement);
+        return ReadCapsuleSweep(impl, query, StepCast{motion.position, direction, distance, iteration}, SweepPurpose::Movement);
     }
 
     /** @brief Resolves one checked sweep, including step admission, without publishing a partial candidate. */
@@ -29,7 +26,7 @@ namespace Horo::Character::Detail {
         if (!std::isfinite(distance) || distance <= descriptor.minimumMoveDistanceMeters)
             return Result<bool>::Success(false);
         const Math::Vec3 direction = motion.remaining / distance;
-        auto probe = ReadMovementSweep(impl, command, input, descriptor, motion, direction, distance, iteration);
+        auto probe = ReadMovementSweep(impl, StepQueryContext{command, input, descriptor}, motion, direction, distance, iteration);
         if (probe.HasError())
             return Result<bool>::Failure(probe.ErrorValue());
         const auto &evidence = probe.Value();
@@ -134,6 +131,16 @@ namespace Horo::Character::Detail {
         }
     }
 
+    /** @brief Admits one airborne continuation against the shared budget before incrementing or querying. */
+    [[nodiscard]] Result<bool> ResolveAirborneIteration(auto &impl, CharacterMovementResult &result, const StepQueryContext &query,
+                                                        SweepMotionState &motion) {
+        if (motion.iteration >= impl.settings.Values().work.maximumMovementIterations) {
+            StopAtMovementLimit(result, motion);
+            return Result<bool>::Success(false);
+        }
+        return ResolveCapsuleSweepIteration(impl, result, query.command, query.input, query.descriptor, motion, motion.iteration++);
+    }
+
     /** @brief Integrates the single committed free-flight velocity through the remaining bounded sweeps. */
     [[nodiscard]] Result<void> ResolveAirborneMotion(auto &impl, CharacterMovementResult &result, const CharacterMovementRequest &command,
                                                      const CharacterFixedTickInput &input, const CharacterControllerDescriptor &descriptor,
@@ -148,12 +155,9 @@ namespace Horo::Character::Detail {
         auto airDescriptor = descriptor;
         // Acceleration below the ordinary intent threshold must not disappear each tick.
         airDescriptor.minimumMoveDistanceMeters = 0.0F;
+        const StepQueryContext airQuery{command, input, airDescriptor};
         while (Math::LengthSquared(motion.remaining) > 0.0F) {
-            if (motion.iteration >= impl.settings.Values().work.maximumMovementIterations) {
-                StopAtMovementLimit(result, motion);
-                break;
-            }
-            const auto swept = ResolveCapsuleSweepIteration(impl, result, command, input, airDescriptor, motion, motion.iteration++);
+            const auto swept = ResolveAirborneIteration(impl, result, airQuery, motion);
             if (swept.HasError())
                 return Result<void>::Failure(swept.ErrorValue());
             if (!swept.Value())
@@ -192,10 +196,10 @@ namespace Horo::Character::Detail {
     }
 
     /** @brief Completes only admitted post-intent gravity phases; a solver stop cannot restart unswept motion. */
-    [[nodiscard]] Result<void> ResolvePostSweepMotion(auto &impl, CharacterMovementResult &result, const CharacterMovementRequest &command,
-                                                      const CharacterFixedTickInput &input, const CharacterControllerDescriptor &descriptor,
+    [[nodiscard]] Result<void> ResolvePostSweepMotion(auto &impl, CharacterMovementResult &result, const StepQueryContext &query,
                                                       const CharacterControllerDescriptor &supportDescriptor, SweepMotionState &motion,
                                                       std::optional<CharacterSweepHit> &steepSupport) {
+        const auto &[command, input, descriptor] = query;
         const bool steepPass = steepSupport.has_value();
         if (result.termination != CharacterMovementTermination::Complete) {
             motion.gravityVelocity = {};
@@ -292,7 +296,7 @@ namespace Horo::Character::Detail {
                 return Result<CharacterMovementResult>::Failure(grounded.ErrorValue());
         }
         if (const auto completed =
-                ResolvePostSweepMotion(impl, result, command, input, descriptor, supportDescriptor, motion, steepSupport);
+                ResolvePostSweepMotion(impl, result, StepQueryContext{command, input, descriptor}, supportDescriptor, motion, steepSupport);
             completed.HasError())
             return Result<CharacterMovementResult>::Failure(completed.ErrorValue());
         result.finalPosition = motion.position;

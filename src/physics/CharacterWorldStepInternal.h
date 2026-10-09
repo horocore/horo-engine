@@ -7,7 +7,7 @@
 #include "CharacterWorldSweepInternal.h"
 
 namespace Horo::Character::Detail {
-    /** @brief Borrows one synchronous step operation's immutable query policy. */
+    /** @brief Borrows immutable capsule-query policy shared by synchronous step and movement operations. */
     struct StepQueryContext final {
         const CharacterMovementRequest &command;
         const CharacterFixedTickInput &input;
