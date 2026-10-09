@@ -1,3 +1,4 @@
+#include "EditorWorkspaceControllerPolicyTestSupport.h"
 #include "Horo/Assets/MeshEditorPayload.h"
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
@@ -196,55 +197,7 @@ namespace {
         }
     };
 
-    class TestWorkspaceController final {
-    public:
-        explicit TestWorkspaceController(std::string projectRoot = "test-project", DiagnosticSourceNavigator diagnosticNavigator = {})
-            : controller_(projectRoot, runtimeScene_, {},
-                          EditorWorkspaceDependencies{.diagnosticSourceNavigator = std::move(diagnosticNavigator)}) {
-            REQUIRE((runtimeScene_.Startup(cancellation_.Token()).HasValue()));
-            PumpLifecycleCommit();
-        }
-
-        void ProcessCommand(const EditorWorkspaceViewCommandData &command) {
-            controller_.ProcessCommand(command);
-            PumpLifecycleCommit();
-        }
-
-        [[nodiscard]] const EditorWorkspaceViewModel &ViewModel() const noexcept {
-            return controller_.ViewModel();
-        }
-
-        [[nodiscard]] EditorDataBus &DataBus() noexcept {
-            return controller_.DataBus();
-        }
-
-        [[nodiscard]] ViewportRevision CurrentViewportRevision() const noexcept {
-            return controller_.CurrentViewportRevision();
-        }
-
-        [[nodiscard]] const EditorViewportSceneSnapshot &ViewportScene() const noexcept {
-            return controller_.ViewportScene();
-        }
-
-        void RefreshAssets(const Assets::AssetRegistrySnapshot &snapshot) {
-            controller_.RefreshAssets(snapshot);
-        }
-
-        void UpdateContentBrowser() {
-            controller_.UpdateContentBrowser();
-        }
-
-    private:
-        void PumpLifecycleCommit() {
-            const Runtime::FrameContext context{1, {}, 0.0, 0, {}, false, cancellation_.Token()};
-            REQUIRE((runtimeScene_.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, context).HasValue()));
-            controller_.SynchronizeRuntimeScenePreview();
-        }
-
-        Runtime::RuntimeSceneService runtimeScene_;
-        CancellationSource cancellation_;
-        EditorWorkspaceController controller_;
-    };
+    using TestWorkspaceController = HoroEditorWorkspaceControllerPolicyTests::FocusedWorkspaceController;
 
     TEST_CASE("Gameplay behavior creation requests validate Lua and native kinds", "[unit][editor][behavior]") {
         const std::string destination = std::filesystem::absolute("project/assets/scripts").string();
