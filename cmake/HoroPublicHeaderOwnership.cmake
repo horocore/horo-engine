@@ -262,6 +262,7 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/Save/SaveParticipation.h
     Horo/Runtime/Save/SaveCaptureSnapshot.h
     Horo/Runtime/Save/SaveRestoreTransaction.h
+    Horo/Runtime/Save/SaveGameplayCheckpoint.h
     Horo/Runtime/Save/SaveArchiveMetadata.h
     Horo/Runtime/Save/SaveArchiveFraming.h
     Horo/Runtime/Save/SaveArchiveFinalization.h

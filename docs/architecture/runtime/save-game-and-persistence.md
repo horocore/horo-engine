@@ -1808,3 +1808,43 @@ Known records keep actual supported decode/hash verification; the generic reader
 inspection and round-trip APIs remain strict. Content reconciliation and re-save
 use the same qualified source/candidate path and compare exact stored bytes and
 directory metadata. This path never permits dropping retained optional records.
+
+## Gameplay Checkpoint Capture And Restart API
+
+`GameplayCheckpoint` is an immutable retry source owned by the host. `Capture`
+invokes the same bounded `RuntimeSaveCaptureBuilder` and participant adapters as
+ordinary saves at the host's exclusive capture safe point. A transient checkpoint
+retains immutable canonical payloads and exact registry, runtime session and Scene
+incarnation evidence. It is a process-local rollback point and never claims a
+durable slot. Capture requires an inert project payload descriptor identifying a
+mandatory capture/restore participant, exact schema and owned record.
+
+Checkpoint identity, spawn anchor, restart context, project, world, base scene,
+product compatibility and baseline digest are stable typed facts. Display labels
+are advisory and may be localized or duplicated; invalid presentation is omitted.
+The project participant encodes checkpoint metadata and spawn/restart semantics in
+its canonical checkpoint record so that durable reload can recover those facts.
+It applies those semantics to its inactive candidate during the normal restore
+phases, rather than calling gameplay after live publication.
+
+`CommitDurable` accepts the trusted publication returned by the ordinary slot
+commit of that exact snapshot. It requires Checkpoint slot kind, matching checkpoint
+identity, base scene and product compatibility. `OpenDurable` reopens metadata
+already decoded from a verified committed archive. Durable sources retain exact
+slot/generation metadata and do not retain a process-local snapshot. Host composition
+owns namespace binding and proves the captured-state/publication relationship;
+these APIs perform no storage I/O or ambient backend discovery.
+
+`GameplayCheckpointController::Activate` selects a retry source without mutating
+live gameplay. Incompatible replacement leaves the previous selection intact.
+`Restart` revalidates baseline, project payload descriptor and transient lifetime,
+then asks the trusted ordinary slot-load composition to stage its source. Durable
+staging must pin the exact namespace/slot generation, verify archive integrity and
+compatibility, and compare canonical checkpoint metadata before returning receipts.
+A stale publication must fail; it may not silently load the newest slot generation.
+The returned receipts are adopted and prepared by `StagedRestoreTransaction` with
+its deterministic validation, dependency plan, rollback and cancellation behavior.
+The host publishes only by calling that transaction's `Activate` with fresh runtime
+and registry evidence under the exclusive lifecycle commit boundary. No checkpoint
+path bypasses the ordinary restore transaction or performs post-publication spawn
+callbacks. Controller access is confined to its constructing thread.
