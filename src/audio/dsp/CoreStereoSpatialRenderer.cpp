@@ -10,6 +10,13 @@
 
 namespace Horo::Audio {
     namespace {
+        /** @brief Stop conversion on terminal/rejected progress or when the admitted input is exhausted. */
+        bool ConversionFinished(const AudioResamplerProgress &progress, const bool inputExhausted) noexcept {
+            using enum AudioResamplerStatus;
+            return progress.status == Complete || progress.status == InvalidState || progress.status == InvalidBuffer ||
+                   (progress.status == InputNeeded && inputExhausted);
+        }
+
         /** @brief Admit a closed finite interval without allowing NaN through comparisons. */
         bool InRange(const float value, const float low, const float high) noexcept {
             return std::isfinite(value) && value >= low && value <= high;
@@ -310,6 +317,15 @@ namespace Horo::Audio {
         ++progress.produced;
     }
 
+    /** @copydoc CoreStereoSpatialRenderer::StageInputFrame */
+    std::uint32_t CoreStereoSpatialRenderer::StageInputFrame(const AudioResamplerInput input, const std::uint32_t consumed) noexcept {
+        if (consumed >= input.frames)
+            return 0;
+        for (std::uint32_t channel = 0; channel < descriptor_.channels; ++channel)
+            inputCells_[channel].samples[0] = input.planes[channel][consumed];
+        return 1;
+    }
+
     /** @copydoc CoreStereoSpatialRenderer::Process */
     AudioResamplerProgress CoreStereoSpatialRenderer::Process(const AudioResamplerInput input, const AudioResamplerOutput output) noexcept {
         using enum AudioResamplerStatus;
@@ -325,20 +341,17 @@ namespace Horo::Audio {
         }
         AudioResamplerProgress progress{.status = OutputFull};
         while (progress.produced < output.capacity) {
-            const std::uint32_t offered = progress.consumed < input.frames ? 1 : 0;
-            if (offered != 0)
-                for (std::uint32_t channel = 0; channel < descriptor_.channels; ++channel)
-                    inputCells_[channel].samples[0] = input.planes[channel][progress.consumed];
+            const std::uint32_t offered = StageInputFrame(input, progress.consumed);
             const auto result = converter_.Process({{inputs.data(), descriptor_.channels},
                                                     offered,
                                                     input.endOfStream && progress.consumed + offered == input.frames},
                                                    {{outputs.data(), descriptor_.channels}, 1});
             progress.consumed += result.consumed;
             progress.sanitizedSamples += result.sanitizedSamples;
+            progress.sourceAdvance += result.sourceAdvance;
             if (result.produced != 0)
                 EmitStereo(output, progress);
-            if (result.status == Complete || result.status == InvalidState || result.status == InvalidBuffer ||
-                (result.status == InputNeeded && progress.consumed == input.frames)) {
+            if (ConversionFinished(result, progress.consumed == input.frames)) {
                 progress.status = result.status;
                 break;
             }

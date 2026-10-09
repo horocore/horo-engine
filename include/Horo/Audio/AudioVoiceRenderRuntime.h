@@ -101,6 +101,10 @@ namespace Horo::Audio {
         AudioVoiceRenderRuntime &operator=(const AudioVoiceRenderRuntime &) = delete;
         /** @brief Read immutable admitted identity. @return Exact voice. */
         [[nodiscard]] AudioVoiceHandle Voice() const noexcept;
+        /** @brief Read the audible/logical cursor on the exclusive processing owner.
+         * @return Source position excluding decoder look-ahead, or zero after detached release.
+         */
+        [[nodiscard]] AudioVoiceCursor Cursor() const noexcept;
         /** @brief Prepare a copied spatial/parameter/route generation and enqueue its exact storage reference.
          * @param request Complete owned values; source/listener contexts must match this owner.
          * @param graph Pinned candidate/current plan used only during preparation; resolves a non-Return stereo bus.
