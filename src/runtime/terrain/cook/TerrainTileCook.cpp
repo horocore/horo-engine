@@ -345,6 +345,25 @@ namespace Horo::Terrain {
         }
     }  // namespace
 
+    namespace {
+        /** @brief Admits exact tile shape and provenance before any payload hash or sample read. */
+        bool AdmittedTilePayload(const TerrainCookedTile &tile, const CookedTerrainTileSet &cooked) {
+            return tile.id.dataset == cooked.dataset && tile.id.tile.lod < TerrainDescriptorHardLimits::LodLevels && tile.samplesX >= 2 &&
+                   tile.samplesZ >= 2 && tile.samplesX <= TerrainDescriptorHardLimits::TileInteriorQuads + 1 &&
+                   tile.samplesZ <= TerrainDescriptorHardLimits::TileInteriorQuads + 1 && !tile.payload.empty() &&
+                   tile.payload.size() <= TerrainDescriptorHardLimits::StagingBytes && PayloadMatchesProvenance(tile, cooked);
+        }
+
+        /** @brief Verifies admitted payload bytes, samples and seams with bounded cooperative cancellation. */
+        bool VerifiedTilePayload(const TerrainCookedTile &tile, const CookedTerrainTileSet &cooked, const CancellationToken &cancellation) {
+            if (!AdmittedTilePayload(tile, cooked))
+                return false;
+            const auto digest = Detail::HashPayload(tile.payload, cancellation);
+            return digest.HasValue() && tile.digest == digest.Value() && ValidTileSamples(tile, cooked, cancellation) &&
+                   ValidTileSeams(tile, cooked);
+        }
+    }  // namespace
+
     /** @copydoc VerifyCookedTerrainTiles */
     Result<void> VerifyCookedTerrainTiles(const CookedTerrainTileSet &cooked, const CancellationToken &cancellation) {
         const auto failure = [&cancellation] {
@@ -363,14 +382,7 @@ namespace Horo::Terrain {
             const auto &tile = cooked.tiles[index];
             if (cancellation.IsCancellationRequested())
                 return failure();
-            if (tile.id.dataset != cooked.dataset || tile.id.tile.lod >= TerrainDescriptorHardLimits::LodLevels || tile.samplesX < 2 ||
-                tile.samplesZ < 2 || tile.samplesX > TerrainDescriptorHardLimits::TileInteriorQuads + 1 ||
-                tile.samplesZ > TerrainDescriptorHardLimits::TileInteriorQuads + 1 || tile.payload.empty() ||
-                tile.payload.size() > TerrainDescriptorHardLimits::StagingBytes || !PayloadMatchesProvenance(tile, cooked))
-                return failure();
-            const auto digest = Detail::HashPayload(tile.payload, cancellation);
-            if (digest.HasError() || tile.digest != digest.Value() || !ValidTileSamples(tile, cooked, cancellation) ||
-                !ValidTileSeams(tile, cooked))
+            if (!VerifiedTilePayload(tile, cooked, cancellation))
                 return failure();
             if (index != 0) {
                 const auto &prior = cooked.tiles[index - 1].id.tile;
