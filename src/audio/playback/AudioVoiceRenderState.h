@@ -132,6 +132,10 @@ namespace Horo::Audio {
         const ErrorCodeDescriptor *PositionStream(const AudioVoiceControlRequest &request) noexcept;
         /** @brief Validate a requested stream seek or exclusive loop against admitted source facts. */
         bool ValidStreamPosition(const AudioVoiceControlRequest &request) const noexcept;
+        /** @brief Validate admitted mono/stereo stream facts against the requested conversion before allocation. */
+        static bool ValidStreamFormat(const AudioResamplerDescriptor &conversion, const AudioStreamDecoderSpec &facts) noexcept;
+        /** @brief Prepare conversion, canonical voice and retained port; the state owns rollback after each acquired resource. */
+        Result<void> PrepareStream(AudioStreamHandle streamHandle);
         /** @brief Admit seek/loop only in controllable states with no outstanding realization handshake. */
         bool CanPositionStream() const noexcept;
         /** @brief Publish canonical virtual EOF once and suspend future fills without reclamation. */
@@ -148,6 +152,10 @@ namespace Horo::Audio {
         AudioVoiceMixRenderResult RenderStream(std::uint32_t frames) noexcept;
         /** @brief Feed the physical stream converter only after canonical execution-state admission. */
         AudioVoiceMixRenderResult RenderStreamPcm(std::uint32_t frames) noexcept;
+        /** @brief Fill empty callback scratch once; return true when the sole port reports cancellation. */
+        bool ReadStreamBlock(std::span<AudioSample *const> rawPointers) noexcept;
+        /** @brief Convert one admitted scratch block, copy output and retain unconsumed input without allocation. */
+        AudioResamplerProgress ConvertStreamBlock(std::uint32_t frames, std::uint32_t produced) noexcept;
         /** @brief Release a stream-only canonical slot on detached control, never from callback. */
         ~State();
     };

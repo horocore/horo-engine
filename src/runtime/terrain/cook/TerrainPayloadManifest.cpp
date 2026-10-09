@@ -123,13 +123,18 @@ namespace Horo::Terrain {
     struct TerrainPayloadManifestBuilder final {
         const TerrainPayloadManifestRequest &request;
         const CancellationToken &cancellation;
-        TerrainPayloadManifest root;
+        TerrainPayloadManifest root = MakeRoot();
         std::uint64_t inputBytes{};
         std::uint64_t work{};
 
-        /** @brief Construct the cook-issued root in an explicit friend context, not aggregate initialization. */
+        /** @brief Bind invocation-owned borrows; root construction stays in the explicit friend factory. */
         TerrainPayloadManifestBuilder(const TerrainPayloadManifestRequest &input, const CancellationToken &token)
-            : request(input), cancellation(token), root() {}
+            : request(input), cancellation(token) {}
+
+        /** @brief Construct in a friend member body; C++20 prvalue elision requires neither public access nor NRVO. */
+        static TerrainPayloadManifest MakeRoot() {
+            return TerrainPayloadManifest{};
+        }
 
         /** @brief Returns typed cancellation first when cooperative cancellation won. */
         Result<void> Fail(const ErrorCodeDescriptor &error = TerrainPayloadManifestErrors::Invalid) const {
@@ -345,7 +350,7 @@ namespace Horo::Terrain {
         }
 
         /** @brief Validates same-LOD neighbours and complete collision/navigation coverage at one common declared LOD. */
-        Result<void> CheckSeams() {
+        Result<void> CheckSeams() const {
             constexpr std::array<std::size_t, 2> facing{1, 3};
             constexpr std::array<std::size_t, 2> opposite{0, 2};
             for (const auto &entry : root.tiles_) {
