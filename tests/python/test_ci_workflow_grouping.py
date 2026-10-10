@@ -55,6 +55,7 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
         "HoroRuntimeUiTextLayoutTests", "HoroRuntimeUiTextShapingTests", "HoroRuntimeUiTextUnicodeTests",
         "HoroRuntimeUiUnicodeStartupTests", "HoroRuntimeUiUnicodeLifecycleTests", "HoroRuntimeUiPublicHeaderConsumer",
         "HoroRuntimeUiOverlayLifecycleTests",
+        "HoroRuntimeUiScreenTransitionTests", "HoroRuntimeUiScreenTransitionPublicHeaderConsumer",
         "HoroTerrainSourceArtifactTests", "HoroTerrainSourceArtifactPublicHeaderConsumer",
         "HoroTerrainPayloadManifestTests", "HoroTerrainPayloadManifestPublicHeaderConsumer",
         "HoroTerrainProducerSnapshotTests", "HoroTerrainProducerSnapshotPublicHeaderConsumer",
@@ -143,6 +144,22 @@ def test_windows_overlay_tests_and_owned_consumer_share_the_build_closure() -> N
     assert 'target_sources(HoroRuntimeUiPublicHeaderConsumer PRIVATE support/RuntimeUiOverlayPublicContract.cpp)' in tests_cmake
     assert 'if(target IN_LIST HORO_CI_WINDOWS_TARGETS)\n        list(APPEND ARG_LABELS ci-windows)' in SUITES
     assert 'add_custom_target(HoroCiWindowsChecks DEPENDS ${HORO_CI_WINDOWS_TARGETS})' in SUITES
+
+
+def test_windows_screen_transition_build_and_execution_are_selected() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    suite = "HoroRuntimeUiScreenTransitionTests"
+    consumer = "HoroRuntimeUiScreenTransitionPublicHeaderConsumer"
+    for target in (suite, consumer):
+        assert target in targets("HORO_CI_WINDOWS_TARGETS")
+        assert f"add_executable({target}" in tests_cmake
+    registration = re.search(r"set\(HORO_CATCH_TEST_TARGETS\s+(.*?)\n\)", tests_cmake, re.S)
+    assert registration
+    assert suite in registration.group(1).split()
+    direct_selection = re.search(r"set_property\(TEST\s+(.*?)\s+APPEND PROPERTY LABELS ci-windows\)", SUITES, re.S)
+    assert direct_selection
+    assert consumer in direct_selection.group(1).split()
+    assert f"add_test(NAME {consumer} COMMAND {consumer})" in tests_cmake
 
 
 def test_windows_suites_run_independently_and_remain_blocking() -> None:

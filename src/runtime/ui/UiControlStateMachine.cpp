@@ -338,7 +338,7 @@ namespace Horo::Runtime::Ui {
             return Failure(UiErrors::ControlLifecycleUnavailable);
         storage_->ClearTransient(true);
         storage_->lifecycle = UiControlLifecycleState::Retiring;
-        storage_->asyncAction.reset();
+        // Retain immutable error ownership until explicit load-time shutdown/reclamation.
         return Result<void>::Success();
     }
 

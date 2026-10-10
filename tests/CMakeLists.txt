@@ -2902,6 +2902,18 @@ add_test(NAME HoroRuntimeUiBindingWritePublicHeaderConsumer COMMAND HoroRuntimeU
 set_tests_properties(HoroRuntimeUiBindingWritePublicHeaderConsumer PROPERTIES LABELS "unit;runtime_ui;headless")
 target_compile_features(HoroRuntimeUiBindingStoreTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiBindingStoreTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiScreenTransitionTests
+        unit/runtime/ui/UiScreenTransitionTests.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeUiScreenTransitionTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiScreenTransitionTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRuntimeUiScreenTransitionTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiScreenTransitionPublicHeaderConsumer support/RuntimeUiScreenTransitionPublicHeaderConsumer.cpp)
+target_compile_features(HoroRuntimeUiScreenTransitionPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiScreenTransitionPublicHeaderConsumer PRIVATE HoroEngine::RuntimeUi)
+add_test(NAME HoroRuntimeUiScreenTransitionPublicHeaderConsumer COMMAND HoroRuntimeUiScreenTransitionPublicHeaderConsumer)
+set_tests_properties(HoroRuntimeUiScreenTransitionPublicHeaderConsumer PROPERTIES LABELS "unit;runtime_ui;headless")
 add_executable(HoroRuntimeUiHotReloadTests
         unit/runtime/ui/UiHotReloadTests.cpp
         unit/runtime/ui/UiHotReloadTestFixture.cpp
@@ -4174,6 +4186,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiBindingWriteTests
         HoroRuntimeUiDocumentTests
         HoroRuntimeUiHotReloadTests
+        HoroRuntimeUiScreenTransitionTests
         HoroRuntimeUiOverlayLifecycleTests
         HoroRuntimeUiLocalizationTests
         HoroRuntimeUiCanvasSpaceTests

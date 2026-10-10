@@ -610,6 +610,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiFeedback.cpp
         runtime/ui/UiFeedbackErrors.cpp
         runtime/ui/UiScreenStack.cpp
+        runtime/ui/UiScreenTransition.cpp
         runtime/ui/UiRouteOperations.cpp
         runtime/ui/UiFocusGraph.cpp
         runtime/ui/UiFocusRestoration.cpp
