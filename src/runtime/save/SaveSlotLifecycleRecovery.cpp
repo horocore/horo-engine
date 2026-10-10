@@ -6,6 +6,20 @@
 namespace Horo::Runtime {
     using namespace SaveSlotLifecycleDetail;
 
+    /** @copydoc SaveSlotLifecycle::CleanupAfterPublication */
+    bool SaveSlotLifecycle::CleanupAfterPublication(Operation &operation) const noexcept {
+        // The selection is already durable. Any unexpected host/observer exception must leave
+        // the original publication successful, with recovery evidence for later worker cleanup.
+        try {
+            auto cleaned = Cleanup(operation);
+            return cleaned.HasError() || cleaned.Value();
+        } catch (const std::bad_alloc &) {
+            return true;
+        } catch (...) {
+            return true;
+        }
+    }
+
     /** @copydoc SaveSlotLifecycle::Cleanup */
     Result<bool> SaveSlotLifecycle::Cleanup(Operation &operation) const {
         if (auto selected = VerifySelected(operation); selected.HasError())
@@ -133,11 +147,19 @@ namespace Horo::Runtime {
             return Result<bool>::Success(false);
         if (auto preserved = PreserveRetired(operation); preserved.HasError() || preserved.Value())
             return preserved;
+        bool removedAny = false;
         for (const auto &retired : operation.catalog.retired) {
+            if (retired.backup || retired.tombstone)
+                continue;
+            removedAny = true;
             if (auto removed = state_->storage.RemoveLifecycleGeneration(retired.entry.publication.generation); removed.HasError())
                 return Result<bool>::Success(true);
         }
-        operation.catalog.retired.clear();
+        if (!removedAny)
+            return Result<bool>::Success(false);
+        std::erase_if(operation.catalog.retired, [](const Retired &record) {
+            return !record.backup && !record.tombstone;
+        });
         // Cleanup changes no visible slot/revision. If its acknowledgement fails, replaying exact
         // retired-generation deletion is safe; no unrelated artifact is inferred as garbage.
         if (auto published = Publish(operation); published.HasError())

@@ -13,7 +13,7 @@ namespace Horo::Runtime {
                                              const ISaveSlotLifecycleHost &host) {
             using enum SaveSlotLifecycleKind;
             const auto kind = static_cast<std::uint8_t>(request.kind);
-            if (kind >= static_cast<std::uint8_t>(Count))
+            if (kind >= static_cast<std::uint8_t>(PublishSave))
                 return Result<void>::Failure(MakeError(SaveErrors::StorageOperationInvalid));
             if ((policy.capabilities & (std::uint16_t{1} << kind)) == 0)
                 return Result<void>::Failure(MakeError(SaveErrors::StoragePermissionDenied));
