@@ -56,8 +56,8 @@ TEST_CASE("Sequence opener owns a persistent typed document with exact revision"
     CHECK(host.DocumentTabs().size() == 1);
     const auto again = opener.Open({.path = "./Başlangıç sequence.hsequence"});
     REQUIRE(again.HasValue());
-    CHECK(again.Value().document->disposition == DocumentOpenDisposition::Focused);
-    CHECK(host.OpenDocument(identity.key).Value().disposition == DocumentOpenDisposition::Focused);
+    CHECK(again.Value().document->disposition == DocumentOpenDisposition::FocusExisting);
+    CHECK(host.OpenDocument(identity.key).Value().disposition == DocumentOpenDisposition::FocusExisting);
     CHECK(host.DocumentTabs().size() == 1);
     project.Write(bytes + "\n");
     const auto changed = SequenceDocument::Open(identity, opened.Value().location.absolutePath);
