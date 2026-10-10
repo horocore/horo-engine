@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "profiles": {
+    "qualification-debug": {
+      "applicationId": "org.horocore.packagequalification",
+      "versionName": "0.2.0",
+      "versionCode": 1,
+      "configuration": "Debug",
+      "preset": "android-debug",
+      "minimumApi": 29,
+      "targetApi": 36,
+      "renderer": "none",
+      "distributionQualified": false,
+      "abis": [
+        "arm64-v8a",
+        "x86_64"
+      ],
+      "nativeLibrary": "horo-package-qualification",
+      "permissions": [
+        "org.horocore.packagequalification.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+      ],
+      "features": [],
+      "assets": {
+        "qualification.json": "android/qualification.json"
+      },
+      "nativeLibraries": [
+        "libhoro-package-qualification.so",
+        "libc++_shared.so"
+      ],
+      "generatedAssets": []
+    },
+    "qualification-release": {
+      "applicationId": "org.horocore.packagequalification",
+      "versionName": "0.2.0",
+      "versionCode": 1,
+      "configuration": "Release",
+      "preset": "android-release",
+      "minimumApi": 29,
+      "targetApi": 36,
+      "renderer": "none",
+      "distributionQualified": false,
+      "abis": [
+        "arm64-v8a"
+      ],
+      "nativeLibrary": "horo-package-qualification",
+      "permissions": [
+        "org.horocore.packagequalification.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+      ],
+      "features": [],
+      "assets": {
+        "qualification.json": "android/qualification.json"
+      },
+      "nativeLibraries": [
+        "libhoro-package-qualification.so",
+        "libc++_shared.so"
+      ],
+      "generatedAssets": [
+        "dexopt/baseline.prof",
+        "dexopt/baseline.profm"
+      ]
+    }
+  }
+}

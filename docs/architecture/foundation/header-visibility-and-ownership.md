@@ -1599,3 +1599,15 @@ or select backends. Existing APIs and persistent formats are unchanged. Rebuild
 consumers for these additive headers. Generated staged consumers and explicit
 contract translation units verify visibility; preview tests verify playback and
 retirement. No broad source/include path is introduced.
+
+## NET-008.3 Play Topology Profile Boundary
+
+`HoroPlayTopologyApplication` solely owns the additive public
+`Horo/Application/PlayTopology.h` contract and declares only Foundation and
+NetworkApi public dependencies. JSON stays private; runtime backend factories,
+editor/native types and process runners do not enter this header. Store filesystem
+paths remain private host composition inputs. The codec and store helper header
+is target-private. Existing callers require no signature migration; preview launch
+hosts opt into complete capability preflight and revision/generation revalidation
+as described in Networking Architecture. The generated staged header consumer and
+`HoroPlayTopologyPublicHeaderConsumer` verify this additive target boundary.
