@@ -4,6 +4,57 @@
   "locale": "en-US",
   "namespace": "editor",
   "messages": {
+    "workspace.sequence.limit": {
+      "text": "Close a sequence tab before opening another (limit 32)."
+    },
+    "workspace.sequence.keys": {
+      "text": "Keys"
+    },
+    "workspace.sequence.close": {
+      "text": "Close"
+    },
+    "workspace.sequence.zoom": {
+      "text": "Timeline zoom"
+    },
+    "workspace.sequence.scroll": {
+      "text": "First visible frame"
+    },
+    "workspace.sequence.playhead": {
+      "text": "Playhead frame"
+    },
+    "workspace.sequence.no_context": {
+      "text": "No scene authoring context. Navigation does not modify the sequence or scene."
+    },
+    "workspace.sequence.unavailable": {
+      "text": "Some tracks require capabilities not delivered yet; their source data is retained."
+    },
+    "workspace.sequence.empty": {
+      "text": "This sequence has no tracks."
+    },
+    "workspace.sequence.invalid": {
+      "text": "The sequence could not be read or validated. Check the source schema and file access."
+    },
+    "workspace.sequence.conflict": {
+      "text": "This asset is already open from a different source revision. Close it before opening the changed source."
+    },
+    "workspace.sequence.transform": {
+      "text": "Transform"
+    },
+    "workspace.sequence.property": {
+      "text": "Property"
+    },
+    "workspace.sequence.camera_cut": {
+      "text": "Camera cut"
+    },
+    "workspace.sequence.event": {
+      "text": "Event"
+    },
+    "workspace.sequence.audio": {
+      "text": "Audio"
+    },
+    "workspace.sequence.sub_sequence": {
+      "text": "Sub-sequence"
+    },
     "workspace.global_dock.network.event.admitted": {
       "text": "Gameplay session admitted"
     },

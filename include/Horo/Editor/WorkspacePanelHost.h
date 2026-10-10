@@ -94,7 +94,12 @@ namespace Horo::Editor {
             return m_documentTabs;
         }
 
-        /** @brief Returns the active document instance, if a document tab is open. */
+        /** @brief Transfers focus to a workspace panel without closing or changing document tabs. */
+        void ClearDocumentFocus() noexcept {
+            m_activeDocument.reset();
+        }
+
+        /** @brief Returns the focused document instance, if a document currently owns presentation. */
         [[nodiscard]] std::optional<DocumentInstanceId> ActiveDocument() const noexcept {
             return m_activeDocument;
         }

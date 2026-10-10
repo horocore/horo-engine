@@ -172,6 +172,7 @@ namespace Horo::Editor {
             .embeddedEditorAvailable = true,
             .externalEditorAvailable = true,
             .uiCanvasExtensions = {".uicanvas"},
+            .sequenceExtensions = {".hsequence"},
         };
     }
 
@@ -190,6 +191,7 @@ namespace Horo::Editor {
         policy_.horoScriptExtensions = NormalizeValues(policy_.horoScriptExtensions, true);
         policy_.projectTextExtensions = NormalizeValues(policy_.projectTextExtensions, true);
         policy_.projectTextFileNames = NormalizeValues(policy_.projectTextFileNames, false);
+        policy_.sequenceExtensions = NormalizeValues(policy_.sequenceExtensions, true);
         policy_.uiCanvasExtensions = NormalizeValues(policy_.uiCanvasExtensions, true);
     }
 
@@ -223,6 +225,8 @@ namespace Horo::Editor {
             return SourceFileClassification{NativeSource, extension};
         if (Contains(policy_.horoScriptExtensions, extension))
             return SourceFileClassification{HoroScript, extension};
+        if (Contains(policy_.sequenceExtensions, extension))
+            return SourceFileClassification{Sequence, extension};
         if (Contains(policy_.uiCanvasExtensions, extension))
             return SourceFileClassification{UiCanvas, extension};
         if (Contains(policy_.projectTextExtensions, extension) || Contains(policy_.projectTextFileNames, fileName))
@@ -306,7 +310,9 @@ namespace Horo::Editor {
     Result<SourceOpenResult> SourceFileOpenService::OpenEmbedded(const SourceOpenRequest &request,
                                                                  const SourceFileClassification &classification,
                                                                  const SourceOpenLocation &location) {
-        const DocumentKind documentKind = classification.kind == SourceFileKind::UiCanvas ? DocumentKind::UiCanvas : DocumentKind::Source;
+        const DocumentKind documentKind = classification.kind == SourceFileKind::Sequence   ? DocumentKind::Sequence
+                                          : classification.kind == SourceFileKind::UiCanvas ? DocumentKind::UiCanvas
+                                                                                            : DocumentKind::Source;
         const DocumentOpenKey key{.kind = documentKind, .source = location.document};
         const Result<DocumentOpenResult> document = documentRegistry_->Open(key);
         if (document.HasError())

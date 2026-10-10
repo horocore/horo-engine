@@ -2012,6 +2012,7 @@ target_link_libraries(HoroEditorSurfaceIdentityTests PRIVATE HoroEngine::EditorS
 add_executable(HoroSourceFileOpenServiceTests
         unit/editor/SourceFileOpenServiceTests.cpp
         unit/editor/SourceDocumentServiceTests.cpp
+        unit/editor/SequenceDocumentTests.cpp
         support/AllocationProbe.cpp
 )
 target_compile_features(HoroSourceFileOpenServiceTests PRIVATE cxx_std_20)
@@ -2053,6 +2054,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerAssetMutationTests.cpp
             unit/editor/EditorWorkspaceControllerAssetTransferTests.cpp
             unit/editor/EditorWorkspaceControllerSourceNavigationTests.cpp
+            unit/editor/EditorWorkspaceControllerSequenceTests.cpp
             unit/editor/EditorWorkspaceControllerFilesystemTestSupport.h
             unit/editor/EditorWorkspaceControllerPolicyTests.cpp
             unit/editor/EditorWorkspaceControllerPolicyTestSupport.h
@@ -2212,6 +2214,7 @@ if (HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditorUiComponentsRenderTests
             unit/editor/EditorUiComponentsRenderTests.cpp
             unit/editor/ActivityButtonIdentityTests.cpp
+            unit/editor/SequenceTimelineRenderTests.cpp
     )
 
     target_compile_features(HoroEditorUiComponentsRenderTests PRIVATE cxx_std_20)
