@@ -191,7 +191,7 @@ namespace Horo::Prefab {
             retainedBytes_ -= entries_.front().bytes;
             entries_.erase(entries_.begin());
         }
-        entries_.push_back({std::move(key), lease, measured.Value()});
+        entries_.emplace_back(std::move(key), lease, measured.Value());
         retainedBytes_ += measured.Value();
         return Result<Lease>::Success(std::move(lease));
     }

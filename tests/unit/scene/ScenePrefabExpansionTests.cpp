@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <catch2/generators/catch_generators.hpp>
 #include <semaphore>
 #include <thread>
 
@@ -192,7 +193,9 @@ TEST_CASE("Every captured project policy field changes the exact expansion key",
 
 TEST_CASE("Canonical serialization survives every production allocation failure", "[native][prefab][allocation]") {
     ExpansionFixture fixture;
-    const auto resolver = fixture.Resolver();
+    const auto name =
+        GENERATE("Root", "Long owned source text with UTF-8: İstanbul, a quote \" and escaped newline\n and backslash \\ end");
+    const auto resolver = fixture.Resolver(name);
     const auto &document = resolver.Sources().front().document;
     const auto canonical = document.SerializeCanonical().Value();
     std::size_t allocations{};
@@ -206,6 +209,7 @@ TEST_CASE("Canonical serialization survives every production allocation failure"
     REQUIRE(allocations > 0);
     REQUIRE(allocations < 4096);
     for (std::size_t index = 0; index < allocations; ++index) {
+        INFO("canonical allocation index " << index);
         const auto failed = [&] {
             Tests::AllocationProbe::ScopedFailure failure{index};
             return document.SerializeCanonical();

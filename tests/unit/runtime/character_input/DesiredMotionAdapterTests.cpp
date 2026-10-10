@@ -30,10 +30,11 @@ namespace {
         }
 
         DesiredMotionAdapter Adapter(SpawnedActiveWorld &active) {
+            const Input::InputRouter &loadRouter = router;
             auto adapter =
                 DesiredMotionAdapter::Create({71, 0, DesiredMotionSource::GameplayInput, true}, active.world->IssueCapability().Value(),
-                                             active.controller, {.move = Input::ActionId{"move"}, .jump = Input::ActionId{"jump"}}, &router,
-                                             &context);
+                                             active.controller, {.move = Input::ActionId{"move"}, .jump = Input::ActionId{"jump"}},
+                                             &loadRouter, &context);
             REQUIRE(adapter.HasValue());
             return std::move(adapter).Value();
         }

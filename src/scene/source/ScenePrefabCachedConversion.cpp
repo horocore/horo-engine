@@ -20,8 +20,8 @@ namespace Horo::SceneSource {
                 if (cancellation.IsCancellationRequested())
                     return Result<ScenePrefabProjection>::Failure(MakeError(Prefab::PrefabErrors::Cancelled));
                 ScenePrefabInstanceProjection entry{.authored = instance};
-                auto candidate = cache.Resolve(resolver, instance.sourcePrefab.Asset(), instance.instanceId, limits, cancellation);
-                if (candidate.HasError()) {
+                if (auto candidate = cache.Resolve(resolver, instance.sourcePrefab.Asset(), instance.instanceId, limits, cancellation);
+                    candidate.HasError()) {
                     entry.failure = candidate.ErrorValue();
                     AddInstanceContext(*entry.failure, entry);
                 } else

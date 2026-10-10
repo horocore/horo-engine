@@ -133,7 +133,7 @@ namespace Horo::CharacterInput {
          * @param capability Dedicated grant issued by the Character owner; the caller transfers lifecycle responsibility.
          * @param controller Exact live controller owned by the grant's scene/world.
          * @param binding Finite projection and semantic actions; ignored for ExternalIntent producers.
-         * @param router Synchronous load-time borrow; required only for GameplayInput.
+         * @param router Read-only synchronous load-time borrow; required only for GameplayInput.
          * @param context Synchronous exact Gameplay context borrow; required only for GameplayInput.
          * @return Owned adapter or original typed capability/descriptor/admission failure. Failed creation does not revoke the grant.
          * @throws std::bad_alloc When load-time owner storage or typed diagnostic allocation fails; the caller's grant stays unchanged.
@@ -142,7 +142,7 @@ namespace Horo::CharacterInput {
                                                                  Character::CharacterCapability capability,
                                                                  Character::CharacterControllerHandle controller,
                                                                  DesiredMotionInputBinding binding = {},
-                                                                 Input::InputRouter *router = nullptr,
+                                                                 const Input::InputRouter *router = nullptr,
                                                                  const Input::InputContextToken *context = nullptr);
 
         /**
