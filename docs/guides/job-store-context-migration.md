@@ -39,3 +39,33 @@ The first terminal result is immutable. `JobHandle::Snapshot()` remains valid af
 eviction, while `JobSystem::Find()` and `SnapshotIfChanged()` expose only active
 and retained recent records. Dropping a handle neither cancels the callback nor
 removes scheduler authority.
+
+## Resource scheduling and host teardown (JOB-001.5)
+
+Existing descriptors remain CPU jobs. To schedule blocking I/O, the host must
+configure `JobSystemConfig::ioWorkerCount` and the caller must select
+`JobDescriptor::resource = JobResource::Io`. No I/O capacity means a typed
+admission rejection, rather than a CPU fallback. Recent-project inspection now
+requires this explicit capacity; its host/test compositions have been updated.
+`WorkerCount()` continues to report CPU capacity only. All lanes share the
+existing global/priority queue bounds and terminal retention.
+
+Set `reservedInteractiveJobs` when background saturation must leave queue room
+for direct user feedback. It defaults to zero, is capped at `maxQueuedJobs`, and
+does not override any priority queue limit.
+
+Hosts call `StopAccepting()` before stopping request sources and cancelling
+service scopes, then drain required owner continuations and call `Shutdown()`
+while callback dependencies are alive. Do not defer the only join to scheduler
+destruction after application services disappear. Shutdown also accounts for
+callbacks claimed through bounded waits and releases their captures before
+returning. Rebuild public-header consumers for the appended descriptor/config
+fields; no installed header ownership or target dependency changes are required.
+
+Callbacks cannot synchronously wait on another resource lane, including through
+the legacy unbounded wait. Such waits and callback-owned task-group cross-lane
+spawns return `job.wait_capacity_deadlock`. Existing CPU-only callers retain
+same-lane structured helping. Move cross-lane pipeline joining to the external
+operation owner; do not block a CPU callback waiting for I/O which may itself need
+CPU capacity. Public wait contracts now state this rule explicitly, and mutual
+CPU/I/O wait regressions verify both overloads and admission behavior.

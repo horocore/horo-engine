@@ -1,0 +1,10 @@
+pluginManagement {
+    repositories { google(); mavenCentral(); gradlePluginPortal() }
+    def contract = new groovy.json.JsonSlurper().parse(file('contract.json'))
+    plugins { id 'com.android.application' version contract.tools.androidGradlePlugin }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories { google(); mavenCentral() }
+}
+rootProject.name = 'HoroAndroidPackage'

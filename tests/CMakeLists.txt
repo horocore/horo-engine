@@ -328,6 +328,15 @@ if(HORO_BUILD_NETWORK_GNS)
     target_link_libraries(HoroNetworkTransportGnsTests PRIVATE HoroEngine::NetworkTransportGNS)
     horo_register_catch_test(HoroNetworkTransportGnsTests LABELS "unit;network;gns;socket")
 endif()
+add_executable(HoroPlayTopologyTests unit/application/PlayTopologyTests.cpp)
+target_compile_features(HoroPlayTopologyTests PRIVATE cxx_std_20)
+target_link_libraries(HoroPlayTopologyTests PRIVATE HoroEngine::PlayTopologyApplication HoroEngine::Platform nlohmann_json::nlohmann_json)
+horo_register_catch_test(HoroPlayTopologyTests LABELS "unit;network;play_topology;headless")
+add_executable(HoroPlayTopologyPublicHeaderConsumer support/PlayTopologyPublicHeaderConsumer.cpp)
+target_compile_features(HoroPlayTopologyPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPlayTopologyPublicHeaderConsumer PRIVATE HoroEngine::PlayTopologyApplication)
+add_test(NAME HoroPlayTopologyPublicHeaderConsumer COMMAND HoroPlayTopologyPublicHeaderConsumer)
+
 add_executable(HoroNetworkDebuggerTests
     support/AllocationProbe.cpp
     unit/runtime/networking/NetworkDebuggerTests.cpp
@@ -2185,8 +2194,10 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/GlobalDockBuildOutputToolbarRenderTests.cpp
             unit/editor/GlobalDockPanelRenderTests.cpp
             unit/editor/GlobalDockNetworkPaneTests.cpp
+            unit/editor/PlayTopologyModalTests.cpp
     )
 
+    target_link_libraries(HoroGlobalDockPanelRenderTests PRIVATE HoroEngine::PlayTopologyApplication HoroEngine::Platform)
     target_compile_features(HoroGlobalDockPanelRenderTests PRIVATE cxx_std_20)
     target_sources(HoroGlobalDockPanelRenderTests PRIVATE unit/editor/RenderGraphInspectionPaneTests.cpp
         ../apps/HoroEditor/app/RenderGraphInspectionPane.cpp)
@@ -2376,6 +2387,7 @@ target_compile_features(HoroFoundationValidationResultTests PRIVATE cxx_std_20)
 target_link_libraries(HoroFoundationValidationResultTests PRIVATE HoroEngine::Foundation)
 add_executable(HoroFoundationJobSystemTests
         unit/foundation/JobSystemTests.cpp
+        unit/foundation/JobResourceSchedulingTests.cpp
         unit/foundation/JobAdmissionTests.cpp
         unit/foundation/JobAdmissionTelemetryTests.cpp
         support/AllocationProbe.cpp
