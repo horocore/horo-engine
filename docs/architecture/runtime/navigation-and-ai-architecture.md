@@ -274,8 +274,21 @@ publishes paths/desired velocities before character locomotion. Stale results re
 `StaleSnapshot` or `InvalidHandle` and may be resubmitted within budget; they are never applied
 to replacement agents or tiles. A held path/corridor must be revalidated before later use too.
 
-`NavigationPathPolicy` is the owner-thread held-corridor boundary while a full coordinator
-is not yet present. The owner assigns a generation-safe `PathId` to each accepted
+The implemented best-effort `NavigationCoordinator` composes the process JobSystem
+with bounded request/result storage and compatible immutable-read partitions.
+Rotating logical-owner service and request/node/outstanding-result quotas prevent
+one owner or replacement incarnations from consuming all configured capacity.
+Deadlines, priority aging, cancellation, Foundation overload deferral and stable
+owner-only publication are described in
+[Asynchronous Grounded Path Batching](../../guides/navigation-path-batching.md).
+The additive runtime header and public consumer test preserve existing provider
+APIs. Completion transport retains the exact provider `Result<NavigationPath>`
+and Scene/root/caller fences; it does not invent missing-region evidence or
+weaken `NavigationOutcome` coverage invariants. Combined-root freshness is checked
+conservatively for the whole topology. Deterministic kernels and automatic stale
+retry remain separate capabilities, rather than implicit fallback modes.
+
+`NavigationPathPolicy` remains the owner-thread held-corridor boundary. The owner assigns a generation-safe `PathId` to each accepted
 path and retains its query provenance, complete or partial region evidence, link
 revision and goal revision. Before handing out a movement corridor, the owner
 compares one fresh combined-world observation with the retained world, topology,
@@ -294,8 +307,8 @@ under the old world identity; the owner clears the policy and creates new-world
 path identity before admitting work. Same-world revision rollback is rejected.
 The new runtime-owned public header is additive; existing query/result callers
 require no source migration, and providers retain the unchanged `NavigationApi`
-boundary. Future coordinator integration must use this owner-phase check rather
-than create a second path-currentness authority.
+boundary. Coordinator result consumption must use this owner-phase check rather
+than create a second held-path currentness authority.
 
 ADR-018 `OwnerThreadNextFrame` console handlers submit typed navigation commands for this
 phase; they do not introduce a second mutation phase in `PreUpdate` / `DebugPhase`. Heavy

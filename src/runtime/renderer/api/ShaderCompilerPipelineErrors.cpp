@@ -76,4 +76,8 @@ namespace Horo::Render::ShaderCompilerPipelineErrors {
         Detail::MakeErrorDescriptor(Domain, "render.shader_compiler.tool_output_invalid", ErrorSeverity::Error,
                                     "A shader tool emitted an absent, malformed, or over-budget artifact.",
                                     "Inspect the exact tool invocation and reject the candidate generation until the artifact validates.");
+    const ErrorCodeDescriptor ToolTimedOut =
+        Detail::MakeErrorDescriptor(Domain, "render.shader_compiler.tool_timed_out", ErrorSeverity::Error,
+                                    "The selected shader compiler exceeded its process deadline.",
+                                    "Inspect the exact tool and bounded timeout policy before retrying the offline compilation.");
 }  // namespace Horo::Render::ShaderCompilerPipelineErrors

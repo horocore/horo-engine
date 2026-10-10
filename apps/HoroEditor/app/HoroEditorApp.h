@@ -1,6 +1,11 @@
 #pragma once
 
+#include <memory>
 #include <optional>
+
+namespace Horo::Render {
+    class IShaderCompilerAdapter;
+}
 
 namespace Horo::Editor {
 
@@ -28,8 +33,11 @@ namespace Horo::Editor {
      * @param argc Process argument count.
      * @param argv Process argument values.
      * @param updateHost Optional installed-host update operations and authenticated helper outcome, kept alive through shutdown.
+     * @param shaderCompiler Optional explicitly qualified host compiler; absent produces typed tool-unavailable output, without SDK
+     * discovery.
      * @return Process exit code.
      */
-    int RunEditorGuiApp(int argc, char **argv, const EditorUpdateHostServices *updateHost = nullptr);
+    int RunEditorGuiApp(int argc, char **argv, const EditorUpdateHostServices *updateHost = nullptr,
+                        std::shared_ptr<const Render::IShaderCompilerAdapter> shaderCompiler = {});
 
 }  // namespace Horo::Editor
