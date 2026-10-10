@@ -389,15 +389,16 @@ namespace Horo::Input {
 
     /** @copydoc RawInputCollector::CancelTouchContact */
     TouchCollectionStatus RawInputCollector::CancelTouchContact(const TouchContactId id) noexcept {
+        using enum TouchCollectionStatus;
         if (!id.IsValid())
-            return TouchCollectionStatus::Invalid;
+            return Invalid;
         auto &touches = impl_->snapshots[impl_->write].touches;
         const auto found = std::ranges::find(touches, id, &TouchContactState::id);
         if (found == touches.end() || !found->contact.down)
-            return TouchCollectionStatus::Stale;
+            return Stale;
         found->cancelled = true;
         Set(found->contact, false);
-        return TouchCollectionStatus::Accepted;
+        return Accepted;
     }
 
     /** @copydoc RawInputCollector::CancelTouchContacts */

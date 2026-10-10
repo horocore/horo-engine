@@ -593,6 +593,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiEventDispatch.cpp
         runtime/ui/UiPointerCapture.cpp
         runtime/ui/UiPointerInteraction.cpp
+        runtime/ui/UiPointerContact.cpp
         runtime/ui/UiAnimationOwnerPointer.cpp
         runtime/ui/UiPointerCaptureErrors.cpp
         runtime/ui/UiActions.cpp

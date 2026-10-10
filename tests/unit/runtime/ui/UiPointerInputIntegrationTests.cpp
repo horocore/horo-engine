@@ -159,6 +159,22 @@ namespace Horo::Runtime::Ui::AnimationTests {
             }
         };
 
+        /** @brief Ends the disarmed held contact and proves only a fresh source generation can press again. */
+        void RequireFreshContact(PointerHostFixture &fixture, const bool touch, const bool releaseFrameStarted = false) {
+            if (!releaseFrameStarted)
+                fixture.Begin(4);
+            fixture.SetContact(touch, false);
+            REQUIRE(fixture.Pump(4).HasValue());
+            CHECK(fixture.observer.counts[static_cast<std::size_t>(UiGestureKind::Tap)] == 0);
+            fixture.Begin(5);
+            fixture.SetContact(touch, true, {1, 2});
+            const auto fresh = fixture.Pump(5);
+            REQUIRE(fresh.HasValue());
+            CHECK(fresh.Value().interaction.activePointers == 1);
+            CHECK(fixture.observer.counts[static_cast<std::size_t>(UiGestureKind::Press)] == 2);
+            CHECK(fixture.observer.counts[static_cast<std::size_t>(UiGestureKind::Drop)] == 0);
+        }
+
         TEST_CASE("Committed mouse and touch route through the real runtime-owned presented canvas", "[runtime_ui][pointer][integration]") {
             const bool touch = GENERATE(false, true);
             PointerHostFixture fixture;
@@ -292,19 +308,9 @@ namespace Horo::Runtime::Ui::AnimationTests {
             REQUIRE(fixture.runtime.participant->ApplyPresentation(Receipt(current, 2)).HasValue());
             CHECK_FALSE(fixture.runtime.participant->PointerInputEligible(fixture.observer.descriptor.owner));
             CHECK(fixture.runtime.participant->PointerInputEligible(fixture.PointerOwner(current)));
-            INFO("Geometry replacement: retained hit matches old interaction="
-                 << (fixture.hit->Descriptor().interaction == fixture.frame.Layout().Descriptor().interaction)
-                 << ", retained hit matches current interaction="
-                 << (fixture.hit->Descriptor().interaction == current.Layout().Descriptor().interaction)
-                 << ", actual owner eligible=" << fixture.runtime.participant->InputEligible(Receipt(current, 2).view)
-                 << ", capture before pump=" << fixture.input.Router().HasCapture());
             fixture.Begin(2);
             fixture.input.Collector().SetKey(Input::Key::Space, true);
             auto stale = fixture.Pump(2);
-            INFO("After stale pump: capture=" << fixture.input.Router().HasCapture()
-                                              << ", defaults=" << fixture.adapter->Defaults().size());
-            INFO("Stale pump error: " << (stale.HasError() ? stale.ErrorValue().code.Value() : "none") << ": "
-                                      << (stale.HasError() ? stale.ErrorValue().message : "none"));
             REQUIRE(stale.HasValue());
             CHECK(stale.Value().status == UiPointerInputStatus::NeedsRebind);
             CHECK_FALSE(fixture.input.Router().HasCapture());
@@ -324,16 +330,7 @@ namespace Horo::Runtime::Ui::AnimationTests {
             CHECK_FALSE(fixture.input.Router().HasCapture());
             fixture.Begin(4);
             fixture.input.Collector().SetKey(Input::Key::Space, false);
-            fixture.SetContact(touch, false);
-            REQUIRE(fixture.Pump(4).HasValue());
-            CHECK(fixture.observer.counts[static_cast<std::size_t>(UiGestureKind::Tap)] == 0);
-            fixture.Begin(5);
-            fixture.SetContact(touch, true, {1, 2});
-            const auto fresh = fixture.Pump(5);
-            REQUIRE(fresh.HasValue());
-            CHECK(fresh.Value().interaction.activePointers == 1);
-            CHECK(fixture.observer.counts[static_cast<std::size_t>(UiGestureKind::Press)] == 2);
-            CHECK(fixture.observer.counts[static_cast<std::size_t>(UiGestureKind::Drop)] == 0);
+            RequireFreshContact(fixture, touch, true);
             current = {};
             REQUIRE(fixture.runtime.host->RunFrame().HasValue());
             const auto freshControl = Frame(*fixture.runtime.participant);
@@ -402,17 +399,8 @@ namespace Horo::Runtime::Ui::AnimationTests {
             REQUIRE(fixture.runtime.participant->ApplyPresentation(Receipt(current, 2)).HasValue());
             CHECK_FALSE(fixture.runtime.participant->PointerInputEligible(fixture.observer.descriptor.owner));
             CHECK(fixture.runtime.participant->PointerInputEligible(fixture.PointerOwner(current)));
-            INFO("Structural reload: retained hit matches old tree="
-                 << (fixture.hit->Descriptor().tree == fixture.frame.Layout().Descriptor().sources.tree)
-                 << ", retained hit matches current tree=" << (fixture.hit->Descriptor().tree == current.Layout().Descriptor().sources.tree)
-                 << ", actual owner eligible=" << fixture.runtime.participant->InputEligible(Receipt(current, 2).view)
-                 << ", capture before pump=" << fixture.input.Router().HasCapture());
             fixture.Begin(2);
             auto retired = fixture.Pump(2);
-            INFO("After retired pump: capture=" << fixture.input.Router().HasCapture()
-                                                << ", defaults=" << fixture.adapter->Defaults().size());
-            INFO("Retired pump error: " << (retired.HasError() ? retired.ErrorValue().code.Value() : "none") << ": "
-                                        << (retired.HasError() ? retired.ErrorValue().message : "none"));
             REQUIRE(retired.HasValue());
             CHECK(retired.Value().status == UiPointerInputStatus::NeedsRebind);
             CHECK(retired.Value().interaction.activePointers == 0);
@@ -426,17 +414,7 @@ namespace Horo::Runtime::Ui::AnimationTests {
             REQUIRE(held.HasValue());
             CHECK(held.Value().interaction.activePointers == 0);
             CHECK(fixture.observer.counts[static_cast<std::size_t>(UiGestureKind::Press)] == 1);
-            fixture.Begin(4);
-            fixture.SetContact(true, false);
-            REQUIRE(fixture.Pump(4).HasValue());
-            CHECK(fixture.observer.counts[static_cast<std::size_t>(UiGestureKind::Tap)] == 0);
-            fixture.Begin(5);
-            fixture.SetContact(true, true, {1, 2});
-            const auto fresh = fixture.Pump(5);
-            REQUIRE(fresh.HasValue());
-            CHECK(fresh.Value().interaction.activePointers == 1);
-            CHECK(fixture.observer.counts[static_cast<std::size_t>(UiGestureKind::Press)] == 2);
-            CHECK(fixture.observer.counts[static_cast<std::size_t>(UiGestureKind::Drop)] == 0);
+            RequireFreshContact(fixture, true);
             current = {};
             REQUIRE(fixture.runtime.host->RunFrame().HasValue());
             const auto freshControl = Frame(*fixture.runtime.participant);

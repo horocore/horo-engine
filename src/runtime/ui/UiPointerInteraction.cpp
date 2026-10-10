@@ -10,21 +10,6 @@
 
 namespace Horo::Runtime::Ui {
     namespace {
-        /** @brief Measures finite logical displacement without signed integer overflow. */
-        double Distance(const UiLogicalPoint from, const UiLogicalPoint to) noexcept {
-            return std::hypot(static_cast<double>(to.x) - from.x, static_cast<double>(to.y) - from.y);
-        }
-
-        /** @brief Saturates derived deltas rather than wrapping a checked endpoint. */
-        UiLogicalPoint Delta(const UiLogicalPoint from, const UiLogicalPoint to) noexcept {
-            const auto difference = [](const std::int32_t left, const std::int32_t right) {
-                return static_cast<std::int32_t>(std::clamp(static_cast<std::int64_t>(right) - left,
-                                                            static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::min()),
-                                                            static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max())));
-            };
-            return {difference(from.x, to.x), difference(from.y, to.y)};
-        }
-
         /** @brief Converts captured coordinates even outside hit regions, rejecting unrepresentable endpoints. */
         Result<UiLogicalPoint> Position(const UiScreenPointerQuery &query) {
             const auto content = query.canvasSpace.ContentPixelRect();
@@ -43,7 +28,7 @@ namespace Horo::Runtime::Ui {
         class PumpGuard final {
         public:
             explicit PumpGuard(bool &active) noexcept : active_(active) {
-                active_ = true;
+                active = true;
             }
 
             ~PumpGuard() {
@@ -250,9 +235,9 @@ namespace Horo::Runtime::Ui {
         if (target != hovered_) {
             if (hovered_.IsValid()) {
                 const auto previous = std::exchange(hovered_, {});
-                const auto left = Emit(environment, previous, {UiGestureKind::HoverLeave, sample.pointer.Value(), previous}, position,
-                                       nextSequence, result);
-                if (left.HasError())
+                if (const auto left = Emit(environment, previous, {UiGestureKind::HoverLeave, sample.pointer.Value(), previous}, position,
+                                           nextSequence, result);
+                    left.HasError())
                     return Result<void>::Failure(left.ErrorValue());
             }
             if (target.IsValid()) {
@@ -283,60 +268,13 @@ namespace Horo::Runtime::Ui {
         const auto position = Position(query);
         if (position.HasError())
             return Result<void>::Failure(position.ErrorValue());
+        const SampleContext context{environment, sample, hit.Value(), position.Value(), nextSequence, result};
+        if (sample.edge == UiPointerEdge::Press)
+            return PressContact(context);
         auto slots = std::span{contacts_}.first(descriptor_.pointerCapacity);
         auto found = std::ranges::find_if(slots, [&sample](const Contact &contact) {
             return contact.capture.State() != UiPointerCaptureState::Inactive && contact.capture.Request().pointer == sample.pointer;
         });
-        if (sample.edge == UiPointerEdge::Press) {
-            if (found != slots.end())
-                return Result<void>::Failure(MakeError(UiErrors::PointerCaptureBusy));
-            if (!hit.Value())
-                return Result<void>::Success();
-            found = std::ranges::find_if(slots, [](const Contact &contact) {
-                return contact.capture.State() == UiPointerCaptureState::Inactive;
-            });
-            if (found == slots.end())
-                return Result<void>::Failure(MakeError(UiErrors::PointerCaptureCapacityExceeded));
-            const auto &owner = descriptor_.owner;
-            const auto target = hit.Value()->element;
-            const UiEventRoute route{owner.instance,    owner.canvas, owner.document,       owner.tree,
-                                     owner.interaction, target,       descriptor_.modalRoot};
-            auto captured = environment.captures.Capture({owner.context, sample.pointer, sample.button, owner.view, route},
-                                                         environment.tree, environment.presented);
-            if (captured.HasError())
-                return Result<void>::Failure(captured.ErrorValue());
-            found->capture = std::move(captured).Value();
-            found->modality = sample.modality;
-            found->origin = found->position = position.Value();
-            found->pressedAt = time_;
-            if (sample.modality == UiPointerModality::Touch) {
-                for (auto &partner : slots) {
-                    if (&partner != std::to_address(found) && partner.capture.IsActive() && partner.modality == UiPointerModality::Touch &&
-                        partner.capture.Request().route.target == target) {
-                        found->multiTouch = partner.multiTouch = true;
-                        if (partner.dragging) {
-                            const auto ended =
-                                Emit(environment, target, {UiGestureKind::Cancel, partner.capture.Request().pointer.Value(), target},
-                                     partner.position, nextSequence, result);
-                            if (ended.HasError())
-                                return Result<void>::Failure(ended.ErrorValue());
-                            if (!partner.capture.IsActive() || !found->capture.IsActive())
-                                return Result<void>::Failure(MakeError(UiErrors::PointerCaptureSourceStale));
-                            partner.dragging = false;
-                        }
-                    }
-                }
-            }
-            const auto emitted =
-                Emit(environment, target, {UiGestureKind::Press, sample.pointer.Value(), target}, position.Value(), nextSequence, result);
-            if (emitted.HasError())
-                return Result<void>::Failure(emitted.ErrorValue());
-            if (!found->capture.IsActive())
-                return Result<void>::Failure(MakeError(UiErrors::PointerCaptureSourceStale));
-            if (!emitted.Value())
-                *found = {};
-            return Result<void>::Success();
-        }
         if (found == slots.end()) {
             if (sample.modality == UiPointerModality::Mouse && (sample.edge == UiPointerEdge::Move || sample.edge == UiPointerEdge::Cancel))
                 return Hover(environment, sample.edge == UiPointerEdge::Move && hit.Value() ? hit.Value()->element : UiElementHandle{},
@@ -356,85 +294,9 @@ namespace Horo::Runtime::Ui {
             const auto emitted = Emit(environment, target, gesture, position.Value(), nextSequence, result);
             return emitted.HasError() ? Result<void>::Failure(emitted.ErrorValue()) : Result<void>::Success();
         }
-        if (sample.edge == UiPointerEdge::Move) {
-            gesture.delta = Delta(previous, position.Value());
-            if (sample.modality == UiPointerModality::Touch) {
-                const auto partner = std::ranges::find_if(slots, [&found, target](const Contact &contact) {
-                    return &contact != std::to_address(found) && contact.capture.IsActive() &&
-                           contact.modality == UiPointerModality::Touch && contact.capture.Request().route.target == target;
-                });
-                if (partner != slots.end()) {
-                    found->multiTouch = partner->multiTouch = true;
-                    const double oldX = static_cast<double>(previous.x) - partner->position.x;
-                    const double oldY = static_cast<double>(previous.y) - partner->position.y;
-                    const double newX = static_cast<double>(position.Value().x) - partner->position.x;
-                    const double newY = static_cast<double>(position.Value().y) - partner->position.y;
-                    const double oldLength = std::hypot(oldX, oldY);
-                    const double newLength = std::hypot(newX, newY);
-                    // Coincident contacts are valid but cannot establish a scale or angle baseline.
-                    if (oldLength >= 1.0 && newLength >= 1.0) {
-                        gesture.kind = UiGestureKind::PinchRotate;
-                        gesture.scale = newLength / oldLength;
-                        gesture.rotation = std::atan2(oldX * newY - oldY * newX, oldX * newX + oldY * newY);
-                        const auto emitted = Emit(environment, target, gesture, position.Value(), nextSequence, result);
-                        if (emitted.HasError())
-                            return Result<void>::Failure(emitted.ErrorValue());
-                        if (!found->capture.IsActive() || !partner->capture.IsActive())
-                            return Result<void>::Failure(MakeError(UiErrors::PointerCaptureSourceStale));
-                    }
-                    return Result<void>::Success();
-                }
-            }
-            if (!found->panning && Distance(found->origin, position.Value()) >= descriptor_.dragThreshold) {
-                const auto *policy = Policy(target);
-                gesture.kind = policy && policy->draggable ? UiGestureKind::DragBegin : UiGestureKind::PanBegin;
-                const auto emitted = Emit(environment, target, gesture, position.Value(), nextSequence, result);
-                if (emitted.HasError())
-                    return Result<void>::Failure(emitted.ErrorValue());
-                if (!found->capture.IsActive())
-                    return Result<void>::Failure(MakeError(UiErrors::PointerCaptureSourceStale));
-                found->panning = emitted.Value();
-                found->dragging = gesture.kind == UiGestureKind::DragBegin && emitted.Value();
-            } else if (found->panning) {
-                gesture.kind = found->dragging ? UiGestureKind::DragUpdate : UiGestureKind::PanUpdate;
-                const auto emitted = Emit(environment, target, gesture, position.Value(), nextSequence, result);
-                if (emitted.HasError())
-                    return Result<void>::Failure(emitted.ErrorValue());
-                if (!found->capture.IsActive())
-                    return Result<void>::Failure(MakeError(UiErrors::PointerCaptureSourceStale));
-            }
-            return Result<void>::Success();
-        }
-        if (found->dragging && hit.Value()) {
-            const auto *policy = Policy(hit.Value()->element);
-            if (policy && policy->dropTarget) {
-                gesture.kind = UiGestureKind::Drop;
-                const auto emitted = Emit(environment, hit.Value()->element, gesture, position.Value(), nextSequence, result);
-                if (emitted.HasError())
-                    return Result<void>::Failure(emitted.ErrorValue());
-            }
-        } else if (!found->panning && !found->longPressed && !found->multiTouch && !found->exceededSlop && hit.Value() &&
-                   hit.Value()->element == target) {
-            const bool doubleTap = lastTap_ == target && time_ - lastTapTime_ <= descriptor_.doubleTapMilliseconds &&
-                                   Distance(lastTapPosition_, position.Value()) < descriptor_.dragThreshold;
-            gesture.kind = doubleTap ? UiGestureKind::DoubleTap : UiGestureKind::Tap;
-            const auto emitted = Emit(environment, target, gesture, position.Value(), nextSequence, result);
-            if (emitted.HasError())
-                return Result<void>::Failure(emitted.ErrorValue());
-            if (!found->capture.IsActive())
-                return Result<void>::Failure(MakeError(UiErrors::PointerCaptureSourceStale));
-            if (emitted.Value()) {
-                lastTap_ = doubleTap ? UiElementHandle{} : target;
-                lastTapPosition_ = position.Value();
-                lastTapTime_ = time_;
-            }
-        }
-        if (!found->capture.IsActive())
-            return Result<void>::Failure(MakeError(UiErrors::PointerCaptureSourceStale));
-        gesture.kind = found->panning ? UiGestureKind::PanEnd : UiGestureKind::Release;
-        *found = {};
-        const auto emitted = Emit(environment, target, gesture, position.Value(), nextSequence, result);
-        return emitted.HasError() ? Result<void>::Failure(emitted.ErrorValue()) : Result<void>::Success();
+        if (sample.edge == UiPointerEdge::Move)
+            return MoveContact(*found, previous, gesture, context);
+        return ReleaseContact(*found, gesture, context);
     }
 
     /** @copydoc UiPointerInteraction::Tick */
@@ -482,8 +344,9 @@ namespace Horo::Runtime::Ui {
             if (!sample.pointer.IsValid() || sample.edge >= UiPointerEdge::Count || sample.modality >= UiPointerModality::Count ||
                 sample.button >= UiPointerButton::Count || !std::isfinite(sample.pixelX) || !std::isfinite(sample.pixelY))
                 return Result<UiPointerInteractionResult>::Failure(MakeError(UiErrors::EventDispatchInvalid));
-            const auto position = Position({descriptor_.owner.view, descriptor_.owner.canvas, canvasSpace, sample.pixelX, sample.pixelY});
-            if (position.HasError())
+            if (const auto position =
+                    Position({descriptor_.owner.view, descriptor_.owner.canvas, canvasSpace, sample.pixelX, sample.pixelY});
+                position.HasError())
                 return Result<UiPointerInteractionResult>::Failure(position.ErrorValue());
         }
         PumpGuard guard{pumping_};

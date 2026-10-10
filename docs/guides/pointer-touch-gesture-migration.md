@@ -83,3 +83,10 @@ public consumer cover staged ownership and concrete host compatibility.
 These are authored coverage targets, not claims that a test has run. Native SDL,
 headless runtime, consumers and platform configurations require their actual
 configured validation; no Linux object result proves another platform's execution.
+
+The pointer implementation now separates frame admission, physical collection and
+semantic delivery, and separates press, paired touch, movement and release
+recognition. These private helpers preserve the existing callback fences and
+fixed storage. Continue constructing adapters with `UiPointerInput::Create`;
+the storage constructor requires a private factory key and is not a caller
+composition API. Public-header ownership and target dependencies are unchanged.

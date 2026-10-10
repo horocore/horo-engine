@@ -289,8 +289,8 @@ namespace Horo::Input {
         }
         found->timestamp = event.timestamp;
         // SDL normalized coordinates are deliberately not clamped: captured fingers may leave the window.
-        const auto collected =
-            collector.SetTouchContact(found->id, event.x * pointerWidth, event.y * pointerHeight, event.type != SDL_EVENT_FINGER_UP);
+        const auto collected = collector.SetTouchContact(found->id, event.x * static_cast<float>(pointerWidth),
+                                                         event.y * static_cast<float>(pointerHeight), event.type != SDL_EVENT_FINGER_UP);
         if (collected != TouchCollectionStatus::Accepted) {
             CancelTouches(collected == TouchCollectionStatus::CapacityExceeded ? TouchCancellationReason::CapacityExceeded
                                                                                : TouchCancellationReason::MalformedSource);
@@ -515,7 +515,8 @@ namespace Horo::Input {
         impl_->collector.Neutralize();
         impl_->CancelTouches(TouchCancellationReason::SurfaceLost);
         impl_->windowId = windowId;
-        impl_->pointerWidth = impl_->pointerHeight = 0;
+        impl_->pointerWidth = 0;
+        impl_->pointerHeight = 0;
         if (auto *window = SDL_GetWindowFromID(windowId))
             (void)SDL_GetWindowSize(window, &impl_->pointerWidth, &impl_->pointerHeight);
         impl_->neutralizeOnBeginFrame = true;

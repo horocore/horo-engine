@@ -51,7 +51,18 @@ namespace Horo::Runtime::Ui {
      *          destruction during Pump violates its live borrow contract. Rebind is rejected during Pump.
      */
     class UiPointerInput final : private Input::IInputCaptureOwner {
+        struct ConstructionKey final {
+        private:
+            friend class UiPointerInput;
+            ConstructionKey() = default;
+        };
+
     public:
+        /** @brief Constructs prepared storage using the factory-only key.
+         * @param key Private factory admission. @param interaction Validated recognizer.
+         */
+        explicit UiPointerInput(ConstructionKey key, UiPointerInteraction interaction);
+
         /** @brief Binds the real router context and copies generation-fenced UI gesture policy at composition.
          * @param router Actual Input owner. @param context Matching live token. @param interaction Complete typed UI owner policy.
          * @param targets Complete copied drag/drop policy. @param actions Four canonical semantic actions in the same Input context.
@@ -93,8 +104,6 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] std::span<const UiControlDefaultAction> Defaults() const noexcept;
 
     private:
-        explicit UiPointerInput(UiPointerInteraction interaction) : interaction_(std::move(interaction)) {}
-
         void OnInputCaptureCancelled(Input::CaptureCancellationReason reason) noexcept override;
 
         struct Contact final {
@@ -124,6 +133,31 @@ namespace Horo::Runtime::Ui {
         bool cleanupPending_{};
         bool stopped_{};
         bool pumping_{};
+        /** @brief Maps one bounded physical sample to canvas pixels. */
+        void AddSample(const UiPointerInputSurface &surface, std::size_t &count, UiPointerId pointer, UiPointerEdge edge,
+                       UiPointerModality modality, UiPointerButton button, float x, float y);
+        /** @brief Collects consumed mouse edges and maintains the router capture. */
+        Result<void> CollectMouse(Input::InputRouter &router, const Input::InputContextToken &context, const UiPointerInputSurface &surface,
+                                  std::size_t &count);
+        /** @brief Collects one touch source without consuming another adapter's contact. */
+        Result<void> CollectTouch(Input::InputRouter &router, const Input::InputContextToken &context, const UiPointerInputSurface &surface,
+                                  const Input::TouchContactState &touch, std::size_t &count);
+        /** @brief Collects owned touch edges and cancels missing sources. */
+        Result<void> CollectTouches(Input::InputRouter &router, const Input::InputContextToken &context,
+                                    const UiPointerInputSurface &surface, std::size_t &count);
+        /** @brief Validates a committed frame before consuming any input. */
+        Result<UiPointerInputStatus> ValidateFrame(Input::InputRouter &router, const Input::InputContextToken &context,
+                                                   const UiPointerInputSurface &surface, std::uint64_t milliseconds) const;
+        /** @brief Commits frame identity and revokes stale authority before collection. */
+        Result<UiPointerInputStatus> AdmitFrame(Input::InputRouter &router, const Input::InputContextToken &context,
+                                                const UiPointerInputSurface &surface, std::uint64_t milliseconds);
+        /** @brief Selects the semantic alternative with cancellation taking precedence. */
+        Result<std::optional<UiAccessibleGesture>> ReadAlternative(Input::InputRouter &router, const Input::InputContextToken &context,
+                                                                   const UiPointerInputSurface &surface);
+        /** @brief Collects and delivers admitted input through the live callback fence. */
+        Result<UiPointerInputFrame> DeliverFrame(Input::InputRouter &router, const Input::InputContextToken &context,
+                                                 const UiPointerInputSurface &surface, std::uint64_t milliseconds,
+                                                 std::optional<UiAccessibleGesture> alternative);
         /** @brief Collects only this adapter's consumed physical edges into fixed storage. @return Sample count or typed capacity failure.
          */
         [[nodiscard]] Result<std::size_t> Collect(Input::InputRouter &router, const Input::InputContextToken &context,

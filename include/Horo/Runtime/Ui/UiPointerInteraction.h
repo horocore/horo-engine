@@ -169,6 +169,29 @@ namespace Horo::Runtime::Ui {
             bool exceededSlop{}; /**< Physical movement disarms click/hold recognition even when a begin default is prevented. */
         };
 
+        /** @brief Synchronous sample evidence borrowed only during a single admitted transition. */
+        struct SampleContext final {
+            const UiPointerInteractionEnvironment &environment;
+            const UiPointerSample &sample;
+            const std::optional<UiHitTestResult> &hit;
+            UiLogicalPoint position;
+            std::uint64_t &nextSequence;
+            UiPointerInteractionResult &result;
+        };
+
+        /** @brief Marks paired touch participation and cancels an active drag before the new press. */
+        Result<void> LinkTouch(Contact &contact, const SampleContext &context);
+        /** @brief Acquires an empty capture slot and routes a new press. */
+        Result<void> PressContact(const SampleContext &context);
+        /** @brief Routes a paired pinch/rotation; returns whether a partner handled the move. */
+        Result<bool> MoveTouch(Contact &contact, UiLogicalPoint previous, UiGestureEvent &gesture, const SampleContext &context);
+        /** @brief Routes movement through pinch, pan-begin or pan-update in order. */
+        Result<void> MoveContact(Contact &contact, UiLogicalPoint previous, UiGestureEvent &gesture, const SampleContext &context);
+        /** @brief Routes a slop-qualified tap and updates admitted double-tap history. */
+        Result<void> TapContact(Contact &contact, UiGestureEvent &gesture, const SampleContext &context);
+        /** @brief Routes drop/tap and releases capture before the terminal gesture. */
+        Result<void> ReleaseContact(Contact &contact, UiGestureEvent &gesture, const SampleContext &context);
+
         UiPointerInteractionDescriptor descriptor_;
         std::array<UiPointerTargetPolicy, MaximumUiInteractionTargets> targets_{};
         std::size_t targetCount_{};

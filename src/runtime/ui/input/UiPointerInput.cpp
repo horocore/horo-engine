@@ -7,6 +7,7 @@
 #include <exception>
 #include <limits>
 #include <new>
+#include <utility>
 
 namespace Horo::Runtime::Ui {
     namespace {
@@ -14,7 +15,7 @@ namespace Horo::Runtime::Ui {
         class PointerInputGuard final {
         public:
             explicit PointerInputGuard(bool &active) noexcept : active_(active) {
-                active_ = true;
+                active = true;
             }
 
             ~PointerInputGuard() {
@@ -55,7 +56,7 @@ namespace Horo::Runtime::Ui {
         class InputGestureRoute final : public UiEventHandler {
         public:
             InputGestureRoute(UiEventHandler &observer, const Input::InputRouter &router, const Input::InputContextToken &context,
-                              const InputRouteFence fence)
+                              const InputRouteFence &fence)
                 : observer_(observer), router_(router), context_(context), fence_(fence) {}
 
             Result<UiEventResponse> Handle(const UiElementHandle element, const UiEventPhase phase, const UiRoutedEvent &event) override {
@@ -97,7 +98,8 @@ namespace Horo::Runtime::Ui {
     /** @copydoc DefaultUiPointerActions */
     std::vector<Input::ActionDescriptor> DefaultUiPointerActions(const Input::InputContextId &context) {
         const std::array names{"ui.pointer.activate", "ui.pointer.context", "ui.pointer.pick", "ui.pointer.cancel"};
-        const std::array keys{Input::Key::Enter, Input::Key::F10, Input::Key::Space, Input::Key::Escape};
+        using enum Input::Key;
+        const std::array keys{Enter, F10, Space, Escape};
         std::vector<Input::ActionDescriptor> result;
         result.reserve(UiPointerActionCount);
         for (std::size_t index = 0; index < names.size(); ++index) {
@@ -121,8 +123,8 @@ namespace Horo::Runtime::Ui {
             !BoundedProfile(router))
             return Result<std::unique_ptr<UiPointerInput>>::Failure(MakeError(UiErrors::EventDispatchCapacityExceeded));
         for (std::size_t index = 0; index < actions.size(); ++index) {
-            const auto action = std::ranges::find(router.Actions(), actions[index], &Input::ActionDescriptor::id);
-            if (action == router.Actions().end() || action->valueType != Input::ActionValueType::Digital ||
+            if (const auto action = std::ranges::find(router.Actions(), actions[index], &Input::ActionDescriptor::id);
+                action == router.Actions().end() || action->valueType != Input::ActionValueType::Digital ||
                 !router.ContextMatches(context, action->context) || action->defaultBindings.size() > 32 ||
                 std::find(actions.begin(), actions.begin() + index, actions[index]) != actions.begin() + index)
                 return Result<std::unique_ptr<UiPointerInput>>::Failure(MakeError(UiErrors::EventDispatchInvalid));
@@ -135,7 +137,7 @@ namespace Horo::Runtime::Ui {
         if (dispatcher.HasError())
             return Result<std::unique_ptr<UiPointerInput>>::Failure(dispatcher.ErrorValue());
         try {
-            auto result = std::unique_ptr<UiPointerInput>{new UiPointerInput{std::move(interaction).Value()}};
+            auto result = std::make_unique<UiPointerInput>(ConstructionKey{}, std::move(interaction).Value());
             result->router_ = &router;
             result->context_ = routing.contextIdentity;
             result->configurationRevision_ = routing.configurationRevision;
@@ -147,6 +149,9 @@ namespace Horo::Runtime::Ui {
             return Result<std::unique_ptr<UiPointerInput>>::Failure(MakeError(UiErrors::EventDispatchCapacityExceeded));
         }
     }
+
+    /** @copydoc UiPointerInput::UiPointerInput */
+    UiPointerInput::UiPointerInput(ConstructionKey, UiPointerInteraction interaction) : interaction_(std::move(interaction)) {}
 
     /** @copydoc UiPointerInput::~UiPointerInput */
     UiPointerInput::~UiPointerInput() {
@@ -204,8 +209,7 @@ namespace Horo::Runtime::Ui {
             UiEventDispatcher::Create({descriptor.owner.instance, descriptor.owner.canvas, descriptor.owner.document, MaximumUiTreeDepth});
         if (dispatcher.HasError())
             return Result<void>::Failure(dispatcher.ErrorValue());
-        const auto suspended = Suspend(owner, nextSequence);
-        if (suspended.HasError())
+        if (const auto suspended = Suspend(owner, nextSequence); suspended.HasError())
             return suspended;
         interaction_ = std::move(next).Value();
         dispatcher_.emplace(std::move(dispatcher).Value());
@@ -213,20 +217,25 @@ namespace Horo::Runtime::Ui {
         return Result<void>::Success();
     }
 
-    /** @copydoc UiPointerInput::Collect */
-    Result<std::size_t> UiPointerInput::Collect(Input::InputRouter &router, const Input::InputContextToken &context,
-                                                const UiPointerInputSurface &surface) {
+    /** @copydoc UiPointerInput::AddSample */
+    void UiPointerInput::AddSample(const UiPointerInputSurface &surface, std::size_t &count, const UiPointerId pointer,
+                                   const UiPointerEdge edge, const UiPointerModality modality, const UiPointerButton button, const float x,
+                                   const float y) {
+        samples_[count++] = {pointer,
+                             edge,
+                             modality,
+                             button,
+                             (x - static_cast<float>(surface.inputViewport.x)) * static_cast<float>(surface.canvasSpace.pixelExtent.width) /
+                                 static_cast<float>(surface.inputViewport.width),
+                             (y - static_cast<float>(surface.inputViewport.y)) *
+                                 static_cast<float>(surface.canvasSpace.pixelExtent.height) /
+                                 static_cast<float>(surface.inputViewport.height)};
+    }
+
+    /** @copydoc UiPointerInput::CollectMouse */
+    Result<void> UiPointerInput::CollectMouse(Input::InputRouter &router, const Input::InputContextToken &context,
+                                              const UiPointerInputSurface &surface, std::size_t &count) {
         const auto &snapshot = router.Snapshot();
-        std::size_t count = 0;
-        const auto add = [&](const UiPointerId pointer, const UiPointerEdge edge, const UiPointerModality modality,
-                             const UiPointerButton button, const float x, const float y) {
-            samples_[count++] = {pointer,
-                                 edge,
-                                 modality,
-                                 button,
-                                 (x - surface.inputViewport.x) * surface.canvasSpace.pixelExtent.width / surface.inputViewport.width,
-                                 (y - surface.inputViewport.y) * surface.canvasSpace.pixelExtent.height / surface.inputViewport.height};
-        };
         const auto mouse = UiPointerId::Create(1).Value();
         if (!mouseButton_) {
             for (std::size_t index = 0; index < snapshot.pointer.buttons.size(); ++index) {
@@ -235,11 +244,11 @@ namespace Horo::Runtime::Ui {
                     continue;
                 auto captured = router.CapturePointer(context, button, *this);
                 if (captured.HasError())
-                    return Result<std::size_t>::Failure(captured.ErrorValue());
+                    return Result<void>::Failure(captured.ErrorValue());
                 mouseCapture_ = std::move(captured).Value();
                 mouseButton_ = button;
-                add(mouse, UiPointerEdge::Press, UiPointerModality::Mouse, static_cast<UiPointerButton>(index), snapshot.pointer.x,
-                    snapshot.pointer.y);
+                AddSample(surface, count, mouse, UiPointerEdge::Press, UiPointerModality::Mouse, static_cast<UiPointerButton>(index),
+                          snapshot.pointer.x, snapshot.pointer.y);
                 break;
             }
         }
@@ -247,111 +256,148 @@ namespace Horo::Runtime::Ui {
             const auto state = snapshot.State(*mouseButton_);
             const auto button = static_cast<UiPointerButton>(*mouseButton_);
             if (state.released || !state.down) {
-                add(mouse, UiPointerEdge::Release, UiPointerModality::Mouse, button, snapshot.pointer.x, snapshot.pointer.y);
+                AddSample(surface, count, mouse, UiPointerEdge::Release, UiPointerModality::Mouse, button, snapshot.pointer.x,
+                          snapshot.pointer.y);
                 mouseCapture_.Release();
                 mouseButton_.reset();
             } else if (!state.pressed)
-                add(mouse, UiPointerEdge::Move, UiPointerModality::Mouse, button, snapshot.pointer.x, snapshot.pointer.y);
+                AddSample(surface, count, mouse, UiPointerEdge::Move, UiPointerModality::Mouse, button, snapshot.pointer.x,
+                          snapshot.pointer.y);
         } else if (router.ConsumePointerMotion(context)) {
-            add(mouse, snapshot.window.pointerInside ? UiPointerEdge::Move : UiPointerEdge::Cancel, UiPointerModality::Mouse,
-                UiPointerButton::Primary, snapshot.pointer.x, snapshot.pointer.y);
+            AddSample(surface, count, mouse, snapshot.window.pointerInside ? UiPointerEdge::Move : UiPointerEdge::Cancel,
+                      UiPointerModality::Mouse, UiPointerButton::Primary, snapshot.pointer.x, snapshot.pointer.y);
         }
-        for (const auto &touch : snapshot.touches) {
-            if (!touch.id.IsValid())
-                continue;
-            auto owned = std::ranges::find(contacts_, touch.id, &Contact::source);
-            if (owned == contacts_.end() && router.ConsumeTouchContact(context, touch.id)) {
-                owned = std::ranges::find_if(contacts_, [](const Contact &entry) {
-                    return !entry.source.IsValid();
-                });
-                if (owned == contacts_.end() || nextPointer_ == std::numeric_limits<std::uint32_t>::max())
-                    return Result<std::size_t>::Failure(MakeError(UiErrors::PointerCaptureCapacityExceeded));
-                *owned = {touch.id, UiPointerId::Create(nextPointer_++).Value(), touch.x, touch.y};
-                add(owned->pointer, UiPointerEdge::Press, UiPointerModality::Touch, UiPointerButton::Primary, touch.x, touch.y);
-            }
-            if (owned == contacts_.end())
-                continue;
-            owned->x = touch.x;
-            owned->y = touch.y;
-            if (touch.cancelled || touch.contact.released || !touch.contact.down) {
-                add(owned->pointer, touch.cancelled ? UiPointerEdge::Cancel : UiPointerEdge::Release, UiPointerModality::Touch,
-                    UiPointerButton::Primary, touch.x, touch.y);
-                *owned = {};
-            } else if (!touch.contact.pressed)
-                add(owned->pointer, UiPointerEdge::Move, UiPointerModality::Touch, UiPointerButton::Primary, touch.x, touch.y);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiPointerInput::CollectTouch */
+    Result<void> UiPointerInput::CollectTouch(Input::InputRouter &router, const Input::InputContextToken &context,
+                                              const UiPointerInputSurface &surface, const Input::TouchContactState &touch,
+                                              std::size_t &count) {
+        if (!touch.id.IsValid())
+            return Result<void>::Success();
+        auto owned = std::ranges::find(contacts_, touch.id, &Contact::source);
+        if (owned == contacts_.end() && router.ConsumeTouchContact(context, touch.id)) {
+            owned = std::ranges::find_if(contacts_, [](const Contact &entry) {
+                return !entry.source.IsValid();
+            });
+            if (owned == contacts_.end() || nextPointer_ == std::numeric_limits<std::uint32_t>::max())
+                return Result<void>::Failure(MakeError(UiErrors::PointerCaptureCapacityExceeded));
+            *owned = {touch.id, UiPointerId::Create(nextPointer_++).Value(), touch.x, touch.y};
+            AddSample(surface, count, owned->pointer, UiPointerEdge::Press, UiPointerModality::Touch, UiPointerButton::Primary, touch.x,
+                      touch.y);
         }
+        if (owned == contacts_.end())
+            return Result<void>::Success();
+        owned->x = touch.x;
+        owned->y = touch.y;
+        if (touch.cancelled || touch.contact.released || !touch.contact.down) {
+            AddSample(surface, count, owned->pointer, touch.cancelled ? UiPointerEdge::Cancel : UiPointerEdge::Release,
+                      UiPointerModality::Touch, UiPointerButton::Primary, touch.x, touch.y);
+            *owned = {};
+        } else if (!touch.contact.pressed)
+            AddSample(surface, count, owned->pointer, UiPointerEdge::Move, UiPointerModality::Touch, UiPointerButton::Primary, touch.x,
+                      touch.y);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiPointerInput::CollectTouches */
+    Result<void> UiPointerInput::CollectTouches(Input::InputRouter &router, const Input::InputContextToken &context,
+                                                const UiPointerInputSurface &surface, std::size_t &count) {
+        const auto &snapshot = router.Snapshot();
+        for (const auto &touch : snapshot.touches)
+            if (const auto collected = CollectTouch(router, context, surface, touch, count); collected.HasError())
+                return collected;
         for (auto &owned : contacts_) {
             if (owned.source.IsValid() &&
                 std::ranges::find(snapshot.touches, owned.source, &Input::TouchContactState::id) == snapshot.touches.end()) {
-                add(owned.pointer, UiPointerEdge::Cancel, UiPointerModality::Touch, UiPointerButton::Primary, owned.x, owned.y);
+                AddSample(surface, count, owned.pointer, UiPointerEdge::Cancel, UiPointerModality::Touch, UiPointerButton::Primary, owned.x,
+                          owned.y);
                 owned = {};
             }
         }
-        return Result<std::size_t>::Success(count);  // At most 16*(press+release), 16 missing-contact cancellations and two mouse edges.
+        return Result<void>::Success();
     }
 
-    /** @copydoc UiPointerInput::Pump */
-    Result<UiPointerInputFrame> UiPointerInput::Pump(Input::InputRouter &router, const Input::InputContextToken &context,
-                                                     const UiPointerInputSurface &surface, const std::uint64_t milliseconds) {
-        if (pumping_)
-            return Result<UiPointerInputFrame>::Failure(MakeError(UiErrors::EventDispatchReentrant));
-        PointerInputGuard guard{pumping_};
-        defaultCount_ = 0;
-        if (stopped_)
-            return Result<UiPointerInputFrame>::Success({UiPointerInputStatus::Stopped});
+    /** @copydoc UiPointerInput::Collect */
+    Result<std::size_t> UiPointerInput::Collect(Input::InputRouter &router, const Input::InputContextToken &context,
+                                                const UiPointerInputSurface &surface) {
+        std::size_t count = 0;
+        if (const auto mouse = CollectMouse(router, context, surface, count); mouse.HasError())
+            return Result<std::size_t>::Failure(mouse.ErrorValue());
+        if (const auto touches = CollectTouches(router, context, surface, count); touches.HasError())
+            return Result<std::size_t>::Failure(touches.ErrorValue());
+        return Result<std::size_t>::Success(count);
+    }
+
+    /** @copydoc UiPointerInput::ValidateFrame */
+    Result<UiPointerInputStatus> UiPointerInput::ValidateFrame(Input::InputRouter &router, const Input::InputContextToken &context,
+                                                               const UiPointerInputSurface &surface,
+                                                               const std::uint64_t milliseconds) const {
         const auto routing = router.RoutingState(context);
         if (&router != router_ || routing.contextIdentity != context_)
-            return Result<UiPointerInputFrame>::Failure(MakeError(UiErrors::EventDispatchSourceStale));
+            return Result<UiPointerInputStatus>::Failure(MakeError(UiErrors::EventDispatchSourceStale));
         const auto &snapshot = router.Snapshot();
         if (!routing.WithinLimits(64, 16) || !BoundedProfile(router) || !surface.inputViewport.IsValid() ||
             surface.inputViewport.width == 0 || surface.inputViewport.height == 0 || !surface.canvasSpace.IsValid() ||
             snapshot.frame == 0 || milliseconds < time_ || (hasFrame_ && snapshot.frame < frame_))
-            return Result<UiPointerInputFrame>::Failure(MakeError(UiErrors::EventDispatchInvalid));
+            return Result<UiPointerInputStatus>::Failure(MakeError(UiErrors::EventDispatchInvalid));
         if (hasFrame_ && snapshot.frame == frame_)
-            return Result<UiPointerInputFrame>::Success({UiPointerInputStatus::DuplicateFrame});
+            return Result<UiPointerInputStatus>::Success(UiPointerInputStatus::DuplicateFrame);
         if (!std::isfinite(snapshot.pointer.x) || !std::isfinite(snapshot.pointer.y) ||
             std::ranges::any_of(snapshot.touches, [](const auto &touch) {
             return touch.id.IsValid() && (!std::isfinite(touch.x) || !std::isfinite(touch.y));
         }))
-            return Result<UiPointerInputFrame>::Failure(MakeError(UiErrors::HitTestInvalid));
+            return Result<UiPointerInputStatus>::Failure(MakeError(UiErrors::HitTestInvalid));
+        return Result<UiPointerInputStatus>::Success(UiPointerInputStatus::Active);
+    }
+
+    /** @copydoc UiPointerInput::AdmitFrame */
+    Result<UiPointerInputStatus> UiPointerInput::AdmitFrame(Input::InputRouter &router, const Input::InputContextToken &context,
+                                                            const UiPointerInputSurface &surface, const std::uint64_t milliseconds) {
+        const auto routing = router.RoutingState(context);
+        const auto &snapshot = router.Snapshot();
         frame_ = snapshot.frame;
         time_ = milliseconds;
         hasFrame_ = true;
         if (routing.configurationRevision != configurationRevision_ || routing.assignmentRevision != assignmentRevision_) {
-            const auto cancelled = Suspend(surface.owner, surface.nextSequence);
-            if (cancelled.HasError())
-                return Result<UiPointerInputFrame>::Failure(cancelled.ErrorValue());
+            if (const auto cancelled = Suspend(surface.owner, surface.nextSequence); cancelled.HasError())
+                return Result<UiPointerInputStatus>::Failure(cancelled.ErrorValue());
             if (!routing.configurationRevision || !routing.assignmentRevision)
-                return Result<UiPointerInputFrame>::Failure(MakeError(UiErrors::EventDispatchLifecycleUnavailable));
+                return Result<UiPointerInputStatus>::Failure(MakeError(UiErrors::EventDispatchLifecycleUnavailable));
             configurationRevision_ = routing.configurationRevision;
             assignmentRevision_ = routing.assignmentRevision;
-            return Result<UiPointerInputFrame>::Success({UiPointerInputStatus::Blocked});
+            return Result<UiPointerInputStatus>::Success(UiPointerInputStatus::Blocked);
         }
         if (cleanupPending_ || !router.IsContextActive(context) || snapshot.touchOverflow || !snapshot.window.pointerDeviceAvailable) {
-            const auto cancelled = Suspend(surface.owner, surface.nextSequence);
-            if (cancelled.HasError())
-                return Result<UiPointerInputFrame>::Failure(cancelled.ErrorValue());
-            return Result<UiPointerInputFrame>::Success({UiPointerInputStatus::Blocked});
+            if (const auto cancelled = Suspend(surface.owner, surface.nextSequence); cancelled.HasError())
+                return Result<UiPointerInputStatus>::Failure(cancelled.ErrorValue());
+            return Result<UiPointerInputStatus>::Success(UiPointerInputStatus::Blocked);
         }
-        const auto &hit = surface.hitTesting.Descriptor();
-        if (hit.tree != interaction_.Owner().tree || hit.interaction != interaction_.Owner().interaction ||
-            !surface.owner.PointerInputEligible(interaction_.Owner())) {
-            const auto cancelled = Suspend(surface.owner, surface.nextSequence);
-            if (cancelled.HasError())
-                return Result<UiPointerInputFrame>::Failure(cancelled.ErrorValue());
-            return Result<UiPointerInputFrame>::Success({UiPointerInputStatus::NeedsRebind});
+        if (const auto &hit = surface.hitTesting.Descriptor(); hit.tree != interaction_.Owner().tree ||
+                                                               hit.interaction != interaction_.Owner().interaction ||
+                                                               !surface.owner.PointerInputEligible(interaction_.Owner())) {
+            if (const auto cancelled = Suspend(surface.owner, surface.nextSequence); cancelled.HasError())
+                return Result<UiPointerInputStatus>::Failure(cancelled.ErrorValue());
+            return Result<UiPointerInputStatus>::Success(UiPointerInputStatus::NeedsRebind);
         }
+        return Result<UiPointerInputStatus>::Success(UiPointerInputStatus::Active);
+    }
+
+    /** @copydoc UiPointerInput::ReadAlternative */
+    Result<std::optional<UiAccessibleGesture>> UiPointerInput::ReadAlternative(Input::InputRouter &router,
+                                                                               const Input::InputContextToken &context,
+                                                                               const UiPointerInputSurface &surface) {
         std::array<Input::ActionEvidence, UiPointerActionCount> actions{};
         for (std::size_t index = 0; index < actions.size(); ++index) {
             actions[index] = router.ReadActionEvidence(context, actions_[index]);
             if (router.LastActionStatus() == Input::ActionReadStatus::CapacityExceeded)
-                return Result<UiPointerInputFrame>::Failure(MakeError(UiErrors::EventDispatchCapacityExceeded));
+                return Result<std::optional<UiAccessibleGesture>>::Failure(MakeError(UiErrors::EventDispatchCapacityExceeded));
         }
         std::optional<UiAccessibleGesture> alternative;
         if (actions[3].value.pressed) {
-            const auto cancelled = Suspend(surface.owner, surface.nextSequence);
-            if (cancelled.HasError())
-                return Result<UiPointerInputFrame>::Failure(cancelled.ErrorValue());
+            if (const auto cancelled = Suspend(surface.owner, surface.nextSequence); cancelled.HasError())
+                return Result<std::optional<UiAccessibleGesture>>::Failure(cancelled.ErrorValue());
             alternative = UiAccessibleGesture::Cancel;
         } else if (actions[1].value.pressed)
             alternative = UiAccessibleGesture::ContextAction;
@@ -359,6 +405,14 @@ namespace Horo::Runtime::Ui {
             alternative = interaction_.HasAccessibleDrag() ? UiAccessibleGesture::Drop : UiAccessibleGesture::PickUp;
         else if (actions[0].value.pressed)
             alternative = interaction_.HasAccessibleDrag() ? UiAccessibleGesture::Drop : UiAccessibleGesture::Activate;
+        return Result<std::optional<UiAccessibleGesture>>::Success(alternative);
+    }
+
+    /** @copydoc UiPointerInput::DeliverFrame */
+    Result<UiPointerInputFrame> UiPointerInput::DeliverFrame(Input::InputRouter &router, const Input::InputContextToken &context,
+                                                             const UiPointerInputSurface &surface, const std::uint64_t milliseconds,
+                                                             const std::optional<UiAccessibleGesture> alternative) {
+        const auto routing = router.RoutingState(context);
         const auto collected =
             alternative == UiAccessibleGesture::Cancel ? Result<std::size_t>::Success(0) : Collect(router, context, surface);
         if (collected.HasError()) {
@@ -384,4 +438,30 @@ namespace Horo::Runtime::Ui {
         }
         return Result<UiPointerInputFrame>::Success({UiPointerInputStatus::Active, pumped.Value(), Defaults()});
     }
+
+    /** @copydoc UiPointerInput::Pump */
+    Result<UiPointerInputFrame> UiPointerInput::Pump(Input::InputRouter &router, const Input::InputContextToken &context,
+                                                     const UiPointerInputSurface &surface, const std::uint64_t milliseconds) {
+        if (pumping_)
+            return Result<UiPointerInputFrame>::Failure(MakeError(UiErrors::EventDispatchReentrant));
+        PointerInputGuard guard{pumping_};
+        defaultCount_ = 0;
+        if (stopped_)
+            return Result<UiPointerInputFrame>::Success({UiPointerInputStatus::Stopped});
+        const auto validated = ValidateFrame(router, context, surface, milliseconds);
+        if (validated.HasError())
+            return Result<UiPointerInputFrame>::Failure(validated.ErrorValue());
+        if (validated.Value() != UiPointerInputStatus::Active)
+            return Result<UiPointerInputFrame>::Success({validated.Value()});
+        const auto admitted = AdmitFrame(router, context, surface, milliseconds);
+        if (admitted.HasError())
+            return Result<UiPointerInputFrame>::Failure(admitted.ErrorValue());
+        if (admitted.Value() != UiPointerInputStatus::Active)
+            return Result<UiPointerInputFrame>::Success({admitted.Value()});
+        const auto alternative = ReadAlternative(router, context, surface);
+        if (alternative.HasError())
+            return Result<UiPointerInputFrame>::Failure(alternative.ErrorValue());
+        return DeliverFrame(router, context, surface, milliseconds, alternative.Value());
+    }
+
 }  // namespace Horo::Runtime::Ui

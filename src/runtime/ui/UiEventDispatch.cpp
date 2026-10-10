@@ -37,6 +37,13 @@ namespace Horo::Runtime::Ui {
             return false;
         }
 
+        /** @brief Checks the gesture/position payload before route construction. */
+        bool ValidPayload(const UiRoutedEvent &event) noexcept {
+            return event.kind == UiEventKind::Gesture
+                       ? event.gesture.has_value() && event.gesture->IsValid() && event.hasLogicalPosition != event.gesture->accessible
+                       : !event.gesture.has_value() && IsPointerEvent(event.kind) == event.hasLogicalPosition;
+        }
+
         /** @brief Restores non-reentrant admission on every handler return or exception path. */
         class DispatchGuard final {
         public:
@@ -178,11 +185,7 @@ namespace Horo::Runtime::Ui {
             return Result<UiEventDispatchResult>::Failure(DispatchError(UiErrors::EventDispatchLifecycleUnavailable));
         if (storage_->dispatching)
             return Result<UiEventDispatchResult>::Failure(DispatchError(UiErrors::EventDispatchReentrant));
-        const bool gestureValid =
-            event.kind == UiEventKind::Gesture
-                ? event.gesture.has_value() && event.gesture->IsValid() && event.hasLogicalPosition != event.gesture->accessible
-                : !event.gesture.has_value() && IsPointerEvent(event.kind) == event.hasLogicalPosition;
-        const bool eventValid = IsKnown(event.kind) && event.sequence != 0 && gestureValid;
+        const bool eventValid = IsKnown(event.kind) && event.sequence != 0 && ValidPayload(event);
         if (const bool routeValid = route.target.IsValid() && (!route.modalRoot || route.modalRoot->IsValid()); !eventValid || !routeValid)
             return Result<UiEventDispatchResult>::Failure(DispatchError(UiErrors::EventDispatchInvalid));
         if (!storage_->Matches(tree, route))

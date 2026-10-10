@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <utility>
 
 namespace Horo::Runtime::Ui {
     namespace {
@@ -9,7 +10,7 @@ namespace Horo::Runtime::Ui {
         class PointerDispatchGuard final {
         public:
             explicit PointerDispatchGuard(bool &flag) noexcept : flag_(flag) {
-                flag_ = true;
+                flag = true;
             }
 
             ~PointerDispatchGuard() {
@@ -39,9 +40,9 @@ namespace Horo::Runtime::Ui {
                 return Result<UiEventResponse>::Failure(MakeError(UiErrors::ControlSourceStale));
             if (phase == UiEventPhase::Target && !UiAnimationOwner::RouteTargetEligible(*owner_.storage_, element))
                 return Result<UiEventResponse>::Failure(MakeError(UiErrors::ControlSourceStale));
-            const auto kind = event.gesture->kind;
             // Release/cancel cleanup is lifecycle state, not a preventable application action. Do it even if capture stops routing.
-            if ((kind == UiGestureKind::Cancel || kind == UiGestureKind::Release || kind == UiGestureKind::PanEnd) &&
+            if (const auto kind = event.gesture->kind;
+                (kind == UiGestureKind::Cancel || kind == UiGestureKind::Release || kind == UiGestureKind::PanEnd) &&
                 cleanedSequence_ != event.sequence) {
                 cleanedSequence_ = event.sequence;
                 const bool completedTap = kind == UiGestureKind::Release && completedTapPointer_ == event.gesture->pointer;
@@ -54,13 +55,11 @@ namespace Horo::Runtime::Ui {
         }
 
         Result<void> ApplyDefault(const UiElementHandle target, const UiRoutedEvent &event) override {
-            const auto observed = observer_.ApplyDefault(target, event);
-            if (observed.HasError())
+            if (const auto observed = observer_.ApplyDefault(target, event); observed.HasError())
                 return observed;
             if (!event.gesture || !owner_.storage_ || owner_.storage_->stopped)
                 return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
-            const auto &gesture = *event.gesture;
-            switch (gesture.kind) {
+            switch (const auto &gesture = *event.gesture; gesture.kind) {
                 case UiGestureKind::Press:
                     if (const auto focused = Focus(target, event); focused.HasError())
                         return focused;
@@ -100,6 +99,48 @@ namespace Horo::Runtime::Ui {
             return Result<void>::Failure(MakeError(UiErrors::EventDispatchInvalid));
         }
 
+        /** @brief Completes accessibility through the same admitted route and cleans the applied prefix on failure. */
+        Result<UiPointerInteractionResult> Accessible(const UiPointerInteractionEnvironment &environment, UiFocusGraph *focus,
+                                                      const std::span<const UiElementHandle> previous, UiPointerInteractionResult result) {
+            const auto focused = focus ? focus->CurrentFocus() : Result<std::optional<UiFocusTarget>>::Success(std::nullopt);
+            if (focused.HasValue() && !focused.Value() && *input_.accessible == UiAccessibleGesture::Cancel) {
+                input_.interaction.CancelTransient();
+                Cleanup(previous);
+                result.defaultActions = input_.writtenDefaults;
+                return Result<UiPointerInteractionResult>::Success(result);  // Cancellation does not require a focused target.
+            }
+            if (focused.HasError() || !focused.Value()) {
+                Cleanup(previous);
+                return Result<UiPointerInteractionResult>::Failure(MakeError(UiErrors::FocusTargetUnavailable));
+            }
+            auto accessible = input_.interaction.Accessible(environment, focused.Value()->element, *input_.accessible, input_.nextSequence);
+            if (accessible.HasError()) {
+                Cleanup(previous);
+                return accessible;
+            }
+            result.dispatched += accessible.Value().dispatched;
+            result.handled |= accessible.Value().handled;
+            result.defaultPrevented |= accessible.Value().defaultPrevented;
+            result.defaultActions = input_.writtenDefaults;
+            return Result<UiPointerInteractionResult>::Success(result);
+        }
+
+        /** @brief Pumps physical transitions, then accessibility while the aggregate pin and exclusion fence remain held. */
+        Result<UiPointerInteractionResult> Pump(const UiPointerInteractionEnvironment &environment, UiReloadCanvas &canvas,
+                                                const std::span<const UiElementHandle> previous) {
+            auto pumped =
+                input_.interaction.Pump(environment, input_.canvasSpace, input_.samples, input_.milliseconds, input_.nextSequence);
+            if (pumped.HasError()) {
+                Cleanup(previous);
+                return pumped;
+            }
+            auto result = std::move(pumped).Value();
+            if (input_.accessible)
+                return Accessible(environment, canvas.focus ? &*canvas.focus : nullptr, previous, result);
+            result.defaultActions = input_.writtenDefaults;
+            return Result<UiPointerInteractionResult>::Success(result);
+        }
+
         /** @brief Cancels only controls touched by this ordered call after route failure; preserves applied values/default prefix. */
         void Cleanup(const std::span<const UiElementHandle> previous) {
             CleanupTargets(previous);
@@ -115,14 +156,13 @@ namespace Horo::Runtime::Ui {
             const auto count = canvas->focus->Order(eligible);
             if (count.HasError())
                 return Result<void>::Failure(count.ErrorValue());
-            const auto candidates = std::span{eligible}.first(count.Value());
-            if (std::ranges::find(candidates, target, &UiFocusTarget::element) == candidates.end())
+            if (const auto candidates = std::span{eligible}.first(count.Value());
+                std::ranges::find(candidates, target, &UiFocusTarget::element) == candidates.end())
                 return Result<void>::Success();  // A semantic hit need not be a focusable control.
             const auto previous = canvas->focus->CurrentFocus();
             if (previous.HasError())
                 return Result<void>::Failure(previous.ErrorValue());
-            const auto changed = canvas->focus->SetFocus(target);
-            if (changed.HasError())
+            if (const auto changed = canvas->focus->SetFocus(target); changed.HasError())
                 return Result<void>::Failure(changed.ErrorValue());
             if (previous.Value() && previous.Value()->element != target)
                 if (const auto lost = Input(previous.Value()->element, UiControlInputKind::FocusLost, event); lost.HasError())
@@ -144,7 +184,7 @@ namespace Horo::Runtime::Ui {
         }
 
         Result<void> Input(const UiElementHandle target, const UiControlInputKind kind, const UiRoutedEvent &event) {
-            if (!owner_.storage_ || owner_.storage_->stopped || !owner_.storage_->currentFrame)
+            if (!owner_.storage_ || owner_.storage_->stopped || !owner_.storage_->currentFrame.has_value())
                 return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
             const auto &controls = owner_.storage_->frames[*owner_.storage_->currentFrame]->controls;
             const auto record = std::ranges::find(controls, target, [](const UiAnimationControlRecord &entry) {
@@ -211,7 +251,7 @@ namespace Horo::Runtime::Ui {
         const auto targets = interaction.TargetsInFlight();
         const auto source = interaction.Owner();
         interaction.CancelTransient();
-        if (!storage_ || storage_->stopped || !storage_->currentFrame)
+        if (!storage_ || storage_->stopped || !storage_->currentFrame.has_value())
             return Result<void>::Success();  // Aggregate shutdown/reload already closes/cancels actual controls.
         const auto &frame = *storage_->frames[*storage_->currentFrame];
         if (frame.controls.size() > MaximumUiInteractionTargets)
@@ -227,9 +267,9 @@ namespace Horo::Runtime::Ui {
                 continue;
             if (nextSequence == 0 || nextSequence == std::numeric_limits<std::uint64_t>::max())
                 return Result<void>::Failure(MakeError(UiErrors::EventDispatchCapacityExceeded));
-            const auto cancelled = HandleControl(source.view, {record->source, UiControlInputKind::Cancel,
-                                                               UiControlActivationSource::Pointer, nextSequence++});
-            if (cancelled.HasError())
+            if (const auto cancelled = HandleControl(source.view, {record->source, UiControlInputKind::Cancel,
+                                                                   UiControlActivationSource::Pointer, nextSequence++});
+                cancelled.HasError())
                 return Result<void>::Failure(cancelled.ErrorValue());
         }
         return Result<void>::Success();
@@ -238,13 +278,14 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiAnimationOwner::PumpPointers */
     Result<UiPointerInteractionResult> UiAnimationOwner::PumpPointers(const UiAnimationPointerInput &input, UiEventHandler &routeHandler) {
         input.writtenDefaults = 0;
-        if (!storage_ || storage_->pointerDispatching || !storage_->currentFrame || input.defaults.size() < MaximumUiInteractionSamples + 1)
+        if (!storage_ || storage_->pointerDispatching || !storage_->currentFrame.has_value() ||
+            input.defaults.size() < MaximumUiInteractionSamples + 1)
             return Result<UiPointerInteractionResult>::Failure(MakeError(UiErrors::EventDispatchLifecycleUnavailable));
         if (const auto admitted = AdmitCommand(*storage_); admitted.HasError())
             return Result<UiPointerInteractionResult>::Failure(admitted.ErrorValue());
         // Includes long-press defaults and failure cleanup of both previously held and newly touched targets.
-        const auto commands = input.samples.size() * 4 + MaximumUiInteractionSamples + MaximumUiInteractionPointers * 2 + 5;
-        if (input.samples.size() > MaximumUiInteractionSamples || commands > storage_->limits.commands - storage_->pendingCommands ||
+        if (const auto commands = input.samples.size() * 4 + MaximumUiInteractionSamples + MaximumUiInteractionPointers * 2 + 5;
+            input.samples.size() > MaximumUiInteractionSamples || commands > storage_->limits.commands - storage_->pendingCommands ||
             input.nextSequence == 0 || input.nextSequence > std::numeric_limits<std::uint64_t>::max() - 1024 ||
             storage_->commandRevision > std::numeric_limits<std::uint64_t>::max() - commands)
             return Result<UiPointerInteractionResult>::Failure(MakeError(UiErrors::EventDispatchCapacityExceeded));
@@ -253,8 +294,8 @@ namespace Horo::Runtime::Ui {
         auto pin = storage_.PublisherPin();  // Shutdown may occur in a callback; guard storage outlives that synchronous borrow.
         const auto &frame = *pin->frames[*pin->currentFrame];
         const auto &owner = input.interaction.Owner();
-        const auto &layout = frame.layout->Descriptor();
-        if (frame.controls.size() > MaximumUiInteractionTargets || frame.layout->Records().size() > MaximumUiInteractionTargets ||
+        if (const auto &layout = frame.layout->Descriptor();
+            frame.controls.size() > MaximumUiInteractionTargets || frame.layout->Records().size() > MaximumUiInteractionTargets ||
             owner.instance != layout.instance || owner.canvas != layout.canvas || owner.tree != layout.sources.tree ||
             owner.interaction != layout.interaction || owner.view != input.view)
             return Result<UiPointerInteractionResult>::Failure(MakeError(UiErrors::ControlSourceStale));
@@ -263,8 +304,8 @@ namespace Horo::Runtime::Ui {
         if (!canvas->captures || presentation == canvas->presentations.end())
             return Result<UiPointerInteractionResult>::Failure(MakeError(UiErrors::PointerCaptureLifecycleUnavailable));
         if (canvas->focus) {
-            const auto focus = canvas->focus->Snapshot();
-            if (focus.HasError() ||
+            if (const auto focus = canvas->focus->Snapshot();
+                focus.HasError() ||
                 input.interaction.ModalRoot() != (focus.Value().modalRoot ? std::optional{focus.Value().modalRoot->element} : std::nullopt))
                 return Result<UiPointerInteractionResult>::Failure(MakeError(UiErrors::FocusSourceStale));
         }
@@ -273,35 +314,6 @@ namespace Horo::Runtime::Ui {
         UiPointerControlRoute bridge{*this, input, routeHandler};
         const UiPointerInteractionEnvironment environment{canvas->tree,      input.hitTesting, *presentation,
                                                           *canvas->captures, input.dispatcher, bridge};
-        auto pumped = input.interaction.Pump(environment, input.canvasSpace, input.samples, input.milliseconds, input.nextSequence);
-        if (pumped.HasError()) {
-            bridge.Cleanup(previous);
-            return pumped;
-        }
-        auto result = std::move(pumped).Value();
-        if (input.accessible) {
-            const auto focused =
-                canvas->focus ? canvas->focus->CurrentFocus() : Result<std::optional<UiFocusTarget>>::Success(std::nullopt);
-            if (focused.HasValue() && !focused.Value() && *input.accessible == UiAccessibleGesture::Cancel) {
-                input.interaction.CancelTransient();
-                bridge.Cleanup(previous);
-                result.defaultActions = input.writtenDefaults;
-                return Result<UiPointerInteractionResult>::Success(result);  // Cancellation does not require a focused target.
-            }
-            if (focused.HasError() || !focused.Value()) {
-                bridge.Cleanup(previous);
-                return Result<UiPointerInteractionResult>::Failure(MakeError(UiErrors::FocusTargetUnavailable));
-            }
-            auto accessible = input.interaction.Accessible(environment, focused.Value()->element, *input.accessible, input.nextSequence);
-            if (accessible.HasError()) {
-                bridge.Cleanup(previous);
-                return accessible;
-            }
-            result.dispatched += accessible.Value().dispatched;
-            result.handled |= accessible.Value().handled;
-            result.defaultPrevented |= accessible.Value().defaultPrevented;
-        }
-        result.defaultActions = input.writtenDefaults;
-        return Result<UiPointerInteractionResult>::Success(result);
+        return bridge.Pump(environment, *canvas, previous);
     }
 }  // namespace Horo::Runtime::Ui
