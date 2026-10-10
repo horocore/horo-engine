@@ -1124,6 +1124,23 @@ add_library(HoroEngine::AudioVoiceRender ALIAS HoroAudioVoiceRender)
 target_compile_features(HoroAudioVoiceRender PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioVoiceRender PUBLIC HoroEngine::AudioPlayback HoroEngine::AudioMixer)
 
+add_library(HoroAudioFrontend STATIC
+        audio/frontend/AudioFrontend.cpp
+        audio/frontend/AudioFrontendLifecycle.cpp)
+add_library(HoroEngine::AudioFrontend ALIAS HoroAudioFrontend)
+target_compile_features(HoroAudioFrontend PUBLIC cxx_std_20)
+target_include_directories(HoroAudioFrontend PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/audio/frontend/include")
+target_link_libraries(HoroAudioFrontend
+        PUBLIC HoroEngine::AudioCommands
+        PRIVATE HoroEngine::AudioVoiceRender HoroAudioBackendContract)
+
+# Deliberate non-installed host-only composition; features see only AudioFrontend's public control API.
+add_library(HoroAudioFrontendComposition INTERFACE)
+target_include_directories(HoroAudioFrontendComposition INTERFACE
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/frontend/include>")
+target_link_libraries(HoroAudioFrontendComposition INTERFACE
+        HoroEngine::AudioFrontend HoroEngine::AudioVoiceRender HoroAudioBackendContract)
+
 add_library(HoroAudioMetrics STATIC
         audio/metrics/AudioMetricExtraction.cpp
         audio/metrics/AudioMetrics.cpp
@@ -1275,6 +1292,7 @@ add_library(HoroAI STATIC
         runtime/ai/api/AITaskLifecycle.cpp
         runtime/ai/api/AITaskContinuation.cpp
         runtime/ai/api/AITaskJobService.cpp
+        runtime/ai/api/AITaskScheduler.cpp
         runtime/ai/api/BehaviorTree.cpp
         runtime/ai/api/BehaviorTreeExecutionPlan.cpp
         runtime/ai/api/BehaviorTreeInstance.cpp
@@ -1961,6 +1979,9 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderSurfaceLifecycleErrors.cpp
         runtime/renderer/api/RenderGraph.cpp
         runtime/renderer/api/RenderGraphExecution.cpp
+        runtime/renderer/api/RenderGraphInspection.cpp
+        runtime/renderer/api/RenderGraphInspectionErrors.cpp
+        runtime/renderer/api/RenderGraphInspectionExport.cpp
         runtime/renderer/api/RenderGraphExecutionErrors.cpp
         runtime/renderer/api/RenderGraphErrors.cpp
         runtime/renderer/api/RenderGraphSynchronization.cpp
@@ -2034,6 +2055,7 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderParallelWorkInternal.cpp
         runtime/renderer/frontend/RenderParallelWorkErrors.cpp
         runtime/renderer/frontend/RenderFrontend.cpp
+        runtime/renderer/frontend/RenderFrontendInspection.cpp
         runtime/renderer/frontend/RenderFrontendResourceAccess.cpp
         runtime/renderer/frontend/RenderFrontendResourceValidation.cpp
         runtime/renderer/frontend/RenderFrontendResources.cpp
@@ -2377,6 +2399,7 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_METAL)
 endif ()
 
 add_library(HoroEditorServices STATIC
+        editor/audio/AudioEditorDocument.cpp
         editor/audio/MixerAssetDocument.cpp
         editor/audio/MixerDocumentCommands.cpp
         editor/CinematicPropertyBindings.cpp
@@ -2444,6 +2467,7 @@ target_include_directories(HoroEditorServices
 
 target_link_libraries(HoroEditorServices
         PUBLIC
+        HoroEngine::AudioFrontend
         HoroEngine::AudioApi
         HoroEngine::Foundation
         HoroEngine::HostErrors
