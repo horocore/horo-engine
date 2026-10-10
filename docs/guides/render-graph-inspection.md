@@ -77,6 +77,8 @@ retention/query services, incident manifests, atomic saved-artifact export and
 advanced graph layout. The initial graph consumer does not claim those services
 or native qualification. No existing callers or persisted graph formats need a
 migration; snapshot ownership is assigned to RenderApi and consumer coverage
-is updated with the new declarations. The renderer-aware pane is private to the
+is updated with the new declarations. Shared allocation uses a private construction
+key supplied only by validated capture; consumers cannot construct empty or forged
+snapshots, including through an empty brace argument. The renderer-aware pane is private to the
 HoroEditor application composition root. Gui retains no renderer dependency;
 its existing dock chrome and the host pane share the public body-text primitive.

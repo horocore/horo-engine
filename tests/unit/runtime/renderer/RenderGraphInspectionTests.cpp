@@ -23,6 +23,39 @@ namespace Horo::Render {
             REQUIRE(captured.HasValue());
             return std::move(captured).Value();
         }
+
+        /** @brief Compiles disjoint compatible lifetimes beside resident identities without pinning native storage. */
+        Sources CompileAliasedResidentSources() {
+            auto builder = RequireBuilder({.maxPasses = 2, .maxResources = 4, .maxUsages = 2, .maxDependencies = 1});
+            const auto first = RequirePass(builder, RenderPassKind::Compute, RenderQueueRole::Compute);
+            const auto second = RequirePass(builder, RenderPassKind::Compute, RenderQueueRole::Compute);
+            const auto a = RequireResource(builder.AddTransientResource(RenderGraphResourceKind::Buffer));
+            const auto b = RequireResource(builder.AddTransientResource(RenderGraphResourceKind::Buffer));
+            const auto buffer = RequireResource(builder.ImportBuffer(BufferHandle(7), RenderGraphResourceClass::Persistent));
+            const auto texture = RequireResource(builder.ImportTexture(TextureHandle(8), RenderGraphResourceClass::History));
+            RequireUsage(builder, {first, a, RenderGraphAccess::Write, RenderGraphUsageKind::Storage});
+            RequireUsage(builder, {second, b, RenderGraphAccess::Write, RenderGraphUsageKind::Storage});
+            RequireDependency(builder, {first, second, RenderGraphDependencyKind::ExecutionOrder});
+            auto graph = RequireGraph(builder);
+            auto schedule = RequireSchedule(graph);
+            const RenderBufferDescriptor descriptor{.byteSize = 256, .usage = RenderBufferUsage::Storage};
+            const std::array requirements{RenderGraphTransientRequirement{a, descriptor}, RenderGraphTransientRequirement{b, descriptor}};
+            auto lifetime = CompileRenderGraphLifetimePlan(graph, schedule, requirements);
+            REQUIRE(lifetime.HasValue());
+            const std::array initialStates{RenderGraphImportedState{buffer,
+                                                                    {RenderGraphSynchronizationAccess::Read,
+                                                                     RenderGraphSynchronizationOperation::Sampled,
+                                                                     RenderGraphPipelineScope::External,
+                                                                     RenderGraphTextureLayout::NotApplicable,
+                                                                     {5}}},
+                                           RenderGraphImportedState{texture,
+                                                                    {RenderGraphSynchronizationAccess::Read,
+                                                                     RenderGraphSynchronizationOperation::Sampled,
+                                                                     RenderGraphPipelineScope::External,
+                                                                     RenderGraphTextureLayout::ShaderReadOnly,
+                                                                     {5}}}};
+            return FinishSources(std::move(graph), std::move(schedule), std::move(lifetime).Value(), initialStates);
+        }
     }  // namespace
 
     TEST_CASE("Graph inspection owns complete topology and exact logical queue/lifetime facts after sources retire",
@@ -87,6 +120,32 @@ namespace Horo::Render {
         auto moved = std::move(first.graph);
         RequireError(Capture(first), "render.graph.inspection.invalid_source");
         CHECK(moved.Owner().IsValid());
+    }
+
+    TEST_CASE("Graph debug export preserves resident handle generations and compatible alias proof without native payloads",
+              "[renderer][render-graph][inspection][export]") {
+        const auto sources = CompileAliasedResidentSources();
+        const auto captured = Capture(sources);
+        REQUIRE(captured.HasValue());
+        const auto &snapshot = *captured.Value();
+        REQUIRE(snapshot.Aliases().size() == 1);
+        REQUIRE(snapshot.Allocations().size() == 2);
+        CHECK(snapshot.Allocations()[0].slot == snapshot.Allocations()[1].slot);
+        const auto exported = ExportRenderGraphInspection(snapshot);
+        REQUIRE(exported.HasValue());
+        const auto parsed = nlohmann::json::parse(exported.Value());
+        CHECK(parsed.at("resources").at(2).at(3) == 1);
+        CHECK(parsed.at("resources").at(2).at(4) == 41);
+        CHECK(parsed.at("resources").at(2).at(5) == 7);
+        CHECK(parsed.at("resources").at(2).at(6) == 1);
+        CHECK(parsed.at("resources").at(3).at(3) == 2);
+        CHECK(parsed.at("resources").at(3).at(4) == 42);
+        CHECK(parsed.at("resources").at(3).at(5) == 8);
+        CHECK(parsed.at("resources").at(3).at(6) == 1);
+        CHECK(parsed.at("aliases").at(0).at(0) == snapshot.Aliases()[0].first.value);
+        CHECK(parsed.at("aliases").at(0).at(1) == snapshot.Aliases()[0].second.value);
+        CHECK(parsed.at("aliases").at(0).at(2) == snapshot.Aliases()[0].compatibilityClass.value);
+        CHECK(ExportRenderGraphInspection(snapshot, exported.Value().size()).Value() == exported.Value());
     }
 
     TEST_CASE("Graph capture count bytes and cancelled work preserve the committed publication",

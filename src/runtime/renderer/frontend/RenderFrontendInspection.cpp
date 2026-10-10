@@ -12,8 +12,7 @@ namespace Horo::Render {
         using SnapshotResult = Result<std::shared_ptr<const RenderGraphInspectionSnapshot>>;
         if (owner_ == nullptr || backend_ == nullptr || executed_ || !frame_.IsValid())
             return SnapshotResult::Failure(MakeError(RenderGraphInspectionErrors::InvalidSource));
-        const auto current = owner_->inspectionFeed_.Read();
-        if (current.HasError())
+        if (const auto current = owner_->inspectionFeed_.Read(); current.HasError())
             return SnapshotResult::Failure(current.ErrorValue());
         if (owner_->inspectionRevision_ == std::numeric_limits<std::uint64_t>::max())
             return SnapshotResult::Failure(MakeError(RenderGraphInspectionErrors::CapacityExceeded));
@@ -21,8 +20,7 @@ namespace Horo::Render {
         auto capture = CaptureRenderGraphInspection(graph, schedule, lifetime, execution, context, limits, cancellation);
         if (capture.HasError())
             return capture;
-        const auto published = owner_->inspectionFeed_.Publish(capture.Value());
-        if (published.HasError())
+        if (const auto published = owner_->inspectionFeed_.Publish(capture.Value()); published.HasError())
             return SnapshotResult::Failure(published.ErrorValue());
         owner_->inspectionRevision_ = context.revision;
         return capture;

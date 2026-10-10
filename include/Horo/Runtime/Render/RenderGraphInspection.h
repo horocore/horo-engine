@@ -48,7 +48,18 @@ namespace Horo::Render {
      * compiler's semantics; they do not claim native realization or GPU timing qualification.
      */
     class RenderGraphInspectionSnapshot final {
+        class ConstructionKey {
+            ConstructionKey() = default;
+            friend class RenderGraphInspectionSnapshot;
+        };
+
     public:
+        /** @brief Allocates capture storage at the validated capture boundary.
+         * @param key Private construction authority; consumers cannot create this key or forge a snapshot. */
+        explicit RenderGraphInspectionSnapshot(ConstructionKey key) noexcept {
+            static_cast<void>(key);
+        }
+
         RenderGraphInspectionSnapshot(const RenderGraphInspectionSnapshot &) = delete;
         RenderGraphInspectionSnapshot &operator=(const RenderGraphInspectionSnapshot &) = delete;
 
@@ -131,7 +142,11 @@ namespace Horo::Render {
         friend Result<std::shared_ptr<const RenderGraphInspectionSnapshot>> CaptureRenderGraphInspection(
             const RenderGraph &, const RenderGraphSchedule &, const RenderGraphLifetimePlan &, const CompiledRenderGraphExecution &,
             RenderGraphInspectionContext, RenderGraphInspectionLimits, std::stop_token);
-        RenderGraphInspectionSnapshot() = default;
+
+        static ConstructionKey MakeConstructionKey() noexcept {
+            return ConstructionKey{};
+        }
+
         RenderGraphInspectionContext context_;
         RenderGraphOwnerId owner_;
         std::vector<RenderGraphPass> passes_;

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <format>
 #include <string>
 
 namespace Horo::Editor {
@@ -17,7 +18,7 @@ namespace Horo::Editor {
         /** @brief Resolves declared Horo vocabularies into localized presentation without backend-name branching. */
         template <typename Enum, std::size_t N>
         const std::string &EnumLabel(const Enum value, const std::array<const char *, N> &keys, const ILocalizationService &localization) {
-            const std::size_t index = static_cast<std::size_t>(value);
+            const auto index = static_cast<std::size_t>(value);
             return localization.Get("editor", index < N ? keys[index] : "render_graph.unavailable");
         }
 
@@ -33,10 +34,9 @@ namespace Horo::Editor {
         /** @brief Projects one immutable resource identity into localized cells. */
         Ui::TableRow ResourceRow(const Render::RenderGraphResource &resource, const ILocalizationService &localization) {
             std::string binding = localization.Get("editor", "render_graph.none");
-            std::visit([&](const auto &handle) {
-                if constexpr (!std::is_same_v<std::decay_t<decltype(handle)>, std::monostate>)
-                    binding =
-                        std::to_string(handle.owner.value) + ":" + std::to_string(handle.slot) + ":" + std::to_string(handle.generation);
+            std::visit([&]<typename Handle>(const Handle &handle) {
+                if constexpr (!std::is_same_v<Handle, std::monostate>)
+                    binding = std::format("{}:{}:{}", handle.owner.value, handle.slot, handle.generation);
             }, resource.binding);
             return {{{std::to_string(resource.id.value)},
                      {EnumLabel(resource.kind, std::array{"render_graph.buffer", "render_graph.texture"}, localization)},
@@ -53,22 +53,24 @@ namespace Horo::Editor {
             return {{{std::to_string(lifetime.resource.value)},
                      {used ? std::to_string(lifetime.firstPass.id.value) : localization.Get("editor", "render_graph.unused")},
                      {used ? std::to_string(lifetime.lastPass.id.value) : localization.Get("editor", "render_graph.unused")},
-                     {used ? std::to_string(lifetime.firstUseIndex) + " → " + std::to_string(lifetime.lastUseIndex)
+                     {used ? std::format("{} → {}", lifetime.firstUseIndex, lifetime.lastUseIndex)
                            : localization.Get("editor", "render_graph.unused")}}};
         }
 
         /** @brief Projects one immutable logical transition into localized cells. */
         Ui::TableRow TransitionRow(const Render::RenderGraphTransition &transition, const ILocalizationService &localization) {
             return {{{std::to_string(transition.resource.value)},
-                     {std::to_string(transition.before.id.value) + " → " + std::to_string(transition.after.id.value)},
-                     {EnumLabel(transition.oldState.access,
-                                std::array{"render_graph.none", "render_graph.read", "render_graph.write", "render_graph.read_write"},
-                                localization) +
-                      " → " +
-                      EnumLabel(transition.newState.access,
-                                std::array{"render_graph.none", "render_graph.read", "render_graph.write", "render_graph.read_write"},
-                                localization)},
-                     {std::to_string(transition.oldState.queue.value) + " → " + std::to_string(transition.newState.queue.value)}}};
+                     {std::format("{} → {}", transition.before.id.value, transition.after.id.value)},
+                     {std::format("{} → {}",
+                                  EnumLabel(transition.oldState.access,
+                                            std::array{"render_graph.none", "render_graph.read", "render_graph.write",
+                                                       "render_graph.read_write"},
+                                            localization),
+                                  EnumLabel(transition.newState.access,
+                                            std::array{"render_graph.none", "render_graph.read", "render_graph.write",
+                                                       "render_graph.read_write"},
+                                            localization))},
+                     {std::format("{} → {}", transition.oldState.queue.value, transition.newState.queue.value)}}};
         }
 
         /** @brief Projects one immutable effective queue into localized cells. */
@@ -201,9 +203,9 @@ namespace Horo::Editor {
             for (std::size_t index = page_ * PageSize; index < end; ++index)
                 rows_.push_back(Row(index, localization));
             const auto &source = snapshot_->Context();
-            sourceLabel_ = localization.Get("editor", "render_graph.renderer") + ": " + std::to_string(source.renderer.value) + "\n" +
-                           localization.Get("editor", "render_graph.frame") + ": " + std::to_string(source.frame.value) + "\n" +
-                           localization.Get("editor", "render_graph.revision") + ": " + std::to_string(source.revision);
+            sourceLabel_ = std::format("{}: {}\n{}: {}\n{}: {}", localization.Get("editor", "render_graph.renderer"), source.renderer.value,
+                                       localization.Get("editor", "render_graph.frame"), source.frame.value,
+                                       localization.Get("editor", "render_graph.revision"), source.revision);
             dirty_ = false;
         }
 
