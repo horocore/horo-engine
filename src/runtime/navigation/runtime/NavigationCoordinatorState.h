@@ -40,6 +40,7 @@ namespace Horo::Navigation {
             std::vector<Work> work;
             std::vector<std::optional<NavigationPathCompletion>> fallback;
             std::optional<JobHandle> job;
+            std::size_t produced{}; /**< Worker-produced prefix; owner reads/resets only after the terminal job fence. */
         };
 
         struct Quota final {

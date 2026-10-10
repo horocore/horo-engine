@@ -72,7 +72,13 @@ Foundation records/callbacks and cancellation sources are bounded by request and
 partition counts. A contended completion-ring publication retains the owned
 result in the partition's prepared fallback slot. Only after Foundation terminal
 state proves callback return or queued-work revocation may the owner collect that
-fallback. Consumed result slots remain reserved while their partition runs;
+fallback. A worker advances the partition's produced prefix only after each result
+is owned by the queue or fallback. The owner reads and resets that prefix only
+after the terminal job fence. A queue reservation hole can delay a produced result;
+a later partition exception must synthesize errors only for the unproduced suffix.
+Delayed records retain exact handles and the entry's job identity, so partition
+reuse cannot attach an old result to a reused slot. Consumed result slots remain
+reserved while their partition runs;
 handle generations advance only after quiescence and never wrap.
 
 On Scene/host shutdown call `BeginShutdown`, which closes admission and signals
@@ -86,3 +92,16 @@ while leases keep provider memory physically safe until workers drain.
 This coordinator implements best-effort asynchronous scheduling. It does not claim
 deterministic publication ticks or measured throughput; deterministic fixed-tick
 kernels require the distinct execution capability described in ADR-107.
+
+`HoroNavigationTransportReservationTests` uses the real private queue template with
+a test-only nothrow payload move paused after an enqueue reservation. Two owner
+drains remain empty while the later record is already enqueued; releasing the
+producer reveals both records in order. A dedicated non-installed test target has
+only a narrow private include path to the owning runtime directory. No production
+or public pause hook is introduced. The public coordinator oracles separately
+verify successful-prefix/later-exception preservation, produced-prefix reset on
+partition reuse, cancellation and generation-safe consumption. The queue test does
+not claim to inject a reservation hole through the public coordinator API.
+The transport target and coordinator public consumer are explicit Windows build
+registry members; the consumer also has direct Windows/navigation execution labels
+and belongs to the navigation composition build registry.

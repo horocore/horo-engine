@@ -270,6 +270,7 @@ namespace Horo::Navigation {
             auto completion = Complete(work, 0, std::move(result));
             if (state->completions.TryPush(completion) != NavigationQueueEnqueueResult::Enqueued)
                 batch.fallback[workIndex].emplace(std::move(completion));
+            ++batch.produced;
         }
         return Result<void>::Success();
     }
@@ -299,7 +300,7 @@ namespace Horo::Navigation {
             if (batch.fallback[index]) {
                 batch.fallback[index]->job = entry->job;
                 entry->candidate.emplace(std::move(*batch.fallback[index]));
-            } else if (snapshot.state == Cancelled || snapshot.state == Failed) {
+            } else if (index >= batch.produced && (snapshot.state == Cancelled || snapshot.state == Failed)) {
                 entry->candidate.emplace(
                     Complete(batch.work[index], entry->job,
                              Result<NavigationPath>::Failure(snapshot.state == Cancelled
@@ -320,12 +321,13 @@ namespace Horo::Navigation {
             if (!snapshot || !snapshot->terminalResult)
                 continue;
             // Reacquire records published between the initial drain and observing the terminal fence.
-            // A later exception must not replace an earlier successful result with the partition failure.
+            // A later exception must not replace an earlier produced result, even behind another producer's reservation hole.
             CollectCompletions();
             // Terminal jobs have returned from the callback or revoked queued work. Fallback buffers are now owner-only.
             CollectBatchWork(batch, *snapshot);
             batch.job.reset();
             batch.work.clear();
+            batch.produced = 0;
             for (auto &fallback : batch.fallback)
                 fallback.reset();
         }

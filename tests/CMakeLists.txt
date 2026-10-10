@@ -1049,7 +1049,7 @@ add_executable(HoroNavigationRuntimeTests
         unit/runtime/navigation/NavigationPathPolicyTests.cpp
         unit/runtime/navigation/NavigationFoundationQualificationTests.cpp
         unit/runtime/navigation/NavigationCoordinatorTests.cpp
-    unit/runtime/navigation/NavigationCoordinatorOwnerBudgetTests.cpp
+        unit/runtime/navigation/NavigationCoordinatorOwnerBudgetTests.cpp
         unit/runtime/navigation/NavigationRuntimeQueuesTests.cpp
         unit/runtime/navigation/NavigationWorldLifecycleTests.cpp
 )
@@ -1057,6 +1057,14 @@ target_compile_features(HoroNavigationRuntimeTests PRIVATE cxx_std_20)
 target_include_directories(HoroNavigationRuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroNavigationRuntimeTests PRIVATE HoroEngine::NavigationRuntime)
 horo_register_catch_test(HoroNavigationRuntimeTests LABELS "unit;navigation;headless;lifecycle")
+
+# Dedicated non-installed white-box test boundary for the private transport primitive.
+add_executable(HoroNavigationTransportReservationTests unit/runtime/navigation/NavigationTransportReservationTests.cpp)
+target_include_directories(HoroNavigationTransportReservationTests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/runtime/navigation/runtime"
+        "${CMAKE_CURRENT_SOURCE_DIR}/support")
+target_link_libraries(HoroNavigationTransportReservationTests PRIVATE HoroEngine::NavigationRuntime)
+horo_register_catch_test(HoroNavigationTransportReservationTests LABELS "unit;navigation;headless;concurrency;ci-windows")
 
 add_executable(HoroNavigationCoordinatorPublicConsumer support/NavigationCoordinatorPublicConsumer.cpp)
 target_link_libraries(HoroNavigationCoordinatorPublicConsumer PRIVATE HoroEngine::NavigationRuntime)
