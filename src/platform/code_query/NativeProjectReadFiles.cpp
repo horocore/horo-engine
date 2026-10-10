@@ -169,7 +169,7 @@ namespace Horo::Platform {
                 Observe(Boundary::AfterFileOpen, path);
                 auto text = std::make_shared<std::string>();
                 text->reserve(static_cast<std::size_t>(before.Value().length));
-                std::array<char, 4096> bytes{};
+                std::array<char, Native::ReadChunkBytes> bytes{};
                 for (;;) {
                     Observe(Boundary::BeforeRead, path);
                     if (auto stop = CheckProjectReadContext(context); stop.HasError())

@@ -1,7 +1,12 @@
 #include "ProjectCodeFilesTesting.h"
 #include "ProjectCodeQueryTestSupport.h"
 
+#include <algorithm>
+#include <functional>
 #include <future>
+#include <memory>
+#include <thread>
+#include <utility>
 #ifndef _WIN32
 #include <sys/stat.h>
 #endif
@@ -9,6 +14,23 @@
 using namespace Horo;
 using namespace Horo::Platform;
 namespace QueryTest = Horo::Test::CodeQuery;
+
+namespace {
+    /** @brief Observes the second native transfer while retaining the fixture's distinct action.
+     * @details The capability owns the action; its borrowed fixture/count state outlives that capability.
+     */
+    std::shared_ptr<const IProjectReadFiles> FilesWithSecondReadObserver(const QueryTest::Directory &directory, unsigned &chunks,
+                                                                         std::function<void()> action) {
+        auto files =
+            CodeFilesTesting::Create(directory.root, "project-one", 3,
+                                     [&chunks, action = std::move(action)](const CodeFilesTesting::Boundary boundary, std::string_view) {
+            if (boundary == CodeFilesTesting::Boundary::BeforeRead && ++chunks == 2)
+                action();
+        });
+        REQUIRE(files.HasValue());
+        return std::move(files).Value();
+    }
+}  // namespace
 
 TEST_CASE("Portable project paths reject complete device names and retain ordinary similar spellings", "[unit][platform][code-query]") {
     for (const auto name : {"con", "PrN.txt", "AUX", "nul.cpp", "CLOCK$", "conin$", "ConOut$.txt", "COM1", "lpt9.txt", "CoM\xc2\xb9.cpp",
@@ -223,6 +245,69 @@ TEST_CASE("Native chunk reads observe revocation without publishing a partial re
     REQUIRE(result.HasError());
     CHECK(QueryTest::Matches(result.ErrorValue(), ProjectReadErrors::Cancelled));
     CHECK(chunks == 2);
+}
+
+TEST_CASE("Native transfers preserve empty short exact and sequential chunk bytes", "[unit][platform][code-query]") {
+    QueryTest::Directory directory;
+    const auto files = directory.Files();
+    for (const std::size_t length : {0U, 1U, 4095U, 4096U, 4097U, 8193U}) {
+        DYNAMIC_SECTION("length " << length) {
+            std::string expected(length, '\0');
+            for (std::size_t index = 0; index < length; ++index)
+                expected[index] = static_cast<char>(index % 251U);
+            directory.Write("a.cpp", expected);
+            ProjectReadLimits limits;
+            limits.maximumFileBytes = std::max<std::size_t>(1, length);
+            const auto captured = files->Text("a.cpp", QueryTest::Context(), limits);
+            REQUIRE(captured.HasValue());
+            CHECK(*captured.Value().text == expected);
+            const auto repeated = files->Text("a.cpp", QueryTest::Context(), limits);
+            REQUIRE(repeated.HasValue());
+            CHECK(*repeated.Value().text == expected);
+            CHECK(repeated.Value().revision == captured.Value().revision);
+            if (length > 1) {
+                limits.maximumFileBytes = length - 1;
+                const auto exceeded = files->Text("a.cpp", QueryTest::Context(), limits);
+                REQUIRE(exceeded.HasError());
+                CHECK(QueryTest::Matches(exceeded.ErrorValue(), ProjectReadErrors::Capacity));
+            }
+        }
+    }
+}
+
+TEST_CASE("Native transfer deadline fences the next chunk and leaves the capability reusable", "[unit][platform][code-query]") {
+    QueryTest::Directory directory;
+    directory.Write("a.cpp", std::string(8193, 'a'));
+    auto context = QueryTest::Context();
+    context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds{1};
+    unsigned chunks{};
+    const auto files = FilesWithSecondReadObserver(directory, chunks, [&] {
+        std::this_thread::sleep_until(context.deadline);
+    });
+    const auto expired = files->Text("a.cpp", context, {});
+    REQUIRE(expired.HasError());
+    CHECK(QueryTest::Matches(expired.ErrorValue(), ProjectReadErrors::Deadline));
+    CHECK(chunks == 2);
+    context = QueryTest::Context();
+    const auto repeated = files->Text("a.cpp", context, {});
+    REQUIRE(repeated.HasValue());
+    CHECK(*repeated.Value().text == std::string(8193, 'a'));
+}
+
+TEST_CASE("Native transfer mutation never publishes a truncated or grown capture", "[unit][platform][code-query]") {
+    QueryTest::Directory directory;
+    for (const std::size_t changedLength : {1U, 12289U}) {
+        DYNAMIC_SECTION("changed length " << changedLength) {
+            directory.Write("a.cpp", std::string(8193, 'a'));
+            unsigned chunks{};
+            const auto files = FilesWithSecondReadObserver(directory, chunks, [&] {
+                directory.Write("a.cpp", std::string(changedLength, 'b'));
+            });
+            const auto changed = files->Text("a.cpp", QueryTest::Context(), {});
+            REQUIRE(changed.HasError());
+            CHECK(QueryTest::Matches(changed.ErrorValue(), ProjectReadErrors::Stale));
+        }
+    }
 }
 
 TEST_CASE("Replacing a pathname after file open never reads the replacement object", "[unit][platform][code-query]") {

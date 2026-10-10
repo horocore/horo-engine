@@ -6,6 +6,9 @@
 #include <span>
 
 namespace Horo::Platform::ProjectReadNative {
+    inline constexpr std::size_t ReadChunkBytes = 4096;
+    /** @brief One fixed-capacity native transfer; larger files require separately fenced calls. */
+    using ReadChunk = std::span<char, ReadChunkBytes>;
 #if defined(_WIN32)
     using HandleValue = void *;
     inline constexpr HandleValue InvalidHandle = nullptr;
@@ -86,10 +89,11 @@ namespace Horo::Platform::ProjectReadNative {
      */
     [[nodiscard]] Result<FileInfo> Info(const Handle &handle);
     /** @brief Reads one bounded chunk from an admitted regular handle.
-     * @param handle Independent read cursor. @param bytes Writable bounded chunk.
-     * @return Bytes read, zero at EOF, or typed failure.
+     * @param handle Independent read cursor. @param bytes Exactly ReadChunkBytes writable bytes.
+     * @return Bytes read within the chunk, zero at EOF, or typed failure. A short read advances
+     * the same cursor; interruption fails without retry so the caller can enforce its stop fence.
      */
-    [[nodiscard]] Result<std::size_t> Read(const Handle &handle, std::span<char> bytes);
+    [[nodiscard]] Result<std::size_t> Read(const Handle &handle, ReadChunk bytes);
     /** @brief Visits finite native directory entries through the same retained identity.
      * @param handle Independent directory cursor. @param context Stop view checked between native calls.
      * @param visitor Bounded caller-owned admission/recursion callback; no callback is retained.

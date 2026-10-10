@@ -4,7 +4,9 @@
 #include <cerrno>
 #include <dirent.h>
 #include <fcntl.h>
+#include <limits>
 #include <sys/stat.h>
+#include <sys/uio.h>
 #include <unistd.h>
 #include <utility>
 
@@ -85,10 +87,13 @@ namespace Horo::Platform::ProjectReadNative {
     }
 
     /** @copydoc Read */
-    Result<std::size_t> Read(const Handle &handle, const std::span<char> bytes) {
-        // One bounded syscall: EINTR fails explicitly rather than retrying beyond the caller's deadline.
-        const auto count = read(handle.Get(), bytes.data(), bytes.size());
-        if (count < 0)
+    Result<std::size_t> Read(const Handle &handle, const ReadChunk bytes) {
+        static_assert(ReadChunkBytes <= static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
+        // A single stack-owned transfer descriptor binds the destination to its fixed capacity.
+        // readv advances the independent cursor just like read; no buffering, allocation or EINTR retry.
+        const iovec destination{bytes.data(), bytes.size()};
+        const auto count = readv(handle.Get(), &destination, 1);
+        if (count < 0 || static_cast<std::size_t>(count) > bytes.size())
             return Result<std::size_t>::Failure(MakeError(ProjectReadErrors::ReadFailed));
         return Result<std::size_t>::Success(static_cast<std::size_t>(count));
     }

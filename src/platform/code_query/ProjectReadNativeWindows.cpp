@@ -159,9 +159,10 @@ namespace Horo::Platform::ProjectReadNative {
     }
 
     /** @copydoc Read */
-    Result<std::size_t> Read(const Handle &handle, const std::span<char> bytes) {
+    Result<std::size_t> Read(const Handle &handle, const ReadChunk bytes) {
+        static_assert(ReadChunkBytes <= MAXDWORD);
         DWORD count{};
-        if (bytes.size() > MAXDWORD || !ReadFile(handle.Get(), bytes.data(), static_cast<DWORD>(bytes.size()), &count, nullptr))
+        if (!ReadFile(handle.Get(), bytes.data(), static_cast<DWORD>(bytes.size()), &count, nullptr) || count > bytes.size())
             return Result<std::size_t>::Failure(MakeError(ProjectReadErrors::ReadFailed));
         return Result<std::size_t>::Success(count);
     }
