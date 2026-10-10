@@ -77,9 +77,11 @@ namespace Horo::SceneSource {
         [[nodiscard]] Result<void> AdmitRequest(const ScenePrefabExpansionRequest &request, const CancellationToken &cancellation) const;
         /** @brief Captures bounded detached work and exact immutable cache hits without submitting it. */
         [[nodiscard]] Result<std::shared_ptr<Work>> CaptureWork(const ScenePrefabExpansionRequest &request,
-                                                                const CancellationToken &cancellation);
+                                                                const CancellationToken &cancellation) const;
         /** @brief Best-effort retention after all publication fences pass; pressure never discards valid output. */
         [[nodiscard]] Result<void> Memoize(Work &completed);
+        /** @brief Retains one candidate or accepts optional capacity/allocation pressure without discarding output. */
+        [[nodiscard]] Result<void> MemoizeCandidate(Work &completed, std::size_t index);
         [[nodiscard]] Result<void> Drain(const JoinOptions &options);
         JobSystem &jobs_;
         Prefab::PrefabExpansionCache cache_;

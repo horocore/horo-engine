@@ -27,21 +27,25 @@ namespace Horo::JsonEncoding::Detail {
 
         CanonicalJsonValue() noexcept = default;
 
-        CanonicalJsonValue(std::nullptr_t) noexcept {}
+        // Schema initializer lists intentionally convert scalar fields into owned wire values.
+        explicit(false) CanonicalJsonValue(std::nullptr_t) noexcept {}
 
-        CanonicalJsonValue(const bool value) noexcept : value_(value) {}
+        explicit(false) CanonicalJsonValue(const bool value) noexcept : value_(value) {}
 
-        template <std::signed_integral Value> CanonicalJsonValue(const Value value) noexcept : value_(std::int64_t{value}) {}
+        template <std::signed_integral Value>
+        explicit(false) CanonicalJsonValue(const Value value) noexcept : value_(std::int64_t{value}) {}
 
-        template <std::unsigned_integral Value> CanonicalJsonValue(const Value value) noexcept : value_(std::uint64_t{value}) {}
+        template <std::unsigned_integral Value>
+        explicit(false) CanonicalJsonValue(const Value value) noexcept : value_(std::uint64_t{value}) {}
 
-        template <std::floating_point Value> CanonicalJsonValue(const Value value) noexcept : value_(static_cast<double>(value)) {}
+        template <std::floating_point Value>
+        explicit(false) CanonicalJsonValue(const Value value) noexcept : value_(static_cast<double>(value)) {}
 
-        CanonicalJsonValue(const std::string &value) : value_(value) {}
+        explicit(false) CanonicalJsonValue(const std::string &value) : value_(value) {}
 
-        CanonicalJsonValue(const std::string_view value) : value_(std::string{value}) {}
+        explicit(false) CanonicalJsonValue(const std::string_view value) : value_(std::string{value}) {}
 
-        CanonicalJsonValue(const char *value) : value_(std::string{value}) {}
+        explicit(false) CanonicalJsonValue(const char *value) : value_(std::string{value}) {}
 
         CanonicalJsonValue(std::initializer_list<typename object_t::value_type> fields) : value_(object_t{fields}) {
             if constexpr (SortedFields)
@@ -69,7 +73,7 @@ namespace Horo::JsonEncoding::Detail {
 
         /** @brief Bridges existing internal DOM consumers; never used by safe source serialization. */
         [[nodiscard]] nlohmann::json ToJson() const {
-            return std::visit([]<typename Item>(const Item &item) -> nlohmann::json {
+            return std::visit([]<typename Item>(const Item &item) {
                 if constexpr (std::is_same_v<Item, array_t>) {
                     auto result = nlohmann::json::array();
                     for (const auto &child : item)
@@ -98,8 +102,7 @@ namespace Horo::JsonEncoding::Detail {
         /** @brief Finds or appends a field in explicit canonical insertion order. */
         CanonicalJsonValue &operator[](const std::string &name) {
             auto &fields = std::get<object_t>(value_);
-            const auto found = std::ranges::find(fields, name, &object_t::value_type::first);
-            if (found != fields.end())
+            if (const auto found = std::ranges::find(fields, name, &object_t::value_type::first); found != fields.end())
                 return found->second;
             if constexpr (SortedFields) {
                 const auto position = std::ranges::lower_bound(fields, name, {}, &object_t::value_type::first);
@@ -144,7 +147,7 @@ namespace Horo::JsonEncoding::Detail {
             for (std::size_t index = 0; index < fields.size(); ++index) {
                 bytes += index == 0 ? "\n" : ",\n";
                 Indent(bytes, indentation, depth + 1);
-                bytes += nlohmann::ordered_json(fields[index].first).dump();
+                WriteString(bytes, fields[index].first);
                 bytes += ": ";
                 fields[index].second.Write(bytes, indentation, depth + 1);
             }
@@ -155,6 +158,15 @@ namespace Horo::JsonEncoding::Detail {
             bytes += '}';
         }
 
+        /** @brief Establishes valid string storage before a fallible copy, preserving the pinned codec's escaping. */
+        static void WriteString(std::string &bytes, const std::string &value) {
+            // Compatible-type construction sets the string tag before allocating in the pinned codec.
+            // The typed constructor completes storage first, so failure never destroys a null string pointer.
+            nlohmann::ordered_json scalar(nlohmann::ordered_json::value_t::string);
+            scalar.get_ref<std::string &>() = value;
+            bytes += scalar.dump();
+        }
+
         /** @brief Delegates only non-structural scalar spelling to the existing canonical codec. */
         void Write(std::string &bytes, const unsigned indentation, const unsigned depth) const {
             std::visit([&]<typename Item>(const Item &item) {
@@ -162,6 +174,8 @@ namespace Horo::JsonEncoding::Detail {
                     WriteArray(bytes, item, indentation, depth);
                 else if constexpr (std::is_same_v<Item, object_t>)
                     WriteObject(bytes, item, indentation, depth);
+                else if constexpr (std::is_same_v<Item, std::string>)
+                    WriteString(bytes, item);
                 else
                     bytes += nlohmann::ordered_json(item).dump();
             }, value_);
