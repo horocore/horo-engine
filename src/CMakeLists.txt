@@ -2008,6 +2008,11 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/BoundedRenderQueueCore.h
         runtime/renderer/frontend/RenderTransferErrorDescriptor.h
         runtime/renderer/frontend/RenderGraphResourceLeasePool.cpp
+        runtime/renderer/frontend/RenderFrameInputInternal.cpp
+        runtime/renderer/frontend/RenderFrameParallelExecution.cpp
+        runtime/renderer/frontend/RenderFrameGraphResources.cpp
+        runtime/renderer/frontend/RenderParallelWorkInternal.cpp
+        runtime/renderer/frontend/RenderParallelWorkErrors.cpp
         runtime/renderer/frontend/RenderFrontend.cpp
         runtime/renderer/frontend/RenderFrontendResourceAccess.cpp
         runtime/renderer/frontend/RenderFrontendResourceValidation.cpp
@@ -2124,6 +2129,10 @@ if (HORO_BUILD_RENDER_METAL)
             runtime/renderer/modules/metal/MetalResourceFormats.mm
             runtime/renderer/modules/metal/MetalResourcePolicy.cpp
             runtime/renderer/modules/metal/MetalResourceRuntime.mm
+            runtime/renderer/modules/metal/MetalParallelRecording.mm
+            runtime/renderer/modules/metal/MetalDeviceDiscovery.mm
+            runtime/renderer/modules/metal/MetalSubmittedGraphQueue.mm
+            runtime/renderer/modules/metal/MetalResourceGraphRuntime.mm
             runtime/renderer/modules/metal/MetalRuntime.mm
     )
     add_library(HoroEngine::RenderMetal ALIAS HoroRenderMetal)

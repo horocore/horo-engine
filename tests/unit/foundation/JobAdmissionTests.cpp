@@ -449,6 +449,23 @@ TEST_CASE("Shutdown wakes all bounded producers before joining running callbacks
     CHECK(fixture.jobs.AdmissionSnapshot().waitingProducers == 0);
 }
 
+TEST_CASE("Host rejection wakes producers while accepted work remains available for owner drain", "[foundation][jobs][admission]") {
+    AdmissionFixture fixture;
+    REQUIRE(fixture.Start());
+    auto queued = fixture.jobs.Submit({}, NoOpJob);
+    REQUIRE(queued.HasValue());
+    auto producer = SubmitProducer(fixture.jobs);
+    REQUIRE(fixture.Waiters(1));
+    fixture.jobs.StopAccepting();
+    REQUIRE(producer.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready);
+    CheckSubmissionRejected(producer.get(), "job.shutdown");
+    CHECK(queued.Value().Snapshot()->state == JobState::Queued);
+    fixture.gate.Release();
+    fixture.jobs.Shutdown(ShutdownPolicy::Drain);
+    CHECK(queued.Value().Wait().HasValue());
+    CHECK(fixture.jobs.AdmissionSnapshot().waitingProducers == 0);
+}
+
 TEST_CASE("Producer wait count and deadlines stay bounded", "[foundation][jobs][admission]") {
     auto config = BlockingConfig();
     config.maxWaitingProducers = 1;

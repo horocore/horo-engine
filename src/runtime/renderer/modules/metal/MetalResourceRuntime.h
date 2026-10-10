@@ -4,6 +4,9 @@
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
 
 #include <memory>
+#ifdef __OBJC__
+#include "MetalParallelRecording.h"
+#endif
 
 namespace Horo::Render::Detail {
     /** @brief Owns Metal realizations for backend-neutral resident resources. */
@@ -40,6 +43,14 @@ namespace Horo::Render::Detail {
                                                         std::span<const RenderGraphResourceInstance> resources);
         /** @brief Commits active resource pins, or abandons them while preserving older submitted uses. */
         void FinishGraphCommands(void *commandBuffer, bool committed) noexcept;
+#ifdef __OBJC__
+        /** @brief Owner-only freeze of validated native references, including their backing heaps. */
+        [[nodiscard]] Result<MetalRecordedOperation> CaptureGraphOperation(const RenderGraphWorkload &workload,
+                                                                           std::span<const RenderGraphResourceInstance> resources,
+                                                                           id<MTLCommandBuffer> commands, id<MTLTexture> primary);
+#endif
+        /** @brief Marks all resolved graph residents against the final owner buffer preceding lease retirement. */
+        void TrackParallelGraphUse(void *finalCommands, std::span<const RenderGraphResourceInstance> resources) noexcept;
         /** @brief Non-blockingly drains at most 64 native-complete retired instances. */
         void DrainGraphRetirements() noexcept;
         void Shutdown() noexcept;

@@ -137,6 +137,12 @@ namespace Horo {
         Background
     };
 
+    /** @brief Execution lane selected before admission; blocking I/O never consumes a CPU worker. */
+    enum class JobResource : std::uint8_t {
+        Cpu,
+        Io
+    };
+
     /** @brief Submission requirement, independent of priority and queue policy. */
     enum class JobRequirement : std::uint8_t {
         Required, /**< At capacity, Shed returns QueueFull rather than classifying this work as expendable. */
@@ -198,6 +204,7 @@ namespace Horo {
         std::optional<ConfigurationSnapshotRef> configuration; /**< Explicit immutable submission configuration. */
         JobPriority priority{JobPriority::Normal};             /**< FIFO class, serviced by a stable starvation-safe 4:2:1 cycle. */
         JobRequirement requirement{JobRequirement::Required};  /**< Required by default; Optional permits shedding at capacity. */
+        JobResource resource{JobResource::Cpu};                /**< CPU by default; Io requires explicit host I/O capacity. */
     };
 
     /** @brief Fixed scheduling limits for one JobSystem instance. */
@@ -207,6 +214,8 @@ namespace Horo {
         std::size_t maxRetainedTerminalJobs = 1024;
         std::array<JobQueueConfig, 3> priorityQueues{}; /**< Interactive, Normal, Background; global maxQueuedJobs still applies. */
         std::size_t maxWaitingProducers = 64;           /**< Global bounded count of producers permitted to await admission. */
+        std::size_t ioWorkerCount = 0;                  /**< Dedicated owned I/O workers; zero rejects I/O submissions. */
+        std::size_t reservedInteractiveJobs = 0;        /**< Queue slots unavailable to Normal/Background; capped at maxQueuedJobs. */
     };
 
     /** @brief Bounded admission facts; counters count rejected submissions, independently of job-store retention. */
@@ -284,14 +293,19 @@ namespace Horo {
         JobHandle(JobHandle &&) noexcept = default;
         JobHandle &operator=(JobHandle &&) noexcept = default;
 
-        /** @brief Waits until the job reaches its single terminal state. @return Success, the retained failure, or job.cancelled. */
+        /** @brief Waits until the job reaches its single terminal state.
+         * @return Success, the retained failure, job.cancelled, or job.wait_capacity_deadlock for a callback dependency cycle/cross-lane
+         * wait.
+         */
         [[nodiscard]] Result<void> Wait() const;
         /**
          * @brief Waits under a finite affinity policy, optionally helping only this exact queued record.
          * @param options Caller-affinity rule and maximum wait duration. `MainThreadPumpAllowed` and `WorkerOnly` may claim
          * this record for inline execution; `OwnerThreadBlockAllowed` waits without pumping. Unrelated queued jobs are never pumped.
          * @return Terminal job result, or a typed forbidden, deadlock-risk or timeout error. Policy validation occurs even
-         * if the job is already terminal. A timeout does not change the job lifecycle, so the handle remains safely retryable.
+         * if the job is already terminal. Callbacks cannot synchronously join another resource lane. A timeout does not change
+         * the job lifecycle, so the handle remains safely retryable. CPU helpers share the configured execution capacity;
+         * I/O helpers require an already executing same-lane callback and reuse its permit.
          */
         [[nodiscard]] Result<void> Wait(const JoinOptions &options) const;
         /** @brief Returns the stable identifier assigned at successful submission. */
@@ -351,12 +365,21 @@ namespace Horo {
         [[nodiscard]] std::size_t WorkerCount() const noexcept;
         /** @brief Returns linearized queue pressure and cumulative overload counters. @return An owned fixed-size snapshot. */
         [[nodiscard]] JobAdmissionSnapshot AdmissionSnapshot() const;
-        /** @brief Stops submissions, then drains or cooperatively cancels work and joins all workers. */
+        /** @brief Closes the linearized submission boundary and wakes blocked producers without joining.
+         * @details Hosts call this before cancelling scopes and draining owner-thread continuations. Idempotent.
+         */
+        void StopAccepting() const;
+        /** @brief Stops submissions, drains or cancels accepted work, joins CPU/I/O workers and waits for inline callbacks to release
+         * captures.
+         * @param policy Drain executes all queued work; Cancel revokes queued work and cooperatively cancels running work.
+         * @pre Called outside a scheduler callback, while every service borrowed by accepted callbacks remains alive.
+         * @details Idempotent. Zero-worker deterministic CPU compositions drain inline on the shutdown owner.
+         */
         void Shutdown(ShutdownPolicy policy) const;
 
     private:
         struct State;
-        static void RunWorker(const std::shared_ptr<State> &state);
+        static void RunWorker(const std::shared_ptr<State> &state, JobResource resource);
         std::shared_ptr<State> m_state;
     };
 
@@ -396,6 +419,7 @@ namespace Horo {
          * @param descriptor Child submission metadata; its parent cancellation is replaced by the group token.
          * @param work Owned child callback.
          * @return Accepted child identifier or a typed admission failure.
+         * @details A scheduler callback may spawn structured children only on its current resource lane.
          */
         [[nodiscard]] Result<JobId> Spawn(JobDescriptor descriptor, JobFunction work) const;
         /**
@@ -403,6 +427,7 @@ namespace Horo {
          * @param descriptor Child submission metadata; cancellation and task-group identity are replaced by the group.
          * @param work Owned child callback receiving immutable submission context.
          * @return Accepted child identifier or a typed admission failure.
+         * @details A scheduler callback may spawn structured children only on its current resource lane.
          */
         [[nodiscard]] Result<JobId> SpawnContext(JobDescriptor descriptor, ContextJobFunction work) const;
         /** @brief Returns the stable process-local identity correlated to every accepted child. */

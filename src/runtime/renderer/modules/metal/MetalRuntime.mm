@@ -1,8 +1,12 @@
 #include "Horo/Runtime/Render/RenderAdapterErrors.h"
 #include "MetalBackendInternal.h"
+#include "MetalColorAttachmentEncoding.h"
 #include "MetalCommandCompletion.h"
+#include "MetalNativeDeviceFacts.h"
+#include "MetalParallelRecording.h"
 #include "MetalRenderBackendErrors.h"
 #include "MetalResourceRuntime.h"
+#include "MetalSubmittedGraphQueue.h"
 
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
@@ -26,124 +30,6 @@ namespace Horo::Render::Detail {
                          .message = std::move(message)};
         }
 
-        [[nodiscard]] MetalHostArchitecture HostArchitecture() noexcept {
-#if defined(__aarch64__) || defined(__arm64__)
-            return MetalHostArchitecture::Arm64;
-#elif defined(__x86_64__)
-            return MetalHostArchitecture::X86_64;
-#else
-            return MetalHostArchitecture::Unsupported;
-#endif
-        }
-
-        [[nodiscard]] RenderAdapterId AdapterId(id<MTLDevice> device) {
-            return RenderAdapterId{std::format("metal:{:016x}", static_cast<std::uint64_t>(device.registryID))};
-        }
-
-        [[nodiscard]] std::uint64_t DiscoveryRevisionForDevices(NSArray<id<MTLDevice>> *devices) {
-            std::vector<std::string> identities;
-            identities.reserve(devices.count);
-            for (id<MTLDevice> device in devices) {
-                identities.push_back(AdapterId(device).Value());
-            }
-            std::ranges::sort(identities);
-
-            constexpr std::uint64_t offsetBasis = 14'695'981'039'346'656'037ULL;
-            constexpr std::uint64_t prime = 1'099'511'628'211ULL;
-            std::uint64_t revision = offsetBasis;
-            for (const std::string &identity : identities) {
-                for (const unsigned char byte : identity) {
-                    revision = (revision ^ byte) * prime;
-                }
-                revision = (revision ^ 0xffU) * prime;
-            }
-            return revision == 0 ? 1 : revision;
-        }
-
-        [[nodiscard]] MetalFormatCapabilities QueryFormats(id<MTLDevice> device) noexcept {
-            MetalFormatCapabilities formats;
-            const auto sampledAttachment = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment;
-            const auto enableUsage = [&formats](const RenderTextureFormat format, const RenderTextureUsage usage) {
-                formats.usages[static_cast<std::size_t>(format)] = usage;
-            };
-            enableUsage(RenderTextureFormat::Rgba8Unorm, sampledAttachment);
-            enableUsage(RenderTextureFormat::Bgra8Unorm, sampledAttachment);
-            enableUsage(RenderTextureFormat::Depth32Float, RenderTextureUsage::RenderAttachment);
-            if (device.depth24Stencil8PixelFormatSupported) {
-                enableUsage(RenderTextureFormat::Depth24Stencil8, RenderTextureUsage::RenderAttachment);
-            }
-            constexpr std::array sampleCounts{1U, 2U, 4U, 8U};
-            for (const std::uint32_t sampleCount : sampleCounts) {
-                if ([device supportsTextureSampleCount:sampleCount]) {
-                    formats.sampleCountMask |= std::uint64_t{1} << sampleCount;
-                }
-            }
-            return formats;
-        }
-
-        [[nodiscard]] RenderAdapterProperties AdapterProperties(id<MTLDevice> device) {
-            const char *name = device.name.UTF8String;
-            std::string displayName = name == nullptr ? "Unnamed Metal device" : std::string{name};
-            constexpr std::size_t maximumDisplayNameLength = 256;
-            if (displayName.size() > maximumDisplayNameLength) {
-                std::size_t truncatedLength = maximumDisplayNameLength;
-                while (truncatedLength > 0 && (static_cast<unsigned char>(displayName[truncatedLength]) & 0xc0U) == 0x80U) {
-                    --truncatedLength;
-                }
-                displayName.resize(truncatedLength);
-            }
-            const RenderAdapterKind kind = device.lowPower ? RenderAdapterKind::Integrated
-                                                           : (device.removable ? RenderAdapterKind::Discrete : RenderAdapterKind::Unknown);
-            return {
-                .id = AdapterId(device),
-                .displayName = std::move(displayName),
-                .kind = kind,
-                .availability = RenderAdapterAvailability::Available,
-                .dedicatedVideoMemoryBytes = 0,
-                .supportsPresentation = !device.headless,
-            };
-        }
-
-        [[nodiscard]] MetalDeviceFacts QueryDeviceFacts(id<MTLDevice> device, const std::uint64_t discoveryRevision,
-                                                        const bool commandQueueAvailable) {
-            const NSOperatingSystemVersion version = NSProcessInfo.processInfo.operatingSystemVersion;
-            return {
-                .adapter = AdapterProperties(device),
-                .discoveryRevision = discoveryRevision,
-                .operatingSystemMajor = static_cast<std::uint32_t>(version.majorVersion),
-                .operatingSystemMinor = static_cast<std::uint32_t>(version.minorVersion),
-                .architecture = HostArchitecture(),
-                .supportsApple7 = [device supportsFamily:MTLGPUFamilyApple7],
-                .supportsMac2 = [device supportsFamily:MTLGPUFamilyMac2],
-                .commandQueueAvailable = commandQueueAvailable,
-                .maxBufferLength = static_cast<std::uint64_t>(device.maxBufferLength),
-                .maxTextureDimension2D = 16'384,
-                .formats = QueryFormats(device),
-            };
-        }
-
-        [[nodiscard]] bool IsDeviceAvailable(const MetalDeviceFacts &facts) noexcept {
-            const bool hostSupported = facts.operatingSystemMajor >= 14;
-            const bool familySupported = (facts.architecture == MetalHostArchitecture::Arm64 && facts.supportsApple7) ||
-                                         (facts.architecture == MetalHostArchitecture::X86_64 && facts.supportsMac2);
-            return hostSupported && familySupported;
-        }
-
-        [[nodiscard]] std::vector<RenderAdapterProperties> DiscoverAdapters(NSArray<id<MTLDevice>> *devices, const std::uint64_t revision) {
-            std::vector<RenderAdapterProperties> adapters;
-            adapters.reserve(devices.count);
-            for (id<MTLDevice> device in devices) {
-                MetalDeviceFacts facts = QueryDeviceFacts(device, revision, false);
-                facts.adapter.availability =
-                    IsDeviceAvailable(facts) ? RenderAdapterAvailability::Available : RenderAdapterAvailability::Unavailable;
-                adapters.push_back(std::move(facts.adapter));
-            }
-            std::ranges::sort(adapters, {}, [](const RenderAdapterProperties &adapter) {
-                return adapter.id.Value();
-            });
-            return adapters;
-        }
-
         [[nodiscard]] Result<void> ValidateInitializationRequest(const MetalPresentationDescriptor &descriptor) {
             if (!descriptor.enableValidation) {
                 return Result<void>::Success();
@@ -155,82 +41,6 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(
                 MakeMetalRuntimeError("render.metal.validation_unavailable",
                                       "Metal validation must be enabled through MTL_DEBUG_LAYER=1 before device creation."));
-        }
-
-        [[nodiscard]] id<MTLDevice> FindDevice(const std::optional<RenderAdapterId> &requested, std::uint64_t &discoveryRevision) {
-            NSArray<id<MTLDevice>> *devices = MTLCopyAllDevices();
-            discoveryRevision = DiscoveryRevisionForDevices(devices);
-            if (!requested) {
-                return MTLCreateSystemDefaultDevice();
-            }
-            for (id<MTLDevice> candidate in devices) {
-                if (AdapterId(candidate) == *requested) {
-                    return candidate;
-                }
-            }
-            return nil;
-        }
-
-        class MetalAdapterDiscovery final : public IRenderAdapterDiscovery {
-        public:
-            Result<RenderAdapterSnapshot> Discover(const RenderAdapterDiscoveryRequest &request) override {
-                if (const std::optional<Error> invalidState = ValidateState(request)) {
-                    return Result<RenderAdapterSnapshot>::Failure(*invalidState);
-                }
-
-                NSArray<id<MTLDevice>> *devices = MTLCopyAllDevices();
-                const std::uint64_t revision = DiscoveryRevisionForDevices(devices);
-                std::vector<RenderAdapterProperties> adapters = DiscoverAdapters(devices, revision);
-                if (adapters.size() > request.maxAdapters) {
-                    adapters.resize(request.maxAdapters);
-                }
-                RenderAdapterSnapshot snapshot{revision, std::move(adapters)};
-                if (!snapshot.IsValid()) {
-                    return Result<RenderAdapterSnapshot>::Failure(
-                        MakeError(MetalBackendErrors::InvalidDeviceFacts,
-                                  "Metal discovery returned duplicate or malformed adapter facts."));
-                }
-                return Result<RenderAdapterSnapshot>::Success(std::move(snapshot));
-            }
-
-            void Stop() noexcept override {
-                stopped_ = true;
-            }
-
-        private:
-            [[nodiscard]] std::optional<Error> ValidateState(const RenderAdapterDiscoveryRequest &request) const {
-                if (stopped_) {
-                    return MakeError(RenderAdapterErrors::DiscoveryStopped);
-                }
-                if (!request.IsValid()) {
-                    return MakeError(RenderAdapterErrors::InvalidDiscoveryRequest);
-                }
-                return std::nullopt;
-            }
-
-            bool stopped_{false};
-        };
-
-        [[nodiscard]] MTLLoadAction ToMetalLoadAction(const AttachmentLoadOperation operation) {
-            switch (operation) {
-                case AttachmentLoadOperation::Load:
-                    return MTLLoadActionLoad;
-                case AttachmentLoadOperation::Clear:
-                    return MTLLoadActionClear;
-                case AttachmentLoadOperation::DontCare:
-                    return MTLLoadActionDontCare;
-            }
-            return MTLLoadActionDontCare;
-        }
-
-        [[nodiscard]] MTLStoreAction ToMetalStoreAction(const AttachmentStoreOperation operation) {
-            switch (operation) {
-                case AttachmentStoreOperation::Store:
-                    return MTLStoreActionStore;
-                case AttachmentStoreOperation::DontCare:
-                    return MTLStoreActionDontCare;
-            }
-            return MTLStoreActionDontCare;
         }
 
         class MetalRuntime final : public IMetalRuntime {
@@ -257,14 +67,17 @@ namespace Horo::Render::Detail {
                 }
 
                 std::uint64_t discoveryRevision = 0;
-                device_ = FindDevice(request.adapter, discoveryRevision);
+                device_ = FindMetalDevice(request.adapter, discoveryRevision);
                 if (device_ == nil) {
                     return Result<MetalDeviceCapabilities>::Failure(
                         MakeError(MetalBackendErrors::AdapterNotFound, "The requested Metal adapter is unavailable."));
                 }
-                commandQueue_ = [device_ newCommandQueue];
+                // Eight live recording leases x sixteen buffers, at most four owner
+                // buffers and sixty-four retained uploads stay below this native cap.
+                // The editor bridge borrows our current buffer; it must not allocate its own.
+                commandQueue_ = [device_ newCommandQueueWithMaxCommandBufferCount:MetalRecordingBudget::NativeQueueCapacity];
                 const Result<MetalDeviceCapabilities> admitted =
-                    AdmitMetalDevice(QueryDeviceFacts(device_, discoveryRevision, commandQueue_ != nil), request);
+                    AdmitMetalDevice(QueryMetalDeviceFacts(device_, discoveryRevision, commandQueue_ != nil), request);
                 if (admitted.HasError()) {
                     Shutdown();
                     return Result<MetalDeviceCapabilities>::Failure(admitted.ErrorValue());
@@ -291,7 +104,7 @@ namespace Horo::Render::Detail {
                 layer_.maximumDrawableCount = descriptor.maxFramesInFlight;
                 maxFramesInFlight_ = descriptor.maxFramesInFlight;
                 ownerThread_ = std::this_thread::get_id();
-                submittedCommands_ = [[NSMutableArray alloc] initWithCapacity:maxFramesInFlight_];
+                submitted_.Initialize(maxFramesInFlight_);
                 layer_.displaySyncEnabled = descriptor.presentMode == PresentMode::Fifo;
                 MetalEditorGraphicsAccess::PublishPersistent(*editorGraphicsBridge_, (__bridge void *)device_,
                                                              (__bridge void *)commandQueue_, this, &WaitUntilIdleThunk);
@@ -397,10 +210,7 @@ namespace Horo::Render::Detail {
                 EndPrimaryEncoder();
 
                 MTLRenderPassColorAttachmentDescriptor *color = renderPassDescriptor_.colorAttachments[0];
-                color.loadAction = ToMetalLoadAction(attachment.loadOperation);
-                color.storeAction = ToMetalStoreAction(attachment.storeOperation);
-                color.clearColor = MTLClearColorMake(attachment.clearColor.red, attachment.clearColor.green, attachment.clearColor.blue,
-                                                     attachment.clearColor.alpha);
+                ConfigureMetalColorAttachment(color, attachment);
                 renderEncoder_ = [commandBuffer_ renderCommandEncoderWithDescriptor:renderPassDescriptor_];
                 if (renderEncoder_ == nil) {
                     return Result<void>::Failure(MakeMetalRuntimeError("render.metal.encoder_creation_failed",
@@ -445,6 +255,59 @@ namespace Horo::Render::Detail {
                 return Result<void>::Success();
             }
 
+            RenderParallelRecordingCapabilities ParallelRecordingCapabilities() const noexcept override {
+                return {MetalRecordingBudget::MaximumPasses, MetalRecordingBudget::MaximumLiveRecordings};
+            }
+
+            Result<std::shared_ptr<IRenderParallelGraphRecording>> PrepareParallelGraph(
+                const RenderGraphExecutionRequest &request) override {
+                using RecordingResult = Result<std::shared_ptr<IRenderParallelGraphRecording>>;
+                if (std::this_thread::get_id() != ownerThread_)
+                    return RecordingResult::Failure(MakeError(MetalBackendErrors::WrongThread));
+                DrainCancelledRecordings();
+                if (const auto admitted = ValidateParallelCapture(request); admitted.HasError())
+                    return RecordingResult::Failure(admitted.ErrorValue());
+                try {
+                    auto operations = CaptureNativeOperations(request);
+                    if (operations.HasError())
+                        return RecordingResult::Failure(operations.ErrorValue());
+                    std::vector<RenderGraphResourceInstance> residents(request.resources.begin(), request.resources.end());
+                    auto recording =
+                        std::make_shared<MetalParallelRecording>(request.frame, std::move(operations).Value(), recordingBudget_);
+                    activeRecording_ = recording;
+                    activeRecordingResources_ = std::move(residents);
+                    for (const auto &binding : request.workloads) {
+                        if (const auto *primary = std::get_if<PrimaryOutputAttachment>(&binding.workload))
+                            activeParallelPrimary_ = *primary;
+                    }
+                    activeGraphLease_ = request.lease;
+                    return RecordingResult::Success(std::move(recording));
+                } catch (const std::bad_alloc &) {
+                    return RecordingResult::Failure(MakeError(MetalBackendErrors::ResourceCreationFailed));
+                }
+            }
+
+            Result<void> AcceptParallelGraph(const std::shared_ptr<IRenderParallelGraphRecording> &recording) override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return WrongThread();
+                if (commandBuffer_ == nil || !activeRecording_ || recording.get() != activeRecording_.get())
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
+                if (const auto accepted = activeRecording_->Accept(); accepted.HasError())
+                    return accepted;
+                // Native workers end their independent primary encoder. The existing GUI
+                // bridge continues on the owner buffer after all graph buffers, preserving
+                // stored primary contents instead of clearing them again or using a worker context.
+                if (activeParallelPrimary_ && activeParallelPrimary_->storeOperation == AttachmentStoreOperation::Store) {
+                    const auto continuation = ExecutePrimaryOutput(
+                        {.loadOperation = AttachmentLoadOperation::Load, .storeOperation = AttachmentStoreOperation::Store});
+                    if (continuation.HasError())
+                        return continuation;
+                }
+                resources_.TrackParallelGraphUse((__bridge void *)commandBuffer_, activeRecordingResources_);
+                recordingAccepted_ = true;
+                return Result<void>::Success();
+            }
+
             Result<void> Present() override {
                 if (std::this_thread::get_id() != ownerThread_) {
                     return WrongThread();
@@ -455,10 +318,12 @@ namespace Horo::Render::Detail {
                 }
                 EndPrimaryEncoder();
                 [commandBuffer_ presentDrawable:drawable_];
+                if (activeRecording_ && !recordingAccepted_)
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
+                if (activeRecording_)
+                    activeRecording_->Commit();
                 lastSubmittedCommandBuffer_ = commandBuffer_;
-                submittedGraphLeases_[submittedCommands_.count] = activeGraphLease_;
-                activeGraphLease_ = nullptr;
-                [submittedCommands_ addObject:commandBuffer_];
+                submitted_.Remember(commandBuffer_, activeGraphLease_, activeRecording_);
                 resources_.FinishGraphCommands((__bridge void *)commandBuffer_, true);
                 [commandBuffer_ commit];
                 ClearActiveFrame();
@@ -467,11 +332,23 @@ namespace Horo::Render::Detail {
 
             void AbortFrame() noexcept override {
                 EndPrimaryEncoder();
+                if (activeRecording_)
+                    activeRecording_->Cancel();
                 resources_.FinishGraphCommands((__bridge void *)commandBuffer_, false);
+                if (activeRecording_ && !activeRecording_->Idle()) {
+                    for (auto &retired : cancelledRecordings_) {
+                        if (!retired.recording) {
+                            retired = {std::move(activeRecording_), activeGraphLease_};
+                            activeGraphLease_ = nullptr;
+                            break;
+                        }
+                    }
+                }
                 if (activeGraphLease_ != nullptr) {
                     activeGraphLease_->Release();
                     activeGraphLease_ = nullptr;
                 }
+                activeRecording_.reset();
                 ClearActiveFrame();
             }
 
@@ -494,20 +371,24 @@ namespace Horo::Render::Detail {
             void Shutdown() noexcept override {
                 AbortFrame();
                 WaitUntilIdle();
-                for (auto *&lease : submittedGraphLeases_) {
-                    if (lease != nullptr) {
-                        lease->Release();
-                        lease = nullptr;
-                    }
+                // Closing the domain prevents submission/reuse. Outstanding CPU capsules own
+                // their native resources AND heaps and can finish cancellation after this runtime.
+                for (auto &retired : cancelledRecordings_) {
+                    if (retired.recording)
+                        retired.recording->Cancel();
+                    if (retired.lease != nullptr)
+                        retired.lease->Release();
+                    retired = {};
                 }
+                submitted_.ReleaseLeases();
                 resources_.Shutdown();
+                submitted_.Clear();
                 MetalEditorGraphicsAccess::Clear(*editorGraphicsBridge_);
                 if (layer_ != nil) {
                     layer_.device = nil;
                     layer_ = nil;
                 }
                 lastSubmittedCommandBuffer_ = nil;
-                submittedCommands_ = nil;
                 submissionError_.reset();
                 ownerThread_ = {};
                 commandQueue_ = nil;
@@ -519,6 +400,41 @@ namespace Horo::Render::Detail {
             }
 
         private:
+            /** @brief Checks native capture state and all command-count bounds before any buffer allocation. */
+            [[nodiscard]] Result<void> ValidateParallelCapture(const RenderGraphExecutionRequest &request) const {
+                if (commandBuffer_ == nil || drawable_ == nil || renderEncoder_ != nil || activeGraphLease_ != nullptr || activeRecording_)
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
+                if (request.workloads.size() > MetalRecordingBudget::MaximumPasses)
+                    return Result<void>::Failure(
+                        MakeError(MetalBackendErrors::UnsupportedGraphExecution,
+                                  "Metal parallel graphs admit at most sixteen independent command buffers per frame."));
+                if (recordingBudget_->live.load(std::memory_order_acquire) >= MetalRecordingBudget::MaximumLiveRecordings)
+                    return Result<void>::Failure(
+                        MakeError(MetalBackendErrors::SubmissionBusy,
+                                  "Cancelled worker or submitted GPU recording leases still occupy the bounded native budget."));
+                return Result<void>::Success();
+            }
+
+            /** @brief Freezes every worker buffer/resource parent before publishing any native session or owner lease. */
+            [[nodiscard]] Result<std::vector<MetalRecordedOperation>> CaptureNativeOperations(const RenderGraphExecutionRequest &request) {
+                using CaptureResult = Result<std::vector<MetalRecordedOperation>>;
+                std::vector<MetalRecordedOperation> operations;
+                operations.reserve(request.workloads.size());
+                for (const auto &binding : request.workloads) {
+                    id<MTLCommandBuffer> commands = [commandQueue_ commandBuffer];
+                    if (commands == nil)
+                        return CaptureResult::Failure(MakeError(MetalBackendErrors::CommandSubmissionFailed));
+                    auto captured = resources_.CaptureGraphOperation(binding.workload, request.resources, commands, drawable_.texture);
+                    if (captured.HasError())
+                        return CaptureResult::Failure(captured.ErrorValue());
+                    auto operation = std::move(captured).Value();
+                    if (std::holds_alternative<PrimaryOutputAttachment>(binding.workload))
+                        operation.presentationDrawable = drawable_;
+                    operations.push_back(std::move(operation));
+                }
+                return CaptureResult::Success(std::move(operations));
+            }
+
             /** @brief Rejects command access outside the initialized render thread without mutating native state. */
             [[nodiscard]] static Result<void> WrongThread() {
                 return Result<void>::Failure(MakeError(MetalBackendErrors::WrongThread));
@@ -532,35 +448,37 @@ namespace Horo::Render::Detail {
                 if (submissionError_) {
                     return Result<void>::Failure(*submissionError_);
                 }
-                while (submittedCommands_.count != 0) {
-                    id<MTLCommandBuffer> submitted = submittedCommands_.firstObject;
-                    if (submitted.status == MTLCommandBufferStatusError) {
-                        const char *reason = submitted.error.localizedDescription.UTF8String;
-                        submissionError_ = MakeError(MetalBackendErrors::CommandSubmissionFailed,
-                                                     reason == nullptr ? "Metal GPU command submission failed; restart the backend."
-                                                                       : std::string{reason});
-                        return Result<void>::Failure(*submissionError_);
-                    }
-                    if (submitted.status != MTLCommandBufferStatusCompleted) {
-                        break;
-                    }
-                    if (submittedGraphLeases_[0] != nullptr) {
-                        submittedGraphLeases_[0]->Release();
-                    }
-                    for (std::size_t index = 1; index < submittedGraphLeases_.size(); ++index) {
-                        submittedGraphLeases_[index - 1] = submittedGraphLeases_[index];
-                    }
-                    submittedGraphLeases_.back() = nullptr;
-                    [submittedCommands_ removeObjectAtIndex:0];
+                DrainCancelledRecordings();
+                if (const auto polled = submitted_.Poll(); polled.HasError()) {
+                    submissionError_ = polled.ErrorValue();
+                    return polled;
                 }
-                if (submittedCommands_.count >= maxFramesInFlight_) {
+                if (submitted_.Count() >= maxFramesInFlight_)
                     return Result<void>::Failure(MakeError(MetalBackendErrors::SubmissionBusy));
+                const std::size_t gpuRecordings = submitted_.RecordingCount();
+                if (recordingBudget_->live.load(std::memory_order_acquire) > static_cast<std::size_t>(gpuRecordings)) {
+                    // A cancelled callback may still retain its CAMetalDrawable parent. Do
+                    // not enter nextDrawable and accidentally wait for that CPU lease to drain.
+                    return Result<void>::Failure(
+                        MakeError(MetalBackendErrors::SubmissionBusy,
+                                  "Cancelled CPU recording leases must drain before acquiring another presentation drawable."));
                 }
                 return Result<void>::Success();
             }
 
             [[nodiscard]] MetalResourceRuntime &Resources() noexcept {
                 return resources_;
+            }
+
+            /** @brief Owner safe-point polling; closed workers never release registry pins themselves. */
+            void DrainCancelledRecordings() noexcept {
+                for (auto &retired : cancelledRecordings_) {
+                    if (retired.recording && retired.recording->Idle()) {
+                        if (retired.lease != nullptr)
+                            retired.lease->Release();
+                        retired = {};
+                    }
+                }
             }
 
             static void WaitUntilIdleThunk(void *context) noexcept {
@@ -590,6 +508,9 @@ namespace Horo::Render::Detail {
             }
 
             void ClearActiveFrame() noexcept {
+                recordingAccepted_ = false;
+                activeRecordingResources_.clear();
+                activeParallelPrimary_.reset();
                 renderPassDescriptor_ = nil;
                 commandBuffer_ = nil;
                 drawable_ = nil;
@@ -606,10 +527,20 @@ namespace Horo::Render::Detail {
             __strong id<MTLRenderCommandEncoder> renderEncoder_{nil};
             __strong MTLRenderPassDescriptor *renderPassDescriptor_{nil};
             __strong id<MTLCommandBuffer> lastSubmittedCommandBuffer_{nil};
-            // Render-thread owned; command buffers retain queued native resources until retirement.
-            __strong NSMutableArray<id<MTLCommandBuffer>> *submittedCommands_{nil};
+            MetalSubmittedGraphQueue submitted_;
             IRenderGraphResourceLease *activeGraphLease_{nullptr};
-            std::array<IRenderGraphResourceLease *, 3> submittedGraphLeases_{};
+
+            struct CancelledRecording {
+                std::shared_ptr<MetalParallelRecording> recording;
+                IRenderGraphResourceLease *lease{nullptr};
+            };
+
+            std::array<CancelledRecording, MetalRecordingBudget::MaximumLiveRecordings> cancelledRecordings_{};
+            std::shared_ptr<MetalParallelRecording> activeRecording_;
+            std::vector<RenderGraphResourceInstance> activeRecordingResources_;
+            std::optional<PrimaryOutputAttachment> activeParallelPrimary_;
+            std::shared_ptr<MetalRecordingBudget> recordingBudget_{std::make_shared<MetalRecordingBudget>()};
+            bool recordingAccepted_{false};
             std::optional<Error> submissionError_;
             std::thread::id ownerThread_;
             std::uint32_t maxFramesInFlight_{0};
@@ -623,10 +554,3 @@ namespace Horo::Render::Detail {
         return Result<std::unique_ptr<IMetalRuntime>>::Success(std::make_unique<MetalRuntime>(presentationPort, editorGraphicsBridge));
     }
 }  // namespace Horo::Render::Detail
-
-namespace Horo::Render {
-    /** @copydoc CreateMetalAdapterDiscovery */
-    Result<std::unique_ptr<IRenderAdapterDiscovery>> CreateMetalAdapterDiscovery() {
-        return Result<std::unique_ptr<IRenderAdapterDiscovery>>::Success(std::make_unique<Detail::MetalAdapterDiscovery>());
-    }
-}  // namespace Horo::Render

@@ -41,6 +41,24 @@ namespace Horo::Render::Detail {
 
         /** @brief Borrows a frontend-owned lease until exact command completion or unsent-frame abandonment. */
         [[nodiscard]] virtual Result<void> RetainGraphResources(IRenderGraphResourceLease &lease) = 0;
+
+        /** @brief Explicit worker-safe native encoding envelope; default fake/unsupported runtimes opt out. */
+        [[nodiscard]] virtual RenderParallelRecordingCapabilities ParallelRecordingCapabilities() const noexcept {
+            return {};
+        }
+
+        /** @brief Owner-only capture; success transfers the exact frontend lease until abandonment/native completion. */
+        [[nodiscard]] virtual Result<std::shared_ptr<IRenderParallelGraphRecording>> PrepareParallelGraph(
+            const RenderGraphExecutionRequest &) {
+            return Result<std::shared_ptr<IRenderParallelGraphRecording>>::Failure(
+                MakeError(MetalBackendErrors::UnsupportedGraphExecution));
+        }
+
+        /** @brief Owner-only readiness/frame/session admission, never a native completion wait. */
+        [[nodiscard]] virtual Result<void> AcceptParallelGraph(const std::shared_ptr<IRenderParallelGraphRecording> &) {
+            return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution));
+        }
+
         [[nodiscard]] virtual Result<void> Present() = 0;
         virtual void AbortFrame() noexcept = 0;
         [[nodiscard]] virtual Result<void> Resize(FramebufferExtent extent) = 0;
