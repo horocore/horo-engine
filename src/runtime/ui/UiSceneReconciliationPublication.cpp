@@ -7,26 +7,26 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiSceneReconciliation::CanCommit */
     Result<void> UiSceneReconciliation::CanCommit(const Prepared &prepared, const UiStructuralCommitPoint point) const {
-        if (!storage_ || storage_->stopped || storage_->collecting || !prepared.storage_ || prepared.storage_->consumed ||
+        if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting || !prepared.storage_ || prepared.storage_->consumed ||
             !UiSceneDetail::Cutoff(point))
             return Failure(UiErrors::InstanceStateInvalid);
         const auto &candidate = *prepared.storage_;
-        if (candidate.owner != storage_ || candidate.revision != storage_->revision)
+        if (!storage_.Matches(candidate.owner) || candidate.revision != storage_.Get()->revision)
             return Failure(UiErrors::RevisionStale);
-        if (storage_->revision == std::numeric_limits<std::uint64_t>::max())
+        if (storage_.Get()->revision == std::numeric_limits<std::uint64_t>::max())
             return Failure(UiErrors::GenerationExhausted);
         if (candidate.cancellation.IsCancellationRequested())
             return Failure(UiErrors::AssetLoadCancelled);
-        if (candidate.retiring.size() + storage_->limits.maximumInstances > storage_->FreeRetired())
+        if (candidate.retiring.size() + storage_.Get()->limits.maximumInstances > storage_.Get()->FreeRetired())
             return Failure(UiErrors::CapacityExceeded);
         for (const auto &retiring : candidate.retiring) {
-            const auto &entry = storage_->active[retiring.slot];
+            const auto &entry = storage_.Get()->active[retiring.slot];
             if (!entry || !entry->publisher.IsCurrent(retiring.source) ||
                 !UiReloadDetail::MatchesSource(*retiring.source.Get(), retiring.stamps))
                 return Failure(UiErrors::RevisionStale);
         }
         for (const auto &rebind : candidate.rebinding) {
-            const auto &entry = storage_->active[rebind.slot];
+            const auto &entry = storage_.Get()->active[rebind.slot];
             if (!entry)
                 return Failure(UiErrors::HandleStale);
             if (const auto valid = entry->publisher.CanCommit(rebind.candidate, point); valid.HasError())
@@ -41,40 +41,46 @@ namespace Horo::Runtime::Ui {
             return Result<UiSceneReconciliationResult>::Failure(valid.ErrorValue());
         auto &candidate = *prepared.storage_;
         for (auto &rebind : candidate.rebinding) {
-            auto &entry = *storage_->active[rebind.slot];
+            auto &entry = *storage_.Get()->active[rebind.slot];
             entry.publisher.CommitValidated(rebind.candidate);
             // Unload leaves explicit unavailable/fallback source evidence; ownership remains persistent.
             entry.descriptor.providerScene = candidate.request.next;
         }
         for (const auto &retiring : candidate.retiring) {
-            auto &entry = storage_->active[retiring.slot];
+            auto &entry = storage_.Get()->active[retiring.slot];
             entry->publisher.Shutdown();
-            const auto free = std::ranges::find_if(storage_->retired, [](const auto &value) {
+            const auto free = std::ranges::find_if(storage_.Get()->retired, [](const auto &value) {
                 return !value;
             });
             free->emplace(std::move(*entry));
             entry.reset();
         }
         for (auto &incoming : candidate.incoming) {
-            const auto free = std::ranges::find_if(storage_->active, [](const auto &entry) {
+            const auto free = std::ranges::find_if(storage_.Get()->active, [](const auto &entry) {
                 return !entry;
             });
             free->emplace(std::move(incoming));
         }
         candidate.incoming.clear();
         candidate.consumed = true;
-        ++storage_->revision;
+        ++storage_.Get()->revision;
         return Result<UiSceneReconciliationResult>::Success(candidate.result);
     }
 
     /** @copydoc UiSceneReconciliation::CollectRetired */
     Result<std::size_t> UiSceneReconciliation::CollectRetired() {
-        if (!storage_ || storage_->collecting)
+        if (!storage_ || storage_.Get()->collecting)
             return Failure<std::size_t>(UiErrors::InstanceStateInvalid);
-        const auto owner = storage_;
+        const auto owner = storage_.OwnerPin();
         owner->collecting = true;
 
         struct Guard final {
+            explicit Guard(Storage &state) noexcept : owner(state) {}
+
+            Guard(const Guard &) = delete;
+            Guard &operator=(const Guard &) = delete;
+            Guard(Guard &&) = delete;
+            Guard &operator=(Guard &&) = delete;
             Storage &owner;
 
             ~Guard() {
@@ -82,12 +88,13 @@ namespace Horo::Runtime::Ui {
                 if (owner.shutdownRequested)
                     owner.Stop();
             }
-        } guard{*owner};
+        };
+
+        Guard guard{*owner};
 
         for (auto &entry : owner->active)
             if (entry) {
-                const auto drained = entry->publisher.CollectRetired();
-                if (drained.HasError())
+                if (const auto drained = entry->publisher.CollectRetired(); drained.HasError())
                     return Result<std::size_t>::Failure(drained.ErrorValue());
                 if (owner->shutdownRequested)
                     return Result<std::size_t>::Success(0);
@@ -95,8 +102,7 @@ namespace Horo::Runtime::Ui {
         std::size_t reclaimed = 0;
         for (auto &entry : owner->retired)
             if (entry) {
-                const auto drained = entry->publisher.CollectRetired();
-                if (drained.HasError())
+                if (const auto drained = entry->publisher.CollectRetired(); drained.HasError())
                     return Result<std::size_t>::Failure(drained.ErrorValue());
                 if (owner->shutdownRequested)
                     return Result<std::size_t>::Success(reclaimed);
@@ -127,19 +133,19 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiSceneReconciliation::Shutdown */
     void UiSceneReconciliation::Shutdown() noexcept {
-        if (!storage_ || storage_->stopped)
+        if (!storage_ || storage_.Get()->stopped)
             return;
-        if (storage_->collecting) {
-            storage_->shutdownRequested = true;
+        if (storage_.Get()->collecting) {
+            storage_.Get()->shutdownRequested = true;
             return;
         }
-        storage_->Stop();
+        storage_.Get()->Stop();
     }
 
     /** @copydoc UiSceneReconciliation::CanReclaim */
     bool UiSceneReconciliation::CanReclaim() const noexcept {
-        return !storage_ || (storage_->stopped && !storage_->collecting && storage_->preparedCount == 0 &&
-                             std::ranges::all_of(storage_->retired, [](const auto &entry) {
+        return !storage_ || (storage_.Get()->stopped && !storage_.Get()->collecting && storage_.Get()->preparedCount == 0 &&
+                             std::ranges::all_of(storage_.Get()->retired, [](const auto &entry) {
             return !entry || entry->publisher.CanReclaim();
         }));
     }

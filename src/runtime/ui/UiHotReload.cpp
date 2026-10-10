@@ -111,11 +111,11 @@ namespace Horo::Runtime::Ui {
                 const auto *next = candidate.replacement->Canvas(old.id);
                 if (!next || old.bindings.has_value() != next->bindings.has_value())
                     return Failure<void>(UiErrors::BindingDescriptorConflict);
-                if (old.bindings) {
-                    const auto valid = next->bindings->ValidateSceneRebind(*old.bindings, old.tree, next->tree, candidate.removingScene);
-                    if (valid.HasError())
-                        return valid;
-                }
+                if (!old.bindings)
+                    continue;
+                if (const auto valid = next->bindings->ValidateSceneRebind(*old.bindings, old.tree, next->tree, candidate.removingScene);
+                    valid.HasError())
+                    return valid;
             }
         }
         if (point != UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands &&
@@ -123,8 +123,8 @@ namespace Horo::Runtime::Ui {
             return Failure<void>(UiErrors::InstanceStateInvalid);
         if (candidate.cancellation.IsCancellationRequested())
             return Failure<void>(UiErrors::AssetLoadCancelled);
-        const auto end = storage_->retired.begin() + storage_->limits.maximumRetiredGenerations;
-        if (std::find(storage_->retired.begin(), end, nullptr) == end)
+        if (const auto end = storage_->retired.begin() + storage_->limits.maximumRetiredGenerations;
+            std::find(storage_->retired.begin(), end, nullptr) == end)
             return Failure<void>(UiErrors::CapacityExceeded);
         if (candidate.replacement->Instance().State() != UiRuntimeInstanceState::Prepared)
             return Failure<void>(UiErrors::InstanceStateInvalid);

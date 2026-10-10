@@ -26,8 +26,8 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiBindingStore::Storage::ValidatePersistentProvider */
     Result<void> UiBindingStore::Storage::ValidatePersistentProvider(const Provider &before) const {
-        const auto *after = FindProvider(before.instance);
-        if (!after || after->scope != before.scope || after->active != before.active || after->revision != before.revision ||
+        if (const auto *after = FindProvider(before.instance);
+            !after || after->scope != before.scope || after->active != before.active || after->revision != before.revision ||
             after->writesRevoked != before.writesRevoked || !SameSchema(after->schema, before.schema))
             return Failure(UiErrors::BindingDescriptorConflict);
         return Result<void>::Success();
@@ -35,10 +35,11 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiBindingStore::Storage::ValidateSceneProvider */
     Result<void> UiBindingStore::Storage::ValidateSceneProvider(const Provider &after, const Storage &source, const bool removing) const {
-        const auto previous = std::ranges::find_if(source.providers, [&](const Provider &before) {
+        if (const auto previous = std::ranges::find_if(source.providers,
+                                                       [&](const Provider &before) {
             return before.scope == UiBindingProviderScopeKind::Scene && SameSchema(before.schema, after.schema);
         });
-        if (previous == source.providers.end())
+            previous == source.providers.end())
             return Failure(UiErrors::BindingSchemaInvalid);
         const auto *before = source.FindProvider(after.instance);
         if (removing) {
@@ -54,8 +55,8 @@ namespace Horo::Runtime::Ui {
     Result<void> UiBindingStore::Storage::ValidateTargetContract(const Target &old, const Target &next, const UiElementTree &sourceTree,
                                                                  const UiElementTree &tree) const {
         const auto oldElement = sourceTree.Get(old.bound.element);
-        const auto newElement = tree.Get(next.bound.element);
-        if (oldElement.HasError() || newElement.HasError() || oldElement.Value().id != newElement.Value().id ||
+        if (const auto newElement = tree.Get(next.bound.element);
+            oldElement.HasError() || newElement.HasError() || oldElement.Value().id != newElement.Value().id ||
             old.bound.property != next.bound.property || old.direction != next.direction || old.property != next.property ||
             old.limits != next.limits || old.fallback != next.fallback)
             return Failure(UiErrors::BindingDescriptorConflict);

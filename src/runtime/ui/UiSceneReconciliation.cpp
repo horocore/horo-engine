@@ -8,10 +8,10 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiSemanticOwner::IsValid */
     bool UiSemanticOwner::IsValid(const UiOwnershipGeneration ownership) const noexcept {
-        if (!ownership.IsValid() || kind >= UiOwnerScopeKind::Count)
+        using enum UiOwnerScopeKind;
+        if (!ownership.IsValid() || kind >= Count)
             return false;
-        if ((kind == UiOwnerScopeKind::Player) != player.has_value() || (kind == UiOwnerScopeKind::Scene) != scene.has_value() ||
-            (kind == UiOwnerScopeKind::Viewport) != viewport.has_value())
+        if ((kind == Player) != player.has_value() || (kind == Scene) != scene.has_value() || (kind == Viewport) != viewport.has_value())
             return false;
         return (!player || (player->IsValid() && player->ownership == ownership)) && (!scene || scene->IsValid()) &&
                (!viewport || (viewport->IsValid() && viewport->ownership == ownership));
@@ -65,42 +65,42 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiSceneReconciliation::Admit */
     Result<void> UiSceneReconciliation::Admit(const UiSceneInstanceDescriptor &descriptor, UiHotReload &&publisher,
                                               const UiStructuralCommitPoint point) {
-        if (!storage_ || storage_->stopped || storage_->collecting || !UiSceneDetail::Cutoff(point))
+        if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting || !UiSceneDetail::Cutoff(point))
             return Failure(UiErrors::InstanceStateInvalid);
-        if (storage_->revision == std::numeric_limits<std::uint64_t>::max())
+        if (storage_.Get()->revision == std::numeric_limits<std::uint64_t>::max())
             return Failure(UiErrors::GenerationExhausted);
         const auto lease = publisher.Acquire();
         if (lease.HasError())
             return Result<void>::Failure(lease.ErrorValue());
-        if (const auto valid = storage_->Validate(descriptor, *lease.Value().Get()); valid.HasError())
+        if (const auto valid = storage_.Get()->Validate(descriptor, *lease.Value().Get()); valid.HasError())
             return valid;
-        if (const auto issued = storage_->Issue(descriptor); issued.HasError())
+        if (const auto issued = storage_.Get()->Issue(descriptor); issued.HasError())
             return issued;
-        const auto free = std::ranges::find_if(storage_->active, [](const auto &entry) {
+        const auto free = std::ranges::find_if(storage_.Get()->active, [](const auto &entry) {
             return !entry;
         });
-        if (free == storage_->active.end())
+        if (free == storage_.Get()->active.end())
             return Failure(UiErrors::CapacityExceeded);
-        free->emplace(Storage::Entry{descriptor, std::move(publisher)});
-        ++storage_->revision;
+        free->emplace(descriptor, std::move(publisher));
+        ++storage_.Get()->revision;
         return Result<void>::Success();
     }
 
     /** @copydoc UiSceneReconciliation::Publisher */
     UiHotReload *UiSceneReconciliation::Publisher(const RuntimeUiInstanceId instance) noexcept {
-        if (!storage_ || storage_->stopped || storage_->collecting)
+        if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting)
             return nullptr;
-        const auto slot = storage_->Find(instance);
-        return slot == storage_->active.size() ? nullptr : &storage_->active[slot]->publisher;
+        const auto slot = storage_.Get()->Find(instance);
+        return slot == storage_.Get()->active.size() ? nullptr : &storage_.Get()->active[slot]->publisher;
     }
 
     /** @copydoc UiSceneReconciliation::Acquire */
     Result<UiReloadLease> UiSceneReconciliation::Acquire(const RuntimeUiInstanceId instance) const {
-        if (!storage_ || storage_->stopped || storage_->collecting)
+        if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting)
             return Failure<UiReloadLease>(UiErrors::InstanceStateInvalid);
-        const auto slot = storage_->Find(instance);
-        return slot == storage_->active.size() ? Failure<UiReloadLease>(UiErrors::HandleStale)
-                                               : storage_->active[slot]->publisher.Acquire();
+        const auto slot = storage_.Get()->Find(instance);
+        return slot == storage_.Get()->active.size() ? Failure<UiReloadLease>(UiErrors::HandleStale)
+                                                     : storage_.Get()->active[slot]->publisher.Acquire();
     }
 
     /** @copydoc UiSceneReconciliation::UiSceneReconciliation */
@@ -125,7 +125,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiSceneReconciliation::LastIssuedInstanceSlot */
     std::uint32_t UiSceneReconciliation::LastIssuedInstanceSlot() const noexcept {
-        return storage_ ? storage_->issued : 0;
+        return storage_ ? storage_.Get()->issued : 0;
     }
 
     /** @copydoc UiSceneReconciliation::Prepared::Prepared */

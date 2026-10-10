@@ -329,6 +329,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiAsyncActions.h
     Horo/Runtime/Ui/UiFeedback.h
     Horo/Runtime/Ui/UiScreenStack.h
+    Horo/Runtime/Ui/UiScreenTransition.h
     Horo/Runtime/Ui/UiRouteStack.h
     Horo/Runtime/Ui/UiFocusGraph.h
     Horo/Runtime/Ui/UiControls.h
@@ -467,6 +468,9 @@ horo_configure_target_header_boundary(HoroGameplayBuild PUBLIC_HEADERS
     Horo/Application/CompilerDiagnosticParser.h
     Horo/Application/GameplayBuildService.h
 )
+horo_configure_target_header_boundary(HoroShaderBuild PUBLIC_HEADERS
+    Horo/Application/ShaderBuildService.h
+)
 horo_configure_target_header_boundary(HoroGameplayLua PUBLIC_HEADERS
     Horo/Gameplay/LuaBehavior.h
 )
@@ -544,6 +548,10 @@ horo_configure_target_header_boundary(HoroAudioPlayback PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroAudioVoiceRender PUBLIC_HEADERS
     Horo/Audio/AudioVoiceRenderRuntime.h
+)
+
+horo_configure_target_header_boundary(HoroAudioFrontend PUBLIC_HEADERS
+    Horo/Audio/AudioFrontend.h
 )
 horo_configure_target_header_boundary(HoroAudioMemory PUBLIC_HEADERS
     Horo/Audio/AudioMemory.h
@@ -632,6 +640,7 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/AITaskLifecycle.h
     Horo/AI/AITaskContinuation.h
     Horo/AI/AITaskJobService.h
+    Horo/AI/AITaskScheduler.h
     Horo/AI/BehaviorTree.h
     Horo/AI/BehaviorTreeRuntime.h
     Horo/AI/DecisionWakePolicy.h
@@ -991,6 +1000,8 @@ horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
     Horo/Runtime/Render/RenderGraph.h
     Horo/Runtime/Render/RenderGraphWorkload.h
     Horo/Runtime/Render/RenderGraphExecution.h
+    Horo/Runtime/Render/RenderGraphInspection.h
+    Horo/Runtime/Render/RenderGraphInspectionErrors.h
     Horo/Runtime/Render/RenderGraphExecutionErrors.h
     Horo/Runtime/Render/RenderGraphErrors.h
     Horo/Runtime/Render/RenderGraphSynchronization.h
@@ -1065,6 +1076,7 @@ horo_configure_target_header_boundary(HoroModelProviderAdapters PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
+    Horo/Editor/AudioEditorDocument.h
     Horo/Editor/MixerAssetDocument.h
     Horo/Editor/CinematicPropertyBindings.h
     Horo/Editor/ActivityBarLayout.h

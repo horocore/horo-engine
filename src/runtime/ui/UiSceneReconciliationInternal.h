@@ -44,6 +44,12 @@ namespace Horo::Runtime::Ui {
     };
 
     struct UiSceneReconciliation::Prepared::Storage final {
+        Storage() = default;
+        Storage(const Storage &) = delete;
+        Storage &operator=(const Storage &) = delete;
+        Storage(Storage &&) = delete;
+        Storage &operator=(Storage &&) = delete;
+
         struct Retire final {
             std::size_t slot{};
             UiReloadLease source;

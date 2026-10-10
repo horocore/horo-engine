@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Horo/Runtime/Render/RenderGraphInspection.h"
+
 /**
  * @file RenderFrontend.h
  * @brief Host-facing owner of one selected and initialized renderer backend.
@@ -114,6 +116,18 @@ namespace Horo::Render {
      */
     class RenderFrameScope final {
     public:
+        /**
+         * @brief Explicitly captures a compiled graph at this real frame's pre-submission safe point.
+         * @param graph Intact immutable authored graph. @param schedule Exact compiled schedule.
+         * @param lifetime Exact logical lifetime plan. @param execution Exact compiled execution plan.
+         * @param limits Finite inspection allowances. @param cancellation Cooperative tooling cancellation.
+         * @return Detached snapshot or typed failure; inspection failure never aborts rendering.
+         * @details Owner-thread tooling only, before Execute/Present. Capture records planned logical facts,
+         * not native realization. No capture occurs unless explicitly requested by the host.
+         */
+        [[nodiscard]] Result<std::shared_ptr<const RenderGraphInspectionSnapshot>> CaptureInspection(
+            const RenderGraph &graph, const RenderGraphSchedule &schedule, const RenderGraphLifetimePlan &lifetime,
+            const CompiledRenderGraphExecution &execution, RenderGraphInspectionLimits limits = {}, std::stop_token cancellation = {});
         /** @brief Aborts the matching frame when this scope still owns one. */
         ~RenderFrameScope();
 
@@ -455,6 +469,10 @@ namespace Horo::Render {
         /** @brief Logically releases one generic render-target generation. */
         [[nodiscard]] Result<void> ReleaseRenderTarget(RenderTargetHandle target);
 
+        /** @brief Reads the last explicitly captured owned graph without querying native state.
+         * @return Snapshot, empty before capture, or owner-thread failure. Readers cannot keep GPU resources alive. */
+        [[nodiscard]] Result<std::shared_ptr<const RenderGraphInspectionSnapshot>> GraphInspectionSnapshot() const;
+
         /** @brief Returns non-additive renderer memory accounting for the current frontend envelope. */
         [[nodiscard]] RenderMemoryBudgetSnapshot MemorySnapshot() const noexcept;
 
@@ -511,6 +529,8 @@ namespace Horo::Render {
         std::unique_ptr<Detail::RenderResourceRegistry> resourceRegistry_;
         std::unique_ptr<Detail::RenderResourceUploadQueue> resourceUploadQueue_;
         std::unique_ptr<Detail::RenderGraphResourceLeasePool> graphResourceLeases_;
+        RenderGraphInspectionFeed inspectionFeed_;
+        std::uint64_t inspectionRevision_{};
         RenderFrameScope *activeFrameScope_{nullptr};
         IStaticMeshPassExecutor *staticMeshPassExecutor_{nullptr};
         std::vector<TargetRecord> targets_{{}};

@@ -162,6 +162,53 @@ namespace Horo::Runtime::Ui {
     private:
         struct Storage;
         explicit UiSceneReconciliation(std::shared_ptr<Storage> storage) noexcept;
-        std::shared_ptr<Storage> storage_;
+
+        /**
+         * @brief Const-propagating facade ownership of the existing pinned registry state.
+         * @details Const facade reads borrow const Storage and cannot obtain a mutable registry pin. The pin remains the sole
+         * shared lifetime authority retained by prepared candidates; this holder adds neither storage allocation nor state.
+         */
+        class OwnedState final {
+        public:
+            explicit OwnedState(std::shared_ptr<Storage> pin) noexcept : pin_(std::move(pin)) {}
+
+            OwnedState(OwnedState &&) noexcept = default;
+            OwnedState &operator=(OwnedState &&) noexcept = default;
+            OwnedState(const OwnedState &) = delete;
+            OwnedState &operator=(const OwnedState &) = delete;
+
+            /** @brief Reports whether registry state exists. @return Presence only. */
+            [[nodiscard]] explicit operator bool() const noexcept {
+                return static_cast<bool>(pin_);
+            }
+
+            /** @brief Borrows mutable state only from the mutable command facade. @return Owner state. */
+            [[nodiscard]] Storage *Get() noexcept {
+                return pin_.get();
+            }
+
+            /** @brief Borrows immutable state from a readonly facade. @return Owner state. */
+            [[nodiscard]] const Storage *Get() const noexcept {
+                return pin_.get();
+            }
+
+            /** @brief Acquires the actual mutable lifetime authority for owner commands. @return Shared registry pin. */
+            [[nodiscard]] std::shared_ptr<Storage> &OwnerPin() noexcept {
+                return pin_;
+            }
+
+            /** @brief Compares registry identity without exposing mutation authority. @param pin Candidate pin. @return Same owner. */
+            [[nodiscard]] bool Matches(const std::shared_ptr<Storage> &pin) const noexcept {
+                return pin_ == pin;
+            }
+
+        private:
+            std::shared_ptr<Storage> pin_;
+        };
+
+        static_assert(std::is_same_v<decltype(std::declval<const OwnedState &>().Get()), const Storage *>);
+        static_assert(std::is_same_v<decltype(std::declval<OwnedState &>().Get()), Storage *>);
+        static_assert(!std::is_invocable_v<decltype(&OwnedState::OwnerPin), const OwnedState &>);
+        OwnedState storage_;
     };
 }  // namespace Horo::Runtime::Ui

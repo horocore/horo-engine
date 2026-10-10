@@ -13,7 +13,7 @@ namespace Horo::Runtime::Ui {
         auto stamps = UiReloadDetail::CaptureSource(*source.Value().Get());
         if (stamps.HasError())
             return Horo::Result<void>::Failure(stamps.ErrorValue());
-        retiring.push_back({slot, std::move(source).Value(), std::move(stamps).Value()});
+        retiring.emplace_back(slot, std::move(source).Value(), std::move(stamps).Value());
         return Horo::Result<void>::Success();
     }
 
@@ -50,8 +50,8 @@ namespace Horo::Runtime::Ui {
                 !entry.descriptor.providerScene && std::ranges::any_of(current->Canvases(), [](const UiReloadCanvas &canvas) {
                 return canvas.bindings && canvas.bindings->HasSceneProviders();
             });
-            const bool detachedReattach = detachedSources && request.next && replacement != bindings.end();
-            if (entry.descriptor.providerScene != request.previous && !detachedReattach)
+            if (const bool detachedReattach = detachedSources && request.next && replacement != bindings.end();
+                entry.descriptor.providerScene != request.previous && !detachedReattach)
                 continue;
             if (replacement == bindings.end())
                 return Failure(UiErrors::BindingProviderUnknown);
@@ -64,10 +64,11 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiSceneReconciliation::Prepared::Storage::ValidateCapacity */
     Horo::Result<void> UiSceneReconciliation::Prepared::Storage::ValidateCapacity(const std::size_t incomingCount) const {
-        const auto freeActive = std::ranges::count_if(owner->active, [](const auto &entry) {
+        if (const auto freeActive = std::ranges::count_if(owner->active,
+                                                          [](const auto &entry) {
             return !entry;
         });
-        if (incomingCount > static_cast<std::size_t>(freeActive) + retiring.size() ||
+            incomingCount > static_cast<std::size_t>(freeActive) + retiring.size() ||
             retiring.size() + owner->limits.maximumInstances > owner->FreeRetired())
             return Failure(UiErrors::CapacityExceeded);
         return Horo::Result<void>::Success();
@@ -88,7 +89,7 @@ namespace Horo::Runtime::Ui {
             return Horo::Result<void>::Failure(lease.ErrorValue());
         if (const auto valid = owner->Validate(activation.descriptor, *lease.Value().Get()); valid.HasError())
             return valid;
-        incoming.push_back({activation.descriptor, std::move(publisher).Value()});
+        incoming.emplace_back(activation.descriptor, std::move(publisher).Value());
         return Horo::Result<void>::Success();
     }
 
@@ -97,24 +98,24 @@ namespace Horo::Runtime::Ui {
                                                                            std::vector<UiSceneBindingReplacement> bindings,
                                                                            std::vector<UiSceneActivation> incoming,
                                                                            const CancellationToken &cancellation) {
-        if (!storage_ || storage_->stopped || storage_->collecting)
+        if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting)
             return Failure<Prepared>(UiErrors::InstanceStateInvalid);
         if (!request.previous.IsValid() || (request.next && (!request.next->IsValid() || request.next == request.previous)))
             return Failure<Prepared>(UiErrors::IdentityInvalid);
-        if (bindings.size() > storage_->limits.maximumInstances || incoming.size() > storage_->limits.maximumInstances ||
-            storage_->preparedCount == storage_->limits.maximumPreparedTransitions)
+        if (bindings.size() > storage_.Get()->limits.maximumInstances || incoming.size() > storage_.Get()->limits.maximumInstances ||
+            storage_.Get()->preparedCount == storage_.Get()->limits.maximumPreparedTransitions)
             return Failure<Prepared>(UiErrors::CapacityExceeded);
         if (cancellation.IsCancellationRequested())
             return Failure<Prepared>(UiErrors::AssetLoadCancelled);
         try {
             auto prepared = std::make_unique<Prepared::Storage>();
-            prepared->owner = storage_;
+            prepared->owner = storage_.OwnerPin();
             prepared->request = request;
-            prepared->revision = storage_->revision;
+            prepared->revision = storage_.Get()->revision;
             prepared->cancellation = cancellation;
             prepared->rebinding.reserve(bindings.size());
             prepared->incoming.reserve(incoming.size());
-            prepared->retiring.reserve(storage_->limits.maximumInstances);
+            prepared->retiring.reserve(storage_.Get()->limits.maximumInstances);
             if (const auto valid = prepared->PrepareActive(bindings); valid.HasError())
                 return Result<Prepared>::Failure(valid.ErrorValue());
             if (const auto valid = prepared->ValidateCapacity(incoming.size()); valid.HasError())
@@ -125,7 +126,7 @@ namespace Horo::Runtime::Ui {
             prepared->result.retiredSceneInstances = static_cast<std::uint32_t>(prepared->retiring.size());
             prepared->result.reboundPersistentInstances = static_cast<std::uint32_t>(prepared->rebinding.size());
             prepared->result.activatedSceneInstances = static_cast<std::uint32_t>(prepared->incoming.size());
-            ++storage_->preparedCount;
+            ++storage_.Get()->preparedCount;
             prepared->admitted = true;
             return Result<Prepared>::Success(Prepared{std::move(prepared)});
         } catch (const std::bad_alloc &) {
