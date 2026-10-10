@@ -2739,6 +2739,20 @@ add_executable(HoroRuntimeSaveRootResolverTests
 target_compile_features(HoroRuntimeSaveRootResolverTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveRootResolverTests PRIVATE HoroEngine::Runtime)
 
+add_executable(HoroRuntimeSaveStorageQualificationTests
+        unit/runtime/save/SaveStorageQualificationTests.cpp
+        unit/runtime/save/SaveStorageRecoveryQualificationTests.cpp
+        unit/runtime/save/SaveStorageLifecycleQualificationTests.cpp)
+target_compile_features(HoroRuntimeSaveStorageQualificationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeSaveStorageQualificationTests PRIVATE HoroEngine::Runtime)
+horo_register_catch_test(HoroRuntimeSaveStorageQualificationTests LABELS "unit;save;qualification;headless;ci-windows")
+
+add_executable(HoroSaveStorageUserStateQualificationTests unit/application/SaveStorageUserStateQualificationTests.cpp)
+target_compile_features(HoroSaveStorageUserStateQualificationTests PRIVATE cxx_std_20)
+target_include_directories(HoroSaveStorageUserStateQualificationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/save)
+target_link_libraries(HoroSaveStorageUserStateQualificationTests PRIVATE HoroEngine::Runtime HoroEngine::UserStateMigration)
+horo_register_catch_test(HoroSaveStorageUserStateQualificationTests LABELS "unit;save;qualification;release;headless;ci-windows")
+
 add_executable(HoroRuntimeSaveFilesystemLockTests
         unit/runtime/save/SaveFilesystemLockTests.cpp
 )

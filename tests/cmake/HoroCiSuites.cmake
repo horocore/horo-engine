@@ -59,6 +59,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroMcpSessionTests
     HoroMcpSessionPublicHeaderConsumer
     HoroRuntimeSaveRootResolverTests
+    HoroRuntimeSaveStorageQualificationTests
+    HoroSaveStorageUserStateQualificationTests
     HoroRuntimeSaveFilesystemLockTests
     HoroRuntimeSaveSlotCommitTransactionTests
     HoroRuntimeSaveSlotLifecycleTests
