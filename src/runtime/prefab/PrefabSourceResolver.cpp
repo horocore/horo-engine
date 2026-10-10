@@ -5,12 +5,31 @@
 #include <algorithm>
 #include <format>
 #include <memory>
+#include <new>
 #include <optional>
 #include <string>
 #include <utility>
 
 namespace Horo::Prefab {
     namespace {
+        /** @brief Captures authoritative canonical source evidence once at immutable resolver admission. */
+        Result<std::vector<PrefabCanonicalSourceCommitment>> CaptureCanonicalSources(
+            const std::span<const PrefabDependencySource> sources) {
+            using Output = std::vector<PrefabCanonicalSourceCommitment>;
+            Output commitments;
+            commitments.reserve(sources.size());
+            for (const auto &source : sources) {
+                const auto bytes = source.document.SerializeCanonical();
+                if (bytes.HasError())
+                    return Result<Output>::Failure(bytes.ErrorValue());
+                if (bytes.Value().size() > PrefabHardLimits::SourceDocumentBytes)
+                    return Result<Output>::Failure(MakeError(PrefabErrors::PayloadTooLarge));
+                commitments.push_back(
+                    {source.document.Data().assetId, ComputeSha256(std::as_bytes(std::span{bytes.Value()})), bytes.Value().size()});
+            }
+            return Result<Output>::Success(std::move(commitments));
+        }
+
         /** @brief Finds an owned source by stable asset identity. */
         [[nodiscard]] const PrefabDependencySource *FindSource(const std::span<const PrefabDependencySource> sources,
                                                                const Assets::AssetId assetId) noexcept {
@@ -200,8 +219,9 @@ namespace Horo::Prefab {
 
     /** @copydoc PrefabSourceResolverSnapshot::PrefabSourceResolverSnapshot */
     PrefabSourceResolverSnapshot::PrefabSourceResolverSnapshot(PrefabDependencyGraphSnapshot graph,
-                                                               std::vector<PrefabDependencySource> sources) noexcept
-        : graph_(std::move(graph)), sources_(std::move(sources)) {}
+                                                               std::vector<PrefabDependencySource> sources,
+                                                               std::vector<PrefabCanonicalSourceCommitment> commitments) noexcept
+        : graph_(std::move(graph)), sources_(std::move(sources)), commitments_(std::move(commitments)) {}
 
     /** @copydoc PrefabSourceResolverSnapshot::RegistryRevision */
     Assets::AssetRegistryRevision PrefabSourceResolverSnapshot::RegistryRevision() const noexcept {
@@ -211,6 +231,11 @@ namespace Horo::Prefab {
     /** @copydoc PrefabSourceResolverSnapshot::Sources */
     std::span<const PrefabDependencySource> PrefabSourceResolverSnapshot::Sources() const noexcept {
         return sources_;
+    }
+
+    /** @copydoc PrefabSourceResolverSnapshot::CanonicalSourceCommitments */
+    std::span<const PrefabCanonicalSourceCommitment> PrefabSourceResolverSnapshot::CanonicalSourceCommitments() const noexcept {
+        return commitments_;
     }
 
     /** @copydoc PrefabSourceResolverSnapshot::Resolve */
@@ -309,13 +334,21 @@ namespace Horo::Prefab {
     Result<PrefabSourceResolverSnapshot> BuildPrefabSourceResolverSnapshot(const Assets::AssetRegistrySnapshot &registry,
                                                                            std::vector<PrefabDependencySource> sources,
                                                                            const PrefabLimitProfile &limits) {
-        std::ranges::sort(sources, {}, [](const PrefabDependencySource &source) {
-            return source.document.Data().assetId;
-        });
-        auto graph = BuildPrefabDependencyGraph(registry, sources, limits);
-        if (graph.HasError())
-            return Result<PrefabSourceResolverSnapshot>::Failure(graph.ErrorValue());
-        return Result<PrefabSourceResolverSnapshot>::Success(PrefabSourceResolverSnapshot{std::move(graph).Value(), std::move(sources)});
+        try {
+            std::ranges::sort(sources, {}, [](const PrefabDependencySource &source) {
+                return source.document.Data().assetId;
+            });
+            auto graph = BuildPrefabDependencyGraph(registry, sources, limits);
+            if (graph.HasError())
+                return Result<PrefabSourceResolverSnapshot>::Failure(graph.ErrorValue());
+            auto commitments = CaptureCanonicalSources(sources);
+            if (commitments.HasError())
+                return Result<PrefabSourceResolverSnapshot>::Failure(commitments.ErrorValue());
+            return Result<PrefabSourceResolverSnapshot>::Success(
+                PrefabSourceResolverSnapshot{std::move(graph).Value(), std::move(sources), std::move(commitments).Value()});
+        } catch (const std::bad_alloc &) {
+            return Result<PrefabSourceResolverSnapshot>::Failure(MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
+        }
     }
 
     /** @copydoc ValidatePrefabCandidatePublication */

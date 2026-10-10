@@ -12,6 +12,13 @@
 #include <vector>
 
 namespace Horo::Prefab {
+    /** @brief Resolver-admitted evidence computed from the actual canonical bytes of one owned validated source. */
+    struct PrefabCanonicalSourceCommitment final {
+        Assets::AssetId asset;      /**< Exact source identity, never an input-vector position. */
+        Sha256Digest digest;        /**< Digest of SerializeCanonical bytes, independent of the caller's claimed revision. */
+        std::size_t encodedBytes{}; /**< Exact canonical wire length for bounded cache/admission accounting. */
+    };
+
     /** @brief Exact immutable source context captured for one root resolution. */
     struct PrefabResolutionRevision final {
         Assets::AssetRegistryRevision registry;         /**< Asset Registry publication used for every lookup. */
@@ -62,6 +69,13 @@ namespace Horo::Prefab {
         [[nodiscard]] Assets::AssetRegistryRevision RegistryRevision() const noexcept;
         /** @brief Returns all owned source documents. @return Borrowed immutable sources. */
         [[nodiscard]] std::span<const PrefabDependencySource> Sources() const noexcept;
+        /**
+         * @brief Returns complete immutable canonical evidence captured before this resolver was published.
+         * @return Borrowed commitments in unique ascending AssetId order; lifetime is this snapshot's.
+         * @details Copying or retiring source snapshots cannot mutate these values. Cache capture and
+         * completion validation reuse this evidence without re-encoding JSON or trusting claimed digests.
+         */
+        [[nodiscard]] std::span<const PrefabCanonicalSourceCommitment> CanonicalSourceCommitments() const noexcept;
 
         /**
          * @brief Captures complete reachable revision evidence without materializing expanded objects.
@@ -106,10 +120,12 @@ namespace Horo::Prefab {
                                                                                       std::vector<PrefabDependencySource>,
                                                                                       const PrefabLimitProfile &);
 
-        PrefabSourceResolverSnapshot(PrefabDependencyGraphSnapshot graph, std::vector<PrefabDependencySource> sources) noexcept;
+        PrefabSourceResolverSnapshot(PrefabDependencyGraphSnapshot graph, std::vector<PrefabDependencySource> sources,
+                                     std::vector<PrefabCanonicalSourceCommitment> commitments) noexcept;
 
         PrefabDependencyGraphSnapshot graph_;
         std::vector<PrefabDependencySource> sources_;
+        std::vector<PrefabCanonicalSourceCommitment> commitments_;
     };
 
     /**
@@ -117,7 +133,9 @@ namespace Horo::Prefab {
      * @param registry Pinned registry snapshot used by every lookup.
      * @param sources Owned immutable validated source documents and semantic revisions.
      * @param limits Captured project policy bounding snapshot construction.
-     * @return Resolver snapshot or a typed dependency consistency error.
+     * @return Resolver snapshot or a typed dependency consistency, source encoding or allocation error.
+     * @details Admission computes exact canonical digest/length evidence from each owned validated document;
+     * claimed source revisions remain separate graph evidence and do not supply those commitments.
      */
     [[nodiscard]] Result<PrefabSourceResolverSnapshot> BuildPrefabSourceResolverSnapshot(const Assets::AssetRegistrySnapshot &registry,
                                                                                          std::vector<PrefabDependencySource> sources,
