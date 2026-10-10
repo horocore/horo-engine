@@ -1925,6 +1925,11 @@ target_compile_features(HoroRuntimeUiInput PUBLIC cxx_std_20)
 target_link_libraries(HoroRuntimeUiInput PUBLIC HoroEngine::Input HoroEngine::RuntimeUi)
 
 add_library(HoroRenderApi STATIC
+        runtime/renderer/api/PostProcessErrors.cpp
+        runtime/renderer/api/PostProcessSettings.cpp
+        runtime/renderer/api/PostProcessVolumes.cpp
+        runtime/renderer/api/PostProcessGraph.cpp
+        runtime/renderer/api/PostProcessGraphAdmission.cpp
         runtime/renderer/api/MotionHistory.cpp
         runtime/renderer/api/MotionHistoryErrors.cpp
         runtime/renderer/api/MaterialBinding.cpp
