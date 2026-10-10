@@ -1046,6 +1046,7 @@ add_executable(HoroNavigationRuntimeTests
         unit/runtime/navigation/NavigationAgentRegistryTests.cpp
         unit/runtime/navigation/NavigationPathPolicyTests.cpp
         unit/runtime/navigation/NavigationFoundationQualificationTests.cpp
+        unit/runtime/navigation/NavigationCoordinatorTests.cpp
         unit/runtime/navigation/NavigationRuntimeQueuesTests.cpp
         unit/runtime/navigation/NavigationWorldLifecycleTests.cpp
 )
@@ -1053,6 +1054,10 @@ target_compile_features(HoroNavigationRuntimeTests PRIVATE cxx_std_20)
 target_include_directories(HoroNavigationRuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroNavigationRuntimeTests PRIVATE HoroEngine::NavigationRuntime)
 horo_register_catch_test(HoroNavigationRuntimeTests LABELS "unit;navigation;headless;lifecycle")
+
+add_executable(HoroNavigationCoordinatorPublicConsumer support/NavigationCoordinatorPublicConsumer.cpp)
+target_link_libraries(HoroNavigationCoordinatorPublicConsumer PRIVATE HoroEngine::NavigationRuntime)
+add_test(NAME HoroNavigationCoordinatorPublicConsumer COMMAND HoroNavigationCoordinatorPublicConsumer)
 
 add_executable(HoroNavigationBakeDiagnosticsPublicConsumer support/NavigationBakeDiagnosticsPublicConsumer.cpp)
 target_link_libraries(HoroNavigationBakeDiagnosticsPublicConsumer PRIVATE HoroEngine::NavigationBakeService)
@@ -1069,6 +1074,7 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_link_libraries(HoroNavigationBakeServiceTests PRIVATE HoroEngine::NavigationBakeService HoroEngine::NavigationRecastDetour)
     horo_register_catch_test(HoroNavigationBakeServiceTests LABELS "unit;navigation;headless;cook")
     add_executable(HoroNavigationRecastDetourTests
+            unit/runtime/navigation/NavigationCoordinatorProviderTests.cpp
             unit/runtime/navigation/RecastDetourProviderTests.cpp
             unit/runtime/navigation/RecastDetourLinkValidationTests.cpp
             unit/runtime/navigation/RecastDetourProviderPathTests.cpp
@@ -1076,7 +1082,7 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     )
     target_compile_features(HoroNavigationRecastDetourTests PRIVATE cxx_std_20)
     target_include_directories(HoroNavigationRecastDetourTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
-    target_link_libraries(HoroNavigationRecastDetourTests PRIVATE HoroEngine::NavigationRecastDetour)
+    target_link_libraries(HoroNavigationRecastDetourTests PRIVATE HoroEngine::NavigationRecastDetour HoroEngine::NavigationRuntime)
     horo_register_catch_test(HoroNavigationRecastDetourTests LABELS "unit;navigation;headless;provider")
     add_executable(HoroNavigationNativeContentTests unit/application/navigation/NavigationNativeContentTests.cpp)
     target_compile_features(HoroNavigationNativeContentTests PRIVATE cxx_std_20)
