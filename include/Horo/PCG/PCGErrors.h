@@ -90,6 +90,14 @@ namespace Horo::PCG::PCGErrors {
     extern const ErrorCodeDescriptor CookedPlanStale;
     /** @brief Canonical plan encoding exceeded its finite tier or caller byte ceiling. */
     extern const ErrorCodeDescriptor CookedPlanCapacityExceeded;
+    /** @brief A cooked node, typed binding, route, or payload has no valid CPU execution contract. */
+    extern const ErrorCodeDescriptor CpuEvaluationInvalid;
+    /** @brief A cooked node type or determinism promise is unsupported by built-in CPU dispatch. */
+    extern const ErrorCodeDescriptor CpuEvaluationUnsupported;
+    /** @brief CPU evaluation exceeds its predeclared output, candidate, or replacement envelope. */
+    extern const ErrorCodeDescriptor CpuEvaluationCapacityExceeded;
+    /** @brief CPU evaluation was rejected by cancellation or shutdown admission. */
+    extern const ErrorCodeDescriptor CpuEvaluationClosed;
     /** @brief A generation plan, output operation, receipt, or provenance tuple is malformed. */
     extern const ErrorCodeDescriptor GenerationPlanInvalid;
     /** @brief A generation plan exceeds its finite operation, dependency, or resource envelope. */
