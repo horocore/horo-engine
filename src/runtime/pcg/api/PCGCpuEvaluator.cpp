@@ -107,11 +107,11 @@ namespace Horo::PCG {
                 return Reject<PCGTierLimits>(PCGErrors::CpuEvaluationCapacityExceeded);
             if (!plan.Catalog().IsValid())
                 return Reject<PCGTierLimits>(PCGErrors::RuntimeUnavailable);
-            const bool canEvaluate = limits.grantedCapabilities.Contains(PCGCapability::OfflineBake) ||
-                                     limits.grantedCapabilities.Contains(PCGCapability::EditorPreview) ||
-                                     limits.grantedCapabilities.Contains(PCGCapability::RuntimeEvaluation) ||
-                                     limits.grantedCapabilities.Contains(PCGCapability::HybridEvaluation);
-            if (!canEvaluate || !limits.grantedCapabilities.ContainsAll(plan.RequiredCapabilities()) ||
+            if (const bool canEvaluate = limits.grantedCapabilities.Contains(PCGCapability::OfflineBake) ||
+                                         limits.grantedCapabilities.Contains(PCGCapability::EditorPreview) ||
+                                         limits.grantedCapabilities.Contains(PCGCapability::RuntimeEvaluation) ||
+                                         limits.grantedCapabilities.Contains(PCGCapability::HybridEvaluation);
+                !canEvaluate || !limits.grantedCapabilities.ContainsAll(plan.RequiredCapabilities()) ||
                 !plan.Catalog().Capabilities().granted.ContainsAll(limits.grantedCapabilities))
                 return Reject<PCGTierLimits>(PCGErrors::UnsupportedCapability);
             for (const auto &bound : bounds)
@@ -139,14 +139,18 @@ namespace Horo::PCG {
             (void)hash.Update(bytes);
         }
 
+        /** @brief Hashes a vector component with canonical signed zero and the existing network-order word encoding. */
+        void HashVectorComponent(Sha256Builder &hash, const float value) {
+            HashWord(hash, std::bit_cast<std::uint32_t>(value == 0.0F ? 0.0F : value));
+        }
+
         /** @brief Hashes the closed typed value with a versioned domain and canonical signed zero. */
         [[nodiscard]] Sha256Digest InputDigest(const PCGGraphValue &value) {
             Sha256Builder hash;
             constexpr std::array<std::uint8_t, 13> domain{'H', 'P', 'C', 'G', 'C', 'P', 'U', 'I', 'N', 'P', 'U', 'T', 1};
             (void)hash.Update(std::as_bytes(std::span(domain)));
             HashWord(hash, value.index());
-            std::visit([&](const auto &typed) {
-                using T = std::decay_t<decltype(typed)>;
+            std::visit([&]<typename T>(const T &typed) {
                 if constexpr (std::is_same_v<T, double>)
                     HashWord(hash, std::bit_cast<std::uint64_t>(typed == 0.0 ? 0.0 : typed));
                 else if constexpr (std::is_integral_v<T>)
@@ -155,12 +159,12 @@ namespace Horo::PCG {
                                        typed.x;
                                        typed.y;
                                    }) {
-                    HashWord(hash, std::bit_cast<std::uint32_t>(typed.x == 0.0F ? 0.0F : typed.x));
-                    HashWord(hash, std::bit_cast<std::uint32_t>(typed.y == 0.0F ? 0.0F : typed.y));
+                    HashVectorComponent(hash, typed.x);
+                    HashVectorComponent(hash, typed.y);
                     if constexpr (requires { typed.z; })
-                        HashWord(hash, std::bit_cast<std::uint32_t>(typed.z == 0.0F ? 0.0F : typed.z));
+                        HashVectorComponent(hash, typed.z);
                     if constexpr (requires { typed.w; })
-                        HashWord(hash, std::bit_cast<std::uint32_t>(typed.w == 0.0F ? 0.0F : typed.w));
+                        HashVectorComponent(hash, typed.w);
                 }
             }, value);
             return hash.Finalize();
@@ -179,15 +183,16 @@ namespace Horo::PCG {
             root.world = limits.world;
             root.cell = limits.cell;
             root.numericPolicyVersion = limits.numericPolicyVersion;
-            root.providers.push_back({spatial.Provenance().provider, spatial.Provenance().source, spatial.Id(),
-                                      spatial.Provenance().revision, spatial.Coordinates().originEpoch, limits.providerContent});
+            root.providers.emplace_back(spatial.Provenance().provider, spatial.Provenance().source, spatial.Id(),
+                                        spatial.Provenance().revision, spatial.Coordinates().originEpoch, limits.providerContent);
             for (const auto &binding : plan.ExposedInputs()) {
                 const auto supplied = std::ranges::find(inputs, binding.id, &PCGCpuInput::id);
                 const auto identity = PCGInputId::Create(binding.id.Value());
                 if (identity.HasError() || (supplied != inputs.end() && supplied->revision == 0))
                     return Reject<std::vector<PCGProvenance>>(PCGErrors::CpuEvaluationInvalid);
-                root.inputs.push_back({identity.Value(), supplied == inputs.end() ? plan.Generation().revision.Value() : supplied->revision,
-                                       InputDigest(supplied == inputs.end() ? binding.defaultValue : supplied->value)});
+                root.inputs.emplace_back(identity.Value(),
+                                         supplied == inputs.end() ? plan.Generation().revision.Value() : supplied->revision,
+                                         InputDigest(supplied == inputs.end() ? binding.defaultValue : supplied->value));
             }
             std::vector<PCGProvenance> roots;
             roots.reserve(plan.Nodes().size());

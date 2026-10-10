@@ -12,6 +12,7 @@
 #include "Horo/Prefab/PrefabLimits.h"
 #include "Horo/Release/ReleasePipelineExecutor.h"
 #include "Horo/Scene/CookedSceneDefinition.h"
+#include "Horo/Scene/ScenePrefabExpansionOwner.h"
 
 #include <vector>
 
@@ -92,8 +93,11 @@ namespace Horo::Application {
          * @param migrations Existing migration/recovery service. All borrowed authorities outlive this host. */
         PrefabSceneCookHost(JobSystem &jobs, std::shared_ptr<const Assets::CookerCatalogSnapshot> catalog,
                             const Assets::AssetRegistry &registry, const ProjectCompatibilityInspector &compatibility,
-                            Editor::ProjectMutationCoordinator &mutations,
-                            const Editor::ProjectMigrationTransactionService &migrations) noexcept;
+                            Editor::ProjectMutationCoordinator &mutations, const Editor::ProjectMigrationTransactionService &migrations);
+
+        /** @brief Closes expansion admission and cancels/joins owned source preparation before releasing host authorities.
+         * @details Destruction is a teardown boundary, never a frame operation. The scheduler outlives this host. */
+        ~PrefabSceneCookHost();
 
         /** @brief Captures real project/source/package inputs and publishes only a complete validated generation.
          * @param request Explicit roots, target, bounded policies and host-owned publication capabilities.
@@ -139,5 +143,6 @@ namespace Horo::Application {
         const ProjectCompatibilityInspector &compatibility_;
         Editor::ProjectMutationCoordinator &mutations_;
         const Editor::ProjectMigrationTransactionService &migrations_;
+        SceneSource::ScenePrefabExpansionOwner expansion_; /**< Owned exact-input expansion worker and bounded result cache. */
     };
 }  // namespace Horo::Application

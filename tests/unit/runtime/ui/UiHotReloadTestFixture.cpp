@@ -176,11 +176,12 @@ namespace Horo::Runtime::Ui::ReloadTests {
                                   std::uint32_t modalHighWater, std::uint32_t routeHighWater, std::uint32_t concurrentSnapshots,
                                   const LayerOptions &layer) {
         auto loaded = Load(version, secondCanvas, layer);
+        const auto runtimeVersion = layer.runtimeRevision == 0 ? version : layer.runtimeRevision;
         std::vector<UiReloadCanvas> canvases;
         for (std::size_t i = 0; i < loaded.document.Canvases().size(); ++i) {
-            auto canvas = MakeCanvas(allocator, loaded.document, i, version, layer);
-            InputOwners(canvas, loaded.document, i, version, textLimit, modalHighWater, routeHighWater, layer);
-            Geometry(canvas, version, concurrentSnapshots, layer.view);
+            auto canvas = MakeCanvas(allocator, loaded.document, i, runtimeVersion, layer);
+            InputOwners(canvas, loaded.document, i, runtimeVersion, textLimit, modalHighWater, routeHighWater, layer);
+            Geometry(canvas, runtimeVersion, concurrentSnapshots, layer.view);
             canvases.push_back(std::move(canvas));
         }
         auto generation = UiReloadGeneration::Create(std::move(loaded), layer.instance, std::move(canvases));
