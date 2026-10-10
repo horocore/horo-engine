@@ -246,6 +246,10 @@ horo_configure_target_header_boundary(HoroPackageSecurity PUBLIC_HEADERS
     Horo/Packages/PackagePublisherVerification.h
     Horo/Packages/PackagePublisherVerificationErrors.h
 )
+horo_configure_target_header_boundary(HoroPackageLifecycle PUBLIC_HEADERS
+    Horo/Packages/PackageLifecycle.h
+    Horo/Packages/PackageLifecycleErrors.h
+)
 horo_configure_target_header_boundary(HoroProjectMigrations)
 horo_configure_target_header_boundary(HoroSaveApi PUBLIC_HEADERS
     Horo/Runtime/Save/SaveErrors.h
@@ -634,6 +638,9 @@ horo_configure_target_header_boundary(HoroPhysicsSceneIntegration PUBLIC_HEADERS
     Horo/Physics/PhysicsCellAttachments.h
     Horo/Physics/PhysicsSceneActivation.h
 )
+horo_configure_target_header_boundary(HoroCharacterInput PUBLIC_HEADERS
+    Horo/CharacterInput/DesiredMotionAdapter.h
+)
 horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/AICanonicalState.h
     Horo/AI/AIErrors.h
@@ -665,7 +672,11 @@ horo_configure_target_header_boundary(HoroAISceneIntegration PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroAISightIntegration PUBLIC_HEADERS
     Horo/AI/PerceptionSight.h
 )
+horo_configure_target_header_boundary(HoroAnimationGraphSourceCodec PUBLIC_HEADERS
+    Horo/Animation/AnimationGraphSource.h
+)
 horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
+    Horo/Animation/AnimationGraph.h
     Horo/Animation/AnimationCompression.h
     Horo/Animation/AnimationClip.h
     Horo/Animation/AnimationComponents.h

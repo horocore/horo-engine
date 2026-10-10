@@ -1292,6 +1292,11 @@ add_library(HoroEngine::PhysicsSceneIntegration ALIAS HoroPhysicsSceneIntegratio
 target_compile_features(HoroPhysicsSceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroPhysicsSceneIntegration PUBLIC HoroEngine::Physics HoroEngine::RuntimeScene HoroEngine::SceneCellPayload)
 
+add_library(HoroCharacterInput STATIC runtime/character/input/DesiredMotionAdapter.cpp)
+add_library(HoroEngine::CharacterInput ALIAS HoroCharacterInput)
+target_compile_features(HoroCharacterInput PUBLIC cxx_std_20)
+target_link_libraries(HoroCharacterInput PUBLIC HoroEngine::Input HoroEngine::Physics)
+
 add_library(HoroAI STATIC
         runtime/ai/api/AICanonicalErrors.cpp
         runtime/ai/api/AICanonicalState.cpp
@@ -1352,6 +1357,8 @@ target_compile_features(HoroGameplayPerceptionIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroGameplayPerceptionIntegration PUBLIC HoroEngine::AISceneIntegration HoroEngine::NetworkRuntime)
 
 add_library(HoroAnimationApi STATIC
+        runtime/animation/api/AnimationGraph.cpp
+        runtime/animation/api/AnimationGraphBinding.cpp
         runtime/animation/api/AnimationCompression.cpp
         runtime/animation/api/AnimationClip.cpp
         runtime/animation/api/AnimationComponents.cpp
@@ -1364,6 +1371,14 @@ add_library(HoroAnimationApi STATIC
 add_library(HoroEngine::AnimationApi ALIAS HoroAnimationApi)
 target_compile_features(HoroAnimationApi PUBLIC cxx_std_20)
 target_link_libraries(HoroAnimationApi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
+
+add_library(HoroAnimationGraphSourceCodec STATIC
+        runtime/animation/source/AnimationGraphSourceRead.cpp
+        runtime/animation/source/AnimationGraphSourceWrite.cpp)
+add_library(HoroEngine::AnimationGraphSourceCodec ALIAS HoroAnimationGraphSourceCodec)
+target_compile_features(HoroAnimationGraphSourceCodec PUBLIC cxx_std_20)
+target_link_libraries(HoroAnimationGraphSourceCodec PUBLIC HoroEngine::AnimationApi PRIVATE nlohmann_json::nlohmann_json)
+
 
 add_library(HoroPCG STATIC
         runtime/pcg/api/PCGNodeCatalog.cpp
@@ -2813,6 +2828,17 @@ target_link_libraries(HoroExtensions
         PUBLIC HoroEngine::Foundation HoroEngine::Platform HoroEngine::Assets HoroEngine::Security
         PRIVATE nlohmann_json::nlohmann_json CURL::libcurl miniz lunasvg::lunasvg
 )
+
+# Application-owned package-to-extension composition; neither package verification nor the native host owns the other's lifecycle.
+add_library(HoroPackageLifecycle STATIC
+        packages/lifecycle/PackageLifecycle.cpp
+        packages/lifecycle/PackageLifecycleErrors.cpp
+        packages/lifecycle/PackageActivationCandidates.cpp
+        packages/lifecycle/PackageActivationComposition.cpp
+)
+add_library(HoroEngine::PackageLifecycle ALIAS HoroPackageLifecycle)
+target_compile_features(HoroPackageLifecycle PUBLIC cxx_std_20)
+target_link_libraries(HoroPackageLifecycle PUBLIC HoroEngine::Foundation HoroEngine::PackageSecurity HoroEngine::Extensions HoroEngine::Assets)
 
 # Host-side bridge: sequence model and runtime remain independent of Extensions.
 add_library(HoroCinematicScriptBridge STATIC

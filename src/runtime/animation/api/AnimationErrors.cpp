@@ -223,4 +223,32 @@ namespace Horo::Animation::AnimationErrors {
                                                         ErrorSeverity::Warning,
                                                         "Animation compression exceeded its captured finite work budget.",
                                                         "Increase the bounded profile budget or reduce source data."};
+    const ErrorCodeDescriptor GraphVersionUnsupported{AnimationDomain, ErrorCode{"animation.graph.version_unsupported"},
+                                                      ErrorSeverity::Error, "Graph schema version requires an unavailable migration.",
+                                                      "Correct the candidate or resume admission before compiling."};
+    const ErrorCodeDescriptor GraphAdmissionRejected{AnimationDomain, ErrorCode{"animation.graph.admission_rejected"}, ErrorSeverity::Error,
+                                                     "Graph compilation owner has closed admission.",
+                                                     "Correct the candidate or resume admission before compiling."};
+    const ErrorCodeDescriptor GraphOperationCancelled{AnimationDomain, ErrorCode{"animation.graph.operation_cancelled"},
+                                                      ErrorSeverity::Error, "Graph compilation or migration was cancelled.",
+                                                      "Correct the candidate or resume admission before compiling."};
+    const ErrorCodeDescriptor GraphReloadMismatch{AnimationDomain, ErrorCode{"animation.graph.reload_mismatch"}, ErrorSeverity::Error,
+                                                  "Graph replacement targets another stable identity.",
+                                                  "Correct the candidate or resume admission before compiling."};
+    const ErrorCodeDescriptor GraphLimitExceeded{AnimationDomain, ErrorCode{"animation.graph.limit_exceeded"}, ErrorSeverity::Error,
+                                                 "Graph compilation exceeds a captured finite work limit.",
+                                                 "Correct the candidate or resume admission before compiling."};
+    const ErrorCodeDescriptor GraphMalformed{AnimationDomain, ErrorCode{"animation.graph.malformed"}, ErrorSeverity::Error,
+                                             "Graph identities, node schemas or endpoints are malformed.",
+                                             "Correct the candidate or resume admission before compiling."};
+    const ErrorCodeDescriptor GraphTypeMismatch{AnimationDomain, ErrorCode{"animation.graph.type_mismatch"}, ErrorSeverity::Error,
+                                                "Graph parameter, interface or connection types disagree.",
+                                                "Correct the candidate or resume admission before compiling."};
+    const ErrorCodeDescriptor GraphCycle{AnimationDomain, ErrorCode{"animation.graph.cycle"}, ErrorSeverity::Error,
+                                         "Graph nodes or subgraph calls contain a cycle.",
+                                         "Correct the candidate or resume admission before compiling."};
+    const ErrorCodeDescriptor
+        GraphBindingMismatch{AnimationDomain, ErrorCode{"animation.graph.binding_mismatch"}, ErrorSeverity::Error,
+                             "Graph dependencies do not match the exact immutable skeleton publication.",
+                             "Resolve and pin the exact validated skeleton and clip dependencies before compilation."};
 }  // namespace Horo::Animation::AnimationErrors

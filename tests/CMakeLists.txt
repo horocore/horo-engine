@@ -111,6 +111,7 @@ target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/RenderGrap
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderParallelWorkPublicHeaderConsumer.cpp)
 target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/RenderParallelFrontendPublicHeaderConsumer.cpp)
 target_sources(HoroRuntimeUiPublicHeaderConsumer PRIVATE support/RuntimeUiUnicodePublicContract.cpp)
+target_sources(HoroCharacterInputPublicHeaderConsumer PRIVATE support/DesiredMotionPublicContract.cpp)
 target_sources(HoroGameplayApiPublicHeaderConsumer PRIVATE support/PersistenceInstallationPublicHeaderConsumer.cpp)
 target_sources(HoroRuntimePublicHeaderConsumer PRIVATE support/SaveSceneCanonicalPublicHeaderConsumer.cpp)
 target_sources(HoroRuntimeScenePublicHeaderConsumer PRIVATE support/SaveContentWorldPublicHeaderConsumer.cpp)
@@ -666,6 +667,14 @@ target_link_libraries(HoroCharacterSurfacePublicHeaderConsumer PRIVATE HoroEngin
 add_test(NAME HoroCharacterSurfacePublicHeaderConsumer COMMAND HoroCharacterSurfacePublicHeaderConsumer)
 set_tests_properties(HoroCharacterSurfacePublicHeaderConsumer PROPERTIES LABELS "unit;physics;headless")
 
+add_executable(HoroCharacterInputTests unit/runtime/character_input/DesiredMotionAdapterTests.cpp
+    unit/runtime/character_input/DesiredMotionAdmissionTests.cpp support/AllocationProbe.cpp)
+target_compile_features(HoroCharacterInputTests PRIVATE cxx_std_20)
+target_include_directories(HoroCharacterInputTests PRIVATE ${PROJECT_SOURCE_DIR}/src/physics)
+target_include_directories(HoroCharacterInputTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroCharacterInputTests PRIVATE HoroEngine::CharacterInput)
+horo_register_catch_test(HoroCharacterInputTests LABELS "unit;character;input;headless")
+
 add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsCellAttachmentsTests.cpp
         support/AllocationProbe.cpp
@@ -817,6 +826,9 @@ target_compile_definitions(HoroAISightTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<B
 horo_register_catch_test(HoroAISightTests LABELS "unit;ai;sight;headless")
 
 add_executable(HoroAnimationApiTests
+        unit/runtime/animation/AnimationGraphTests.cpp
+        unit/runtime/animation/AnimationGraphBindingTests.cpp
+        unit/runtime/animation/AnimationGraphSourceTests.cpp
         unit/runtime/animation/AnimationCompressionTests.cpp
         unit/runtime/animation/AnimationClipTests.cpp
         unit/runtime/animation/AnimationComponentTests.cpp
@@ -826,7 +838,7 @@ add_executable(HoroAnimationApiTests
         unit/runtime/animation/SkeletalMeshSkinningTests.cpp
 )
 target_compile_features(HoroAnimationApiTests PRIVATE cxx_std_20)
-target_link_libraries(HoroAnimationApiTests PRIVATE HoroEngine::AnimationApi)
+target_link_libraries(HoroAnimationApiTests PRIVATE HoroEngine::AnimationApi HoroEngine::AnimationGraphSourceCodec nlohmann_json::nlohmann_json)
 horo_register_catch_test(HoroAnimationApiTests LABELS "unit;animation;headless")
 
 add_executable(HoroPCGTests
@@ -3781,6 +3793,16 @@ foreach(abi_fixture_mode RANGE 0 11)
     target_compile_definitions(HoroExtensionManagerTests PRIVATE
             HORO_ABI_FIXTURE_${abi_fixture_mode}="$<TARGET_FILE:${abi_fixture_target}>")
 endforeach()
+add_executable(HoroPackageLifecycleTests unit/packages/PackageLifecycleTests.cpp)
+target_link_libraries(HoroPackageLifecycleTests PRIVATE HoroEngine::PackageLifecycle HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
+target_include_directories(HoroPackageLifecycleTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+add_dependencies(HoroPackageLifecycleTests HoroExtensionAbiFixture0 HoroExtensionAbiFixture4 HoroExtensionAbiFixture6)
+target_compile_definitions(HoroPackageLifecycleTests PRIVATE
+    HORO_PACKAGE_NATIVE_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture4>"
+    HORO_PACKAGE_EMPTY_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture0>"
+    HORO_PACKAGE_FAILING_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture6>")
+horo_register_catch_test(HoroPackageLifecycleTests LABELS "packages;extensions;headless")
+
 add_library(HoroExtensionAbiMissingLoadFixture MODULE fixtures/extensions/AbiModuleMissingLoad.c)
 target_compile_features(HoroExtensionAbiMissingLoadFixture PRIVATE c_std_11)
 set_target_properties(HoroExtensionAbiMissingLoadFixture PROPERTIES C_EXTENSIONS OFF)
@@ -3809,6 +3831,9 @@ foreach(abi_hostile_fixture_mode RANGE 0 7)
     target_compile_definitions(HoroExtensionManagerTests PRIVATE
             HORO_ABI_HOSTILE_FIXTURE_${abi_hostile_fixture_mode}="$<TARGET_FILE:${abi_hostile_fixture_target}>")
 endforeach()
+add_dependencies(HoroPackageLifecycleTests HoroExtensionAbiHostileFixture6)
+target_compile_definitions(HoroPackageLifecycleTests PRIVATE
+    HORO_PACKAGE_TEARDOWN_FAILING_FIXTURE="$<TARGET_FILE:HoroExtensionAbiHostileFixture6>")
 add_test(NAME HoroExtensionAbiConformanceCliSupported
     COMMAND "$<TARGET_FILE:horo-extension-conformance>" --json "$<TARGET_FILE:HoroExtensionAbiFixture1>")
 set_tests_properties(HoroExtensionAbiConformanceCliSupported PROPERTIES
@@ -4424,6 +4449,12 @@ set_tests_properties(HoroCliMcpStdioContract PROPERTIES LABELS "cli;mcp;integrat
 add_executable(HoroMixerDocumentTests unit/editor/MixerAssetDocumentTests.cpp)
 target_link_libraries(HoroMixerDocumentTests PRIVATE HoroEngine::EditorServices)
 horo_register_catch_test(HoroMixerDocumentTests LABELS "unit;editor;audio;headless")
+
+add_executable(HoroAnimationGraphPublicHeaderConsumer support/AnimationGraphPublicHeaderConsumer.cpp)
+target_compile_features(HoroAnimationGraphPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroAnimationGraphPublicHeaderConsumer PRIVATE HoroEngine::AnimationApi HoroEngine::AnimationGraphSourceCodec)
+add_test(NAME HoroAnimationGraphPublicHeaderConsumer COMMAND HoroAnimationGraphPublicHeaderConsumer)
+set_tests_properties(HoroAnimationGraphPublicHeaderConsumer PROPERTIES LABELS "unit;animation;headless;public_headers;ci-windows")
 
 horo_finalize_ci_suites()
 

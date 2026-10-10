@@ -16,6 +16,8 @@ set(HORO_CI_AUDIO_TARGETS
 # The full Windows suite remains disabled. Preserve all existing focused checks
 # in one headless Debug build, including their public-header compile consumers.
 set(HORO_CI_WINDOWS_TARGETS
+    HoroAnimationApiTests
+    HoroAnimationGraphPublicHeaderConsumer
     HoroLightCullingTests
     HoroLightFramePoolTests
     HoroAITaskSchedulerTests
@@ -57,6 +59,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroPrefabSceneExpansionContractConsumer
     HoroAssetRegistryTests
     HoroInputTests
+    HoroCharacterInputTests
+    HoroCharacterInputPublicHeaderConsumer
     HoroInputSdlTests
     HoroRuntimeUiInputTests
     HoroRuntimeUiTextUnicodeTests
@@ -80,6 +84,9 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroExtensionManagerTests
     HoroEditorActivityBoundaryTests
     HoroExtensionsPublicHeaderConsumer
+
+    HoroPackageLifecycleTests
+    HoroPackageLifecyclePublicHeaderConsumer
     HoroMcpSessionTests
     HoroMcpSessionPublicHeaderConsumer
     HoroRuntimeSaveRootResolverTests
