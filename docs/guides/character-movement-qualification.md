@@ -31,7 +31,7 @@ copied snapshots surviving teardown. Null compositions must return explicit
 `CapabilityUnavailable` without a spawned transform.
 
 The existing exact headless geometry, ramp, step and airborne oracles additionally
-capture metrics on each helper-driven attempted tick. Actual callback counts
+capture metrics on each helper-driven attempted tick. Actual sweep callback counts (plus step landing overlap-clearance callbacks)
 must equal captured query counts and stay within the prepared query and movement
 iteration budgets. Their existing tighter terminal tolerances, threshold
 variants, malformed evidence, rollback and cancellation cases remain applicable.
