@@ -1584,3 +1584,15 @@ and eviction before destroying the cache or authority. Cancellation does not rev
 accepted readers; exact old/new payload revisions coexist only within reserved
 peaks and retire independently. The public-header consumer verifies the target's
 staged dependency surface without broad source/include paths.
+
+## NET-008.3 Play Topology Profile Boundary
+
+`HoroPlayTopologyApplication` solely owns the additive public
+`Horo/Application/PlayTopology.h` contract and declares only Foundation and
+NetworkApi public dependencies. JSON stays private; runtime backend factories,
+editor/native types and process runners do not enter this header. Store filesystem
+paths remain private host composition inputs. The codec and store helper header
+is target-private. Existing callers require no signature migration; preview launch
+hosts opt into complete capability preflight and revision/generation revalidation
+as described in Networking Architecture. The generated staged header consumer and
+`HoroPlayTopologyPublicHeaderConsumer` verify this additive target boundary.

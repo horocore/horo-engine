@@ -548,6 +548,31 @@ namespace Horo::Editor {
             }
         }
 
+        /** @brief Place the localized profiles action only when it fits before the existing Play controls. */
+        void DrawPlayProfilesControl(const float playX, const bool idle, EditorWorkspaceViewCommandData &outCommand,
+                                     const EditorGuiContext &context) {
+            const std::string label = context.localization.Get("editor", "workspace.play_topology.button");
+            const auto metrics = DesignSystem::MetricsFor(Theme::GetActiveTokens(), Ui::ComponentSize::Small);
+            float width{};
+            {
+                Theme::ScopedTextStyle textStyle(context.theme.fonts.sans, metrics.fontSize, Theme::FontPx::Sans);
+                width = ImGui::CalcTextSize(label.c_str()).x + 2 * metrics.paddingX;
+            }
+            const float gap = Ui::ScaledLayoutValue(8);
+            const float x = playX - width - gap;
+            if (x < ImGui::GetCursorPosX() + gap)
+                return;
+            ImGui::SetCursorPosX(x);
+            if (const std::string stableLabel = label + "###workspace_play_profiles";
+                Ui::Button({.label = stableLabel.c_str(),
+                            .variant = Ui::ButtonVariant::Secondary,
+                            .enabled = idle,
+                            .font = context.theme.fonts.sans,
+                            .componentSize = Ui::ComponentSize::Small}))
+                outCommand.command = EditorWorkspaceViewCommand::OpenPlayTopologyProfiles;
+            ImGui::SameLine(0, gap);
+        }
+
         void DrawPlayControls(const float availableRight, const EditorWorkspaceViewModel &viewModel,
                               EditorWorkspaceViewCommandData &outCommand, const EditorGuiContext &context) {
             const bool idle = viewModel.playState == EditorPlayState::Idle || viewModel.playState == EditorPlayState::Failed;
@@ -560,7 +585,7 @@ namespace Horo::Editor {
             const float controlX = availableRight - controlWidth;
             if (controlX < ImGui::GetCursorPosX() + 8.0F)
                 return;
-
+            DrawPlayProfilesControl(controlX, idle, outCommand, context);
             ImGui::SetCursorPosX(controlX);
             const auto drawButton = [&](const char *labelKey, const char *stableId, const bool enabled,
                                         const EditorWorkspaceViewCommand command) {

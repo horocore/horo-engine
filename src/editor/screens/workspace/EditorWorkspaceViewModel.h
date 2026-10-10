@@ -140,6 +140,7 @@ namespace Horo::Editor {
         ReorderActivityBarItem,
         DockWorkspacePanel,
         ResizePanel,
+        OpenPlayTopologyProfiles,
     };
 
     enum class BottomDockMode {

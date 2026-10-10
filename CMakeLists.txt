@@ -4,6 +4,12 @@ set(HORO_ENGINE_VERSION "0.2.0")
 
 project(HoroEngine VERSION ${HORO_ENGINE_VERSION} LANGUAGES CXX C)
 
+option(HORO_ANDROID_PACKAGE_QUALIFICATION "Build the explicit Android package qualification host only" OFF)
+if(HORO_ANDROID_PACKAGE_QUALIFICATION)
+    include(cmake/HoroAndroidPackageQualification.cmake)
+    return()
+endif()
+
 execute_process(
     COMMAND git rev-parse --short=12 HEAD
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
