@@ -15,6 +15,7 @@ namespace Horo::Tests::VoiceRenderFixture {
             bool primingSilent{};
             bool quiescingSilent{};
             bool rejectOpenedFormat{};
+            std::size_t callbackEntries{};
 
             AudioBackendKind Kind() const noexcept override {
                 return null->Kind();
@@ -67,6 +68,7 @@ namespace Horo::Tests::VoiceRenderFixture {
 
             static Audio::Backend::RenderResult Process(void *context, const Audio::Backend::RenderInvocation &invocation) noexcept {
                 auto &self = *static_cast<CapturingOutput *>(context);
+                ++self.callbackEntries;
                 const auto rendered = self.port.process(self.port.context, invocation);
                 bool silent = true;
                 for (std::size_t index = 0; index < self.left.size(); ++index) {
@@ -409,6 +411,9 @@ namespace Horo::Tests::VoiceRenderFixture {
             CHECK(rig.frontend->Snapshot().phase == AudioFrontendPhase::Closed);
             CHECK(rig.output->null->State() == Audio::Backend::NullAudioBackendState::Closed);
             CHECK(rig.registry->Snapshot(rig.frontend->Snapshot().voice).HasError());
+            const auto callbacks = rig.output->callbackEntries;
+            CHECK(rig.output->null->AdvanceCallback().HasError());
+            CHECK(rig.output->callbackEntries == callbacks);
             CHECK(rig.frontend->Snapshot().pendingOperations == 0);
             CHECK(rig.frontend->Snapshot().retainedOperationResults == 3);
             std::array<AudioFrontendOperationResult, 3> results;

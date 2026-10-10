@@ -91,11 +91,12 @@ namespace Horo::Editor {
 
     /** @copydoc AudioEditorDocument::Transport */
     Result<Audio::AudioCommandAdmission> AudioEditorDocument::Transport(const std::uint64_t expectedRevision,
-                                                                        const Audio::AudioVoiceControlRequest control) {
+                                                                        const Audio::AudioVoiceControlRequest &control) {
+        using enum Audio::AudioVoiceControl;
+
         if (const auto valid = CheckRevision(expectedRevision); valid.HasError())
             return Result<Audio::AudioCommandAdmission>::Failure(valid.ErrorValue());
-        if (!focused_ && control.control != Audio::AudioVoiceControl::Stop && control.control != Audio::AudioVoiceControl::Pause &&
-            control.control != Audio::AudioVoiceControl::Cancel)
+        if (!focused_ && control.control != Stop && control.control != Pause && control.control != Cancel)
             return Result<Audio::AudioCommandAdmission>::Failure(MakeError(AudioEditorDocumentErrors::Unfocused));
         if (!preview_ || previewRevision_ != revision_)
             return Result<Audio::AudioCommandAdmission>::Failure(MakeError(AudioEditorDocumentErrors::PreviewUnavailable));

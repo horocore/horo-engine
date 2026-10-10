@@ -87,10 +87,10 @@ namespace Horo::Audio {
          */
         [[nodiscard]] Result<void> Pump(AudioMonotonicTimestamp deadline);
         /** @brief Admits one typed control for this lane's exact voice.
-         * @param control Owned transport operation; foreign voices and inactive output fail.
+         * @param control Typed operation copied at admission; foreign voices and inactive output fail.
          * @return Exact admission or explicit retry/rejection. Application occurs on the callback.
          */
-        [[nodiscard]] Result<AudioCommandAdmission> Transport(AudioVoiceControlRequest control);
+        [[nodiscard]] Result<AudioCommandAdmission> Transport(const AudioVoiceControlRequest &control);
         /** @brief Copies and acknowledges completed operations on control, without allocation.
          * @param output Caller storage; at most 64 results are copied per call.
          * @return Number of results copied. Results remain retained on saturation; native resources

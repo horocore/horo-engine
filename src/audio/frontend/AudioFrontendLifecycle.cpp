@@ -24,8 +24,8 @@ namespace Horo::Audio {
     /** @copydoc AudioFrontend::State::AdmitOpened */
     Result<void> AudioFrontend::State::AdmitOpened(const Backend::Opened &value) {
         opened = true;
-        const auto &request = output->open;
-        if (ValidateAudioDeviceNegotiation(request.format, output->devices, value.format).status !=
+        if (const auto &request = output->open;
+            ValidateAudioDeviceNegotiation(request.format, output->devices, value.format).status !=
                 AudioDeviceNegotiationStatus::Accepted ||
             value.access != request.access || value.timing.epoch != request.plannedEpoch ||
             !ValidateAudioDeviceTimingReport(value.timing, request.plannedEpoch, output->backend->Kind()) ||
@@ -49,8 +49,7 @@ namespace Horo::Audio {
         if (completion.operation != *pending)
             return Failure(AudioErrors::EventQueueInvalid);
         const auto outcome = ApplyCompletion(completion);
-        const auto acknowledged = output->backend->AcknowledgeCompletion(*pending);
-        if (acknowledged.HasError()) {
+        if (const auto acknowledged = output->backend->AcknowledgeCompletion(*pending); acknowledged.HasError()) {
             phase = AudioFrontendPhase::Retained;
             return acknowledged;
         }
@@ -174,8 +173,7 @@ namespace Horo::Audio {
             if (const auto observed = Observe(events[index]); observed.HasError())
                 return observed;
         if (ready && started && !rendering) {
-            const auto committed = output->backend->CommitRendering(output->open.plannedEpoch);
-            if (committed.HasError())
+            if (const auto committed = output->backend->CommitRendering(output->open.plannedEpoch); committed.HasError())
                 return committed;
             rendering = true;
             phase = closing ? AudioFrontendPhase::Closing : AudioFrontendPhase::Active;
@@ -194,11 +192,9 @@ namespace Horo::Audio {
         if (const auto drained = DrainCancelled(); drained.HasError())
             return drained;
         if (owned.streams) {
-            const auto stopped = owned.streams->Stop(owned.stream);
-            if (stopped.HasError())
+            if (const auto stopped = owned.streams->Stop(owned.stream); stopped.HasError())
                 return stopped;
-            const auto retired = owned.streams->Retire(owned.stream);
-            if (retired.HasError())
+            if (const auto retired = owned.streams->Retire(owned.stream); retired.HasError())
                 return retired;
             owned.streams.reset();
         }
@@ -218,6 +214,7 @@ namespace Horo::Audio {
         for (std::size_t count = 0; count <= MaximumAudioCommandSlots; ++count) {
             (void)owned.staging.Pump(64);
             while (owned.staging.TryConsume(cancelled)) {
+                // Native detachment permits dropping cancelled records without dispatch or resource borrows.
             }
             if (owned.staging.IsDrained())
                 break;

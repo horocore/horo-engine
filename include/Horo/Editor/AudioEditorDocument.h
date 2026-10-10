@@ -80,7 +80,7 @@ namespace Horo::Editor {
          * @return Admission/retry or typed stale/closed/unfocused failure; application is callback-owned.
          */
         [[nodiscard]] Result<Audio::AudioCommandAdmission> Transport(std::uint64_t expectedRevision,
-                                                                     Audio::AudioVoiceControlRequest control);
+                                                                     const Audio::AudioVoiceControlRequest &control);
         /** @brief Copies and acknowledges retained terminal transport results, including after reload/close.
          * @param output Caller-owned storage; results carry their originating runtime and admission sequence.
          * @return Number of results copied. Undrained old-preview results block replacement admission;
