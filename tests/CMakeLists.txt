@@ -1090,6 +1090,7 @@ add_executable(HoroNavigationRuntimeTests
         unit/runtime/navigation/NavigationDynamicRegistryTests.cpp
         unit/runtime/navigation/NavigationObstacleOverlayTests.cpp
         unit/runtime/navigation/NavigationAgentRegistryTests.cpp
+        unit/runtime/navigation/NavigationMovementTests.cpp
         unit/runtime/navigation/NavigationPathPolicyTests.cpp
         unit/runtime/navigation/NavigationFoundationQualificationTests.cpp
         unit/runtime/navigation/NavigationCoordinatorTests.cpp
