@@ -56,6 +56,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroRuntimeUiTextLayoutTests
     HoroRuntimeUiPublicHeaderConsumer
     HoroRuntimeUiOverlayLifecycleTests
+    HoroRuntimeUiScreenTransitionTests
+    HoroRuntimeUiScreenTransitionPublicHeaderConsumer
     HoroInputPublicHeaderConsumer
     HoroExtensionManagerTests
     HoroEditorActivityBoundaryTests
@@ -151,6 +153,7 @@ function(horo_finalize_ci_suites)
         HoroNetworkDebuggerPublicHeaderConsumer
         HoroAudioCallbackLockPolicyTest
         HoroPrefabSceneExpansionContractConsumer
+        HoroRuntimeUiScreenTransitionPublicHeaderConsumer
         HoroExtensionManagerTests
         HoroExtensionAbiConformanceCliSupported
         HoroExtensionAbiConformanceCliIncompatible

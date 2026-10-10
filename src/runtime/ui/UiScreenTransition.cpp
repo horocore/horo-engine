@@ -42,23 +42,35 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Identifies stages that can still reach publication. */
         bool Pending(const UiScreenTransitionState state) noexcept {
-            return state == UiScreenTransitionState::LoadingDocument || state == UiScreenTransitionState::LoadingDependencies ||
-                   state == UiScreenTransitionState::LoadCompleted || state == UiScreenTransitionState::AwaitingComposition ||
-                   state == UiScreenTransitionState::Ready;
+            using enum UiScreenTransitionState;
+            return state == LoadingDocument || state == LoadingDependencies || state == LoadCompleted || state == AwaitingComposition ||
+                   state == Ready;
         }
     }  // namespace
 
     struct UiScreenTransition::Storage final {
+        /** @brief Owns immutable terminal errors independently from current screen lifetime. */
+        struct FailureState final {
+            std::optional<Error> detail;
+            Error invalid{MakeError(UiScreenTransitionErrors::Invalid)};
+            Error timeout{MakeError(UiScreenTransitionErrors::Timeout)};
+            Error cancelled{MakeError(UiErrors::AssetLoadCancelled)};
+        };
+
+        /** @brief Tracks the host's monotonic preparation clock. */
+        struct Timing final {
+            std::uint64_t started{};
+            std::uint64_t lastTick{};
+        };
+
         Storage(UiRuntimeAssetLoadService &service, UiOwnershipGeneration owner, UiScreenTransitionLimits bounds)
-            : loader(service), ownership(owner), limits(bounds), retired(bounds.maximumRetiredScreens),
-              invalid(MakeError(UiScreenTransitionErrors::Invalid)), timeout(MakeError(UiScreenTransitionErrors::Timeout)),
-              cancelled(MakeError(UiErrors::AssetLoadCancelled)) {}
+            : loader(service), ownership(owner), limits(bounds), retired(bounds.maximumRetiredScreens) {}
 
         /** @brief Preserves the original failure while leaving live screen ownership untouched. */
         Result<void> Reject(Error error) {
-            detail = std::move(error);
+            failures.detail = std::move(error);
             progress.state = UiScreenTransitionState::Failed;
-            return Result<void>::Failure(*detail);
+            return Result<void>::Failure(*failures.detail);
         }
 
         /** @brief Reads the current exact route guard without changing route ownership. */
@@ -71,6 +83,26 @@ namespace Horo::Runtime::Ui {
             return canvas->routes->Guard();
         }
 
+        /** @brief Verifies the exact source generation and navigation guard without allocation or mutation. */
+        bool SourceMatches() const noexcept {
+            if (!source || !current->IsCurrent(*source))
+                return false;
+            auto *canvas = current->Current()->Canvas(currentCanvas);
+            if (!canvas || !canvas->routes || !sourceGuard || canvas->routes->State() != UiScreenStackState::Active)
+                return false;
+            const auto top = canvas->routes->Top();
+            return canvas->routes->Stack() == sourceGuard->stack && canvas->routes->Revision() == sourceGuard->revision &&
+                   (top ? std::optional{top->id} : std::nullopt) == sourceGuard->top;
+        }
+
+        /** @brief Refuses retirement while any canvas owns a prepared navigation mutation. */
+        bool RoutesCanRetire() const noexcept {
+            for (const auto &canvas : current->Current()->Canvases())
+                if (canvas.routes && !canvas.routes->CanRetire())
+                    return false;
+            return true;
+        }
+
         /** @brief Releases terminal preparation resources only while the collection fence is held. */
         Result<void> CollectPreparation() {
             if (Pending(progress.state))
@@ -81,8 +113,7 @@ namespace Horo::Runtime::Ui {
             }
             if (candidate) {
                 candidate->Shutdown();
-                auto collected = candidate->CollectRetired();
-                if (collected.HasError())
+                if (auto collected = candidate->CollectRetired(); collected.HasError())
                     return Result<void>::Failure(collected.ErrorValue());
                 if (!candidate->CanReclaim())
                     return Fail<void>(UiScreenTransitionErrors::Busy);
@@ -102,8 +133,7 @@ namespace Horo::Runtime::Ui {
             for (auto &publisher : retired) {
                 if (!publisher)
                     continue;
-                auto collected = publisher->CollectRetired();
-                if (collected.HasError())
+                if (auto collected = publisher->CollectRetired(); collected.HasError())
                     return Result<std::size_t>::Failure(collected.ErrorValue());
                 if (publisher->CanReclaim()) {
                     publisher.reset();
@@ -111,8 +141,7 @@ namespace Horo::Runtime::Ui {
                 }
             }
             if (current) {
-                auto collected = current->CollectRetired();
-                if (collected.HasError())
+                if (auto collected = current->CollectRetired(); collected.HasError())
                     return Result<std::size_t>::Failure(collected.ErrorValue());
                 if (progress.state == UiScreenTransitionState::Stopped && current->CanReclaim()) {
                     current.reset();
@@ -136,14 +165,10 @@ namespace Horo::Runtime::Ui {
         std::optional<UiRouteStackGuard> sourceGuard;
         UiCanvasId currentCanvas;
         UiScreenTransitionProgress progress;
-        std::uint64_t started{};
-        std::uint64_t lastTick{};
+        Timing timing;
         std::uint64_t nextOperation{1};
         std::uint32_t lastInstanceSlot{};
-        std::optional<Error> detail;
-        Error invalid;
-        Error timeout;
-        Error cancelled;
+        FailureState failures;
         bool collecting{}; /**< Closes public borrowing and mutation while deferred authority callbacks drain. */
         bool stopRequested{};
     };
@@ -193,7 +218,7 @@ namespace Horo::Runtime::Ui {
         if (s.collecting || s.request || s.loading || s.candidate)
             return Fail<UiScreenTransitionId>(UiScreenTransitionErrors::Busy);
         if (!request.instance.IsValid() || request.instance.ownership != s.ownership || request.instance.slot <= s.lastInstanceSlot ||
-            !request.route.IsValid() || request.timeoutTicks == 0 || now < s.lastTick)
+            !request.route.IsValid() || request.timeoutTicks == 0 || now < s.timing.lastTick)
             return Fail<UiScreenTransitionId>(UiScreenTransitionErrors::Invalid);
         if (s.nextOperation == 0)
             return Fail<UiScreenTransitionId>(UiErrors::GenerationExhausted);
@@ -218,9 +243,9 @@ namespace Horo::Runtime::Ui {
         s.lastInstanceSlot = request.instance.slot;
         s.request.emplace(std::move(request));
         s.cancellation = cancellation;
-        s.started = now;
-        s.lastTick = now;
-        s.detail.reset();
+        s.timing.started = now;
+        s.timing.lastTick = now;
+        s.failures.detail.reset();
         s.progress = {{s.ownership, s.nextOperation}, UiScreenTransitionState::LoadingDocument, 0, s.request->timeoutTicks};
         s.nextOperation = s.nextOperation == std::numeric_limits<std::uint64_t>::max() ? 0 : s.nextOperation + 1;
         return Result<UiScreenTransitionId>::Success(s.progress.operation);
@@ -228,35 +253,36 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiScreenTransition::Poll */
     UiScreenTransitionProgress UiScreenTransition::Poll(const std::uint64_t now) noexcept {
+        using enum UiScreenTransitionState;
         if (!storage_)
-            return {{}, UiScreenTransitionState::Stopped, 0, 0};
+            return {{}, Stopped, 0, 0};
         auto &s = *storage_;
         if (s.collecting || !Pending(s.progress.state))
             return s.progress;
-        if (now < s.lastTick) {
-            s.progress.state = UiScreenTransitionState::Failed;
+        if (now < s.timing.lastTick) {
+            s.progress.state = Failed;
             return s.progress;
         }
-        s.lastTick = now;
-        s.progress.elapsedTicks = now - s.started;
+        s.timing.lastTick = now;
+        s.progress.elapsedTicks = now - s.timing.started;
         if (s.cancellation.IsCancellationRequested()) {
-            s.progress.state = UiScreenTransitionState::Cancelled;
+            s.progress.state = Cancelled;
         } else if (s.progress.elapsedTicks >= s.progress.timeoutTicks) {
-            s.progress.state = UiScreenTransitionState::TimedOut;
-        } else if (s.progress.state != UiScreenTransitionState::Ready && !s.loaded && s.loading) {
+            s.progress.state = TimedOut;
+        } else if (s.progress.state != Ready && !s.loaded && s.loading) {
             switch (s.loading->State()) {
                 case UiRuntimeAssetLoadState::LoadingDependencies:
-                    s.progress.state = UiScreenTransitionState::LoadingDependencies;
+                    s.progress.state = LoadingDependencies;
                     break;
                 case UiRuntimeAssetLoadState::Succeeded:
-                    s.progress.state = UiScreenTransitionState::LoadCompleted;
+                    s.progress.state = LoadCompleted;
                     break;
                 case UiRuntimeAssetLoadState::Cancelled:
-                    s.progress.state = UiScreenTransitionState::Cancelled;
+                    s.progress.state = Cancelled;
                     break;
                 case UiRuntimeAssetLoadState::Failed:
                     // Consume original failure detail only in the explicit load-time Prepare operation.
-                    s.progress.state = UiScreenTransitionState::LoadCompleted;
+                    s.progress.state = LoadCompleted;
                     break;
                 default:
                     break;
@@ -267,10 +293,10 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiScreenTransition::PrepareAssets */
     Result<void> UiScreenTransition::PrepareAssets(const UiScreenTransitionId operation, const std::uint64_t now) {
+        using enum UiScreenTransitionState;
         if (!storage_ || storage_->collecting || operation != storage_->progress.operation)
             return Fail<void>(UiErrors::RevisionStale);
-        const auto progress = Poll(now);
-        if (progress.state != UiScreenTransitionState::LoadCompleted && progress.state != UiScreenTransitionState::AwaitingComposition)
+        if (const auto progress = Poll(now); progress.state != LoadCompleted && progress.state != AwaitingComposition)
             return Failure() ? Result<void>::Failure(*Failure()) : Fail<void>(UiErrors::AssetLoadNotReady);
         auto &s = *storage_;
         if (s.loaded)
@@ -279,7 +305,7 @@ namespace Horo::Runtime::Ui {
         if (loaded.HasError())
             return s.Reject(loaded.ErrorValue());
         s.loaded.emplace(std::move(loaded).Value());
-        s.progress.state = UiScreenTransitionState::AwaitingComposition;
+        s.progress.state = AwaitingComposition;
         return Result<void>::Success();
     }
 
@@ -299,8 +325,8 @@ namespace Horo::Runtime::Ui {
         if (generation.HasError())
             return s.Reject(generation.ErrorValue());
         auto preparedGeneration = std::move(generation).Value();
-        auto *canvas = preparedGeneration.Canvas(s.request->asset.canvas.canvas);
-        if (!canvas || !canvas->routes || !canvas->routes->Empty())
+        if (auto *canvas = preparedGeneration.Canvas(s.request->asset.canvas.canvas);
+            !canvas || !canvas->routes || !canvas->routes->Empty())
             return s.Reject(MakeError(UiErrors::RouteStackInvalid));
         auto publisher = UiHotReload::Create(std::move(preparedGeneration), s.limits.reload);
         if (publisher.HasError())
@@ -341,19 +367,10 @@ namespace Horo::Runtime::Ui {
             return !publisher;
         });
         if (s.current) {
-            if (!s.source || !s.current->IsCurrent(*s.source))
+            if (!s.SourceMatches())
                 return UiScreenTransitionCommitResult::SourceStale;
-            auto *canvas = s.current->Current()->Canvas(s.currentCanvas);
-            if (!canvas || !canvas->routes || !s.sourceGuard || canvas->routes->State() != UiScreenStackState::Active)
-                return UiScreenTransitionCommitResult::SourceStale;
-            const auto top = canvas->routes->Top();
-            if (canvas->routes->Stack() != s.sourceGuard->stack || canvas->routes->Revision() != s.sourceGuard->revision ||
-                (top ? std::optional{top->id} : std::nullopt) != s.sourceGuard->top)
-                return UiScreenTransitionCommitResult::SourceStale;
-            // A prepared route mutation must not survive screen retirement.
-            for (const auto &canvas : s.current->Current()->Canvases())
-                if (canvas.routes && !canvas.routes->CanRetire())
-                    return UiScreenTransitionCommitResult::RouteBusy;
+            if (!s.RoutesCanRetire())
+                return UiScreenTransitionCommitResult::RouteBusy;
             if (slot == s.retired.end())
                 return UiScreenTransitionCommitResult::RetentionFull;
             s.current->Shutdown();
@@ -367,7 +384,8 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiScreenTransition::Cancel */
     Result<void> UiScreenTransition::Cancel(const UiScreenTransitionId operation) {
-        if (!storage_ || storage_->progress.state == UiScreenTransitionState::Stopped)
+        using enum UiScreenTransitionState;
+        if (!storage_ || storage_->progress.state == Stopped)
             return Fail<void>(UiErrors::AssetLoadShutdown);
         auto &s = *storage_;
         if (s.collecting)
@@ -375,8 +393,8 @@ namespace Horo::Runtime::Ui {
         if (operation != s.progress.operation)
             return Fail<void>(UiErrors::RevisionStale);
         if (Pending(s.progress.state))
-            s.progress.state = UiScreenTransitionState::Cancelled;
-        if (s.loading && s.progress.state != UiScreenTransitionState::Committed)
+            s.progress.state = Cancelled;
+        if (s.loading && s.progress.state != Committed)
             return s.loading->RequestCancel();
         return Result<void>::Success();
     }
@@ -407,15 +425,16 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiScreenTransition::Failure */
     const Error *UiScreenTransition::Failure() const noexcept {
+        using enum UiScreenTransitionState;
         if (!storage_)
             return nullptr;
         const auto &s = *storage_;
-        if (s.progress.state == UiScreenTransitionState::TimedOut)
-            return &s.timeout;
-        if (s.progress.state == UiScreenTransitionState::Cancelled)
-            return &s.cancelled;
-        if (s.progress.state == UiScreenTransitionState::Failed)
-            return s.detail ? &*s.detail : &s.invalid;
+        if (s.progress.state == TimedOut)
+            return &s.failures.timeout;
+        if (s.progress.state == Cancelled)
+            return &s.failures.cancelled;
+        if (s.progress.state == Failed)
+            return s.failures.detail ? &*s.failures.detail : &s.failures.invalid;
         return nullptr;
     }
 
@@ -432,15 +451,23 @@ namespace Horo::Runtime::Ui {
             UiScreenTransition &owner;
             Storage &storage;
 
-            ~CollectionGuard() {
+            CollectionGuard(UiScreenTransition &ownerRef, Storage &storageRef) noexcept : owner(ownerRef), storage(storageRef) {}
+
+            CollectionGuard(const CollectionGuard &) = delete;
+            CollectionGuard &operator=(const CollectionGuard &) = delete;
+            CollectionGuard(CollectionGuard &&) = delete;
+            CollectionGuard &operator=(CollectionGuard &&) = delete;
+
+            ~CollectionGuard() noexcept {
                 storage.collecting = false;
                 if (storage.stopRequested)
                     owner.Shutdown();
             }
-        } guard{*this, s};
+        };
 
-        const auto preparation = s.CollectPreparation();
-        if (preparation.HasError())
+        CollectionGuard guard{*this, s};
+
+        if (const auto preparation = s.CollectPreparation(); preparation.HasError())
             return Result<std::size_t>::Failure(preparation.ErrorValue());
         return s.CollectPublishers();
     }
