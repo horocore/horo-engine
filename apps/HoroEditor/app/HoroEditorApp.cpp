@@ -1448,9 +1448,13 @@ namespace Horo::Editor {
                 std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot, rendererRestart, clock);
             participant->BindHost(*runtime);
             EditorRuntimeParticipant *pacingParticipant = participant.get();
-            if (const Result<void> added = runtime->AddParticipant(std::move(participant));
-                added.HasError() || runtime->Startup().HasError()) {
-                LOG_ERROR("editor.runtime", "Runtime host startup failed.");
+            Result<void> startup = runtime->AddParticipant(std::move(participant));
+            if (startup.HasValue()) {
+                startup = runtime->Startup();
+            }
+            if (startup.HasError()) {
+                LOG_ERROR("editor.runtime", "Runtime host startup failed [%s]: %s", startup.ErrorValue().code.Value().c_str(),
+                          startup.ErrorValue().message.c_str());
                 screenHost.RequestFatalShutdown();
                 runtime->Shutdown();
                 return std::nullopt;
