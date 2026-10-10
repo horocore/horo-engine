@@ -1366,6 +1366,8 @@ target_compile_features(HoroAnimationApi PUBLIC cxx_std_20)
 target_link_libraries(HoroAnimationApi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
 
 add_library(HoroPCG STATIC
+        runtime/pcg/api/PCGCpuEvaluator.cpp
+        runtime/pcg/api/PCGCpuNodeDispatch.cpp
         runtime/pcg/api/PCGCookedPlan.cpp
         runtime/pcg/api/PCGErrors.cpp
         runtime/pcg/api/PCGGenerationPlan.cpp

@@ -422,6 +422,26 @@ namespace Horo::PCG {
         }
     }
 
+    /** @copydoc PCGPointCloudWorkspace::RequiredBytes */
+    Result<std::size_t> PCGPointCloudWorkspace::RequiredBytes(const PCGCookedPlan &plan,
+                                                              const std::span<const PCGPointOutputBound> bounds) {
+        const auto tier = LimitsForTier(plan.Tier());
+        if (tier.HasError() || plan.Nodes().size() > tier.Value().maximumNodes)
+            return Reject<std::size_t>(PCGErrors::PointDataInvalid);
+        try {
+            State state;
+            state.nodeCount = static_cast<std::uint32_t>(plan.Nodes().size());
+            if (const auto shape = CapturePlanShape(plan, bounds, tier.Value(), state); shape.HasError())
+                return Result<std::size_t>::Failure(shape.ErrorValue());
+            const auto metadata = MetadataBytes(state);
+            if (metadata.HasError())
+                return Result<std::size_t>::Failure(metadata.ErrorValue());
+            return AssignSlots(state, bounds, metadata.Value());
+        } catch (const std::bad_alloc &) {
+            return Reject<std::size_t>(PCGErrors::PointCapacityExceeded);
+        }
+    }
+
     /** @copydoc PCGPointCloudWorkspace::ReservedBytes */
     std::size_t PCGPointCloudWorkspace::ReservedBytes() const noexcept {
         return state_->reservedBytes;

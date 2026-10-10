@@ -829,6 +829,7 @@ target_link_libraries(HoroAnimationApiTests PRIVATE HoroEngine::AnimationApi)
 horo_register_catch_test(HoroAnimationApiTests LABELS "unit;animation;headless")
 
 add_executable(HoroPCGTests
+        unit/runtime/pcg/PCGCpuEvaluatorTests.cpp
         unit/runtime/pcg/PCGCookedPlanTests.cpp
         unit/runtime/pcg/PCGGraphAssetTests.cpp
         unit/runtime/pcg/PCGGraphValidationTests.cpp
@@ -842,6 +843,7 @@ add_executable(HoroPCGTests
 )
 target_compile_features(HoroPCGTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPCGTests PRIVATE HoroEngine::PCG)
+target_include_directories(HoroPCGTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/pcg/api)
 horo_register_catch_test(HoroPCGTests LABELS "unit;pcg;headless")
 
 add_executable(HoroPCGTerrainAdapterTests

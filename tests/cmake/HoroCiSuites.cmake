@@ -29,6 +29,10 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroNetworkDebuggerPublicHeaderConsumer
     HoroTerrainAuthoringTests
     HoroTerrainAuthoringPublicHeaderConsumer
+    HoroPCGTests
+    HoroPCGTerrainAdapterTests
+    HoroPCGPublicHeaderConsumer
+    HoroPCGTerrainAdapterPublicHeaderConsumer
     HoroMixerDocumentTests
     ${HORO_CI_AUDIO_TARGETS}
     HoroCliCommandRegistryTests
