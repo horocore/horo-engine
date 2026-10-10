@@ -232,10 +232,11 @@ namespace Horo::Render::Detail {
         }
 
         [[nodiscard]] bool SupportedPassKind(const RenderPassKind kind) noexcept {
+            using enum RenderPassKind;
             switch (kind) {
-                case RenderPassKind::Graphics:
-                case RenderPassKind::Compute:
-                case RenderPassKind::Copy:
+                case Graphics:
+                case Compute:
+                case Copy:
                     return true;
                 default:
                     return false;
@@ -248,6 +249,11 @@ namespace Horo::Render::Detail {
             return !pass.staticMesh || pass.kind == RenderPassKind::Graphics;
         }
     }  // namespace
+
+    /** @copydoc CapturedRenderPass::~CapturedRenderPass */
+    CapturedRenderPass::~CapturedRenderPass() {
+        descriptor.staticMesh.reset();
+    }
 
     /** @copydoc CapturedRenderPass::CapturedRenderPass */
     CapturedRenderPass::CapturedRenderPass(CapturedRenderPass &&other) noexcept

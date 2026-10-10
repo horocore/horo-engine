@@ -60,7 +60,8 @@ namespace Horo::Render {
     }
 
     /** @copydoc RenderFrameScope::PrepareParallelExecution */
-    Result<void> RenderFrameScope::PrepareParallelExecution(JobSystem &jobs, const std::span<const RenderPassDescriptor> orderedPasses,
+    Result<void> RenderFrameScope::PrepareParallelExecution(const JobSystem &jobs,
+                                                            const std::span<const RenderPassDescriptor> orderedPasses,
                                                             const RenderParallelWorkLimits &limits, const CancellationToken &cancellation) {
         if (const auto admitted = ValidateExecutionAdmission(); admitted.HasError())
             return admitted;
@@ -75,20 +76,21 @@ namespace Horo::Render {
     }
 
     /** @copydoc RenderFrameScope::PrepareParallelGraphExecution */
-    Result<void> RenderFrameScope::PrepareParallelGraphExecution(JobSystem &jobs, const CompiledRenderGraphExecution &graph,
+    Result<void> RenderFrameScope::PrepareParallelGraphExecution(const JobSystem &jobs, const CompiledRenderGraphExecution &graph,
                                                                  const std::span<const RenderGraphPassWorkload> workloads,
-                                                                 const CancellationToken &cancellation) {
-        if (const auto admitted = ValidateExecutionAdmission(); admitted.HasError())
-            return admitted;
-        if (const auto admitted = ValidateParallelGraphAdmission(backend_->ParallelRecordingCapabilities(), graph, workloads, cancellation);
-            admitted.HasError())
-            return admitted;
+                                                                 const CancellationToken &cancellation) noexcept {
         try {
+            if (const auto admitted = ValidateExecutionAdmission(); admitted.HasError())
+                return admitted;
+            if (const auto admitted =
+                    ValidateParallelGraphAdmission(backend_->ParallelRecordingCapabilities(), graph, workloads, cancellation);
+                admitted.HasError())
+                return admitted;
             auto prepared = CaptureParallelGraph(graph, workloads);
             if (prepared.HasError())
                 return Result<void>::Failure(prepared.ErrorValue());
-            const auto &recording = prepared.Value();
-            if (!recording || recording->Frame() != frame_ || recording->PassCount() != workloads.size()) {
+            if (const auto &recording = prepared.Value();
+                !recording || recording->Frame() != frame_ || recording->PassCount() != workloads.size()) {
                 Abort();
                 return Result<void>::Failure(MakeError(FrontendErrors::InvalidFrameToken));
             }
@@ -143,8 +145,7 @@ namespace Horo::Render {
         // Keep captured storage alive throughout the synchronous backend/executor borrow.
         // Removing the pending controller permits the ordinary exactly-once Execute path.
         const auto completed = std::move(parallelWork_);
-        const Result<void> executed = ExecuteCapturedCommands(completed->Commands());
-        if (executed.HasError())
+        if (const Result<void> executed = ExecuteCapturedCommands(completed->Commands()); executed.HasError())
             return PollResult::Failure(executed.ErrorValue());
         return PollResult::Success(RenderParallelExecutionProgress::Executed);
     }
@@ -158,17 +159,17 @@ namespace Horo::Render {
     }
 
     /** @copydoc RenderFrameScope::PollParallelGraph */
-    Result<RenderParallelExecutionProgress> RenderFrameScope::PollParallelGraph() {
+    Result<RenderParallelExecutionProgress> RenderFrameScope::PollParallelGraph() noexcept {
         using PollResult = Result<RenderParallelExecutionProgress>;
-        const auto &recording = parallelGraphWork_->Recording();
-        if (recording->Frame() != frame_)
-            return RejectParallelPoll(MakeError(FrontendErrors::InvalidFrameToken));
-        const auto progress = parallelGraphWork_->Poll();
-        if (progress.HasError())
-            return RejectParallelPoll(progress.ErrorValue());
-        if (progress.Value() == Detail::RenderWorkProgress::Pending)
-            return PollResult::Success(RenderParallelExecutionProgress::Pending);
         try {
+            const auto &recording = parallelGraphWork_->Recording();
+            if (recording->Frame() != frame_)
+                return RejectParallelPoll(MakeError(FrontendErrors::InvalidFrameToken));
+            const auto progress = parallelGraphWork_->Poll();
+            if (progress.HasError())
+                return RejectParallelPoll(progress.ErrorValue());
+            if (progress.Value() == Detail::RenderWorkProgress::Pending)
+                return PollResult::Success(RenderParallelExecutionProgress::Pending);
             if (const auto accepted = backend_->AcceptParallelGraph(recording); accepted.HasError())
                 return RejectParallelPoll(accepted.ErrorValue());
             parallelGraphWork_.reset();
@@ -180,7 +181,7 @@ namespace Horo::Render {
     }
 
     /** @copydoc RenderFrameScope::ExecuteCapturedCommands */
-    Result<void> RenderFrameScope::ExecuteCapturedCommands(const std::span<const RenderPassDescriptor> commands) {
+    Result<void> RenderFrameScope::ExecuteCapturedCommands(const std::span<const RenderPassDescriptor> commands) noexcept {
         try {
             for (const auto &pass : commands) {
                 if (const auto valid = ValidateStaticMeshBinding(pass); valid.HasError()) {

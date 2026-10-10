@@ -7,6 +7,13 @@ and source revisions, canonical source commitments associated with dependency
 identities, registry revision and every field of `PrefabProjectPolicy` to match.
 Placement transforms and containing-scene parents remain fresh Scene inputs.
 
+Resolver construction computes each source's canonical digest and exact byte
+length from its actual owned validated document, independently of claimed source
+revisions. The readonly `CanonicalSourceCommitments()` span is identity-associated
+and sorted by AssetId. Cache capture and owner admission reuse that immutable
+evidence; source retirement cannot change it. Existing resolver callers require
+no constructor or request migration.
+
 The existing Scene schema has no instance override-set field. This cache does
 not invent an override catalog or accept unmodeled overrides: currently admitted
 authored values participate through the canonical source/Scene commitments. A
@@ -25,9 +32,13 @@ envelope. Submit never grants blocking admission, even inside a host NonCritical
 producer scope. Full queues return typed scheduler errors. Completion polling is
 nonblocking; `Join` requires an explicit host-approved wait policy and deadline.
 
-`TakeCompleted` checks current document session, scene/revision, complete
-canonical Scene values, source commitments, registry and settings before any
+`TakeCompleted` checks current document session, scene/revision, complete ordered
+owned Scene values, source commitments, registry and settings before any
 memoization/publication. Validation allocation failure is a typed failed attempt.
+Authored comparison includes all eight object fields, all optional/vector/opaque
+component values and every placement field. It does not rebuild JSON or trust
+revision counters. Admission still enforces the prior complete Scene codec
+validation and exact 16 MiB encoded-byte ceiling, plus the logical copy bounds.
 After validation, cache capacity/allocation failure is best-effort memoization:
 it cannot discard the complete definition. Each failed insertion preserves old
 entries; earlier successful insertions may remain. Successful output still
@@ -54,6 +65,19 @@ Entry count, retained logical owned storage and canonical key-source bytes have
 finite explicit limits. Eviction removes only cache ownership; previously
 returned immutable leases stay alive. `RetainedBytes` is owner-thread-only, not a
 cross-thread telemetry accessor, and excludes allocator bookkeeping.
+
+Canonical source encoding uses a non-installed structural wire helper shared by
+the Prefab and Scene source targets. Ordinary bounded-schema containers clean up
+without allocation; only scalar escaping/number spelling uses the pinned JSON
+codec. Prefab insertion ordering and Scene sorted-map ordering, indentation and
+final newlines are preserved. Prefab serialization and resolver admission return
+typed allocation failures. Scene owner admission translates encoding allocation
+failure at its existing Result boundary without accepting a partial attempt.
+
+The existing internal cook/editor DOM consumers explicitly bridge with `ToJson()`.
+That bridge retains their old JSON-tree behavior and is **not** claimed OOM-safe;
+neither cache capture nor owner Submit/TakeCompleted uses it. There is no installed
+new JSON API, dependency patch, allocator replacement or changed persisted schema.
 
 Regression coverage exercises real immutable resolver snapshots, actual Scene
 conversion and Foundation jobs, including reordered/transitive dependencies,

@@ -75,6 +75,7 @@ namespace HoroEditorWorkspaceControllerPolicyTests {
         }
 
         [[nodiscard]] Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override {
+            ++atomicReplaceCalls;
             if (failReplace)
                 return Result<void>::Failure(MakeError(InjectedFilesystemFailure));
             return native_.AtomicReplace(prepared, destination);
@@ -92,6 +93,7 @@ namespace HoroEditorWorkspaceControllerPolicyTests {
 
         bool failSync{false};
         bool failReplace{false};
+        std::size_t atomicReplaceCalls{0}; /**< Counts attempted replacement, including injected failures, for autosave retry assertions. */
 
     private:
         NativeDurableFileSystem native_;

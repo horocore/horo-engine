@@ -1,5 +1,6 @@
 #include "SourceDocumentInternal.h"
 
+#include <cstddef>
 #include <new>
 
 namespace Horo::Editor {
@@ -14,7 +15,7 @@ namespace Horo::Editor {
                 return false;
             if (text.starts_with("\xef\xbb\xbf") && offset > 0 && offset < 3)
                 return false;
-            return offset == text.size() || (static_cast<unsigned char>(text[offset]) & 0xc0U) != 0x80U;
+            return offset == text.size() || (static_cast<std::byte>(text[offset]) & std::byte{0xc0}) != std::byte{0x80};
         }
 
         /** @brief Validates patch arithmetic and reserves a complete new byte buffer before copying borrowed input. */
@@ -114,8 +115,7 @@ namespace Horo::Editor {
     Result<SourceDocumentSnapshot> SourceDocumentService::InspectDisk(const DocumentInstanceId instance,
                                                                       const CancellationToken cancellation) {
         try {
-            const auto current = Snapshot(instance);
-            if (current.HasError())
+            if (const auto current = Snapshot(instance); current.HasError())
                 return current;
             auto &record = *storage_->Find(instance);
             if (const auto admitted = storage_->AdmitBytes(storage_->limits.maximumDocumentBytes); admitted.HasError())
@@ -125,8 +125,7 @@ namespace Horo::Editor {
                                           : Detail::LoadSourceText(path.Value(), storage_->limits.maximumDocumentBytes, cancellation);
             if (cancellation.IsCancellationRequested())
                 return Failure<SourceDocumentSnapshot>(SourceDocumentErrors::Cancelled);
-            const auto disposition = ObservedState(loaded, *record.root->base);
-            if (disposition != record.root->external) {
+            if (const auto disposition = ObservedState(loaded, *record.root->base); disposition != record.root->external) {
                 auto next = Detail::NextRoot(*record.root);
                 if (next.HasError())
                     return Result<SourceDocumentSnapshot>::Failure(next.ErrorValue());

@@ -8,7 +8,7 @@
 namespace Horo::Character {
     /** @brief Owner-thread-only world borrow; cancellation is the sole cross-thread mutation. */
     struct CharacterCapabilityState final {
-        CharacterCapabilityState(CharacterWorld &owner, CharacterCapabilityIdentity issued, std::thread::id thread,
+        CharacterCapabilityState(CharacterWorld &owner, const CharacterCapabilityIdentity &issued, std::thread::id thread,
                                  const CancellationToken &parent)
             : world(&owner), identity(issued), ownerThread(thread), revocation(parent) {}
 
@@ -22,6 +22,13 @@ namespace Horo::Character {
         /** @brief Fixed grant slots with weak client ownership; never keeps the world or a consumer alive. */
         class CharacterCapabilityRegistry final {
         public:
+            CharacterCapabilityRegistry() = default;
+            // The registry alone retires these world borrows; client copies share states, never this guard.
+            CharacterCapabilityRegistry(const CharacterCapabilityRegistry &) = delete;
+            CharacterCapabilityRegistry &operator=(const CharacterCapabilityRegistry &) = delete;
+            CharacterCapabilityRegistry(CharacterCapabilityRegistry &&) = delete;
+            CharacterCapabilityRegistry &operator=(CharacterCapabilityRegistry &&) = delete;
+
             ~CharacterCapabilityRegistry() {
                 Retire();
             }

@@ -13,6 +13,17 @@ consumer of one module to discover every header in the repository.
 
 ## Classifications
 
+### PLT-001.5 Android storage boundary
+
+`HoroEngine::Platform` solely owns the additive `Horo/Platform/AndroidStorage.h`
+logical roots, opaque process-local document handles and bounded storage service.
+The generated standalone public-header consumer verifies the staged contract.
+`AndroidStorageAdapter.h` remains target-private and is visible only to the
+explicit Android storage regression target. Android AssetManager/native file
+descriptors never appear in public Horo headers. Existing callers need no migration;
+opt-in host composition and grant/owner lifetime are documented in
+[Android Platform Host](./android-platform-host.md#plt-0015-adapter-and-host-migration).
+
 ### AUD-003.3 playback boundary and migration
 
 `HoroAudioApi` owns the additive `Horo/Audio/AudioVoiceControls.h` intent/cursor

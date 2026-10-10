@@ -1,5 +1,7 @@
 #include "runtime/renderer/modules/metal/MetalResourcePolicy.h"
 
+#include <algorithm>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
 
@@ -112,6 +114,56 @@ namespace Horo::Render::Detail {
         CHECK(PlanMetalTextureUpload(multisampled, 256).HasError());
         constexpr std::size_t excessiveAlignment = std::size_t{1} << (std::numeric_limits<std::size_t>::digits - 1U);
         CHECK(PlanMetalTextureUpload(Texture(), excessiveAlignment).HasError());
+    }
+
+    TEST_CASE("Metal buffer upload checks actual capacity before touching destination storage") {
+        const std::array source{std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4}};
+        std::array<std::byte, 6> destination;
+        destination.fill(std::byte{9});
+        const auto untouched = destination;
+        CHECK(CopyMetalBufferUpload(destination.data(), source.size() - 1, source).HasError());
+        CHECK(destination == untouched);
+        CHECK(CopyMetalBufferUpload(nullptr, source.size(), source).HasError());
+        CHECK(CopyMetalBufferUpload(nullptr, 0, {}).HasValue());
+        REQUIRE(CopyMetalBufferUpload(destination.data(), destination.size(), source).HasValue());
+        CHECK(std::ranges::equal(source, std::span{destination}.first(source.size())));
+        CHECK(destination[4] == std::byte{9});
+        CHECK(destination[5] == std::byte{9});
+    }
+
+    TEST_CASE("Metal texture upload preserves row padding and copies every layer") {
+        auto texture = Texture();
+        texture.extent = {3, 2};
+        texture.layerCount = 2;
+        std::array<std::byte, 48> source;
+        for (std::size_t index = 0; index < source.size(); ++index)
+            source[index] = static_cast<std::byte>(index);
+        std::array<std::byte, 64> destination;
+        destination.fill(std::byte{255});
+        REQUIRE(CopyMetalTextureUpload(texture, 16, destination.data(), destination.size(), source).HasValue());
+        for (std::size_t row = 0; row < 4; ++row) {
+            CHECK(std::ranges::equal(std::span{source}.subspan(row * 12, 12), std::span{destination}.subspan(row * 16, 12)));
+            CHECK(std::ranges::all_of(std::span{destination}.subspan(row * 16 + 12, 4), [](const std::byte value) {
+                return value == std::byte{255};
+            }));
+        }
+    }
+
+    TEST_CASE("Metal texture upload rejects incomplete last layers and staging before any row write") {
+        auto texture = Texture();
+        texture.extent = {3, 2};
+        texture.layerCount = 2;
+        const std::array<std::byte, 48> source{};
+        std::array<std::byte, 64> destination;
+        destination.fill(std::byte{9});
+        const auto untouched = destination;
+        CHECK(CopyMetalTextureUpload(texture, 16, destination.data(), destination.size(), std::span{source}.first(47)).HasError());
+        CHECK(CopyMetalTextureUpload(texture, 16, destination.data(), destination.size() - 1, source).HasError());
+        CHECK(CopyMetalTextureUpload(texture, 16, nullptr, destination.size(), source).HasError());
+        CHECK(CopyMetalTextureUpload(texture, 3, destination.data(), destination.size(), source).HasError());
+        constexpr std::size_t excessiveAlignment = std::size_t{1} << (std::numeric_limits<std::size_t>::digits - 1U);
+        CHECK(CopyMetalTextureUpload(texture, excessiveAlignment, destination.data(), destination.size(), source).HasError());
+        CHECK(destination == untouched);
     }
 
     TEST_CASE("Metal mesh binding policy requires valid typed vertex and index usages") {

@@ -2,6 +2,7 @@
 
 #include "Horo/Runtime/Save/SaveErrors.h"
 #include "Horo/Runtime/Save/SaveTelemetry.h"
+#include "Horo/Runtime/Save/SaveThumbnailArchive.h"
 
 #include <algorithm>
 #include <mutex>
@@ -198,6 +199,27 @@ namespace Horo::Runtime {
             }
         }
 
+        /** @brief Finalizes optional presentation bytes on the worker before the existing commit gate. */
+        [[nodiscard]] bool PreparePresentation(SaveStorageRequest &request,
+                                               const std::shared_ptr<const SavePresentationArchiveInput> &input,
+                                               const SaveStorageLimits &limits, SaveOperationController &controller) {
+            if (!input)
+                return true;
+            if (controller.PublishProgress(SaveOperationStage::FinalizingArchive, {0, 1}) != SaveOperationTransitionResult::Applied)
+                return false;
+            auto prepared = PrepareSavePresentationWrite(*input);
+            if (prepared.HasError()) {
+                Fail(controller, prepared.ErrorValue(), false);
+                return false;
+            }
+            request.write = std::move(prepared).Value();
+            if (!ValidWrite(request, limits)) {
+                Fail(controller, MakeError(SaveErrors::StorageOperationInvalid), false);
+                return false;
+            }
+            return true;
+        }
+
         [[nodiscard]] Result<void> Execute(const std::shared_ptr<SaveStorageDetail::SharedOperation> &state,
                                            const std::shared_ptr<ISaveStorageProvider> &provider, const SaveStorageRequest &request,
                                            const SaveStorageLimits limits, const std::shared_ptr<SaveOperationController> &controller,
@@ -282,11 +304,52 @@ namespace Horo::Runtime {
         }, {});
     }
 
-    /** @copydoc SaveStorageAdapter::SubmitRequest */
-    Result<SaveStorageOperation> SaveStorageAdapter::SubmitRequest(
-        const OperationId operation, SaveStorageRequest request, CancellationToken cancellation,
+    /** @copydoc SaveStorageAdapter::SubmitPresentation */
+    Result<SaveStorageOperation> SaveStorageAdapter::SubmitPresentation(
+        const OperationId operation, SaveStorageAddress address, SavePresentationArchiveInput input, CancellationToken cancellation,
         const std::optional<std::chrono::steady_clock::time_point> deadline) const {
-        if (!jobs_ || !provider_ || !ValidLimits(limits_) || !ValidRequest(request, limits_))
+        try {
+            const auto &name = address.namespaceAccess.expected;
+            if (input.header.product != name.product || input.header.environment != name.environment)
+                return Result<SaveStorageOperation>::Failure(MakeError(SaveErrors::NamespaceStale));
+            if (const auto *owner = std::get_if<UserProfileOwner>(&name.owner);
+                owner && (input.header.user != owner->user || input.header.profile != owner->profile))
+                return Result<SaveStorageOperation>::Failure(MakeError(SaveErrors::NamespaceStale));
+            auto publication = input.publication;
+            publication.thumbnail = input.capture.artifact ? std::optional{input.capture.artifact->Request().thumbnail} : std::nullopt;
+            if (const auto valid = ValidateSaveThumbnailPublication(publication, input.capture); valid.HasError())
+                return Result<SaveStorageOperation>::Failure(valid.ErrorValue());
+            input.limits.maximumArchiveBytes = std::min(input.limits.maximumArchiveBytes, limits_.maximumArchiveBytes);
+            auto owned = std::make_shared<const SavePresentationArchiveInput>(std::move(input));
+            return SubmitRequest(operation, {.kind = SaveStorageOperationKind::Write, .source = std::move(address)}, cancellation, deadline,
+                                 std::move(owned));
+        } catch (const std::bad_alloc &) {
+            return Result<SaveStorageOperation>::Failure(MakeError(SaveErrors::StorageAllocationFailed));
+        }
+    }
+
+    namespace {
+        /** @brief Admits a detached presentation write before its worker supplies finalized archive bytes. */
+        [[nodiscard]] bool ValidPresentationRequest(const SaveStorageRequest &request,
+                                                    const std::shared_ptr<const SavePresentationArchiveInput> &presentation) noexcept {
+            return presentation && request.kind == SaveStorageOperationKind::Write && ValidAddress(request.source) && !request.write &&
+                   !request.destination && presentation->publication.slot == request.source.slot;
+        }
+
+        /** @brief Selects detached presentation admission or the existing finalized-storage request contract. */
+        [[nodiscard]] bool ValidSubmissionRequest(const SaveStorageRequest &request, const SaveStorageLimits &limits,
+                                                  const std::shared_ptr<const SavePresentationArchiveInput> &presentation) noexcept {
+            const bool validPresentation = ValidPresentationRequest(request, presentation);
+            return presentation ? validPresentation : ValidRequest(request, limits);
+        }
+    }  // namespace
+
+    /** @copydoc SaveStorageAdapter::SubmitRequest */
+    Result<SaveStorageOperation> SaveStorageAdapter::SubmitRequest(const OperationId operation, SaveStorageRequest request,
+                                                                   CancellationToken cancellation,
+                                                                   const std::optional<std::chrono::steady_clock::time_point> deadline,
+                                                                   std::shared_ptr<const SavePresentationArchiveInput> presentation) const {
+        if (!jobs_ || !provider_ || !ValidLimits(limits_) || !ValidSubmissionRequest(request, limits_, presentation))
             return Result<SaveStorageOperation>::Failure(MakeError(SaveErrors::StorageOperationInvalid));
         if (!provider_->Capabilities().Supports(request.kind))
             return Result<SaveStorageOperation>::Failure(MakeError(SaveErrors::StorageCapabilityUnsupported));
@@ -303,9 +366,12 @@ namespace Horo::Runtime {
             state->SetOperation(producer->Handle());
             state->SetCancellation(CancellationSource(cancellation));
             state->SetScheduler(*jobs_);
-            auto submitted = jobs_->SubmitResult({.parentCancellation = state->Cancellation(), .operationId = operation},
-                                                 [state, provider = provider_, request = std::move(request), limits = limits_, producer,
-                                                  operation](const CancellationToken &token) mutable {
+            auto submitted =
+                jobs_->SubmitResult({.parentCancellation = state->Cancellation(), .operationId = operation},
+                                    [state, provider = provider_, request = std::move(request), limits = limits_, producer, operation,
+                                     presentation = std::move(presentation)](const CancellationToken &token) mutable {
+                if (!PreparePresentation(request, presentation, limits, *producer))
+                    return Result<void>::Success();
                 return Execute(state, provider, request, limits, producer, token, operation);
             });
             if (submitted.HasError())

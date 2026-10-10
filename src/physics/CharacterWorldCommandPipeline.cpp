@@ -92,7 +92,7 @@ namespace Horo::Character {
                     return rejected(CharacterCommandAdmissionStatus::RejectedFull);
                 }
 
-                impl_->fastPath.Commands().push_back({request, revocation});
+                impl_->fastPath.Commands().emplace_back(request, revocation);
                 const auto depth = static_cast<std::uint32_t>(impl_->fastPath.Commands().size());
                 impl_->pendingCommands.store(depth);
                 impl_->maximumCommandDepth.store(std::max(depth, impl_->maximumCommandDepth.load()));

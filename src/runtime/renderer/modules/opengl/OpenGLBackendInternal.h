@@ -10,9 +10,24 @@
 #include <span>
 
 namespace Horo::Render::Detail {
-    using OpenGLViewportFunction = void (*)(std::int32_t x, std::int32_t y, std::int32_t width, std::int32_t height);
-    using OpenGLClearColorFunction = void (*)(float red, float green, float blue, float alpha);
-    using OpenGLClearFunction = void (*)(std::uint32_t mask);
+    /** @brief Admits actual desktop/Core context facts before backend readiness publication.
+     * @param facts Realized native context version, profile, entry-point and baseline limit facts.
+     * @param options Explicit host-requested OpenGL version policy.
+     * @return Typed unsupported-context/driver failure or success.
+     */
+    [[nodiscard]] Result<void> ValidateOpenGLContextFacts(const OpenGLContextFacts &facts, const OpenGLBackendOptions &options);
+
+    /** @brief Projects realized baseline facts into the backend-neutral capability snapshot.
+     * @param facts Validated context facts supplied by the current presentation port.
+     * @param resourcesAvailable Whether the complete optional resource command dispatch is available.
+     * @return Explicit capabilities of this OpenGL backend incarnation.
+     */
+    [[nodiscard]] RenderCapabilitySnapshot MakeOpenGLCapabilitySnapshot(const OpenGLContextFacts &facts, bool resourcesAvailable) noexcept;
+
+    /** Sets viewport zero only, preserving fractional bounds and higher indexed viewports. */
+    using OpenGLViewportFunction = void (*)(float x, float y, float width, float height) noexcept;
+    using OpenGLClearColorFunction = void (*)(float red, float green, float blue, float alpha) noexcept;
+    using OpenGLClearFunction = void (*)(std::uint32_t mask) noexcept;
     using OpenGLGenerateObjectsFunction = void (*)(std::int32_t count, std::uint32_t *objects);
     using OpenGLDeleteObjectsFunction = void (*)(std::int32_t count, const std::uint32_t *objects);
     using OpenGLBindObjectFunction = void (*)(std::uint32_t target, std::uint32_t object);
@@ -40,6 +55,41 @@ namespace Horo::Render::Detail {
                                                       std::int32_t level);
     using OpenGLCheckFramebufferFunction = std::uint32_t (*)(std::uint32_t target);
     using OpenGLDrawReadBufferFunction = void (*)(std::uint32_t mode);
+
+    /** @brief Core state operations used only while the backend's context is current; callbacks must not throw. */
+    struct OpenGLStateFunctions {
+        void (*getInteger)(std::uint32_t, std::span<std::int32_t>) noexcept {nullptr};
+        /** VIEWPORT is queried at index zero without truncating fractional values. */
+        void (*getFloat)(std::uint32_t, std::span<float>) noexcept {nullptr};
+        void (*getBoolean)(std::uint32_t, std::span<std::uint8_t>) noexcept {nullptr};
+        /** SCISSOR_TEST is queried only at index zero. */
+        bool (*isEnabled)(std::uint32_t) noexcept {nullptr};
+        /** SCISSOR_TEST changes only index zero; other capabilities are non-indexed. */
+        void (*setEnabled)(std::uint32_t, bool) noexcept {nullptr};
+        /** Changes only indexed color mask zero; higher masks remain untouched. */
+        void (*colorMask)(std::span<const std::uint8_t, 4>) noexcept {nullptr};
+        void (*bindDrawFramebuffer)(std::uint32_t) noexcept {nullptr};
+        void (*drawBuffer)(std::uint32_t) noexcept {nullptr};
+        void (*drawBuffers)(std::span<const std::uint32_t>) noexcept {nullptr};
+        std::uint32_t (*error)() noexcept {nullptr};
+
+        [[nodiscard]] bool IsValid() const noexcept {
+            return getInteger && getFloat && getBoolean && isEnabled && setEnabled && colorMask && bindDrawFramebuffer && drawBuffer &&
+                   drawBuffers && error;
+        }
+    };
+
+    /** @brief Private opaque core sync identities; polling is zero-time and never blocks the frame thread. */
+    struct OpenGLSyncFunctions {
+        std::uintptr_t (*fence)() noexcept {nullptr};
+        std::uint32_t (*poll)(std::uintptr_t) noexcept {nullptr};
+        void (*destroy)(std::uintptr_t) noexcept {nullptr};
+        void (*flush)() noexcept {nullptr};
+
+        [[nodiscard]] bool IsValid() const noexcept {
+            return fence && poll && destroy && flush;
+        }
+    };
 
     struct OpenGLBufferFunctions {
         OpenGLGenerateObjectsFunction generateBuffers{nullptr};
@@ -75,16 +125,21 @@ namespace Horo::Render::Detail {
     };
 
     struct OpenGLCommandFunctions {
+        /** Reports actual native entry-point readiness after the owning port loads dispatch. */
+        bool (*isAvailable)() noexcept {nullptr};
         OpenGLViewportFunction viewport{nullptr};
         OpenGLClearColorFunction clearColor{nullptr};
         OpenGLClearFunction clear{nullptr};
+        OpenGLStateFunctions state;
+        OpenGLSyncFunctions sync;
         OpenGLBufferFunctions buffers;
         OpenGLVertexArrayFunctions vertexArrays;
         OpenGLTextureFunctions textures;
         OpenGLFramebufferFunctions framebuffers;
 
         [[nodiscard]] bool IsValid() const noexcept {
-            return viewport != nullptr && clearColor != nullptr && clear != nullptr;
+            return isAvailable != nullptr && viewport != nullptr && clearColor != nullptr && clear != nullptr && state.IsValid() &&
+                   sync.IsValid();
         }
 
         [[nodiscard]] bool HasResourceFunctions() const noexcept {

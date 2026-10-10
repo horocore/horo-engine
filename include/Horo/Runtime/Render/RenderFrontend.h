@@ -145,7 +145,7 @@ namespace Horo::Render {
                                                 std::span<const RenderGraphPassWorkload> workloads);
         /**
          * @brief Freezes borrowed inputs and schedules bounded preparation and CPU command recording.
-         * @param jobs Host worker pool; it must continue servicing accepted jobs until host shutdown.
+         * @param jobs Const facade of the host worker pool; its owned scheduler continues servicing accepted jobs until host shutdown.
          * @param orderedPasses Immutable source views borrowed only during this call; all arrays are copied.
          * @param limits Finite input/output payload and job-count envelope.
          * @param cancellation Parent cancellation checked again before owner publication.
@@ -154,13 +154,13 @@ namespace Horo::Render {
          * Workers retain owned CPU bytes only; neither backend nor attached executor is borrowed.
          * A failed partial admission cancels its accepted siblings and leaves this frame unexecuted.
          */
-        [[nodiscard]] Result<void> PrepareParallelExecution(JobSystem &jobs, std::span<const RenderPassDescriptor> orderedPasses,
+        [[nodiscard]] Result<void> PrepareParallelExecution(const JobSystem &jobs, std::span<const RenderPassDescriptor> orderedPasses,
                                                             const RenderParallelWorkLimits &limits = {},
                                                             const CancellationToken &cancellation = {});
 
         /**
          * @brief Freezes native graph payload on the owner and records it through the host worker pool.
-         * @param jobs Host scheduler owning callback admission, execution and cancellation acknowledgement.
+         * @param jobs Const host scheduler facade; its owned state performs callback admission, execution and cancellation acknowledgement.
          * @param graph Exact compiled graph borrowed only during this call; not retained by workers.
          * @param workloads One operation per compiled pass, borrowed only during owner capture.
          * @param cancellation Parent token checked during worker recording and before owner acceptance.
@@ -169,10 +169,13 @@ namespace Horo::Render {
          * context calls. PollParallelExecution accepts ready records in graph order; Present commits
          * them on the render owner. Abandonment closes submission without joining workers. Existing
          * frontend leases remain the sole resident authority until CPU abandonment or GPU completion.
+         * This is an exception containment boundary: arbitrary backend exceptions abort the frame
+         * and return render.frontend.frame_exception. No exception escapes; inability to construct
+         * an error under catastrophic allocation failure follows the process noexcept contract.
          */
-        [[nodiscard]] Result<void> PrepareParallelGraphExecution(JobSystem &jobs, const CompiledRenderGraphExecution &graph,
+        [[nodiscard]] Result<void> PrepareParallelGraphExecution(const JobSystem &jobs, const CompiledRenderGraphExecution &graph,
                                                                  std::span<const RenderGraphPassWorkload> workloads,
-                                                                 const CancellationToken &cancellation = {});
+                                                                 const CancellationToken &cancellation = {}) noexcept;
 
         /**
          * @brief Polls bounded work without waiting, then executes ready commands on the render owner.
@@ -217,15 +220,15 @@ namespace Horo::Render {
         [[nodiscard]] Result<void> ValidateExecutionAdmission() const;
         /** @brief Validates owner-side executor and target liveness before synchronous borrowing. */
         [[nodiscard]] Result<void> ValidateStaticMeshBinding(const RenderPassDescriptor &pass) const;
-        /** @brief Polls and accepts the native capsule only on the frame owner. */
-        [[nodiscard]] Result<RenderParallelExecutionProgress> PollParallelGraph();
+        /** @brief Polls and accepts only on the frame owner; contains every backend exception before returning. */
+        [[nodiscard]] Result<RenderParallelExecutionProgress> PollParallelGraph() noexcept;
         /** @brief Cancels this frame and preserves a native or job error across the polling boundary. */
         [[nodiscard]] Result<RenderParallelExecutionProgress> RejectParallelPoll(const Error &error);
         /** @brief Captures native slots and transfers the existing owner lease only on backend success. */
         [[nodiscard]] Result<std::shared_ptr<IRenderParallelGraphRecording>> CaptureParallelGraph(
             const CompiledRenderGraphExecution &graph, std::span<const RenderGraphPassWorkload> workloads);
-        /** @brief Executes frozen command slots in canonical order; no worker accesses an attached executor or backend. */
-        [[nodiscard]] Result<void> ExecuteCapturedCommands(std::span<const RenderPassDescriptor> commands);
+        /** @brief Executes frozen slots in canonical order and contains arbitrary executor/backend exceptions. */
+        [[nodiscard]] Result<void> ExecuteCapturedCommands(std::span<const RenderPassDescriptor> commands) noexcept;
 
         RenderFrontend *owner_{nullptr};
         IRenderBackend *backend_{nullptr};

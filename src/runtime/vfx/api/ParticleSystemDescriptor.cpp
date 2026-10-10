@@ -22,12 +22,15 @@ namespace Horo::Vfx {
             return Result<T>::Failure(MakeError(code, std::move(message)));
         }
 
-        [[nodiscard]] bool ExactObject(const Json &value, const std::initializer_list<std::string_view> names) {
-            if (!value.is_object() || value.size() != names.size())
+        [[nodiscard]] bool ExactObject(const Json &value, const std::initializer_list<std::string_view> names,
+                                       const std::initializer_list<std::string_view> optional = {}) {
+            if (!value.is_object())
                 return false;
-            return std::ranges::all_of(names, [&value](const std::string_view name) {
+            const auto present = [&value](const std::string_view name) {
                 return value.contains(std::string{name});
-            });
+            };
+            const auto optionalCount = static_cast<std::size_t>(std::ranges::count_if(optional, present));
+            return value.size() == names.size() + optionalCount && std::ranges::all_of(names, present);
         }
 
         class StrictJsonObserver final {
@@ -140,6 +143,9 @@ namespace Horo::Vfx {
             return Result<ParticleDescriptorSchemaVersion>::Success(version);
         }
 
+        constexpr std::array CollisionResponses{std::pair{"bounce"sv, ParticleCollisionResponse::Bounce},
+                                                std::pair{"die"sv, ParticleCollisionResponse::Die}};
+
         [[nodiscard]] Result<EmitterId> DecodeEmitter(const Json &value) {
             if (!ExactObject(value, {"scope", "slot", "generation"}))
                 return Reject<EmitterId>(VfxErrors::ParticleDescriptorMalformed, "emitterId has an invalid shape.");
@@ -180,9 +186,10 @@ namespace Horo::Vfx {
         }
 
         [[nodiscard]] bool ValidRoot(const Json &root) {
-            return ExactObject(root, {"schemaVersion", "emitterId", "simulationPreference", "maximumParticles", "shape", "spawnRate",
-                                      "lifetime", "initialSpeed", "initialSize", "initialOpacity", "materialId", "renderMode", "sortMode",
-                                      "collisionMode"}) &&
+            return ExactObject(root,
+                               {"schemaVersion", "emitterId", "simulationPreference", "maximumParticles", "shape", "spawnRate", "lifetime",
+                                "initialSpeed", "initialSize", "initialOpacity", "materialId", "renderMode", "sortMode", "collisionMode"},
+                               {"collisionResponse"}) &&
                    ExactObject(root.at("lifetime"), {"kind", "seconds", "killCondition"});
         }
 
@@ -226,7 +233,10 @@ namespace Horo::Vfx {
                  .material = std::move(material).Value(),
                  .renderMode = EnumValue(root.at("renderMode"), RenderModes, ParticleRenderMode::Count),
                  .sortMode = EnumValue(root.at("sortMode"), SortModes, ParticleSortMode::Count),
-                 .collisionMode = EnumValue(root.at("collisionMode"), CollisionModes, ParticleCollisionMode::Count)});
+                 .collisionMode = EnumValue(root.at("collisionMode"), CollisionModes, ParticleCollisionMode::Count),
+                 .collisionResponse = root.contains("collisionResponse")
+                                          ? EnumValue(root.at("collisionResponse"), CollisionResponses, ParticleCollisionResponse::Count)
+                                          : ParticleCollisionResponse::Bounce});
         }
 
         [[nodiscard]] bool FiniteOrdered(const ParticleScalarRange &range) noexcept {
@@ -271,7 +281,8 @@ namespace Horo::Vfx {
             findings.AddIf(data.simulationPreference >= SimulationPreference::Count || data.shape >= ParticleEmitterShape::Count ||
                                data.lifetimeKind >= ParticleLifetimeKind::Count || data.killCondition >= ParticleKillCondition::Count ||
                                data.renderMode >= ParticleRenderMode::Count || data.sortMode >= ParticleSortMode::Count ||
-                               data.collisionMode >= ParticleCollisionMode::Count,
+                               data.collisionMode >= ParticleCollisionMode::Count ||
+                               data.collisionResponse >= ParticleCollisionResponse::Count,
                            VfxErrors::ParticleDescriptorMalformed, "One or more closed policy values are unknown.");
             findings.AddIf(data.maximumParticles == 0 || data.maximumParticles > limits.maximumParticles,
                            VfxErrors::ParticleDescriptorLimitExceeded, "maximumParticles exceeds the active semantic limit.");

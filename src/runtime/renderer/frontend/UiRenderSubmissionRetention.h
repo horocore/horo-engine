@@ -36,6 +36,10 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> ValidateCoverage(const Runtime::Ui::UiRenderSnapshot &snapshot) const;
         /** @brief Counts owned exact image pages and font generations for one immutable reference. */
         [[nodiscard]] std::size_t CountSourceMatches(const Runtime::Ui::UiRenderResourceReference &reference) const;
+        /** @brief Counts exact retained font/page/UV matches for one sampled glyph without dropping duplicate evidence. */
+        [[nodiscard]] std::size_t CountGlyphMatches(const Runtime::Ui::UiRenderResourceReference &reference,
+                                                    const Runtime::Ui::UiPositionedGlyph &glyph,
+                                                    const Runtime::Ui::UiGlyphAtlas::FrameLease &atlas) const;
         /** @brief Requires every sampled glyph to match exactly one retained page realization and owned font generation. */
         [[nodiscard]] Result<void> ValidateGlyphCoverage(const Runtime::Ui::UiRenderSnapshot &snapshot,
                                                          const Runtime::Ui::UiGlyphAtlas::FrameLease &atlas) const;

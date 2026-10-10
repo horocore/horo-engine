@@ -127,9 +127,12 @@ TEST_CASE("Expansion allocation failure never evicts the prior exact immutable c
     {
         PrefabExpansionCache probe{{.maximumEntries = 1}};
         REQUIRE(probe.Resolve(resolver, fixture.asset, firstInstance, fixture.limits).HasValue());
-        Tests::AllocationProbe::ScopedMeasurement measurement;
-        const auto next = probe.Resolve(resolver, fixture.asset, nextInstance, fixture.limits);
-        allocations = measurement.Snapshot().requests;
+        const auto next = [&] {
+            Tests::AllocationProbe::ScopedMeasurement measurement;
+            auto result = probe.Resolve(resolver, fixture.asset, nextInstance, fixture.limits);
+            allocations = measurement.Snapshot().requests;
+            return result;
+        }();
         REQUIRE(next.HasValue());
     }
     REQUIRE(allocations > 0);
@@ -187,6 +190,65 @@ TEST_CASE("Every captured project policy field changes the exact expansion key",
     }
 }
 
+TEST_CASE("Canonical serialization survives every production allocation failure", "[native][prefab][allocation]") {
+    ExpansionFixture fixture;
+    const auto resolver = fixture.Resolver();
+    const auto &document = resolver.Sources().front().document;
+    const auto canonical = document.SerializeCanonical().Value();
+    std::size_t allocations{};
+    const auto measured = [&] {
+        Tests::AllocationProbe::ScopedMeasurement measurement;
+        auto result = document.SerializeCanonical();
+        allocations = measurement.Snapshot().requests;
+        return result;
+    }();
+    REQUIRE(measured.HasValue());
+    REQUIRE(allocations > 0);
+    REQUIRE(allocations < 4096);
+    for (std::size_t index = 0; index < allocations; ++index) {
+        const auto failed = [&] {
+            Tests::AllocationProbe::ScopedFailure failure{index};
+            return document.SerializeCanonical();
+        }();
+        REQUIRE(failed.HasError());
+        RequireAllocationFailurePreservesSource(failed.ErrorValue(), document, canonical);
+    }
+}
+
+TEST_CASE("Resolver admission computes actual immutable evidence transactionally under every allocation failure",
+          "[native][prefab][allocation]") {
+    ExpansionFixture fixture;
+    const auto resolver = fixture.Resolver();
+    const auto registry = fixture.registry.Snapshot();
+    const auto &document = resolver.Sources().front().document;
+    const auto canonical = document.SerializeCanonical().Value();
+    std::size_t allocations{};
+    auto sources = resolver.Sources();
+    auto ownedSources = std::vector<PrefabDependencySource>{sources.begin(), sources.end()};
+    const auto measured = [&] {
+        Tests::AllocationProbe::ScopedMeasurement measurement;
+        auto result = BuildPrefabSourceResolverSnapshot(registry, std::move(ownedSources), fixture.limits);
+        allocations = measurement.Snapshot().requests;
+        return result;
+    }();
+    REQUIRE(measured.HasValue());
+    REQUIRE(allocations > 0);
+    REQUIRE(allocations < 4096);
+    REQUIRE(measured.Value().CanonicalSourceCommitments().size() == 1);
+    CHECK(measured.Value().CanonicalSourceCommitments().front().digest == ComputeSha256(std::as_bytes(std::span{canonical})));
+    CHECK(measured.Value().CanonicalSourceCommitments().front().encodedBytes == canonical.size());
+    for (std::size_t index = 0; index < allocations; ++index) {
+        ownedSources.assign(sources.begin(), sources.end());
+        const auto failed = [&] {
+            Tests::AllocationProbe::ScopedFailure failure{index};
+            return BuildPrefabSourceResolverSnapshot(registry, std::move(ownedSources), fixture.limits);
+        }();
+        REQUIRE(failed.HasError());
+        RequireAllocationFailurePreservesSource(failed.ErrorValue(), document, canonical);
+        CHECK(resolver.CanonicalSourceCommitments().front().encodedBytes == canonical.size());
+    }
+}
+
 TEST_CASE("Cache retained and canonical source byte ceilings accept their exact boundary", "[native][prefab][cache]") {
     ExpansionFixture fixture;
     const auto resolver = fixture.Resolver();
@@ -216,7 +278,8 @@ TEST_CASE("Transitive source commitments are identity associated and cannot reus
          .objects = {{.localId = {0}, .name = "Root"}},
          .composition = PrefabComposition{.nestedPlacements = {{.placementLocalId = {1},
                                                                 .sourcePrefab = PrefabAssetReference::Create(childAsset).Value(),
-                                                                .authoredAgainst = child.sourceRevision}}}});
+                                                                .authoredAgainst = child.sourceRevision}}},
+         .referencedAssets = {childAsset}});
     const auto snapshot = fixture.registry.Snapshot();
     const auto ordered = BuildPrefabSourceResolverSnapshot(snapshot, {root, child}, fixture.limits);
     const auto reversed = BuildPrefabSourceResolverSnapshot(snapshot, {child, root}, fixture.limits);

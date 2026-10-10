@@ -93,19 +93,15 @@ namespace Horo::Prefab {
             for (const auto &dependency : revision.dependencies) {
                 if (!dependency.sourceRevision)
                     continue;
-                const auto source = std::ranges::find_if(resolver.Sources(), [&dependency](const auto &entry) {
-                    return entry.document.Data().assetId == dependency.assetId;
-                });
-                if (source == resolver.Sources().end())
+                const auto commitments = resolver.CanonicalSourceCommitments();
+                const auto source = std::ranges::lower_bound(commitments, dependency.assetId, {}, &PrefabCanonicalSourceCommitment::asset);
+                if (source == commitments.end() || source->asset != dependency.assetId)
                     return Result<Digests>::Failure(MakeError(PrefabErrors::ResolutionStale));
                 if (cancellation.IsCancellationRequested())
                     return Result<Digests>::Failure(MakeError(PrefabErrors::Cancelled));
-                auto bytes = source->document.SerializeCanonical();
-                if (bytes.HasError())
-                    return Result<Digests>::Failure(bytes.ErrorValue());
-                if (!budget.Add(bytes.Value().size()))
+                if (!budget.Add(source->encodedBytes))
                     return Result<Digests>::Failure(MakeError(PrefabErrors::ExpansionCacheCapacityExceeded));
-                digests.push_back(ComputeSha256(std::as_bytes(std::span{bytes.Value()})));
+                digests.push_back(source->digest);
             }
             return Result<Digests>::Success(std::move(digests));
         }

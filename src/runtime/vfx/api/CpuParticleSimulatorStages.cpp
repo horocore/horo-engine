@@ -190,7 +190,9 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                 const auto &plane = state.planes[planeIndex];
                 const float previousDistance = Math::Dot(previous - plane.point, plane.normal);
                 const float currentDistance = Math::Dot(position - plane.point, plane.normal);
-                if (previousDistance < 0.0F || currentDistance > 0.0F)
+                if (!Finite(previousDistance) || !Finite(currentDistance) || !Finite(previousDistance - currentDistance))
+                    return Failure<CpuParticleCollisionSelection>(VfxErrors::ParticleCollisionQueryFailed);
+                if (previousDistance < 0.0F || currentDistance > 0.0F || currentDistance >= previousDistance)
                     continue;
                 const float denominator = previousDistance - currentDistance;
                 const float time = denominator > std::numeric_limits<float>::epsilon() ? previousDistance / denominator : 0.0F;
@@ -205,6 +207,45 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                 selection.stableTarget = planeIndex;
                 selection.stableFeature = planeIndex;
             }
+            return Result<CpuParticleCollisionSelection>::Success(selection);
+        }
+
+        /** @brief Samples the frozen endpoint pixel and intersects its reconstructed surface plane. */
+        [[nodiscard]] Result<CpuParticleCollisionSelection> QueryDepth(const Detail::CpuParticleSimulatorState &state,
+                                                                       const Math::Vec3 previous, const Math::Vec3 position) {
+            CpuParticleCollisionSelection selection{};
+            const auto &depth = state.sceneDepth;
+            if (depth.samples.empty())
+                return Result<CpuParticleCollisionSelection>::Success(selection);
+            const auto clip = Math::TransformHomogeneous(depth.worldToClip, {position.x, position.y, position.z, 1.0F});
+            if (!Finite(clip) || clip.w <= std::numeric_limits<float>::epsilon())
+                return Result<CpuParticleCollisionSelection>::Success(selection);
+            const Math::Vec3 ndc{clip.x / clip.w, clip.y / clip.w, clip.z / clip.w};
+            if (!Finite(ndc) || ndc.x < -1.0F || ndc.x >= 1.0F || ndc.y < -1.0F || ndc.y >= 1.0F || ndc.z < 0.0F || ndc.z > 1.0F)
+                return Result<CpuParticleCollisionSelection>::Success(selection);
+            const auto x = static_cast<std::uint32_t>((ndc.x * 0.5F + 0.5F) * static_cast<float>(depth.width));
+            const auto y = static_cast<std::uint32_t>((ndc.y * 0.5F + 0.5F) * static_cast<float>(depth.height));
+            if (x >= depth.width || y >= depth.height)
+                return Result<CpuParticleCollisionSelection>::Success(selection);
+            const auto &sample = depth.samples[static_cast<std::size_t>(y) * depth.width + x];
+            if (!sample.covered || ndc.z < sample.depth)
+                return Result<CpuParticleCollisionSelection>::Success(selection);
+            const auto surface = Math::TryTransformPoint(state.clipToWorld, {ndc.x, ndc.y, sample.depth});
+            if (surface.HasError())
+                return Failure<CpuParticleCollisionSelection>(VfxErrors::ParticleCollisionQueryFailed);
+            const Math::Vec3 normal = Math::Normalize(sample.normal);
+            const float before = Math::Dot(previous - surface.Value(), normal);
+            const float after = Math::Dot(position - surface.Value(), normal);
+            if (!Finite(before) || !Finite(after))
+                return Failure<CpuParticleCollisionSelection>(VfxErrors::ParticleCollisionQueryFailed);
+            if (before < 0.0F || after >= before || after > 0.0F)
+                return Result<CpuParticleCollisionSelection>::Success(selection);
+            const float time = before / (before - after);
+            selection.hit = true;
+            selection.position = previous + ((position - previous) * time);
+            selection.normal = normal;
+            selection.distance = Math::Length(selection.position - previous);
+            selection.restitution = depth.restitution;
             return Result<CpuParticleCollisionSelection>::Success(selection);
         }
 
@@ -234,8 +275,8 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
             if (!hit.hit)
                 return Result<CpuParticleCollisionSelection>::Success(selection);
             if (!Finite(hit.position) || !Finite(hit.normal) || !Finite(hit.distance) || hit.distance < 0.0F ||
-                Math::LengthSquared(hit.normal) <= std::numeric_limits<float>::epsilon() || !Finite(hit.restitution) ||
-                hit.restitution < 0.0F || hit.restitution > 1.0F)
+                !Finite(Math::LengthSquared(hit.normal)) || Math::LengthSquared(hit.normal) <= std::numeric_limits<float>::epsilon() ||
+                !Finite(hit.restitution) || hit.restitution < 0.0F || hit.restitution > 1.0F)
                 return Failure<CpuParticleCollisionSelection>(VfxErrors::ParticleCollisionQueryFailed);
             selection.hit = true;
             selection.position = hit.position;
@@ -257,7 +298,7 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                 case ParticleCollisionMode::Planes:
                     return QueryPlanes(state, previous, position);
                 case ParticleCollisionMode::SceneDepth:
-                    return QueryAdapter(state, step, state.sceneDepth, handle, previous, position, velocity);
+                    return QueryDepth(state, previous, position);
                 case ParticleCollisionMode::PhysicsWorld:
                     return QueryAdapter(state, step, state.physicsWorld, handle, previous, position, velocity);
                 case ParticleCollisionMode::Count:
@@ -422,7 +463,7 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
             view.positionX[dense] = collision.Value().position.x + (collision.Value().normal.x * CollisionEpsilon);
             view.positionY[dense] = collision.Value().position.y + (collision.Value().normal.y * CollisionEpsilon);
             view.positionZ[dense] = collision.Value().position.z + (collision.Value().normal.z * CollisionEpsilon);
-            if (state.collisionResponse == CpuParticleCollisionResponse::Die ||
+            if (state.descriptor.collisionResponse == ParticleCollisionResponse::Die ||
                 state.descriptor.killCondition == ParticleKillCondition::Collision) {
                 view.customFlags[dense] |= ExplicitKillBit;
                 continue;
@@ -431,10 +472,11 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
             const Math::Vec3 velocity{view.velocityX[dense], view.velocityY[dense], view.velocityZ[dense]};
             const float normalVelocity = Math::Dot(velocity, normal);
             if (normalVelocity < 0.0F) {
-                const Math::Vec3 reflected = velocity - (normal * (2.0F * normalVelocity));
-                view.velocityX[dense] = reflected.x * collision.Value().restitution;
-                view.velocityY[dense] = reflected.y * collision.Value().restitution;
-                view.velocityZ[dense] = reflected.z * collision.Value().restitution;
+                const Math::Vec3 reflected =
+                    velocity - (normal * normalVelocity) - (normal * (normalVelocity * collision.Value().restitution));
+                view.velocityX[dense] = reflected.x;
+                view.velocityY[dense] = reflected.y;
+                view.velocityZ[dense] = reflected.z;
             }
         }
         return Result<std::uint32_t>::Success(collisions);

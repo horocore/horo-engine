@@ -102,33 +102,42 @@ namespace Horo::SceneSource {
             std::size_t remaining = Prefab::PrefabHardLimits::SourceDocumentBytes;
             if (resolver.Sources().size() > Prefab::PrefabHardLimits::SourceObjectCount)
                 return Result<void>::Failure(MakeError(Prefab::PrefabErrors::ExpansionCacheCapacityExceeded));
-            for (const auto &source : resolver.Sources()) {
+            for (const auto &source : resolver.CanonicalSourceCommitments()) {
                 if (cancellation.IsCancellationRequested())
                     return Result<void>::Failure(MakeError(Prefab::PrefabErrors::Cancelled));
-                const auto bytes = source.document.SerializeCanonical();
-                if (bytes.HasError())
-                    return Result<void>::Failure(bytes.ErrorValue());
-                if (bytes.Value().size() > remaining)
+                if (source.encodedBytes > remaining)
                     return Result<void>::Failure(MakeError(Prefab::PrefabErrors::ExpansionCacheCapacityExceeded));
-                remaining -= bytes.Value().size();
+                remaining -= source.encodedBytes;
             }
             return Result<void>::Success();
         }
 
-        /** @brief Commits every current authored value through the existing canonical Scene codec, not a revision counter alone. */
-        Result<Sha256Digest> DocumentDigest(const SceneSourceDocument &document) {
+        /** @brief Preserves codec validation and the exact wire-byte ceiling using allocation-safe structural encoding. */
+        Result<void> ValidateDocumentEncoding(const SceneSourceDocument &document) {
             if (!AdmitDocument(document))
-                return Result<Sha256Digest>::Failure(MakeError(Prefab::PrefabErrors::PayloadTooLarge));
+                return Result<void>::Failure(MakeError(Prefab::PrefabErrors::PayloadTooLarge));
             try {
                 const auto bytes = EncodeSceneSource({document.objects, document.prefabInstances});
                 if (bytes.size() > MaximumSceneSourceBytes)
-                    return Result<Sha256Digest>::Failure(MakeError(Prefab::PrefabErrors::PayloadTooLarge));
-                return Result<Sha256Digest>::Success(ComputeSha256(std::as_bytes(std::span{bytes})));
+                    return Result<void>::Failure(MakeError(Prefab::PrefabErrors::PayloadTooLarge));
+                return Result<void>::Success();
             } catch (const std::bad_alloc &) {
                 throw;  // The public admission/completion boundary returns the allocation-specific typed failure.
             } catch (const std::exception &error) {
-                return Result<Sha256Digest>::Failure(MakeError(Prefab::PrefabErrors::AdmissionRejected, error.what()));
+                return Result<void>::Failure(MakeError(Prefab::PrefabErrors::AdmissionRejected, error.what()));
             }
+        }
+
+        /** @brief Compares every owned authored object field, including all typed and opaque component values. */
+        bool SameAuthoredObject(const SceneObjectSnapshot &left, const SceneObjectSnapshot &right) noexcept {
+            return left.id == right.id && left.parent == right.parent && left.name == right.name &&
+                   left.localTransform == right.localTransform && left.primitiveMesh == right.primitiveMesh &&
+                   left.components == right.components && left.meshAsset == right.meshAsset && left.editorState == right.editorState;
+        }
+
+        /** @brief Checks complete ordered authored input without rebuilding a JSON tree under completion allocation pressure. */
+        bool SameAuthoredDocument(const SceneSourceDocument &left, const SceneSourceDocument &right) noexcept {
+            return std::ranges::equal(left.objects, right.objects, SameAuthoredObject) && left.prefabInstances == right.prefabInstances;
         }
 
         /** @brief Recognizes terminal scheduler state; its snapshot lock synchronizes the completed owned envelope. */
@@ -140,7 +149,6 @@ namespace Horo::SceneSource {
     /** @brief The worker alone writes detached candidates/result; owner reads only after scheduler terminal synchronization. */
     struct ScenePrefabExpansionOwner::Work final {
         ScenePrefabExpansionRequest request;
-        Sha256Digest documentDigest;
         CancellationToken cancellation;
         std::vector<Prefab::PrefabExpansionCacheKey> keys;
         std::vector<std::shared_ptr<const Prefab::EffectivePrefabCandidate>> hits;
@@ -148,20 +156,17 @@ namespace Horo::SceneSource {
         std::optional<Runtime::RuntimeSceneDefinition> definition;
 
         /** @brief Checks all captured document/session/settings evidence before dependency recapture. */
-        bool MatchesCurrent(const ScenePrefabExpansionRequest &current, const Sha256Digest &digest, const bool closed) const {
+        bool MatchesCurrent(const ScenePrefabExpansionRequest &current, const bool closed) const {
             return !closed && !cancellation.IsCancellationRequested() && definition && current.documentSession == request.documentSession &&
                    current.scene == request.scene && current.revision == request.revision &&
                    current.resolver.RegistryRevision() == request.resolver.RegistryRevision() &&
-                   current.limits.Policy() == request.limits.Policy() && digest == documentDigest;
+                   current.limits.Policy() == request.limits.Policy() && SameAuthoredDocument(current.document, request.document);
         }
 
         /** @brief Recaptures source identities and cancellation at the publication boundary, without mutating cache state. */
         Result<void> ValidateCurrent(const ScenePrefabExpansionRequest &current, const Prefab::PrefabExpansionCache &cache,
                                      const bool closed) const {
-            const auto digest = DocumentDigest(current.document);
-            if (digest.HasError())
-                return Result<void>::Failure(digest.ErrorValue());
-            if (!MatchesCurrent(current, digest.Value(), closed))
+            if (!MatchesCurrent(current, closed))
                 return Result<void>::Failure(MakeError(Prefab::PrefabErrors::ResolutionStale));
             for (std::size_t index = 0; index < keys.size(); ++index) {
                 const auto &placement = current.document.prefabInstances[index];
@@ -251,9 +256,8 @@ namespace Horo::SceneSource {
         using Output = std::shared_ptr<Work>;
         if (const auto admitted = AdmitResolver(request.resolver, cancellation); admitted.HasError())
             return Result<Output>::Failure(admitted.ErrorValue());
-        auto digest = DocumentDigest(request.document);
-        if (digest.HasError())
-            return Result<Output>::Failure(digest.ErrorValue());
+        if (const auto validated = ValidateDocumentEncoding(request.document); validated.HasError())
+            return Result<Output>::Failure(validated.ErrorValue());
         std::vector<Prefab::PrefabExpansionCacheKey> keys;
         std::vector<std::shared_ptr<const Prefab::EffectivePrefabCandidate>> hits;
         keys.reserve(request.document.prefabInstances.size());
@@ -266,8 +270,7 @@ namespace Horo::SceneSource {
             hits.push_back(cache_.Find(key.Value()));
             keys.push_back(std::move(key).Value());
         }
-        return Result<Output>::Success(
-            std::make_shared<Work>(Work{request, digest.Value(), cancellation, std::move(keys), std::move(hits), {}, {}}));
+        return Result<Output>::Success(std::make_shared<Work>(Work{request, cancellation, std::move(keys), std::move(hits), {}, {}}));
     }
 
     /** @copydoc ScenePrefabExpansionOwner::Submit */
