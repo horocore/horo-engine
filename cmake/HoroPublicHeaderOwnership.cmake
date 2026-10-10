@@ -998,6 +998,8 @@ horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
     Horo/Runtime/Render/RenderMemoryTypes.h
     Horo/Runtime/Render/RenderResourceDescriptorErrors.h
     Horo/Runtime/Render/RenderResourceDescriptors.h
+    Horo/Runtime/Render/RenderShaderResources.h
+    Horo/Runtime/Render/RenderShaderResourceErrors.h
     Horo/Runtime/Render/RenderSubmission.h
     Horo/Runtime/Render/ShaderArtifact.h
     Horo/Runtime/Render/ShaderCompilerPipeline.h

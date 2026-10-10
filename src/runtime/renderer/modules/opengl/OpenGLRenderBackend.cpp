@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Render/RenderShaderResources.h"
 #include "OpenGLBackendInternal.h"
 #include "OpenGLExecutionAdapter.h"
 #include "OpenGLGraphWorkloads.h"
@@ -9,7 +10,9 @@
 #include <glad/gl.h>
 #include <limits>
 #include <memory>
+#include <new>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -64,6 +67,12 @@ namespace Horo::Render {
             RenderTextureUsage usage{RenderTextureUsage::None};
             std::uint32_t sampleCount{1};
             std::uint32_t references{1};
+        };
+
+        /** @brief Native shader metadata; frontend registry remains the sole resident identity/dependency authority. */
+        struct OpenGLShaderModule {
+            RenderShaderModuleDescriptor descriptor;
+            std::size_t cookedBytes{0};
         };
 
         [[nodiscard]] OpenGLTextureFormat TextureFormat(const RenderTextureFormat format) noexcept {
@@ -299,6 +308,9 @@ namespace Horo::Render {
                 // Context destruction owns queued native references; no normal-frame or teardown GPU wait is introduced.
                 CompleteActiveFrame();
                 execution_.Reset();
+                for (const auto &[shader, metadata] : shaderModules_)
+                    functions_.shaders.deleteShader(shader);
+                shaderModules_.clear();
                 DestroyRemainingResources();
                 initialized_ = false;
                 DestroyContext();
@@ -497,6 +509,7 @@ namespace Horo::Render {
             std::unordered_map<std::uint32_t, RenderBufferDescriptor> bufferDescriptors_;
             std::unordered_map<std::uint32_t, Detail::OpenGLGraphTexture> textureDescriptors_;
             std::unordered_map<std::uint64_t, OpenGLTextureView> textureViews_;
+            std::unordered_map<std::uint32_t, OpenGLShaderModule> shaderModules_;
             std::uint32_t nextTextureViewIdentity_{1};
             std::unordered_set<std::uint32_t> buffers_;
             std::unordered_set<std::uint32_t> meshes_;

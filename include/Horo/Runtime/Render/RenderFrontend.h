@@ -11,9 +11,11 @@
 #include "Horo/Runtime/Render/RenderGraphTransientResources.h"
 #include "Horo/Runtime/Render/RenderMemoryBudget.h"
 #include "Horo/Runtime/Render/RenderParallelWork.h"
+#include "Horo/Runtime/Render/RenderShaderResources.h"
 
 #include <memory>
 #include <span>
+#include <thread>
 #include <vector>
 
 namespace Horo::Render {
@@ -322,6 +324,40 @@ namespace Horo::Render {
          */
         [[nodiscard]] const RenderBackendCapabilities &Capabilities() const noexcept;
 
+        /** @brief Synchronously prepares an exact cooked stage on the render owner, outside an active frame.
+         * @param descriptor Validated target, stage, authored entry and original artifact/interface identity.
+         * @param cookedPackage Entire immutable HOROSHDR package borrowed only during this call.
+         * @return Ready generation and completed operation, or typed failure with no partial publication.
+         * @details Admits backing before native compilation. No job, source cooker, fallback or borrowed byte retention occurs.
+         * Host cancellation/shutdown is serialized before/after this bounded loading operation. */
+        [[nodiscard]] Result<ResourceCreation<RenderShaderModuleHandle>> CreateShaderModule(const RenderShaderModuleDescriptor &descriptor,
+                                                                                            std::span<const std::uint8_t> cookedPackage);
+        /** @brief Synchronously prepares an exact graphics pipeline during render-owner loading.
+         * @param descriptor Cooked manifest/reflection, exact shader generations and immutable state/cache identity.
+         * @return Ready pipeline generation and completed operation, or original typed failure.
+         * @details Retains both shader dependencies until pipeline retirement; active-frame creation is rejected. */
+        [[nodiscard]] Result<ResourceCreation<RenderPipelineHandle>> CreateGraphicsPipeline(
+            const RenderGraphicsPipelineDescriptor &descriptor);
+        /** @brief Synchronously prepares one admitted immutable sampler outside an active frame.
+         * @param descriptor Exact filtering, addressing and comparison policy.
+         * @return Ready sampler generation and completed operation, or typed failure without policy substitution. */
+        [[nodiscard]] Result<ResourceCreation<RenderSamplerHandle>> CreateSampler(const RenderSamplerDescriptor &descriptor);
+        /** @brief Retires an exact shader generation once pipeline and submission pins drain.
+         * @param handle Exact frontend-owned generation. @return Success or typed identity/lifecycle failure. */
+        [[nodiscard]] Result<void> ReleaseShaderModule(RenderShaderModuleHandle handle);
+        /** @brief Retires an exact pipeline generation once its consumer and submission pins drain.
+         * @param handle Exact frontend-owned generation. @return Success or typed identity/lifecycle failure. */
+        [[nodiscard]] Result<void> ReleaseGraphicsPipeline(RenderPipelineHandle handle);
+        /** @brief Retires an exact sampler generation once material and submission pins drain.
+         * @param handle Exact frontend-owned generation. @return Success or typed identity/lifecycle failure. */
+        [[nodiscard]] Result<void> ReleaseSampler(RenderSamplerHandle handle);
+        /** @brief Queries one exact shader generation. @param handle Exact identity. @return State or typed identity failure. */
+        [[nodiscard]] Result<RenderResourceState> ResourceState(RenderShaderModuleHandle handle) const;
+        /** @brief Queries one exact pipeline generation. @param handle Exact identity. @return State or typed identity failure. */
+        [[nodiscard]] Result<RenderResourceState> ResourceState(RenderPipelineHandle handle) const;
+        /** @brief Queries one exact sampler generation. @param handle Exact identity. @return State or typed identity failure. */
+        [[nodiscard]] Result<RenderResourceState> ResourceState(RenderSamplerHandle handle) const;
+
         /**
          * @brief Begins one staged frame owned by a move-only recovery scope.
          * @param descriptor Host frame identity and output extent.
@@ -576,6 +612,7 @@ namespace Horo::Render {
         };
 
         std::unique_ptr<IRenderBackend> backend_;
+        const std::thread::id preparationOwner_{std::this_thread::get_id()};
         std::unique_ptr<RenderMemoryBudget> memoryBudget_;
         RenderFrontendMemoryConfig memoryConfig_;
         std::unique_ptr<Detail::RenderResourceRegistry> resourceRegistry_;

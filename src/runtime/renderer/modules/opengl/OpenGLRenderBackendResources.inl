@@ -1,4 +1,70 @@
 /** @brief Resource realization methods kept with OpenGLRenderBackend's private definition. */
+/** @copydoc IRenderResourceBackend::QueryShaderModuleMemoryCost */
+Result<RenderMemoryCostPlan> QueryShaderModuleMemoryCost(const RenderShaderModuleDescriptor &descriptor,
+                                                         const std::size_t cookedBytes) const override {
+    if (!IsOwnerThread())
+        return WrongThread<RenderMemoryCostPlan>();
+    const auto valid = ValidateRenderShaderModuleDescriptor(descriptor);
+    if (valid.HasError())
+        return Result<RenderMemoryCostPlan>::Failure(valid.ErrorValue());
+    if (!initialized_ || !functions_.shaders.IsValid() || !functions_.shaders.isAvailable() ||
+        descriptor.target.backend != ShaderTargetBackend::OpenGL || descriptor.target.payloadFormat != ShaderPayloadFormat::Glsl410 ||
+        (descriptor.stage != ShaderStage::Vertex && descriptor.stage != ShaderStage::Fragment) ||
+        descriptor.target.descriptorVersion != 1 || descriptor.target.interfaceSchemaVersion != 1 || cookedBytes == 0 ||
+        cookedBytes > 64U * 1024U * 1024U)
+        return Result<RenderMemoryCostPlan>::Failure(
+            MakeError(OpenGLBackendErrors::UnsupportedResourceOperation,
+                      "OpenGL admits cooked GLSL 410 vertex/fragment modules with version-one target/interface metadata."));
+    // Driver shader allocations are opaque. This explicit admission estimate is not measured native memory usage.
+    constexpr std::size_t expansion = 16;
+    constexpr std::size_t objectEstimate = 64U * 1024U;
+    if (cookedBytes > (std::numeric_limits<std::size_t>::max() - objectEstimate) / expansion)
+        return Result<RenderMemoryCostPlan>::Failure(MakeError(OpenGLBackendErrors::ResourceCreationFailed));
+    const auto required = ConservativeRequirement(cookedBytes * expansion + objectEstimate);
+    if (!required)
+        return Result<RenderMemoryCostPlan>::Failure(MakeError(OpenGLBackendErrors::ResourceCreationFailed));
+    return Result<RenderMemoryCostPlan>::Success(MemoryCostPlan(3, cookedBytes, *required));
+}
+
+/** @copydoc IRenderResourceBackend::CreateShaderModule */
+Result<std::uint64_t> CreateShaderModule(const RenderShaderModuleDescriptor &descriptor, const std::span<const std::uint8_t> cookedCode,
+                                         const RenderMemoryPlacement &placement) override {
+    if (auto failure = ResourceCreationFailure(); failure)
+        return std::move(*failure);
+    if (frameActive_)
+        return Result<std::uint64_t>::Failure(MakeError(OpenGLBackendErrors::FrameActive));
+    const auto cost = QueryShaderModuleMemoryCost(descriptor, cookedCode.size());
+    if (cost.HasError())
+        return Result<std::uint64_t>::Failure(cost.ErrorValue());
+    if (!MatchesPlacement(cost.Value(), placement))
+        return Result<std::uint64_t>::Failure(
+            MakeError(OpenGLBackendErrors::InvalidConfig, "Cooked shader candidate does not match its admitted memory placement."));
+    const auto compiled = Detail::CompileOpenGLCookedStage({descriptor.stage, descriptor.entryPoint, cookedCode}, functions_.shaders);
+    if (compiled.HasError())
+        return Result<std::uint64_t>::Failure(compiled.ErrorValue());
+    try {
+        shaderModules_.emplace(compiled.Value(), OpenGLShaderModule{descriptor, cookedCode.size()});
+    } catch (const std::bad_alloc &) {
+        functions_.shaders.deleteShader(compiled.Value());
+        return Result<std::uint64_t>::Failure(
+            MakeError(OpenGLBackendErrors::ResourceCreationFailed, "OpenGL shader tracking metadata allocation failed."));
+    } catch (const std::length_error &) {
+        functions_.shaders.deleteShader(compiled.Value());
+        return Result<std::uint64_t>::Failure(
+            MakeError(OpenGLBackendErrors::ResourceCreationFailed, "OpenGL shader tracking metadata exceeded its finite envelope."));
+    }
+    return Result<std::uint64_t>::Success(compiled.Value());
+}
+
+/** @copydoc IRenderResourceBackend::DestroyShaderModule */
+void DestroyShaderModule(const std::uint64_t backendInstance) noexcept override {
+    if (!IsOwnerThread() || backendInstance > std::numeric_limits<std::uint32_t>::max())
+        return;
+    const auto shader = static_cast<std::uint32_t>(backendInstance);
+    if (shaderModules_.erase(shader) != 0)
+        functions_.shaders.deleteShader(shader);
+}
+
 /** @copydoc IRenderBackend::QueryBufferMemoryCost */
 Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
     const auto required = ConservativeRequirement(descriptor.byteSize);
@@ -6,26 +72,29 @@ Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor 
         return Result<RenderMemoryCostPlan>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation,
                                                                "OpenGL buffer memory requirements are unavailable for this descriptor."));
     if (!capabilities_.support.Supports(descriptor))
-        return Result<RenderMemoryCostPlan>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation,
-                                                               "OpenGL buffer memory-cost query failed: " +
-                                                                   DescribeRenderBufferAdmissionFailure(descriptor, capabilities_.support)));
+        return Result<RenderMemoryCostPlan>::Failure(
+            MakeError(OpenGLBackendErrors::UnsupportedResourceOperation,
+                      "OpenGL buffer memory-cost query failed: " +
+                          DescribeRenderBufferAdmissionFailure(descriptor, capabilities_.support)));
     return Result<RenderMemoryCostPlan>::Success(MemoryCostPlan(1, descriptor.byteSize, *required));
 }
 
 /** @copydoc IRenderBackend::QueryTextureMemoryCost */
 Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override {
     if (!initialized_ || !functions_.HasResourceFunctions())
-        return Result<RenderMemoryCostPlan>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation,
-                                                               "OpenGL texture memory requirements are unavailable."));
+        return Result<RenderMemoryCostPlan>::Failure(
+            MakeError(OpenGLBackendErrors::UnsupportedResourceOperation, "OpenGL texture memory requirements are unavailable."));
     if (!capabilities_.support.formats.Supports(descriptor))
-        return Result<RenderMemoryCostPlan>::Failure(MakeError(
-            OpenGLBackendErrors::UnsupportedResourceOperation,
-            "OpenGL texture memory-cost query failed: " + DescribeRenderTextureAdmissionFailure(descriptor, capabilities_.support)));
+        return Result<RenderMemoryCostPlan>::Failure(
+            MakeError(OpenGLBackendErrors::UnsupportedResourceOperation,
+                      "OpenGL texture memory-cost query failed: " +
+                          DescribeRenderTextureAdmissionFailure(descriptor, capabilities_.support)));
     if (!IsSupportedTextureDescriptor(descriptor))
-        return Result<RenderMemoryCostPlan>::Failure(MakeError(
-            OpenGLBackendErrors::UnsupportedResourceOperation,
-            "OpenGL texture memory-cost query failed: " + DescribeRenderTextureRequest(descriptor) +
-                "; this path implements only single-mip, single-layer, single-sample 2d textures with sampled or attachment usage."));
+        return Result<RenderMemoryCostPlan>::Failure(
+            MakeError(OpenGLBackendErrors::UnsupportedResourceOperation,
+                      "OpenGL texture memory-cost query failed: " + DescribeRenderTextureRequest(descriptor) +
+                          "; this path implements only single-mip, single-layer, single-sample 2d textures with sampled or attachment "
+                          "usage."));
     const auto payload = RenderTextureBaseLevelByteSize(descriptor);
     auto required = payload.has_value() ? ConservativeRequirement(*payload) : std::nullopt;
     const bool graphColor = capabilities_.supportsExactTransientResourceReuse && descriptor.format == RenderTextureFormat::Rgba8Unorm &&
@@ -36,10 +105,10 @@ Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescripto
                                                                                              : std::nullopt;
     }
     if (!payload.has_value() || !required.has_value())
-        return Result<RenderMemoryCostPlan>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation,
-                                                               "OpenGL texture memory-cost query failed: " +
-                                                                   DescribeRenderTextureRequest(descriptor) +
-                                                                   "; memory requirement overflows the representable size."));
+        return Result<RenderMemoryCostPlan>::Failure(
+            MakeError(OpenGLBackendErrors::UnsupportedResourceOperation,
+                      "OpenGL texture memory-cost query failed: " + DescribeRenderTextureRequest(descriptor) +
+                          "; memory requirement overflows the representable size."));
     return Result<RenderMemoryCostPlan>::Success(MemoryCostPlan(2, *payload, *required));
 }
 
@@ -52,7 +121,8 @@ Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, con
     if (cost.HasError())
         return Result<std::uint64_t>::Failure(cost.ErrorValue());
     if (!descriptor.IsValid() || (!initialData.empty() && initialData.size() != descriptor.byteSize) ||
-        !MatchesPlacement(cost.Value(), placement) || descriptor.byteSize > static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max()))
+        !MatchesPlacement(cost.Value(), placement) ||
+        descriptor.byteSize > static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max()))
         return Result<std::uint64_t>::Failure(MakeError(OpenGLBackendErrors::InvalidConfig, "OpenGL buffer creation request is invalid."));
     std::uint32_t buffer = 0;
     functions_.buffers.generateBuffers(1, &buffer);
@@ -138,11 +208,11 @@ Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &textureDescri
         return Result<std::uint64_t>::Failure(cost.ErrorValue());
     constexpr auto maximumExtent = static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max());
     if (textureDescriptor.extent.width > maximumExtent || textureDescriptor.extent.height > maximumExtent ||
-        textureDescriptor.extent.width > contextFacts_.maxTexture2DSize ||
-        textureDescriptor.extent.height > contextFacts_.maxTexture2DSize)
-        return Result<std::uint64_t>::Failure(MakeError(
-            OpenGLBackendErrors::InvalidConfig,
-            "OpenGL texture creation failed: " + DescribeRenderTextureAdmissionFailure(textureDescriptor, capabilities_.support)));
+        textureDescriptor.extent.width > contextFacts_.maxTexture2DSize || textureDescriptor.extent.height > contextFacts_.maxTexture2DSize)
+        return Result<std::uint64_t>::Failure(
+            MakeError(OpenGLBackendErrors::InvalidConfig,
+                      "OpenGL texture creation failed: " +
+                          DescribeRenderTextureAdmissionFailure(textureDescriptor, capabilities_.support)));
     if (!bytes.has_value() || (!textureData.empty() && textureData.size() != *bytes) || !MatchesPlacement(cost.Value(), placement))
         return Result<std::uint64_t>::Failure(MakeError(OpenGLBackendErrors::InvalidConfig, "OpenGL texture creation request is invalid."));
     std::uint32_t texture = 0;

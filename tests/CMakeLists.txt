@@ -2664,6 +2664,7 @@ target_link_libraries(HoroPipelinePreparationTests PRIVATE HoroEngine::RenderApi
 
 add_executable(HoroPipelineCacheTests
         unit/runtime/renderer/PipelineCacheTests.cpp
+        unit/runtime/renderer/RenderShaderResourceDescriptorTests.cpp
 )
 target_compile_features(HoroPipelineCacheTests PRIVATE cxx_std_20)
 target_include_directories(HoroPipelineCacheTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
@@ -3840,6 +3841,7 @@ if (HORO_BUILD_RENDER_OPENGL)
     add_executable(HoroRenderOpenGLTests
             unit/runtime/renderer/OpenGLRenderBackendTests.cpp
             unit/runtime/renderer/OpenGLCommandAdaptationTests.cpp
+            unit/runtime/renderer/OpenGLShaderRealizationTests.cpp
             unit/runtime/renderer/OpenGLRenderBackendQualificationTests.cpp
             unit/runtime/renderer/OpenGLRenderResourceTests.cpp
             unit/runtime/renderer/OpenGLRenderGraphTests.cpp

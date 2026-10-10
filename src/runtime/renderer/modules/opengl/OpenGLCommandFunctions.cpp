@@ -246,6 +246,7 @@ namespace Horo::Render::Detail {
                              .checkFramebuffer = &ProductionCheckFramebuffer,
                              .drawBuffer = &ProductionDrawBuffer,
                              .readBuffer = &ProductionReadBuffer},
+            .shaders = ProductionOpenGLShaderFunctions(),
         };
     }
 }  // namespace Horo::Render::Detail

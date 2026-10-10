@@ -1974,6 +1974,8 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderResourceAdmission.cpp
         runtime/renderer/api/RenderResourceDescriptors.cpp
         runtime/renderer/api/ShaderArtifact.cpp
+        runtime/renderer/api/RenderShaderResources.cpp
+        runtime/renderer/api/RenderShaderResourceErrors.cpp
         runtime/renderer/api/ShaderCompilerPipeline.cpp
         runtime/renderer/api/ShaderCompilerPipelineErrors.cpp
         runtime/renderer/api/ShaderManifest.cpp
@@ -2042,6 +2044,7 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderFrontendResourceAccess.cpp
         runtime/renderer/frontend/RenderFrontendResourceValidation.cpp
         runtime/renderer/frontend/RenderFrontendResources.cpp
+        runtime/renderer/frontend/RenderFrontendShaderResources.cpp
         runtime/renderer/frontend/RenderFrontendErrors.cpp
         runtime/renderer/frontend/RenderMemoryBudget.cpp
         runtime/renderer/frontend/RenderMemoryBudgetErrors.cpp
@@ -2123,6 +2126,7 @@ if (HORO_BUILD_RENDER_OPENGL)
     add_library(HoroRenderOpenGL STATIC
             runtime/renderer/modules/opengl/OpenGLBackendModule.cpp
             runtime/renderer/modules/opengl/OpenGLCommandFunctions.cpp
+            runtime/renderer/modules/opengl/OpenGLShaderRealization.cpp
             runtime/renderer/modules/opengl/OpenGLContextAdmission.cpp
             runtime/renderer/modules/opengl/OpenGLExecutionState.cpp
         runtime/renderer/modules/opengl/OpenGLExecutionAdapter.cpp
