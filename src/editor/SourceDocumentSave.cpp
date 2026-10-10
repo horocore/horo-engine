@@ -1,6 +1,7 @@
 #include "Horo/Foundation/Platform.h"
 #include "SourceDocumentInternal.h"
 
+#include <exception>
 #include <span>
 #include <type_traits>
 #include <utility>
@@ -9,6 +10,8 @@ namespace Horo::Editor {
     static_assert(std::is_nothrow_move_constructible_v<SourceSaveResult>);
     static_assert(std::is_nothrow_move_assignable_v<Result<SourceSaveResult>>);
     static_assert(std::is_nothrow_move_assignable_v<Error>);
+    static_assert(std::is_nothrow_move_constructible_v<Error>);
+    static_assert(std::is_nothrow_destructible_v<Error>);
 
     namespace {
         const ErrorCodeDescriptor ReadOnly{.domain = ErrorDomainId{"horo.editor.source"},
@@ -20,19 +23,30 @@ namespace Horo::Editor {
 
         /** @brief Holds admission closed while filesystem/provider callbacks execute. */
         struct PublicationGuard final {
-            bool &busy;
+            bool *busy;
 
-            explicit PublicationGuard(bool &value) noexcept : busy(value) {
-                busy = true;
+            explicit PublicationGuard(bool &value) noexcept : busy(&value) {
+                *busy = true;
             }
 
             ~PublicationGuard() noexcept {
-                busy = false;
+                *busy = false;
             }
 
             PublicationGuard(const PublicationGuard &) = delete;
             PublicationGuard &operator=(const PublicationGuard &) = delete;
         };
+
+        /** @brief Reports cleanup failure without replacing the primary save outcome or throwing during unwind. */
+        bool TryRemoveTemporary(DurableFileSystem &files, const std::filesystem::path &path) noexcept {
+            try {
+                return files.RemoveDurable(path).HasValue();
+            } catch (const std::exception &) {
+                return false;
+            } catch (...) {
+                return false;
+            }
+        }
 
         /** @brief Removes only an exclusively created temporary owned by this transaction. */
         struct TemporaryGuard final {
@@ -48,10 +62,7 @@ namespace Horo::Editor {
             ~TemporaryGuard() noexcept {
                 if (!created)
                     return;
-                try {
-                    static_cast<void>(files.RemoveDurable(path));
-                } catch (...) {
-                }
+                static_cast<void>(TryRemoveTemporary(files, path));
             }
         };
 
@@ -74,42 +85,58 @@ namespace Horo::Editor {
 
         /** @brief Captures destination permissions without granting overwrite authority. */
         Result<std::filesystem::perms> DestinationPermissions(const std::filesystem::path &path) {
+            using enum std::filesystem::perms;
             std::error_code error;
             if (!std::filesystem::exists(path, error)) {
                 if (error)
                     return Result<std::filesystem::perms>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
-                return Result<std::filesystem::perms>::Success(std::filesystem::perms::unknown);
+                return Result<std::filesystem::perms>::Success(unknown);
             }
             const auto permissions = std::filesystem::status(path, error).permissions();
             if (error)
                 return Result<std::filesystem::perms>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
-            constexpr auto writable =
-                std::filesystem::perms::owner_write | std::filesystem::perms::group_write | std::filesystem::perms::others_write;
-            if ((permissions & writable) == std::filesystem::perms::none)
+            if (constexpr auto writable = owner_write | group_write | others_write; (permissions & writable) == none)
                 return Result<std::filesystem::perms>::Failure(MakeError(ReadOnly));
             return Result<std::filesystem::perms>::Success(permissions);
         }
 
+        /** @brief Borrows the captured revision and its exact expected disk base for one save operation. */
+        struct SaveBytes final {
+            std::string_view text;
+            std::string_view expected;
+        };
+
         /** @brief Prepares exclusive bytes between two exact conflict checks, then fences cancellation. */
         Result<void> PrepareBytes(DurableFileSystem &files, const std::filesystem::path &path, TemporaryGuard &cleanup,
-                                  const std::string_view text, const std::string_view expected, const bool absentAllowed,
-                                  const std::size_t maximum, const CancellationToken cancellation) {
-            auto observed = CheckDisk(path, expected, absentAllowed, maximum, cancellation);
+                                  const SaveBytes contents, const bool absentAllowed, const std::size_t maximum,
+                                  const CancellationToken cancellation) {
+            auto observed = CheckDisk(path, contents.expected, absentAllowed, maximum, cancellation);
             if (observed.HasError())
                 return observed;
             const auto permissions = DestinationPermissions(path);
             if (permissions.HasError())
                 return Result<void>::Failure(permissions.ErrorValue());
-            const auto bytes = std::span{text.data(), text.size()};
-            auto written = files.WritePrivateDurable(cleanup.path, std::as_bytes(bytes), cleanup.created, permissions.Value());
-            if (written.HasError())
+            const auto bytes = std::span{contents.text.data(), contents.text.size()};
+            if (auto written = files.WritePrivateDurable(cleanup.path, std::as_bytes(bytes), cleanup.created, permissions.Value());
+                written.HasError())
                 return written;
-            observed = CheckDisk(path, expected, absentAllowed, maximum, cancellation);
+            observed = CheckDisk(path, contents.expected, absentAllowed, maximum, cancellation);
             if (observed.HasError())
                 return observed;
             if (cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(SourceDocumentErrors::Cancelled));
             return Result<void>::Success();
+        }
+
+        /** @brief Records visible publication using only preallocated state; false leaves the original exception active. */
+        bool PreserveVisibleFailure(const AtomicFileReplacementReceipt &receipt, TemporaryGuard &cleanup, SourceSaveResult &result,
+                                    Error &fallback) noexcept {
+            if (!receipt.WasCommitted())
+                return false;
+            cleanup.created = false;
+            result.disposition = SourceSaveDisposition::VisibleDurabilityUnconfirmed;
+            result.diagnostic.emplace(std::move(fallback));
+            return true;
         }
 
         /** @brief Uses the native commit receipt to preserve visible state even when durability or callbacks fail. */
@@ -133,14 +160,25 @@ namespace Horo::Editor {
                     prepared.external = SourceExternalState::InSync;
                     prepared.saveUnconfirmed = false;
                 }
-            } catch (...) {
-                if (!receipt.WasCommitted())
+            } catch (const std::exception &) {
+                if (!PreserveVisibleFailure(receipt, cleanup, result, fallback))
                     throw;
-                cleanup.created = false;
-                result.disposition = SourceSaveDisposition::VisibleDurabilityUnconfirmed;
-                result.diagnostic = std::move(fallback);
+            } catch (...) {
+                if (!PreserveVisibleFailure(receipt, cleanup, result, fallback))
+                    throw;
             }
             return Result<void>::Success();
+        }
+
+        /** @brief Keeps a preallocated per-document failure if constructing a later save outcome runs out of memory. */
+        void CompleteSaveItem(SourceDocumentService &documents, SourceSaveAllItem &item, const SourceSaveRequest &request,
+                              DurableFileSystem &files, const CancellationToken &cancellation) {
+            try {
+                item.result = documents.Save(request, files, cancellation);
+            } catch (const std::bad_alloc &) {
+                // Earlier publications and this item's preallocated error remain observable.
+                return;
+            }
         }
     }  // namespace
 
@@ -148,8 +186,7 @@ namespace Horo::Editor {
     Result<SourceSaveResult> SourceDocumentService::Save(const SourceSaveRequest &request, DurableFileSystem &files,
                                                          const CancellationToken cancellation) {
         try {
-            const auto current = Snapshot(request.instance);
-            if (current.HasError())
+            if (const auto current = Snapshot(request.instance); current.HasError())
                 return Result<SourceSaveResult>::Failure(current.ErrorValue());
             const auto &record = *storage_->Find(request.instance);
             return SaveTo(request, files, record.root->identity, record.path, cancellation);
@@ -178,8 +215,7 @@ namespace Horo::Editor {
         std::error_code error;
         if (!std::filesystem::is_directory(path.parent_path(), error) || error)
             return Result<std::filesystem::path>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
-        const bool relocating = path != record.path;
-        if (relocating && !request.approvedDiskBytes && std::filesystem::exists(path, error))
+        if (const bool relocating = path != record.path; relocating && !request.approvedDiskBytes && std::filesystem::exists(path, error))
             return Result<std::filesystem::path>::Failure(MakeError(SourceDocumentErrors::SaveConflict));
         if (const auto admitted = AdmitBytes(limits.maximumDocumentBytes); admitted.HasError())
             return Result<std::filesystem::path>::Failure(admitted.ErrorValue());
@@ -191,8 +227,7 @@ namespace Horo::Editor {
                                                            DocumentIdentity identity, std::filesystem::path path,
                                                            const CancellationToken cancellation) {
         try {
-            const auto current = Snapshot(request.instance);
-            if (current.HasError())
+            if (const auto current = Snapshot(request.instance); current.HasError())
                 return Result<SourceSaveResult>::Failure(current.ErrorValue());
             auto &record = *storage_->Find(request.instance);
             auto safe = storage_->PrepareSavePath(record, request, identity, std::move(path), cancellation);
@@ -214,22 +249,25 @@ namespace Horo::Editor {
             auto temporary = path;
             temporary += ".horo-source.temporary";
             PublicationGuard publication{storage_->saving};
-            auto lock = files.TryAcquireExclusive(lockPath, "horo.source_document");
-            if (lock.HasError())
+            if (auto lock = files.TryAcquireExclusive(lockPath, "horo.source_document"); lock.HasError()) {
                 return Result<SourceSaveResult>::Failure(lock.ErrorValue());
-            TemporaryGuard cleanup{files, temporary};
-            const auto written = PrepareBytes(files, path, cleanup, prepared->text->bytes, expected, absentAllowed,
-                                              storage_->limits.maximumDocumentBytes, cancellation);
-            if (written.HasError())
-                return Result<SourceSaveResult>::Failure(written.ErrorValue());
-            const auto replaced = ReplacePrepared(files, path, cleanup, *prepared, result, std::move(fallback));
-            if (replaced.HasError())
-                return Result<SourceSaveResult>::Failure(replaced.ErrorValue());
-            record.path.swap(path);
-            record.root = std::move(prepared);
-            return Result<SourceSaveResult>::Success(std::move(result));
+            } else {
+                TemporaryGuard cleanup{files, temporary};
+                if (const auto written = PrepareBytes(files, path, cleanup, SaveBytes{prepared->text->bytes, expected}, absentAllowed,
+                                                      storage_->limits.maximumDocumentBytes, cancellation);
+                    written.HasError())
+                    return Result<SourceSaveResult>::Failure(written.ErrorValue());
+                if (const auto replaced = ReplacePrepared(files, path, cleanup, *prepared, result, std::move(fallback));
+                    replaced.HasError())
+                    return Result<SourceSaveResult>::Failure(replaced.ErrorValue());
+                record.path.swap(path);
+                record.root = std::move(prepared);
+                return Result<SourceSaveResult>::Success(std::move(result));
+            }
         } catch (const std::bad_alloc &) {
             return Result<SourceSaveResult>::Failure(MakeError(SourceDocumentErrors::TooLarge));
+        } catch (const std::exception &) {
+            return Result<SourceSaveResult>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
         } catch (...) {
             return Result<SourceSaveResult>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
         }
@@ -246,17 +284,13 @@ namespace Horo::Editor {
             results.reserve(storage_->records.size());
             for (const auto &record : storage_->records)
                 if (record.root->saveUnconfirmed || record.root->text->bytes != record.root->base->bytes)
-                    requests.push_back({record.root->identity.instance, record.root->revision, {}});
+                    requests.emplace_back(record.root->identity.instance, record.root->revision, std::nullopt);
             // Reserve every result/error before any disk publication, so a later
             // allocation failure cannot erase evidence of earlier successful saves.
             for (const auto &request : requests)
                 results.push_back({request.instance, Result<SourceSaveResult>::Failure(MakeError(SourceDocumentErrors::TooLarge))});
-            for (std::size_t index = 0; index < requests.size(); ++index) {
-                try {
-                    results[index].result = Save(requests[index], files, cancellation);
-                } catch (const std::bad_alloc &) { /* The preallocated per-document error remains observable. */
-                }
-            }
+            for (std::size_t index = 0; index < requests.size(); ++index)
+                CompleteSaveItem(*this, results[index], requests[index], files, cancellation);
             return Result<std::vector<SourceSaveAllItem>>::Success(std::move(results));
         } catch (const std::bad_alloc &) {
             return Result<std::vector<SourceSaveAllItem>>::Failure(MakeError(SourceDocumentErrors::TooLarge));

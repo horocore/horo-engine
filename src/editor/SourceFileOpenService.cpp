@@ -353,9 +353,9 @@ namespace Horo::Editor {
         try {
             if (publishing_)
                 return Result<SourceSaveResult>::Failure(MakeError(SourceDocumentErrors::Busy));
-            const auto classification = Classify(destination);
-            if (classification.kind != SourceFileKind::NativeSource && classification.kind != SourceFileKind::HoroScript &&
-                classification.kind != SourceFileKind::ProjectText)
+            if (const auto classification = Classify(destination); classification.kind != SourceFileKind::NativeSource &&
+                                                                   classification.kind != SourceFileKind::HoroScript &&
+                                                                   classification.kind != SourceFileKind::ProjectText)
                 return Result<SourceSaveResult>::Failure(MakeError(SourceOpenErrors::Unsupported));
             const auto current = sourceDocuments_.Snapshot(request.instance);
             if (current.HasError())
@@ -368,8 +368,7 @@ namespace Horo::Editor {
             auto source = SourceDocumentId::Parse(path.lexically_relative(projectRoot_).generic_string());
             if (source.HasError())
                 return Result<SourceSaveResult>::Failure(source.ErrorValue());
-            const auto identity = documentRegistry_->Find(request.instance);
-            if (!identity || *identity != current.Value().Identity())
+            if (const auto identity = documentRegistry_->Find(request.instance); !identity || *identity != current.Value().Identity())
                 return Result<SourceSaveResult>::Failure(MakeError(SourceDocumentErrors::Stale));
             auto registry = *documentRegistry_;
             DocumentIdentity replacement{{DocumentKind::Source, std::move(source).Value()}, request.instance};
@@ -377,16 +376,21 @@ namespace Horo::Editor {
                 return Result<SourceSaveResult>::Failure(retargeted.ErrorValue());
 
             struct Guard final {
-                bool &value;
+                bool *value;
 
-                explicit Guard(bool &busy) noexcept : value(busy) {
-                    value = true;
+                explicit Guard(bool &busy) noexcept : value(&busy) {
+                    *value = true;
                 }
 
                 ~Guard() noexcept {
-                    value = false;
+                    *value = false;
                 }
-            } guard{publishing_};
+
+                Guard(const Guard &) = delete;
+                Guard &operator=(const Guard &) = delete;
+            };
+
+            Guard guard{publishing_};
 
             auto saved = sourceDocuments_.SaveTo(request, files, std::move(replacement), path, cancellation);
             if (saved.HasValue())
@@ -400,23 +404,24 @@ namespace Horo::Editor {
     /** @copydoc SourceFileOpenService::ResolveClose */
     Result<bool> SourceFileOpenService::ResolveClose(const SourceSaveRequest &request, const SourceCloseDecision decision,
                                                      DurableFileSystem &files) {
+        using enum SourceCloseDecision;
         const auto current = sourceDocuments_.Snapshot(request.instance);
         if (current.HasError())
             return Result<bool>::Failure(current.ErrorValue());
         if (request.expectedRevision != current.Value().Revision())
             return Result<bool>::Failure(MakeError(SourceDocumentErrors::Stale));
-        if (decision == SourceCloseDecision::Cancel)
+        if (decision == Cancel)
             return Result<bool>::Success(false);
-        if (decision == SourceCloseDecision::Save && current.Value().Dirty()) {
+        if (decision == Save && current.Value().Dirty()) {
             auto saved = sourceDocuments_.Save(request, files);
             if (saved.HasError())
                 return Result<bool>::Failure(saved.ErrorValue());
             if (saved.Value().disposition != SourceSaveDisposition::Durable)
                 return Result<bool>::Failure(*saved.Value().diagnostic);
-        } else if (decision != SourceCloseDecision::Save && decision != SourceCloseDecision::Discard) {
+        } else if (decision != Save && decision != Discard) {
             return Result<bool>::Failure(MakeError(SourceDocumentErrors::Invalid));
         }
-        if (auto closed = CloseDocument(request.instance, decision == SourceCloseDecision::Discard); closed.HasError())
+        if (auto closed = CloseDocument(request.instance, decision == Discard); closed.HasError())
             return Result<bool>::Failure(closed.ErrorValue());
         return Result<bool>::Success(true);
     }
