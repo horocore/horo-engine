@@ -37,7 +37,9 @@ def test_release_configuration_preserves_debug_jolt_artifacts(tmp_path):
     builds = {}
     for configuration in ("Debug", "Release"):
         build = tmp_path / configuration
-        # Shell-free argv uses fixed settings and test-owned temporary paths.
+        # shutil.which verified the installed executable; argv uses fixed settings
+        # and test-owned paths with shell=False and a bounded timeout.
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
         subprocess.run(  # nosec B603
             [cmake, "-S", str(source), "-B", str(build),
              f"-DCMAKE_BUILD_TYPE={configuration}",
