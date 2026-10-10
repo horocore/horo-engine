@@ -286,8 +286,8 @@ namespace Horo::Character::Detail {
                                                                                const CharacterSweepProbeResult &evidence,
                                                                                const Math::Vec3 direction, const float nearest) {
         const auto &descriptor = query.descriptor;
-        const float walkableCosine = std::cos(descriptor.maximumSlopeDegrees * Math::Pi / 180.0F);
-        if (std::ranges::any_of(evidence.hits.begin(), evidence.hits.begin() + evidence.hitCount, [&](const CharacterSweepHit &hit) {
+        if (const float walkableCosine = std::cos(descriptor.maximumSlopeDegrees * Math::Pi / 180.0F);
+            std::ranges::any_of(evidence.hits.begin(), evidence.hits.begin() + evidence.hitCount, [&](const CharacterSweepHit &hit) {
             return IsLowStepContact(hit, descriptor, motion, direction, nearest) &&
                    !IsWalkableGroundNormal(hit.normal, descriptor.up, walkableCosine);
         }))
