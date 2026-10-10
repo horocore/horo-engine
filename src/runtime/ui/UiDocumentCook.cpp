@@ -1,4 +1,5 @@
 #include "Horo/Runtime/Ui/UiDocument.h"
+#include "UiDocumentCookPresentation.h"
 
 #include <algorithm>
 #include <array>
@@ -151,15 +152,6 @@ namespace Horo::Runtime::Ui {
                    writer.U32(static_cast<std::uint32_t>(document.Routes().size()));
         }
 
-        [[nodiscard]] bool WriteCanvases(CookedWriter &writer, const UiDocument &document) {
-            for (const UiCanvasDescriptor &canvas : document.Canvases())
-                if (!WriteId(writer, canvas.id) || !WriteId(writer, canvas.rootElement) ||
-                    !writer.Byte(static_cast<std::uint8_t>(canvas.renderMode)) || !writer.U32(canvas.referenceResolution.width) ||
-                    !writer.U32(canvas.referenceResolution.height) || !writer.Byte(static_cast<std::uint8_t>(canvas.scaleMode)))
-                    return false;
-            return true;
-        }
-
         [[nodiscard]] bool WriteElements(CookedWriter &writer, const UiDocument &document, const std::size_t maximumTextBytes) {
             for (const UiDocumentElement &element : document.Elements()) {
                 if (!WriteId(writer, element.id) || !WriteId(writer, element.parent) ||
@@ -197,7 +189,7 @@ namespace Horo::Runtime::Ui {
             if (const auto valid = ValidateEncodeLimits(document, limits); valid.HasError())
                 return Result<std::vector<std::uint8_t>>::Failure(valid.ErrorValue());
             CookedWriter writer{limits.maximumPayloadBytes};
-            if (!WriteDocumentHeader(writer, document) || !WriteCanvases(writer, document) ||
+            if (!WriteDocumentHeader(writer, document) || !CookPresentationDetail::WriteCanvases(writer, document.Canvases()) ||
                 !WriteElements(writer, document, limits.maximumTextBytes) ||
                 !WriteDependencies(writer, document, limits.maximumTextBytes) || !WriteRoutes(writer, document))
                 return Failure<std::vector<std::uint8_t>>(UiErrors::CapacityExceeded);
@@ -350,6 +342,7 @@ namespace Horo::Runtime::Ui {
         }
 
         struct CookedDocumentHeader final {
+            std::uint32_t formatVersion{};
             UiDocumentSchemaVersion schemaVersion;
             UiDocumentId document;
             UiDocumentRevision revision;
@@ -375,8 +368,9 @@ namespace Horo::Runtime::Ui {
             CookedDocumentHeader header;
             if (!reader.Bytes(magic) || magic != CookedMagic || !reader.U32(formatVersion))
                 return Failure<CookedDocumentHeader>(UiErrors::CookedPayloadMalformed);
-            if (formatVersion != CurrentCookedUiDocumentFormatVersion)
+            if (!CookPresentationDetail::IsSupportedFormat(formatVersion))
                 return Failure<CookedDocumentHeader>(UiErrors::CookedFormatUnsupported);
+            header.formatVersion = formatVersion;
             if (!reader.U16(schemaMajor) || !reader.U16(schemaMinor) || !reader.Bytes(documentBytes) || !reader.U64(revisionValue) ||
                 !reader.U32(header.canvasCount) || !reader.U32(header.elementCount) || !reader.U32(header.dependencyCount) ||
                 !reader.U32(header.routeCount))
@@ -399,7 +393,7 @@ namespace Horo::Runtime::Ui {
             return Result<CookedDocumentHeader>::Success(std::move(header));
         }
 
-        [[nodiscard]] Result<UiCanvasDescriptor> ReadCanvas(CookedReader &reader) {
+        [[nodiscard]] Result<UiCanvasDescriptor> ReadCanvas(CookedReader &reader, const std::uint32_t formatVersion) {
             auto id = ReadId<UiCanvasId>(reader, false);
             auto root = ReadId<UiElementId>(reader, false);
             std::uint8_t renderMode{}, scaleMode{};
@@ -407,8 +401,19 @@ namespace Horo::Runtime::Ui {
             if (id.HasError() || root.HasError() || !reader.Byte(renderMode) || !reader.U32(width) || !reader.U32(height) ||
                 !reader.Byte(scaleMode))
                 return Failure<UiCanvasDescriptor>(UiErrors::CookedPayloadMalformed);
-            return Result<UiCanvasDescriptor>::Success(
-                {id.Value(), root.Value(), static_cast<UiRenderMode>(renderMode), {width, height}, static_cast<UiScaleMode>(scaleMode)});
+            UiCanvasPresentationPolicy policy;
+            if (formatVersion >= 2) {
+                auto read = CookPresentationDetail::Read(reader);
+                if (read.HasError())
+                    return Result<UiCanvasDescriptor>::Failure(read.ErrorValue());
+                policy = read.Value();
+            }
+            return Result<UiCanvasDescriptor>::Success({id.Value(),
+                                                        root.Value(),
+                                                        static_cast<UiRenderMode>(renderMode),
+                                                        {width, height},
+                                                        static_cast<UiScaleMode>(scaleMode),
+                                                        policy});
         }
 
         [[nodiscard]] Result<UiDocumentElement> ReadElement(CookedReader &reader, const UiDocumentCookLimits &limits) {
@@ -458,7 +463,7 @@ namespace Horo::Runtime::Ui {
 
         [[nodiscard]] Result<void> DecodeCanvases(CookedReader &reader, const CookedDocumentHeader &header, UiDocumentBuilder &builder) {
             for (std::uint32_t index = 0; index < header.canvasCount; ++index) {
-                const auto canvas = ReadCanvas(reader);
+                const auto canvas = ReadCanvas(reader, header.formatVersion);
                 if (canvas.HasError() || builder.AddCanvas(canvas.Value()).HasError())
                     return Failure(UiErrors::CookedPayloadMalformed);
             }

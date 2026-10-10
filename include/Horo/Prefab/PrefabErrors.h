@@ -10,6 +10,12 @@
 #include <span>
 
 namespace Horo::Prefab::PrefabErrors {
+    /** @brief Authoring expansion cache exceeds its finite entry, key or retained-storage ceiling. */
+    extern const ErrorCodeDescriptor ExpansionCacheCapacityExceeded;
+    /** @brief An authoring expansion cache operation ran outside its owning thread. */
+    extern const ErrorCodeDescriptor ExpansionCacheThreadViolation;
+    /** @brief Bounded authoring expansion storage could not be allocated; prior cache entries remain intact. */
+    extern const ErrorCodeDescriptor ExpansionCacheAllocationFailed;
     /** @brief A required prefab identity is invalid. */
     extern const ErrorCodeDescriptor IdentityInvalid;
     /** @brief A prefab-local address contains an invalid or excessive scope. */

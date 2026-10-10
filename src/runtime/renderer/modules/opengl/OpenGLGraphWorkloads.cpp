@@ -93,7 +93,9 @@ namespace Horo::Render::Detail {
         template <typename Workload>
         [[nodiscard]] Result<void> ValidateWorkload(const RenderGraphExecutionRequest &request, const OpenGLGraphResources &resources,
                                                     const Workload &workload) {
-            if constexpr (std::is_same_v<Workload, RenderGraphBufferCopy>) {
+            if constexpr (std::is_same_v<Workload, RenderGraphLightCulling>) {
+                return Result<void>::Failure(MakeError(LightCullingErrors::Unsupported));
+            } else if constexpr (std::is_same_v<Workload, RenderGraphBufferCopy>) {
                 if (!ValidCopy(workload, request, resources))
                     return Result<void>::Failure(MakeError(OpenGLBackendErrors::InvalidExecutionPlan));
             } else if constexpr (std::is_same_v<Workload, RenderGraphColorAttachment>) {

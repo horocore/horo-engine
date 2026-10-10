@@ -18,11 +18,41 @@ namespace Horo::Render {
             RenderGraphResourceClass resourceClass;
         };
 
+        /** @brief Matches exactly four distinct whole-buffer storage uses and finite dispatch bounds. */
+        [[nodiscard]] bool MatchesLightCulling(const RenderGraphExecutionRequest &request, const RenderGraphExecutionPass &pass,
+                                               const RenderGraphLightCulling &culling) {
+            const auto &dispatch = culling.dispatch;
+            const LightCullingBudget budget{.maximumLights = std::max(dispatch.referencesPerCluster, std::max(1U, dispatch.lightCount)),
+                                            .maximumClusters = dispatch.clusterCount,
+                                            .referencesPerCluster = dispatch.referencesPerCluster};
+            const auto uses = request.graph.Usages().subspan(pass.usages.offset, pass.usages.count);
+            if (pass.kind != RenderPassKind::Compute || !culling.kernel || culling.tableRevision == 0 || !budget.IsValid() ||
+                dispatch.reserved != 0 || uses.size() != 4)
+                return false;
+            const std::array ids{culling.lights, culling.clusters, culling.membership, culling.references};
+            for (std::size_t index = 0; index < ids.size(); ++index) {
+                if (ids[index].owner != request.graph.Owner() || ids[index].value == 0 ||
+                    ids[index].value > request.graph.Resources().size() ||
+                    request.graph.Resources()[ids[index].value - 1].kind != RenderGraphResourceKind::Buffer)
+                    return false;
+                for (std::size_t previous = 0; previous < index; ++previous)
+                    if (ids[previous] == ids[index])
+                        return false;
+                const auto found = std::ranges::find(uses, ids[index], &RenderGraphResourceUsage::resource);
+                if (found == uses.end() || found->kind != RenderGraphUsageKind::Storage ||
+                    found->access != (index < 2 ? RenderGraphAccess::Read : RenderGraphAccess::Write))
+                    return false;
+            }
+            return true;
+        }
+
         /** @brief Requires each operation to account for exactly its retained semantic uses. */
         [[nodiscard]] bool MatchesWorkload(const RenderGraphExecutionRequest &request, const RenderGraphExecutionPass &pass,
                                            const RenderGraphWorkload &workload) {
             using enum RenderGraphAccess;
             const auto uses = request.graph.Usages().subspan(pass.usages.offset, pass.usages.count);
+            if (const auto *culling = std::get_if<RenderGraphLightCulling>(&workload))
+                return MatchesLightCulling(request, pass, *culling);
             if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload)) {
                 return pass.kind == RenderPassKind::Graphics && color->operations.IsValid() &&
                        color->operations.loadOperation != AttachmentLoadOperation::DontCare &&

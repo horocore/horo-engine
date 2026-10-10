@@ -5,6 +5,7 @@
  * @brief Non-installed canonical Scene codec bridge; no editor or runtime activation dependency.
  */
 
+#include "CanonicalJsonWriter.h"
 #include "Horo/Scene/SceneSource.h"
 
 #include <cstddef>
@@ -21,6 +22,7 @@
 namespace Horo::SceneSource::Detail {
     using PrimitiveMeshDescriptor = Runtime::PrimitiveMeshDescriptor;
     using Json = nlohmann::json;
+    using WireJson = JsonEncoding::Detail::CanonicalJsonValue<true>;
 
     inline constexpr std::uint32_t kSceneSchemaVersion = 1;
     inline constexpr std::uintmax_t kMaximumProjectMetadataBytes = 64U * 1024U;
@@ -47,10 +49,10 @@ namespace Horo::SceneSource::Detail {
     /** @brief Reports filesystem-resolved containment beneath a project root. */
     [[nodiscard]] bool IsResolvedContainedBy(const std::filesystem::path &absoluteRoot, const std::filesystem::path &absoluteCandidate);
 
-    [[nodiscard]] Json Vec2Json(Math::Vec2 value);
-    [[nodiscard]] Json Vec3Json(Math::Vec3 value);
-    [[nodiscard]] Json QuaternionJson(Math::Quaternion value);
-    [[nodiscard]] Json TransformJson(const Math::Transform &value);
+    [[nodiscard]] WireJson Vec2Json(Math::Vec2 value);
+    [[nodiscard]] WireJson Vec3Json(Math::Vec3 value);
+    [[nodiscard]] WireJson QuaternionJson(Math::Quaternion value);
+    [[nodiscard]] WireJson TransformJson(const Math::Transform &value);
 
     [[nodiscard]] Result<Math::Vec2> ParseVec2(const Json &value);
     [[nodiscard]] Result<Math::Vec3> ParseVec3(const Json &value);
@@ -62,9 +64,9 @@ namespace Horo::SceneSource::Detail {
     [[nodiscard]] bool AllSucceeded(std::initializer_list<bool> results);
 
     [[nodiscard]] Result<PrimitiveMeshDescriptor> ParsePrimitive(const Json &value);
-    [[nodiscard]] Json PrimitiveJson(const PrimitiveMeshDescriptor &descriptor);
+    [[nodiscard]] WireJson PrimitiveJson(const PrimitiveMeshDescriptor &descriptor);
 
-    [[nodiscard]] Json BehaviorFieldValueJson(const Gameplay::BehaviorFieldValue &value);
+    [[nodiscard]] WireJson BehaviorFieldValueJson(const Gameplay::BehaviorFieldValue &value);
     [[nodiscard]] Result<Gameplay::BehaviorFieldValue> ParseBehaviorFieldValue(const Json &value);
     [[nodiscard]] Result<Audio::AudioSoundReference> ParseAudioSoundReference(const Json &value);
 
@@ -81,12 +83,12 @@ namespace Horo::SceneSource::Detail {
     [[nodiscard]] Result<std::vector<Runtime::PhysicsConstraintComponent>> ParsePhysicsConstraints(const Json &value);
     [[nodiscard]] Result<std::vector<Gameplay::BehaviorComponent>> ParseBehaviors(const Json &value);
 
-    [[nodiscard]] Json ComponentsJson(const SceneObjectComponentSet &components);
-    void AppendPhysicsComponents(Json &value, const SceneObjectComponentSet &components);
+    [[nodiscard]] WireJson ComponentsJson(const SceneObjectComponentSet &components);
+    void AppendPhysicsComponents(WireJson &value, const SceneObjectComponentSet &components);
     [[nodiscard]] Result<SceneObjectComponentSet> ParseComponents(const Json &value);
 
     using ParsedScene = SceneSourceDocument;
-    [[nodiscard]] Json SceneJson(const SceneSourceView &snapshot);
+    [[nodiscard]] WireJson SceneJson(const SceneSourceView &snapshot);
     [[nodiscard]] Result<ParsedScene> ParseScene(std::string_view contents);
 
 }  // namespace Horo::SceneSource::Detail

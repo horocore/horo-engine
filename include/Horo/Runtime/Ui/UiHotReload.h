@@ -169,6 +169,20 @@ namespace Horo::Runtime::Ui {
          * @pre Explicit load-time owner operation; no supplied owner callback executes and no borrow is retained unpinned.
          */
         [[nodiscard]] Result<Prepared> Prepare(UiReloadGeneration replacement, const CancellationToken &cancellation = {});
+        /** @brief Prepares scene-provider rebinding without inventing an authored document revision.
+         * @param replacement Same exact cooked asset/document publication, fresh owner-allocated runtime trees and resolved bindings.
+         * @param removing Explicit unload permits closed scene providers with optional fallback or required unavailability.
+         * @param cancellation Host-owned cancellation ancestry checked again at commit.
+         * @return Complete reconciled candidate or typed failure preserving the active generation.
+         */
+        [[nodiscard]] Result<Prepared> PrepareSceneRebind(UiReloadGeneration replacement, bool removing,
+                                                          const CancellationToken &cancellation = {});
+        /** @brief Checks complete source, cancellation, cutoff and retirement capacity without publishing.
+         * @param prepared Exact private candidate. @param point Owner lifecycle cutoff.
+         * @return Success or original typed failure; owner thread must not mutate source before immediate commit.
+         */
+        [[nodiscard]] Result<void> CanCommit(const Prepared &prepared, UiStructuralCommitPoint point) const;
+
         /**
          * @brief Publishes one complete prepared generation exactly once at the declared owner safe point.
          * @param prepared Exact candidate from this publisher, consumed only on success.
@@ -194,6 +208,11 @@ namespace Horo::Runtime::Ui {
          * @return Whether this publisher still owns that exact active generation.
          */
         [[nodiscard]] bool IsCurrent(const UiReloadLease &lease) const noexcept;
+        /** @brief Checks exact current/retired publisher provenance without granting new work.
+         * @param lease Nonempty whole generation pin. @return Whether this publisher retains that exact generation.
+         * @details Bounded immutable query; historical ownership never implies current render/input admission.
+         */
+        [[nodiscard]] bool Retains(const UiReloadLease &lease) const noexcept;
         /** @brief Drains deferred authority abandonment and reclaims unpinned retired generations outside frame work.
          * @return Number reclaimed or a typed owner/lifecycle failure.
          * @pre Owner-thread load-time operation, including after shutdown. Callback reentry cannot acquire or publish generations.
@@ -209,6 +228,11 @@ namespace Horo::Runtime::Ui {
         struct Storage;
         friend class UiAnimationOwner;
         friend class UiOverlayLifecycle;
+        friend class UiSceneReconciliation;
+        /** @brief Shares bounded preparation after asset/publication lineage has been qualified. */
+        [[nodiscard]] Result<Prepared> PrepareQualified(UiReloadGeneration replacement, const CancellationToken &cancellation);
+        /** @brief Publishes immediately after CanCommit without fallible work or outside callbacks. */
+        void CommitValidated(Prepared &prepared) noexcept;
         /** @brief Borrows immutable active composition solely for fail-closed overlay audience/route checks. */
         [[nodiscard]] const UiReloadGeneration *OverlayCurrent() const noexcept;
         /** @brief Borrows this publisher's private candidate solely for checked layer composition before publication. */
