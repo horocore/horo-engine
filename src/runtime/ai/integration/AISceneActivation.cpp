@@ -382,7 +382,7 @@ namespace Horo::AI {
     }
 
     /** @copydoc AiSceneRuntime::ConfigureTaskSchedulerAtSafePoint */
-    Result<void> AiSceneRuntime::ConfigureTaskSchedulerAtSafePoint(JobSystem &jobs, const AiTaskSchedulerSettings settings) {
+    Result<void> AiSceneRuntime::ConfigureTaskSchedulerAtSafePoint(JobSystem &jobs, const AiTaskSchedulerSettings &settings) const {
         if (shutdown_ || !active_ || active_->scheduler)
             return Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
         auto scheduler = AiTaskScheduler::Create(jobs, active_->binding.incarnation, settings);
@@ -393,16 +393,23 @@ namespace Horo::AI {
     }
 
     /** @copydoc AiSceneRuntime::RegisterDecisionAtSafePoint */
-    Result<void> AiSceneRuntime::RegisterDecisionAtSafePoint(const AgentHandle agent, const AiAgentSchedulePolicy policy,
+    Result<void> AiSceneRuntime::RegisterDecisionAtSafePoint(const AgentHandle agent, const AiAgentSchedulePolicy &policy,
                                                              std::shared_ptr<const void> image,
-                                                             std::shared_ptr<IAiScheduledDecision> executor) {
+                                                             std::shared_ptr<IAiScheduledDecision> executor) const {
+        // Preserve callback-before-image destruction on every rejection, including an inactive Scene.
+        struct PinnedExecutor final {
+            std::shared_ptr<const void> image;
+            std::shared_ptr<IAiScheduledDecision> executor;
+        };
+
+        PinnedExecutor captured{std::move(image), std::move(executor)};
         if (shutdown_ || !active_ || !active_->scheduler)
             return Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
-        auto *slot = FindAgent(*active_, agent);
+        const auto *slot = FindAgent(*active_, agent);
         if (!slot || slot->record.state != AiAgentActivationState::Active)
             return Result<void>::Failure(MakeError(AIErrors::HandleInvalid));
-        return active_->scheduler->Register(agent, slot->record.agent.agent, policy, std::move(image), std::move(executor),
-                                            slot->cancellation.Token());
+        return active_->scheduler->Register(agent, slot->record.agent.agent, policy, std::move(captured.image),
+                                            std::move(captured.executor), slot->cancellation.Token());
     }
 
     /** @copydoc AiSceneRuntime::TaskSchedulerAtSafePoint */

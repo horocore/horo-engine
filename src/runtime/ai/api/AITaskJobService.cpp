@@ -126,7 +126,7 @@ namespace Horo::AI {
 
     /** @copydoc AiTaskJobService::PendingCount */
     std::size_t AiTaskJobService::PendingCount(const AgentHandle agent) const noexcept {
-        return static_cast<std::size_t>(std::count_if(entries_.begin(), entries_.end(), [agent](const Entry &entry) {
+        return static_cast<std::size_t>(std::ranges::count_if(entries_, [agent](const Entry &entry) {
             return entry.job.Id() != 0 && entry.continuation.Operation().agent == agent;
         }));
     }

@@ -31,8 +31,12 @@ namespace Horo::AI {
         std::shared_ptr<IAiScheduledDecision> executor;
         DecisionWakeReasons pending{.activation = true};
         AiDecisionSliceContext context;
-        std::uint64_t nextTick{1}, waitingSince{1}, evaluatedTick{}, intentSince{};
-        std::size_t submitted{}, commands{};
+        std::uint64_t nextTick{1};
+        std::uint64_t waitingSince{1};
+        std::uint64_t evaluatedTick{};
+        std::uint64_t intentSince{};
+        std::size_t submitted{};
+        std::size_t commands{};
         bool intents{};
     };
 
@@ -63,7 +67,7 @@ namespace Horo::AI {
 
     /** @copydoc AiTaskScheduler::AiTaskScheduler */
     AiTaskScheduler::AiTaskScheduler(ConstructionKey, JobSystem &jobs, const AiRuntimeIncarnation incarnation,
-                                     const AiTaskSchedulerSettings settings)
+                                     const AiTaskSchedulerSettings &settings)
         : incarnation_(incarnation), settings_(settings), entries_(settings.maximumAgents) {
         order_.reserve(settings.maximumAgents);
         auto service = AiTaskJobService::Create(jobs, settings.pendingWorkers);
@@ -74,7 +78,7 @@ namespace Horo::AI {
 
     /** @copydoc AiTaskScheduler::Create */
     Result<std::unique_ptr<AiTaskScheduler>> AiTaskScheduler::Create(JobSystem &jobs, const AiRuntimeIncarnation incarnation,
-                                                                     const AiTaskSchedulerSettings settings) {
+                                                                     const AiTaskSchedulerSettings &settings) {
         if (!incarnation.IsValid() || !Valid(settings))
             return Result<std::unique_ptr<AiTaskScheduler>>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
         try {
@@ -87,18 +91,21 @@ namespace Horo::AI {
 
     /** @copydoc AiTaskScheduler::Find */
     AiTaskScheduler::Entry *AiTaskScheduler::Find(const AgentHandle agent) noexcept {
-        const auto found = std::find_if(entries_.begin(), entries_.end(), [agent](const Entry &entry) {
+        const auto found = std::ranges::find_if(entries_, [agent](const Entry &entry) {
             return entry.agent == agent;
         });
-        return found == entries_.end() ? nullptr : &*found;
+        return found == entries_.end() ? nullptr : std::to_address(found);
     }
 
     /** @copydoc AiTaskScheduler::Register */
-    Result<void> AiTaskScheduler::Register(const AgentHandle agent, const AgentId identity, const AiAgentSchedulePolicy policy,
+    Result<void> AiTaskScheduler::Register(const AgentHandle agent, const AgentId identity, const AiAgentSchedulePolicy &policy,
                                            std::shared_ptr<const void> image, std::shared_ptr<IAiScheduledDecision> executor,
                                            CancellationToken cancellation) {
+        Entry captured;
+        captured.image = std::move(image);
+        captured.executor = std::move(executor);
         if (closed_ || inPhase_ || (report_.tick != 0 && !committed_) || !agent.IsValid() || agent.incarnation != incarnation_ ||
-            !identity.IsValid() || !image || !executor || cancellation.IsCancellationRequested() ||
+            !identity.IsValid() || !captured.image || !captured.executor || cancellation.IsCancellationRequested() ||
             policy.priority >= AiTaskPriority::Count || policy.intervalTicks == 0 || policy.workUnitsPerTick == 0 ||
             policy.workUnitsPerTick > settings_.workUnitsPerTick || policy.commandsPerTick == 0 ||
             policy.commandsPerTick > settings_.commandsPerTick || policy.workerSubmissionsPerTick == 0 ||
@@ -118,8 +125,8 @@ namespace Horo::AI {
         free->identity = identity;
         free->policy = policy;
         free->cancellation = std::move(cancellation);
-        free->image = std::move(image);
-        free->executor = std::move(executor);
+        free->image = std::move(captured.image);
+        free->executor = std::move(captured.executor);
         free->waitingSince = report_.tick == 0 ? 1 : report_.tick;
         free->nextTick = free->waitingSince;
         return Result<void>::Success();
@@ -150,6 +157,15 @@ namespace Horo::AI {
         entry = {};
     }
 
+    /** @copydoc AiTaskScheduler::RetireIfCancelled */
+    bool AiTaskScheduler::RetireIfCancelled(Entry &entry) noexcept {
+        if (!entry.cancellation.IsCancellationRequested())
+            return false;
+        Retire(entry);
+        ++report_.cancelled;
+        return true;
+    }
+
     /** @copydoc AiTaskScheduler::Unregister */
     Result<void> AiTaskScheduler::Unregister(const AgentHandle agent) {
         auto *entry = Find(agent);
@@ -170,11 +186,8 @@ namespace Horo::AI {
             auto &entry = entries_[i];
             if (!entry.executor)
                 continue;
-            if (entry.cancellation.IsCancellationRequested()) {
-                Retire(entry);
-                ++report_.cancelled;
+            if (RetireIfCancelled(entry))
                 continue;
-            }
             if (entry.nextTick != 0 && entry.nextTick <= report_.tick) {
                 if (!entry.pending.Any())
                     entry.waitingSince = entry.nextTick;
@@ -182,23 +195,64 @@ namespace Horo::AI {
             }
             order_.push_back(i);
         }
-        std::sort(order_.begin(), order_.end(), [this](const auto lhs, const auto rhs) {
-            const auto &a = entries_[lhs];
-            const auto &b = entries_[rhs];
-            const auto aSince = a.intents ? std::min(a.waitingSince, a.intentSince) : a.waitingSince;
-            const auto bSince = b.intents ? std::min(b.waitingSince, b.intentSince) : b.waitingSince;
-            const bool aStarved = (a.pending.Any() || a.intents) && report_.tick - aSince >= settings_.starvationTicks;
-            const bool bStarved = (b.pending.Any() || b.intents) && report_.tick - bSince >= settings_.starvationTicks;
-            if (aStarved != bStarved)
-                return aStarved;
-            if (aStarved && aSince != bSince)
-                return aSince < bSince;
-            if (a.policy.priority != b.policy.priority)
-                return a.policy.priority > b.policy.priority;
-            if (a.waitingSince != b.waitingSince)
-                return a.waitingSince < b.waitingSince;
-            return a.identity < b.identity;
+        std::ranges::sort(order_, [this](const auto lhs, const auto rhs) {
+            return Before(entries_[lhs], entries_[rhs]);
         });
+    }
+
+    /** @copydoc AiTaskScheduler::Before */
+    bool AiTaskScheduler::Before(const Entry &a, const Entry &b) const noexcept {
+        const auto aSince = a.intents ? std::min(a.waitingSince, a.intentSince) : a.waitingSince;
+        const auto bSince = b.intents ? std::min(b.waitingSince, b.intentSince) : b.waitingSince;
+        const bool aStarved = (a.pending.Any() || a.intents) && report_.tick - aSince >= settings_.starvationTicks;
+        if (const bool bStarved = (b.pending.Any() || b.intents) && report_.tick - bSince >= settings_.starvationTicks;
+            aStarved != bStarved)
+            return aStarved;
+        if (aStarved && aSince != bSince)
+            return aSince < bSince;
+        if (a.policy.priority != b.policy.priority)
+            return a.policy.priority > b.policy.priority;
+        if (a.waitingSince != b.waitingSince)
+            return a.waitingSince < b.waitingSince;
+        return a.identity < b.identity;
+    }
+
+    /** @copydoc AiTaskScheduler::EvaluateEntry */
+    void AiTaskScheduler::EvaluateEntry(Entry &entry) {
+        const auto tick = report_.tick;
+        const auto units = std::min(entry.policy.workUnitsPerTick, settings_.workUnitsPerTick - report_.workUnits);
+        // Reserve the whole slice before callbacks; unused allowance cannot hide unbounded reentry/work.
+        report_.workUnits += units;
+        ++report_.evaluated;
+        entry.evaluatedTick = tick;
+        entry.context = {entry.agent, tick, entry.pending, entry.cancellation};
+        entry.pending = {};
+        entry.nextTick = Next(tick, entry.policy.intervalTicks);
+        AiWorkBudget budget{units};
+        evaluating_ = &entry;
+        evaluatingBudget_ = &budget;
+        const auto evaluated = entry.executor->Evaluate(entry.context, budget);
+        evaluating_ = nullptr;
+        evaluatingBudget_ = nullptr;
+        if (closed_ || RetireIfCancelled(entry))
+            return;
+        if (evaluated.HasError() || evaluated.Value() >= AiSliceOutcome::Count) {
+            ++report_.failed;
+            if (!report_.firstFailure)
+                report_.firstFailure = evaluated.HasError() ? evaluated.ErrorValue() : MakeError(AIErrors::SchedulerPolicyInvalid);
+            entry.executor->Cancel();
+            return;
+        }
+        entry.intents = true;
+        entry.intentSince = tick;
+        const auto outcome = evaluated.Value();
+        if (budget.Exhausted() || outcome == AiSliceOutcome::BudgetExhausted)
+            ++report_.exhausted;
+        if (outcome != AiSliceOutcome::Complete || budget.Exhausted()) {
+            ++report_.yielded;
+            entry.pending.explicitRequest = true;
+            entry.waitingSince = tick;
+        }
     }
 
     /** @copydoc AiTaskScheduler::EvaluateAtDecision */
@@ -216,11 +270,14 @@ namespace Horo::AI {
         inPhase_ = true;
         jobs_->Pump();
         Order();
-        report_.deferred = report_.starved = 0;
+        report_.deferred = 0;
+        report_.starved = 0;
         for (const auto index : order_) {
             if (closed_)
                 break;
             auto &entry = entries_[index];
+            if (RetireIfCancelled(entry))
+                continue;
             if (!entry.pending.Any())
                 continue;
             if (tick - entry.waitingSince >= settings_.starvationTicks)
@@ -230,44 +287,37 @@ namespace Horo::AI {
                 ++report_.deferred;
                 continue;
             }
-            const auto units = std::min(entry.policy.workUnitsPerTick, settings_.workUnitsPerTick - report_.workUnits);
-            // Reserve the whole slice before callbacks; unused allowance cannot hide unbounded reentry/work.
-            report_.workUnits += units;
-            ++report_.evaluated;
-            entry.evaluatedTick = tick;
-            entry.context = {entry.agent, tick, entry.pending, entry.cancellation};
-            entry.pending = {};
-            entry.nextTick = Next(tick, entry.policy.intervalTicks);
-            AiWorkBudget budget{units};
-            evaluating_ = &entry;
-            evaluatingBudget_ = &budget;
-            const auto evaluated = entry.executor->Evaluate(entry.context, budget);
-            evaluating_ = nullptr;
-            evaluatingBudget_ = nullptr;
-            if (closed_)
-                break;
-            if (evaluated.HasError() || evaluated.Value() >= AiSliceOutcome::Count) {
-                ++report_.failed;
-                if (!report_.firstFailure)
-                    report_.firstFailure = evaluated.HasError() ? evaluated.ErrorValue() : MakeError(AIErrors::SchedulerPolicyInvalid);
-                entry.executor->Cancel();
-                continue;
-            }
-            entry.intents = true;
-            entry.intentSince = tick;
-            const auto outcome = evaluated.Value();
-            if (budget.Exhausted() || outcome == AiSliceOutcome::BudgetExhausted)
-                ++report_.exhausted;
-            if (outcome != AiSliceOutcome::Complete || budget.Exhausted()) {
-                ++report_.yielded;
-                entry.pending.explicitRequest = true;
-                entry.waitingSince = tick;
-            }
+            EvaluateEntry(entry);
         }
         inPhase_ = false;
         if (closed_)
             Shutdown();
         return Result<AiSchedulingReport>::Success(report_);
+    }
+
+    /** @copydoc AiTaskScheduler::CommitEntry */
+    void AiTaskScheduler::CommitEntry(Entry &entry) {
+        const auto units = std::min(entry.policy.commandsPerTick - entry.commands, settings_.commandsPerTick - report_.commands);
+        AiWorkBudget budget{units};
+        // Reserve the finite command slice before callbacks, including cancellation or zero-work yield.
+        entry.commands += units;
+        report_.commands += units;
+        const auto committed = entry.executor->Commit(entry.context, budget);
+        if (closed_)
+            return;
+        if (RetireIfCancelled(entry))
+            return;
+        if (committed.HasError()) {
+            ++report_.failed;
+            if (!report_.firstFailure)
+                report_.firstFailure = committed.ErrorValue();
+            entry.executor->Cancel();
+            entry.intents = false;
+        } else {
+            entry.intents = !committed.Value();
+            if (entry.intents)
+                ++report_.exhausted;
+        }
     }
 
     /** @copydoc AiTaskScheduler::CommitAtIntentDispatch */
@@ -282,28 +332,11 @@ namespace Horo::AI {
             if (closed_)
                 break;
             auto &entry = entries_[index];
+            if (RetireIfCancelled(entry))
+                continue;
             if (!entry.intents || entry.commands == entry.policy.commandsPerTick || report_.commands == settings_.commandsPerTick)
                 continue;
-            const auto units = std::min(entry.policy.commandsPerTick - entry.commands, settings_.commandsPerTick - report_.commands);
-            AiWorkBudget budget{units};
-            const auto committed = entry.executor->Commit(entry.context, budget);
-            if (closed_)
-                break;
-            // Reserve the finite command slice, even if the callback yields without consuming.
-            const auto consumed = units;
-            entry.commands += consumed;
-            report_.commands += consumed;
-            if (committed.HasError()) {
-                ++report_.failed;
-                if (!report_.firstFailure)
-                    report_.firstFailure = committed.ErrorValue();
-                entry.executor->Cancel();
-                entry.intents = false;
-            } else {
-                entry.intents = !committed.Value();
-                if (entry.intents)
-                    ++report_.exhausted;
-            }
+            CommitEntry(entry);
         }
         committed_ = true;
         inPhase_ = false;

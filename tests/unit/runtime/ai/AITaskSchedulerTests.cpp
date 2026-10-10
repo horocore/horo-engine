@@ -18,6 +18,8 @@ namespace Horo::AI {
             std::uint64_t id{};
             std::size_t remaining{1}, intents{}, committed{}, cancelled{}, evaluations{};
             bool fail{}, exhaust{}, stop{};
+            CancellationSource *cancelPeer{};
+            CancellationSource *cancelAtCommit{};
             AiTaskScheduler *scheduler{};
             std::optional<AiTaskContinuation> continuation;
             std::optional<AiWorkerSliceLease> worker;
@@ -29,6 +31,8 @@ namespace Horo::AI {
             Result<AiSliceOutcome> Evaluate(const AiDecisionSliceContext &context, AiWorkBudget &budget) noexcept override {
                 CHECK(std::this_thread::get_id() == owner);
                 ++evaluations;
+                if (cancelPeer)
+                    cancelPeer->RequestCancellation();
                 reasons = context.reasons;
                 if (order)
                     order->push_back(id);
@@ -46,6 +50,8 @@ namespace Horo::AI {
                 if (fail)
                     return Result<AiSliceOutcome>::Failure(MakeError(AIErrors::CapabilityUnavailable));
                 while (remaining > 0) {
+                    if (context.cancellation.IsCancellationRequested())
+                        return Result<AiSliceOutcome>::Success(AiSliceOutcome::Yielded);
                     if (!budget.Consume())
                         return Result<AiSliceOutcome>::Success(AiSliceOutcome::BudgetExhausted);
                     --remaining;
@@ -56,9 +62,13 @@ namespace Horo::AI {
                 return Result<AiSliceOutcome>::Success(AiSliceOutcome::Complete);
             }
 
-            Result<bool> Commit(const AiDecisionSliceContext &, AiWorkBudget &budget) noexcept override {
+            Result<bool> Commit(const AiDecisionSliceContext &context, AiWorkBudget &budget) noexcept override {
+                if (cancelAtCommit)
+                    cancelAtCommit->RequestCancellation();
                 CHECK(std::this_thread::get_id() == owner);
                 while (intents > 0) {
+                    if (context.cancellation.IsCancellationRequested())
+                        return Result<bool>::Success(false);
                     if (!budget.Consume())
                         return Result<bool>::Success(false);
                     --intents;
@@ -71,6 +81,27 @@ namespace Horo::AI {
                 ++cancelled;
                 intents = 0;
             }
+        };
+
+        struct DestructionProbe final : IAiScheduledDecision {
+            std::weak_ptr<const void> image;
+            bool *pinned{};
+
+            DestructionProbe(std::weak_ptr<const void> pin, bool &alive) : image(std::move(pin)), pinned(&alive) {}
+
+            ~DestructionProbe() override {
+                *pinned = !image.expired();
+            }
+
+            Result<AiSliceOutcome> Evaluate(const AiDecisionSliceContext &, AiWorkBudget &) noexcept override {
+                return Result<AiSliceOutcome>::Success(AiSliceOutcome::Complete);
+            }
+
+            Result<bool> Commit(const AiDecisionSliceContext &, AiWorkBudget &) noexcept override {
+                return Result<bool>::Success(true);
+            }
+
+            void Cancel() noexcept override {}
         };
 
         struct Harness final {
@@ -120,6 +151,27 @@ namespace Horo::AI {
             invalid.intervalTicks = 0;
             ExpectError(h.scheduler->Register(h.Handle(1), MakeIdentity<AgentId>(2), invalid, h.image, probe),
                         AIErrors::SchedulerPolicyInvalid);
+        }
+
+        TEST_CASE("AI rejected scheduler and scene registration keep code pinned through executor destruction",
+                  "[unit][ai][scheduler][lifetime]") {
+            Harness h;
+            for (const bool inactiveScene : {false, true}) {
+                auto image = std::make_shared<int>(1);
+                std::weak_ptr<const void> pin = image;
+                bool destroyedWhilePinned{};
+                auto executor = std::make_shared<DestructionProbe>(pin, destroyedWhilePinned);
+                if (inactiveScene) {
+                    auto runtime = std::move(AiSceneRuntime::Create()).Value();
+                    ExpectError(runtime.RegisterDecisionAtSafePoint(h.Handle(0), {}, std::move(image), std::move(executor)),
+                                AIErrors::RuntimeUnavailable);
+                } else {
+                    ExpectError(h.scheduler->Register({}, MakeIdentity<AgentId>(1), {}, std::move(image), std::move(executor)),
+                                AIErrors::SchedulerPolicyInvalid);
+                }
+                CHECK(destroyedWhilePinned);
+                CHECK(pin.expired());
+            }
         }
 
         TEST_CASE("AI deterministic scheduling uses priority then persistent identity regardless of registration order",
@@ -235,6 +287,44 @@ namespace Horo::AI {
             h.scheduler->Shutdown();
             ExpectError(h.scheduler->EvaluateAtDecision(3), AIErrors::SchedulerPhaseInvalid);
             ExpectError(h.scheduler->Wake(h.Handle(1), {.task = true}), AIErrors::TaskContextInvalid);
+        }
+
+        TEST_CASE("AI cancellation published after ordering prevents a later peer from evaluating", "[unit][ai][scheduler]") {
+            Harness h;
+            CancellationSource cancellation;
+            auto first = h.Register(0, {.priority = AiTaskPriority::Urgent});
+            auto peer = h.Register(1, {}, cancellation.Token());
+            first->cancelPeer = &cancellation;
+            const auto report = h.scheduler->EvaluateAtDecision(1);
+            REQUIRE(report.HasValue());
+            CHECK(report.Value().evaluated == 1);
+            CHECK(report.Value().cancelled == 1);
+            CHECK(peer->evaluations == 0);
+            CHECK(peer->cancelled == 1);
+            REQUIRE(h.scheduler->CommitAtIntentDispatch(1).HasValue());
+            CHECK(peer->committed == 0);
+        }
+
+        TEST_CASE("AI callback cancellation retains charged work and fences pending commit", "[unit][ai][scheduler]") {
+            for (const bool duringCommit : {false, true}) {
+                Harness h;
+                CancellationSource cancellation;
+                auto probe = h.Register(0, {}, cancellation.Token());
+                if (duringCommit)
+                    probe->cancelAtCommit = &cancellation;
+                else
+                    probe->cancelPeer = &cancellation;
+                auto evaluated = h.scheduler->EvaluateAtDecision(1);
+                REQUIRE(evaluated.HasValue());
+                CHECK(evaluated.Value().workUnits == 64);
+                CHECK(evaluated.Value().evaluated == 1);
+                auto commit = h.scheduler->CommitAtIntentDispatch(1);
+                REQUIRE(commit.HasValue());
+                CHECK(commit.Value().cancelled == 1);
+                CHECK(commit.Value().commands == (duringCommit ? 16 : 0));
+                CHECK(probe->cancelled == 1);
+                CHECK(probe->committed == 0);
+            }
         }
 
         TEST_CASE("AI callback shutdown is deferred until callback return without committing intents", "[unit][ai][scheduler]") {

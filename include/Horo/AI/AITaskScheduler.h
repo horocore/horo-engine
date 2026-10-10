@@ -171,16 +171,17 @@ namespace Horo::AI {
     public:
         /** @brief Allocates validated finite storage. @param key Factory authority. @param jobs Borrowed process jobs.
          * @param incarnation Exact scene incarnation. @param settings Validated project limits. */
-        AiTaskScheduler(ConstructionKey, JobSystem &jobs, AiRuntimeIncarnation incarnation, AiTaskSchedulerSettings settings);
+        AiTaskScheduler(ConstructionKey, JobSystem &jobs, AiRuntimeIncarnation incarnation, const AiTaskSchedulerSettings &settings);
         /** @brief Composes without creating threads. @param jobs Borrowed process jobs. @param incarnation Scene identity.
          * @param settings Finite validated limits. @return Owned scheduler or typed admission/storage failure. */
         [[nodiscard]] static Result<std::unique_ptr<AiTaskScheduler>> Create(JobSystem &jobs, AiRuntimeIncarnation incarnation,
-                                                                             AiTaskSchedulerSettings settings = {});
+                                                                             const AiTaskSchedulerSettings &settings = {});
         /** @brief Registers one exact live generation; one coalesced wake slot per agent.
          * @param agent Runtime handle. @param identity Stable ordering identity. @param policy Positive lowerable limits.
          * @param image Pin covering callbacks and destruction. @param executor Owned bounded evaluator/committer.
-         * @param cancellation Agent/scene lifetime token. @return Success or typed validation/capacity/duplicate failure. */
-        [[nodiscard]] Result<void> Register(AgentHandle agent, AgentId identity, AiAgentSchedulePolicy policy,
+         * @param cancellation Agent/scene lifetime token. @return Success or typed validation/capacity/duplicate failure.
+         * @pre Before the first decision phase or after current intent dispatch; never between phases. */
+        [[nodiscard]] Result<void> Register(AgentHandle agent, AgentId identity, const AiAgentSchedulePolicy &policy,
                                             std::shared_ptr<const void> image, std::shared_ptr<IAiScheduledDecision> executor,
                                             CancellationToken cancellation = {});
         /** @brief Coalesces causes without queue growth. @param agent Exact registered handle. @param reasons Nonempty causes.
@@ -210,8 +211,17 @@ namespace Horo::AI {
         struct Entry;
         /** @brief Resolves exact registration. @param agent Exact handle. @return Slot or null. */
         [[nodiscard]] Entry *Find(AgentHandle agent) noexcept;
+        /** @brief Advances one admitted owner slice, retaining bounded intents and original failures. @param entry Admitted agent. */
+        void EvaluateEntry(Entry &entry);
+        /** @brief Commits one retained bounded intent prefix. @param entry Exact live agent. */
+        void CommitEntry(Entry &entry);
+        /** @brief Compares stable priority, age and persistent identity. @param a Left slot. @param b Right slot.
+         * @return Whether the left slot precedes the right. */
+        [[nodiscard]] bool Before(const Entry &a, const Entry &b) const noexcept;
         /** @brief Builds stable priority/age/identity order into reserved storage. */
         void Order();
+        /** @brief Rechecks lifetime immediately around callbacks. @param entry Owned slot. @return Whether retired. */
+        [[nodiscard]] bool RetireIfCancelled(Entry &entry) noexcept;
         /** @brief Fences one cancellation and releases callback inputs. @param entry Exact owned slot. */
         void Retire(Entry &entry) noexcept;
         AiRuntimeIncarnation incarnation_;
