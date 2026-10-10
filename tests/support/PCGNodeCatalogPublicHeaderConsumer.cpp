@@ -1,5 +1,6 @@
 #include "Horo/PCG/PCGCpuEvaluator.h"
 #include "Horo/PCG/PCGNodeCatalog.h"
+#include "Horo/PCG/PCGPointGeneration.h"
 
 #include <type_traits>
 

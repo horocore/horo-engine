@@ -72,3 +72,30 @@ Third-party callbacks, module loading, additional node families and automatic
 migration are not introduced by this registry delivery. The built-in functions are
 repository-owned, allocation-admitted pure point operations; later contributions
 must follow the separate ADR-152 trust and lifetime contract.
+
+## Point generation extension (HORO-2015)
+
+The catalog capacity/default grows deliberately from four to seven built-ins;
+existing enum values, type IDs and SnapshotGrid's eight-byte payload remain unchanged.
+New typed generation payloads are documented in the
+[point generation contract](../architecture/runtime/pcg-point-generation-contract.md).
+
+`PCGNodeCatalogSnapshot::Cost` now accepts the exact `PCGCookedNode`, validates its
+catalog schema, and accounts for payload-dependent attempts, pair comparisons and
+transient scratch. The evaluator and catalog regression callers migrate together;
+there is no type-only overload that could underprice Poisson settings. Grid source
+lookup charges now include both admission and execution searches. Merge conservatively
+admits composite identity validation even for identity-free legacy schemas. Kernel
+scratch is included in the complete scratch/aggregate/replacement envelope before
+workspace allocation, and is not retained as immutable candidate point storage.
+
+`HoroPCG` owns `PCGPointGeneration.h` and the public consumer includes it directly.
+The single `DerivePCGSampleSeed` extraction preserves existing HPCGSEED1 bytes and
+seed goldens. Composite roots remain all 32 canonical key bytes; a zero digest is
+not newly reserved. Source sample identities do not replace the existing generated
+output execution/node/pin address contract. Any future output-intent conversion must
+retain the composite root rather than flattening it to the scalar sample column.
+
+SnapshotGrid v1 also preserves its established missing-grid `CpuEvaluationInvalid`
+diagnostic. New generation source lookups report `SpatialInputInvalid`; the paired
+admission regression asserts both exact codes rather than flattening either error.

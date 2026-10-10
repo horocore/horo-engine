@@ -125,6 +125,14 @@ namespace Horo::PCG {
         std::shared_ptr<const State> state_;
     };
 
+    /** @brief Derives the existing schema-1 sample seed from an exact canonical root key.
+     * @param key Captured PCGProvenance::Key, or its unchanged retained point-identity bytes.
+     * @param sample Nonzero semantic source sample, assigned before acceptance or compaction.
+     * @return Existing deterministic seed or typed invalid-sample failure.
+     * @pre The owning capture/evaluation boundary has admitted the deterministic numeric tier.
+     * @note This validates seed consistency, not authenticity of host-supplied provider content evidence. */
+    [[nodiscard]] Result<std::uint64_t> DerivePCGSampleSeed(Sha256Digest key, SourceSampleId sample);
+
     /** @brief Captures and canonicalizes a bounded provenance tuple.
      * @param candidate Complete detached graph, world, node, inputs, providers, and tier evidence.
      * @param admission Current lifecycle gate; cancellation and shutdown reject new captures.

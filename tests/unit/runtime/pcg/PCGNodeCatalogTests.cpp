@@ -68,7 +68,7 @@ namespace Horo::PCG {
                                    PCGGraphSourceHardLimits::SourceBytes);
         }
 
-        Result<PCGCpuCandidate> Evaluate(const PCGCookedPlan &plan, const std::size_t visits = 3, const std::size_t snapshotVisits = 1,
+        Result<PCGCpuCandidate> Evaluate(const PCGCookedPlan &plan, const std::size_t visits = 3, const std::size_t snapshotVisits = 2,
                                          const bool secondGrid = false) {
             PCGSpatialSnapshotCandidate source;
             source.snapshot = Id<SpatialSnapshotId>(1);
@@ -122,7 +122,7 @@ namespace Horo::PCG {
         CheckError(catalog.Register(PCGCpuNodeKind::Forward), PCGErrors::RegistryDuplicate);
         CheckError(catalog.Register(static_cast<PCGCpuNodeKind>(99)), PCGErrors::CpuEvaluationUnsupported);
         CheckError(PCGNodeCatalog::Create(root.Value().Capabilities(), 0), PCGErrors::RegistryCapacityExceeded);
-        CheckError(PCGNodeCatalog::Create(root.Value().Capabilities(), 5), PCGErrors::RegistryCapacityExceeded);
+        CheckError(PCGNodeCatalog::Create(root.Value().Capabilities(), 8), PCGErrors::RegistryCapacityExceeded);
         auto small = Catalog(1);
         REQUIRE(small.Register(PCGCpuNodeKind::Forward).HasValue());
         CheckError(small.Register(PCGCpuNodeKind::Merge), PCGErrors::RegistryCapacityExceeded);
@@ -178,21 +178,51 @@ namespace Horo::PCG {
         CheckError(root.Validate(invalid), PCGErrors::RegistryDescriptorInvalid);
     }
 
+    TEST_CASE("PCG generation catalog explicitly registers seven stable builtins with exact new schemas", "[unit][pcg][catalog]") {
+        auto created = PCGNodeCatalog::Create(ProjectPCGCapabilities(PCGHostProfile::Headless, Grants()).Value());
+        REQUIRE(created.HasValue());
+        auto owner = std::move(created).Value();
+        for (std::uint8_t index = 0; index < 7; ++index)
+            REQUIRE(owner.Register(static_cast<PCGCpuNodeKind>(index)).HasValue());
+        const auto root = owner.Snapshot().Value();
+        REQUIRE(root.Nodes().size() == 7);
+        for (std::size_t index = 0; index < root.Nodes().size(); ++index) {
+            const auto &entry = root.Nodes()[index];
+            CHECK(entry.type.Value() == 0x5043470206000001ULL + index);
+            CHECK(static_cast<std::size_t>(entry.kind) == index);
+            if (index >= 4) {
+                CHECK(entry.determinism == PCGNodeDeterminism::ProfileDeterministic);
+                CHECK(entry.pinCount == 1);
+                CHECK(entry.pins[0].direction == PCGPinDirection::Output);
+                CHECK(entry.settings != PCGNodeSettingsSchema::None);
+            }
+        }
+        CHECK(PCGCpuNodeType(static_cast<PCGCpuNodeKind>(7)).HasError());
+        auto lowered = Catalog(4);
+        for (const auto kind :
+             {PCGCpuNodeKind::SnapshotGrid, PCGCpuNodeKind::GridJitter, PCGCpuNodeKind::Stratified, PCGCpuNodeKind::PoissonScatter})
+            REQUIRE(lowered.Register(kind).HasValue());
+        CheckError(lowered.Register(PCGCpuNodeKind::Forward), PCGErrors::RegistryCapacityExceeded);
+    }
+
     TEST_CASE("PCG catalog work cost is checked before executable allocation admission", "[unit][pcg][catalog]") {
         auto catalog = Catalog();
         REQUIRE(catalog.Register(PCGCpuNodeKind::SnapshotGrid).HasValue());
         REQUIRE(catalog.Register(PCGCpuNodeKind::DensityFilter).HasValue());
         const auto root = catalog.Snapshot().Value();
-        const auto gridType = PCGCpuNodeType(PCGCpuNodeKind::SnapshotGrid).Value();
-        CHECK(root.Cost(gridType, 0, 1).Value().pointVisits == 1);
-        CHECK(root.Cost(gridType, 1, 1).Value().pointVisits == 2);
-        CHECK(root.Cost(PCGCpuNodeType(PCGCpuNodeKind::DensityFilter).Value(), std::numeric_limits<std::size_t>::max(), 0).HasError());
         const auto plan = Cook(root);
         REQUIRE(plan.HasValue());
+        const auto &grid = plan.Value().Nodes()[0];
+        CHECK(root.Cost(grid, 0, 1).Value().pointVisits == 1);
+        CHECK(root.Cost(grid, 1, 1).Value().pointVisits == 2);
+        CHECK(root.Cost(grid, std::numeric_limits<std::size_t>::max(), 0).HasError());
+        auto malformed = grid;
+        malformed.payload.clear();
+        CheckError(root.Cost(malformed, 1, 1), PCGErrors::RegistryDescriptorInvalid);
         REQUIRE(Evaluate(plan.Value(), 2).HasValue());
-        CHECK(root.Cost(gridType, 0, 2).Value().snapshotElementVisits == 2);
-        CheckError(Evaluate(plan.Value(), 2, 1, true), PCGErrors::CpuEvaluationCapacityExceeded);
-        REQUIRE(Evaluate(plan.Value(), 2, 2, true).HasValue());
+        CHECK(root.Cost(grid, 0, 2).Value().snapshotElementVisits == 4);
+        CheckError(Evaluate(plan.Value(), 2, 3, true), PCGErrors::CpuEvaluationCapacityExceeded);
+        REQUIRE(Evaluate(plan.Value(), 2, 4, true).HasValue());
         CheckError(Evaluate(plan.Value(), 2, 0), PCGErrors::CpuEvaluationInvalid);
         CheckError(Evaluate(plan.Value(), 1), PCGErrors::CpuEvaluationCapacityExceeded);
         CheckError(Evaluate(plan.Value(), 0), PCGErrors::CpuEvaluationInvalid);

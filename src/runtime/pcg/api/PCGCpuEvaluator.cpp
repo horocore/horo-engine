@@ -3,6 +3,8 @@
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/PCG/PCGErrors.h"
 #include "PCGCpuEvaluatorInternal.h"
+#include "PCGPointGenerationInternal.h"
+#include "PCGPointIdentityInternal.h"
 
 #include <algorithm>
 #include <bit>
@@ -233,10 +235,10 @@ namespace Horo::PCG {
         constexpr std::size_t WorkProofBytes = 2 * PCGGraphValidationLimits::HardMaximumNodes * sizeof(std::size_t);
 
         /** @brief Proves total declared point and spatial snapshot visits in graph order using charged bounded metadata. */
-        [[nodiscard]] Result<void> AdmitWork(const PCGCookedPlan &plan, const std::span<const PCGPointOutputBound> bounds,
-                                             const PCGSpatialSnapshot &spatial, const PCGCpuEvaluationLimits &limits) {
+        [[nodiscard]] Result<std::size_t> AdmitWork(const PCGCookedPlan &plan, const std::span<const PCGPointOutputBound> bounds,
+                                                    const PCGSpatialSnapshot &spatial, const PCGCpuEvaluationLimits &limits) {
             if (plan.Nodes().size() > PCGGraphValidationLimits::HardMaximumNodes)
-                return Reject<void>(PCGErrors::CpuEvaluationCapacityExceeded);
+                return Reject<std::size_t>(PCGErrors::CpuEvaluationCapacityExceeded);
             std::array<std::size_t, PCGGraphValidationLimits::HardMaximumNodes> outputs{};
             std::array<std::size_t, PCGGraphValidationLimits::HardMaximumNodes> points{};
             // Catalog validation requires exactly one point output; RequiredBytes already proves each bound and route.
@@ -247,27 +249,32 @@ namespace Horo::PCG {
             for (const auto &route : plan.Routes()) {
                 const auto next = CheckedPCGAdd(points[route.targetNode], outputs[route.sourceNode]);
                 if (next.HasError())
-                    return Result<void>::Failure(next.ErrorValue());
+                    return Result<std::size_t>::Failure(next.ErrorValue());
                 points[route.targetNode] = next.Value();
             }
             std::size_t total{};
             std::size_t snapshotTotal{};
+            std::size_t scratch{};
+            const auto spatialCount = CheckedPCGAdd(spatial.Grids().size(), spatial.Volumes().size());
+            if (spatialCount.HasError())
+                return spatialCount;
             for (std::size_t node = 0; node < plan.Nodes().size(); ++node) {
-                const auto cost = plan.Catalog().Cost(plan.Nodes()[node].type, points[node], spatial.Grids().size());
+                const auto cost = plan.Catalog().Cost(plan.Nodes()[node], points[node], spatialCount.Value());
                 if (cost.HasError())
-                    return Result<void>::Failure(cost.ErrorValue());
+                    return Result<std::size_t>::Failure(cost.ErrorValue());
+                scratch = std::max(scratch, cost.Value().scratchBytes);
                 const auto next = CheckedPCGAdd(total, cost.Value().pointVisits);
                 if (next.HasError())
-                    return Result<void>::Failure(next.ErrorValue());
+                    return Result<std::size_t>::Failure(next.ErrorValue());
                 total = next.Value();
                 const auto snapshotNext = CheckedPCGAdd(snapshotTotal, cost.Value().snapshotElementVisits);
                 if (snapshotNext.HasError())
-                    return Result<void>::Failure(snapshotNext.ErrorValue());
+                    return Result<std::size_t>::Failure(snapshotNext.ErrorValue());
                 snapshotTotal = snapshotNext.Value();
                 if (total > limits.maximumPointVisits || snapshotTotal > limits.maximumSnapshotElementVisits)
-                    return Reject<void>(PCGErrors::CpuEvaluationCapacityExceeded);
+                    return Reject<std::size_t>(PCGErrors::CpuEvaluationCapacityExceeded);
             }
-            return Result<void>::Success();
+            return Result<std::size_t>::Success(scratch);
         }
 
         /** @brief Adds the complete finite storage categories without wrapping or allocating. */
@@ -282,6 +289,28 @@ namespace Horo::PCG {
             return Result<std::size_t>::Success(total);
         }
 
+        /** @brief Proves complete semantic schemas and exact source feasibility before allocating point columns. */
+        [[nodiscard]] Result<void> ValidateGenerationBounds(const PCGCookedPlan &plan, const PCGSpatialSnapshot &spatial,
+                                                            const std::span<const PCGPointOutputBound> bounds) {
+            for (const auto &bound : bounds) {
+                const auto identity = detail::HasPointIdentity(*bound.schema);
+                if (identity.HasError())
+                    return Result<void>::Failure(identity.ErrorValue());
+                const auto &node = plan.Nodes()[bound.node];
+                const auto descriptor = plan.Catalog().Find(node.type);
+                if (descriptor.HasError())
+                    return Result<void>::Failure(descriptor.ErrorValue());
+                if (descriptor.Value()->settings != PCGNodeSettingsSchema::None) {
+                    const auto settings = detail::DecodePointGeneration(node);
+                    if (settings.HasError())
+                        return Result<void>::Failure(settings.ErrorValue());
+                    if (const auto valid = detail::ValidatePointGeneration(settings.Value(), spatial, bound); valid.HasError())
+                        return Result<void>::Failure(valid.ErrorValue());
+                }
+            }
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<AdmittedWorkspace> AdmitWorkspace(const PCGCookedPlan &plan, const PCGSpatialSnapshot &spatial,
                                                                const std::span<const PCGPointOutputBound> bounds,
                                                                const PCGCpuEvaluationLimits &limits, const PCGTierLimits &tier) {
@@ -291,6 +320,11 @@ namespace Horo::PCG {
             const auto reservation = PCGPointCloudWorkspace::RequiredBytes(plan, bounds);
             if (reservation.HasError())
                 return Result<AdmittedWorkspace>::Failure(reservation.ErrorValue());
+            if (const auto valid = ValidateGenerationBounds(plan, spatial, bounds); valid.HasError())
+                return Result<AdmittedWorkspace>::Failure(valid.ErrorValue());
+            const auto work = AdmitWork(plan, bounds, spatial, limits);
+            if (work.HasError())
+                return Result<AdmittedWorkspace>::Failure(work.ErrorValue());
             const auto provenanceBytes = ProvenanceReservation(plan);
             if (provenanceBytes.HasError())
                 return Result<AdmittedWorkspace>::Failure(provenanceBytes.ErrorValue());
@@ -302,7 +336,8 @@ namespace Horo::PCG {
             const auto workerReservation = CheckedPCGMultiply(limits.workers, sizeof(JobDescriptor) + 512);
             if (workerReservation.HasError())
                 return Result<AdmittedWorkspace>::Failure(workerReservation.ErrorValue());
-            const auto withWorkers = SumCharges({reservation.Value(), workerReservation.Value(), WorkProofBytes, provenanceBytes.Value()});
+            const auto withWorkers =
+                SumCharges({reservation.Value(), workerReservation.Value(), WorkProofBytes, provenanceBytes.Value(), work.Value()});
             if (withWorkers.HasError())
                 return Result<AdmittedWorkspace>::Failure(withWorkers.ErrorValue());
             if (withWorkers.Value() > limits.maximumScratchBytes)
@@ -318,8 +353,6 @@ namespace Horo::PCG {
             if (total.Value() > tier.maximumAggregateBytes ||
                 (limits.retainedBytes != 0 && total.Value() > tier.maximumReplacementOverlapBytes))
                 return Reject<AdmittedWorkspace>(PCGErrors::CpuEvaluationCapacityExceeded);
-            if (const auto work = AdmitWork(plan, bounds, spatial, limits); work.HasError())
-                return Result<AdmittedWorkspace>::Failure(work.ErrorValue());
             auto workspace = PCGPointCloudWorkspace::Create(plan, bounds, reservation.Value(), limits.retainedBytes);
             if (workspace.HasError())
                 return Result<AdmittedWorkspace>::Failure(workspace.ErrorValue());
