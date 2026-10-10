@@ -1,5 +1,6 @@
 #include "Horo/AI/AITaskJobService.h"
 
+#include <algorithm>
 #include <new>
 #include <utility>
 
@@ -111,6 +112,23 @@ namespace Horo::AI {
             if (published.HasValue() && published.Value() != AiTaskPublicationDisposition::Contended)
                 entry = {};
         }
+    }
+
+    /** @copydoc AiTaskJobService::CancelAgent */
+    void AiTaskJobService::CancelAgent(const AgentHandle agent, const AiTaskCancellationReason reason) noexcept {
+        for (auto &entry : entries_) {
+            if (entry.job.Id() != 0 && entry.continuation.Operation().agent == agent) {
+                entry.cancellation = reason;
+                static_cast<void>(entry.job.RequestCancel());
+            }
+        }
+    }
+
+    /** @copydoc AiTaskJobService::PendingCount */
+    std::size_t AiTaskJobService::PendingCount(const AgentHandle agent) const noexcept {
+        return static_cast<std::size_t>(std::count_if(entries_.begin(), entries_.end(), [agent](const Entry &entry) {
+            return entry.job.Id() != 0 && entry.continuation.Operation().agent == agent;
+        }));
     }
 
     /** @copydoc AiTaskJobService::Shutdown */

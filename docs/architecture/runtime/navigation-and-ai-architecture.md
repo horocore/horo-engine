@@ -2413,6 +2413,55 @@ through the Foundation `JobSystem`:
 - **Scene-Scoped Cancellation**: Every async AI job captures a `CancellationToken` bound to the active `SceneRuntime` generation. When a scene unloads or transitions, all active AI jobs are cancelled immediately.
 - **Worker Thread Invariant**: Background AI jobs never mutate scene ECS components or live blackboard instances directly. Completed results (e.g. `PathfindingResult`, visibility test results) are queued into thread-safe result buffers and applied to agent memory on the main simulation thread at designated phase safe points.
 
+### Fixed-Tick Agent Work Admission (GAI-001.8)
+
+`AiTaskScheduler` in `HoroAI` is the scene owner's cooperative admission policy
+above the existing Foundation `JobSystem`, not a worker executor. The host
+composes it through `AiSceneRuntime::ConfigureTaskSchedulerAtSafePoint`, binds
+exact active agents with `RegisterDecisionAtSafePoint`, and calls
+`EvaluateAtDecision` in `AiDecisionEvaluate` and `CommitAtIntentDispatch` in
+`AiIntentDispatch`. Restore, scene replacement, disable, structural retirement
+and shutdown fence retained decisions and intents and cancel their workers.
+The process JobSystem and worker-owned image pins must drain before code unload.
+
+Each registration owns one coalesced wake slot. Existing `DecisionWakePolicy`
+requests can be forwarded as typed `DecisionWakeReasons`; activation, blackboard,
+perception, task completion and explicit requests bypass cadence. Fixed-tick
+polling coalesces missed intervals without catch-up. Authored priority, overdue
+age and persistent `AgentId` determine stable admission independently of registration
+order. After the declared starvation age, overdue agents precede ordinary priority.
+`AiSchedulingReport` exposes starved/deferred, exhausted/yielded, failure and
+cancellation counts plus the original first callback error.
+
+Positive finite per-agent and global evaluation/work/command/submission limits
+are validated before registration. `AiWorkBudget` is cooperative: a provider
+must consume before every bounded node/query/command step and check cancellation
+between steps. It does not preempt arbitrary C++ code or bound the elapsed time
+of a single step. A slice is reserved before invoking callbacks; repeated calls
+in the same tick cannot renew allowances. Incomplete command batches retain their
+bounded storage and fence further evaluation until drained; no command or decision
+catch-up extends the tick. Hosts provide an executor with immutable frozen inputs
+and preallocated resumable state/intents; its owner-only commit queues Scene
+commands at the safe point instead of mutating ECS from a worker.
+
+Best-effort `SubmitWorker` accepts only precomposed `AiWorkerSliceLease` work
+implementing `IAiBudgetedTaskJob`. Its finite cost is charged from the executing
+owner slice before admission, and the worker receives its own non-copyable
+allowance. Over-budget attempts produce a typed `SchedulerBudgetExhausted` task
+failure. Per-agent retained-work and per-tick submission limits and the shared
+service capacity also apply; cancelled running jobs retain capacity until terminal.
+Completion remains a candidate in the existing continuation mailbox: only owner
+evaluation advances task state. Deterministic mode deliberately rejects async
+worker submission with `SchedulerWorkerUnsupported`; the host uses bounded owner
+slices so worker completion timing cannot affect declared deterministic flow.
+
+This is an additive public contract owned by `HoroAI`; scene composition methods
+belong to `HoroAISceneIntegration`. Existing tree, state-machine and task-service
+callers retain their contracts. Hosts opting into scene-wide scheduling must bind
+one executor per exact live agent, forward coalesced wakes, call the two declared
+phases and recompose/rebind after restore or scene replacement. Scheduling state,
+worker leases and outstanding intent batches are transient and never serialized.
+
 ## Debugging And Visualization
 
 [ADR-110](../../adr/110-navigation-editor-surface-and-command-ownership.md)

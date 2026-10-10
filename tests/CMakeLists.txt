@@ -750,6 +750,7 @@ add_executable(HoroAITests
         unit/runtime/ai/AISceneRestoreTests.cpp
         unit/runtime/ai/AISceneComponentsTests.cpp
         unit/runtime/ai/AITaskLifecycleTests.cpp
+        unit/runtime/ai/AITaskSchedulerTests.cpp
         unit/runtime/ai/BehaviorTreeTests.cpp
         unit/runtime/ai/BehaviorTreeRuntimeTests.cpp
         unit/runtime/ai/BehaviorTreeLifecycleTests.cpp
@@ -771,6 +772,11 @@ target_compile_features(HoroAITests PRIVATE cxx_std_20)
 target_link_libraries(HoroAITests PRIVATE HoroEngine::AI HoroEngine::AISceneIntegration HoroEngine::GameplayPerceptionIntegration)
 horo_register_catch_test(HoroAITests LABELS "unit;ai;headless")
 target_include_directories(HoroAITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+
+add_executable(HoroAITaskSchedulerPublicConsumer support/AITaskSchedulerPublicConsumer.cpp)
+target_compile_features(HoroAITaskSchedulerPublicConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroAITaskSchedulerPublicConsumer PRIVATE HoroEngine::AISceneIntegration)
+add_test(NAME HoroAITaskSchedulerPublicConsumer COMMAND HoroAITaskSchedulerPublicConsumer)
 
 add_executable(HoroAISightTests
         support/AllocationProbe.cpp
