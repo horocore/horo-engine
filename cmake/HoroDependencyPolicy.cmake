@@ -43,6 +43,7 @@ horo_allow_target_dependencies(TARGET HoroCharacterInput DEPENDENCIES HoroInput 
 horo_allow_target_dependencies(TARGET HoroAssets DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroNetworkApi DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroNetworkDebuggerApplication DEPENDENCIES HoroNetworkApi)
+horo_allow_target_dependencies(TARGET HoroPlayTopologyApplication DEPENDENCIES HoroFoundation HoroNetworkApi HoroPlatform)
 horo_allow_target_dependencies(TARGET HoroNetworkRuntime DEPENDENCIES HoroNetworkApi HoroRuntimeScene HoroRuntime)
 horo_allow_target_dependencies(TARGET HoroNetworkTransportNull DEPENDENCIES HoroNetworkApi)
 if(HORO_BUILD_NETWORK_GNS)
@@ -200,7 +201,7 @@ horo_allow_target_dependencies(TARGET HoroEditorViewportOpenGL
 horo_allow_target_dependencies(TARGET HoroEditorViewportMetal
     DEPENDENCIES HoroEditorViewportScene HoroEditorViewportResources HoroRenderMetal HoroRenderFrontend)
 horo_allow_target_dependencies(TARGET HoroGui
-    DEPENDENCIES HoroEditorServices HoroCinematicCameraRuntime HoroFoundation HoroEditorRenderExtraction HoroExtensions)
+    DEPENDENCIES HoroPlayTopologyApplication HoroEditorServices HoroCinematicCameraRuntime HoroFoundation HoroEditorRenderExtraction HoroExtensions)
 horo_allow_target_dependencies(TARGET HoroExtensions
     DEPENDENCIES HoroFoundation HoroPlatform HoroAssets HoroSecurity)
 

@@ -30,7 +30,9 @@ def targets(name: str) -> set[str]:
 def test_windows_group_preserves_every_previously_built_target() -> None:
     assert targets("HORO_CI_WINDOWS_TARGETS") == targets("HORO_CI_AUDIO_TARGETS") | {
         "HoroD3D12InitializationTests",
+        "HoroMaterialBindingTests", "HoroMaterialBindingPublicHeaderConsumer",
         "HoroNetworkDebuggerTests", "HoroNetworkDebuggerPublicHeaderConsumer",
+        "HoroPlayTopologyTests", "HoroPlayTopologyPublicHeaderConsumer",
         "HoroTerrainAuthoringTests", "HoroTerrainAuthoringPublicHeaderConsumer",
         "HoroCliCommandRegistryTests", "HoroPlatformTests", "HoroUpdateZipPackageProducerTests",
         "HoroCliOutputPublicHeaderConsumer", "HoroCliProductionOutputContract",
@@ -58,6 +60,7 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
         "HoroTerrainProducerSnapshotTests", "HoroTerrainProducerSnapshotPublicHeaderConsumer",
         "HoroRuntimeSaveEventTriggersTests", "HoroSaveEventTriggersPublicHeaderConsumer",
         "HoroRuntimeSaveRestoreTransactionTests", "HoroSaveGameplayCheckpointPublicHeaderConsumer",
+        "HoroNavigationRuntimeTests", "HoroNavigationBakeServiceTests",
     }
     for workflow in ("prefab-foundation-windows", "extension-abi-windows", "mcp-session-windows", "save-path-windows"):
         assert not (ROOT / f".github/workflows/{workflow}.yml").exists()
@@ -78,7 +81,25 @@ def test_windows_pointer_gesture_tests_and_consumers_share_build_closure() -> No
     assert "unit/runtime/input/SdlTouchInputTests.cpp" in tests_cmake
     for consumer in ("HoroRuntimeUiPointerPublicHeaderConsumer", "HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer"):
         match = re.search(rf"set_tests_properties\({consumer} PROPERTIES LABELS \"([^\"]+)\"\)", tests_cmake)
-        assert match and {"public_headers", "ci-windows"} <= set(match.group(1).split(";"))
+        assert match
+        assert {"public_headers", "ci-windows"} <= set(match.group(1).split(";"))
+
+
+def test_windows_navigation_qualification_has_build_and_discovery_closure() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    for target in ("HoroNavigationRuntimeTests", "HoroNavigationBakeServiceTests"):
+        assert target in targets("HORO_CI_WINDOWS_TARGETS")
+        assert f"add_executable({target}" in tests_cmake
+    assert "unit/runtime/navigation/NavigationBakeJobsTests.cpp" in tests_cmake
+    assert "unit/runtime/navigation/NavigationBakeServiceTests.cpp" in tests_cmake
+    assert "unit/runtime/navigation/NavigationBakeQualificationTests.cpp" in tests_cmake
+    assert 'horo_register_catch_test(HoroNavigationBakeServiceTests LABELS "unit;navigation;headless;cook")' in tests_cmake
+    assert 'horo_register_catch_test(HoroNavigationRuntimeTests LABELS "unit;navigation;headless;lifecycle")' in tests_cmake
+    assert 'if(target IN_LIST HORO_CI_WINDOWS_TARGETS)\n        list(APPEND ARG_LABELS ci-windows)' in SUITES
+    for name in ("ci-base", "ci-headless", "ci-windows-debug"):
+        assert preset("configurePresets", name)["cacheVariables"].get("HORO_BUILD_NAVIGATION_RECAST_DETOUR", "ON") == "ON"
+    root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    assert 'option(HORO_BUILD_NAVIGATION_RECAST_DETOUR "Build the default grounded navigation query provider" ON)' in root_cmake
 
 
 def test_windows_manifest_tests_and_consumer_share_the_build_closure() -> None:
@@ -242,3 +263,14 @@ def test_windows_restore_allocation_sweep_has_mandatory_release_coverage() -> No
     assert "continue-on-error" not in test.group(1)
     assert "--output-junit build/ci-audio-release/restore-ctest.xml" in test.group(1)
     assert "            build/ci-audio-release/restore-ctest.xml" in WORKFLOW
+
+
+def test_windows_material_binding_has_tests_and_owned_consumer() -> None:
+    cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    for target in ("HoroMaterialBindingTests", "HoroMaterialBindingPublicHeaderConsumer"):
+        assert target in targets("HORO_CI_WINDOWS_TARGETS")
+        assert f"add_executable({target}" in cmake
+    registry = (ROOT / "cmake/HoroPublicHeaderOwnership.cmake").read_text(encoding="utf-8")
+    for header in ("MaterialBinding.h", "MaterialBindingBackend.h", "MaterialBindingErrors.h"):
+        assert registry.count(f"Horo/Runtime/Render/{header}") == 1
+    assert "        HoroMaterialBindingTests\n" in cmake

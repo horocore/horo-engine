@@ -1,0 +1,66 @@
+plugins { id 'com.android.application' }
+
+def contract = new groovy.json.JsonSlurper().parse(file('contract.json'))
+android {
+    namespace contract.profile.applicationId
+    compileSdk contract.tools.sdkApi
+    buildToolsVersion contract.tools.buildTools
+    defaultConfig {
+        applicationId contract.profile.applicationId
+        minSdk contract.profile.minimumApi
+        targetSdk contract.profile.targetApi
+        versionCode contract.profile.versionCode
+        versionName contract.profile.versionName
+        ndk { abiFilters.addAll(contract.abis) }
+    }
+    buildTypes {
+        debug { signingConfig null }
+        release { minifyEnabled false; signingConfig null }
+    }
+    sourceSets {
+        main {
+            manifest.srcFile 'AndroidManifest.xml'
+            java.srcDirs = ['java']
+            jniLibs.srcDirs = ['native']
+            assets.srcDirs = ['assets']
+        }
+    }
+    packaging { jniLibs { useLegacyPackaging = false; keepDebugSymbols += ["**/*.so"] } }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+dependencies {
+    // Kotlin 1.8 merged the JDK variants into stdlib; align AndroidX transitives before dexing.
+    implementation platform("org.jetbrains.kotlin:kotlin-bom:${contract.tools.kotlin}")
+    implementation files('game-activity.aar')
+    implementation "androidx.appcompat:appcompat:${contract.tools.appcompat}"
+}
+// Lock runtime dependency graphs before provenance or APK assembly resolves them.
+configurations.configureEach {
+    if (name in ['debugRuntimeClasspath', 'releaseRuntimeClasspath']) {
+        resolutionStrategy.activateDependencyLocking()
+    }
+}
+dependencyLocking { lockMode = LockMode.STRICT }
+
+tasks.withType(AbstractArchiveTask).configureEach {
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+tasks.register('writeDependencyProvenance') {
+    doLast {
+        def configurationName = contract.profile.configuration.toLowerCase() + 'RuntimeClasspath'
+        def records = configurations[configurationName].resolvedConfiguration.resolvedArtifacts.collect { artifact ->
+            def component = artifact.moduleVersion.id
+            if (component.group == 'org.jetbrains.kotlin' && component.name.startsWith('kotlin-stdlib') && component.version != contract.tools.kotlin) {
+                throw new GradleException('Kotlin runtime drift: align all stdlib variants with the locked BOM before packaging')
+            }
+            [group: component.group, module: component.name, version: component.version,
+             sha256: java.security.MessageDigest.getInstance('SHA-256').digest(artifact.file.bytes).encodeHex().toString()]
+        }.sort { a, b -> (a.group + ':' + a.module) <=> (b.group + ':' + b.module) }
+        file('assets/horo-java-dependencies.json').text = groovy.json.JsonOutput.toJson(records) + '\n'
+    }
+}
