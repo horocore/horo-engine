@@ -958,6 +958,10 @@ horo_configure_target_header_boundary(HoroPrefabCookHost PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
+    Horo/Runtime/Render/PostProcessSettings.h
+    Horo/Runtime/Render/PostProcessVolumes.h
+    Horo/Runtime/Render/PostProcessGraph.h
+    Horo/Runtime/Render/PostProcessErrors.h
     Horo/Runtime/Render/MaterialBindingBackend.h
     Horo/Runtime/Render/MaterialBinding.h
     Horo/Runtime/Render/MaterialBindingErrors.h
