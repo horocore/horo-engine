@@ -458,15 +458,16 @@ namespace Horo::PCG {
         }
 
         BuiltInExecution BuiltInFunction(PCGCpuNodeKind kind) noexcept {
+            using enum PCGCpuNodeKind;
             switch (kind) {
-                case PCGCpuNodeKind::SnapshotGrid:
-                    return &InvokeBuiltIn<PCGCpuNodeKind::SnapshotGrid>;
-                case PCGCpuNodeKind::DensityFilter:
-                    return &InvokeBuiltIn<PCGCpuNodeKind::DensityFilter>;
-                case PCGCpuNodeKind::Merge:
-                    return &InvokeBuiltIn<PCGCpuNodeKind::Merge>;
-                case PCGCpuNodeKind::Forward:
-                    return &InvokeBuiltIn<PCGCpuNodeKind::Forward>;
+                case SnapshotGrid:
+                    return &InvokeBuiltIn<SnapshotGrid>;
+                case DensityFilter:
+                    return &InvokeBuiltIn<DensityFilter>;
+                case Merge:
+                    return &InvokeBuiltIn<Merge>;
+                case Forward:
+                    return &InvokeBuiltIn<Forward>;
             }
             return nullptr;
         }

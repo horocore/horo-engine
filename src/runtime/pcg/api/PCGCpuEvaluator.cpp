@@ -240,8 +240,10 @@ namespace Horo::PCG {
             std::array<std::size_t, PCGGraphValidationLimits::HardMaximumNodes> outputs{};
             std::array<std::size_t, PCGGraphValidationLimits::HardMaximumNodes> points{};
             // Catalog validation requires exactly one point output; RequiredBytes already proves each bound and route.
-            for (const auto &bound : bounds)
-                outputs[bound.node] = points[bound.node] = bound.maximumPoints;
+            for (const auto &bound : bounds) {
+                outputs[bound.node] = bound.maximumPoints;
+                points[bound.node] = bound.maximumPoints;
+            }
             for (const auto &route : plan.Routes()) {
                 const auto next = CheckedPCGAdd(points[route.targetNode], outputs[route.sourceNode]);
                 if (next.HasError())

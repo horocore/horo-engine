@@ -253,9 +253,11 @@ namespace Horo::PCG {
             auto resolved = ResolveNodes(source, validated, registry);
             if (resolved.HasError())
                 return Result<OwnedPlanSections>::Failure(resolved.ErrorValue());
-            const auto mode = source.mode == PCGGenerationMode::Offline   ? PCGCapability::OfflineBake
-                              : source.mode == PCGGenerationMode::Runtime ? PCGCapability::RuntimeEvaluation
-                                                                          : PCGCapability::HybridEvaluation;
+            PCGCapability mode = PCGCapability::HybridEvaluation;
+            if (source.mode == PCGGenerationMode::Offline)
+                mode = PCGCapability::OfflineBake;
+            else if (source.mode == PCGGenerationMode::Runtime)
+                mode = PCGCapability::RuntimeEvaluation;
             if ((catalog.Capabilities().profile != registry.Capabilities().profile ||
                  catalog.Capabilities().granted != registry.Capabilities().granted) ||
                 !catalog.Capabilities().granted.Contains(mode))
@@ -370,7 +372,7 @@ namespace Horo::PCG {
         auto lowered = BuildExecutableSections(source, validated, registry, catalog, *graphDescriptor.Value(), requiredCapabilities);
         if (lowered.HasError())
             return Result<PCGCookedPlan>::Failure(lowered.ErrorValue());
-        auto &owned = lowered.Value();
+        auto owned = std::move(lowered).Value();
         const PlanSections sections{owned.nodes, owned.routes, owned.constants, owned.exposed};
         auto bytes = Encode(source, sourceDigest, owned.capabilities, sections, effectiveMaximum);
         if (bytes.HasError())

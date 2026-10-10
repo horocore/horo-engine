@@ -25,6 +25,7 @@ namespace Horo::PCG {
         }
 
         Result<PCGBuiltInNodeDescriptor> Describe(PCGCpuNodeKind kind) {
+            using enum PCGCpuNodeKind;
             const auto index = static_cast<std::size_t>(kind);
             if (index >= 4)
                 return Reject<PCGBuiltInNodeDescriptor>(PCGErrors::CpuEvaluationUnsupported);
@@ -40,16 +41,15 @@ namespace Horo::PCG {
             descriptor.kind = kind;
             descriptor.requiredCapabilities = capabilities.Value();
             descriptor.determinism =
-                kind == PCGCpuNodeKind::SnapshotGrid ? PCGNodeDeterminism::ProfileDeterministic : PCGNodeDeterminism::PortableDeterministic;
-            descriptor.settings =
-                kind == PCGCpuNodeKind::SnapshotGrid ? PCGNodeSettingsSchema::SpatialGridIdentity : PCGNodeSettingsSchema::None;
-            descriptor.workPerSnapshotElement = kind == PCGCpuNodeKind::SnapshotGrid ? 1 : 0;
-            descriptor.workPerPoint = kind == PCGCpuNodeKind::DensityFilter || kind == PCGCpuNodeKind::Merge ? 2 : 1;
-            if (kind != PCGCpuNodeKind::SnapshotGrid)
+                kind == SnapshotGrid ? PCGNodeDeterminism::ProfileDeterministic : PCGNodeDeterminism::PortableDeterministic;
+            descriptor.settings = kind == SnapshotGrid ? PCGNodeSettingsSchema::SpatialGridIdentity : PCGNodeSettingsSchema::None;
+            descriptor.workPerSnapshotElement = kind == SnapshotGrid ? 1 : 0;
+            descriptor.workPerPoint = kind == DensityFilter || kind == Merge ? 2 : 1;
+            if (kind != SnapshotGrid)
                 descriptor.pins[descriptor.pinCount++] = {PCGPinDirection::Input, PCGPinType::PointSet, PCGPinCardinality::Single};
-            if (kind == PCGCpuNodeKind::DensityFilter)
+            if (kind == DensityFilter)
                 descriptor.pins[descriptor.pinCount++] = {PCGPinDirection::Input, PCGPinType::Scalar, PCGPinCardinality::Single};
-            if (kind == PCGCpuNodeKind::Merge)
+            if (kind == Merge)
                 descriptor.pins[descriptor.pinCount++] = {PCGPinDirection::Input, PCGPinType::PointSet, PCGPinCardinality::Single};
             descriptor.pins[descriptor.pinCount++] = {PCGPinDirection::Output, PCGPinType::PointSet, PCGPinCardinality::Multiple};
             std::ranges::sort(std::span(descriptor.pins.data(), descriptor.pinCount));
@@ -123,8 +123,8 @@ namespace Horo::PCG {
         std::ranges::sort(std::span(pins.data(), node.pins.size()));
         if (!std::ranges::equal(std::span(pins.data(), node.pins.size()), std::span(descriptor.pins.data(), descriptor.pinCount)))
             return NodeFailure(PCGErrors::RegistryDescriptorInvalid, node.id);
-        const auto size = descriptor.settings == PCGNodeSettingsSchema::SpatialGridIdentity ? 8U : 0U;
-        if (node.payload.size() != size || (size != 0 && std::ranges::all_of(node.payload, [](auto byte) {
+        if (const auto size = descriptor.settings == PCGNodeSettingsSchema::SpatialGridIdentity ? 8U : 0U;
+            node.payload.size() != size || (size != 0 && std::ranges::all_of(node.payload, [](auto byte) {
             return byte == 0;
         })))
             return NodeFailure(PCGErrors::RegistryDescriptorInvalid, node.id);
