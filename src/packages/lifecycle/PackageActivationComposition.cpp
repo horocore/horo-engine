@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <format>
 #include <fstream>
 #include <map>
 #include <stdexcept>
@@ -37,8 +38,8 @@ namespace Horo::Packages::Detail {
         Result<std::filesystem::path> CreatePrivateRoot(const std::filesystem::path &parent) {
             static std::atomic<std::uint64_t> sequence{};  // Only unique temporary names are shared across service owners.
             for (unsigned attempt = 0; attempt < 16U; ++attempt) {
-                auto path = parent / ("horo-activation-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
-                                      '-' + std::to_string(++sequence));
+                auto path =
+                    parent / std::format("horo-activation-{}-{}", std::chrono::steady_clock::now().time_since_epoch().count(), ++sequence);
                 std::error_code error;
                 if (!std::filesystem::create_directory(path, error)) {
                     if (error)
@@ -59,8 +60,7 @@ namespace Horo::Packages::Detail {
     /** @copydoc PackageActivationComposition::PackageActivationComposition */
     PackageActivationComposition::PackageActivationComposition(const PackageLifecycleConfiguration &configuration,
                                                                std::shared_ptr<const VerifiedPackageInstallRecord> install,
-                                                               const std::uint64_t generation)
-        : snapshot_(std::make_shared<PackageActivationSnapshot>()), catalog_(std::make_unique<Assets::AssetImporterCatalog>()) {
+                                                               const std::uint64_t generation) {
         (void)configuration;
         snapshot_->install = std::move(install);
         snapshot_->generation = generation;
@@ -105,7 +105,9 @@ namespace Horo::Packages::Detail {
                 return Result<void>::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
             std::ofstream output{path, std::ios::binary | std::ios::trunc};
             const auto &content = bytes.Value();
-            output.write(reinterpret_cast<const char *>(content.data()), static_cast<std::streamsize>(content.size()));
+            // The archive exposes verified uint8_t bytes; ostream's bulk-write ABI requires char code units.
+            const auto *characters = reinterpret_cast<const char *>(content.data());  // NOSONAR(cpp:S6022)
+            output.write(characters, static_cast<std::streamsize>(content.size()));
             output.close();
             if (!output)
                 return Result<void>::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
@@ -130,9 +132,9 @@ namespace Horo::Packages::Detail {
         // Evaluate every grant before any package code runs. Leases stay detached until complete registration succeeds.
         for (const auto &candidate : candidates) {
             for (const auto &id : candidate.plan.moduleIds) {
-                const auto module = std::ranges::find(candidate.manifest.modules, id, &Extensions::ExtensionModuleManifest::id);
+                const auto moduleManifest = std::ranges::find(candidate.manifest.modules, id, &Extensions::ExtensionModuleManifest::id);
                 Extensions::ExtensionAdmissionRequest request{candidate.manifest.id, id, snapshot_->generation, {}};
-                for (const auto &capability : module->requiredCapabilities)
+                for (const auto &capability : moduleManifest->requiredCapabilities)
                     request.capabilities.push_back({{capability}, {}});
                 auto admission = Extensions::ExtensionCapabilityAdmission::Evaluate(request, candidate.trust.policy);
                 if (admission.HasError())
@@ -145,7 +147,7 @@ namespace Horo::Packages::Detail {
                 return files;
             const auto &archive = candidate.install->Graph()->packages[candidate.packageIndex].archive;
             for (const auto &file : archive->Manifest().Entries())
-                artifacts.emplace(packageRoot / file.id.path.Value(), file.digest);
+                artifacts.try_emplace(packageRoot / file.id.path.Value(), file.digest);
         }
         auto gate = std::make_shared<BoundArtifactGate>(configuration.artifactGate, std::move(artifacts));
         manager_ = std::make_unique<Extensions::ExtensionManager>(catalog_.get(), configuration.profile, configuration.capabilities,

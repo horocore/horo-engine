@@ -163,7 +163,9 @@ namespace Horo::Packages {
     std::shared_ptr<const VerifiedPackageInstallRecord> PackageInstallService::FreezeRecord(
         std::shared_ptr<const PackageRestoreGraph> graph, const std::uint64_t revision) {
         auto snapshot = std::make_shared<const PackageRestoreGraph>(*graph);
-        return std::shared_ptr<const VerifiedPackageInstallRecord>{new VerifiedPackageInstallRecord{std::move(snapshot), revision}};
+        return std::shared_ptr<const VerifiedPackageInstallRecord>{
+            new VerifiedPackageInstallRecord{std::move(snapshot),
+                                             revision}};  // NOSONAR(cpp:S5950) Private constructor seals install evidence.
     }
 
     /** @copydoc PackageInstallService::InstalledRecord */

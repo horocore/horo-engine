@@ -9,9 +9,21 @@
 #include <utility>
 
 namespace Horo::Packages {
+    namespace {
+        /** @brief Validates the same absolute, canonical existing directory before lifecycle configuration is admitted. */
+        bool IsPrivateTemporaryRoot(const std::filesystem::path &root) {
+            std::error_code error;
+            const auto canonical = std::filesystem::canonical(root, error);
+            if (error || !root.is_absolute() || canonical != root.lexically_normal())
+                return false;
+            const bool directory = std::filesystem::is_directory(canonical, error);
+            return directory && !error;
+        }
+    }  // namespace
+
     struct PackageLifecycleService::Impl final {
         Impl(PackageInstallService &installation, const IPackageExtensionTrust &approval, PackageLifecycleConfiguration policy)
-            : install(installation), trust(approval), configuration(std::move(policy)), owner(std::this_thread::get_id()) {}
+            : install(installation), trust(approval), configuration(std::move(policy)) {}
 
         /** @brief Keeps the primary typed error and the previous published graph when preparation fails. */
         Result<void> Fail(Error error) {
@@ -23,6 +35,8 @@ namespace Horo::Packages {
 
         /** @brief Retains failed detached native owners if actual callback leases still require draining. */
         Result<void> Reject(std::unique_ptr<Detail::PackageActivationComposition> candidate, Error error) {
+            if (!candidate)
+                return Fail(std::move(error));
             candidate->Retire();
             if (!candidate->Finalize()) {
                 retired.push_back(std::move(candidate));
@@ -31,16 +45,21 @@ namespace Horo::Packages {
             return Fail(std::move(error));
         }
 
+        /** @brief Reads live shutdown state after host callbacks can reenter the lifecycle service. */
+        bool StopRequested() const noexcept {
+            return shutdownRequested;
+        }
+
         /** @brief Stages validated native owners and checks cancellation, install identity and leases before publication. */
         Result<void> PrepareStaged(std::shared_ptr<const VerifiedPackageInstallRecord> installed,
                                    std::span<const EnabledPackageExtension> enabled, std::uint64_t nextGeneration,
                                    const CancellationToken &cancellation, std::unique_ptr<Detail::PackageActivationComposition> &staged) {
-            if (cancellation.IsCancellationRequested() || shutdownRequested)
+            if (cancellation.IsCancellationRequested() || StopRequested())
                 return Result<void>::Failure(MakeError(PackageLifecycleErrors::Cancelled));
             auto candidates = Detail::PreparePackageCandidates(installed, enabled, trust, configuration);
             if (candidates.HasError())
                 return Result<void>::Failure(candidates.ErrorValue());
-            if (cancellation.IsCancellationRequested() || shutdownRequested)
+            if (cancellation.IsCancellationRequested() || StopRequested())
                 return Result<void>::Failure(MakeError(PackageLifecycleErrors::Cancelled));
             if (install.InstalledRecord() != installed)
                 return Result<void>::Failure(MakeError(PackageLifecycleErrors::StaleInstall));
@@ -48,22 +67,41 @@ namespace Horo::Packages {
             staged = std::make_unique<Detail::PackageActivationComposition>(configuration, installed, nextGeneration);
             if (auto prepared = staged->Prepare(candidates.Value(), configuration, cancellation); prepared.HasError())
                 return Result<void>::Failure(prepared.ErrorValue());
-            if (cancellation.IsCancellationRequested() || shutdownRequested)
+            if (cancellation.IsCancellationRequested() || StopRequested())
                 return Result<void>::Failure(MakeError(PackageLifecycleErrors::Cancelled));
             if (install.InstalledRecord() != installed)
                 return Result<void>::Failure(MakeError(PackageLifecycleErrors::StaleInstall));
-            const auto snapshot = staged->Snapshot();
-            if (!std::ranges::all_of(snapshot->activations, [nextGeneration](const auto &lease) {
+            if (const auto snapshot = staged->Snapshot(); !std::ranges::all_of(snapshot->activations, [nextGeneration](const auto &lease) {
                 return lease.IsUsable() && lease.Activation().Generation() == nextGeneration;
             }))
                 return Result<void>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
             return Result<void>::Success();
         }
 
+        /** @brief Restores preparation state and services deferred reentrant shutdown only after staged rollback completes. */
+        struct PreparationGuard final {
+            PackageLifecycleService &service;
+            Impl &state;
+
+            PreparationGuard(PackageLifecycleService &lifecycle, Impl &lifecycleState) noexcept
+                : service(lifecycle), state(lifecycleState) {}
+
+            PreparationGuard(const PreparationGuard &) = delete;
+            PreparationGuard &operator=(const PreparationGuard &) = delete;
+            PreparationGuard(PreparationGuard &&) = delete;
+            PreparationGuard &operator=(PreparationGuard &&) = delete;
+
+            ~PreparationGuard() {
+                state.preparing = false;
+                if (state.shutdownRequested)
+                    service.Shutdown();
+            }
+        };
+
         PackageInstallService &install;
         const IPackageExtensionTrust &trust;
         PackageLifecycleConfiguration configuration;
-        std::thread::id owner;
+        std::thread::id owner{std::this_thread::get_id()};
         PackageLifecycleState journal;
         std::uint64_t generation{};
         bool preparing{};
@@ -78,13 +116,9 @@ namespace Horo::Packages {
     Result<std::unique_ptr<PackageLifecycleService>> PackageLifecycleService::Create(PackageInstallService &install,
                                                                                      const IPackageExtensionTrust &trust,
                                                                                      PackageLifecycleConfiguration configuration) {
-        std::error_code error;
-        const auto canonical = std::filesystem::canonical(configuration.temporaryRoot, error);
-        if (error || !configuration.temporaryRoot.is_absolute() || canonical != configuration.temporaryRoot.lexically_normal() ||
-            !std::filesystem::is_directory(canonical, error) || error || !configuration.artifactGate ||
-            configuration.maximumExtensions == 0U || configuration.maximumExtensions > 64U ||
-            configuration.maximumRetiredCompositions == 0U || configuration.maximumRetiredCompositions > 64U ||
-            configuration.capabilities.size() > 256U)
+        if (!IsPrivateTemporaryRoot(configuration.temporaryRoot) || !configuration.artifactGate || configuration.maximumExtensions == 0U ||
+            configuration.maximumExtensions > 64U || configuration.maximumRetiredCompositions == 0U ||
+            configuration.maximumRetiredCompositions > 64U || configuration.capabilities.size() > 256U)
             return Result<std::unique_ptr<PackageLifecycleService>>::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
         if (configuration.profile != Extensions::ExtensionHostProfile::Headless &&
             configuration.profile != Extensions::ExtensionHostProfile::Interactive)
@@ -96,8 +130,10 @@ namespace Horo::Packages {
         for (const auto &capability : configuration.capabilities)
             if (capability.empty() || capability.size() > 256U)
                 return Result<std::unique_ptr<PackageLifecycleService>>::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+        // The validated factory retains the private constructor; make_unique cannot invoke it.
         return Result<std::unique_ptr<PackageLifecycleService>>::Success(std::unique_ptr<PackageLifecycleService>{
-            new PackageLifecycleService{std::make_unique<Impl>(install, trust, std::move(configuration))}});
+            new PackageLifecycleService{// NOSONAR(cpp:S5950) Private validated constructor.
+                                        std::make_unique<Impl>(install, trust, std::move(configuration))}});
     }
 
     /** @copydoc PackageLifecycleService::PackageLifecycleService */
@@ -126,22 +162,12 @@ namespace Horo::Packages {
         impl_->journal = {PackageActivationOutcome::Preparing, generation, install->Revision(), {}, !impl_->retired.empty()};
         impl_->preparing = true;
 
-        struct PreparationGuard final {
-            PackageLifecycleService &service;
-            Impl &state;
-
-            ~PreparationGuard() {
-                state.preparing = false;
-                if (state.shutdownRequested)
-                    service.Shutdown();
-            }
-        } guard{*this, *impl_};
+        Impl::PreparationGuard guard{*this, *impl_};
 
         std::unique_ptr<Detail::PackageActivationComposition> staged;
         try {
-            auto prepared = impl_->PrepareStaged(install, enabled, generation, cancellation, staged);
-            if (prepared.HasError())
-                return staged ? impl_->Reject(std::move(staged), prepared.ErrorValue()) : impl_->Fail(prepared.ErrorValue());
+            if (auto prepared = impl_->PrepareStaged(install, enabled, generation, cancellation, staged); prepared.HasError())
+                return impl_->Reject(std::move(staged), prepared.ErrorValue());
             const auto snapshot = staged->Snapshot();
             // All fallible work is complete. Publish the exact graph and registrations together before retiring prior owners.
             auto previous = std::move(impl_->current);
@@ -153,12 +179,12 @@ namespace Horo::Packages {
                 impl_->retired.push_back(std::move(previous));
             }
             return Result<void>::Success();
-        } catch (const std::exception &exception) {
+        } catch (const std::exception &exception) {  // NOSONAR(cpp:S1181) Trusted host callbacks form an exception containment boundary.
             auto error = MakeError(PackageLifecycleErrors::InvalidCandidate, exception.what());
-            return staged ? impl_->Reject(std::move(staged), std::move(error)) : impl_->Fail(std::move(error));
-        } catch (...) {
+            return impl_->Reject(std::move(staged), std::move(error));
+        } catch (...) {  // NOSONAR(cpp:S2738) Trusted host callbacks may throw arbitrary types; staged rollback must still run.
             auto error = MakeError(PackageLifecycleErrors::InvalidCandidate);
-            return staged ? impl_->Reject(std::move(staged), std::move(error)) : impl_->Fail(std::move(error));
+            return impl_->Reject(std::move(staged), std::move(error));
         }
     }
 
@@ -200,7 +226,7 @@ namespace Horo::Packages {
         try {
             FinalizeRetirements();
             impl_->journal.restartRequired = !impl_->retired.empty() || static_cast<bool>(impl_->current);
-        } catch (...) {
+        } catch (...) {  // NOSONAR(cpp:S2738) Trusted host callbacks may throw arbitrary types; staged rollback must still run.
             impl_->journal.restartRequired = true;
         }
     }

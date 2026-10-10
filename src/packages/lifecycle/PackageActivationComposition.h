@@ -31,8 +31,8 @@ namespace Horo::Packages::Detail {
         [[nodiscard]] Result<void> Materialize(const PackageActivationCandidate &candidate, const std::filesystem::path &root,
                                                const CancellationToken &cancellation) const;
         std::filesystem::path root_;
-        std::shared_ptr<PackageActivationSnapshot> snapshot_;
-        std::unique_ptr<Assets::AssetImporterCatalog> catalog_;
+        std::shared_ptr<PackageActivationSnapshot> snapshot_{std::make_shared<PackageActivationSnapshot>()};
+        std::unique_ptr<Assets::AssetImporterCatalog> catalog_{std::make_unique<Assets::AssetImporterCatalog>()};
         std::unique_ptr<Extensions::ExtensionManager> manager_;
         std::vector<Extensions::ExtensionCapabilityAdmission> admissions_;
         std::vector<std::shared_ptr<Extensions::ExtensionRetirement>> retirements_;

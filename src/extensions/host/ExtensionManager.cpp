@@ -29,7 +29,6 @@ namespace Horo::Extensions {
         struct FailedActivationGuard final {
             std::vector<std::shared_ptr<ExtensionRetirement>> &owners;
             std::shared_ptr<ExtensionRetirement> retirement;
-            bool committed{};
 
             /** @brief Reserves failed activation ownership before native callbacks can retain code. */
             FailedActivationGuard(std::vector<std::shared_ptr<ExtensionRetirement>> &failedOwners,
@@ -39,10 +38,19 @@ namespace Horo::Extensions {
                 owners.push_back(retirement);
             }
 
+            FailedActivationGuard(const FailedActivationGuard &) = delete;
+            FailedActivationGuard &operator=(const FailedActivationGuard &) = delete;
+            FailedActivationGuard(FailedActivationGuard &&) = delete;
+            FailedActivationGuard &operator=(FailedActivationGuard &&) = delete;
+
+            /** @brief Releases failure retention after the loaded record owns every published native lifetime. */
+            void Commit() {
+                std::erase(owners, retirement);
+                retirement.reset();
+            }
+
             ~FailedActivationGuard() {
-                if (committed)
-                    std::erase(owners, retirement);
-                else
+                if (retirement)
                     retirement->CloseAdmission();
             }
         };
@@ -620,7 +628,7 @@ namespace Horo::Extensions {
         record.mapped()->platformProvider = std::move(platformPublication).Value();
         m_loadedExtensions.insert(std::move(record));
         m_activationOrder.push_back(std::move(activationId));
-        failureGuard.committed = true;
+        failureGuard.Commit();
         LOG_INFO("extensions", "Successfully loaded extension: %s", extensionId.c_str());
         return Result<std::string>::Success(std::move(extensionId));
     }

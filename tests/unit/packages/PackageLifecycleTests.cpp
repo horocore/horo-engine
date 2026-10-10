@@ -184,10 +184,13 @@ namespace {
         }
         SECTION("off owner lane") {
             fixture.Install();
-            std::thread worker{[&fixture] {
-                CHECK(fixture.Activate().HasError());
+            bool rejected{};
+            std::thread worker{[&fixture, &rejected] {
+                rejected = fixture.service->Activate(fixture.enabled, PackageActivationBoundary::Quiescent, fixture.cancellation.Token())
+                               .HasError();
             }};
             worker.join();
+            CHECK(rejected);
         }
         SECTION("cancelled before load") {
             fixture.Install();

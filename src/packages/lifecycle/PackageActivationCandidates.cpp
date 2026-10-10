@@ -3,6 +3,7 @@
 #include "PackageActivationComposition.h"
 
 #include <algorithm>
+#include <bit>
 #include <map>
 #include <set>
 
@@ -62,14 +63,15 @@ namespace Horo::Packages::Detail {
         Result<DeclaredDescriptor> ReadDeclaredDescriptor(const PackageRestorePackage &package, const PackagePath &descriptorPath) {
             const auto &name = descriptorPath.Value();
             const auto slash = name.rfind('/');
-            if (slash == std::string::npos || name.substr(slash + 1U) != "extension.json")
+            if (slash == std::string::npos || !name.ends_with("/extension.json"))
                 return Result<DeclaredDescriptor>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
             std::string root = name.substr(0U, slash);
             const auto entries = package.archive->Manifest().Entries();
-            const auto descriptor = std::ranges::find(entries, name, [](const PackageFileEntry &entry) {
+            if (const auto descriptor = std::ranges::find(entries, name,
+                                                          [](const PackageFileEntry &entry) {
                 return entry.id.path.Value();
             });
-            if (descriptor == entries.end() || !descriptor->contributionRoot || descriptor->contributionRoot->Value() != root ||
+                descriptor == entries.end() || !descriptor->contributionRoot || descriptor->contributionRoot->Value() != root ||
                 !root.starts_with("extensions/") || root.substr(11U).find('/') != std::string::npos ||
                 std::ranges::find(package.lock.contributions, root.substr(11U)) == package.lock.contributions.end())
                 return Result<DeclaredDescriptor>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
@@ -77,7 +79,10 @@ namespace Horo::Packages::Detail {
             if (bytes.HasError())
                 return Result<DeclaredDescriptor>::Failure(bytes.ErrorValue());
             const auto &content = bytes.Value();
-            const std::string text(reinterpret_cast<const char *>(content.data()), content.size());
+            std::string text(content.size(), '\0');
+            std::ranges::transform(content, text.begin(), [](const std::byte value) {
+                return std::bit_cast<char>(value);
+            });
             auto manifest = Extensions::ParseExtensionManifest(text);
             if (manifest.HasError())
                 return Result<DeclaredDescriptor>::Failure(manifest.ErrorValue());
@@ -95,8 +100,9 @@ namespace Horo::Packages::Detail {
             auto descriptor = ReadDeclaredDescriptor(package, enabled.descriptor);
             if (descriptor.HasError())
                 return Result<PackageActivationCandidate>::Failure(descriptor.ErrorValue());
-            const auto &root = descriptor.Value().root;
-            auto &manifest = descriptor.Value().manifest;
+            auto declared = std::move(descriptor).Value();
+            const auto &root = declared.root;
+            auto &manifest = declared.manifest;
             const auto entries = package.archive->Manifest().Entries();
             // This composition exposes only the registered importer catalog. Other extension points need their own explicit host owners.
             if (!std::ranges::all_of(manifest.contributions, [](const auto &contribution) {
@@ -150,9 +156,34 @@ namespace Horo::Packages::Detail {
                 auto candidate = Candidate(install, static_cast<std::size_t>(package - packages.begin()), selection, host, trust);
                 if (candidate.HasError())
                     return Result<PendingCandidates>::Failure(candidate.ErrorValue());
-                pending.emplace(selection.package.Value(), std::move(candidate).Value());
+                pending.try_emplace(selection.package.Value(), std::move(candidate).Value());
             }
             return Result<PendingCandidates>::Success(std::move(pending));
+        }
+
+        /** @brief Checks every immutable dependency before deciding whether its selected provider is still pending. */
+        Result<bool> DependenciesReady(std::span<const LockedPackageReference> dependencies,
+                                       std::span<const PackageRestorePackage> packages, const PendingCandidates &pending) {
+            bool ready = true;
+            for (const auto &dependency : dependencies) {
+                if (const auto provider = std::ranges::find(packages, dependency.package.Value(),
+                                                            [](const PackageRestorePackage &package) {
+                    return package.lock.package.Value();
+                });
+                    provider == packages.end() || provider->lock.version != dependency.version)
+                    return Result<bool>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
+                if (pending.contains(dependency.package.Value()))
+                    ready = false;
+            }
+            return Result<bool>::Success(ready);
+        }
+
+        /** @brief Retains selected provider identities in the same order as the installed dependency list. */
+        void BindSelectedProviders(PackageActivationCandidate &candidate, std::span<const LockedPackageReference> dependencies,
+                                   const std::set<std::string, std::less<>> &selected) {
+            for (const auto &dependency : dependencies)
+                if (selected.contains(dependency.package.Value()))
+                    candidate.providers.push_back(dependency.package.Value());
         }
 
         /** @brief Orders selected providers first and rejects missing, incompatible or cyclic installed dependencies. */
@@ -172,25 +203,14 @@ namespace Horo::Packages::Detail {
                 bool advanced = false;
                 for (auto item = pending.begin(); item != pending.end();) {
                     const auto &dependencies = packages[item->second.packageIndex].lock.dependencies;
-                    bool ready = true;
-                    for (const auto &dependency : dependencies) {
-                        const auto provider =
-                            std::ranges::find(packages, dependency.package.Value(), [](const PackageRestorePackage &package) {
-                            return package.lock.package.Value();
-                        });
-                        if (provider == packages.end() || provider->lock.version != dependency.version)
-                            return Result<std::vector<PackageActivationCandidate>>::Failure(
-                                MakeError(PackageLifecycleErrors::InvalidCandidate));
-                        if (pending.contains(dependency.package.Value()))
-                            ready = false;
-                    }
-                    if (!ready) {
+                    auto readiness = DependenciesReady(dependencies, packages, pending);
+                    if (readiness.HasError())
+                        return Result<std::vector<PackageActivationCandidate>>::Failure(readiness.ErrorValue());
+                    if (!readiness.Value()) {
                         ++item;
                         continue;
                     }
-                    for (const auto &dependency : dependencies)
-                        if (selected.contains(dependency.package.Value()))
-                            item->second.providers.push_back(dependency.package.Value());
+                    BindSelectedProviders(item->second, dependencies, selected);
                     ordered.push_back(std::move(item->second));
                     item = pending.erase(item);
                     advanced = true;
