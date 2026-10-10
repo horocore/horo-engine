@@ -484,6 +484,44 @@ context afterward. Context does not leak between jobs reusing a worker thread.
 
 ## Resource Scheduling
 
+JOB-001.5 implements `JobResource::Cpu` and `JobResource::Io` in the process-owned
+`JobSystem`. The descriptor selects exactly one execution lane before admission.
+CPU work defaults to the existing worker lane; blocking filesystem/network work
+opts into the I/O lane. `ioWorkerCount == 0` rejects I/O work with
+`job.wait_capacity_deadlock` without publishing a record. Each lane has owned
+joinable workers and its own Interactive/Normal/Background FIFO queues and
+4:2:1 dispatch cycle. Blocking I/O cannot consume a CPU execution slot.
+
+Queue capacities, producer FIFO admission and terminal retention remain shared
+across lanes, rather than multiplying the configured memory bounds. Hosts may
+reserve `reservedInteractiveJobs` of the global queue capacity for Interactive
+work. Normal and Background admissions may use only the remaining capacity;
+the reservation saturates at the global maximum. The default reservation is zero
+for source-compatible existing hosts. The graphical host reserves eight slots
+and composes one I/O worker; recent-project filesystem inspection uses that lane
+at Background priority.
+
+Execution permits include explicit owner-thread CPU helping. A helper cannot
+exceed configured CPU concurrency (one permit in zero-worker deterministic
+compositions), and cannot borrow I/O capacity or help across resource lanes.
+Nested exact-record helping on the same scheduler/lane reuses the current
+thread's permit, preserving single-worker structured joins. Synchronous waits
+from a callback into another lane reject with `job.wait_capacity_deadlock`,
+including the legacy unbounded wait, before observing completion timing. This
+prevents a saturated CPU/I/O mutual wait cycle. Callback-owned task groups also
+reject cross-lane children before admission. Cross-lane pipelines submit the next
+stage without synchronously joining it from a scheduler callback; an external
+operation owner may join all lanes. A wait-policy rejection leaves a task group
+unfinalized; destruction still cancels and drains accepted children.
+After shutdown starts, only already-running same-lane callbacks may help their
+accepted children; external helpers cannot claim new callbacks.
+
+Interactive work has reserved admission capacity and a bounded dispatch position
+under sustained background submissions. Scheduling is cooperative: an already
+running callback is never preempted, so a wall-clock latency bound requires
+callbacks to finish or observe cancellation at bounded intervals. Interactive
+I/O still waits for running I/O work; it cannot evade the declared resource limit.
+
 CPU worker count alone is insufficient for expensive pipelines. Jobs may also
 acquire bounded resources:
 
@@ -533,6 +571,27 @@ Shutdown order is:
 
 No callback executes against a destroyed service. Forced abandonment is allowed
 only for process termination paths and is recorded.
+
+`StopAccepting()` provides the first linearized boundary without joining. It
+wakes bounded admission producers with `job.shutdown` while accepted jobs remain
+available for owner continuation drain. `Shutdown(Drain)` then finishes accepted
+work; `Shutdown(Cancel)` revokes queued callbacks and requests cancellation of
+running callbacks. Both join CPU/I/O workers and wait for all inline callbacks,
+including callback-capture destruction, before returning. Terminal handles remain
+queryable. Zero-worker CPU test compositions drain inline on the shutdown owner.
+Shutdown is idempotent and must be called outside scheduler callbacks.
+Partial worker construction uses the same cancellation/join rollback before
+propagating its failure.
+
+The graphical runtime participant closes admission before modal/screen teardown,
+lets those owners cancel/join their scopes and release routes, then joins the
+scheduler while Scene, project, platform, configuration, update and observability
+services remain alive. A scope finalizer covers failed startup and unwinding
+before the runtime participant owns shutdown. Renderer restarts use a fresh
+scheduler session after the previous session has drained. Current CLI/MCP hosts
+do not compose a Foundation scheduler: their transport/session/controller drain
+precedes application-registry and module destruction. They must not introduce a
+second worker pool or a scheduler without the same explicit rejection/join order.
 
 ## Testing
 

@@ -240,6 +240,38 @@ namespace Horo::Render {
                 return executed;
             }
 
+            /** @copydoc IRenderBackend::ParallelRecordingCapabilities */
+            RenderParallelRecordingCapabilities ParallelRecordingCapabilities() const noexcept override {
+                return initialized_ ? runtime_->ParallelRecordingCapabilities() : RenderParallelRecordingCapabilities{};
+            }
+
+            /** @copydoc IRenderBackend::PrepareParallelGraph */
+            Result<std::shared_ptr<IRenderParallelGraphRecording>> PrepareParallelGraph(
+                const RenderGraphExecutionRequest &request) override {
+                using RecordingResult = Result<std::shared_ptr<IRenderParallelGraphRecording>>;
+                if (const auto state = ValidateActiveFrame(request.frame); state.HasError()) {
+                    return RecordingResult::Failure(state.ErrorValue());
+                }
+                if (const auto valid = Detail::ValidateMetalRenderGraph(*runtime_, request); valid.HasError()) {
+                    return RecordingResult::Failure(valid.ErrorValue());
+                }
+                if (!request.resources.empty() && request.lease == nullptr) {
+                    return RecordingResult::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
+                }
+                return runtime_->PrepareParallelGraph(request);
+            }
+
+            /** @copydoc IRenderBackend::AcceptParallelGraph */
+            Result<void> AcceptParallelGraph(const std::shared_ptr<IRenderParallelGraphRecording> &recording) override {
+                if (!recording) {
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
+                }
+                if (const auto state = ValidateActiveFrame(recording->Frame()); state.HasError()) {
+                    return state;
+                }
+                return runtime_->AcceptParallelGraph(recording);
+            }
+
             /** @copydoc IRenderBackend::Present */
             Result<void> Present(const FrameToken frame) override {
                 if (const Result<void> state = ValidateActiveFrame(frame); state.HasError()) {
