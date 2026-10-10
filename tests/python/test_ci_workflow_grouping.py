@@ -30,6 +30,7 @@ def targets(name: str) -> set[str]:
 def test_windows_group_preserves_every_previously_built_target() -> None:
     assert targets("HORO_CI_WINDOWS_TARGETS") == targets("HORO_CI_AUDIO_TARGETS") | {
         "HoroD3D12InitializationTests",
+        "HoroMaterialBindingTests", "HoroMaterialBindingPublicHeaderConsumer",
         "HoroNetworkDebuggerTests", "HoroNetworkDebuggerPublicHeaderConsumer",
         "HoroPlayTopologyTests", "HoroPlayTopologyPublicHeaderConsumer",
         "HoroTerrainAuthoringTests", "HoroTerrainAuthoringPublicHeaderConsumer",
@@ -232,3 +233,14 @@ def test_windows_restore_allocation_sweep_has_mandatory_release_coverage() -> No
     assert "continue-on-error" not in test.group(1)
     assert "--output-junit build/ci-audio-release/restore-ctest.xml" in test.group(1)
     assert "            build/ci-audio-release/restore-ctest.xml" in WORKFLOW
+
+
+def test_windows_material_binding_has_tests_and_owned_consumer() -> None:
+    cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    for target in ("HoroMaterialBindingTests", "HoroMaterialBindingPublicHeaderConsumer"):
+        assert target in targets("HORO_CI_WINDOWS_TARGETS")
+        assert f"add_executable({target}" in cmake
+    registry = (ROOT / "cmake/HoroPublicHeaderOwnership.cmake").read_text(encoding="utf-8")
+    for header in ("MaterialBinding.h", "MaterialBindingBackend.h", "MaterialBindingErrors.h"):
+        assert registry.count(f"Horo/Runtime/Render/{header}") == 1
+    assert "        HoroMaterialBindingTests\n" in cmake

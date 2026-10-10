@@ -2655,6 +2655,18 @@ add_executable(HoroShaderReflectionTests
 target_compile_features(HoroShaderReflectionTests PRIVATE cxx_std_20)
 target_include_directories(HoroShaderReflectionTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroShaderReflectionTests PRIVATE HoroEngine::RenderApi)
+add_executable(HoroMaterialBindingTests
+        unit/runtime/renderer/MaterialBindingTests.cpp
+)
+target_compile_features(HoroMaterialBindingTests PRIVATE cxx_std_20)
+target_include_directories(HoroMaterialBindingTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+target_link_libraries(HoroMaterialBindingTests PRIVATE HoroEngine::RenderApi Threads::Threads)
+add_executable(HoroMaterialBindingPublicHeaderConsumer support/MaterialBindingPublicHeaderConsumer.cpp)
+target_compile_features(HoroMaterialBindingPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroMaterialBindingPublicHeaderConsumer PRIVATE HoroEngine::RenderApi)
+add_test(NAME HoroMaterialBindingPublicHeaderConsumer COMMAND HoroMaterialBindingPublicHeaderConsumer)
+set_tests_properties(HoroMaterialBindingPublicHeaderConsumer PROPERTIES LABELS "unit;renderer;headless;ci-windows")
+
 add_executable(HoroStandardPbrMaterialTests
         unit/runtime/renderer/StandardPbrMaterialTests.cpp
 )
@@ -4063,6 +4075,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroShaderManifestTests
         HoroShaderPermutationTests
         HoroShaderReflectionTests
+        HoroMaterialBindingTests
         HoroStandardPbrMaterialTests
         HoroStandardPbrPassPlanTests
         HoroShaderCompilerPipelineTests
