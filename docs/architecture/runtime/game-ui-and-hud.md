@@ -215,6 +215,18 @@ Unrelated scopes survive. Shutdown retires all scopes before Renderer, Assets,
 Input, Localization or Platform dependencies disappear and is idempotent after
 partial activation.
 
+### Persistent UI scene reconciliation
+
+`UiSceneReconciliation` owns actual `UiHotReload` publishers by immutable semantic
+scope and exact Scene provider lineage. Complete private same-document runtime
+candidates rebind Scene providers without inventing an authored revision; aggregate
+publication preserves game/player ownership, retires only the outgoing exact Scene
+owners, and admits prepared incoming Scene UI at ADR-073 cutoffs. Required source
+loss is explicit, non-scene providers remain unchanged, and old leases drain through
+the existing publisher barriers. See the [scene reconciliation migration guide](../../guides/runtime-ui-scene-reconciliation-migration.md)
+for host Scene publication ordering, unavailable-source policy and inert identity
+target migration. Viewport attachment and audience reconciliation remain independent.
+
 ## Presentation Scope, Bands And Routes
 
 [ADR-080](../../adr/080-runtime-ui-presentation-scope-layer-and-route.md) keeps
@@ -1277,6 +1289,15 @@ Required tests cover:
   separate from game menus.
 
 ## Typed asset generation reload
+
+`UiScreenTransition` owns asynchronous whole-screen preparation over the existing
+Assets-backed loader and complete `UiReloadGeneration` composition. It retains
+the current last-good publisher through cancellation, timeout and failure, then
+swaps complete publishers at an ADR-073 structural safe point. Frame polling
+reads stage/deadline facts without pumping assets; composition and deferred
+reclamation are explicit load-time operations. Old whole-generation leases remain
+pinned, while fresh presentation evidence gates the replacement screen's input.
+See [the asynchronous screen transition contract](../../guides/runtime-ui-screen-transition-migration.md).
 
 `UiHotReload` is owned by `HoroEngine::RuntimeUi`. It prepares complete real
 Assets closures and actual canvas owners privately, reconciles compatible stable

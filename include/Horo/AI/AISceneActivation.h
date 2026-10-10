@@ -7,6 +7,7 @@
 
 #include "Horo/AI/AISceneComponents.h"
 #include "Horo/AI/AITaskLifecycle.h"
+#include "Horo/AI/AITaskScheduler.h"
 #include "Horo/AI/BlackboardInstance.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
@@ -243,6 +244,23 @@ namespace Horo::AI {
          * @post Success cancels old tasks and observers before releasing their storage; asynchronous work restarts separately.
          */
         [[nodiscard]] Result<void> CommitRestoreAtSafePoint(std::unique_ptr<AiSceneRestoreCandidate> candidate);
+
+        /** @brief Composes the active scene's scheduler once, at the owner safe point.
+         * @param jobs Process JobSystem, retained until every worker image pin drains.
+         * @param settings Finite scene-wide scheduling limits. @return Success or typed unavailable/admission failure.
+         * @details Scene replacement/restore closes this scheduler. Recompose and rebind executors after publication. */
+        [[nodiscard]] Result<void> ConfigureTaskSchedulerAtSafePoint(JobSystem &jobs, const AiTaskSchedulerSettings &settings = {}) const;
+        /** @brief Binds a decision only to an exact currently active scene agent.
+         * @param agent Exact live handle. @param policy Finite frequency/work policy.
+         * @param image Callback lifetime pin. @param executor Owned bounded owner evaluator/intent committer.
+         * @return Success or typed stale/disabled/unconfigured/admission failure. */
+        [[nodiscard]] Result<void> RegisterDecisionAtSafePoint(AgentHandle agent, const AiAgentSchedulePolicy &policy,
+                                                               std::shared_ptr<const void> image,
+                                                               std::shared_ptr<IAiScheduledDecision> executor) const;
+        /** @brief Borrows scheduling at its declared owner phases.
+         * @return Active scheduler or typed unavailable failure.
+         * @details Borrow expires on scene replacement, restore, shutdown or destruction. Workers must never retain it. */
+        [[nodiscard]] Result<AiTaskScheduler *> TaskSchedulerAtSafePoint() const;
 
         /**
          * @brief Starts one owned task at the AI decision safe point.

@@ -73,6 +73,10 @@ codec. String scalars and field names first establish valid empty string storage
 then assign content: the pinned compatible-type constructor sets the string tag
 before allocation and cannot safely unwind an allocation failure. Typed storage
 construction preserves codec escaping while avoiding that incomplete state.
+Recursive wire copies complete each alternative outside the destination variant
+before moving it into place. This avoids the GCC 13 recursive-variant copy
+unwinding path observed when a nested container allocation fails; copy assignment
+first completes a replacement, preserving the previous destination on failure.
 Prefab insertion ordering and Scene sorted-map ordering, indentation and
 final newlines are preserved. Prefab serialization and resolver admission return
 typed allocation failures. Scene owner admission translates encoding allocation

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "MetalLightCullingKernel.h"
 #include "MetalRenderBackendErrors.h"
 #include "MetalResourceInstances.h"
 #include "MetalResourcePolicy.h"
@@ -105,6 +106,9 @@ namespace Horo::Render::Detail {
         };
 
         __strong id<MTLDevice> device{nil};
+        std::shared_ptr<const MetalLightKernelOwnerIdentity> lightKernelOwner{std::make_shared<const MetalLightKernelOwnerIdentity>()};
+        std::uint64_t lightKernelIncarnation{0}; /**< Monotonic runtime admission generation; old cooked leases cannot cross reset. */
+        bool lightKernelIdentityExhausted{false};
         __strong id<MTLCommandQueue> commandQueue{nil};
         __strong id<MTLCommandBuffer> lastSubmittedUpload{nil}; /**< Final staging submission drained during teardown. */
         __strong NSMutableArray<id<MTLCommandBuffer>> *submittedUploads{

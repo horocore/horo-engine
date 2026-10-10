@@ -27,6 +27,45 @@ namespace Horo::JsonEncoding::Detail {
 
         CanonicalJsonValue() noexcept = default;
 
+        /** @brief Copies each complete alternative before publishing it into the recursive variant. */
+        CanonicalJsonValue(const CanonicalJsonValue &other) {
+            // GCC 13's recursive variant copy cleanup can visit a valueless destination after allocation failure.
+            // Copy outside the destination variant; publishing the completed string/vector only moves owned storage.
+            std::visit([this]<typename Item>(const Item &item) {
+                Item copied{item};
+                value_.template emplace<Item>(std::move(copied));
+            }, other.value_);
+        }
+
+        /** @brief Transfers complete owned storage without allocation and leaves the source null. */
+        CanonicalJsonValue(CanonicalJsonValue &&other) noexcept : value_(std::move(other.value_)) {
+            other.value_ = nullptr;
+        }
+
+        /** @brief Retires owned storage to the inert null alternative without allocation. */
+        ~CanonicalJsonValue() {
+            // Destroy the complete alternative through RAII; the remaining null member owns no resources.
+            value_ = nullptr;
+        }
+
+        /** @brief Preserves the destination if copying any nested child fails. */
+        CanonicalJsonValue &operator=(const CanonicalJsonValue &other) {
+            if (this != &other) {
+                CanonicalJsonValue copied{other};
+                *this = std::move(copied);
+            }
+            return *this;
+        }
+
+        /** @brief Replaces owned storage without allocation, leaves the source null and preserves self-moves. */
+        CanonicalJsonValue &operator=(CanonicalJsonValue &&other) noexcept {
+            if (this != &other) {
+                value_ = std::move(other.value_);
+                other.value_ = nullptr;
+            }
+            return *this;
+        }
+
         // Schema initializer lists intentionally convert scalar fields into owned wire values.
         explicit(false) CanonicalJsonValue(std::nullptr_t) noexcept {}
 
@@ -120,6 +159,9 @@ namespace Horo::JsonEncoding::Detail {
 
     private:
         using Value = std::variant<std::nullptr_t, bool, std::int64_t, std::uint64_t, double, std::string, array_t, object_t>;
+        static_assert(std::is_nothrow_move_constructible_v<Value>);
+        static_assert(std::is_nothrow_move_assignable_v<Value>);
+        static_assert(noexcept(std::declval<Value &>() = nullptr));
 
         /** @brief Writes indentation directly into output; partial output owns no unsafe cleanup. */
         static void Indent(std::string &bytes, const unsigned indentation, const unsigned depth) {
@@ -159,7 +201,7 @@ namespace Horo::JsonEncoding::Detail {
         }
 
         /** @brief Establishes valid string storage before a fallible copy, preserving the pinned codec's escaping. */
-        static void WriteString(std::string &bytes, const std::string &value) {
+        static void WriteString(std::string &bytes, const std::string_view value) {
             // Compatible-type construction sets the string tag before allocating in the pinned codec.
             // The typed constructor completes storage first, so failure never destroys a null string pointer.
             nlohmann::ordered_json scalar(nlohmann::ordered_json::value_t::string);

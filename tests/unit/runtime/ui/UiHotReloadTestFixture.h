@@ -30,6 +30,7 @@ namespace Horo::Runtime::Ui::ReloadTests {
 
     /** @brief Real cooked route and independently scoped owner composition for cross-layer contract coverage. */
     struct LayerOptions final {
+        std::uint64_t runtimeRevision{}; /**< Optional runtime-only generation, independent of cooked document revision. */
         UiRouteMetadata route{Stable<UiRouteId>(9), UiPresentationBand::Screen, 1, false};
         RuntimeUiInstanceId instance{Instance()};
         UiCanvasInstanceId canvas{Owner(), 2, 1};

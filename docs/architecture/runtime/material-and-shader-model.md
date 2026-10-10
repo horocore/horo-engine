@@ -454,6 +454,57 @@ feature flags at runtime requires an explicit material swap. Editing per-instanc
 parameter overrides does not require a swap; the scene runtime updates the instance's
 entry under a new override hash while the parent material remains shared.
 
+### Generic Resident Binding Boundary
+
+`MaterialBindingLayout` normalizes active resources and exact target placements
+from `NormalizedShaderReflection`. `MaterialBindingDescriptor` owns packed bytes
+and names each active resource array element through typed, frontend-owned
+buffer, texture-view and sampler generations. A selected renderer adapter
+implements `IMaterialBindingBackend::Realize` at a non-frame-hot preparation
+boundary. It must verify exact pipeline/interface compatibility, resource
+residency, usages and byte ranges before native mutation; the returned
+`IResidentMaterialBinding` owns its native descriptor table and registry pins.
+The default adapter returns typed `MaterialBindingErrors::Unsupported`.
+This boundary does not advertise native shader/pipeline support; native
+realization remains each backend's responsibility, including RND-005.6 for Metal.
+
+The frontend owns one `MaterialBindingTable` per renderer incarnation. Published
+entries are immutable generations. Publication failure preserves existing
+entries; replacement publishes a new generation before the host releases the
+old table reference. `Acquire` retains exact descriptor storage and native pins.
+`Release` removes discovery only. Released generations still held by consumers
+remain charged against the same generation and parameter-byte budgets, so
+repeated replacement cannot bypass admission. Frame binding acquires prepared
+entries without native creation, parameter packing or heap allocation.
+
+Fallback is an explicit optional descriptor reference to an already resident
+entry with identical logical and target packing. Required inputs cannot carry a
+fallback. Only the adapter's exact typed Unsupported result may select the
+fallback; stale identities, invalid layouts, allocation, capacity and other
+backend errors remain failures. Selection reports both the fallback flag and
+original error. No shader source compilation or profile selection occurs here.
+
+All table operations and final consumer-lease destruction run serially on the
+creating render-capable thread. Cross-thread operations fail before backend
+work. Shutdown stops admission/discovery and releases table references while
+consumer leases remain valid. Host shutdown first stops producers, retires or
+abandons native submissions, and drains consumer leases before destroying the
+selected backend/registry. Adapters retain native command-use references until
+exact completion independently of preparation leases; destructors never wait
+for normal-frame GPU completion. The synchronous realization call is a safe
+point operation, not an asynchronous job; cancellation is observed by the host
+before admission, while shutdown is serialized after it returns.
+
+Migration: this is an additive renderer API owned by `HoroRenderApi`, not a
+second semantic material table. Existing `PrepareStandardPbrMaterial` and pass
+planning callers retain their packed material contracts. Composition roots may
+construct the generic table with their already selected `IRenderBackend`, which
+now also implements the material adapter boundary. Until a backend realizes
+that contract, publication fails explicitly. Backend adapters consume the owned
+layout/values and resolve the existing generation-safe handles; scene/gameplay
+code never sees native tables or chooses an adapter. The public-header consumer
+and headless fake-adapter tests cover this contract on all CI platforms.
+
 ### Render Extraction
 
 Mesh instances extract:

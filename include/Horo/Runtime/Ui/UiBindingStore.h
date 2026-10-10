@@ -314,6 +314,11 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<std::size_t> DrainDirty(std::span<UiBindingTargetDirty> output);
         /** @brief Returns current publication/content evidence without polling providers. @return Latest committed summary. */
         [[nodiscard]] UiBindingApplyResult Current() const noexcept;
+        /** @brief Checks an exact live provider registration without invoking gameplay code.
+         * @param instance Host-resolved provider incarnation. @param scope Required explicit registration scope.
+         * @return False for unknown, revoked, cross-owner providers or a retired/stopped store.
+         */
+        [[nodiscard]] bool HasProvider(UiBindingProviderInstanceId instance, UiBindingProviderScopeKind scope) const noexcept;
         /** @brief Validates the retained store's actual tree/source lineage without invoking a provider.
          * @param tree Exact active owning tree. @return Success or typed stale/lifecycle failure.
          */
@@ -325,6 +330,20 @@ namespace Horo::Runtime::Ui {
          */
         [[nodiscard]] bool ReloadCompatible(const UiBindingStore &source, const UiElementTree &sourceTree, const UiElementTree &tree,
                                             UiElementId element) const;
+
+        /** @brief Queries actual retained Scene provider registrations without invoking providers.
+         * @return True when a Scene-scoped registration exists, including explicit unavailable removal evidence.
+         */
+        [[nodiscard]] bool HasSceneProviders() const noexcept;
+        /** @brief Validates a complete privately prepared scene-provider replacement against actual old bindings.
+         * @param source Last-good store. @param sourceTree Its exact tree. @param tree Private replacement tree.
+         * @param removing True only for explicit scene unload; required sources may then become unavailable.
+         * @return Success or typed schema/source/target failure; non-scene sources and bound values must remain identical.
+         * @details All targets keep stable authored identity, direction, property, limits and fallback. Active Scene sources
+         * must use fresh exact provider incarnations; removal requires closed sources and no readable stale values.
+         */
+        [[nodiscard]] Result<void> ValidateSceneRebind(const UiBindingStore &source, const UiElementTree &sourceTree,
+                                                       const UiElementTree &tree, bool removing) const;
 
         /**
          * @brief Atomically admits a complete bounded write capability batch at load time, once per store.

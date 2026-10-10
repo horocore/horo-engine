@@ -17,6 +17,24 @@ namespace Horo::Render {
             bool claimed{false};
         };
 
+        /** @brief Creates a typed resource-admission failure without accessing backend state. */
+        template <typename T> [[nodiscard]] Result<T> UnsupportedResource(std::string message) {
+            return Result<T>::Failure(MakeMetalError(MetalBackendErrors::UnsupportedResourceOperation, std::move(message)));
+        }
+
+        /** @brief Runs a memory-cost query only for an initialized backend. */
+        template <typename Query>
+        [[nodiscard]] Result<RenderMemoryCostPlan> QueryMemoryCost(const bool initialized, const char *message, Query &&query) {
+            if (!initialized)
+                return Result<RenderMemoryCostPlan>::Failure(MakeMetalError(MetalBackendErrors::NotInitialized, message));
+            return std::forward<Query>(query)();
+        }
+
+        /** @brief Creates the original typed failure without accessing backend state. */
+        [[nodiscard]] Result<std::uint64_t> ResourceNotInitialized(std::string message) {
+            return Result<std::uint64_t>::Failure(MakeMetalError(MetalBackendErrors::NotInitialized, std::move(message)));
+        }
+
         class MetalRenderBackend final : public IRenderBackend {
         public:
             MetalRenderBackend(std::unique_ptr<Detail::IMetalRuntime> runtime,
@@ -79,9 +97,25 @@ namespace Horo::Render {
                 return capabilities_;
             }
 
+            /** @copydoc IRenderBackend::RealizeLightCullingKernel */
+            Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
+                const CookedLightCullingKernel &kernel) override {
+                if (!capabilities_.support.features.Supports(RenderCapability::LightCulling))
+                    return Result<std::shared_ptr<IResidentLightCullingKernel>>::Failure(MakeError(LightCullingErrors::Unsupported));
+                return runtime_->RealizeLightCullingKernel(kernel);
+            }
+
+            /** @copydoc IRenderBackend::UpdateLightFrame */
+            Result<void> UpdateLightFrame(const NativeLightFrameUpdate &update) override {
+                if (!capabilities_.support.features.Supports(RenderCapability::LightCulling))
+                    return Result<void>::Failure(MakeError(LightCullingErrors::Unsupported));
+                return runtime_->UpdateLightFrame(update);
+            }
+
             /** @copydoc IRenderBackend::QueryBufferMemoryCost */
             Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
-                return QueryMemoryCost("Metal buffer memory requirements require an initialized backend.", [this, &descriptor] {
+                return QueryMemoryCost(initialized_, "Metal buffer memory requirements require an initialized backend.",
+                                       [this, &descriptor] {
                     if (!capabilities_.support.Supports(descriptor))
                         return UnsupportedResource<RenderMemoryCostPlan>(
                             "Metal buffer memory-cost query failed: " +
@@ -92,7 +126,8 @@ namespace Horo::Render {
 
             /** @copydoc IRenderBackend::QueryTextureMemoryCost */
             Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override {
-                return QueryMemoryCost("Metal texture memory requirements require an initialized backend.", [this, &descriptor] {
+                return QueryMemoryCost(initialized_, "Metal texture memory requirements require an initialized backend.",
+                                       [this, &descriptor] {
                     if (!capabilities_.support.Supports(descriptor))
                         return UnsupportedResource<RenderMemoryCostPlan>(
                             "Metal texture memory-cost query failed: " +
@@ -197,6 +232,7 @@ namespace Horo::Render {
 
                 frameActive_ = true;
                 activeFrame_ = FrameToken{nextFrameToken_++};
+                activeHostFrame_ = descriptor.frameNumber;
                 return Result<FrameToken>::Success(activeFrame_);
             }
 
@@ -287,6 +323,26 @@ namespace Horo::Render {
                 return Result<void>::Success();
             }
 
+            /** @copydoc IRenderBackend::PresentWithTiming */
+            Result<void> PresentWithTiming(const FrameToken frame, const PresentationTimingRequest &request) override {
+                if (const auto state = ValidateActiveFrame(frame); state.HasError())
+                    return state;
+                if (request.frameNumber != activeHostFrame_ || !request.surface.IsAttachedGeneration())
+                    return Result<void>::Failure(MakeError(FramePacingErrors::InvalidSurface));
+                if (const auto presented = runtime_->PresentWithTiming(request); presented.HasError())
+                    return presented;
+                frameActive_ = false;
+                activeFrame_ = {};
+                return Result<void>::Success();
+            }
+
+            /** @copydoc IRenderBackend::PollNativePresentTiming */
+            Result<std::optional<NativePresentTiming>> PollNativePresentTiming() override {
+                if (!initialized_)
+                    return Result<std::optional<NativePresentTiming>>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                return runtime_->PollNativePresentTiming();
+            }
+
             /** @copydoc IRenderBackend::AbortFrame */
             void AbortFrame(const FrameToken frame) noexcept override {
                 if (frameActive_ && frame == activeFrame_) {
@@ -329,20 +385,6 @@ namespace Horo::Render {
             }
 
         private:
-            template <typename T> [[nodiscard]] static Result<T> UnsupportedResource(std::string message) {
-                return Result<T>::Failure(MakeMetalError(MetalBackendErrors::UnsupportedResourceOperation, std::move(message)));
-            }
-
-            template <typename Query> [[nodiscard]] Result<RenderMemoryCostPlan> QueryMemoryCost(const char *message, Query &&query) const {
-                if (!initialized_)
-                    return Result<RenderMemoryCostPlan>::Failure(MakeMetalError(MetalBackendErrors::NotInitialized, message));
-                return std::forward<Query>(query)();
-            }
-
-            [[nodiscard]] static Result<std::uint64_t> ResourceNotInitialized(std::string message) {
-                return Result<std::uint64_t>::Failure(MakeMetalError(MetalBackendErrors::NotInitialized, std::move(message)));
-            }
-
             [[nodiscard]] Result<void> ValidateActiveFrame(const FrameToken frame) const {
                 if (!initialized_) {
                     return Result<void>::Failure(
@@ -406,6 +448,7 @@ namespace Horo::Render {
             std::shared_ptr<MetalPresentationLease> presentationLease_;
             RenderBackendCapabilities capabilities_{.backend = RenderBackendId{"metal"}};
             FrameToken activeFrame_{};
+            std::uint64_t activeHostFrame_{};
             std::uint64_t nextFrameToken_{1};
             bool initialized_{false};
             bool runtimeInitialized_{false};

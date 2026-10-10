@@ -54,6 +54,7 @@ namespace Horo::Render::Test {
                             .presentMode = PresentMode::Fifo,
                         })
                         .HasValue());
+            RequireErrorCode(backend->PollNativePresentTiming(), "render.frame_pacing.native_timing_unsupported", "render.frame-pacing");
             REQUIRE(backend->Capabilities().backend == expectations.id);
             REQUIRE(backend->Capabilities().presentsToWindow == expectations.presentsToWindow);
             REQUIRE(backend->Capabilities().support.IsValid());

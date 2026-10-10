@@ -4,6 +4,318 @@
   "locale": "tr-TR",
   "namespace": "editor",
   "messages": {
+    "render_graph.renderer": {
+      "text": "İşleyici"
+    },
+    "render_graph.frame": {
+      "text": "Kare"
+    },
+    "render_graph.revision": {
+      "text": "Yakalama revizyonu"
+    },
+    "render_graph.title": {
+      "text": "Render Grafiği"
+    },
+    "render_graph.passes": {
+      "text": "Geçişler"
+    },
+    "render_graph.resources": {
+      "text": "Kaynaklar"
+    },
+    "render_graph.lifetimes": {
+      "text": "Yaşam süreleri"
+    },
+    "render_graph.barriers": {
+      "text": "Bariyerler"
+    },
+    "render_graph.queues": {
+      "text": "Kuyruklar"
+    },
+    "render_graph.culling": {
+      "text": "Eleme"
+    },
+    "render_graph.timing": {
+      "text": "Zamanlama"
+    },
+    "render_graph.no_capture": {
+      "text": "Yakalanmış render grafiği yok. Grafik yakalama, render sahibi tarafından açıkça istenmelidir."
+    },
+    "render_graph.query_failed": {
+      "text": "Yakalanan grafik kullanılamıyor. Render sahibinden yeni bir yakalama isteyin."
+    },
+    "render_graph.planned": {
+      "text": "Yakalanmış mantıksal plan. Yerel yürütme ve zamanlama ölçülmedi."
+    },
+    "render_graph.unavailable": {
+      "text": "Kullanılamıyor"
+    },
+    "render_graph.none": {
+      "text": "Yok"
+    },
+    "render_graph.graphics": {
+      "text": "Grafik"
+    },
+    "render_graph.compute": {
+      "text": "Hesaplama"
+    },
+    "render_graph.copy": {
+      "text": "Kopyalama"
+    },
+    "render_graph.transfer": {
+      "text": "Aktarım"
+    },
+    "render_graph.keep": {
+      "text": "Koru"
+    },
+    "render_graph.allow_cull": {
+      "text": "Kullanılmayan çıktılar elenebilir"
+    },
+    "render_graph.buffer": {
+      "text": "Arabellek"
+    },
+    "render_graph.texture": {
+      "text": "Doku"
+    },
+    "render_graph.external": {
+      "text": "Harici"
+    },
+    "render_graph.persistent": {
+      "text": "Kalıcı"
+    },
+    "render_graph.transient": {
+      "text": "Geçici"
+    },
+    "render_graph.history": {
+      "text": "Geçmiş"
+    },
+    "render_graph.unused": {
+      "text": "Kullanılmıyor"
+    },
+    "render_graph.read": {
+      "text": "Okuma"
+    },
+    "render_graph.write": {
+      "text": "Yazma"
+    },
+    "render_graph.read_write": {
+      "text": "Okuma ve yazma"
+    },
+    "render_graph.retained": {
+      "text": "Korundu"
+    },
+    "render_graph.culled": {
+      "text": "Elendi"
+    },
+    "render_graph.reason.policy": {
+      "text": "Muhafazakâr politika"
+    },
+    "render_graph.reason.export": {
+      "text": "Gözlemlenebilir çıktı"
+    },
+    "render_graph.reason.import": {
+      "text": "İçe aktarılan kaynak değişikliği"
+    },
+    "render_graph.reason.external": {
+      "text": "Harici eşzamanlama"
+    },
+    "render_graph.reason.dependency": {
+      "text": "Gerekli bağımlılık"
+    },
+    "render_graph.reason.producer": {
+      "text": "Gerekli üretici"
+    },
+    "render_graph.reason.unused": {
+      "text": "Kullanılmayan geçici çıktılar"
+    },
+    "render_graph.reason.culled": {
+      "text": "Yalnızca elenen geçişler için gerekli"
+    },
+    "render_graph.id": {
+      "text": "Kimlik"
+    },
+    "render_graph.kind": {
+      "text": "Tür"
+    },
+    "render_graph.queue_role": {
+      "text": "Kuyruk rolü"
+    },
+    "render_graph.policy": {
+      "text": "Politika"
+    },
+    "render_graph.class": {
+      "text": "Yaşam süresi sınıfı"
+    },
+    "render_graph.binding": {
+      "text": "Sahip : yuva : nesil"
+    },
+    "render_graph.first_pass": {
+      "text": "İlk geçiş"
+    },
+    "render_graph.last_pass": {
+      "text": "Son geçiş"
+    },
+    "render_graph.use_interval": {
+      "text": "Yürütme aralığı"
+    },
+    "render_graph.pass_edge": {
+      "text": "Kaynak → hedef geçiş"
+    },
+    "render_graph.access": {
+      "text": "Erişim geçişi"
+    },
+    "render_graph.queue_edge": {
+      "text": "Kaynak → hedef kuyruk"
+    },
+    "render_graph.queue": {
+      "text": "Etkin kuyruk"
+    },
+    "render_graph.order": {
+      "text": "Yürütme sırası"
+    },
+    "render_graph.coverage": {
+      "text": "Kanıt"
+    },
+    "render_graph.disposition": {
+      "text": "Sonuç"
+    },
+    "render_graph.reason": {
+      "text": "Neden"
+    },
+    "render_graph.cpu": {
+      "text": "CPU süresi"
+    },
+    "render_graph.gpu": {
+      "text": "GPU süresi"
+    },
+    "render_graph.previous": {
+      "text": "Önceki sayfa"
+    },
+    "render_graph.next": {
+      "text": "Sonraki sayfa"
+    },
+    "workspace.sequence.limit": {
+      "text": "Başka bir sekans açmadan önce bir sekans sekmesini kapatın (sınır 32)."
+    },
+    "workspace.sequence.keys": {
+      "text": "Anahtarlar"
+    },
+    "workspace.sequence.close": {
+      "text": "Kapat"
+    },
+    "workspace.sequence.zoom": {
+      "text": "Zaman çizelgesi yakınlaştırma"
+    },
+    "workspace.sequence.scroll": {
+      "text": "İlk görünür kare"
+    },
+    "workspace.sequence.playhead": {
+      "text": "Oynatma kafası karesi"
+    },
+    "workspace.sequence.no_context": {
+      "text": "Sahne düzenleme bağlamı yok. Gezinme sekansı veya sahneyi değiştirmez."
+    },
+    "workspace.sequence.unavailable": {
+      "text": "Bazı izler henüz sunulmayan yetenekler gerektirir; kaynak verileri korunur."
+    },
+    "workspace.sequence.empty": {
+      "text": "Bu sekansın izi yok."
+    },
+    "workspace.sequence.invalid": {
+      "text": "Sekans okunamadı veya doğrulanamadı. Kaynak şemasını ve dosya erişimini kontrol edin."
+    },
+    "workspace.sequence.conflict": {
+      "text": "Bu varlık farklı bir kaynak sürümünden açık. Değişen kaynağı açmadan önce kapatın."
+    },
+    "workspace.sequence.transform": {
+      "text": "Dönüşüm"
+    },
+    "workspace.sequence.property": {
+      "text": "Özellik"
+    },
+    "workspace.sequence.camera_cut": {
+      "text": "Kamera geçişi"
+    },
+    "workspace.sequence.event": {
+      "text": "Olay"
+    },
+    "workspace.sequence.audio": {
+      "text": "Ses"
+    },
+    "workspace.sequence.sub_sequence": {
+      "text": "Alt sekans"
+    },
+    "workspace.play_topology.button": {
+      "text": "Oyun profilleri"
+    },
+    "workspace.play_topology.title": {
+      "text": "Çok oyunculu oyun profilleri"
+    },
+    "workspace.play_topology.profile": {
+      "text": "Kaydedilmiş profil"
+    },
+    "workspace.play_topology.new": {
+      "text": "Yeni profil"
+    },
+    "workspace.play_topology.name": {
+      "text": "Profil adı"
+    },
+    "workspace.play_topology.map": {
+      "text": "Projeye göre sahne yolu (.horo)"
+    },
+    "workspace.play_topology.kind": {
+      "text": "Topoloji"
+    },
+    "workspace.play_topology.standalone": {
+      "text": "Bağımsız"
+    },
+    "workspace.play_topology.listen": {
+      "text": "Dinleme sunucusu ve istemciler"
+    },
+    "workspace.play_topology.dedicated": {
+      "text": "Özel sunucu ve istemciler"
+    },
+    "workspace.play_topology.clients": {
+      "text": "Ek istemciler (0–8; dinleme: 0–7)"
+    },
+    "workspace.play_topology.transport": {
+      "text": "Taşıma sağlayıcısı kimliği"
+    },
+    "workspace.play_topology.port": {
+      "text": "Sunucu bağlantı noktası (1–65535)"
+    },
+    "workspace.play_topology.simulation": {
+      "text": "Simülasyon ön ayarı kimliği (isteğe bağlı)"
+    },
+    "workspace.play_topology.simulation_hint": {
+      "text": "Başlatmadan önce kimlikler kullanılabilir ön izleme yeteneklerine göre doğrulanır."
+    },
+    "workspace.play_topology.user_hint": {
+      "text": "Bu makinenin bağlantı noktası geçersiz kılmaları ayrı kaydedilir; proje varsayılanlarını değiştirmez."
+    },
+    "workspace.play_topology.user_port": {
+      "text": "Bu makinenin bağlantı noktası (0: proje varsayılanı)"
+    },
+    "workspace.play_topology.save_project": {
+      "text": "Proje profilini kaydet"
+    },
+    "workspace.play_topology.save_user": {
+      "text": "Bu makinenin ayarını kaydet"
+    },
+    "workspace.play_topology.reload": {
+      "text": "Kaydedilmiş profilleri yeniden yükle"
+    },
+    "workspace.play_topology.close": {
+      "text": "Kapat"
+    },
+    "workspace.play_topology.invalid": {
+      "text": "Geçerli bir ad, sahne yolu, mod, sayılar ve ağ kimlikleri girin."
+    },
+    "workspace.play_topology.stale": {
+      "text": "Kaydedilmiş profiller değişti. Yeniden kaydetmeden önce yükleyin."
+    },
+    "workspace.play_topology.storage": {
+      "text": "Profiller okunamadı veya kaydedilemedi. Proje depolama erişimini kontrol edin."
+    },
     "workspace.global_dock.network.event.admitted": {
       "text": "Oyun oturumu onaylandı"
     },
