@@ -269,50 +269,8 @@ jobs:
         run: ./.github/scripts/stage_windows_symbols.ps1 -BinaryDirectory build/ci/tests
 
       - name: Test Debug
-        id: debug_test
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
         run: ctest --preset "${{ matrix.preset }}"
-
-      # Temporary diagnosis for the existing PR's deterministic GCC 13 allocation crash.
-      - name: Diagnose PR 3361 allocation crash
-        id: allocation_diagnostic
-        if: ${{ !cancelled() && runner.os == 'Linux' && github.event_name == 'pull_request' && github.event.pull_request.number == 3361 && steps.debug_test.outcome == 'failure' }}
-        shell: bash
-        run: |
-          diagnostic_dir="${{ runner.temp }}/pr3361-allocation-diagnostic"
-          mkdir -p "$diagnostic_dir"
-          exec > >(tee "$diagnostic_dir/diagnostic.log") 2>&1
-          trap 'result=$?; printf "%s\n" "$result" > "$diagnostic_dir/exit-code.txt"; printf "PR 3361 allocation diagnostic exit code: %s\n" "$result" >> "$GITHUB_STEP_SUMMARY"' EXIT
-          git rev-parse HEAD
-          git rev-parse HEAD:src HEAD:include HEAD:tests HEAD:assets HEAD:cmake
-          sha256sum build/ci/tests/HoroSceneRuntimeConversionTests
-          g++ --version
-          if ! command -v gdb; then
-            timeout --signal=TERM --kill-after=5s 175s bash -euo pipefail <<'PROVISION_GDB'
-          sudo apt-get update
-          apt-cache policy gdb
-          candidate=$(apt-cache policy gdb | awk '$1 == "Candidate:" {print $2}')
-          test -n "$candidate" && test "$candidate" != '(none)'
-          printf 'Installing distro GDB candidate: %s\n' "$candidate"
-          sudo apt-get install --yes --no-install-recommends "gdb=$candidate"
-          PROVISION_GDB
-          fi
-          command -v gdb
-          gdb --version
-          timeout --signal=INT --kill-after=5s 30s gdb --batch --return-child-result \
-            -ex 'set pagination off' \
-            -ex 'handle SIGSEGV stop print nopass' \
-            -ex run -ex 'thread apply all bt full' \
-            --args build/ci/tests/HoroSceneRuntimeConversionTests \
-            'Canonical serialization survives every production allocation failure'
-
-      - name: Upload PR 3361 allocation diagnostic
-        if: ${{ !cancelled() && runner.os == 'Linux' && github.event_name == 'pull_request' && github.event.pull_request.number == 3361 && steps.debug_test.outcome == 'failure' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: pr3361-allocation-diagnostic-${{ github.sha }}
-          path: ${{ runner.temp }}/pr3361-allocation-diagnostic/
-          if-no-files-found: error
 
       - name: Test Release audio checks
         if: ${{ !cancelled() && steps.release_build.outcome == 'success' }}

@@ -27,6 +27,31 @@ namespace Horo::JsonEncoding::Detail {
 
         CanonicalJsonValue() noexcept = default;
 
+        /** @brief Copies each complete alternative before publishing it into the recursive variant. */
+        CanonicalJsonValue(const CanonicalJsonValue &other) {
+            // GCC 13's recursive variant copy cleanup can visit a valueless destination after allocation failure.
+            // Copy outside the destination variant; publishing the completed string/vector only moves owned storage.
+            std::visit([this]<typename Item>(const Item &item) {
+                Item copied{item};
+                value_.template emplace<Item>(std::move(copied));
+            }, other.value_);
+        }
+
+        /** @brief Transfers complete owned storage without allocation. */
+        CanonicalJsonValue(CanonicalJsonValue &&) noexcept = default;
+
+        /** @brief Preserves the destination if copying any nested child fails. */
+        CanonicalJsonValue &operator=(const CanonicalJsonValue &other) {
+            if (this != &other) {
+                CanonicalJsonValue copied{other};
+                *this = std::move(copied);
+            }
+            return *this;
+        }
+
+        /** @brief Replaces owned storage without allocation. */
+        CanonicalJsonValue &operator=(CanonicalJsonValue &&) noexcept = default;
+
         // Schema initializer lists intentionally convert scalar fields into owned wire values.
         explicit(false) CanonicalJsonValue(std::nullptr_t) noexcept {}
 

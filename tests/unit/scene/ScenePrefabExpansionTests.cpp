@@ -1,9 +1,13 @@
 #include "AllocationProbe.h"
+#include "CanonicalJsonWriter.h"
 #include "ScenePrefabExpansionTestSupport.h"
 
 #include <algorithm>
 #include <array>
+#include <catch2/catch_template_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <new>
+#include <optional>
 #include <semaphore>
 #include <thread>
 
@@ -329,4 +333,57 @@ TEST_CASE("Resource dependencies remain exact graph evidence without requiring a
     const auto hit = cache.Resolve(resolver.Value(), fixture.asset, instance, fixture.limits);
     REQUIRE(hit.HasValue());
     CHECK(hit.Value() == result.Value());
+}
+
+using OrderedWireValue = Horo::JsonEncoding::Detail::CanonicalJsonValue<false>;
+using SortedWireValue = Horo::JsonEncoding::Detail::CanonicalJsonValue<true>;
+
+TEMPLATE_TEST_CASE("Recursive canonical copies preserve source and destination at every allocation failure",
+                   "[native][prefab][wire][allocation]", OrderedWireValue, SortedWireValue) {
+    using Wire = TestType;
+    const bool arrayRoot = GENERATE(false, true);
+    const bool assignment = GENERATE(false, true);
+    const Wire child{{"values", Wire::array({std::string(128, 'x'), Wire{{"nested", Wire::array({1, 2, 3})}}})}};
+    const Wire source = arrayRoot ? Wire::array({child, child}) : Wire{{"first", child}, {"second", child}};
+    const std::string sourceBytes = source.dump(2);
+    const Wire previous{{"preserved", std::string(128, 'p')}};
+    const std::string previousBytes = previous.dump(2);
+    std::size_t allocations{};
+    {
+        Wire destination{previous};
+        std::optional<Wire> constructed;
+        Tests::AllocationProbe::ScopedMeasurement measurement;
+        if (assignment)
+            destination = source;
+        else
+            constructed.emplace(source);
+        allocations = measurement.Snapshot().requests;
+    }
+    REQUIRE(allocations > 0);
+    REQUIRE(allocations < 4096);
+    for (std::size_t index = 0; index < allocations; ++index) {
+        INFO("recursive copy allocation index " << index << ", array root " << arrayRoot << ", assignment " << assignment);
+        Wire destination{previous};
+        std::optional<Wire> constructed;
+        bool rejected{};
+        {
+            Tests::AllocationProbe::ScopedFailure failure{index};
+            try {
+                if (assignment)
+                    destination = source;
+                else
+                    constructed.emplace(source);
+            } catch (const std::bad_alloc &) {
+                rejected = true;
+            }
+        }
+        REQUIRE(rejected);
+        CHECK_FALSE(constructed.has_value());
+        CHECK(destination.dump(2) == previousBytes);
+        CHECK(source.dump(2) == sourceBytes);
+        constructed.emplace(source);
+        CHECK(constructed->dump(2) == sourceBytes);
+        destination = source;
+        CHECK(destination.dump(2) == sourceBytes);
+    }
 }
