@@ -58,7 +58,7 @@ namespace Horo::Render::TransientTest {
         Result<void> Initialize(const RenderBackendConfig &config) override {
             const auto initialized = backend_->Initialize(config);
             capabilities_ = backend_->Capabilities();
-            capabilities_.backend = RenderBackendId{"transient_probe"};
+            capabilities_.backend = RenderBackendId{"transient-probe"};
             capabilities_.supportsExactTransientResourceReuse = audit_->faults.supportsReuse;
             live_ = initialized.HasValue();
             return initialized;
@@ -240,12 +240,12 @@ namespace Horo::Render::TransientTest {
                                                         const RenderResourceRetirementLimits &retirement = {}) {
         RenderBackendRegistry registry;
         REQUIRE(registry
-                    .Register({.id = RenderBackendId{"transient_probe"},
+                    .Register({.id = RenderBackendId{"transient-probe"},
                                .displayName = "Transient probe",
                                .provider = std::make_unique<ProbeProvider>(audit)})
                     .HasValue());
         REQUIRE(registry.Seal().HasValue());
-        auto frontend = RenderFrontend::Create(registry, RenderBackendId{"transient_probe"}, {}, {}, memory, retirement);
+        auto frontend = RenderFrontend::Create(registry, RenderBackendId{"transient-probe"}, {}, {}, memory, retirement);
         REQUIRE(frontend.HasValue());
         return std::move(frontend).Value();
     }
