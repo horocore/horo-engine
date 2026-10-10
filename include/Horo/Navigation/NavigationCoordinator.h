@@ -13,6 +13,9 @@
 #include <span>
 
 namespace Horo::Navigation {
+    /** @brief Compiled ceiling on owner-side full-table candidate probes in one tick. */
+    inline constexpr std::uint32_t MaximumNavigationPathSelectionProbes = 4096;
+
     /** @brief Logical caller identity and incarnation; replacement agents cannot consume old results. */
     struct NavigationPathCaller final {
         NavigationDynamicOwnerId owner;
@@ -30,6 +33,7 @@ namespace Horo::Navigation {
         std::uint32_t maximumPendingPerCaller{16};      /**< Result-slot quota; must be less than requestSlots. */
         std::uint64_t nodeExpansionsPerTick{4096};      /**< Conservative sum of admitted node ceilings, shared across partitions. */
         std::uint64_t nodeExpansionsPerCaller{512};     /**< One caller cannot consume the whole configured node budget. */
+        std::uint32_t selectionProbesPerTick{4096};     /**< Full-table probes, in [requestSlots, MaximumNavigationPathSelectionProbes]. */
         std::uint64_t priorityAgingTicks{30};           /**< Oldest requests outrank fresh priority after this delay. */
         std::size_t maximumOwnedBytes{4 * 1024 * 1024}; /**< Prepared inline storage ceiling; provider output uses admitted limits. */
     };
@@ -63,7 +67,7 @@ namespace Horo::Navigation {
     struct NavigationPathPublication final {
         NavigationWorldActivationDescriptor activation; /**< All-zero means no active world after unload/shutdown. */
         NavigationOutcomeProvenance source;
-        std::span<const NavigationPathCaller> callers;
+        std::span<const NavigationPathCaller> callers; /**< Strictly ascending unique logical owners and their current incarnations. */
         std::uint64_t tick{};
     };
 
@@ -101,7 +105,7 @@ namespace Horo::Navigation {
          * @param tick Monotonic admission tick.
          * @return Generation-safe handle or typed error; rejection creates no accepted request/job.
          */
-        [[nodiscard]] Result<NavRequestHandle> Submit(NavigationWorldLifecycle &world, NavigationPathSubmission submission,
+        [[nodiscard]] Result<NavRequestHandle> Submit(const NavigationWorldLifecycle &world, NavigationPathSubmission submission,
                                                       std::uint64_t tick);
         /** @brief Cancel one generation before publication. @param handle Exact admitted identity.
          * @return False for invalid/consumed/terminal identity; true for a pending cancellation request.
@@ -131,6 +135,8 @@ namespace Horo::Navigation {
     private:
         struct State;
         explicit NavigationCoordinator(std::shared_ptr<State> state) noexcept;
+        /** @brief Access owner mutation authority; unavailable on a const coordinator. @return Shared owned state. */
+        [[nodiscard]] std::shared_ptr<State> &MutableState() noexcept;
         std::shared_ptr<State> state_;
     };
 }  // namespace Horo::Navigation

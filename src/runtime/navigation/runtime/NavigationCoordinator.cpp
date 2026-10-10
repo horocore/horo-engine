@@ -31,14 +31,17 @@ namespace Horo::Navigation {
             limits.requestsPerTick > limits.requestSlots || limits.requestsPerCaller == 0 ||
             limits.requestsPerCaller > limits.requestsPerTick || limits.maximumPendingPerCaller == 0 ||
             limits.maximumPendingPerCaller >= limits.requestSlots || limits.nodeExpansionsPerCaller == 0 ||
-            limits.nodeExpansionsPerCaller >= limits.nodeExpansionsPerTick)
+            limits.nodeExpansionsPerCaller >= limits.nodeExpansionsPerTick || limits.selectionProbesPerTick < limits.requestSlots ||
+            limits.selectionProbesPerTick > MaximumNavigationPathSelectionProbes)
             return Failure<NavigationCoordinator>(NavigationErrors::CapabilityDescriptorInvalid);
         const auto queueBytes = Detail::BoundedMpmcQueue<NavigationPathCompletion>::StorageBytes(limits.requestSlots);
-        const std::size_t ownedBytes =
-            *queueBytes + sizeof(State) + limits.requestSlots * (sizeof(State::Slot) + sizeof(State::Quota) + sizeof(std::uint32_t)) +
-            limits.maximumJobs *
-                (sizeof(State::Batch) + limits.requestsPerJob * (sizeof(State::Work) + sizeof(std::optional<NavigationPathCompletion>)));
-        if (ownedBytes > limits.maximumOwnedBytes)
+        if (!queueBytes.has_value())
+            return Failure<NavigationCoordinator>(NavigationErrors::CapacityExceeded);
+        if (const std::size_t ownedBytes =
+                *queueBytes + sizeof(State) + limits.requestSlots * (sizeof(State::Slot) + sizeof(State::Quota) + sizeof(std::uint32_t)) +
+                limits.maximumJobs * (sizeof(State::Batch) +
+                                      limits.requestsPerJob * (sizeof(State::Work) + sizeof(std::optional<NavigationPathCompletion>)));
+            ownedBytes > limits.maximumOwnedBytes)
             return Failure<NavigationCoordinator>(NavigationErrors::CapacityExceeded);
         try {
             return Result<NavigationCoordinator>::Success(NavigationCoordinator{std::make_shared<State>(jobs, limits)});
@@ -58,39 +61,41 @@ namespace Horo::Navigation {
     }
 
     /** @copydoc NavigationCoordinator::Submit */
-    Result<NavRequestHandle> NavigationCoordinator::Submit(NavigationWorldLifecycle &world, NavigationPathSubmission input,
+    Result<NavRequestHandle> NavigationCoordinator::Submit(const NavigationWorldLifecycle &world, NavigationPathSubmission input,
                                                            const std::uint64_t tick) {
-        if (!state_ || state_->closed)
+        auto &state = MutableState();
+        if (!state || state->closed)
             return Failure<NavRequestHandle>(NavigationErrors::AdmissionRejected);
-        if (tick < state_->tick || !ValidSubmission(input, tick))
+        if (tick < state->tick || !ValidSubmission(input, tick))
             return Failure<NavRequestHandle>(NavigationErrors::CapabilityDescriptorInvalid);
-        if (input.request.requirement.limits.maximumNodeExpansions > state_->limits.nodeExpansionsPerCaller)
+        if (input.request.requirement.limits.maximumNodeExpansions > state->limits.nodeExpansionsPerCaller)
             return Failure<NavRequestHandle>(NavigationErrors::QueryLimitExceeded);
-        state_->Collect();
-        const auto outstanding = std::ranges::count_if(state_->slots, [&](const State::Slot &slot) {
+        state->Collect();
+        if (const auto outstanding = std::ranges::count_if(state->slots,
+                                                           [&](const State::Slot &slot) {
             return slot.entry && slot.entry->submission.caller.owner == input.caller.owner;
         });
-        if (outstanding >= state_->limits.maximumPendingPerCaller)
+            outstanding >= state->limits.maximumPendingPerCaller)
             return Failure<NavRequestHandle>(NavigationErrors::AdmissionRejected);
         auto lease = world.Acquire(input.request.world);
         if (lease.HasError())
             return Result<NavRequestHandle>::Failure(std::move(lease).ErrorValue());
         if (lease.Value().Descriptor().topology != input.request.topology)
             return Failure<NavRequestHandle>(NavigationErrors::StaleSnapshot);
-        const auto admission =
-            AdmitNavigationQuery(lease.Value().Backend().Capabilities(), input.capabilityRevision, input.request.requirement);
-        if (admission.HasError())
+        if (const auto admission =
+                AdmitNavigationQuery(lease.Value().Backend().Capabilities(), input.capabilityRevision, input.request.requirement);
+            admission.HasError())
             return Result<NavRequestHandle>::Failure(admission.ErrorValue());
-        for (std::uint32_t index = 0; index < state_->slots.size(); ++index) {
-            auto &slot = state_->slots[index];
+        for (std::uint32_t index = 0; index < state->slots.size(); ++index) {
+            auto &slot = state->slots[index];
             if (slot.entry || slot.generation == 0)
                 continue;
-            if (state_->sequence == std::numeric_limits<std::uint64_t>::max())
+            if (state->sequence == std::numeric_limits<std::uint64_t>::max())
                 return Failure<NavRequestHandle>(NavigationErrors::GenerationExhausted);
             const NavRequestHandle handle{input.request.world, {index, slot.generation}};
             try {
                 CancellationSource cancellation{input.cancellation};
-                NavigationQueuedQuery query{state_->sequence + 1, handle,         input.request, std::move(lease).Value(),
+                NavigationQueuedQuery query{state->sequence + 1,  handle,         input.request, std::move(lease).Value(),
                                             cancellation.Token(), input.operation};
                 slot.entry.emplace(State::Entry{.submission = std::move(input),
                                                 .cancellation = std::move(cancellation),
@@ -99,8 +104,8 @@ namespace Horo::Navigation {
             } catch (const std::bad_alloc &) {
                 return Failure<NavRequestHandle>(NavigationErrors::CapacityExceeded);
             }
-            ++state_->sequence;
-            state_->tick = tick;
+            ++state->sequence;
+            state->tick = tick;
             return Result<NavRequestHandle>::Success(handle);
         }
         return Failure<NavRequestHandle>(NavigationErrors::AdmissionRejected);
@@ -108,7 +113,8 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationCoordinator::Cancel */
     bool NavigationCoordinator::Cancel(const NavRequestHandle handle) noexcept {
-        auto *entry = state_ ? state_->Find(handle) : nullptr;
+        auto &state = MutableState();
+        const auto *entry = state ? state->Find(handle) : nullptr;
         if (!entry || entry->published)
             return false;
         entry->cancellation.RequestCancellation();
@@ -117,56 +123,53 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationCoordinator::Dispatch */
     std::uint32_t NavigationCoordinator::Dispatch(const std::uint64_t tick) {
-        if (!state_ || state_->closed || tick < state_->tick)
+        auto &state = MutableState();
+        if (!state || state->closed || tick < state->tick)
             return 0;
-        state_->tick = tick;
-        state_->Collect();
-        if (state_->dispatchTick != tick) {
-            state_->dispatchTick = tick;
-            state_->dispatched = 0;
-            state_->nodes = 0;
-            state_->quotas.clear();
+        state->tick = tick;
+        state->Collect();
+        if (state->dispatchTick != tick) {
+            state->dispatchTick = tick;
+            state->dispatched = 0;
+            state->nodes = 0;
+            state->selectionProbes = 0;
+            state->quotas.clear();
         }
-        const auto before = state_->dispatched;
-        for (std::uint32_t index = 0; index < state_->batches.size() && state_->dispatched < state_->limits.requestsPerTick; ++index) {
-            auto &batch = state_->batches[index];
+        const auto before = state->dispatched;
+        for (std::uint32_t index = 0; index < state->batches.size() && state->dispatched < state->limits.requestsPerTick; ++index) {
+            const auto &batch = state->batches[index];
             if (batch.job)
                 continue;
-            state_->PrepareBatch(index, tick);
-            if (!batch.work.empty() && !State::SubmitBatch(state_, index))
+            state->PrepareBatch(index, tick);
+            if (!batch.work.empty() && !State::SubmitBatch(state, index))
                 break;  // Foundation pressure retains accepted navigation requests for a later bounded attempt.
         }
-        return state_->dispatched - before;
+        return state->dispatched - before;
     }
 
     /** @copydoc NavigationCoordinator::Commit */
     std::uint32_t NavigationCoordinator::Commit(const NavigationPathPublication &current) {
-        const bool active = current.activation.IsValid();
-        const bool empty = !current.activation.scene.IsValid() && !current.activation.sceneGeneration.IsValid() &&
-                           !current.activation.world.IsValid() && !current.activation.topology.IsValid();
-        if (!state_ || current.tick < state_->tick || (!active && !empty) ||
-            (active && (!ValidateNavigationOutcomeProvenance(current.source) || current.source.world != current.activation.world ||
-                        current.source.topology != current.activation.topology)) ||
-            current.callers.size() > state_->limits.requestSlots)
+        auto &state = MutableState();
+        if (!state || !state->ValidPublication(current))
             return 0;
-        state_->tick = current.tick;
-        state_->Collect();
-        auto &order = state_->publicationOrder;
+        state->tick = current.tick;
+        state->Collect();
+        auto &order = state->publicationOrder;
         order.clear();
-        for (std::uint32_t index = 0; index < state_->slots.size(); ++index) {
-            if (state_->slots[index].entry && !state_->slots[index].entry->published)
+        for (std::uint32_t index = 0; index < state->slots.size(); ++index) {
+            if (state->slots[index].entry && !state->slots[index].entry->published)
                 order.push_back(index);
         }
         std::ranges::sort(order, {}, [&](const std::uint32_t index) {
-            return state_->slots[index].entry->query.acceptedSequence;
+            return state->slots[index].entry->query.acceptedSequence;
         });
         std::uint32_t published{};
         for (const auto index : order) {
-            auto &entry = *state_->slots[index].entry;
+            auto &entry = *state->slots[index].entry;
             auto failure = State::PublicationFailure(entry, current);
-            if (!failure && entry.submission.targetTick > current.tick)
+            if (!failure.has_value() && entry.submission.targetTick > current.tick)
                 continue;
-            if (!failure && !entry.candidate)
+            if (!failure.has_value() && !entry.candidate)
                 break;  // Worker arrival cannot bypass an earlier eligible admitted request.
             State::Publish(entry, std::move(failure), current.tick);
             ++published;
@@ -176,32 +179,39 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationCoordinator::Take */
     std::optional<NavigationPathCompletion> NavigationCoordinator::Take(const NavRequestHandle handle) {
-        if (!state_)
+        auto &state = MutableState();
+        if (!state)
             return std::nullopt;
-        state_->Collect();
-        auto *entry = state_->Find(handle);
+        state->Collect();
+        auto *entry = state->Find(handle);
         if (!entry || !entry->terminal || entry->taken)
             return std::nullopt;
         auto result = std::move(entry->terminal);
         entry->terminal.reset();
         entry->taken = true;
-        state_->Retire(state_->slots[handle.slot.index]);
+        state->Retire(state->slots[handle.slot.index]);
         return result;
     }
 
     /** @copydoc NavigationCoordinator::BeginShutdown */
     void NavigationCoordinator::BeginShutdown() noexcept {
-        if (!state_)
+        auto &state = MutableState();
+        if (!state)
             return;
-        state_->closed = true;
-        for (auto &slot : state_->slots) {
+        state->closed = true;
+        for (auto &slot : state->slots) {
             if (slot.entry && !slot.entry->published)
                 slot.entry->cancellation.RequestCancellation();
         }
-        for (auto &batch : state_->batches) {
+        for (auto &batch : state->batches) {
             if (batch.job)
                 static_cast<void>(batch.job->RequestCancel());
         }
+    }
+
+    /** @copydoc NavigationCoordinator::MutableState */
+    std::shared_ptr<NavigationCoordinator::State> &NavigationCoordinator::MutableState() noexcept {
+        return state_;
     }
 
     /** @copydoc NavigationCoordinator::IsDrained */

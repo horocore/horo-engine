@@ -14,7 +14,12 @@ a generation-safe handle without executing provider work or publishing a result.
 World pause closes new admission but preserves previously admitted leases.
 
 During the owner's scheduling phase call `Dispatch(tick)`. Repeated calls at one
-tick share the same request and conservative node reservations. Each logical owner
+tick share the same request and conservative node reservations. They also share
+a separate owner-side selection-probe quota. Every full candidate-table scan is
+charged before selection; exhaustion defers remaining work to the next tick.
+The compiled probe ceiling bounds selection independently from provider queries
+and prevents large admitted queues from resetting owner work through repeated
+dispatch calls. Each logical owner
 has both an outstanding-result quota and a per-tick request/node quota, shared by
 all of its incarnations. A rotating logical-owner cursor provides round-robin
 service, including when the tick budget is one. Within a caller, aged requests
@@ -34,7 +39,13 @@ requests; it neither blocks the owner nor silently drops accepted requests.
 At `NavIntentCommit`, provide the current activation, combined-root provenance,
 and current incarnations of retained callers, then call `Commit`. The caller span
 is bounded by request capacity; it need contain only owners with retained
-requests. An all-zero activation represents an unloaded world. Publication checks
+requests. It must be strictly sorted by logical owner ID, with one valid current
+incarnation per owner. Ambiguous duplicate/replacement or unordered authority
+slices reject the whole publication attempt without changing request state.
+Binary lookup then bounds per-request caller validation instead of rescanning
+all callers for every completion. This additive coordinator has no existing
+production callers to migrate; new host adapters must sort their authority slice
+before calling `Commit`. An all-zero activation represents an unloaded world. Publication checks
 cancellation, exact Scene/world, caller incarnation and every captured snapshot,
 topology, obstacle, filter, profile and origin fence. Currentness is conservative
 for the whole topology. A stale root returns `StaleSnapshot`; this implementation

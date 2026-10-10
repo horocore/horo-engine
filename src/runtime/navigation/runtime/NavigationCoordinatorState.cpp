@@ -4,7 +4,7 @@
 
 namespace Horo::Navigation {
     /** @copydoc NavigationCoordinator::State::State */
-    NavigationCoordinator::State::State(JobSystem &scheduler, NavigationPathBatchLimits bounds)
+    NavigationCoordinator::State::State(JobSystem &scheduler, const NavigationPathBatchLimits &bounds)
         : jobs(scheduler), limits(bounds), slots(bounds.requestSlots), batches(bounds.maximumJobs), completions(bounds.requestSlots) {
         quotas.reserve(bounds.requestSlots);
         publicationOrder.reserve(bounds.requestSlots);
@@ -64,20 +64,28 @@ namespace Horo::Navigation {
         auto &batch = batches[index];
         auto caller = lastCaller;
         while (batch.work.size() < limits.requestsPerJob && dispatched + batch.work.size() < limits.requestsPerTick) {
-            const auto selected = Select(now, caller, batch);
-            if (!selected)
+            if (!StageNext(batch, now, caller))
                 break;
-            const auto &entry = *slots[*selected].entry;
-            const auto activePartitions = std::ranges::count_if(batches, [&](const Batch &active) {
-                return active.job && !active.work.empty() && active.work.front().query.request.world == entry.query.request.world;
-            });
-            if (activePartitions >= entry.query.worldLease.Backend().Capabilities().maximumConcurrentQueries)
-                break;
-            if (!batch.work.empty() && !Compatible(batch.work.front(), entry))
-                break;
-            batch.work.push_back({entry.query, entry.submission.caller, entry.submission.source, entry.submission.configuration});
-            caller = entry.submission.caller.owner.Value();
         }
+    }
+
+    /** @copydoc NavigationCoordinator::State::StageNext */
+    bool NavigationCoordinator::State::StageNext(Batch &batch, const std::uint64_t now, std::uint64_t &caller) {
+        const auto selected = Select(now, caller, batch);
+        if (!selected.has_value())
+            return false;
+        const auto &entry = *slots[*selected].entry;
+        if (const auto activePartitions = std::ranges::count_if(batches,
+                                                                [&](const Batch &active) {
+            return active.job && !active.work.empty() && active.work.front().query.request.world == entry.query.request.world;
+        });
+            activePartitions >= entry.query.worldLease.Backend().Capabilities().maximumConcurrentQueries)
+            return false;
+        if (!batch.work.empty() && !Compatible(batch.work.front(), entry))
+            return false;
+        batch.work.emplace_back(entry.query, entry.submission.caller, entry.submission.source, entry.submission.configuration);
+        caller = entry.submission.caller.owner.Value();
+        return true;
     }
 
     /** @copydoc NavigationCoordinator::State::SubmitBatch */
@@ -106,6 +114,24 @@ namespace Horo::Navigation {
         return true;
     }
 
+    /** @copydoc NavigationCoordinator::State::ValidPublication */
+    bool NavigationCoordinator::State::ValidPublication(const NavigationPathPublication &current) const noexcept {
+        const bool active = current.activation.IsValid();
+        if (const bool empty = !current.activation.scene.IsValid() && !current.activation.sceneGeneration.IsValid() &&
+                               !current.activation.world.IsValid() && !current.activation.topology.IsValid();
+            current.tick < tick || (!active && !empty) || current.callers.size() > limits.requestSlots ||
+            (active && (!ValidateNavigationOutcomeProvenance(current.source) || current.source.world != current.activation.world ||
+                        current.source.topology != current.activation.topology)))
+            return false;
+        NavigationDynamicOwnerId previous;
+        for (const auto &caller : current.callers) {
+            if (!caller.owner.IsValid() || !caller.generation.IsValid() || caller.owner <= previous)
+                return false;
+            previous = caller.owner;
+        }
+        return true;
+    }
+
     /** @copydoc NavigationCoordinator::State::PublicationFailure */
     std::optional<Error> NavigationCoordinator::State::PublicationFailure(const Entry &entry, const NavigationPathPublication &current) {
         if (entry.cancellation.Token().IsCancellationRequested())
@@ -115,7 +141,8 @@ namespace Horo::Navigation {
             entry.query.worldLease.Descriptor().sceneGeneration != current.activation.sceneGeneration ||
             entry.query.request.world != current.activation.world)
             return MakeError(NavigationErrors::InvalidWorld);
-        if (std::ranges::find(current.callers, entry.submission.caller) == current.callers.end())
+        const auto caller = std::ranges::lower_bound(current.callers, entry.submission.caller.owner, {}, &NavigationPathCaller::owner);
+        if (caller == current.callers.end() || *caller != entry.submission.caller)
             return MakeError(NavigationErrors::InvalidHandle);
         if (!SameSource(entry.submission.source, current.source))
             return MakeError(NavigationErrors::StaleSnapshot);
@@ -126,11 +153,11 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationCoordinator::State::Publish */
     void NavigationCoordinator::State::Publish(Entry &entry, std::optional<Error> failure, const std::uint64_t now) {
-        if (failure) {
+        if (failure.has_value()) {
             entry.cancellation.RequestCancellation();
-            entry.terminal.emplace(NavigationPathCompletion{entry.query.handle, entry.submission.caller, entry.query.acceptedSequence,
-                                                            entry.job, entry.submission.source, entry.query.worldLease.Descriptor(),
-                                                            Result<NavigationPath>::Failure(std::move(*failure))});
+            entry.terminal.emplace(entry.query.handle, entry.submission.caller, entry.query.acceptedSequence, entry.job,
+                                   entry.submission.source, entry.query.worldLease.Descriptor(),
+                                   Result<NavigationPath>::Failure(std::move(*failure)));
         } else {
             entry.terminal.emplace(std::move(*entry.candidate));
         }
@@ -141,7 +168,10 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationCoordinator::State::Select */
     std::optional<std::uint32_t> NavigationCoordinator::State::Select(const std::uint64_t now, const std::uint64_t previousCaller,
-                                                                      const Batch &staged) const noexcept {
+                                                                      const Batch &staged) noexcept {
+        if (limits.selectionProbesPerTick - selectionProbes < slots.size())
+            return std::nullopt;
+        selectionProbes += static_cast<std::uint32_t>(slots.size());
         std::optional<std::uint32_t> selected;
         for (std::uint32_t index = 0; index < slots.size(); ++index) {
             const auto &slot = slots[index];
@@ -157,7 +187,7 @@ namespace Horo::Navigation {
                 continue;
             if (!WithinNodeBudget(entry, staged))
                 continue;
-            if (!selected) {
+            if (!selected.has_value()) {
                 selected = index;
                 continue;
             }
@@ -165,8 +195,7 @@ namespace Horo::Navigation {
             const auto caller = entry.submission.caller.owner.Value();
             const auto priorCaller = prior.submission.caller.owner.Value();
             const auto rank = std::pair{caller <= previousCaller, caller};
-            const auto priorRank = std::pair{priorCaller <= previousCaller, priorCaller};
-            if (rank < priorRank) {
+            if (const auto priorRank = std::pair{priorCaller <= previousCaller, priorCaller}; rank < priorRank) {
                 selected = index;
                 continue;
             }
@@ -185,9 +214,8 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationCoordinator::State::Charge */
     void NavigationCoordinator::State::Charge(const NavigationDynamicOwnerId caller, const std::uint32_t requestedNodes) {
-        const auto quota = std::ranges::find(quotas, caller, &Quota::caller);
-        if (quota == quotas.end())
-            quotas.push_back({caller, 1, requestedNodes});
+        if (const auto quota = std::ranges::find(quotas, caller, &Quota::caller); quota == quotas.end())
+            quotas.emplace_back(caller, 1, requestedNodes);
         else {
             ++quota->dispatched;
             quota->nodes += requestedNodes;
@@ -256,6 +284,32 @@ namespace Horo::Navigation {
         }
     }
 
+    /** @copydoc NavigationCoordinator::State::CollectBatchWork */
+    void NavigationCoordinator::State::CollectBatchWork(Batch &batch, const JobSnapshot &snapshot) {
+        using enum JobState;
+        for (std::size_t index = 0; index < batch.work.size(); ++index) {
+            auto *entry = Find(batch.work[index].query.handle);
+            if (!entry)
+                continue;
+            entry->executing = false;
+            if (entry->published || entry->candidate) {
+                Retire(slots[batch.work[index].query.handle.slot.index]);
+                continue;
+            }
+            if (batch.fallback[index]) {
+                batch.fallback[index]->job = entry->job;
+                entry->candidate.emplace(std::move(*batch.fallback[index]));
+            } else if (snapshot.state == Cancelled || snapshot.state == Failed) {
+                entry->candidate.emplace(
+                    Complete(batch.work[index], entry->job,
+                             Result<NavigationPath>::Failure(snapshot.state == Cancelled
+                                                                 ? MakeError(NavigationErrors::QueryCancelled)
+                                                                 : snapshot.error.value_or(MakeError(NavigationErrors::ProviderFailed)))));
+            }
+            Retire(slots[batch.work[index].query.handle.slot.index]);
+        }
+    }
+
     /** @copydoc NavigationCoordinator::State::Collect */
     void NavigationCoordinator::State::Collect() {
         CollectCompletions();
@@ -269,25 +323,7 @@ namespace Horo::Navigation {
             // A later exception must not replace an earlier successful result with the partition failure.
             CollectCompletions();
             // Terminal jobs have returned from the callback or revoked queued work. Fallback buffers are now owner-only.
-            for (std::size_t index = 0; index < batch.work.size(); ++index) {
-                auto *entry = Find(batch.work[index].query.handle);
-                if (!entry)
-                    continue;
-                entry->executing = false;
-                if (!entry->published && !entry->candidate) {
-                    if (batch.fallback[index]) {
-                        batch.fallback[index]->job = entry->job;
-                        entry->candidate.emplace(std::move(*batch.fallback[index]));
-                    } else if (snapshot->state == JobState::Cancelled || snapshot->state == JobState::Failed) {
-                        entry->candidate.emplace(Complete(batch.work[index], entry->job,
-                                                          Result<NavigationPath>::Failure(snapshot->state == JobState::Cancelled
-                                                                                              ? MakeError(NavigationErrors::QueryCancelled)
-                                                                                              : snapshot->error.value_or(MakeError(
-                                                                                                    NavigationErrors::ProviderFailed)))));
-                    }
-                }
-                Retire(slots[batch.work[index].query.handle.slot.index]);
-            }
+            CollectBatchWork(batch, *snapshot);
             batch.job.reset();
             batch.work.clear();
             for (auto &fallback : batch.fallback)
