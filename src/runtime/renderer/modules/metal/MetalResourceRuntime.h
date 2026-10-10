@@ -19,6 +19,11 @@ namespace Horo::Render::Detail {
         MetalResourceRuntime &operator=(const MetalResourceRuntime &) = delete;
 
         void Initialize(void *device, void *commandQueue) noexcept;
+        /** @brief Mutates only a complete reusable native frame slot; pending native references reject before writes. */
+        [[nodiscard]] Result<void> UpdateLightFrame(const NativeLightFrameUpdate &update);
+        /** @brief Loads an exact cooked Metal library and validates the fixed culling compute ABI before native publication. */
+        [[nodiscard]] Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
+            const CookedLightCullingKernel &kernel);
         [[nodiscard]] Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const;
         [[nodiscard]] Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const;
         [[nodiscard]] Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, std::span<const std::byte> initialData,

@@ -53,6 +53,54 @@ releases every slot. A new workspace is required for a new evaluation, source
 revision, or replacement. The cooked plan exposes its captured operational tier for
 this admission; its portable byte format and compiler version are unchanged.
 
+`EvaluatePCGCpu` is the first built-in, backend-neutral cooked-plan evaluator. It
+consumes one immutable `PCGSpatialSnapshot`, the exact cooked plan, typed exposed
+overrides and one finite workspace/candidate envelope. Dispatch recognizes only
+PCG-owned version-1 built-in IDs. Snapshot-grid nodes read one stable grid identity
+from an eight-byte network-order payload; density-filter nodes take one PointSet
+and one Scalar threshold; merge nodes take two PointSets in input-pin identity order;
+forward nodes take one PointSet. Each produces one PointSet output, and every routed
+point schema must match its output schema exactly. Unknown type/version/payload,
+unbound scalar, absent grid, unsupported determinism or capability, closed lifecycle
+and over-budget output fail before any candidate is returned. Snapshot-grid requires
+profile determinism and an exact nonzero numeric-profile fingerprint. The host must
+grant at least one execution capability (offline bake, preview, runtime or hybrid),
+as well as every graph requirement; validation-only grants cannot produce candidates.
+
+The evaluator derives contiguous logical partitions from the caller's supported
+worker count. A Foundation `TaskGroup` computes density-filter selection counts over
+disjoint immutable input spans, joins every child, then the operation owner writes
+and merges in stable point-index order. Snapshot-grid generation and final writes
+stay on the owner lane. Worker count changes partition boundaries, never semantic
+point or output order; children cannot access writable workspace columns or target
+owners. Multiworker evaluation requires an explicitly borrowed host scheduler that
+outlives the synchronous call.
+It returns detached immutable final point columns, exact graph source digest,
+authored seed, snapshot identity and numeric profile. These are candidate values
+only: no node receives a scene, terrain, physics, navigation, renderer or editor
+mutation interface. Host-controlled output-intent adaptation and commit remain
+separate from this pure point-evaluation contract.
+
+The CPU evaluator admits the complete workspace, structured worker, provenance,
+candidate, input snapshot, resident plan, and retained replacement envelope before
+allocating point columns. `PCGPointCloudWorkspace::RequiredBytes` proves slot reuse
+using only bounded metadata. Grid coordinates use the same double intermediates
+as snapshot endpoint admission before checked conversion to float storage.
+
+CPU requests carry explicit world/cell scope, numeric policy, certified profile,
+and the host-owned canonical provider-content digest. The host must digest the
+actual immutable captured provider values; a revision-only digest is invalid
+provenance evidence. The evaluator binds this digest to the snapshot's exact
+provider/source/snapshot/revision/origin epoch, hashes effective typed exposed
+values (including cooked defaults) using the versioned `HPCGCPUINPUT` domain,
+closed value tag and network-order numeric bits (signed zero is canonicalized),
+and captures one canonical `PCGProvenance`
+root per cooked node. Input overrides carry nonzero owner revisions. Defaults use
+the accepted graph revision. All roots inherit the plan's strongest numeric
+qualification, including nodes consuming a profile-dependent upstream result.
+The candidate retains these roots; grid sample streams use `PCGProvenance::Seed`
+with canonical grid-linear sample identity, independent of worker partitioning.
+
 ### Graph Source Schema 1.1
 
 `PCGGraphAsset` is the implemented bounded semantic source value. It owns stable graph,
@@ -164,7 +212,11 @@ digest, authored graph seed, world identity, signed cell coordinates, stable nod
 identity, policy version, typed input revisions and content digests, and every provider's
 source revision, snapshot identity, origin epoch and canonical content digest. The host
 supplies the digest of canonical bytes when capturing an input or provider; a revision
-alone does not prove unchanged content. Capture sorts bounded input and provider sets
+alone does not prove unchanged content. Input capture admits up to 512 individual
+stamps, matching the High graph tier; provider capture remains bounded to 64.
+The earlier 64-input implementation ceiling could not represent Standard/High
+evaluator requests and is widened without changing schema-1 bytes or keys for
+previously admitted records. Capture sorts bounded input and provider sets
 by stable identity and rejects duplicates, missing evidence and closed lifecycle states.
 The captured root owns its records, so replacing source or provider snapshots does not
 mutate readers already evaluating the previous root.
@@ -186,8 +238,8 @@ value. One output batch must still belong to one exact graph revision, node and
 execution. Reuse requires exact current provenance key equality and a deterministic
 tier; changed graph, input, provider, world/cell, node, numeric policy or certified
 profile invalidates it. The owner must recapture current authoritative evidence before
-calling the reuse check. This contract is a pure foundation for future cooked-plan and
-evaluation integration; no graph evaluator is implemented by this schema.
+calling the reuse check. The CPU evaluator integrates this pure provenance contract without granting
+mutation authority to captured roots.
 
 ## PCG Model
 

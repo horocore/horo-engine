@@ -234,6 +234,28 @@ namespace Horo::PCG::PCGErrors {
                                                          .summary = "The canonical PCG plan exceeds its admitted byte envelope.",
                                                          .remediationHint =
                                                              "Reduce graph complexity or select a larger admitted tier bound."};
+    const ErrorCodeDescriptor CpuEvaluationInvalid{.domain = PcgDomain,
+                                                   .code = ErrorCode{"pcg.cpu_evaluation.invalid"},
+                                                   .defaultSeverity = ErrorSeverity::Error,
+                                                   .summary = "The cooked CPU node contract or typed input is invalid.",
+                                                   .remediationHint = "Use exact built-in versions, pins, payloads, and typed bindings."};
+    const ErrorCodeDescriptor CpuEvaluationUnsupported{.domain = PcgDomain,
+                                                       .code = ErrorCode{"pcg.cpu_evaluation.unsupported"},
+                                                       .defaultSeverity = ErrorSeverity::Error,
+                                                       .summary = "The CPU evaluator cannot execute this node or determinism tier.",
+                                                       .remediationHint =
+                                                           "Cook with a supported built-in node and certified numeric tier."};
+    const ErrorCodeDescriptor CpuEvaluationCapacityExceeded{.domain = PcgDomain,
+                                                            .code = ErrorCode{"pcg.cpu_evaluation.capacity_exceeded"},
+                                                            .defaultSeverity = ErrorSeverity::Error,
+                                                            .summary = "CPU evaluation exceeds its admitted resource envelope.",
+                                                            .remediationHint =
+                                                                "Lower declared outputs or request a larger tier reservation."};
+    const ErrorCodeDescriptor CpuEvaluationClosed{.domain = PcgDomain,
+                                                  .code = ErrorCode{"pcg.cpu_evaluation.closed"},
+                                                  .defaultSeverity = ErrorSeverity::Warning,
+                                                  .summary = "CPU evaluation admission is closed by cancellation or shutdown.",
+                                                  .remediationHint = "Retire this request and submit under a live owner generation."};
     const ErrorCodeDescriptor GenerationPlanInvalid{.domain = PcgDomain,
                                                     .code = ErrorCode{"pcg.generation_plan.invalid"},
                                                     .defaultSeverity = ErrorSeverity::Error,

@@ -161,7 +161,8 @@ namespace Horo::Prefab {
 
         /**
          * @brief Serializes the complete document into deterministic canonical UTF-8 JSON.
-         * @return Canonical source bytes, or a document validation error if the immutable candidate is not serializable.
+         * @return Canonical source bytes, a document validation error, or a typed allocation failure.
+         * @details Structural encoder cleanup never allocates; failure leaves the immutable source unchanged.
          */
         [[nodiscard]] Result<std::string> SerializeCanonical() const;
 

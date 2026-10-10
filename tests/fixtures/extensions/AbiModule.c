@@ -109,12 +109,22 @@ static void DestroyImporter(void *context) {
 static HoroExtensionStatus RegisterFixtureImporters(const HoroExtensionHostApi *host) {
     static const char contributionId[] = "fixture.importer";
     static const char contributionVersion[] = "1.0.0";
+    static const char extension[] = "raw";
+    static const char assetType[] = "example.raw";
+    static const char targetExtension[] = ".horoasset";
+    static const HoroExtensionStringView extensions[] = {{extension, sizeof(extension) - 1}};
+    static const HoroExtensionStringView assetTypes[] = {{assetType, sizeof(assetType) - 1}};
     static uint32_t destroyCount;
     const HoroAssetImporterDescriptor importer = {
         .structSize = sizeof(HoroAssetImporterDescriptor),
         .abiVersion = HORO_ASSET_IMPORTER_ABI_VERSION,
         .contributionId = {contributionId, sizeof(contributionId) - 1},
         .contributionVersion = {contributionVersion, sizeof(contributionVersion) - 1},
+        .fileExtensions = extensions,
+        .fileExtensionCount = 1,
+        .assetTypes = assetTypes,
+        .assetTypeCount = 1,
+        .targetExtension = {targetExtension, sizeof(targetExtension) - 1},
         .importerContext = HORO_ABI_FIXTURE_MODE == 8 ? NULL : &destroyCount,
         .importAsset = HORO_ABI_FIXTURE_MODE == 5 ? NULL : ImportAsset,
         .destroyImporter = HORO_ABI_FIXTURE_MODE == 8 ? NULL : DestroyImporter,

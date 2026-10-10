@@ -19,6 +19,9 @@
 #include <vector>
 
 namespace Horo::PCG {
+    /** @brief Maximum typed input stamps, matching the High operational graph tier. */
+    inline constexpr std::size_t MaximumPCGProvenanceInputs = 512;
+
     /** @brief Stable world identity; cell coordinates alone do not identify a world. */
     using PCGWorldId = PcgStableIdentity<struct PCGWorldIdentityTag>;
     /** @brief Stable identity of one typed exposed or external input. */

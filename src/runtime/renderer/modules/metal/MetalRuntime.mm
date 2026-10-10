@@ -4,11 +4,13 @@
 #include "MetalCommandCompletion.h"
 #include "MetalNativeDeviceFacts.h"
 #include "MetalParallelRecording.h"
+#include "MetalPresentationFeedback.h"
 #include "MetalRenderBackendErrors.h"
 #include "MetalResourceRuntime.h"
 #include "MetalSubmittedGraphQueue.h"
 
 #import <Metal/Metal.h>
+#import <QuartzCore/CAAnimation.h>
 #import <QuartzCore/CAMetalLayer.h>
 #include <algorithm>
 #include <array>
@@ -76,7 +78,7 @@ namespace Horo::Render::Detail {
                 // buffers and sixty-four retained uploads stay below this native cap.
                 // The editor bridge borrows our current buffer; it must not allocate its own.
                 commandQueue_ = [device_ newCommandQueueWithMaxCommandBufferCount:MetalRecordingBudget::NativeQueueCapacity];
-                const Result<MetalDeviceCapabilities> admitted =
+                Result<MetalDeviceCapabilities> admitted =
                     AdmitMetalDevice(QueryMetalDeviceFacts(device_, discoveryRevision, commandQueue_ != nil), request);
                 if (admitted.HasError()) {
                     Shutdown();
@@ -97,19 +99,38 @@ namespace Horo::Render::Detail {
                                               "The platform presentation port did not expose a CAMetalLayer."));
                 }
 
-                layer_.device = device_;
-                layer_.pixelFormat = MTLPixelFormatBGRA8Unorm;
-                layer_.framebufferOnly = YES;
-                layer_.opaque = YES;
-                layer_.maximumDrawableCount = descriptor.maxFramesInFlight;
+                ConfigurePresentationLayer(descriptor.maxFramesInFlight);
                 maxFramesInFlight_ = descriptor.maxFramesInFlight;
+                feedback_ = std::make_shared<MetalPresentationFeedback>();
                 ownerThread_ = std::this_thread::get_id();
                 submitted_.Initialize(maxFramesInFlight_);
                 layer_.displaySyncEnabled = descriptor.presentMode == PresentMode::Fifo;
                 MetalEditorGraphicsAccess::PublishPersistent(*editorGraphicsBridge_, (__bridge void *)device_,
                                                              (__bridge void *)commandQueue_, this, &WaitUntilIdleThunk);
                 resources_.Initialize((__bridge void *)device_, (__bridge void *)commandQueue_);
-                return admitted;
+                auto capabilities = std::move(admitted).Value();
+                capabilities.implemented.support.features.Enable(RenderCapability::LightCulling);
+                return Result<MetalDeviceCapabilities>::Success(std::move(capabilities));
+            }
+
+            Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
+                const CookedLightCullingKernel &kernel) override {
+                using Preparation = Result<std::shared_ptr<IResidentLightCullingKernel>>;
+                if (std::this_thread::get_id() != ownerThread_)
+                    return Preparation::Failure(MakeError(MetalBackendErrors::WrongThread));
+                if (commandBuffer_ != nil)
+                    return Preparation::Failure(
+                        MakeError(LightCullingErrors::InvalidInput, "Kernel realization requires a preparation safe point."));
+                return resources_.RealizeLightCullingKernel(kernel);
+            }
+
+            Result<void> UpdateLightFrame(const NativeLightFrameUpdate &update) override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return WrongThread();
+                if (commandBuffer_ != nil)
+                    return Result<void>::Failure(
+                        MakeError(LightCullingErrors::InvalidInput, "Light slots update only outside an active frame."));
+                return resources_.UpdateLightFrame(update);
             }
 
             Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
@@ -308,6 +329,40 @@ namespace Horo::Render::Detail {
                 return Result<void>::Success();
             }
 
+            /** @copydoc IMetalRuntime::PresentWithTiming */
+            Result<void> PresentWithTiming(const PresentationTimingRequest &request) override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return WrongThread();
+                if (!request.surface.IsAttachedGeneration() || request.frameNumber == 0 || drawable_ == nil || commandBuffer_ == nil)
+                    return Result<void>::Failure(MakeError(FramePacingErrors::InvalidSurface));
+                const Duration before = request.clock.MonotonicNow();
+                const double nativeNow = CACurrentMediaTime();
+                const Duration after = request.clock.MonotonicNow();
+                const MetalPresentationCalibration calibration{nativeNow, before, after};
+                const auto feedback = feedback_;
+                const auto surface = request.surface;
+                const auto frame = request.frameNumber;
+                if (feedback->SelectSurface(surface)) {
+                    [drawable_ addPresentedHandler:^(id<MTLDrawable> displayed) {
+                      if (const auto timing = calibration.Translate(surface, frame, displayed.presentedTime))
+                          feedback->Publish(*timing);
+                      else
+                          feedback->Discard();
+                    }];
+                }
+                return Present();
+            }
+
+            /** @copydoc IMetalRuntime::PollNativePresentTiming */
+            Result<std::optional<NativePresentTiming>> PollNativePresentTiming() override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return Result<std::optional<NativePresentTiming>>::Failure(MakeError(MetalBackendErrors::WrongThread));
+                auto timing = feedback_->Poll();
+                if (timing)
+                    timing->discardedObservations = feedback_->DroppedCount();
+                return Result<std::optional<NativePresentTiming>>::Success(timing);
+            }
+
             Result<void> Present() override {
                 if (std::this_thread::get_id() != ownerThread_) {
                     return WrongThread();
@@ -369,6 +424,7 @@ namespace Horo::Render::Detail {
             }
 
             void Shutdown() noexcept override {
+                feedback_->Close();
                 AbortFrame();
                 WaitUntilIdle();
                 // Closing the domain prevents submission/reuse. Outstanding CPU capsules own
@@ -400,6 +456,15 @@ namespace Horo::Render::Detail {
             }
 
         private:
+            /** @brief Configures the admitted native presentation layer before publishing graphics access. */
+            void ConfigurePresentationLayer(const std::uint32_t maxFramesInFlight) {
+                layer_.device = device_;
+                layer_.pixelFormat = MTLPixelFormatBGRA8Unorm;
+                layer_.framebufferOnly = YES;
+                layer_.opaque = YES;
+                layer_.maximumDrawableCount = maxFramesInFlight;
+            }
+
             /** @brief Checks native capture state and all command-count bounds before any buffer allocation. */
             [[nodiscard]] Result<void> ValidateParallelCapture(const RenderGraphExecutionRequest &request) const {
                 if (commandBuffer_ == nil || drawable_ == nil || renderEncoder_ != nil || activeGraphLease_ != nullptr || activeRecording_)
@@ -528,6 +593,7 @@ namespace Horo::Render::Detail {
             __strong MTLRenderPassDescriptor *renderPassDescriptor_{nil};
             __strong id<MTLCommandBuffer> lastSubmittedCommandBuffer_{nil};
             MetalSubmittedGraphQueue submitted_;
+            std::shared_ptr<MetalPresentationFeedback> feedback_{std::make_shared<MetalPresentationFeedback>()};
             IRenderGraphResourceLease *activeGraphLease_{nullptr};
 
             struct CancelledRecording {

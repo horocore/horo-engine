@@ -1585,6 +1585,21 @@ accepted readers; exact old/new payload revisions coexist only within reserved
 peaks and retire independently. The public-header consumer verifies the target's
 staged dependency surface without broad source/include paths.
 
+## AUD-009.1 additive preview contracts
+
+`Horo/Audio/AudioFrontend.h` belongs exclusively to `HoroAudioFrontend`, with
+AudioCommands public and VoiceRender/output protocol private dependencies.
+`Horo/Editor/AudioEditorDocument.h` belongs to EditorServices, whose deliberate
+AudioFrontend public dependency supplies the typed preview capability.
+
+`HoroAudioFrontendComposition` is a non-installed host-only interface with a
+narrow include root under `src/audio/frontend/include`. Application roots and
+tests consume detached resource/output composition; editor features never expose
+or select backends. Existing APIs and persistent formats are unchanged. Rebuild
+consumers for these additive headers. Generated staged consumers and explicit
+contract translation units verify visibility; preview tests verify playback and
+retirement. No broad source/include path is introduced.
+
 ## NET-008.3 Play Topology Profile Boundary
 
 `HoroPlayTopologyApplication` solely owns the additive public
@@ -1596,3 +1611,20 @@ is target-private. Existing callers require no signature migration; preview laun
 hosts opt into complete capability preflight and revision/generation revalidation
 as described in Networking Architecture. The generated staged header consumer and
 `HoroPlayTopologyPublicHeaderConsumer` verify this additive target boundary.
+
+## PKG-001.9 Package Activation Composition
+
+`HoroPackageLifecycle` alone owns `Horo/Packages/PackageLifecycle.h` and
+`PackageLifecycleErrors.h`. It explicitly composes PackageSecurity, Extensions,
+Assets and Foundation. The generated `HoroPackageLifecyclePublicHeaderConsumer`
+compiles both headers with only declared dependencies. Internal candidate and
+native composition implementation remain target-private under `src/packages/lifecycle`.
+PackageSecurity additionally exposes the sealed install lease in its existing
+PackageInstall header; Packages owns the bounded archive-file accessor in its
+existing PackageArchive header. Frozen install-pointer migration and explicit
+host wiring are recorded in [Package Lifecycle](../packages/package-lifecycle.md).
+
+The additive `ExtensionManager::FailedActivationRetirements()` contract remains
+owned by `HoroExtensions`. Composition callers migrate their resource cleanup
+checks to include rejected activation owners as well as successful load owners;
+`HoroExtensionsPublicHeaderConsumer` verifies the existing owning boundary.

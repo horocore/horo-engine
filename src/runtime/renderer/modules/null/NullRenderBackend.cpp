@@ -1,4 +1,5 @@
 #include "Horo/Runtime/Render/NullBackendModule.h"
+#include "NullGraphWorkloads.h"
 #include "NullRenderBackendErrors.h"
 
 #include <limits>
@@ -139,7 +140,10 @@ namespace Horo::Render {
                     return Result<std::uint64_t>::Failure(
                         MakeBackendError(NullBackendErrors::InvalidConfig, "Null buffer realization request is invalid."));
                 }
-                return NextResourceInstance();
+                const auto instance = NextGraphResourceInstance();
+                if (instance.HasValue())
+                    graphResources_.buffers.try_emplace(instance.Value(), descriptor);
+                return instance;
             }
 
             /** @copydoc IRenderBackend::CreateMesh */
@@ -168,7 +172,10 @@ namespace Horo::Render {
                     !MatchesPlacement(cost.Value(), placement))
                     return Result<std::uint64_t>::Failure(
                         MakeBackendError(NullBackendErrors::InvalidConfig, "Null texture realization request is invalid."));
-                return NextResourceInstance();
+                const auto instance = NextGraphResourceInstance();
+                if (instance.HasValue())
+                    graphResources_.textures.try_emplace(instance.Value(), descriptor);
+                return instance;
             }
 
             Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor, const std::uint64_t texture) override {
@@ -187,8 +194,8 @@ namespace Horo::Render {
             }
 
             /** @copydoc IRenderBackend::DestroyBuffer */
-            void DestroyBuffer(std::uint64_t) noexcept override {
-                // Null resources are opaque monotonic identities with no native allocation to release.
+            void DestroyBuffer(const std::uint64_t instance) noexcept override {
+                graphResources_.buffers.erase(instance);
             }
 
             /** @copydoc IRenderBackend::DestroyMesh */
@@ -196,8 +203,8 @@ namespace Horo::Render {
                 // Null resources are opaque monotonic identities with no native allocation to release.
             }
 
-            void DestroyTexture(std::uint64_t) noexcept override {
-                // Null resources are opaque monotonic identities with no native allocation to release.
+            void DestroyTexture(const std::uint64_t instance) noexcept override {
+                graphResources_.textures.erase(instance);
             }
 
             void DestroyTextureView(std::uint64_t) noexcept override {
@@ -289,6 +296,22 @@ namespace Horo::Render {
                 return Result<void>::Success();
             }
 
+            /** @copydoc IRenderBackend::ExecuteGraph */
+            Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request) override {
+                if (!initialized_)
+                    return Result<void>::Failure(MakeError(NullBackendErrors::NotInitialized));
+                if (!frameActive_)
+                    return Result<void>::Failure(MakeError(NullBackendErrors::NoActiveFrame));
+                if (request.frame != activeFrame_)
+                    return Result<void>::Failure(MakeError(NullBackendErrors::FrameTokenMismatch));
+                if (activeGraphLease_ != nullptr)
+                    return Result<void>::Failure(MakeError(NullBackendErrors::InvalidExecutionPlan));
+                if (const auto valid = Detail::ValidateNullGraphWorkloads(graphResources_, request); valid.HasError())
+                    return valid;
+                activeGraphLease_ = request.lease;
+                return Result<void>::Success();
+            }
+
             /** @copydoc IRenderBackend::Present */
             Result<void> Present(FrameToken frame) override {
                 if (!initialized_) {
@@ -303,8 +326,7 @@ namespace Horo::Render {
                         MakeBackendError(NullBackendErrors::FrameTokenMismatch, "Frame token does not match the active frame."));
                 }
 
-                frameActive_ = false;
-                activeFrame_ = {};
+                AbortActiveFrame();  // The headless stream completes at this owner-thread drain point.
                 return Result<void>::Success();
             }
 
@@ -317,6 +339,8 @@ namespace Horo::Render {
 
             /** @copydoc IRenderBackend::AbortActiveFrame */
             void AbortActiveFrame() noexcept override {
+                if (activeGraphLease_ != nullptr)
+                    std::exchange(activeGraphLease_, nullptr)->Release();
                 frameActive_ = false;
                 activeFrame_ = {};
             }
@@ -342,7 +366,9 @@ namespace Horo::Render {
 
             /** @copydoc IRenderBackend::Shutdown */
             void Shutdown() noexcept override {
-                frameActive_ = false;
+                AbortActiveFrame();
+                graphResources_.buffers.clear();
+                graphResources_.textures.clear();
                 initialized_ = false;
                 activeFrame_ = {};
                 extent_ = {};
@@ -350,6 +376,13 @@ namespace Horo::Render {
             }
 
         private:
+            /** @brief Bounds headless resource metadata before creating a new exact instance identity. */
+            [[nodiscard]] Result<std::uint64_t> NextGraphResourceInstance() {
+                if (graphResources_.buffers.size() + graphResources_.textures.size() >= Detail::NullGraphResources::MaximumResources)
+                    return Result<std::uint64_t>::Failure(MakeError(NullBackendErrors::ResourceInstanceExhausted));
+                return NextResourceInstance();
+            }
+
             [[nodiscard]] Result<std::uint64_t> NextResourceInstance() {
                 if (nextResourceInstance_ == std::numeric_limits<std::uint64_t>::max()) {
                     return Result<std::uint64_t>::Failure(
@@ -364,9 +397,12 @@ namespace Horo::Render {
                 .supportsMeshResources = true,
                 .supportsTextureResources = true,
                 .supportsRenderTargetResources = true,
+                .supportsExactTransientResourceReuse = true,
                 .support = NullCapabilitySnapshot(),
             };
             RenderBackendConfig config_{};
+            Detail::NullGraphResources graphResources_;
+            IRenderGraphResourceLease *activeGraphLease_{nullptr};
             FramebufferExtent extent_{};
             FrameToken activeFrame_{};
             std::uint64_t nextFrameToken_{1};

@@ -117,7 +117,8 @@ export(TARGETS HoroFoundation HoroNetworkApi HoroSaveApi HoroGameplayApi
        FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayTargets.cmake")
 # Physics is an explicit SDK component. The minimal gameplay export remains solver-free;
 # opting in exports the reviewed private static-link closure, never repository-wide includes.
-set(HORO_GAMEPLAY_PHYSICS_SDK_TARGETS HoroGameplayPhysicsIntegration HoroPhysics HoroPhysicsModel HoroAssets HoroRuntime
+set_target_properties(HoroSceneIdentity PROPERTIES EXPORT_NAME SceneIdentity)
+set(HORO_GAMEPLAY_PHYSICS_SDK_TARGETS HoroSceneIdentity HoroGameplayPhysicsIntegration HoroPhysics HoroPhysicsModel HoroAssets HoroRuntime
     HoroThirdPartyUfbx miniz utf8proc nlohmann_json)
 if(TARGET Jolt)
     list(APPEND HORO_GAMEPLAY_PHYSICS_SDK_TARGETS Jolt)

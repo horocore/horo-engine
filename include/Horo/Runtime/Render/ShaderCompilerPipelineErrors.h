@@ -25,5 +25,6 @@ namespace Horo::Render::ShaderCompilerPipelineErrors {
     extern const ErrorCodeDescriptor ToolDigestMismatch;            /**< @brief Executable bytes do not match the reviewed lock. */
     extern const ErrorCodeDescriptor ScratchIoFailed;               /**< @brief Isolated compiler scratch I/O failed. */
     extern const ErrorCodeDescriptor ToolProcessFailed;             /**< @brief A compiler process did not exit successfully. */
-    extern const ErrorCodeDescriptor ToolOutputInvalid;             /**< @brief A compiler output is absent, malformed, or over budget. */
+    extern const ErrorCodeDescriptor ToolTimedOut;      /**< @brief A selected compiler exceeded its explicit process deadline. */
+    extern const ErrorCodeDescriptor ToolOutputInvalid; /**< @brief A compiler output is absent, malformed, or over budget. */
 }  // namespace Horo::Render::ShaderCompilerPipelineErrors

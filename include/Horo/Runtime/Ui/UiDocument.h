@@ -41,8 +41,8 @@ namespace Horo::Runtime::Ui {
     /** @brief Maximum byte count admitted by one cooked document payload. */
     inline constexpr std::size_t MaximumCookedUiDocumentBytes = 64ULL * 1024ULL * 1024ULL;
 
-    /** @brief Version of the backend-neutral binary Runtime UI cooked payload. */
-    inline constexpr std::uint32_t CurrentCookedUiDocumentFormatVersion = 1;
+    /** @brief Binary Runtime UI payload version; v2 persists canvas presentation policy, with v1 decode retained. */
+    inline constexpr std::uint32_t CurrentCookedUiDocumentFormatVersion = 2;
 
     /** @brief Bounded limits applied while producing or decoding one cooked Runtime UI document. */
     struct UiDocumentCookLimits final {
@@ -258,6 +258,7 @@ namespace Horo::Runtime::Ui {
          * @param payload Untrusted cooked bytes; the input remains borrowed and unchanged.
          * @param limits Bounded decoder and content limits.
          * @return Owned validated cooked representation or a typed malformed/version/capacity failure.
+         * @details Format 1 supplies neutral canvas presentation defaults; format 2 retains the authored policy.
          */
         [[nodiscard]] static Result<CookedUiDocument> Decode(std::span<const std::uint8_t> payload,
                                                              const UiDocumentCookLimits &limits = {});

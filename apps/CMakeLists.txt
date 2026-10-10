@@ -156,6 +156,8 @@ if(HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditor
         HoroEditor/main.cpp
         HoroEditor/app/HoroEditorApp.cpp
+        HoroEditor/app/EditorWorkerShutdown.cpp
+        HoroEditor/app/RenderGraphInspectionPane.cpp
         HoroEditor/app/EditorUserStateMigration.cpp
         HoroEditor/app/ConfiguredEditorUpdateBackend.cpp
         HoroEditor/app/ConfiguredEditorUpdateManifestSource.cpp
@@ -268,6 +270,7 @@ if(HORO_BUILD_EDITOR_GUI)
 
     target_link_libraries(HoroEditor
         PRIVATE
+            HoroEngine::ShaderBuild
             HoroEngine::Gui
             HoroEngine::EditorServices
             HoroEngine::EditorRenderExtraction

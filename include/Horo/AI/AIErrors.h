@@ -8,6 +8,14 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::AI::AIErrors {
+    /** @brief Fixed-tick scheduler settings, registration or cooperative limits are invalid. */
+    extern const ErrorCodeDescriptor SchedulerPolicyInvalid;
+    /** @brief A cooperative owner or worker slice attempted work beyond its admitted allowance. */
+    extern const ErrorCodeDescriptor SchedulerBudgetExhausted;
+    /** @brief Scheduler was called reentrantly, after closure, or with an invalid phase/clock. */
+    extern const ErrorCodeDescriptor SchedulerPhaseInvalid;
+    /** @brief Deterministic admission requires owner evaluation instead of timing-dependent worker jobs. */
+    extern const ErrorCodeDescriptor SchedulerWorkerUnsupported;
     /** @brief A persistent AI identity uses its reserved zero representation. */
     extern const ErrorCodeDescriptor IdentityInvalid;
     /** @brief Two descriptors collide within one persistent identity domain. */
