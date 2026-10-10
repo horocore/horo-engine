@@ -4,12 +4,36 @@
 #include <array>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <thread>
 
 namespace Horo::Navigation {
     namespace {
         using namespace std::chrono_literals;
+
+        /** @brief Measures callback occupancy; the scheduler is destroyed before this captured owner. */
+        struct WorkOccupancy {
+            std::atomic<std::size_t> active{};
+            std::atomic<std::size_t> peak{};
+            std::atomic<std::size_t> executed{};
+            std::atomic<bool> exceeded{};
+
+            Result<void> Execute(const NavigationBakeJobBudget &budget) {
+                const auto count = active.fetch_add(1) + 1;
+                auto observed = peak.load();
+                while (observed < count && !peak.compare_exchange_weak(observed, count)) {
+                    // A competing callback updates observed; retry only while this count is larger.
+                }
+                if (count > budget.maximumConcurrentJobs || count * 30 > budget.maximumResidentBytes ||
+                    count * 40 > budget.maximumTemporaryBytes)
+                    exceeded.store(true);
+                std::this_thread::sleep_for(1ms);
+                executed.fetch_add(1);
+                active.fetch_sub(1);
+                return Result<void>::Success();
+            }
+        };
 
         [[nodiscard]] NavigationBakeJobBudget TestBudget() {
             return {.maximumConcurrentJobs = 2,
@@ -213,6 +237,53 @@ namespace Horo::Navigation {
         CHECK(handle.Snapshot()->state == NavigationBakeJobState::Succeeded);
         CHECK(laterWorkCount.load() == 2);
         CHECK_FALSE(laterWorkStartedTooEarly.load());
+    }
+
+    TEST_CASE("Bake qualification bounds simultaneous jobs and resident memory and aggregate scratch reservations",
+              "[navigation][bake][qualification][headless]") {
+        const auto resource = GENERATE(NavigationBakeBudgetResource::ConcurrentJobs, NavigationBakeBudgetResource::ResidentMemory,
+                                       NavigationBakeBudgetResource::TemporaryStorage);
+        INFO("limiting resource=" << static_cast<int>(resource));
+        OperationStore operations(4, 4);
+        WorkOccupancy occupancy;
+        JobSystem jobs({.workerCount = 4, .maxQueuedJobs = 32, .maxRetainedTerminalJobs = 32});
+        auto descriptor = CompleteDescriptor();
+        descriptor.budget.maximumConcurrentJobs = resource == NavigationBakeBudgetResource::ConcurrentJobs ? 1 : 4;
+        descriptor.budget.maximumResidentBytes = resource == NavigationBakeBudgetResource::ResidentMemory ? 60 : 1024;
+        descriptor.budget.maximumTemporaryBytes = resource == NavigationBakeBudgetResource::TemporaryStorage ? 80 : 4096;
+        descriptor.budget.maximumWorkItems = 32;
+        descriptor.work.erase(descriptor.work.begin() + 1, descriptor.work.begin() + 3);
+        const auto budget = descriptor.budget;
+        for (std::size_t index = 0; index < 24; ++index) {
+            auto item = Work(NavigationBakeJobStage::TileBuild, 1, 30, 40);
+            item.execute = [&occupancy, budget](const CancellationToken &) {
+                return occupancy.Execute(budget);
+            };
+            descriptor.work.insert(descriptor.work.end() - 2, std::move(item));
+        }
+        const auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
+        RequireTerminal(handle);
+        const auto terminal = handle.Snapshot();
+        REQUIRE(terminal.has_value());
+        if (resource == NavigationBakeBudgetResource::TemporaryStorage) {
+            CHECK(terminal->state == NavigationBakeJobState::Failed);
+            REQUIRE(terminal->limitingResource.has_value());
+            CHECK(*terminal->limitingResource == resource);
+            CHECK(terminal->acceptedChildJobs == 0);
+            CHECK(occupancy.executed.load() == 0);
+            CHECK(occupancy.peak.load() == 0);
+            return;
+        }
+        CHECK(terminal->state == NavigationBakeJobState::Succeeded);
+        CHECK(terminal->acceptedChildJobs == 27);
+        CHECK(terminal->terminalChildJobs == terminal->acceptedChildJobs);
+        CHECK(occupancy.executed.load() == 24);
+        CHECK(occupancy.active.load() == 0);
+        CHECK(occupancy.peak.load() >= 1);
+        CHECK_FALSE(occupancy.exceeded.load());
+        CHECK(occupancy.peak.load() <= budget.maximumConcurrentJobs);
+        CHECK(occupancy.peak.load() * 30 <= budget.maximumResidentBytes);
+        CHECK(occupancy.peak.load() * 40 <= budget.maximumTemporaryBytes);
     }
 
     TEST_CASE("Navigation bake rejects missing stages without creating an operation") {
