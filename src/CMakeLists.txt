@@ -2121,6 +2121,7 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderQueryErrors.cpp
         runtime/renderer/frontend/RenderResourceOperations.cpp
         runtime/renderer/frontend/RenderResourceRegistry.cpp
+        runtime/renderer/frontend/RenderResourceRegistryOperations.cpp
         runtime/renderer/frontend/RenderResourceReservationGuard.cpp
         runtime/renderer/frontend/RenderResourceSubmissionPins.cpp
         runtime/renderer/frontend/UiRenderComposition.cpp
@@ -2141,6 +2142,16 @@ target_link_libraries(HoroRenderFrontend
         HoroEngine::RenderBackendRegistry
         HoroEngine::RuntimeUi
 )
+
+# Host-only bridge: Terrain value extraction does not depend on renderer lifecycle.
+add_library(HoroTerrainRenderIntegration STATIC
+        runtime/terrain/render/TerrainRenderSnapshot.cpp
+        runtime/terrain/render/TerrainTileResourceOwner.cpp
+)
+add_library(HoroEngine::TerrainRenderIntegration ALIAS HoroTerrainRenderIntegration)
+target_compile_features(HoroTerrainRenderIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroTerrainRenderIntegration PUBLIC
+        HoroEngine::TerrainCook HoroEngine::TerrainRender HoroEngine::RenderFrontend HoroEngine::WorldStreaming)
 
 add_library(HoroSceneRenderExtraction STATIC runtime/renderer/frontend/LightSceneExtraction.cpp)
 add_library(HoroEngine::SceneRenderExtraction ALIAS HoroSceneRenderExtraction)

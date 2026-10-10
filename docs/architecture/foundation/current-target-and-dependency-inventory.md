@@ -394,3 +394,27 @@ its qualified source-free flat convex loader. `HoroDestructionCollisionArtifacts
 links DestructionApi/Physics for one source-free packaged bundle, separate from offline
 projection. Generated individual public-header
 consumers validate each of these target boundaries.
+
+### Terrain render integration header migration (HORO-1907)
+
+`HoroEngine::TerrainRenderIntegration` owns the new
+`Horo/TerrainRenderIntegration/TerrainRenderSnapshot.h` and
+`Horo/TerrainRenderIntegration/TerrainTileResourceOwner.h` public contracts. Host
+composition links that target explicitly when visual extraction/resources are needed.
+The existing TerrainRender target retains its TerrainApi/RenderApi dependencies;
+TerrainApi, TerrainRuntime, and concrete renderer backends acquire no reverse edge.
+The integration depends on TerrainCook, TerrainRender, RenderFrontend, and WorldStreaming
+identity/origin values and publishes
+only their staged owning headers. `HoroTerrainRenderIntegrationPublicHeaderConsumer`
+compiles both declarations without repository-wide source include access. Existing
+callers need no migration because this is an additive opt-in host boundary.
+
+The renderer resource contract also adds `RenderResourceOperationState` under the
+existing RenderApi-owned `RenderResource.h` and an observation method under the
+existing RenderFrontend-owned `RenderFrontend.h`. The observed Terrain failure path
+needs to distinguish a known failed creation from an unknown/evicted operation record
+before relinquishing automatically retired metadata. Existing callers retain
+`ResourceOperationResult` and its original diagnostic behavior, including terminal
+results after shutdown; no migration is required. Ownership and dependency edges
+remain unchanged. RenderApi and RenderFrontend public-header consumers and the
+integration consumer validate this additive contract.

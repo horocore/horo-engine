@@ -104,6 +104,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroTerrainPayloadManifestPublicHeaderConsumer
     HoroTerrainProducerSnapshotTests
     HoroTerrainProducerSnapshotPublicHeaderConsumer
+    HoroTerrainRenderIntegrationTests
+    HoroTerrainRenderIntegrationPublicHeaderConsumer
     HoroNavigationRuntimeTests
     HoroNavigationTransportReservationTests
     HoroNavigationCoordinatorPublicConsumer

@@ -505,6 +505,13 @@ namespace Horo::Render {
         /** @brief Returns the current state of one generic render-target generation. */
         [[nodiscard]] Result<RenderResourceState> ResourceState(RenderTargetHandle target) const;
 
+        /** @brief Observes a known creation outcome without conflating failures with query errors.
+         * @param operation Exact frontend-issued operation.
+         * @return Pending, Succeeded or Failed; unknown/evicted identities and stopped frontend are typed errors.
+         * @details Failed retains the original diagnostic in ResourceOperationResult. Bounded history can evict
+         * completed operations; callers must preserve ownership when their outcome cannot be proven. */
+        [[nodiscard]] Result<RenderResourceOperationState> ResourceOperationState(ResourceOperationId operation) const;
+
         /** @brief Returns success, pending, or the stored typed result for one resource operation. */
         [[nodiscard]] Result<void> ResourceOperationResult(ResourceOperationId operation) const;
 

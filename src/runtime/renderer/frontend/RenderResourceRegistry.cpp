@@ -257,26 +257,6 @@ namespace Horo::Render::Detail {
         QueueRetirementIfEligible(reservation.identity.slot);
     }
 
-    Result<void> RenderResourceRegistry::OperationResult(const ResourceOperationId operation) const {
-        if (!operation.IsValid()) {
-            return Result<void>::Failure(
-                RegistryError(FrontendErrors::ResourceOperationUnknown, "The resource operation identity is invalid."));
-        }
-        const auto record = std::ranges::find(operations_, operation, &OperationRecord::id);
-        if (record == operations_.end()) {
-            return Result<void>::Failure(
-                RegistryError(FrontendErrors::ResourceOperationUnknown, "The resource operation does not belong to this registry."));
-        }
-        if (!record->complete) {
-            return Result<void>::Failure(
-                RegistryError(FrontendErrors::ResourceOperationPending, "The renderer resource operation has not completed."));
-        }
-        if (record->error.has_value()) {
-            return Result<void>::Failure(*record->error);
-        }
-        return Result<void>::Success();
-    }
-
     Result<std::uint64_t> RenderResourceRegistry::BackendInstance(const RenderResourceClass resourceClass,
                                                                   const RenderResourceIdentity identity) const {
         const auto validated = Validate(resourceClass, identity);
