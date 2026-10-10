@@ -795,6 +795,7 @@ horo_configure_target_header_boundary(HoroNavigationRuntime PUBLIC_HEADERS
     Horo/Navigation/NavigationObstacleOverlay.h
     Horo/Navigation/NavigationAgentRegistry.h
     Horo/Navigation/NavigationPathPolicy.h
+    Horo/Navigation/NavigationCoordinator.h
     Horo/Navigation/NavigationRuntimeQueues.h
     Horo/Navigation/NavigationWorldLifecycle.h
 )
@@ -991,6 +992,8 @@ horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
     Horo/Runtime/Render/RenderCapabilities.h
     Horo/Runtime/Render/RenderDisplay.h
     Horo/Runtime/Render/RenderDisplayErrors.h
+    Horo/Runtime/Render/FramePacing.h
+    Horo/Runtime/Render/FramePacingErrors.h
     Horo/Runtime/Render/PresentMode.h
     Horo/Runtime/Render/PresentModeErrors.h
     Horo/Runtime/Render/RenderSurfaceLifecycle.h
@@ -1033,6 +1036,7 @@ horo_configure_target_header_boundary(HoroRenderBackendRegistry PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroRenderFrontend PUBLIC_HEADERS
     Horo/Runtime/Render/RenderFrontend.h
+    Horo/Runtime/Render/RenderGraphTransientResources.h
     Horo/Runtime/Render/RenderMemoryBudget.h
     Horo/Runtime/Render/RenderMemoryBudgetErrors.h
     Horo/Runtime/Render/RenderReadback.h

@@ -37,13 +37,15 @@ namespace Horo::JsonEncoding::Detail {
             }, other.value_);
         }
 
-        /** @brief Transfers complete owned storage without allocation. */
-        CanonicalJsonValue(CanonicalJsonValue &&) noexcept = default;
+        /** @brief Transfers complete owned storage without allocation and leaves the source null. */
+        CanonicalJsonValue(CanonicalJsonValue &&other) noexcept : value_(std::move(other.value_)) {
+            other.value_ = nullptr;
+        }
 
         /** @brief Retires owned storage to the inert null alternative without allocation. */
         ~CanonicalJsonValue() {
             // Destroy the complete alternative through RAII; the remaining null member owns no resources.
-            value_.template emplace<std::nullptr_t>(nullptr);
+            value_ = nullptr;
         }
 
         /** @brief Preserves the destination if copying any nested child fails. */
@@ -55,8 +57,14 @@ namespace Horo::JsonEncoding::Detail {
             return *this;
         }
 
-        /** @brief Replaces owned storage without allocation. */
-        CanonicalJsonValue &operator=(CanonicalJsonValue &&) noexcept = default;
+        /** @brief Replaces owned storage without allocation, leaves the source null and preserves self-moves. */
+        CanonicalJsonValue &operator=(CanonicalJsonValue &&other) noexcept {
+            if (this != &other) {
+                value_ = std::move(other.value_);
+                other.value_ = nullptr;
+            }
+            return *this;
+        }
 
         // Schema initializer lists intentionally convert scalar fields into owned wire values.
         explicit(false) CanonicalJsonValue(std::nullptr_t) noexcept {}
@@ -151,6 +159,9 @@ namespace Horo::JsonEncoding::Detail {
 
     private:
         using Value = std::variant<std::nullptr_t, bool, std::int64_t, std::uint64_t, double, std::string, array_t, object_t>;
+        static_assert(std::is_nothrow_move_constructible_v<Value>);
+        static_assert(std::is_nothrow_move_assignable_v<Value>);
+        static_assert(noexcept(std::declval<Value &>() = nullptr));
 
         /** @brief Writes indentation directly into output; partial output owns no unsafe cleanup. */
         static void Indent(std::string &bytes, const unsigned indentation, const unsigned depth) {

@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Runtime/Render/FramePacing.h"
 #include "Horo/Runtime/Render/MaterialBindingBackend.h"
 #include "Horo/Runtime/Render/PresentMode.h"
 #include "Horo/Runtime/Render/RenderAdapter.h"
@@ -128,6 +129,14 @@ namespace Horo::Render {
         bool supportsMeshResources{false};
         bool supportsTextureResources{false};
         bool supportsRenderTargetResources{false};
+        /**
+         * @brief Admits exact-descriptor transient object reuse on one effective queue.
+         *
+         * The selected backend must validate resolved instances before encoding and provide
+         * equivalent visibility between consecutive non-overlapping logical occupants.
+         * This grants no permission for overlapping resources or distinct placed-resource aliasing.
+         */
+        bool supportsExactTransientResourceReuse{false};
         /** @brief Modern immutable feature, queue, limit, and format support snapshot. */
         RenderCapabilitySnapshot support;
     };
@@ -278,6 +287,13 @@ namespace Horo::Render {
          * @brief Queries native-free backing requirements before a buffer allocation is admitted.
          * @param descriptor Valid backend-neutral buffer descriptor.
          * @return Exact or conservative requirements, or a typed unsupported/failure result.
+         * @throws std::bad_alloc Owned requirement or error metadata allocation failed.
+         * @throws std::length_error Owned metadata exceeds its representable capacity.
+         * @details Expected descriptor, capability and native failures must use Result and retain
+         * their original error identity. Implementations may throw only the two documented
+         * metadata exceptions; other exceptions violate this callback contract. Queries must
+         * release temporary native probes before returning or unwinding. This is not noexcept
+         * because the returned Error owns its metadata.
          */
         [[nodiscard]] virtual Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const = 0;
 
@@ -285,6 +301,13 @@ namespace Horo::Render {
          * @brief Queries native-free backing requirements before a texture allocation is admitted.
          * @param descriptor Valid backend-neutral texture descriptor.
          * @return Exact or conservative requirements, or a typed unsupported/failure result.
+         * @throws std::bad_alloc Owned requirement or error metadata allocation failed.
+         * @throws std::length_error Owned metadata exceeds its representable capacity.
+         * @details Expected descriptor, capability and native failures must use Result and retain
+         * their original error identity. Implementations may throw only the two documented
+         * metadata exceptions; other exceptions violate this callback contract. Queries must
+         * release temporary native probes before returning or unwinding. This is not noexcept
+         * because the returned Error owns its metadata.
          */
         [[nodiscard]] virtual Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const = 0;
 
@@ -416,6 +439,23 @@ namespace Horo::Render {
 
         /** @brief Completes the active frame and presents when the backend supports presentation. */
         [[nodiscard]] virtual Result<void> Present(FrameToken frame) = 0;
+
+        /** @brief Presents with exact host identity and synchronous clock calibration.
+         * @param frame Active backend token.
+         * @param request Borrowed host identity and monotonic clock; never retained by callbacks.
+         * @return Present result; feedback arrives separately through PollNativePresentTiming.
+         * @details Default invokes Present; native timing remains explicitly unsupported.
+         */
+        [[nodiscard]] virtual Result<void> PresentWithTiming(FrameToken frame, const PresentationTimingRequest &request);
+
+        /** @brief Polls one new native display observation without waiting or allocating.
+         * @return New qualified observation, empty when pending, or typed unsupported/failure.
+         * @details Owner-thread only. The provider must translate actual display time to the
+         * host monotonic clock and exact surface/host-frame identity. Present return or GPU
+         * completion cannot stand in for display time. Unsupported is the default for peers
+         * without a qualified native provider. No implicit backend or timing fallback occurs.
+         */
+        [[nodiscard]] virtual Result<std::optional<NativePresentTiming>> PollNativePresentTiming();
 
         /** @brief Discards matching active-frame work after a failed execution or presentation step. */
         virtual void AbortFrame(FrameToken frame) noexcept = 0;

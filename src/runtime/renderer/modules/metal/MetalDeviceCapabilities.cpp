@@ -180,6 +180,7 @@ namespace Horo::Render::Detail {
                     .supportsMeshResources = true,
                     .supportsTextureResources = true,
                     .supportsRenderTargetResources = true,
+                    .supportsExactTransientResourceReuse = true,
                     .support = MakeCapabilitySnapshot(facts),
                 },
         };

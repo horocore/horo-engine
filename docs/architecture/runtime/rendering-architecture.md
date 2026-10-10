@@ -1562,6 +1562,67 @@ manually order backend commands around hidden global state.
 
 ## Resource Model
 
+### Prepared graph transient resources
+
+The in-process C++ `IRenderResourceBackend::QueryBufferMemoryCost` and
+`QueryTextureMemoryCost` callbacks return expected descriptor, capability and native
+failures as `Result<RenderMemoryCostPlan>`, preserving backend error identity and
+context. Only `std::bad_alloc` and `std::length_error` from owned metadata are
+permitted exceptions. Queries release any temporary native probes before return
+or unwind. These callbacks are not `noexcept`: their returned `Error` owns strings
+and may require allocation. This narrow metadata exception contract does not
+change other backend callbacks or permit exceptions across a C ABI or job boundary.
+Frontend admission catches the two documented metadata exceptions and rolls back
+its exact registry and budget claims. Constructing the resulting owned failure
+may itself fail under persistent memory exhaustion; RAII still owns cleanup.
+Runtime errors and other exceptions from custom query implementations violate the
+contract and are no longer translated into a generic backend exception.
+
+`RenderGraphLifetimePlan` remains an inert logical proof. The host explicitly calls
+`RenderFrontend::PrepareTransientGraphResources(plan, scope)` outside an active
+frame to realize its used allocation slots. The selected backend must advertise
+`supportsExactTransientResourceReuse`. This admission reuses one native object for
+exact-descriptor-compatible, non-overlapping occupants of a logical slot; it does
+not create distinct placed resources sharing a heap range. Queue-role differences
+remain conservative separate slots. Used resources are checked against the exact
+compiled first/last uses and pass identities again before execution.
+
+The frontend owns at most eight prepared sets. Their handles identify the renderer,
+graph and a non-wrapping set sequence. Existing resource registry generations and
+`RenderMemoryBudget` remain the sole physical allocation and retirement authorities.
+Preparation queries actual backend requirements, reserves every unique slot before
+any native allocation, and publishes only a complete set. Partial failure cancels
+reservations and retires realized siblings while preserving the originating error.
+Backend memory class, size and estimate provenance are never replaced by logical
+graph classifications. OpenGL charges an additional estimated attachment granule
+for its prepared color framebuffer; this estimate is not measured driver usage.
+
+The explicit frame overload accepts the prepared handle and combines imported,
+transient and optional Runtime UI generation pins in the existing completion
+lease. Multiple logical aliases retain one physical generation pin per submission.
+A set remains unavailable for reuse until that exact lease completes, even after
+Present or logical set release. Frame admission performs no new allocation or
+CPU/GPU wait. Logical release retires native backing through the normal registry;
+released set records cannot be recycled while their completion lease borrows them.
+
+Null validates actual model buffer/texture instances and completes at its owner
+drain. OpenGL validates all native identities, copy flags and byte bounds before
+encoding; graph color framebuffers are created during preparation. Its ordered
+buffer copies and whole-color operations preserve caller state. Immediate command
+encoding transfers the same lease into a frame fence slot before the first command.
+Partial failure or fence creation failure cannot return backing to the frontend
+early; actual completion or context shutdown closes that ownership. Metal admits
+the same prepared instances through its existing native validators and ordered
+encoders, retaining the lease to actual command-buffer completion. Unsent Metal
+encoding failures discard the command buffer before release.
+
+These translators support finite operations on one effective queue. Compute,
+ownership transfers, Vulkan/D3D12 graph translation and distinct placed-resource
+alias barriers require separate implementation and remain typed unsupported paths.
+No backend is selected as a fallback. See the
+[migration guide](../../guides/render-graph-transient-resources.md) for host usage
+and validation limits.
+
 The canonical identity, descriptor, validation, and lifetime policy is
 [ADR-027: Renderer Resource Identity and Descriptors](../../adr/027-renderer-resource-identity-and-descriptors.md).
 ADR-027 is the sole normative owner of that policy; this section is an
@@ -1733,6 +1794,62 @@ no independent thread, cancellation, or shutdown lifecycle. The application host
 the immutable request and invokes negotiation before a renderer-owned surface lifecycle
 applies the resolved value. Surface reconfiguration, pacing, HDR, and backend-native
 translation remain in their owning downstream contracts.
+
+### Host frame pacing and presentation evidence
+
+`FramePacer` is the host-owned, owner-thread scheduling policy from RND-008.5.
+It consumes committed `RenderSurfaceLifecycle` publications and a separate typed
+0 (unlimited) or 1..1000 Hz frame cap. `Poll` returns Ready, a wait slice of at
+most 2 ms, or Suspended. The host owns all sleeping, event pumping and cancellation;
+no backend wait, busy spin, callback or worker is introduced by this policy.
+Deadlines rebase after late frames without catch-up bursts. Surface revisions,
+focus discontinuity, suspension and explicit reset discard timing baselines.
+`Stop` closes admission before surface shutdown. Runtime's simulation clock and
+fixed-step policy remain authoritative.
+
+The editor applies `--frame-rate-limit <0..1000>` before `RunFrame` samples its
+clock. Invalid/missing limits fail startup rather than selecting unlimited.
+Its normal FIFO policy and smoke-mode Immediate policy remain independent of the
+cap. Surface resize publishes only after native Resize succeeds; minimized/zero
+extent suspends presentation while short host sleeps keep event pumping alive.
+Focus changes reset pacing without selecting a new backend or clock.
+
+`RenderFrameScope::Present` optionally borrows `PresentationTimingRequest` for
+one call, validates the exact host frame and propagates it through
+`IRenderBackend::PresentWithTiming`. Native feedback is polled without waiting.
+`RecordPresent` labels CPU call duration separately from `NativePresentTiming`.
+Only native timestamps with actual refresh ordinals can establish an estimated
+refresh rate (four to eight intervals). Missed refresh ordinals are divided out;
+CPU return, GPU completion and drawable counts are never refresh evidence.
+
+Metal translates `MTLDrawable.presentedTime` in `addPresentedHandler` using a
+bounded host/Core Animation clock calibration. Zero timestamps denote dropped
+or unpresented drawables and are excluded. Its latest-value mailbox coalesces
+feedback with nonblocking try-locks; callback captures retain only value identity,
+calibration and shared feedback state. Shutdown atomically closes publication
+before native teardown, so late callbacks cannot access the destroyed runtime,
+window, frontend or clock. Stale surface/frame/time evidence is discarded and
+coalesced/rejected observation counts remain visible. Calibration spans exceeding
+1 ms are discarded. Metal provides actual display times but no native refresh
+ordinal, so its refresh estimate stays absent; the drawable identifier is not a
+refresh counter. OpenGL, Vulkan and Null currently return the typed
+`NativeTimingUnsupported` result because their retained presentation ports expose
+no qualified display timestamp provider. No substitute timestamp is fabricated.
+
+The editor publishes CPU present-call seconds, native feedback support, and missed
+cap deadlines through observability gauges. Pacer snapshots additionally expose
+native display timestamps, calibration uncertainty (in the observation), rejected
+feedback counts, and qualified refresh estimates. Pending and unsupported native
+timing remain distinct; these logical tests do not certify native display timing
+or pacing performance on a device.
+
+Migration: these additive RenderApi contracts belong solely to `HoroRenderApi`.
+Rebuild renderer components and frontend consumers together for the new virtual
+methods. Existing `Present()` callers remain source-compatible and acquire no
+native timing registration; backends without a provider inherit typed unsupported
+polling. Header ownership and generated public consumer targets include both new
+headers. Native display-link scheduling, latency admission and frames-in-flight
+policy retain their separate owners.
 
 Publish revisioned logical output candidates with owner-thread commands before
 layout/extraction; commit active output only after realizing the same candidate

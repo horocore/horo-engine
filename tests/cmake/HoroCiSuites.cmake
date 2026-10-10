@@ -87,6 +87,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroTerrainProducerSnapshotTests
     HoroTerrainProducerSnapshotPublicHeaderConsumer
     HoroNavigationRuntimeTests
+    HoroNavigationTransportReservationTests
+    HoroNavigationCoordinatorPublicConsumer
     HoroNavigationBakeServiceTests
 )
 
@@ -96,6 +98,7 @@ set(HORO_CI_NAVIGATION_TARGETS
     HoroNavigationRecastDetour
     HoroNavigationApiPublicHeaderConsumer
     HoroNavigationRuntimePublicHeaderConsumer
+    HoroNavigationCoordinatorPublicConsumer
     HoroNavigationNullPublicHeaderConsumer
     HoroNavigationRecastDetourPublicHeaderConsumer
     HoroNavigationBakeServicePublicHeaderConsumer
@@ -163,11 +166,13 @@ function(horo_finalize_ci_suites)
         HoroPrefabSceneExpansionContractConsumer
         HoroRuntimeUiScreenTransitionPublicHeaderConsumer
         HoroExtensionManagerTests
+        HoroNavigationCoordinatorPublicConsumer
         HoroExtensionAbiConformanceCliSupported
         HoroExtensionAbiConformanceCliIncompatible
         HoroExtensionAbiConformanceCliRequiresModule
         APPEND PROPERTY LABELS ci-windows)
-    set_property(TEST HoroNavigationBakeDiagnosticsPublicConsumer APPEND PROPERTY LABELS ci-navigation)
+    set_property(TEST HoroNavigationBakeDiagnosticsPublicConsumer HoroNavigationCoordinatorPublicConsumer
+        APPEND PROPERTY LABELS ci-navigation)
 
     # Catch tests receive coverage labels during registration. Direct CTest
     # contracts use the same former gui/editor exclusion. Python tooling runs

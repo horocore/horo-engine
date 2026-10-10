@@ -340,6 +340,29 @@ using OrderedWireValue = Horo::JsonEncoding::Detail::CanonicalJsonValue<false>;
 using SortedWireValue = Horo::JsonEncoding::Detail::CanonicalJsonValue<true>;
 
 namespace {
+    /** @brief Checks allocation-free move transfer, null source retirement and self-move preservation. */
+    template <typename Wire> void RequireNonthrowingAllocationFreeMoves(const Wire &source, const std::string &sourceBytes) {
+        Wire moving{source};
+        std::optional<Wire> constructed;
+        Wire destination{{"previous", std::string(128, 'p')}};
+        std::size_t moveAllocations{};
+        {
+            Tests::AllocationProbe::ScopedMeasurement measurement;
+            Tests::AllocationProbe::ScopedFailure failure{0};
+            constructed.emplace(std::move(moving));
+            destination = std::move(*constructed);
+            Wire &self = destination;
+            destination = std::move(self);
+            moveAllocations = measurement.Snapshot().requests;
+        }
+        CHECK(moveAllocations == 0);
+        CHECK(moving.dump(2) == "null");
+        REQUIRE(constructed.has_value());
+        CHECK(constructed->dump(2) == "null");
+        CHECK(destination.dump(2) == sourceBytes);
+        CHECK(source.dump(2) == sourceBytes);
+    }
+
     /** @brief Verifies nested member RAII cleanup and move traits without allowing allocating assertions in the failure scope. */
     template <typename Wire> void RequireNonthrowingAllocationFreeDestruction(const Wire &source, const std::string &sourceBytes) {
         STATIC_REQUIRE(std::is_nothrow_destructible_v<Wire>);
@@ -359,6 +382,34 @@ namespace {
         CHECK(source.dump(2) == sourceBytes);
     }
 }  // namespace
+
+TEMPLATE_TEST_CASE("Canonical moves retire every wire alternative without allocation", "[native][prefab][wire][allocation]",
+                   OrderedWireValue, SortedWireValue) {
+    using Wire = TestType;
+    const unsigned alternative = GENERATE(0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U);
+    const Wire source = [alternative] {
+        switch (alternative) {
+            case 0:
+                return Wire{nullptr};
+            case 1:
+                return Wire{true};
+            case 2:
+                return Wire{std::int64_t{-7}};
+            case 3:
+                return Wire{std::uint64_t{7}};
+            case 4:
+                return Wire{1.25};
+            case 5:
+                return Wire{std::string(128, 's')};
+            case 6:
+                return Wire::array({std::string(128, 'a'), Wire{{"nested", true}}});
+            default:
+                return Wire{{"nested", Wire::array({std::string(128, 'o'), nullptr})}};
+        }
+    }();
+    const std::string sourceBytes = source.dump(2);
+    RequireNonthrowingAllocationFreeMoves(source, sourceBytes);
+}
 
 TEMPLATE_TEST_CASE("Recursive canonical copies preserve source and destination at every allocation failure",
                    "[native][prefab][wire][allocation]", OrderedWireValue, SortedWireValue) {
