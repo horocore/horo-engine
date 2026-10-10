@@ -19,7 +19,8 @@ namespace Horo::Application {
                                                      .tiles = tiles,
                                                      .sources = harness.fixture.Observations()});
             REQUIRE(rejected.HasError());
-            CHECK(rejected.ErrorValue().code == NavigationErrors::BakeInputInvalid.code);
+            CHECK(rejected.ErrorValue().domain.Value() == NavigationErrors::BakeInputInvalid.domain.Value());
+            CHECK(rejected.ErrorValue().code.Value() == NavigationErrors::BakeInputInvalid.code.Value());
             CHECK(harness.builder->builds.load() == 0);
             CHECK_FALSE(harness.service->Published());
             std::ranges::sort(tiles, {}, &NavigationBakeTile::key);
