@@ -2,11 +2,14 @@
 
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <fstream>
 #include <limits>
+#include <ranges>
 #include <type_traits>
+#include <utility>
 
 namespace Horo::Render::ShaderCompilerToolchainDetail {
     namespace {
@@ -140,6 +143,97 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
         return line;
     }
 
+    namespace {
+        /** @brief Optional native code attached to a recognized severity marker. */
+        struct NativeSeverityMarker {
+            std::optional<std::string> code;
+        };
+
+        /** @brief Bounds native codes to the supported token vocabulary. */
+        bool IsNativeCode(const std::string_view code) {
+            return std::ranges::all_of(code, [](const unsigned char character) {
+                return (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z') ||
+                       (character >= '0' && character <= '9') || character == '_' || character == '-';
+            });
+        }
+
+        /** @brief Extracts a bounded native code followed by the diagnostic colon. */
+        std::optional<std::string> ReadNativeCode(const std::string_view message, const std::size_t start) {
+            const auto colon = message.find(':', start + 1);
+            if (colon == std::string::npos || colon == start + 1 || colon - start > 128U)
+                return {};
+            const auto code = message.substr(start + 1, colon - start - 1);
+            if (!IsNativeCode(code))
+                return {};
+            return std::string{code};
+        }
+
+        /** @brief Recognizes a severity word without accepting a substring inside another token. */
+        std::optional<NativeSeverityMarker> ReadSeverityMarker(const std::string_view message, const std::string_view word) {
+            const auto offset = message.find(word);
+            if (offset == std::string::npos || (offset != 0 && message[offset - 1] != ' '))
+                return {};
+            const std::size_t start = offset + word.size();
+            if (start >= message.size())
+                return {};
+            if (message[start] == ':')
+                return NativeSeverityMarker{};
+            if (message[start] != ' ')
+                return {};
+            auto code = ReadNativeCode(message, start);
+            if (!code)
+                return {};
+            return NativeSeverityMarker{std::move(code)};
+        }
+
+        /** @brief Preserves original severity and optional native code independently of source parsing. */
+        void ApplyNativeSeverity(ShaderCompilerDiagnostic &diagnostic) {
+            using enum ShaderCompilerDiagnosticSeverity;
+            for (const auto &[word, severity] :
+                 {std::pair{std::string_view{"error"}, Error}, std::pair{std::string_view{"warning"}, Warning},
+                  std::pair{std::string_view{"note"}, Information}}) {
+                auto marker = ReadSeverityMarker(diagnostic.message, word);
+                if (!marker)
+                    continue;
+                diagnostic.toolCode = std::move(marker->code);
+                diagnostic.severity = severity;
+                break;
+            }
+        }
+
+        /** @brief Consume a checked coordinate and required colon without advancing malformed input. */
+        bool ConsumeCoordinate(const char *&begin, const char *end, std::uint32_t &coordinate) {
+            const auto parsed = std::from_chars(begin, end, coordinate);
+            if (parsed.ec != std::errc{} || parsed.ptr == end || *parsed.ptr != ':')
+                return false;
+            begin = parsed.ptr + 1;
+            return true;
+        }
+
+        /** @brief Maps only recognized source prefixes with complete line/column coordinates. */
+        void ApplySourceLocation(ShaderCompilerDiagnostic &diagnostic, const std::string_view sourceIdentity) {
+            constexpr std::string_view SourcePrefix = "<shader>:";
+            const std::string logicalPrefix = std::string{sourceIdentity} + ":";
+            std::size_t prefixBytes{};
+            if (diagnostic.message.starts_with(SourcePrefix))
+                prefixBytes = SourcePrefix.size();
+            else if (diagnostic.message.starts_with(logicalPrefix))
+                prefixBytes = logicalPrefix.size();
+            if (prefixBytes == 0U)
+                return;
+            const char *begin = diagnostic.message.data() + prefixBytes;
+            const char *end = diagnostic.message.data() + diagnostic.message.size();
+            std::uint32_t line = 0;
+            std::uint32_t column = 0;
+            if (!ConsumeCoordinate(begin, end, line) || !ConsumeCoordinate(begin, end, column) || line == 0)
+                return;
+            diagnostic.category = ShaderCompilerDiagnosticCategory::Source;
+            diagnostic.sourceIdentity = sourceIdentity;
+            diagnostic.line = line;
+            diagnostic.column = column;
+        }
+    }  // namespace
+
     ShaderCompilerDiagnostic MakeToolDiagnostic(std::string message, const bool truncated, const std::string_view sourceIdentity,
                                                 const ProcessOutputStream stream) {
         ShaderCompilerDiagnostic diagnostic;
@@ -148,24 +242,8 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                                                                            : ShaderCompilerDiagnosticSeverity::Information;
         diagnostic.message = std::move(message);
         diagnostic.truncated = truncated;
-        constexpr std::string_view SourcePrefix = "<shader>:";
-        if (!diagnostic.message.starts_with(SourcePrefix))
-            return diagnostic;
-        const char *begin = diagnostic.message.data() + SourcePrefix.size();
-        const char *end = diagnostic.message.data() + diagnostic.message.size();
-        std::uint32_t line = 0;
-        const auto parsedLine = std::from_chars(begin, end, line);
-        if (parsedLine.ec != std::errc{} || parsedLine.ptr == end || *parsedLine.ptr != ':')
-            return diagnostic;
-        std::uint32_t column = 0;
-        if (const auto parsedColumn = std::from_chars(parsedLine.ptr + 1, end, column); parsedColumn.ec != std::errc{} || line == 0)
-            return diagnostic;
-        diagnostic.category = ShaderCompilerDiagnosticCategory::Source;
-        diagnostic.sourceIdentity = sourceIdentity;
-        diagnostic.line = line;
-        diagnostic.column = column;
-        if (diagnostic.message.find("error:") != std::string::npos)
-            diagnostic.severity = ShaderCompilerDiagnosticSeverity::Error;
+        ApplyNativeSeverity(diagnostic);
+        ApplySourceLocation(diagnostic, sourceIdentity);
         return diagnostic;
     }
 }  // namespace Horo::Render::ShaderCompilerToolchainDetail

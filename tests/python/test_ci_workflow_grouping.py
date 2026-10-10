@@ -29,6 +29,7 @@ def targets(name: str) -> set[str]:
 
 def test_windows_group_preserves_every_previously_built_target() -> None:
     assert targets("HORO_CI_WINDOWS_TARGETS") == targets("HORO_CI_AUDIO_TARGETS") | {
+        "HoroAITaskSchedulerTests", "HoroAITaskSchedulerPublicConsumer",
         "HoroD3D12InitializationTests",
         "HoroMaterialBindingTests", "HoroMaterialBindingPublicHeaderConsumer",
         "HoroNetworkDebuggerTests", "HoroNetworkDebuggerPublicHeaderConsumer",
@@ -55,17 +56,31 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
         "HoroRuntimeUiUnicodeStartupTests", "HoroRuntimeUiUnicodeLifecycleTests", "HoroRuntimeUiPublicHeaderConsumer",
         "HoroRuntimeUiOverlayLifecycleTests",
         "HoroRuntimeUiHudAssociationTests", "HoroRuntimeUiHudPublicHeaderConsumer",
+        "HoroRuntimeUiScreenTransitionTests", "HoroRuntimeUiScreenTransitionPublicHeaderConsumer",
         "HoroTerrainSourceArtifactTests", "HoroTerrainSourceArtifactPublicHeaderConsumer",
         "HoroTerrainPayloadManifestTests", "HoroTerrainPayloadManifestPublicHeaderConsumer",
         "HoroTerrainProducerSnapshotTests", "HoroTerrainProducerSnapshotPublicHeaderConsumer",
         "HoroRuntimeSaveEventTriggersTests", "HoroSaveEventTriggersPublicHeaderConsumer",
         "HoroRuntimeSaveRestoreTransactionTests", "HoroSaveGameplayCheckpointPublicHeaderConsumer",
         "HoroNavigationRuntimeTests", "HoroNavigationBakeServiceTests",
+        "HoroNavigationTransportReservationTests", "HoroNavigationCoordinatorPublicConsumer",
     }
     for workflow in ("prefab-foundation-windows", "extension-abi-windows", "mcp-session-windows", "save-path-windows"):
         assert not (ROOT / f".github/workflows/{workflow}.yml").exists()
     assert preset("buildPresets", "ci-windows-debug")["targets"] == ["HoroCiWindowsChecks"]
     assert preset("testPresets", "ci-windows-debug")["filter"]["include"]["label"] == "^ci-windows$"
+
+
+def test_ai_scheduler_qualification_has_build_discovery_and_single_source_ownership() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    for target in ("HoroAITaskSchedulerTests", "HoroAITaskSchedulerPublicConsumer"):
+        assert target in targets("HORO_CI_WINDOWS_TARGETS")
+        assert f"add_executable({target} " in tests_cmake
+        assert f"target_link_libraries({target} PRIVATE HoroEngine::AISceneIntegration)" in tests_cmake
+    assert tests_cmake.count("unit/runtime/ai/AITaskSchedulerTests.cpp") == 1
+    assert 'horo_register_catch_test(HoroAITaskSchedulerTests LABELS "unit;ai;headless")' in tests_cmake
+    assert 'add_test(NAME HoroAITaskSchedulerPublicConsumer COMMAND HoroAITaskSchedulerPublicConsumer)' in tests_cmake
+    assert 'set_tests_properties(HoroAITaskSchedulerPublicConsumer PROPERTIES LABELS "unit;ai;headless;ci-windows")' in tests_cmake
 
 
 def test_windows_navigation_qualification_has_build_and_discovery_closure() -> None:
@@ -83,6 +98,22 @@ def test_windows_navigation_qualification_has_build_and_discovery_closure() -> N
         assert preset("configurePresets", name)["cacheVariables"].get("HORO_BUILD_NAVIGATION_RECAST_DETOUR", "ON") == "ON"
     root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
     assert 'option(HORO_BUILD_NAVIGATION_RECAST_DETOUR "Build the default grounded navigation query provider" ON)' in root_cmake
+
+
+def test_navigation_transport_and_coordinator_consumer_have_build_and_execution_closure() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    transport = "HoroNavigationTransportReservationTests"
+    consumer = "HoroNavigationCoordinatorPublicConsumer"
+    for target in (transport, consumer):
+        assert target in targets("HORO_CI_WINDOWS_TARGETS")
+        assert f"add_executable({target}" in tests_cmake
+    assert f'horo_register_catch_test({transport} LABELS "unit;navigation;headless;concurrency;ci-windows")' in tests_cmake
+    assert f"add_test(NAME {consumer} COMMAND {consumer})" in tests_cmake
+    windows_labels = re.search(r"set_property\(TEST\s+(.*?)\s+APPEND PROPERTY LABELS ci-windows\)", SUITES, re.S)
+    assert windows_labels is not None
+    assert consumer in windows_labels.group(1).split()
+    assert consumer in targets("HORO_CI_NAVIGATION_TARGETS")
+    assert f"set_property(TEST HoroNavigationBakeDiagnosticsPublicConsumer {consumer}\n        APPEND PROPERTY LABELS ci-navigation)" in SUITES
 
 
 def test_windows_manifest_tests_and_consumer_share_the_build_closure() -> None:
@@ -140,6 +171,22 @@ def test_windows_runtime_ui_tests_and_owned_consumers_share_the_build_closure() 
     assert 'add_custom_target(HoroCiWindowsChecks DEPENDS ${HORO_CI_WINDOWS_TARGETS})' in SUITES
 
 
+def test_windows_screen_transition_build_and_execution_are_selected() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    suite = "HoroRuntimeUiScreenTransitionTests"
+    consumer = "HoroRuntimeUiScreenTransitionPublicHeaderConsumer"
+    for target in (suite, consumer):
+        assert target in targets("HORO_CI_WINDOWS_TARGETS")
+        assert f"add_executable({target}" in tests_cmake
+    registration = re.search(r"set\(HORO_CATCH_TEST_TARGETS\s+(.*?)\n\)", tests_cmake, re.S)
+    assert registration
+    assert suite in registration.group(1).split()
+    direct_selection = re.search(r"set_property\(TEST\s+(.*?)\s+APPEND PROPERTY LABELS ci-windows\)", SUITES, re.S)
+    assert direct_selection
+    assert consumer in direct_selection.group(1).split()
+    assert f"add_test(NAME {consumer} COMMAND {consumer})" in tests_cmake
+
+
 def test_windows_suites_run_independently_and_remain_blocking() -> None:
     # CTest continues through cases by default. Workflow test stages must also
     # remain runnable after another stage fails, and failures must fail the job.
@@ -179,6 +226,7 @@ def test_audio_keeps_both_modes_and_all_platforms() -> None:
     assert targets("HORO_CI_AUDIO_TARGETS") == {
         "HoroAudioRealtimeSafetyHarnessTests", "HoroAudioWatchdogTests", "HoroAudioNullTests",
         "HoroAudioDspTests", "HoroCoreAudioDspTests", "HoroAudioCommandTests", "HoroAudioMixerTests",
+        "HoroAudioEditorPreviewTests", "HoroAudioFrontendPublicHeaderConsumer",
     }
     assert preset("configurePresets", "ci-native-debug")["cacheVariables"]["CMAKE_BUILD_TYPE"] == "Debug"
     assert preset("configurePresets", "ci-audio-release")["cacheVariables"]["CMAKE_BUILD_TYPE"] == "Release"
@@ -229,6 +277,18 @@ def test_installed_manifest_source_keeps_sonar_coverage() -> None:
     collector = (ROOT / ".github/scripts/collect_sonar_coverage.sh").read_text(encoding="utf-8")
     assert '"$workspace/apps/HoroEditor/app/ConfiguredEditorUpdateManifestSource.cpp"' in collector
     assert "HoroConfiguredEditorUpdateBackendTests" in targets("HORO_SONAR_EDITOR_TARGETS")
+
+
+def test_instrumented_render_graph_pane_keeps_sonar_coverage() -> None:
+    collector = (ROOT / ".github/scripts/collect_sonar_coverage.sh").read_text(encoding="utf-8")
+    assert '"$workspace/apps/HoroEditor/app/RenderGraphInspectionPane.cpp"' in collector
+    assert '"$workspace/apps/HoroEditor/app/"' not in collector
+    test_targets = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    assert "target_sources(HoroGlobalDockPanelRenderTests PRIVATE unit/editor/RenderGraphInspectionPaneTests.cpp" in test_targets
+    assert "../apps/HoroEditor/app/RenderGraphInspectionPane.cpp)" in test_targets
+    assert preset("configurePresets", "sonar")["inherits"] == "ci-linux-debug"
+    assert preset("configurePresets", "ci-linux-debug")["inherits"] == "ci-native-debug"
+    assert preset("configurePresets", "ci-native-debug")["cacheVariables"]["HORO_BUILD_EDITOR_GUI"] == "ON"
 
 
 def test_windows_restore_allocation_sweep_has_mandatory_release_coverage() -> None:

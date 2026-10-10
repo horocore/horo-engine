@@ -411,6 +411,9 @@ namespace {
         RuntimeState state = DefaultState();
         FakeRuntimePort port{state};
         std::unique_ptr<IRenderBackend> backend = CreateBackend(port);
+        const auto timing = backend->PollNativePresentTiming();
+        REQUIRE(timing.HasError());
+        CHECK(timing.ErrorValue().code.Value() == "render.frame_pacing.native_timing_unsupported");
 
         REQUIRE(backend->Initialize(RenderBackendConfig{.requirePresentation = true}).HasValue());
         Test::RequireErrorCode(backend->BeginFrame(FrameDescriptor{.frameNumber = 1, .outputExtent = {1280, 720}}),
