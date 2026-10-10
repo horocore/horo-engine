@@ -4,6 +4,57 @@
   "locale": "tr-TR",
   "namespace": "editor",
   "messages": {
+    "workspace.sequence.limit": {
+      "text": "Başka bir sekans açmadan önce bir sekans sekmesini kapatın (sınır 32)."
+    },
+    "workspace.sequence.keys": {
+      "text": "Anahtarlar"
+    },
+    "workspace.sequence.close": {
+      "text": "Kapat"
+    },
+    "workspace.sequence.zoom": {
+      "text": "Zaman çizelgesi yakınlaştırma"
+    },
+    "workspace.sequence.scroll": {
+      "text": "İlk görünür kare"
+    },
+    "workspace.sequence.playhead": {
+      "text": "Oynatma kafası karesi"
+    },
+    "workspace.sequence.no_context": {
+      "text": "Sahne düzenleme bağlamı yok. Gezinme sekansı veya sahneyi değiştirmez."
+    },
+    "workspace.sequence.unavailable": {
+      "text": "Bazı izler henüz sunulmayan yetenekler gerektirir; kaynak verileri korunur."
+    },
+    "workspace.sequence.empty": {
+      "text": "Bu sekansın izi yok."
+    },
+    "workspace.sequence.invalid": {
+      "text": "Sekans okunamadı veya doğrulanamadı. Kaynak şemasını ve dosya erişimini kontrol edin."
+    },
+    "workspace.sequence.conflict": {
+      "text": "Bu varlık farklı bir kaynak sürümünden açık. Değişen kaynağı açmadan önce kapatın."
+    },
+    "workspace.sequence.transform": {
+      "text": "Dönüşüm"
+    },
+    "workspace.sequence.property": {
+      "text": "Özellik"
+    },
+    "workspace.sequence.camera_cut": {
+      "text": "Kamera geçişi"
+    },
+    "workspace.sequence.event": {
+      "text": "Olay"
+    },
+    "workspace.sequence.audio": {
+      "text": "Ses"
+    },
+    "workspace.sequence.sub_sequence": {
+      "text": "Alt sekans"
+    },
     "workspace.play_topology.button": {
       "text": "Oyun profilleri"
     },

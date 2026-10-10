@@ -2378,6 +2378,7 @@ add_library(HoroEditorServices STATIC
         editor/SourceDocumentChanges.cpp
         editor/SourceDocumentSnapshot.cpp
         editor/SourceDocumentText.cpp
+        editor/SequenceDocument.cpp
         editor/UiCanvasDocument.cpp
         editor/UiCanvasDocumentSerialization.cpp
         editor/document/SceneDocumentComparison.cpp
@@ -2502,6 +2503,7 @@ endif ()
 if (HORO_BUILD_EDITOR_GUI)
     add_library(HoroGui STATIC
             editor/design_system/components/EditorUiComponents.cpp
+            editor/design_system/components/SequenceTimelineControl.cpp
             editor/design_system/icons/EditorIcons.cpp
             editor/design_system/components/EditorSnackbarHost.cpp
             editor/app/EditorTheme.cpp
@@ -2587,6 +2589,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserGameplay.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserAssetOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
+            editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
+            editor/screens/workspace/EditorWorkspaceViewSequence.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
             editor/screens/workspace/ExtensionActivityView.cpp
             editor/screens/workspace/EditorWorkspaceScreen.cpp
