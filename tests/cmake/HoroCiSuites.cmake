@@ -72,8 +72,12 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroMcpProjectCodeQueryPublicHeaderConsumer
     HoroSourceDocumentCodeQueryPublicHeaderConsumer
     HoroRuntimeSaveRootResolverTests
+    HoroRuntimeSaveStorageQualificationTests
+    HoroSaveStorageUserStateQualificationTests
     HoroRuntimeSaveFilesystemLockTests
     HoroRuntimeSaveSlotCommitTransactionTests
+    HoroRuntimeSaveSlotLifecycleTests
+    HoroSaveSlotLifecyclePublicHeaderConsumer
     HoroRuntimeSaveRestoreTransactionTests
     HoroSaveGameplayCheckpointPublicHeaderConsumer
     HoroRuntimeSaveEventTriggersTests

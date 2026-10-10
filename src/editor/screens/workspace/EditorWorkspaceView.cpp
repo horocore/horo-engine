@@ -853,7 +853,7 @@ namespace Horo::Editor {
                                     ImVec2(size.x - edgeW * 2.0F, size.y - edgeH * 2.0F), TabCenter, outCommand);
         }
 
-        const float tabHeight = area == WorkspaceDockArea::Document ? 28.0F * Theme::GetActiveTokens().sizes.uiScale : 0.0F;
+        const float tabHeight = DocumentTabHeight(area);
         if (area == WorkspaceDockArea::Document)
             DrawDocumentTabs(viewModel, outCommand);
 
@@ -861,8 +861,7 @@ namespace Horo::Editor {
         ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::Bg1());
         ImGui::SetCursorPosY(tabHeight);
         ImGui::BeginChild("##DockContent", ImVec2(0.0F, size.y - tabHeight), false, ImGuiWindowFlags_NoSavedSettings);
-        if (activePanel)
-            activePanel->DrawPanel(ImGui::GetWindowPos(), ImGui::GetWindowSize(), viewModel, outCommand, m_context);
+        DrawDockContent(area, activePanel, viewModel, outCommand);
         ImGui::EndChild();
         ImGui::PopStyleColor();
 
@@ -890,8 +889,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorWorkspaceView::DrawDocumentTab */
-    void EditorWorkspaceView::DrawDocumentTab(const TabStackNode &stack, const std::string &panelId,
-                                              EditorWorkspaceViewCommandData &outCommand) {
+    void EditorWorkspaceView::DrawDocumentTab(const std::string &panelId, EditorWorkspaceViewCommandData &outCommand, const bool active) {
         const auto &panels = m_panelRegistry.GetAllPanels();
         const auto panel = std::ranges::find_if(panels, [&panelId](const auto &candidate) {
             return candidate->GetId() == panelId;
@@ -911,7 +909,7 @@ namespace Horo::Editor {
         const bool hovered = ImGui::IsItemHovered();
         ImDrawList *drawList = ImGui::GetWindowDrawList();
         ImVec4 tabSurface = hovered ? Theme::Hover() : Theme::Bg1();
-        if (stack.activeTab == panelId)
+        if (active)
             tabSurface = Theme::Bg2();
         drawList->AddRectFilled(tabMin, tabMax, Theme::U32(tabSurface), 4.0F * scale);
         drawList->AddRect(tabMin, tabMax, Theme::U32(Theme::Border()), 4.0F * scale);
@@ -945,11 +943,15 @@ namespace Horo::Editor {
         if (stack == nullptr)
             return;
 
-        const float scale = Theme::GetActiveTokens().sizes.uiScale;
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0F * scale, 0.0F));
+        const auto &tokens = Theme::GetActiveTokens();
+        const float height = DocumentTabHeight(WorkspaceDockArea::Document);
+        ImGui::BeginChild("##DocumentTabStrip", {0.0F, height}, false, ImGuiWindowFlags_HorizontalScrollbar);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(tokens.spacing.propertyRowGap, 0.0F));
         for (const std::string &panelId : stack->tabs)
-            DrawDocumentTab(*stack, panelId, outCommand);
+            DrawDocumentTab(panelId, outCommand, !viewModel.workspacePanelHost.ActiveDocument().has_value() && stack->activeTab == panelId);
+        DrawSequenceDocumentTabs(viewModel, outCommand);
         ImGui::PopStyleVar();
+        ImGui::EndChild();
     }
 
     void EditorWorkspaceView::DrawMiddleAndBottomDocks(const WorkspaceLayoutGeometry &geo, const EditorWorkspaceViewModel &viewModel,

@@ -85,6 +85,13 @@ namespace Horo::Runtime {
         RuntimeSaveSnapshot snapshot;
     };
 
+    /** @brief Complete host-owned admission for one autosave worker operation and its exact storage target. */
+    struct SaveAutosaveAdmission final {
+        SaveOperationDescriptor operation; /**< Fresh original operation descriptor, used only when admitting a new capture. */
+        SaveArbiterAddress address;        /**< Host catalog-selected target; never selected by a timer or retry. */
+        std::optional<SaveArbiterRetryDescriptor> retry; /**< Optional finite capability bound to the same target/capture. */
+    };
+
     /**
      * @brief Session-owned scheduler borrowing the sole arbiter and capture barrier on their owner thread.
      *
@@ -139,8 +146,7 @@ namespace Horo::Runtime {
          * Manual/queued work takes precedence. Polls an owned pending barrier at subsequent safe points.
          * @param phase Current actual lifecycle phase, never a remembered previous safe point.
          * @param generation Exact current generation.
-         * @param operation Fresh host OperationStore descriptor; used only for a new admission.
-         * @param address Current typed autosave target chosen by host catalog/rotation policy.
+         * @param admission Fresh host operation, exact catalog target and optional matching retry capability.
          * @param provenance Current coherent capture evidence, never timer-time state.
          * @param participants Pinned actual registry snapshot.
          * @param limits Existing immutable capture limits.
@@ -148,8 +154,7 @@ namespace Horo::Runtime {
          * @post No callback or runtime snapshot is retained after handoff. Reentry is rejected.
          */
         [[nodiscard]] Result<std::optional<SaveAutosaveCapture>> CommitAtSafePoint(RuntimePhase phase, SaveRuntimeGeneration generation,
-                                                                                   SaveOperationDescriptor operation,
-                                                                                   SaveArbiterAddress address,
+                                                                                   SaveAutosaveAdmission admission,
                                                                                    const RuntimeSaveCaptureProvenance &provenance,
                                                                                    SaveParticipantRegistrySnapshot participants,
                                                                                    const RuntimeSaveCaptureLimits &limits = {});
@@ -198,7 +203,8 @@ namespace Horo::Runtime {
         /** @brief Observes the exact retained terminal handle and preserves failure cause. */
         [[nodiscard]] Result<void> ObserveTerminal();
         /** @brief Creates one background arbiter operation and requests its barrier. */
-        [[nodiscard]] Result<void> Admit(SaveOperationDescriptor operation, SaveArbiterAddress address);
+        [[nodiscard]] Result<void> Admit(SaveOperationDescriptor operation, SaveArbiterAddress address,
+                                         std::optional<SaveArbiterRetryDescriptor> retry);
         /** @brief Polls cancellation and hands off the current immutable barrier cut once. */
         [[nodiscard]] Result<std::optional<SaveAutosaveCapture>> Capture(RuntimePhase phase, const RuntimeSaveCaptureProvenance &provenance,
                                                                          SaveParticipantRegistrySnapshot participants,
