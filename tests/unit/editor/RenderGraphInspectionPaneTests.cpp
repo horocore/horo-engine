@@ -20,10 +20,23 @@ namespace {
     using namespace Horo;
     using namespace Horo::Editor;
 
+    /** @brief Owns state shared with the retained query callback across GUI draw frames. */
+    struct InspectionProbe {
+        using Snapshot = std::shared_ptr<const Render::RenderGraphInspectionSnapshot>;
+        Snapshot publication;
+        std::size_t queries{};
+        bool failed{};
+
+        Result<Snapshot> Read() {
+            ++queries;
+            return failed ? Result<Snapshot>::Failure(MakeError(Render::RenderGraphInspectionErrors::Closed))
+                          : Result<Snapshot>::Success(publication);
+        }
+    };
+
     /** @brief Owns the complete software GUI fixture, with no window/device or native renderer. */
     struct GuiFixture {
-        GuiFixture() {
-            ImGui::CreateContext();
+        GuiFixture() : ownedContext(ImGui::CreateContext()) {
             auto &io = ImGui::GetIO();
             io.DisplaySize = {1280, 900};
             io.DeltaTime = 1.0F / 60.0F;
@@ -33,8 +46,15 @@ namespace {
         }
 
         ~GuiFixture() {
-            ImGui::DestroyContext();
+            ImGui::DestroyContext(ownedContext);
         }
+
+        GuiFixture(const GuiFixture &) = delete;
+        GuiFixture &operator=(const GuiFixture &) = delete;
+        GuiFixture(GuiFixture &&) = delete;
+        GuiFixture &operator=(GuiFixture &&) = delete;
+
+        ImGuiContext *const ownedContext;
     };
 
     /** @brief Draws one bounded pane region while preserving commands as read-only inspection output. */
@@ -184,41 +204,37 @@ TEST_CASE("Render graph pane is inert while hidden and renders localized narrow 
     const ThemeContext theme{fonts};
     const EditorSettingsSnapshot settings{};
     const EditorGuiContext context{engineEvents, editorEvents, localization, theme, settings};
-    using Snapshot = std::shared_ptr<const Render::RenderGraphInspectionSnapshot>;
-    Snapshot publication;
-    std::size_t queries{};
-    bool failed{};
-    auto pane = MakeRenderGraphInspectionPane([&] {
-        ++queries;
-        return failed ? Result<Snapshot>::Failure(MakeError(Render::RenderGraphInspectionErrors::Closed))
-                      : Result<Snapshot>::Success(publication);
+    const auto probe = std::make_shared<InspectionProbe>();
+    auto pane = MakeRenderGraphInspectionPane([probe] {
+        return probe->Read();
     });
-    CHECK(queries == 0);
+    CHECK(probe->queries == 0);
     IGlobalDockPane *inspectionPane = pane.get();
     GlobalDockPanel panel;
     REQUIRE(panel.RegisterPane(std::move(pane)));
     DrawPane(panel, context, 700);
-    CHECK(queries == 0);
+    CHECK(probe->queries == 0);
     REQUIRE(panel.ActivatePane("horo.global_dock.render_graph"));
     DrawPane(panel, context, 220);
-    CHECK(queries == 1);
-    failed = true;
+    CHECK(probe->queries == 1);
+    probe->failed = true;
     DrawPane(panel, context, 220);
-    CHECK(queries == 2);
-    failed = false;
+    CHECK(probe->queries == 2);
+    probe->failed = false;
     const auto sources = Render::Test::CompileSources();
     const auto captured =
         Render::CaptureRenderGraphInspection(sources.graph, sources.schedule, sources.lifetime, sources.execution, {{41}, {9}, 1});
     REQUIRE(captured.HasValue());
-    publication = captured.Value();
+    probe->publication = captured.Value();
     ExerciseSections(panel, context, localization);
-    ExercisePaging(panel, context, publication);
-    const auto beforeHidden = queries;
+    ExercisePaging(panel, context, probe->publication);
+    const auto beforeHidden = probe->queries;
     REQUIRE(panel.ActivatePane("horo.global_dock.assets"));
     DrawPane(panel, context, 500);
-    CHECK(queries == beforeHidden);
+    CHECK(probe->queries == beforeHidden);
     inspectionPane->Detach();
     REQUIRE(panel.ActivatePane("horo.global_dock.render_graph"));
     DrawPane(panel, context, 220);
-    CHECK(queries == beforeHidden);
+    CHECK(probe->queries == beforeHidden);
+    CHECK(probe.use_count() == 1);
 }
