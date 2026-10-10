@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
+#include <functional>
 #include <map>
 #include <set>
 
@@ -15,8 +17,8 @@ namespace Horo::Animation {
                                              DiagnosticSeverity::Error,
                                              error.message,
                                              {"animation.graph", 0, 0},
-                                             "/definitions/" + std::to_string(location.definition.Value()) + "/nodes/" +
-                                                 std::to_string(location.node.Value()) + "/pins/" + std::to_string(location.pin.Value())});
+                                             std::format("/definitions/{}/nodes/{}/pins/{}", location.definition.Value(),
+                                                         location.node.Value(), location.pin.Value())});
             }
             return error;
         }
@@ -45,8 +47,8 @@ namespace Horo::Animation {
             if (context.replacing && *context.replacing != data.id)
                 return Result<void>::Failure(Failure(GraphReloadMismatch));
             const auto &limits = context.limits;
-            const AnimationGraphLimits hard{};
-            if (limits.definitions == 0 || limits.definitions > hard.definitions || limits.nodes == 0 || limits.nodes > hard.nodes ||
+            if (const AnimationGraphLimits hard{};
+                limits.definitions == 0 || limits.definitions > hard.definitions || limits.nodes == 0 || limits.nodes > hard.nodes ||
                 limits.pins == 0 || limits.pins > hard.pins || limits.connections > hard.connections ||
                 limits.parameters > hard.parameters || limits.callDepth == 0 || limits.callDepth > hard.callDepth ||
                 limits.evaluationInstructions == 0 || limits.evaluationInstructions > hard.evaluationInstructions ||
@@ -56,7 +58,10 @@ namespace Horo::Animation {
                 return Result<void>::Failure(Failure(GraphLimitExceeded));
             if (data.definitions.empty() || data.definitions.size() > limits.definitions || data.parameters.size() > limits.parameters)
                 return Result<void>::Failure(Failure(GraphLimitExceeded));
-            std::uint64_t nodes{}, pins{}, connections{}, interfaces{};
+            std::uint64_t nodes{};
+            std::uint64_t pins{};
+            std::uint64_t connections{};
+            std::uint64_t interfaces{};
             for (const auto &definition : data.definitions) {
                 nodes += definition.nodes.size();
                 connections += definition.connections.size();
@@ -158,8 +163,8 @@ namespace Horo::Animation {
                 const auto *target = Find(data.definitions, call->definition);
                 if (!target)
                     return Result<std::vector<GraphPin>>::Failure(Failure(GraphMalformed, location));
-                for (const auto &input : target->inputs)
-                    add(GraphPinRole::Interface, input.type, false, input.id);
+                for (const auto &definitionInput : target->inputs)
+                    add(GraphPinRole::Interface, definitionInput.type, false, definitionInput.id);
                 add(GraphPinRole::Result, GraphValueType::Pose, true);
             } else {
                 return Result<std::vector<GraphPin>>::Failure(Failure(GraphMalformed, location));
@@ -215,14 +220,14 @@ namespace Horo::Animation {
                     return pins;
                 topology.indexes.emplace(node.id, index);
                 if (std::holds_alternative<GraphOutputNode>(node.payload)) {
-                    if (output)
+                    if (output.has_value())
                         return Result<void>::Failure(Failure(GraphMalformed, location));
                     output = index;
                 }
                 if (const auto *input = std::get_if<GraphInputNode>(&node.payload))
                     ++inputUses[input->input];
             }
-            if (!output || inputUses.size() != definition.inputs.size())
+            if (!output.has_value() || inputUses.size() != definition.inputs.size())
                 return Result<void>::Failure(Failure(GraphMalformed, location));
             for (const auto &[id, uses] : inputUses)
                 if (uses != 1)
@@ -235,7 +240,8 @@ namespace Horo::Animation {
         Result<void> IndexEdge(const GraphDefinition &definition, std::size_t index, DefinitionTopology &topology,
                                std::set<GraphEndpoint> &destinations) {
             const auto &edge = definition.connections[index];
-            const auto source = topology.indexes.find(edge.source.node), destination = topology.indexes.find(edge.destination.node);
+            const auto source = topology.indexes.find(edge.source.node);
+            const auto destination = topology.indexes.find(edge.destination.node);
             const GraphSourceLocation location{definition.id, edge.destination.node, edge.destination.pin};
             if (source == topology.indexes.end() || destination == topology.indexes.end())
                 return Result<void>::Failure(Failure(GraphMalformed, location));
@@ -276,7 +282,7 @@ namespace Horo::Animation {
         Result<void> ValidateReachability(const GraphDefinition &definition, const DefinitionTopology &topology,
                                           const AnimationGraphCompileContext &context) {
             std::vector<bool> reached(definition.nodes.size());
-            std::vector<std::size_t> pending{topology.output};
+            std::vector pending{topology.output};
             reached[topology.output] = true;
             while (!pending.empty()) {
                 if (auto state = Admission(context); state.HasError())
@@ -358,12 +364,32 @@ namespace Horo::Animation {
             return Result<GraphCompiledDefinition>::Success(std::move(result));
         }
 
+        /** @brief Propagates completed callee costs into one definition under exact captured limits. */
+        Result<void> AccumulateCallBudget(GraphCompiledDefinition &definition, std::span<const GraphCompiledDefinition> definitions,
+                                          const AnimationGraphCompileContext &context) {
+            definition.callDepth = 1;
+            definition.evaluationInstructions = definition.instructions.size();
+            for (const auto &instruction : definition.instructions)
+                if (instruction.definitionIndex.has_value()) {
+                    const auto &target = definitions[*instruction.definitionIndex];
+                    definition.callDepth = std::max(definition.callDepth, target.callDepth + 1);
+                    definition.evaluationInstructions += target.evaluationInstructions;
+                    definition.sourceMapCallEntries += target.sourceMapCallEntries + target.evaluationInstructions;
+                }
+            if (definition.callDepth > context.limits.callDepth ||
+                definition.evaluationInstructions > context.limits.evaluationInstructions ||
+                definition.sourceMapCallEntries > context.limits.sourceMapCallEntries)
+                return Result<void>::Failure(Failure(GraphLimitExceeded, {definition.id, {}, {}}));
+            return Result<void>::Success();
+        }
+
         /** @brief Rejects recursive calls and budgets expanded execution without expanding stored programs. */
         Result<void> BoundCalls(std::vector<GraphCompiledDefinition> &definitions, const AnimationGraphCompileContext &context) {
-            std::vector<std::set<std::size_t>> dependencies(definitions.size()), callers(definitions.size());
+            std::vector<std::set<std::size_t>> dependencies(definitions.size());
+            std::vector<std::set<std::size_t>> callers(definitions.size());
             for (std::size_t index = 0; index < definitions.size(); ++index)
                 for (const auto &instruction : definitions[index].instructions)
-                    if (instruction.definitionIndex) {
+                    if (instruction.definitionIndex.has_value()) {
                         dependencies[index].insert(*instruction.definitionIndex);
                         callers[*instruction.definitionIndex].insert(index);
                     }
@@ -377,20 +403,8 @@ namespace Horo::Animation {
                     return state;
                 const auto index = *ready.begin();
                 ready.erase(ready.begin());
-                auto &definition = definitions[index];
-                definition.callDepth = 1;
-                definition.evaluationInstructions = definition.instructions.size();
-                for (const auto &instruction : definition.instructions)
-                    if (instruction.definitionIndex) {
-                        const auto &target = definitions[*instruction.definitionIndex];
-                        definition.callDepth = std::max(definition.callDepth, target.callDepth + 1);
-                        definition.evaluationInstructions += target.evaluationInstructions;
-                        definition.sourceMapCallEntries += target.sourceMapCallEntries + target.evaluationInstructions;
-                    }
-                if (definition.callDepth > context.limits.callDepth ||
-                    definition.evaluationInstructions > context.limits.evaluationInstructions ||
-                    definition.sourceMapCallEntries > context.limits.sourceMapCallEntries)
-                    return Result<void>::Failure(Failure(GraphLimitExceeded, {definition.id, {}, {}}));
+                if (auto budget = AccumulateCallBudget(definitions[index], definitions, context); budget.HasError())
+                    return budget;
                 ++completed;
                 for (const auto caller : callers[index]) {
                     dependencies[caller].erase(index);
@@ -400,6 +414,20 @@ namespace Horo::Animation {
             }
             if (completed != definitions.size())
                 return Result<void>::Failure(Failure(GraphCycle));
+            return Result<void>::Success();
+        }
+
+        /** @brief Infers legacy edge types on a detached definition while preserving cancellation and error order. */
+        Result<void> MigrateConnections(GraphDefinition &definition, const AnimationGraphCompileContext &context) {
+            for (auto &edge : definition.connections) {
+                if (auto state = Admission(context); state.HasError())
+                    return state;
+                const auto *node = Find(definition.nodes, edge.source.node);
+                const auto *pin = node ? Find(node->pins, edge.source.pin) : nullptr;
+                if (!pin || edge.type != GraphValueType::Unspecified)
+                    return Result<void>::Failure(Failure(GraphMalformed, {definition.id, edge.source.node, edge.source.pin}));
+                edge.type = pin->type;
+            }
             return Result<void>::Success();
         }
 
@@ -419,7 +447,7 @@ namespace Horo::Animation {
         const auto *entry = Find(canonical.definitions, canonical.entry);
         if (!entry || !entry->inputs.empty())
             return Result<AnimationGraphProgram>::Failure(Failure(GraphMalformed));
-        std::set<std::string> names;
+        std::set<std::string, std::less<>> names;
         for (const auto &parameter : canonical.parameters)
             if (!ValidParameter(parameter) || !names.insert(parameter.name).second)
                 return Result<AnimationGraphProgram>::Failure(Failure(GraphTypeMismatch));
@@ -476,20 +504,11 @@ namespace Horo::Animation {
         Canonicalize(migrated);
         if (migrated.schemaVersion == 1) {
             for (auto &definition : migrated.definitions)
-                for (auto &edge : definition.connections) {
-                    if (auto state = Admission(context); state.HasError())
-                        return Result<AnimationGraphData>::Failure(state.ErrorValue());
-                    const auto *node = Find(definition.nodes, edge.source.node);
-                    const auto *pin = node ? Find(node->pins, edge.source.pin) : nullptr;
-                    if (!pin || edge.type != GraphValueType::Unspecified)
-                        return Result<AnimationGraphData>::Failure(
-                            Failure(GraphMalformed, {definition.id, edge.source.node, edge.source.pin}));
-                    edge.type = pin->type;
-                }
+                if (auto connections = MigrateConnections(definition, context); connections.HasError())
+                    return Result<AnimationGraphData>::Failure(connections.ErrorValue());
             migrated.schemaVersion = CurrentAnimationGraphSchemaVersion;
         }
-        auto checked = AnimationGraphProgram::CompileSchema(migrated, context);
-        if (checked.HasError())
+        if (auto checked = AnimationGraphProgram::CompileSchema(migrated, context); checked.HasError())
             return Result<AnimationGraphData>::Failure(checked.ErrorValue());
         return Result<AnimationGraphData>::Success(std::move(migrated));
     }

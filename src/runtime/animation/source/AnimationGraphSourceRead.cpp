@@ -60,7 +60,12 @@ namespace Horo::Animation {
 
         /** @brief Whole-candidate decoded storage counters. */
         struct Budget final {
-            std::size_t definitions{}, nodes{}, pins{}, connections{}, interfaces{}, parameters{};
+            std::size_t definitions{};
+            std::size_t nodes{};
+            std::size_t pins{};
+            std::size_t connections{};
+            std::size_t interfaces{};
+            std::size_t parameters{};
         };
 
         /** @brief Decodes a pin's exact shape; semantic validation remains the compiler's authority. */
@@ -146,7 +151,8 @@ namespace Horo::Animation {
 
         /** @brief Decodes exact finite binary32/scalar defaults without narrowing overflow or coercion. */
         GraphParameterValue Default(const Json &value, GraphValueType type) {
-            if (type == GraphValueType::Float) {
+            using enum GraphValueType;
+            if (type == Float) {
                 if (!value.is_number())
                     Reject(AnimationErrors::GraphTypeMismatch);
                 const auto number = value.get<double>();
@@ -154,7 +160,7 @@ namespace Horo::Animation {
                     Reject(AnimationErrors::GraphTypeMismatch);
                 return static_cast<float>(number);
             }
-            if (type == GraphValueType::Integer) {
+            if (type == Integer) {
                 if (!value.is_number_integer())
                     Reject(AnimationErrors::GraphTypeMismatch);
                 if (value.is_number_unsigned() &&
@@ -165,7 +171,7 @@ namespace Horo::Animation {
                     Reject(AnimationErrors::GraphTypeMismatch);
                 return static_cast<std::int32_t>(number);
             }
-            if ((type != GraphValueType::Boolean && type != GraphValueType::Trigger) || !value.is_boolean())
+            if ((type != Boolean && type != Trigger) || !value.is_boolean())
                 Reject(AnimationErrors::GraphTypeMismatch);
             return value.get<bool>();
         }
@@ -204,7 +210,8 @@ namespace Horo::Animation {
         void ValidateDependencies(const Json &values, const AnimationGraphData &data) {
             if (!values.is_array() || values.size() > AnimationGraphHardLimits::Nodes + 1U)
                 Reject(AnimationErrors::GraphLimitExceeded);
-            std::set<std::pair<std::string, Assets::AssetId>> actual, expected;
+            std::set<std::pair<std::string, Assets::AssetId>> actual;
+            std::set<std::pair<std::string, Assets::AssetId>> expected;
             for (const auto &dependency : values) {
                 Keys(dependency, {"assetType", "assetId"});
                 if (!dependency["assetType"].is_string())
@@ -226,9 +233,12 @@ namespace Horo::Animation {
                 Reject(AnimationErrors::GraphMalformed);
             std::vector<std::set<std::string>> keys;
             std::size_t values{};
-            const auto callback = [&](int depth, Json::parse_event_t event, Json &value) {
+            const auto callback = [&context, &limits, &keys, &values](int depth, Json::parse_event_t event, Json &value) {
                 CheckAdmission(context);
-                if (depth < 0 || static_cast<std::size_t>(depth) > limits.depth || ++values > limits.jsonValues)
+                if (depth < 0 || static_cast<std::size_t>(depth) > limits.depth)
+                    Reject(AnimationErrors::GraphLimitExceeded);
+                ++values;
+                if (values > limits.jsonValues)
                     Reject(AnimationErrors::GraphLimitExceeded);
                 if (value.is_string() && value.get_ref<const std::string &>().size() > AnimationGraphSourceHardLimits::StringBytes)
                     Reject(AnimationErrors::GraphLimitExceeded);

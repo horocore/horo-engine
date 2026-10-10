@@ -95,7 +95,7 @@ namespace Horo::Animation::GraphCompileDetail {
             occurrence.parameterRead = instruction.parameterIndex;
             occurrence.output.type = GraphValueType::Unspecified;
             for (const auto &input : instruction.inputs)
-                occurrence.inputs.push_back({input.destination, frame.slots[input.instruction], frame.producers[input.instruction]});
+                occurrence.inputs.emplace_back(input.destination, frame.slots[input.instruction], frame.producers[input.instruction]);
             return occurrence;
         }
 
@@ -139,7 +139,7 @@ namespace Horo::Animation::GraphCompileDetail {
             frame.path.push_back(instruction.source);
             frame.callerInstruction = occurrence.instructionIndex;
             for (const auto &input : occurrence.inputs)
-                frame.inputs.emplace(Find(instruction.pins, input.destination)->interfaceId, input);
+                frame.inputs.try_emplace(Find(instruction.pins, input.destination)->interfaceId, input);
             frame.completion = std::move(occurrence);
             return frame;
         }
@@ -167,7 +167,7 @@ namespace Horo::Animation::GraphCompileDetail {
                     const auto callerInstruction = frame.callerInstruction;
                     auto completion = std::move(frame.completion);
                     frames.pop_back();
-                    if (callerInstruction) {
+                    if (callerInstruction.has_value()) {
                         frames.back().slots[*callerInstruction] = output;
                         frames.back().producers[*callerInstruction] = producer;
                         completion->output = output;
@@ -179,7 +179,7 @@ namespace Horo::Animation::GraphCompileDetail {
                 const auto index = static_cast<std::uint32_t>(frame.next++);
                 const auto &instruction = definition.instructions[index];
                 auto occurrence = Occurrence(instruction, frame, index);
-                if (instruction.definitionIndex) {
+                if (instruction.definitionIndex.has_value()) {
                     auto child = Callee(instruction, frame, std::move(occurrence), definitions);
                     frames.push_back(std::move(child));
                 } else {

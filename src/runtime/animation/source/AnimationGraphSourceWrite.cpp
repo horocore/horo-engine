@@ -22,8 +22,7 @@ namespace Horo::Animation {
 
         /** @brief Writes the one reference allowed by each typed opcode. */
         Json Reference(const GraphNodePayload &payload) {
-            return std::visit([](const auto &value) -> Json {
-                using T = std::decay_t<decltype(value)>;
+            return std::visit([]<typename T>(const T &value) -> Json {
                 if constexpr (std::is_same_v<T, GraphClipNode>)
                     return value.clip.Asset().ToString();
                 else if constexpr (std::is_same_v<T, GraphParameterNode>)
@@ -55,7 +54,9 @@ namespace Horo::Animation {
 
         /** @brief Writes a fully validated canonical definition. */
         Json Definition(const GraphDefinition &definition) {
-            Json inputs = Json::array(), nodes = Json::array(), edges = Json::array();
+            Json inputs = Json::array();
+            Json nodes = Json::array();
+            Json edges = Json::array();
             for (const auto &input : definition.inputs)
                 inputs.push_back(Json{{"id", input.id.Value()}, {"type", Type(input.type)}});
             for (const auto &node : definition.nodes)
@@ -71,8 +72,8 @@ namespace Horo::Animation {
 
         /** @brief Writes finite scalar defaults, normalizing equivalent signed zero. */
         Json Parameter(const GraphParameter &parameter) {
-            Json value = std::visit([](const auto scalar) -> Json {
-                if constexpr (std::is_same_v<std::remove_cv_t<decltype(scalar)>, float>)
+            Json value = std::visit([]<typename T>(const T scalar) -> Json {
+                if constexpr (std::is_same_v<T, float>)
                     return scalar == 0.0F ? Json(0.0F) : Json(scalar);
                 else
                     return Json(scalar);
@@ -93,7 +94,8 @@ namespace Horo::Animation {
             if (checked.HasError())
                 return Result<std::string>::Failure(checked.ErrorValue());
             const auto &canonical = checked.Value();
-            Json parameters = Json::array(), definitions = Json::array();
+            Json parameters = Json::array();
+            Json definitions = Json::array();
             for (const auto &parameter : canonical.parameters) {
                 CheckAdmission(context);
                 parameters.push_back(Parameter(parameter));

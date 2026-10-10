@@ -14,9 +14,8 @@ namespace Horo::Animation::GraphCompileDetail {
 
     /** @brief Finds a stable id in a canonical collection. */
     template <typename Collection, typename Id> const typename Collection::value_type *Find(const Collection &values, Id id) {
-        const auto found = std::lower_bound(values.begin(), values.end(), id, [](const auto &value, const auto key) {
-            return value.id < key;
-        });
+        using Value = typename Collection::value_type;
+        const auto found = std::ranges::lower_bound(values, id, {}, &Value::id);
         return found != values.end() && found->id == id ? &*found : nullptr;
     }
 

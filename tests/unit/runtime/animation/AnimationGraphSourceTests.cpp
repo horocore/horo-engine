@@ -103,7 +103,6 @@ TEST_CASE("Graph source rejects unknown fields malformed identities and node kin
     const auto encoded = SerializeAnimationGraphSource(data);
     REQUIRE(encoded.HasValue());
     auto source = nlohmann::ordered_json::parse(encoded.Value());
-    std::string raw;
     SECTION("unknown root key") {
         source["unrecognized"] = 1;
     }
@@ -128,8 +127,7 @@ TEST_CASE("Graph source rejects unknown fields malformed identities and node kin
     SECTION("noncanonical UUID") {
         source["payload"]["skeleton"] = "{00000000-0000-0000-0000-000000000002}";
     }
-    if (raw.empty())
-        raw = source.dump();
+    const std::string raw = source.dump();
     const auto failed = DeserializeAnimationGraphSource(raw, data.id);
     REQUIRE(failed.HasError());
 }
@@ -139,7 +137,6 @@ TEST_CASE("Graph source rejects invalid defaults and dependency projections", "[
     const auto encoded = SerializeAnimationGraphSource(data);
     REQUIRE(encoded.HasValue());
     auto source = nlohmann::ordered_json::parse(encoded.Value());
-    std::string raw;
     SECTION("default overflow") {
         source["payload"]["parameters"][0]["default"] = 1e100;
     }
@@ -158,8 +155,7 @@ TEST_CASE("Graph source rejects invalid defaults and dependency projections", "[
     SECTION("wrong dependency type") {
         source["dependencies"][0]["assetType"] = "core.mesh";
     }
-    if (raw.empty())
-        raw = source.dump();
+    const std::string raw = source.dump();
     const auto failed = DeserializeAnimationGraphSource(raw, data.id);
     REQUIRE(failed.HasError());
 }
