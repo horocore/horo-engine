@@ -51,7 +51,7 @@ namespace Horo::Render {
     }  // namespace
 
     struct ResidentMaterialBinding::Storage {
-        MaterialBindingId id;
+        MaterialBindingGenerationId id;
         MaterialBindingDescriptor descriptor;
         std::unique_ptr<IResidentMaterialBinding> backend;
         std::shared_ptr<BindingBudget> budget;
@@ -83,7 +83,7 @@ namespace Horo::Render {
         }
 
         /** @brief Finds only a currently discoverable exact generation. */
-        [[nodiscard]] std::shared_ptr<const ResidentMaterialBinding> Find(const MaterialBindingId id) const {
+        [[nodiscard]] std::shared_ptr<const ResidentMaterialBinding> Find(const MaterialBindingGenerationId id) const {
             if (id.owner != owner || !id.IsValid())
                 return {};
             for (const auto &entry : entries)
@@ -126,7 +126,7 @@ namespace Horo::Render {
     }
 
     /** @copydoc ResidentMaterialBinding::Id */
-    MaterialBindingId ResidentMaterialBinding::Id() const noexcept {
+    MaterialBindingGenerationId ResidentMaterialBinding::Id() const noexcept {
         return storage_->id;
     }
 
@@ -216,7 +216,7 @@ namespace Horo::Render {
     }
 
     /** @copydoc MaterialBindingTable::Acquire */
-    Result<std::shared_ptr<const ResidentMaterialBinding>> MaterialBindingTable::Acquire(const MaterialBindingId binding) const {
+    Result<std::shared_ptr<const ResidentMaterialBinding>> MaterialBindingTable::Acquire(const MaterialBindingGenerationId binding) const {
         if (auto thread = implementation_->CheckThread(); thread.HasError())
             return Result<std::shared_ptr<const ResidentMaterialBinding>>::Failure(thread.ErrorValue());
         if (!implementation_->accepting)
@@ -228,7 +228,7 @@ namespace Horo::Render {
     }
 
     /** @copydoc MaterialBindingTable::Release */
-    Result<void> MaterialBindingTable::Release(const MaterialBindingId binding) {
+    Result<void> MaterialBindingTable::Release(const MaterialBindingGenerationId binding) {
         if (auto thread = implementation_->CheckThread(); thread.HasError())
             return thread;
         if (!implementation_->Find(binding))

@@ -13,7 +13,7 @@
 
 namespace Horo::Render {
     /** @brief Exact renderer-owned material table generation. */
-    struct MaterialBindingId {
+    struct MaterialBindingGenerationId {
         RenderResourceOwnerId owner;
         std::uint64_t value{0};
 
@@ -21,7 +21,7 @@ namespace Horo::Render {
             return owner.IsValid() && value != 0;
         }
 
-        [[nodiscard]] constexpr auto operator<=>(const MaterialBindingId &) const noexcept = default;
+        [[nodiscard]] constexpr auto operator<=>(const MaterialBindingGenerationId &) const noexcept = default;
     };
 
     /** @brief Exact buffer generation and admitted byte range. */
@@ -74,14 +74,14 @@ namespace Horo::Render {
         MaterialBindingLayout layout;
         std::vector<MaterialResourceBinding> resources;
         bool required{true};
-        std::optional<MaterialBindingId> authoredFallback;
+        std::optional<MaterialBindingGenerationId> authoredFallback;
     };
 
     /** @brief Immutable consumer lease retaining both descriptor storage and native resource pins. */
     class ResidentMaterialBinding final {
     public:
         /** @brief Returns the exact generation. @return Stable identity for this lease lifetime. */
-        [[nodiscard]] MaterialBindingId Id() const noexcept;
+        [[nodiscard]] MaterialBindingGenerationId Id() const noexcept;
         /** @brief Returns owned logical bindings. @return Borrowed immutable descriptor valid for the lease lifetime. */
         [[nodiscard]] const MaterialBindingDescriptor &Descriptor() const noexcept;
         /** @brief Borrows the renderer-owned adapter lease. @return Native adapter interface, never a native API handle. */
@@ -97,7 +97,7 @@ namespace Horo::Render {
 
     /** @brief Visible admission outcome; an authored fallback carries the exact unsupported cause. */
     struct MaterialBindingSelection {
-        MaterialBindingId binding;
+        MaterialBindingGenerationId binding;
         bool usedFallback{false};
         std::optional<Error> fallbackReason;
     };
@@ -131,10 +131,10 @@ namespace Horo::Render {
         [[nodiscard]] Result<MaterialBindingSelection> Publish(MaterialBindingDescriptor descriptor);
         /** @brief Acquires an exact immutable generation. @param binding Exact table identity.
          * @return Owning lease or typed stale/closed/thread failure. */
-        [[nodiscard]] Result<std::shared_ptr<const ResidentMaterialBinding>> Acquire(MaterialBindingId binding) const;
+        [[nodiscard]] Result<std::shared_ptr<const ResidentMaterialBinding>> Acquire(MaterialBindingGenerationId binding) const;
         /** @brief Removes a generation from discovery without invalidating consumer leases.
          * @param binding Exact current table identity. @return Success or typed identity/thread failure. */
-        [[nodiscard]] Result<void> Release(MaterialBindingId binding);
+        [[nodiscard]] Result<void> Release(MaterialBindingGenerationId binding);
         /** @brief Reports retained budgets. @return Coherent owner-thread snapshot. */
         [[nodiscard]] MaterialBindingSnapshot Snapshot() const noexcept;
         /** @brief Stops admission and removes table references; consumer leases remain valid. @return Success or wrong-thread failure. */

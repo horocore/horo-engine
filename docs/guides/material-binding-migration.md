@@ -48,3 +48,9 @@ fallback decisions, immutable leases, finite retained budgets and shutdown.
 `HoroMaterialBindingPublicHeaderConsumer` builds through RenderApi only. Both
 are included in the reduced Windows CI build/discovery closure; Linux/macOS
 full suites and hosted quality checks must qualify the actual C++ sources.
+
+The string-backed `MaterialBindingId` in `Mesh.h` remains the logical extraction
+identity (including `CoreDefaultMaterial`). `MaterialBindingGenerationId` names
+an exact resident table generation with frontend ownership; it is not a logical
+material name. The descriptor carries the established cooked `MaterialRuntimeId`;
+host extraction resolves logical names to cooked materials before realization.
