@@ -1,5 +1,6 @@
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorSettingsService.h"
+#include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Foundation/DataBus.h"
 #include "editor/modals/play_topology/PlayTopologyModal.h"
