@@ -77,8 +77,13 @@ namespace Horo::Character {
             auto input = FixedTick(tick);
             input.fixedDelta = Duration::FromNanoseconds(nanos);
             input.query = probe.Context(host.world->Descriptor(), tick);
+            CharacterMetricCapture capture;
+            input.metrics = &capture;
+            const auto callsBefore = probe.calls;
             REQUIRE(host.world->QueueMovementCommand(command).HasValue());
             const auto advanced = host.world->AdvanceFixedTick(input);
+            REQUIRE(capture.snapshot.queries == probe.calls - callsBefore);
+            RequireMovementBudget(*host.world, capture);
             if (advanced.HasError())
                 UNSCOPED_INFO(advanced.ErrorValue().message);
             REQUIRE(advanced.HasValue());

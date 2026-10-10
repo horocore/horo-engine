@@ -3,6 +3,7 @@
 #include "Horo/Editor/ActivityBarLayout.h"
 #include "Horo/Editor/EditorMenuModel.h"
 #include "Horo/Editor/EditorWorkspaceEvents.h"
+#include "Horo/Editor/SequenceDocument.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "Horo/Editor/WorkspacePanelHost.h"
 #include "Horo/Foundation/Result.h"
@@ -14,6 +15,7 @@
 #include "editor/screens/workspace/ContentBrowserModel.h"
 #include "editor/screens/workspace/GameplayBehaviorRequest.h"
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -63,6 +65,9 @@ namespace Horo::Editor {
 
     enum class EditorWorkspaceViewCommand {
         None,
+        FocusSequenceDocument,
+        CloseSequenceDocument,
+        UpdateSequenceTimeline,
         ReturnToWelcome,
         SaveScene,
         SaveSceneAs,
@@ -198,6 +203,12 @@ namespace Horo::Editor {
         std::uint32_t column{};
     };
 
+    /** @brief Workspace-owned source lease and separate transient presentation state. */
+    struct SequenceWorkspaceDocument {
+        std::shared_ptr<const SequenceDocument> source;
+        SequenceTimelineState timeline;
+    };
+
     struct TransparentStringHash {
         using is_transparent = void;
 
@@ -208,6 +219,8 @@ namespace Horo::Editor {
 
     struct EditorWorkspaceViewCommandData {  // NOSONAR(cpp:S1820) Command payload variant container
         EditorWorkspaceViewCommand command = EditorWorkspaceViewCommand::None;
+        std::optional<DocumentInstanceId> documentInstance;
+        std::optional<SequenceTimelineState> sequenceTimeline;
         std::optional<EditorMenuInvocation> menuInvocation = std::nullopt;
         std::optional<ObjectSelectionRequest> objectSelection = std::nullopt;
         std::optional<int> targetIndex = std::nullopt;
@@ -303,6 +316,7 @@ namespace Horo::Editor {
         std::string activeBottomRightPanelId;
         BottomDockMode bottomDockMode = BottomDockMode::Full;
         std::string activeDocumentPanelId = "horo.viewport";
+        std::vector<SequenceWorkspaceDocument> sequenceDocuments;
 
         float leftPanelWidth = 268.0F;
         float rightPanelWidth = 300.0F;

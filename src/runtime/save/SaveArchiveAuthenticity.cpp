@@ -31,8 +31,8 @@ namespace Horo::Runtime {
                 archive.size() < SaveArchivePreambleByteLength + SaveArchiveUnsignedTrailerByteLength ||
                 !std::equal(Magic.begin(), Magic.end(), archive.begin()))
                 return Result<TrailerView>::Failure(MakeError(SaveErrors::ArchiveEnvelopeInvalid));
-            if (ReadLe<std::uint32_t>(archive, 8) != 1 || ReadLe<std::uint32_t>(archive, 12) != 0 ||
-                ReadLe<std::uint32_t>(archive, 28) != 0)
+            if (const auto version = ReadLe<std::uint32_t>(archive, 8);
+                (version != 1 && version != 2) || ReadLe<std::uint32_t>(archive, 12) != 0 || ReadLe<std::uint32_t>(archive, 28) != 0)
                 return Result<TrailerView>::Failure(MakeError(SaveErrors::ArchiveEnvelopeInvalid));
             const auto payloadBytes = ReadLe<std::uint64_t>(archive, 16);
             const auto trailerBytes = ReadLe<std::uint32_t>(archive, 24);
