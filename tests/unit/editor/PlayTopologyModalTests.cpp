@@ -86,6 +86,7 @@ TEST_CASE("Play profile modal supports narrow localized cancelled and shutdown l
         for (const auto *window : ImGui::GetCurrentContext()->Windows) {
             if (std::string_view{window->Name}.find("PlayTopologyProfiles") == std::string_view::npos)
                 continue;
+            INFO("locale: " << locale << ", window: " << window->Name);
             CHECK(window->Size.x <= 320);
             CHECK(window->ScrollMax.x == 0);
             found = true;

@@ -245,7 +245,9 @@ namespace Horo::Editor {
                                     .showClose = true,
                                     .titleFontSize = Theme::TextPx::Title()},
                                    context_.theme.fonts);
-        ImGui::BeginChild("##TopologyBody", {0, shell.BodyHeight()});
+        // Reserve the tall form's scrollbar from its first frame so controls never
+        // inherit the previous frame's wider content region when scrolling appears.
+        ImGui::BeginChild("##TopologyBody", {0, shell.BodyHeight()}, false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
         ImGui::PushTextWrapPos(0);
         ImGui::BeginDisabled(!loaded_);
         DrawProject();
