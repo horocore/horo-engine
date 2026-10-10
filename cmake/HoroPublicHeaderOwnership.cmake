@@ -344,6 +344,10 @@ horo_configure_target_header_boundary(HoroUiTemplateGraph PUBLIC_HEADERS
     Horo/UiTemplates/UiTemplateDependencyGraph.h
     Horo/UiTemplates/UiTemplateErrors.h
 )
+horo_configure_target_header_boundary(HoroPlayTopologyApplication PUBLIC_HEADERS
+    Horo/Application/PlayTopology.h
+)
+
 horo_configure_target_header_boundary(HoroNetworkDebuggerApplication PUBLIC_HEADERS
     Horo/Application/NetworkDebugger.h
 )
