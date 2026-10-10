@@ -4,6 +4,318 @@
   "locale": "en-US",
   "namespace": "editor",
   "messages": {
+    "render_graph.renderer": {
+      "text": "Renderer"
+    },
+    "render_graph.frame": {
+      "text": "Frame"
+    },
+    "render_graph.revision": {
+      "text": "Capture revision"
+    },
+    "render_graph.title": {
+      "text": "Render Graph"
+    },
+    "render_graph.passes": {
+      "text": "Passes"
+    },
+    "render_graph.resources": {
+      "text": "Resources"
+    },
+    "render_graph.lifetimes": {
+      "text": "Lifetimes"
+    },
+    "render_graph.barriers": {
+      "text": "Barriers"
+    },
+    "render_graph.queues": {
+      "text": "Queues"
+    },
+    "render_graph.culling": {
+      "text": "Culling"
+    },
+    "render_graph.timing": {
+      "text": "Timing"
+    },
+    "render_graph.no_capture": {
+      "text": "No captured render graph. Graph capture must be requested explicitly by the rendering host."
+    },
+    "render_graph.query_failed": {
+      "text": "The captured graph is unavailable. Request a new capture from the rendering host."
+    },
+    "render_graph.planned": {
+      "text": "Captured logical plan. Native execution and timing are not measured."
+    },
+    "render_graph.unavailable": {
+      "text": "Unavailable"
+    },
+    "render_graph.none": {
+      "text": "None"
+    },
+    "render_graph.graphics": {
+      "text": "Graphics"
+    },
+    "render_graph.compute": {
+      "text": "Compute"
+    },
+    "render_graph.copy": {
+      "text": "Copy"
+    },
+    "render_graph.transfer": {
+      "text": "Transfer"
+    },
+    "render_graph.keep": {
+      "text": "Keep"
+    },
+    "render_graph.allow_cull": {
+      "text": "May cull unused outputs"
+    },
+    "render_graph.buffer": {
+      "text": "Buffer"
+    },
+    "render_graph.texture": {
+      "text": "Texture"
+    },
+    "render_graph.external": {
+      "text": "External"
+    },
+    "render_graph.persistent": {
+      "text": "Persistent"
+    },
+    "render_graph.transient": {
+      "text": "Transient"
+    },
+    "render_graph.history": {
+      "text": "History"
+    },
+    "render_graph.unused": {
+      "text": "Unused"
+    },
+    "render_graph.read": {
+      "text": "Read"
+    },
+    "render_graph.write": {
+      "text": "Write"
+    },
+    "render_graph.read_write": {
+      "text": "Read and write"
+    },
+    "render_graph.retained": {
+      "text": "Retained"
+    },
+    "render_graph.culled": {
+      "text": "Culled"
+    },
+    "render_graph.reason.policy": {
+      "text": "Conservative policy"
+    },
+    "render_graph.reason.export": {
+      "text": "Observable output"
+    },
+    "render_graph.reason.import": {
+      "text": "Imported resource mutation"
+    },
+    "render_graph.reason.external": {
+      "text": "External synchronization"
+    },
+    "render_graph.reason.dependency": {
+      "text": "Required dependency"
+    },
+    "render_graph.reason.producer": {
+      "text": "Required producer"
+    },
+    "render_graph.reason.unused": {
+      "text": "Unused transient outputs"
+    },
+    "render_graph.reason.culled": {
+      "text": "Only needed by culled passes"
+    },
+    "render_graph.id": {
+      "text": "Identity"
+    },
+    "render_graph.kind": {
+      "text": "Kind"
+    },
+    "render_graph.queue_role": {
+      "text": "Queue role"
+    },
+    "render_graph.policy": {
+      "text": "Policy"
+    },
+    "render_graph.class": {
+      "text": "Lifetime class"
+    },
+    "render_graph.binding": {
+      "text": "Owner : slot : generation"
+    },
+    "render_graph.first_pass": {
+      "text": "First pass"
+    },
+    "render_graph.last_pass": {
+      "text": "Last pass"
+    },
+    "render_graph.use_interval": {
+      "text": "Execution interval"
+    },
+    "render_graph.pass_edge": {
+      "text": "Source → destination pass"
+    },
+    "render_graph.access": {
+      "text": "Access transition"
+    },
+    "render_graph.queue_edge": {
+      "text": "Source → destination queue"
+    },
+    "render_graph.queue": {
+      "text": "Effective queue"
+    },
+    "render_graph.order": {
+      "text": "Execution index"
+    },
+    "render_graph.coverage": {
+      "text": "Evidence"
+    },
+    "render_graph.disposition": {
+      "text": "Disposition"
+    },
+    "render_graph.reason": {
+      "text": "Reason"
+    },
+    "render_graph.cpu": {
+      "text": "CPU time"
+    },
+    "render_graph.gpu": {
+      "text": "GPU time"
+    },
+    "render_graph.previous": {
+      "text": "Previous page"
+    },
+    "render_graph.next": {
+      "text": "Next page"
+    },
+    "workspace.sequence.limit": {
+      "text": "Close a sequence tab before opening another (limit 32)."
+    },
+    "workspace.sequence.keys": {
+      "text": "Keys"
+    },
+    "workspace.sequence.close": {
+      "text": "Close"
+    },
+    "workspace.sequence.zoom": {
+      "text": "Timeline zoom"
+    },
+    "workspace.sequence.scroll": {
+      "text": "First visible frame"
+    },
+    "workspace.sequence.playhead": {
+      "text": "Playhead frame"
+    },
+    "workspace.sequence.no_context": {
+      "text": "No scene authoring context. Navigation does not modify the sequence or scene."
+    },
+    "workspace.sequence.unavailable": {
+      "text": "Some tracks require capabilities not delivered yet; their source data is retained."
+    },
+    "workspace.sequence.empty": {
+      "text": "This sequence has no tracks."
+    },
+    "workspace.sequence.invalid": {
+      "text": "The sequence could not be read or validated. Check the source schema and file access."
+    },
+    "workspace.sequence.conflict": {
+      "text": "This asset is already open from a different source revision. Close it before opening the changed source."
+    },
+    "workspace.sequence.transform": {
+      "text": "Transform"
+    },
+    "workspace.sequence.property": {
+      "text": "Property"
+    },
+    "workspace.sequence.camera_cut": {
+      "text": "Camera cut"
+    },
+    "workspace.sequence.event": {
+      "text": "Event"
+    },
+    "workspace.sequence.audio": {
+      "text": "Audio"
+    },
+    "workspace.sequence.sub_sequence": {
+      "text": "Sub-sequence"
+    },
+    "workspace.play_topology.button": {
+      "text": "Play profiles"
+    },
+    "workspace.play_topology.title": {
+      "text": "Multiplayer play profiles"
+    },
+    "workspace.play_topology.profile": {
+      "text": "Saved profile"
+    },
+    "workspace.play_topology.new": {
+      "text": "New profile"
+    },
+    "workspace.play_topology.name": {
+      "text": "Profile name"
+    },
+    "workspace.play_topology.map": {
+      "text": "Project-relative scene (.horo)"
+    },
+    "workspace.play_topology.kind": {
+      "text": "Topology"
+    },
+    "workspace.play_topology.standalone": {
+      "text": "Standalone"
+    },
+    "workspace.play_topology.listen": {
+      "text": "Listen host and clients"
+    },
+    "workspace.play_topology.dedicated": {
+      "text": "Dedicated server and clients"
+    },
+    "workspace.play_topology.clients": {
+      "text": "Additional clients (0–8; listen: 0–7)"
+    },
+    "workspace.play_topology.transport": {
+      "text": "Transport provider identity"
+    },
+    "workspace.play_topology.port": {
+      "text": "Server port (1–65535)"
+    },
+    "workspace.play_topology.simulation": {
+      "text": "Simulation preset identity (optional)"
+    },
+    "workspace.play_topology.simulation_hint": {
+      "text": "References are validated against available preview capabilities before launch."
+    },
+    "workspace.play_topology.user_hint": {
+      "text": "Machine-local port overrides are stored separately and never change project defaults."
+    },
+    "workspace.play_topology.user_port": {
+      "text": "This machine’s port (0 uses project default)"
+    },
+    "workspace.play_topology.save_project": {
+      "text": "Save project profile"
+    },
+    "workspace.play_topology.save_user": {
+      "text": "Save this machine’s override"
+    },
+    "workspace.play_topology.reload": {
+      "text": "Reload saved profiles"
+    },
+    "workspace.play_topology.close": {
+      "text": "Close"
+    },
+    "workspace.play_topology.invalid": {
+      "text": "Enter a valid name, scene path, mode, counts and network references."
+    },
+    "workspace.play_topology.stale": {
+      "text": "Saved profiles changed. Reload before saving again."
+    },
+    "workspace.play_topology.storage": {
+      "text": "Profiles could not be read or saved. Check project storage access."
+    },
     "workspace.global_dock.network.event.admitted": {
       "text": "Gameplay session admitted"
     },

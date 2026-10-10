@@ -27,6 +27,7 @@
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/input/EditorInputActions.h"
 #include "editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.h"
+#include "editor/modals/play_topology/PlayTopologyModal.h"
 #include "editor/modals/scene_compare/SceneConflictCompareModal.h"
 #include "editor/renderer/EditorGuiRenderer.h"
 #include "editor/renderer/EditorViewportRenderer.h"
@@ -286,7 +287,9 @@ namespace Horo::Editor {
                 }
 
                 if (command.command != None) {
-                    if (command.command == CompareExternalScene) {
+                    if (command.command == OpenPlayTopologyProfiles) {
+                        OpenPlayTopologyProfilesModal();
+                    } else if (command.command == CompareExternalScene) {
                         OpenSceneComparison();
                     } else if (command.command == CreateLuaBehavior || command.command == CreateNativeBehavior) {
                         using enum GameplayBehaviorKind;
@@ -583,6 +586,21 @@ namespace Horo::Editor {
                     !WorkspaceLayoutPersistence::Save(path, layout, &error))
                     LOG_WARN("editor.workspace", "Cannot save workspace state: %s", error.c_str());
                 workspacePersistenceAdmitted_ = false;
+            }
+
+            void OpenPlayTopologyProfilesModal() {
+                if (!controller_ || !projectServices_.durableFiles)
+                    return;
+                const auto &model = controller_->ViewModel();
+                if (model.playState != EditorPlayState::Idle && model.playState != EditorPlayState::Failed)
+                    return;
+                const std::filesystem::path root{model.projectRoot};
+                auto store = std::make_unique<Application::PlayTopologyStore>(*projectServices_.durableFiles,
+                                                                              root / "config" / "play_topologies.json",
+                                                                              root / ".horo" / "local" / "play_topology_overrides.json");
+                const auto opened = modalHost_.OpenRoot(std::make_unique<PlayTopologyModal>(context_, std::move(store)));
+                if (opened.HasError())
+                    LOG_WARN("editor.play_topology", "Profile modal admission failed: %s", opened.ErrorValue().message.c_str());
             }
 
             void OpenSceneComparison() {

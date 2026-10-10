@@ -40,9 +40,10 @@ namespace Horo::JsonEncoding::Detail {
         /** @brief Transfers complete owned storage without allocation. */
         CanonicalJsonValue(CanonicalJsonValue &&) noexcept = default;
 
-        /** @brief Releases complete owned alternatives through their allocation-free RAII cleanup. */
+        /** @brief Retires owned storage to the inert null alternative without allocation. */
         ~CanonicalJsonValue() {
-            // The owned variant member performs the complete cleanup; there is no separate raw resource to release.
+            // Destroy the complete alternative through RAII; the remaining null member owns no resources.
+            value_.template emplace<std::nullptr_t>(nullptr);
         }
 
         /** @brief Preserves the destination if copying any nested child fails. */

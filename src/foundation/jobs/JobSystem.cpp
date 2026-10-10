@@ -66,10 +66,11 @@ namespace Horo {
         using SynchronizedStateMutex::Mutex;
 
         JobRecord(const JobId jobId, const JobDescriptor &descriptor, const SchedulerIdentity scheduler, std::weak_ptr<JobStoreState> owner,
-                  std::weak_ptr<std::condition_variable> admissionWake)
+                  std::weak_ptr<std::condition_variable> admissionWake, std::shared_ptr<JobExecutionState> executionOwner)
             : id(jobId), cancellation(descriptor.parentCancellation), operationId(descriptor.operationId),
               taskGroupId(descriptor.taskGroupId), configuration(descriptor.configuration), schedulerIdentity(scheduler),
-              store(std::move(owner)), admissionWake(std::move(admissionWake)) {
+              store(std::move(owner)), admissionWake(std::move(admissionWake)), resource(descriptor.resource),
+              execution(std::move(executionOwner)) {
             timing.submittedAt = std::chrono::steady_clock::now();
         }
 
@@ -92,6 +93,9 @@ namespace Horo {
         SchedulerIdentity schedulerIdentity;
         std::weak_ptr<JobStoreState> store;
         std::weak_ptr<std::condition_variable> admissionWake;
+        JobResource resource;
+        std::shared_ptr<JobExecutionState> execution;
+        bool ownsExecutionSlot{}; /**< Written at claim and read only by that callback's execution thread. */
         std::thread::id submittingThread = std::this_thread::get_id();
     };
 
@@ -109,16 +113,17 @@ namespace Horo {
 
     /** @copydoc JobSystem::State::State */
     JobSystem::State::State(const JobSystemConfig &value)
-        : config(value), schedulerIdentity(NextSchedulerIdentity()), store(std::make_shared<JobStoreState>(value.maxRetainedTerminalJobs)) {
-    }
+        : config(value), schedulerIdentity(NextSchedulerIdentity()), execution(std::make_shared<JobExecutionState>(value)),
+          store(std::make_shared<JobStoreState>(value.maxRetainedTerminalJobs)) {}
 
     /** @copydoc JobSystem::State::PruneQueues */
     void JobSystem::State::PruneQueues() {
-        for (auto &queue : queues)
-            std::erase_if(queue, [](const std::shared_ptr<JobRecord> &record) {
-                std::lock_guard lock(record->Mutex());
-                return record->state != JobState::Queued;
-            });
+        for (const auto resource : {JobResource::Cpu, JobResource::Io})
+            for (auto &queue : Queues(resource))
+                std::erase_if(queue, [](const std::shared_ptr<JobRecord> &record) {
+                    std::lock_guard lock(record->Mutex());
+                    return record->state != JobState::Queued;
+                });
     }
 
     namespace {
@@ -247,6 +252,30 @@ namespace Horo {
         }
 
         void ExecuteJobRecord(const std::shared_ptr<JobRecord> &record) {
+            // Claim registers this lifetime before publishing Running. Release only after callback captures and context.
+            struct ExecutionLease final {
+                ExecutionLease(JobExecutionState &owner, const JobResource lane, const bool ownsPermit)
+                    : state(owner), resource(lane), ownsSlot(ownsPermit) {}
+
+                ExecutionLease(const ExecutionLease &) = delete;
+                ExecutionLease &operator=(const ExecutionLease &) = delete;
+                ExecutionLease(ExecutionLease &&) = delete;
+                ExecutionLease &operator=(ExecutionLease &&) = delete;
+
+                JobExecutionState &state;
+                JobResource resource;
+                bool ownsSlot;
+
+                ~ExecutionLease() {
+                    std::lock_guard lock(state.mutex);
+                    --state.active;
+                    if (ownsSlot)
+                        --state.occupied[static_cast<std::size_t>(resource)];
+                    state.completed.notify_all();
+                }
+            };
+
+            const ExecutionLease lease{*record->execution, record->resource, record->ownsExecutionSlot};
             const Telemetry::ScopedOperationContext operationContext{record->operationContext};
             const JobExecutionScope executionScope{*record};
             ContextJobFunction work;
@@ -295,24 +324,62 @@ namespace Horo {
             return true;
         }
 
-        [[nodiscard]] bool TryClaimJobRecord(const std::shared_ptr<JobRecord> &record) {
+        [[nodiscard]] bool TryClaimJobRecord(const std::shared_ptr<JobRecord> &record, const bool worker = false) {
             ContextJobFunction releasedWork;
-            bool claimed;
-            if (const std::shared_ptr store = record->store.lock()) {
-                std::scoped_lock locks(store->Mutex(), record->Mutex());
-                claimed = ClaimRecordLocked(*record, store.get(), releasedWork);
-            } else {
-                std::lock_guard recordLock(record->Mutex());
-                claimed = ClaimRecordLocked(*record, nullptr, releasedWork);
+            bool claimed = false;
+            {
+                std::unique_lock executionLock(record->execution->mutex);
+                const bool sameLane = activeExecutionFrame.has_value() &&
+                                      activeExecutionFrame->get().record.schedulerIdentity == record->schedulerIdentity &&
+                                      activeExecutionFrame->get().record.resource == record->resource;
+                if (!worker && ((!record->execution->helpersAllowed && !sameLane) || (activeExecutionFrame.has_value() && !sameLane) ||
+                                (record->resource == JobResource::Io && !sameLane)))
+                    return false;
+                const auto lane = static_cast<std::size_t>(record->resource);
+                const auto hasSlot = [&record, sameLane, lane] {
+                    return sameLane || record->execution->occupied[lane] < record->execution->limits[lane];
+                };
+                if (worker)
+                    record->execution->completed.wait(executionLock, hasSlot);
+                else if (!hasSlot())
+                    return false;
+                if (const std::shared_ptr store = record->store.lock()) {
+                    std::scoped_lock locks(store->Mutex(), record->Mutex());
+                    claimed = ClaimRecordLocked(*record, store.get(), releasedWork);
+                } else {
+                    std::lock_guard recordLock(record->Mutex());
+                    claimed = ClaimRecordLocked(*record, nullptr, releasedWork);
+                }
+                if (claimed) {
+                    ++record->execution->active;
+                    record->ownsExecutionSlot = !sameLane;
+                    if (!sameLane)
+                        ++record->execution->occupied[lane];
+                }
             }
             return claimed;
         }
 
+        /** @brief Rejects synchronous dependency cycles and cross-lane waits before observing completion timing. */
+        [[nodiscard]] Result<void> ValidateWaitDependency(const JobRecord &record, const bool allowTerminalReentry = false) {
+            if (IsOnExecutionStack(record)) {
+                // Legacy capture cleanup may reenter after publication; it cannot wait on its own unfinished callback.
+                std::lock_guard lock(record.Mutex());
+                if (!allowTerminalReentry || !IsTerminal(record.state))
+                    return Result<void>::Failure(
+                        MakeJobError(JobErrors::WaitCapacityDeadlock, "A synchronous wait would close a re-entrant job execution cycle."));
+            }
+            if (activeExecutionFrame.has_value() && activeExecutionFrame->get().record.schedulerIdentity == record.schedulerIdentity &&
+                activeExecutionFrame->get().record.resource != record.resource)
+                return Result<void>::Failure(MakeJobError(JobErrors::WaitCapacityDeadlock,
+                                                          "A scheduler callback cannot synchronously join a different resource lane."));
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> ValidateBoundedWait(const JobRecord &record, const WaitPolicy policy) {
             using enum WaitPolicy;
-            if (IsOnExecutionStack(record))
-                return Result<void>::Failure(
-                    MakeJobError(JobErrors::WaitCapacityDeadlock, "A synchronous wait would close a re-entrant job execution cycle."));
+            if (const auto dependency = ValidateWaitDependency(record); dependency.HasError())
+                return dependency;
             switch (policy) {
                 case MainThreadPumpAllowed:
                     return Result<void>::Success();
@@ -374,23 +441,26 @@ namespace Horo {
         }
     }  // namespace
 
-    void JobSystem::RunWorker(const std::shared_ptr<State> &state) {
+    void JobSystem::RunWorker(const std::shared_ptr<State> &state, const JobResource resource) {
         for (;;) {
             std::shared_ptr<JobRecord> record;
             {
                 std::unique_lock lock(state->mutex);
-                state->workAvailable.wait(lock, [&state] {
-                    return state->stopping || state->QueuedCount() != 0;
+                state->workAvailable.wait(lock, [&state, resource] {
+                    const auto &queues = state->Queues(resource);
+                    return state->stopping || std::ranges::any_of(queues, [](const auto &queue) {
+                        return !queue.empty();
+                    });
                 });
-                if (state->QueuedCount() == 0) {
+                record = state->PopNext(resource);
+                if (!record) {
                     if (state->stopping)
                         return;
                     continue;
                 }
-                record = state->PopNext();
             }
 
-            if (!TryClaimJobRecord(record))
+            if (!TryClaimJobRecord(record, true))
                 continue;
 
             ExecuteJobRecord(record);
@@ -399,12 +469,21 @@ namespace Horo {
 
     /** @copydoc JobSystem::JobSystem */
     JobSystem::JobSystem(const JobSystemConfig &config) : m_state(std::make_shared<State>(config)) {
-        for (std::size_t index = 0; index < m_state->config.workerCount; ++index)
-            m_state->workers.emplace_back([state = m_state] {
-                activeSchedulerIdentity = state->schedulerIdentity;
-                RunWorker(state);
-                activeSchedulerIdentity.reset();
-            });
+        using enum JobResource;
+        try {
+            for (const auto resource : {Cpu, Io}) {
+                const auto count = resource == Cpu ? config.workerCount : config.ioWorkerCount;
+                for (std::size_t index = 0; index < count; ++index)
+                    m_state->workers.emplace_back([state = m_state, resource] {
+                        activeSchedulerIdentity = state->schedulerIdentity;
+                        RunWorker(state, resource);
+                        activeSchedulerIdentity.reset();
+                    });
+            }
+        } catch (...) {
+            Shutdown(ShutdownPolicy::Cancel);
+            throw;
+        }
     }
 
     JobSystem::~JobSystem() {
@@ -436,7 +515,7 @@ namespace Horo {
             if (cancelled)
                 RetainTerminalRecord(*store, record->id);
             else
-                queues[priority].push_back(record);
+                Queues(record->resource)[priority].push_back(record);
         } catch (...) {
             // Failed publication must not leave a retained, unreachable Queued record.
             store->records.erase(record->id);
@@ -461,7 +540,7 @@ namespace Horo {
             RecordRejection(priority, space.ErrorValue());
             return Result<JobHandle>::Failure(space.ErrorValue());
         }
-        record = std::make_shared<JobRecord>(nextId, descriptor, schedulerIdentity, store, spaceAvailable);
+        record = std::make_shared<JobRecord>(nextId, descriptor, schedulerIdentity, store, spaceAvailable, execution);
         const bool cancelled = record->cancellation.Token().IsCancellationRequested();
         if (cancelled) {
             // Prepare fallible terminal metadata before publishing or transferring callback ownership.
@@ -482,7 +561,7 @@ namespace Horo {
         PublishRecord(record, priority, cancelled);
         ++nextId;
         if (!cancelled)
-            workAvailable.notify_one();
+            workAvailable.notify_all();
         return Result<JobHandle>::Success(JobHandle(std::move(record)));
     }
 
@@ -490,7 +569,8 @@ namespace Horo {
     Result<JobHandle> JobSystem::SubmitContext(const JobDescriptor &descriptor, ContextJobFunction work) const {
         const JobDescriptor ownedDescriptor{descriptor};
         const auto priority = static_cast<std::size_t>(ownedDescriptor.priority);
-        if (const auto validated = m_state->ValidateAdmission(priority, ownedDescriptor.requirement); validated.HasError())
+        if (const auto validated = m_state->ValidateAdmission(priority, ownedDescriptor.requirement, ownedDescriptor.resource);
+            validated.HasError())
             return Result<JobHandle>::Failure(validated.ErrorValue());
         const auto &queueConfig = m_state->config.priorityQueues[priority];
         ContextJobFunction releasedWork;
@@ -560,14 +640,28 @@ namespace Horo {
         m_state->PruneQueues();
         auto snapshot = m_state->admission;
         for (std::size_t index = 0; index < m_state->queues.size(); ++index)
-            snapshot.queued[index] = m_state->queues[index].size();
+            snapshot.queued[index] = m_state->queues[index].size() + m_state->ioQueues[index].size();
         return snapshot;
     }
 
+    /** @copydoc JobSystem::StopAccepting */
+    void JobSystem::StopAccepting() const {
+        {
+            std::lock_guard lock(m_state->mutex);
+            m_state->accepting = false;
+        }
+        m_state->spaceAvailable->notify_all();
+    }
+
+    /** @copydoc JobSystem::Shutdown */
     void JobSystem::Shutdown(const ShutdownPolicy policy) const {
         std::vector<ContextJobFunction> releasedWork;
         {
             std::lock_guard shutdownLock(m_state->shutdownMutex);
+            {
+                std::lock_guard executionLock(m_state->execution->mutex);
+                m_state->execution->helpersAllowed = false;
+            }
             {
                 // Queue admission/pop is serialized first; record completion never acquires the scheduler mutex.
                 std::lock_guard lock(m_state->mutex);
@@ -588,15 +682,23 @@ namespace Horo {
                         releasedWork.push_back(RequestCancelRecord(record, "Job was cancelled during shutdown."));
                     for (auto &queue : m_state->queues)
                         queue.clear();
+                    for (auto &queue : m_state->ioQueues)
+                        queue.clear();
                 }
             }
             m_state->workAvailable.notify_all();
             m_state->spaceAvailable->notify_all();
+            if (policy == ShutdownPolicy::Drain && m_state->config.workerCount == 0)
+                RunWorker(m_state, JobResource::Cpu);
             std::ranges::for_each(m_state->workers, [](std::thread &worker) {  // NOSONAR(cpp:S6168) std::jthread not supported by
                                                                                // AppleClang libc++ without experimental flags
                 if (worker.joinable()) {
                     worker.join();
                 }
+            });
+            std::unique_lock executionLock(m_state->execution->mutex);
+            m_state->execution->completed.wait(executionLock, [this] {
+                return m_state->execution->active == 0;
             });
         }
         releasedWork.clear();
@@ -607,6 +709,8 @@ namespace Horo {
             return Result<void>::Failure(MakeJobError(JobErrors::InvalidHandle, "Cannot wait on an invalid job handle."));
 
         const auto record = m_record;
+        if (const auto dependency = ValidateWaitDependency(*record, true); dependency.HasError())
+            return dependency;
         std::unique_lock lock(record->Mutex());
         record->completed.wait(lock, [record] {
             return IsTerminal(record->state);
@@ -733,6 +837,15 @@ namespace Horo {
         try {
             RequestCancel();
             static_cast<void>(Join());
+            // A policy rejection cannot release accepted children. Destruction has already revoked every child's
+            // cancellation token and must finish their lifetime even when a callback cannot form a new wait dependency.
+            for (const auto &child : m_state->children) {
+                const auto &record = child.m_record;
+                std::unique_lock lock(record->Mutex());
+                record->completed.wait(lock, [&record] {
+                    return IsTerminal(record->state);
+                });
+            }
         } catch (...) {  // NOSONAR(cpp:S2486) A destructor cannot report or propagate cleanup failures.
             // Destructors must swallow any unexpected exceptions per noexcept contract
         }
@@ -752,6 +865,9 @@ namespace Horo {
         std::lock_guard lock(m_state->mutex);
         if (!m_state->accepting)
             return Result<JobId>::Failure(MakeJobError(JobErrors::TaskGroupClosed, "Task group admission is closed."));
+        if (activeExecutionFrame.has_value() && activeExecutionFrame->get().record.resource != descriptor.resource)
+            return Result<JobId>::Failure(
+                MakeJobError(JobErrors::WaitCapacityDeadlock, "Structured children spawned by a callback must use its resource lane."));
 
         descriptor.parentCancellation = m_state->cancellation.Token();
         descriptor.taskGroupId = m_state->id;
@@ -814,7 +930,7 @@ namespace Horo {
         ChildJoinOutcome outcome;
         for (const auto &child : children) {
             const Result<void> waited = options == nullptr ? JobHandle{child}.Wait() : WaitUntil(child, deadline, options->waitPolicy);
-            if (options != nullptr && waited.HasError() && IsWaitControlError(waited.ErrorValue())) {
+            if (waited.HasError() && IsWaitControlError(waited.ErrorValue())) {
                 outcome.interruption = waited.ErrorValue();
                 return outcome;
             }

@@ -2,6 +2,7 @@
 
 #include "Horo/Foundation/JobSystem.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <condition_variable>
@@ -25,6 +26,22 @@ namespace Horo {
         [[nodiscard]] friend bool operator==(const SchedulerIdentity &, const SchedulerIdentity &) = default;
     };
 
+    /** @brief Tracks callback/capture lifetime under mutex, including explicit inline wait execution.
+     * Shutdown closes helper admission then waits for active callbacks; workers may finish draining afterward.
+     * Records share this owner so durable handles cannot escape the rejection/join boundary.
+     */
+    struct JobExecutionState final {
+        explicit JobExecutionState(const JobSystemConfig &config)
+            : limits{std::max<std::size_t>(1, config.workerCount), config.ioWorkerCount} {}
+
+        std::mutex mutex;
+        std::condition_variable completed;
+        bool helpersAllowed = true;
+        std::size_t active{};
+        const std::array<std::size_t, 2> limits;
+        std::array<std::size_t, 2> occupied{};
+    };
+
     struct JobSystem::State {
         /** @brief Copies immutable configuration and creates one execution/admission state owner. */
         explicit State(const JobSystemConfig &value);
@@ -38,7 +55,9 @@ namespace Horo {
         JobId nextId = 1;
         // Admission/pop and all queue counts share mutex; callbacks and telemetry execute outside it.
         std::array<std::deque<std::shared_ptr<JobRecord>>, 3> queues;
-        std::size_t dispatchCursor{};
+        std::array<std::deque<std::shared_ptr<JobRecord>>, 3> ioQueues;
+        std::array<std::size_t, 2> dispatchCursor{};
+        std::shared_ptr<JobExecutionState> execution;
         std::shared_ptr<std::condition_variable> spaceAvailable = std::make_shared<std::condition_variable>();
         JobAdmissionSnapshot admission;
         std::array<std::deque<std::uint64_t>, 3> producerOrder;
@@ -63,13 +82,13 @@ namespace Horo {
         void PublishRecord(const std::shared_ptr<JobRecord> &record, std::size_t priority, bool cancelled);
 
         /** @brief Validates immutable policy before any admission side effects. */
-        [[nodiscard]] Result<void> ValidateAdmission(std::size_t priority, JobRequirement requirement) const;
+        [[nodiscard]] Result<void> ValidateAdmission(std::size_t priority, JobRequirement requirement, JobResource resource) const;
 
         /** @brief Records a rejected decision with scheduler mutex held. */
         void RecordRejection(std::size_t priority, const Error &error);
 
         /** @brief Checks whether this caller can safely join the bounded producer wait set. */
-        [[nodiscard]] Result<void> ValidateBlockingAdmission(std::size_t priority, bool executionThread) const;
+        [[nodiscard]] Result<void> ValidateBlockingAdmission(std::size_t priority, bool executionThread, JobResource resource) const;
 
         /** @brief Applies terminal decision precedence while retaining the producer's FIFO position. */
         [[nodiscard]] Result<void> WaitForAdmission(std::unique_lock<std::mutex> &lock, const JobDescriptor &descriptor,
@@ -97,19 +116,25 @@ namespace Horo {
         };
 
         [[nodiscard]] std::size_t QueuedCount() const noexcept {
-            return queues[0].size() + queues[1].size() + queues[2].size();
+            return queues[0].size() + queues[1].size() + queues[2].size() + ioQueues[0].size() + ioQueues[1].size() + ioQueues[2].size();
+        }
+
+        [[nodiscard]] auto &Queues(const JobResource resource) noexcept {
+            return resource == JobResource::Io ? ioQueues : queues;
         }
 
         /** @brief Prunes terminal/claimed work while scheduler mutex is held. */
         void PruneQueues();
 
         [[nodiscard]] bool HasSpace(const std::size_t priority) const noexcept {
-            return QueuedCount() < config.maxQueuedJobs &&
-                   queues[priority].size() < config.priorityQueues[priority].capacity.value_or(config.maxQueuedJobs);
+            const auto reserved = std::min(config.reservedInteractiveJobs, config.maxQueuedJobs);
+            const auto limit = priority == 0 ? config.maxQueuedJobs : config.maxQueuedJobs - reserved;
+            return QueuedCount() < limit && queues[priority].size() + ioQueues[priority].size() <
+                                                config.priorityQueues[priority].capacity.value_or(config.maxQueuedJobs);
         }
 
         /** @brief Selects weighted FIFO work while scheduler mutex is held. */
-        [[nodiscard]] std::shared_ptr<JobRecord> PopNext();
+        [[nodiscard]] std::shared_ptr<JobRecord> PopNext(JobResource resource);
     };
 
     namespace JobDetail {

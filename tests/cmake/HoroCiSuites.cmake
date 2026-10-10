@@ -9,12 +9,20 @@ set(HORO_CI_AUDIO_TARGETS
     HoroCoreAudioDspTests
     HoroAudioCommandTests
     HoroAudioMixerTests
+    HoroAudioEditorPreviewTests
+    HoroAudioFrontendPublicHeaderConsumer
 )
 
 # The full Windows suite remains disabled. Preserve all existing focused checks
 # in one headless Debug build, including their public-header compile consumers.
 set(HORO_CI_WINDOWS_TARGETS
+    HoroAITaskSchedulerTests
+    HoroAITaskSchedulerPublicConsumer
+    HoroMaterialBindingTests
+    HoroMaterialBindingPublicHeaderConsumer
     HoroD3D12InitializationTests
+    HoroPlayTopologyTests
+    HoroPlayTopologyPublicHeaderConsumer
     HoroNetworkDebuggerTests
     HoroNetworkDebuggerPublicHeaderConsumer
     HoroTerrainAuthoringTests
@@ -52,6 +60,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroRuntimeUiTextLayoutTests
     HoroRuntimeUiPublicHeaderConsumer
     HoroRuntimeUiOverlayLifecycleTests
+    HoroRuntimeUiScreenTransitionTests
+    HoroRuntimeUiScreenTransitionPublicHeaderConsumer
     HoroInputPublicHeaderConsumer
     HoroExtensionManagerTests
     HoroEditorActivityBoundaryTests
@@ -59,8 +69,12 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroMcpSessionTests
     HoroMcpSessionPublicHeaderConsumer
     HoroRuntimeSaveRootResolverTests
+    HoroRuntimeSaveStorageQualificationTests
+    HoroSaveStorageUserStateQualificationTests
     HoroRuntimeSaveFilesystemLockTests
     HoroRuntimeSaveSlotCommitTransactionTests
+    HoroRuntimeSaveSlotLifecycleTests
+    HoroSaveSlotLifecyclePublicHeaderConsumer
     HoroRuntimeSaveRestoreTransactionTests
     HoroSaveGameplayCheckpointPublicHeaderConsumer
     HoroRuntimeSaveEventTriggersTests
@@ -72,6 +86,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroTerrainPayloadManifestPublicHeaderConsumer
     HoroTerrainProducerSnapshotTests
     HoroTerrainProducerSnapshotPublicHeaderConsumer
+    HoroNavigationRuntimeTests
+    HoroNavigationBakeServiceTests
 )
 
 set(HORO_CI_NAVIGATION_TARGETS
@@ -141,9 +157,11 @@ function(horo_finalize_ci_suites)
     endif()
 
     set_property(TEST
+        HoroPlayTopologyPublicHeaderConsumer
         HoroNetworkDebuggerPublicHeaderConsumer
         HoroAudioCallbackLockPolicyTest
         HoroPrefabSceneExpansionContractConsumer
+        HoroRuntimeUiScreenTransitionPublicHeaderConsumer
         HoroExtensionManagerTests
         HoroExtensionAbiConformanceCliSupported
         HoroExtensionAbiConformanceCliIncompatible

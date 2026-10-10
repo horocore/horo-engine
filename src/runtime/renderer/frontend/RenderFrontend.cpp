@@ -322,10 +322,12 @@ namespace Horo::Render {
                                                   })),
           resourceUploadQueue_(std::make_unique<Detail::RenderResourceUploadQueue>(uploadLimits)),
           graphResourceLeases_(
-              std::make_unique<Detail::RenderGraphResourceLeasePool>(*resourceRegistry_, retirementLimits.maximumSubmissionPins)) {}
+              std::make_unique<Detail::RenderGraphResourceLeasePool>(*resourceRegistry_, retirementLimits.maximumSubmissionPins)),
+          inspectionFeed_(resourceOwner) {}
 
     /** @copydoc RenderFrontend::~RenderFrontend */
     RenderFrontend::~RenderFrontend() {
+        static_cast<void>(inspectionFeed_.Shutdown());
         if (activeFrameScope_ != nullptr) {
             activeFrameScope_->Abort();
         }

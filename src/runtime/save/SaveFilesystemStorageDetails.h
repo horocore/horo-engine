@@ -68,15 +68,21 @@ namespace Horo::Runtime::SaveFilesystemDetails {
         HANDLE file_;
     };
 
-    [[nodiscard]] inline Result<void> WriteWindowsBytes(HANDLE file, std::span<const std::byte> bytes) {
+    template <typename ProgressHook, typename SyncHook>
+    [[nodiscard]] inline Result<void> WriteWindowsBytes(HANDLE file, std::span<const std::byte> bytes, ProgressHook &&onProgress,
+                                                        SyncHook &&beforeSync) {
         std::size_t offset = 0;
         while (offset < bytes.size()) {
-            const DWORD amount = static_cast<DWORD>(std::min<std::size_t>(bytes.size() - offset, std::numeric_limits<DWORD>::max()));
+            const DWORD amount = static_cast<DWORD>(std::min<std::size_t>(bytes.size() - offset, 64ULL << 10U));
             DWORD written{};
             if (!::WriteFile(file, bytes.data() + offset, amount, &written, nullptr) || written == 0)
                 return Result<void>::Failure(Failure(SaveErrors::StoragePermanentIo, "Windows temporary write", ::GetLastError()));
             offset += written;
+            if (auto admitted = onProgress(); admitted.HasError())
+                return admitted;
         }
+        if (auto admitted = beforeSync(); admitted.HasError())
+            return admitted;
         if (!::FlushFileBuffers(file))
             return Result<void>::Failure(Failure(SaveErrors::StoragePermanentIo, "Windows temporary synchronization", ::GetLastError()));
         return Result<void>::Success();

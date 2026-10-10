@@ -1584,3 +1584,30 @@ and eviction before destroying the cache or authority. Cancellation does not rev
 accepted readers; exact old/new payload revisions coexist only within reserved
 peaks and retire independently. The public-header consumer verifies the target's
 staged dependency surface without broad source/include paths.
+
+## AUD-009.1 additive preview contracts
+
+`Horo/Audio/AudioFrontend.h` belongs exclusively to `HoroAudioFrontend`, with
+AudioCommands public and VoiceRender/output protocol private dependencies.
+`Horo/Editor/AudioEditorDocument.h` belongs to EditorServices, whose deliberate
+AudioFrontend public dependency supplies the typed preview capability.
+
+`HoroAudioFrontendComposition` is a non-installed host-only interface with a
+narrow include root under `src/audio/frontend/include`. Application roots and
+tests consume detached resource/output composition; editor features never expose
+or select backends. Existing APIs and persistent formats are unchanged. Rebuild
+consumers for these additive headers. Generated staged consumers and explicit
+contract translation units verify visibility; preview tests verify playback and
+retirement. No broad source/include path is introduced.
+
+## NET-008.3 Play Topology Profile Boundary
+
+`HoroPlayTopologyApplication` solely owns the additive public
+`Horo/Application/PlayTopology.h` contract and declares only Foundation and
+NetworkApi public dependencies. JSON stays private; runtime backend factories,
+editor/native types and process runners do not enter this header. Store filesystem
+paths remain private host composition inputs. The codec and store helper header
+is target-private. Existing callers require no signature migration; preview launch
+hosts opt into complete capability preflight and revision/generation revalidation
+as described in Networking Architecture. The generated staged header consumer and
+`HoroPlayTopologyPublicHeaderConsumer` verify this additive target boundary.

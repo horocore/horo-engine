@@ -273,7 +273,9 @@ namespace Horo::Application {
             source.target.relativePath = "../escape.scene";
         }
         SECTION("absolute") {
-            source.target.relativePath = (directory.root / "asset.scene").string();
+            const auto absolute = (directory.root / "asset.scene").generic_u8string();
+            REQUIRE(std::filesystem::path{absolute}.is_absolute());
+            source.target.relativePath.assign(absolute.begin(), absolute.end());
         }
         SECTION("Windows traversal") {
             source.target.relativePath = "..\\escape.scene";
@@ -378,13 +380,22 @@ namespace Horo::Application {
             dispatcher = true;
         }
         auto journal = NavigationBakeDiagnostics::Create(config).Value();
-        if (dispatcher)
-            REQUIRE(Telemetry::Runtime::Initialize({.queueCapacity = 512}, std::shared_ptr<Telemetry::ISink>{journal}));
+        std::shared_ptr<PausedDiagnosticSink> paused;
+        std::optional<TelemetryOwner> telemetry;
+        std::optional<ResumeDispatcher> resume;
+        if (dispatcher) {
+            paused = std::make_shared<PausedDiagnosticSink>(journal);
+            telemetry.emplace(paused);
+            resume.emplace(*paused);
+            paused->Pause();
+        }
         REQUIRE(journal->Record({.operation = 1,
                                  .event = NavigationBakeDiagnosticEvent::Succeeded,
                                  .result = BuildOutputResult::Succeeded,
                                  .message = "completed"}));
         if (dispatcher) {
+            REQUIRE(journal->Snapshot().persistenceDrops == 0);
+            paused->Resume();
             REQUIRE(Telemetry::Runtime::Flush());
             REQUIRE(journal->Snapshot().historyFailures == 1);
             REQUIRE(journal->Snapshot().persistenceDrops == 0);

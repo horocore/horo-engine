@@ -548,6 +548,31 @@ namespace Horo::Editor {
             }
         }
 
+        /** @brief Place the localized profiles action only when it fits before the existing Play controls. */
+        void DrawPlayProfilesControl(const float playX, const bool idle, EditorWorkspaceViewCommandData &outCommand,
+                                     const EditorGuiContext &context) {
+            const std::string label = context.localization.Get("editor", "workspace.play_topology.button");
+            const auto metrics = DesignSystem::MetricsFor(Theme::GetActiveTokens(), Ui::ComponentSize::Small);
+            float width{};
+            {
+                Theme::ScopedTextStyle textStyle(context.theme.fonts.sans, metrics.fontSize, Theme::FontPx::Sans);
+                width = ImGui::CalcTextSize(label.c_str()).x + 2 * metrics.paddingX;
+            }
+            const float gap = Ui::ScaledLayoutValue(8);
+            const float x = playX - width - gap;
+            if (x < ImGui::GetCursorPosX() + gap)
+                return;
+            ImGui::SetCursorPosX(x);
+            if (const std::string stableLabel = label + "###workspace_play_profiles";
+                Ui::Button({.label = stableLabel.c_str(),
+                            .variant = Ui::ButtonVariant::Secondary,
+                            .enabled = idle,
+                            .font = context.theme.fonts.sans,
+                            .componentSize = Ui::ComponentSize::Small}))
+                outCommand.command = EditorWorkspaceViewCommand::OpenPlayTopologyProfiles;
+            ImGui::SameLine(0, gap);
+        }
+
         void DrawPlayControls(const float availableRight, const EditorWorkspaceViewModel &viewModel,
                               EditorWorkspaceViewCommandData &outCommand, const EditorGuiContext &context) {
             const bool idle = viewModel.playState == EditorPlayState::Idle || viewModel.playState == EditorPlayState::Failed;
@@ -560,7 +585,7 @@ namespace Horo::Editor {
             const float controlX = availableRight - controlWidth;
             if (controlX < ImGui::GetCursorPosX() + 8.0F)
                 return;
-
+            DrawPlayProfilesControl(controlX, idle, outCommand, context);
             ImGui::SetCursorPosX(controlX);
             const auto drawButton = [&](const char *labelKey, const char *stableId, const bool enabled,
                                         const EditorWorkspaceViewCommand command) {
@@ -828,7 +853,7 @@ namespace Horo::Editor {
                                     ImVec2(size.x - edgeW * 2.0F, size.y - edgeH * 2.0F), TabCenter, outCommand);
         }
 
-        const float tabHeight = area == WorkspaceDockArea::Document ? 28.0F * Theme::GetActiveTokens().sizes.uiScale : 0.0F;
+        const float tabHeight = DocumentTabHeight(area);
         if (area == WorkspaceDockArea::Document)
             DrawDocumentTabs(viewModel, outCommand);
 
@@ -836,8 +861,7 @@ namespace Horo::Editor {
         ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::Bg1());
         ImGui::SetCursorPosY(tabHeight);
         ImGui::BeginChild("##DockContent", ImVec2(0.0F, size.y - tabHeight), false, ImGuiWindowFlags_NoSavedSettings);
-        if (activePanel)
-            activePanel->DrawPanel(ImGui::GetWindowPos(), ImGui::GetWindowSize(), viewModel, outCommand, m_context);
+        DrawDockContent(area, activePanel, viewModel, outCommand);
         ImGui::EndChild();
         ImGui::PopStyleColor();
 
@@ -865,8 +889,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorWorkspaceView::DrawDocumentTab */
-    void EditorWorkspaceView::DrawDocumentTab(const TabStackNode &stack, const std::string &panelId,
-                                              EditorWorkspaceViewCommandData &outCommand) {
+    void EditorWorkspaceView::DrawDocumentTab(const std::string &panelId, EditorWorkspaceViewCommandData &outCommand, const bool active) {
         const auto &panels = m_panelRegistry.GetAllPanels();
         const auto panel = std::ranges::find_if(panels, [&panelId](const auto &candidate) {
             return candidate->GetId() == panelId;
@@ -886,7 +909,7 @@ namespace Horo::Editor {
         const bool hovered = ImGui::IsItemHovered();
         ImDrawList *drawList = ImGui::GetWindowDrawList();
         ImVec4 tabSurface = hovered ? Theme::Hover() : Theme::Bg1();
-        if (stack.activeTab == panelId)
+        if (active)
             tabSurface = Theme::Bg2();
         drawList->AddRectFilled(tabMin, tabMax, Theme::U32(tabSurface), 4.0F * scale);
         drawList->AddRect(tabMin, tabMax, Theme::U32(Theme::Border()), 4.0F * scale);
@@ -920,11 +943,15 @@ namespace Horo::Editor {
         if (stack == nullptr)
             return;
 
-        const float scale = Theme::GetActiveTokens().sizes.uiScale;
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0F * scale, 0.0F));
+        const auto &tokens = Theme::GetActiveTokens();
+        const float height = DocumentTabHeight(WorkspaceDockArea::Document);
+        ImGui::BeginChild("##DocumentTabStrip", {0.0F, height}, false, ImGuiWindowFlags_HorizontalScrollbar);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(tokens.spacing.propertyRowGap, 0.0F));
         for (const std::string &panelId : stack->tabs)
-            DrawDocumentTab(*stack, panelId, outCommand);
+            DrawDocumentTab(panelId, outCommand, !viewModel.workspacePanelHost.ActiveDocument().has_value() && stack->activeTab == panelId);
+        DrawSequenceDocumentTabs(viewModel, outCommand);
         ImGui::PopStyleVar();
+        ImGui::EndChild();
     }
 
     void EditorWorkspaceView::DrawMiddleAndBottomDocks(const WorkspaceLayoutGeometry &geo, const EditorWorkspaceViewModel &viewModel,
