@@ -354,8 +354,8 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiPointerInput::AdmitFrame */
     Result<UiPointerInputStatus> UiPointerInput::AdmitFrame(Input::InputRouter &router, const Input::InputContextToken &context,
-                                                            const UiPointerInputSurface &surface, const std::uint64_t milliseconds) {
-        const auto routing = router.RoutingState(context);
+                                                            const UiPointerInputSurface &surface, const std::uint64_t milliseconds,
+                                                            const Input::InputRoutingState &routing) {
         const auto &snapshot = router.Snapshot();
         frame_ = snapshot.frame;
         time_ = milliseconds;
@@ -411,8 +411,8 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiPointerInput::DeliverFrame */
     Result<UiPointerInputFrame> UiPointerInput::DeliverFrame(Input::InputRouter &router, const Input::InputContextToken &context,
                                                              const UiPointerInputSurface &surface, const std::uint64_t milliseconds,
-                                                             const std::optional<UiAccessibleGesture> alternative) {
-        const auto routing = router.RoutingState(context);
+                                                             const std::optional<UiAccessibleGesture> alternative,
+                                                             const Input::InputRoutingState &routing) {
         const auto collected =
             alternative == UiAccessibleGesture::Cancel ? Result<std::size_t>::Success(0) : Collect(router, context, surface);
         if (collected.HasError()) {
@@ -448,12 +448,13 @@ namespace Horo::Runtime::Ui {
         defaultCount_ = 0;
         if (stopped_)
             return Result<UiPointerInputFrame>::Success({UiPointerInputStatus::Stopped});
+        const auto routing = router.RoutingState(context);
         const auto validated = ValidateFrame(router, context, surface, milliseconds);
         if (validated.HasError())
             return Result<UiPointerInputFrame>::Failure(validated.ErrorValue());
         if (validated.Value() != UiPointerInputStatus::Active)
             return Result<UiPointerInputFrame>::Success({validated.Value()});
-        const auto admitted = AdmitFrame(router, context, surface, milliseconds);
+        const auto admitted = AdmitFrame(router, context, surface, milliseconds, routing);
         if (admitted.HasError())
             return Result<UiPointerInputFrame>::Failure(admitted.ErrorValue());
         if (admitted.Value() != UiPointerInputStatus::Active)
@@ -461,7 +462,7 @@ namespace Horo::Runtime::Ui {
         const auto alternative = ReadAlternative(router, context, surface);
         if (alternative.HasError())
             return Result<UiPointerInputFrame>::Failure(alternative.ErrorValue());
-        return DeliverFrame(router, context, surface, milliseconds, alternative.Value());
+        return DeliverFrame(router, context, surface, milliseconds, alternative.Value(), routing);
     }
 
 }  // namespace Horo::Runtime::Ui

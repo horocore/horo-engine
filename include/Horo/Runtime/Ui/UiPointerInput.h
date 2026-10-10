@@ -150,14 +150,15 @@ namespace Horo::Runtime::Ui {
                                                    const UiPointerInputSurface &surface, std::uint64_t milliseconds) const;
         /** @brief Commits frame identity and revokes stale authority before collection. */
         Result<UiPointerInputStatus> AdmitFrame(Input::InputRouter &router, const Input::InputContextToken &context,
-                                                const UiPointerInputSurface &surface, std::uint64_t milliseconds);
+                                                const UiPointerInputSurface &surface, std::uint64_t milliseconds,
+                                                const Input::InputRoutingState &routing);
         /** @brief Selects the semantic alternative with cancellation taking precedence. */
         Result<std::optional<UiAccessibleGesture>> ReadAlternative(Input::InputRouter &router, const Input::InputContextToken &context,
                                                                    const UiPointerInputSurface &surface);
         /** @brief Collects and delivers admitted input through the live callback fence. */
         Result<UiPointerInputFrame> DeliverFrame(Input::InputRouter &router, const Input::InputContextToken &context,
                                                  const UiPointerInputSurface &surface, std::uint64_t milliseconds,
-                                                 std::optional<UiAccessibleGesture> alternative);
+                                                 std::optional<UiAccessibleGesture> alternative, const Input::InputRoutingState &routing);
         /** @brief Collects only this adapter's consumed physical edges into fixed storage. @return Sample count or typed capacity failure.
          */
         [[nodiscard]] Result<std::size_t> Collect(Input::InputRouter &router, const Input::InputContextToken &context,

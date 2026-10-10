@@ -24,6 +24,14 @@ namespace Horo::Runtime::Ui {
 
     }  // namespace
 
+    /** @copydoc UiPointerInteraction::ObservePosition */
+    UiLogicalPoint UiPointerInteraction::ObservePosition(Contact &contact, const UiLogicalPoint position) noexcept {
+        const auto previous = contact.position;
+        contact.position = position;
+        contact.exceededSlop |= Distance(contact.origin, position) >= descriptor_.dragThreshold;
+        return previous;
+    }
+
     /** @copydoc UiPointerInteraction::LinkTouch */
     Result<void> UiPointerInteraction::LinkTouch(Contact &contact, const SampleContext &context) {
         const auto &environment = context.environment;

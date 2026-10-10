@@ -285,9 +285,7 @@ namespace Horo::Runtime::Ui {
         const auto target = found->capture.Request().route.target;
         if (found->modality != sample.modality || found->capture.Request().button != sample.button)
             return Result<void>::Failure(MakeError(UiErrors::PointerCaptureInvalid));
-        const auto previous = found->position;
-        found->position = position.Value();
-        found->exceededSlop |= Distance(found->origin, position.Value()) >= descriptor_.dragThreshold;
+        const auto previous = ObservePosition(*found, position.Value());
         UiGestureEvent gesture{UiGestureKind::Cancel, sample.pointer.Value(), target};
         if (sample.edge == UiPointerEdge::Cancel || !found->capture.IsActive()) {
             *found = {};

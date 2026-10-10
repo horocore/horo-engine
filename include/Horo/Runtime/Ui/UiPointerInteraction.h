@@ -179,6 +179,8 @@ namespace Horo::Runtime::Ui {
             UiPointerInteractionResult &result;
         };
 
+        /** @brief Updates physical displacement and permanently disarms tap recognition after exceeding slop. */
+        UiLogicalPoint ObservePosition(Contact &contact, UiLogicalPoint position) noexcept;
         /** @brief Marks paired touch participation and cancels an active drag before the new press. */
         Result<void> LinkTouch(Contact &contact, const SampleContext &context);
         /** @brief Acquires an empty capture slot and routes a new press. */
