@@ -9,6 +9,8 @@
 #include "Horo/Runtime/Save/SaveNamespace.h"
 #include "Horo/Runtime/Save/SaveOperation.h"
 #include "Horo/Runtime/Save/SaveProjectPolicy.h"
+#include "Horo/Runtime/Save/SaveSafePointCoordinator.h"
+#include "Horo/Runtime/Save/SaveStoragePolicy.h"
 
 #include <compare>
 #include <cstddef>
@@ -46,7 +48,8 @@ namespace Horo::Runtime {
         Loading,
         Activating,
         Cancelling,
-        Terminal
+        Terminal,
+        WaitingForRetry
     };
 
     /** @brief Result category for one successful admission attempt. */
@@ -64,6 +67,50 @@ namespace Horo::Runtime {
         [[nodiscard]] constexpr auto operator<=>(const SaveArbiterAddress &) const noexcept = default;
     };
 
+    /** @brief Finite nonblocking storage retry policy; only known uncommitted transient I/O is eligible. */
+    struct SaveArbiterRetryPolicy final {
+        std::uint8_t maximumRetries{}; /**< Zero disables retries; at most MaximumSaveStorageAutomaticRetries. */
+        std::uint64_t initialBackoffMilliseconds{100};
+        std::uint64_t maximumBackoffMilliseconds{5'000};
+        std::uint64_t maximumElapsedMilliseconds{30'000};
+
+        [[nodiscard]] bool operator==(const SaveArbiterRetryPolicy &) const noexcept = default;
+    };
+
+    /** @brief Exact original publication evidence retained across attempts; retries never recapture or change identity. */
+    struct SaveArbiterRetryPreconditions final {
+        SaveNamespaceAccessRequest access;
+        SaveNamespaceBindingState bindingState{SaveNamespaceBindingState::Available};
+        SaveRuntimeGeneration runtime;
+        bool authorized{true}; /**< Trusted current product authority; false invalidates the attempt. */
+        std::uint64_t catalogRevision{};
+        SaveGameSlotId slot;
+        std::uint64_t compatibilityRevision{1}; /**< Host version/trust policy revision validated for this archive. */
+        std::optional<SlotGenerationId> expectedGeneration;
+        SlotGenerationId publicationGeneration; /**< Same newly issued archive generation for every attempt. */
+
+        [[nodiscard]] bool operator==(const SaveArbiterRetryPreconditions &other) const noexcept {
+            return access.expected == other.access.expected && access.expectedRevision == other.access.expectedRevision &&
+                   bindingState == other.bindingState && runtime == other.runtime && authorized == other.authorized &&
+                   catalogRevision == other.catalogRevision && slot == other.slot && compatibilityRevision == other.compatibilityRevision &&
+                   expectedGeneration == other.expectedGeneration && publicationGeneration == other.publicationGeneration;
+        }
+    };
+
+    /** @brief Host-issued retry capability copied at operation admission, before any worker executes. */
+    struct SaveArbiterRetryDescriptor final {
+        SaveArbiterRetryPolicy policy;
+        SaveArbiterRetryPreconditions preconditions;
+        std::uint64_t admittedAtMilliseconds{}; /**< Absolute host monotonic clock baseline. */
+    };
+
+    /** @brief Bounded backoff diagnostics attached to the original operation, never a second job or terminal receipt. */
+    struct SaveArbiterRetrySnapshot final {
+        std::uint8_t completedRetries{};
+        std::uint64_t eligibleAtMilliseconds{};
+        std::optional<Error> lastError;
+    };
+
     /** @brief Fully owned request copied at bounded arbiter admission. */
     struct SaveArbiterRequest final {
         SaveOperationDescriptor operation;
@@ -71,6 +118,7 @@ namespace Horo::Runtime {
         std::optional<SaveArbiterAddress> address;
         SaveArbiterPriority priority{SaveArbiterPriority::Normal};
         SaveArbiterConflictPolicy conflict{SaveArbiterConflictPolicy::Reject};
+        std::optional<SaveArbiterRetryDescriptor> retry;
     };
 
     /** @brief Immutable copy returned to polling UI, host, or headless callers. */
@@ -82,6 +130,7 @@ namespace Horo::Runtime {
         SaveArbiterPriority priority{SaveArbiterPriority::Normal};
         std::uint64_t enqueueOrder{};
         std::uint64_t revision{1};
+        SaveArbiterRetrySnapshot retry;
     };
 
     /** @brief Successful admission including the effective operation after coalescing. */
@@ -130,6 +179,33 @@ namespace Horo::Runtime {
          */
         [[nodiscard]] Result<void> Fail(OperationId operation, Error error,
                                         SaveOperationCommitOutcome outcome = SaveOperationCommitOutcome::NotCommitted);
+        /** @brief Handles one storage failure before the commit gate, yielding the active slot during bounded backoff.
+         * @param operation Active Save identity in Encoding or Committing; only Encoding can defer. @param failure Positively classified
+         * provider failure/publication evidence. Caller retry counters are ignored; the admitted finite policy is authoritative.
+         * @param monotonicMilliseconds Nondecreasing host clock.
+         * @param now Host steady clock for the original operation cancellation/deadline.
+         * @return True when deferred; false when the original operation terminalizes with its typed cause, or invalid-state/outcome error.
+         * @pre The worker attempt has settled and released its mutation lease; immutable capture/generation pins remain owned.
+         * @post Only TransientIo with NotCommitted can defer. Captured archive/pins remain host-owned; no new job is dispatched.
+         */
+        [[nodiscard]] Result<bool> DeferStorageRetry(OperationId operation, SaveStorageFailureInput failure,
+                                                     std::uint64_t monotonicMilliseconds,
+                                                     std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+        /** @brief Revalidates original evidence and resumes a due storage attempt only when manual/queued work has precedence.
+         * @param operation Deferred identity. @param current Trusted current facts observed under the publication lease.
+         * @param monotonicMilliseconds Nondecreasing host clock.
+         * @param now Host steady clock for the original operation cancellation/deadline.
+         * @return Original active snapshot when eligible, empty when deferred/cancelled/failed, or invalid-state error.
+         * @post No capture, I/O, wait or callback occurs. Host must retain/revalidate its immutable archive before dispatch and
+         * publication.
+         */
+        [[nodiscard]] Result<std::optional<SaveArbiterSnapshot>> ResumeStorageRetry(
+            OperationId operation, const SaveArbiterRetryPreconditions &current, std::uint64_t monotonicMilliseconds,
+            std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+        /** @brief Closes admission and terminalizes queued/deferred work once; active precommit producers cancel cooperatively.
+         * @return Success; active publication beyond its commit gate remains host-owned.
+         */
+        [[nodiscard]] Result<void> BeginShutdown();
         /** @brief Explicitly cancels queued or active pre-commit work. @param operation Identity. @return Atomic request disposition. */
         [[nodiscard]] SaveCancellationRequestResult Cancel(OperationId operation);
         /** @brief Lets the active producer acknowledge a pending cooperative cancellation. @param operation Active identity.

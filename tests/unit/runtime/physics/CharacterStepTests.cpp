@@ -23,9 +23,11 @@ namespace Horo::Character {
             bool offsetLandingPlane{};
             CharacterWorld *shutdownWorld{};
             std::uint32_t calls{};
+            std::uint32_t overlapCalls{};
 
             static Result<CharacterOverlapProbeResult> Overlap(void *context, const CharacterOverlapProbeRequest &request) noexcept {
                 auto &probe = *static_cast<StepProbe *>(context);
+                ++probe.overlapCalls;
                 return Result<CharacterOverlapProbeResult>::Success(probe.overlapLanding && request.position.x > 0.2F
                                                                         ? CharacterOverlapProbeResult{1, {0, 0.1F, 0}}
                                                                         : CharacterOverlapProbeResult{});
@@ -135,10 +137,17 @@ namespace Horo::Character {
                                             const Math::Vec3 velocity = {30, 0, 0}) {
             auto input = FixedTick(tick);
             input.query = probe.Context(spawned.world->Descriptor(), tick);
+            CharacterMetricCapture capture;
+            input.metrics = &capture;
+            const auto callsBefore = probe.calls + probe.overlapCalls;
             auto request = Movement(spawned.controller, tick, tick);
             request.desiredVelocityMetersPerSecond = velocity;
             REQUIRE(spawned.world->QueueMovementCommand(request).HasValue());
-            return spawned.world->AdvanceFixedTick(input);
+            const auto advanced = spawned.world->AdvanceFixedTick(input);
+            REQUIRE(capture.snapshot.queries == probe.calls + probe.overlapCalls - callsBefore);
+            if (probe.shutdownWorld == nullptr)
+                RequireMovementBudget(*spawned.world, capture);
+            return advanced;
         }
 
         TEST_CASE("Character complete step path commits eligible exact and near height boundaries", "[physics][character][step]") {
