@@ -94,7 +94,9 @@ namespace Horo::Render {
      * @brief Validates a finite single-queue graph request before selected-backend native validation.
      * @param request Borrowed graph, exact operation/resource views and completion lease.
      * @return Success or typed malformed, unsupported-workload, queue, or transient-admission failure.
-     * @details Checks exact workload/use agreement, bounds and resolved identity coverage. It
+     * @details Checks exact workload/use agreement, bounds, resolved identity coverage and
+     * non-overlapping intervals for actual repeated transient instances. Imported storage cannot
+     * serve as a transient alias. Native namespaces are compared by resource kind. It
      * creates no native resources and proves no backend instance validity or native synchronization.
      * Unused transient declarations may have no instance. Used transient declarations require
      * the frontend's explicit realized-set admission; every native backend must still validate its own objects.

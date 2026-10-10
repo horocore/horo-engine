@@ -27,11 +27,11 @@ namespace Horo::Render::Detail {
 
             ~PendingClaims() {
                 for (const auto &claim : slots) {
-                    static_cast<void>(budget_.Cancel(claim.memory));
                     const auto state = registry_.State(claim.resourceClass, claim.resource.identity);
-                    if (state.HasValue() && state.Value() == RenderResourceState::Pending)
+                    if (state.HasValue() && state.Value() == RenderResourceState::Pending) {
+                        static_cast<void>(budget_.Cancel(claim.memory));
                         static_cast<void>(registry_.CancelPending(claim.resourceClass, claim.resource.identity));
-                    else if (state.HasValue() && state.Value() == RenderResourceState::Ready)
+                    } else if (state.HasValue() && state.Value() == RenderResourceState::Ready)
                         static_cast<void>(registry_.Release(claim.resourceClass, claim.resource.identity));
                 }
                 static_cast<void>(registry_.DrainRetirements());
