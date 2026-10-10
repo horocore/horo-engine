@@ -971,6 +971,10 @@ horo_configure_target_header_boundary(HoroPrefabCookHost PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
+    Horo/Runtime/Render/LightCulling.h
+    Horo/Runtime/Render/LightCullingKernel.h
+    Horo/Runtime/Render/LightFrameLayout.h
+    Horo/Runtime/Render/LightFrameUpload.h
     Horo/Runtime/Render/PostProcessSettings.h
     Horo/Runtime/Render/PostProcessVolumes.h
     Horo/Runtime/Render/PostProcessGraph.h
@@ -1031,10 +1035,14 @@ horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
     Horo/Runtime/Render/RenderResource.h
     Horo/Runtime/Render/RenderScene.h
 )
+horo_configure_target_header_boundary(HoroSceneRenderExtraction PUBLIC_HEADERS
+    Horo/Runtime/Render/LightSceneExtraction.h
+)
 horo_configure_target_header_boundary(HoroRenderBackendRegistry PUBLIC_HEADERS
     Horo/Runtime/Render/RenderBackendRegistry.h
 )
 horo_configure_target_header_boundary(HoroRenderFrontend PUBLIC_HEADERS
+    Horo/Runtime/Render/LightFrameBufferPool.h
     Horo/Runtime/Render/RenderFrontend.h
     Horo/Runtime/Render/RenderGraphTransientResources.h
     Horo/Runtime/Render/RenderMemoryBudget.h

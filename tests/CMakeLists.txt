@@ -101,6 +101,7 @@ target_sources(HoroShaderBuildPublicHeaderConsumer PRIVATE support/ShaderBuildPu
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderGraphWorkloadPublicHeaderConsumer.cpp)
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderGraphInspectionPublicHeaderConsumer.cpp)
 target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/RenderFrontendInspectionPublicHeaderConsumer.cpp)
+target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/LightFramePoolPublicHeaderConsumer.cpp)
 if(TARGET HoroGuiPublicHeaderConsumer)
     target_sources(HoroGuiPublicHeaderConsumer PRIVATE support/EditorWrappedTextPublicHeaderConsumer.cpp)
 endif()
@@ -2738,6 +2739,19 @@ add_executable(HoroStandardPbrMaterialTests
 target_compile_features(HoroStandardPbrMaterialTests PRIVATE cxx_std_20)
 target_include_directories(HoroStandardPbrMaterialTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroStandardPbrMaterialTests PRIVATE HoroEngine::RenderApi)
+add_executable(HoroLightCullingTests
+        unit/runtime/renderer/LightCullingGraphTests.cpp
+        unit/runtime/renderer/LightCullingTests.cpp
+        unit/runtime/renderer/LightFrameUploadTests.cpp
+        unit/runtime/renderer/LightCullingKernelTests.cpp
+        unit/runtime/renderer/LightSceneExtractionTests.cpp
+)
+target_compile_features(HoroLightCullingTests PRIVATE cxx_std_20)
+target_link_libraries(HoroLightCullingTests PRIVATE HoroEngine::SceneRenderExtraction)
+add_executable(HoroLightFramePoolTests unit/runtime/renderer/LightFrameBufferPoolTests.cpp)
+target_compile_features(HoroLightFramePoolTests PRIVATE cxx_std_20)
+target_link_libraries(HoroLightFramePoolTests PRIVATE HoroEngine::RenderFrontend HoroEngine::RenderNull)
+
 add_executable(HoroStandardPbrPassPlanTests
         unit/runtime/renderer/StandardPbrPassPlanTests.cpp
 )
@@ -3976,6 +3990,8 @@ endif ()
 if (HORO_BUILD_RENDER_METAL)
     add_executable(HoroMetalGraphExecutionSmoke integration/renderer/MetalGraphExecutionSmoke.mm)
     target_sources(HoroMetalGraphExecutionSmoke PRIVATE integration/renderer/MetalParallelRecordingSmoke.mm)
+    target_sources(HoroMetalGraphExecutionSmoke PRIVATE integration/renderer/MetalLightFrameUploadSmoke.mm)
+    target_sources(HoroMetalGraphExecutionSmoke PRIVATE integration/renderer/MetalLightCullingSmoke.mm)
     target_compile_features(HoroMetalGraphExecutionSmoke PRIVATE cxx_std_20)
     target_compile_options(HoroMetalGraphExecutionSmoke PRIVATE -fobjc-arc)
     target_include_directories(HoroMetalGraphExecutionSmoke PRIVATE ${PROJECT_SOURCE_DIR}/src
@@ -4200,6 +4216,8 @@ set(HORO_CATCH_TEST_TARGETS
         HoroMaterialBindingTests
         HoroStandardPbrMaterialTests
         HoroStandardPbrPassPlanTests
+        HoroLightCullingTests
+        HoroLightFramePoolTests
         HoroShaderCompilerPipelineTests
         HoroRenderSubmissionTests
         HoroRenderFrontendTests

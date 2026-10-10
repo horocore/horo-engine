@@ -330,6 +330,24 @@ namespace Horo::Render {
         [[nodiscard]] const RenderBackendCapabilities &Capabilities() const noexcept;
 
         /**
+         * @brief Realizes one cooked light-culling kernel before frame admission on the render owner thread.
+         * @param kernel Exact cooked artifact and final-target reflection produced by the admitted toolchain route.
+         * @return Owned selected-backend kernel lease or typed capability, lifecycle or native failure.
+         * @details Source compilation and implicit quality fallback are prohibited; callers drain leases before frontend destruction.
+         */
+        [[nodiscard]] Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
+            const CookedLightCullingKernel &kernel);
+
+        /**
+         * @brief Updates exact ready frame-slot buffers before opening a frame; submitted slots remain immutable until complete.
+         * @param buffers Four distinct host-visible storage generations allocated at preparation time.
+         * @param update Validated packed table, finite budget and increasing slot revision.
+         * @return Original typed failure or successful update; pending never blocks or changes the active recipe.
+         * @details The host allocates at most its admitted frames-in-flight slots and retries only a native-complete slot.
+         */
+        [[nodiscard]] Result<void> UpdateLightFrame(const LightFrameBuffers &buffers, const LightFrameUpdate &update);
+
+        /**
          * @brief Begins one staged frame owned by a move-only recovery scope.
          * @param descriptor Host frame identity and output extent.
          * @return Frame scope, the original typed backend failure, or a translated

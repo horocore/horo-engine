@@ -17,8 +17,9 @@ namespace Horo::Render::Detail {
                 return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution,
                                                        "Prepare transient resources through the frontend before execution."));
         }
-        for (const auto &pass : graph.Passes()) {
-            if (pass.kind == RenderPassKind::Compute)
+        for (std::size_t index = 0; index < graph.Passes().size(); ++index) {
+            const auto &pass = graph.Passes()[index];
+            if (pass.kind == RenderPassKind::Compute && !std::holds_alternative<RenderGraphLightCulling>(request.workloads[index].workload))
                 return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedPassKind));
             if (pass.queue != graph.Passes().front().queue)
                 return Result<void>::Failure(

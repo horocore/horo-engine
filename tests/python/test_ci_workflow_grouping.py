@@ -29,6 +29,7 @@ def targets(name: str) -> set[str]:
 
 def test_windows_group_preserves_every_previously_built_target() -> None:
     assert targets("HORO_CI_WINDOWS_TARGETS") == targets("HORO_CI_AUDIO_TARGETS") | {
+        "HoroLightCullingTests", "HoroLightFramePoolTests",
         "HoroAITaskSchedulerTests", "HoroAITaskSchedulerPublicConsumer",
         "HoroD3D12InitializationTests",
         "HoroMaterialBindingTests", "HoroMaterialBindingPublicHeaderConsumer",
@@ -68,6 +69,19 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
         assert not (ROOT / f".github/workflows/{workflow}.yml").exists()
     assert preset("buildPresets", "ci-windows-debug")["targets"] == ["HoroCiWindowsChecks"]
     assert preset("testPresets", "ci-windows-debug")["filter"]["include"]["label"] == "^ci-windows$"
+
+
+def test_windows_light_qualification_has_build_and_discovery_closure() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    registration = re.search(r"set\(HORO_CATCH_TEST_TARGETS\s+(.*?)\n\)", tests_cmake, re.S)
+    assert registration, "Missing native Catch registration group"
+    for target in ("HoroLightCullingTests", "HoroLightFramePoolTests"):
+        assert target in targets("HORO_CI_WINDOWS_TARGETS")
+        assert f"add_executable({target}" in tests_cmake
+        assert target in registration.group(1).split()
+    assert "unit/runtime/renderer/LightFrameBufferPoolTests.cpp" in tests_cmake
+    assert "unit/runtime/renderer/LightSceneExtractionTests.cpp" in tests_cmake
+    assert 'if(target IN_LIST HORO_CI_WINDOWS_TARGETS)\n        list(APPEND ARG_LABELS ci-windows)' in SUITES
 
 
 def test_ai_scheduler_qualification_has_build_discovery_and_single_source_ownership() -> None:
