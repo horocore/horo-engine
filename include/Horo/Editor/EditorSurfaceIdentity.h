@@ -66,6 +66,7 @@ namespace Horo::Editor {
         Project,
         Custom,
         UiCanvas,
+        Sequence,
     };
 
     /** @brief Returns the canonical persisted name of a document kind, or empty for None. */

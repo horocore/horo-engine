@@ -12,6 +12,10 @@ concept AllowsUnvalidatedConstruction =
 static_assert(!AllowsUnvalidatedConstruction<Horo::Runtime::SaveEventTriggers>);
 
 int main() {
+    const Horo::Runtime::SaveArbiterRetryDescriptor retry;
+    static_assert(std::is_copy_constructible_v<Horo::Runtime::SaveArbiterRetryDescriptor>);
+    if (retry.policy.maximumRetries != 0)
+        return 1;
     const Horo::Runtime::SaveTriggerReceipt receipt;
     return Horo::Runtime::DecideSaveTransition(receipt) == Horo::Runtime::SaveTransitionDecision::NotApplicable ? 0 : 1;
 }
