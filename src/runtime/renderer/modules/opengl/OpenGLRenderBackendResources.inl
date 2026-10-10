@@ -8,8 +8,8 @@ Result<std::size_t> QueryMaterialParameterBufferSize(const std::uint64_t pipelin
         return Result<std::size_t>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));
     if (pipeline > std::numeric_limits<std::uint32_t>::max())
         return Result<std::size_t>::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
-    const auto program = graphicsPipelines_.find(static_cast<std::uint32_t>(pipeline));
-    if (program == graphicsPipelines_.end() || !SameMaterialLayout(program->second.layout, descriptor.layout))
+    const auto program = prepared_.graphicsPipelines.find(static_cast<std::uint32_t>(pipeline));
+    if (program == prepared_.graphicsPipelines.end() || !Detail::SameMaterialLayout(program->second.layout, descriptor.layout))
         return Result<std::size_t>::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
     const auto &layout = program->second.layout;
     const auto resource = std::ranges::find(layout.resources, binding, &ShaderReflectedBinding::id);
@@ -34,8 +34,8 @@ Result<std::unique_ptr<IResidentMaterialBinding>> RealizeResolved(const Material
         return Realization::Failure(valid.ErrorValue());
     if (pipeline > std::numeric_limits<std::uint32_t>::max() || resources.size() != descriptor.resources.size())
         return Realization::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
-    const auto program = graphicsPipelines_.find(static_cast<std::uint32_t>(pipeline));
-    if (program == graphicsPipelines_.end() || !SameMaterialLayout(program->second.layout, descriptor.layout))
+    const auto program = prepared_.graphicsPipelines.find(static_cast<std::uint32_t>(pipeline));
+    if (program == prepared_.graphicsPipelines.end() || !Detail::SameMaterialLayout(program->second.layout, descriptor.layout))
         return Realization::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid,
                                               "Material layout does not match the exact resident program's cooked layout."));
     const auto alignment = functions_.materials.uniformOffsetAlignment();
@@ -43,7 +43,7 @@ Result<std::unique_ptr<IResidentMaterialBinding>> RealizeResolved(const Material
         return Realization::Failure(alignment.ErrorValue());
     if (alignment.Value() == 0)
         return Realization::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
-    auto material = std::make_unique<OpenGLMaterialBinding>();
+    auto material = std::make_unique<Detail::OpenGLMaterialBinding>();
     material->owner = this;
     material->program = program->first;
     for (std::size_t index = 0; index < resources.size(); ++index) {
@@ -56,10 +56,10 @@ Result<std::unique_ptr<IResidentMaterialBinding>> RealizeResolved(const Material
         if (mapping == descriptor.layout.targetBindings.end() || declaration == descriptor.layout.resources.end() ||
             logical.arrayElement != 0 || declaration->arrayCount != 1 || mapping->nativeSpace != 0 || resident.instance == 0)
             return Realization::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
-        OpenGLMaterialSlot slot{.kind = resident.kind,
-                                .binding = mapping->nativeBinding,
-                                .offset = resident.offset,
-                                .byteCount = resident.byteCount};
+        Detail::OpenGLMaterialSlot slot{.kind = resident.kind,
+                                        .binding = mapping->nativeBinding,
+                                        .offset = resident.offset,
+                                        .byteCount = resident.byteCount};
         if (declaration->kind == ShaderResourceKind::UniformBuffer) {
             if (resident.kind != MaterialResidentResourceKind::Buffer || resident.instance > std::numeric_limits<std::uint32_t>::max())
                 return Realization::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
@@ -84,18 +84,18 @@ Result<std::unique_ptr<IResidentMaterialBinding>> RealizeResolved(const Material
             if (samplerInstance.kind != MaterialResidentResourceKind::Sampler ||
                 samplerInstance.instance > std::numeric_limits<std::uint32_t>::max())
                 return Realization::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
-            const auto sampler = samplerDescriptors_.find(static_cast<std::uint32_t>(samplerInstance.instance));
+            const auto sampler = prepared_.samplerDescriptors.find(static_cast<std::uint32_t>(samplerInstance.instance));
             const auto comparison = functions_.materials.textureComparison(program->first, mapping->nativeName);
             if (comparison.HasError())
                 return Realization::Failure(comparison.ErrorValue());
-            if (sampler == samplerDescriptors_.end() || sampler->second.compareEnabled != comparison.Value() ||
+            if (sampler == prepared_.samplerDescriptors.end() || sampler->second.compareEnabled != comparison.Value() ||
                 (comparison.Value() && view->second.aspect != RenderTextureAspect::Depth))
                 return Realization::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
             slot.object = view->second.texture;
             slot.sampler = sampler->first;
         } else if (declaration->kind == ShaderResourceKind::Sampler) {
             if (resident.kind != MaterialResidentResourceKind::Sampler || resident.instance > std::numeric_limits<std::uint32_t>::max() ||
-                !samplerDescriptors_.contains(static_cast<std::uint32_t>(resident.instance)))
+                !prepared_.samplerDescriptors.contains(static_cast<std::uint32_t>(resident.instance)))
                 return Realization::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
             continue;  // Separate sampler policy is applied only through its cooked sampled-texture pairing.
         } else {
@@ -131,11 +131,11 @@ Result<RenderMemoryCostPlan> QueryGraphicsPipelineMemoryCost(const RenderGraphic
         !functions_.materialExecution.IsValid() || !functions_.materialExecution.isAvailable() || vertex == 0 || fragment == 0 ||
         vertex == fragment || vertex > std::numeric_limits<std::uint32_t>::max() || fragment > std::numeric_limits<std::uint32_t>::max())
         return Result<RenderMemoryCostPlan>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));
-    const auto vertexModule = shaderModules_.find(static_cast<std::uint32_t>(vertex));
-    const auto fragmentModule = shaderModules_.find(static_cast<std::uint32_t>(fragment));
+    const auto vertexModule = prepared_.shaderModules.find(static_cast<std::uint32_t>(vertex));
+    const auto fragmentModule = prepared_.shaderModules.find(static_cast<std::uint32_t>(fragment));
     const auto matches = [&](const auto &module, const ShaderStage stage) {
-        return module != shaderModules_.end() && module->second.descriptor.stage == stage &&
-               SameShaderTarget(module->second.descriptor.target, descriptor.target) &&
+        return module != prepared_.shaderModules.end() && module->second.descriptor.stage == stage &&
+               Detail::SameShaderTarget(module->second.descriptor.target, descriptor.target) &&
                module->second.descriptor.artifactKey == descriptor.compatibility.shaderArtifactKey &&
                module->second.descriptor.shaderInterface == descriptor.reflection.interfaceCompatibility &&
                std::ranges::any_of(descriptor.manifest.entryPoints, [&](const auto &entry) {
@@ -207,8 +207,8 @@ Result<std::uint64_t> CreateGraphicsPipeline(const RenderGraphicsPipelineDescrip
     if (program.HasError())
         return Result<std::uint64_t>::Failure(program.ErrorValue());
     try {
-        graphicsPipelines_.emplace(program.Value(),
-                                   OpenGLGraphicsPipeline{layout.Value(), descriptor.state, key.Value(), features.Value()});
+        prepared_.graphicsPipelines.emplace(program.Value(), Detail::OpenGLGraphicsPipeline{layout.Value(), descriptor.state, key.Value(),
+                                                                                            features.Value()});
     } catch (const std::bad_alloc &) {
         functions_.shaders.deleteProgram(program.Value());
         return Result<std::uint64_t>::Failure(
@@ -226,7 +226,7 @@ void DestroyGraphicsPipeline(const std::uint64_t backendInstance) noexcept overr
     if (!IsOwnerThread() || backendInstance > std::numeric_limits<std::uint32_t>::max())
         return;
     const auto program = static_cast<std::uint32_t>(backendInstance);
-    if (graphicsPipelines_.erase(program) != 0)
+    if (prepared_.graphicsPipelines.erase(program) != 0)
         functions_.shaders.deleteProgram(program);
 }
 
@@ -274,7 +274,7 @@ Result<std::uint64_t> CreateShaderModule(const RenderShaderModuleDescriptor &des
     if (compiled.HasError())
         return Result<std::uint64_t>::Failure(compiled.ErrorValue());
     try {
-        shaderModules_.emplace(compiled.Value(), OpenGLShaderModule{descriptor, cookedCode.size()});
+        prepared_.shaderModules.emplace(compiled.Value(), Detail::OpenGLShaderModule{descriptor, cookedCode.size()});
     } catch (const std::bad_alloc &) {
         functions_.shaders.deleteShader(compiled.Value());
         return Result<std::uint64_t>::Failure(
@@ -292,7 +292,7 @@ void DestroyShaderModule(const std::uint64_t backendInstance) noexcept override 
     if (!IsOwnerThread() || backendInstance > std::numeric_limits<std::uint32_t>::max())
         return;
     const auto shader = static_cast<std::uint32_t>(backendInstance);
-    if (shaderModules_.erase(shader) != 0)
+    if (prepared_.shaderModules.erase(shader) != 0)
         functions_.shaders.deleteShader(shader);
 }
 
@@ -323,7 +323,7 @@ Result<std::uint64_t> CreateSampler(const RenderSamplerDescriptor &descriptor, c
     if (created.HasError())
         return Result<std::uint64_t>::Failure(created.ErrorValue());
     try {
-        samplerDescriptors_.emplace(created.Value(), descriptor);
+        prepared_.samplerDescriptors.emplace(created.Value(), descriptor);
     } catch (const std::bad_alloc &) {
         functions_.samplers.destroy(created.Value());
         return Result<std::uint64_t>::Failure(
@@ -341,7 +341,7 @@ void DestroySampler(const std::uint64_t backendInstance) noexcept override {
     if (!IsOwnerThread() || backendInstance > std::numeric_limits<std::uint32_t>::max())
         return;
     const auto sampler = static_cast<std::uint32_t>(backendInstance);
-    if (samplerDescriptors_.erase(sampler) != 0)
+    if (prepared_.samplerDescriptors.erase(sampler) != 0)
         functions_.samplers.destroy(sampler);
 }
 
@@ -483,10 +483,10 @@ Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, const s
     functions_.buffers.bindBuffer(GL_ARRAY_BUFFER, 0);
     try {
         meshes_.insert(vertexArray);
-        meshDescriptors_.emplace(vertexArray, descriptor);
+        prepared_.meshDescriptors.emplace(vertexArray, descriptor);
     } catch (...) {  // NOSONAR(cpp:S2738)
         meshes_.erase(vertexArray);
-        meshDescriptors_.erase(vertexArray);
+        prepared_.meshDescriptors.erase(vertexArray);
         functions_.vertexArrays.deleteVertexArrays(1, &vertexArray);
         return Result<std::uint64_t>::Failure(
             MakeError(OpenGLBackendErrors::ResourceCreationFailed, "OpenGL mesh tracking allocation failed."));
@@ -649,18 +649,19 @@ Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &descripto
     try {
         renderTargets_.insert(framebuffer);
         const auto depth = textureViews_.find(depthAttachment);
-        materialTargets_.emplace(framebuffer,
-                                 OpenGLMaterialTarget{.extent = descriptor.extent,
-                                                      .colorTexture = colorAttachment != 0 ? color->second.texture : 0,
-                                                      .depthTexture = depth != textureViews_.end() ? depth->second.texture : 0,
-                                                      .colorFormat =
-                                                          colorAttachment != 0 ? color->second.format : RenderTextureFormat::Rgba8Unorm,
-                                                      .depthFormat =
-                                                          depth != textureViews_.end() ? std::optional{depth->second.format} : std::nullopt,
-                                                      .sampleCount = descriptor.sampleCount});
+        prepared_.materialTargets
+            .emplace(framebuffer,
+                     Detail::OpenGLMaterialTarget{.extent = descriptor.extent,
+                                                  .colorTexture = colorAttachment != 0 ? color->second.texture : 0,
+                                                  .depthTexture = depth != textureViews_.end() ? depth->second.texture : 0,
+                                                  .colorFormat =
+                                                      colorAttachment != 0 ? color->second.format : RenderTextureFormat::Rgba8Unorm,
+                                                  .depthFormat =
+                                                      depth != textureViews_.end() ? std::optional{depth->second.format} : std::nullopt,
+                                                  .sampleCount = descriptor.sampleCount});
     } catch (...) {  // NOSONAR(cpp:S2738)
         renderTargets_.erase(framebuffer);
-        materialTargets_.erase(framebuffer);
+        prepared_.materialTargets.erase(framebuffer);
         functions_.framebuffers.deleteFramebuffers(1, &framebuffer);
         return Result<std::uint64_t>::Failure(
             MakeError(OpenGLBackendErrors::ResourceCreationFailed, "OpenGL render-target tracking allocation failed."));
@@ -702,7 +703,7 @@ void DestroyMesh(const std::uint64_t backendInstance) noexcept override {
     if (!IsOwnerThread())
         return;
     if (backendInstance <= std::numeric_limits<std::uint32_t>::max())
-        meshDescriptors_.erase(static_cast<std::uint32_t>(backendInstance));
+        prepared_.meshDescriptors.erase(static_cast<std::uint32_t>(backendInstance));
     DeleteTrackedObject(functions_.vertexArrays.deleteVertexArrays, meshes_, backendInstance);
 }
 
@@ -740,6 +741,6 @@ void DestroyRenderTarget(const std::uint64_t backendInstance) noexcept override 
     if (!IsOwnerThread())
         return;
     if (backendInstance <= std::numeric_limits<std::uint32_t>::max())
-        materialTargets_.erase(static_cast<std::uint32_t>(backendInstance));
+        prepared_.materialTargets.erase(static_cast<std::uint32_t>(backendInstance));
     DeleteTrackedObject(functions_.framebuffers.deleteFramebuffers, renderTargets_, backendInstance);
 }

@@ -184,6 +184,99 @@ namespace Horo::Render::OpenGLMaterialSmoke {
         }
     };
 
+    /** @brief Owns prepared native consumer inputs while keeping completion and CPU release assertions in the test. */
+    struct PreparedDraw {
+        OpenGLMaterialTests::PipelineFixture pipeline;
+        RenderMeshHandle mesh;
+        OpenGLMaterialTests::TargetFixture target;
+        RenderSamplerHandle sampler;
+        std::unique_ptr<MaterialBindingTable> table;
+        std::shared_ptr<const ResidentMaterialBinding> material;
+        MaterialBindingGenerationId binding;
+        Detail::OpenGLMaterialContextFeatures features;
+        std::uint64_t program, samplerObject, targetObject;
+    };
+
+    /** @brief Prepares the same exact native resources before installing hostile caller state. */
+    PreparedDraw PrepareDraw(RenderFrontend &frontend) {
+        auto pipeline = OpenGLMaterialTests::PreparePipeline(frontend);
+        const auto features = Detail::ProductionOpenGLMaterialExecutionFunctions().queryFeatures();
+        REQUIRE(features.HasValue());
+        std::cout << "Native hostile-state qualification: fixed-index=" << features.Value().fixedIndexRestart
+                  << " clip-distances=" << features.Value().clipDistances << '\n';
+        // 0xffff is a legitimate vertex of this UInt16 mesh. A leaked fixed-index restart enable would drop its triangle.
+        const auto mesh = OpenGLMaterialTests::PrepareMesh(frontend, features.Value().fixedIndexRestart);
+        const auto target = OpenGLMaterialTests::PrepareTarget(frontend);
+        constexpr std::array<std::byte, 4> white{std::byte{255}, std::byte{255}, std::byte{255}, std::byte{255}};
+        const auto texture = OpenGLMaterialTests::PrepareTexture(frontend,
+                                                                 {.extent = {1, 1},
+                                                                  .format = RenderTextureFormat::Rgba8Unorm,
+                                                                  .usage = RenderTextureUsage::Sampled},
+                                                                 RenderTextureAspect::Color, white);
+        const auto sampler = frontend.CreateSampler({});
+        REQUIRE(sampler.HasValue());
+        auto tableResult = MaterialBindingTable::Create(pipeline.pipeline.owner, frontend);
+        REQUIRE(tableResult.HasValue());
+        auto table = std::move(tableResult).Value();
+        const auto published = table->Publish(OpenGLMaterialTests::Material(pipeline, texture.view, sampler.Value().handle));
+        REQUIRE(published.HasValue());
+        auto materialResult = table->Acquire(published.Value().binding);
+        REQUIRE(materialResult.HasValue());
+        auto material = std::move(materialResult).Value();
+        const auto program = Detail::RenderFrontendResourceAccess::BackendInstance(frontend, pipeline.pipeline);
+        REQUIRE(program.HasValue());
+        const auto samplerObject = Detail::RenderFrontendResourceAccess::BackendInstance(frontend, sampler.Value().handle);
+        REQUIRE(samplerObject.HasValue());
+        const auto targetObject = Detail::RenderFrontendResourceAccess::BackendInstance(frontend, target.target);
+        REQUIRE(targetObject.HasValue());
+        return {std::move(pipeline),
+                mesh,
+                target,
+                sampler.Value().handle,
+                std::move(table),
+                std::move(material),
+                published.Value().binding,
+                features.Value(),
+                program.Value(),
+                samplerObject.Value(),
+                targetObject.Value()};
+    }
+
+    /** @brief Reads one exact pixel while restoring the caller's read framebuffer; synchronization is test-only. */
+    void CheckPixels(const GLuint target) {
+        GLint readFramebuffer = 0;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFramebuffer);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, target);
+        std::array<std::uint8_t, 4> pixel{};
+        glReadPixels(32, 16, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(readFramebuffer));
+        CHECK(pixel[0] >= 62);
+        CHECK(pixel[0] <= 65);
+        CHECK(pixel[1] >= 190);
+        CHECK(pixel[1] <= 193);
+        CHECK(pixel[2] >= 126);
+        CHECK(pixel[2] <= 129);
+        REQUIRE(glGetError() == GL_NO_ERROR);
+    }
+
+    /** @brief Creates and identifies the selected real Core context without substituting a software renderer. */
+    std::unique_ptr<RenderFrontend> PrepareFrontend(Port &port) {
+        RenderBackendRegistry registry;
+        REQUIRE(RegisterOpenGLRenderBackend(registry, port).HasValue());
+        REQUIRE(registry.Seal().HasValue());
+        auto created = RenderFrontend::Create(registry, RenderBackendId{"opengl"},
+                                              {.enableValidation = false, .maxFramesInFlight = 1, .presentMode = PresentMode::Immediate});
+        REQUIRE(created.HasValue());
+        auto frontend = std::move(created).Value();
+        const auto device = frontend->QueryPipelineDeviceIdentity();
+        REQUIRE(device.HasValue());
+        std::cout << "Native qualification device: " << device.Value().driverIdentity << " / " << device.Value().driverVersion << '\n';
+        const auto renderer = device.Value().driverIdentity;
+        REQUIRE(renderer.find("llvmpipe") == std::string::npos);
+        REQUIRE(renderer.find("softpipe") == std::string::npos);
+        return frontend;
+    }
+
     TEST_CASE("Prepared native OpenGL material renders exact pixels and restores caller state", "[gpu][display][opengl][material]") {
         REQUIRE(SDL_Init(SDL_INIT_VIDEO));
         const auto quit = [](const int *) noexcept {
@@ -198,79 +291,26 @@ namespace Horo::Render::OpenGLMaterialSmoke {
                                                                          &SDL_DestroyWindow};
         REQUIRE(window);
         Port port{*window};
-        RenderBackendRegistry registry;
-        REQUIRE(RegisterOpenGLRenderBackend(registry, port).HasValue());
-        REQUIRE(registry.Seal().HasValue());
-        auto created = RenderFrontend::Create(registry, RenderBackendId{"opengl"},
-                                              {.enableValidation = false, .maxFramesInFlight = 1, .presentMode = PresentMode::Immediate});
-        REQUIRE(created.HasValue());
-        auto frontend = std::move(created).Value();
-        const auto device = frontend->QueryPipelineDeviceIdentity();
-        REQUIRE(device.HasValue());
-        std::cout << "Native qualification device: " << device.Value().driverIdentity << " / " << device.Value().driverVersion << '\n';
-        const auto renderer = device.Value().driverIdentity;
-        REQUIRE(renderer.find("llvmpipe") == std::string::npos);
-        REQUIRE(renderer.find("softpipe") == std::string::npos);
-        auto pipeline = OpenGLMaterialTests::PreparePipeline(*frontend);
-        const auto features = Detail::ProductionOpenGLMaterialExecutionFunctions().queryFeatures();
-        REQUIRE(features.HasValue());
-        std::cout << "Native hostile-state qualification: fixed-index=" << features.Value().fixedIndexRestart
-                  << " clip-distances=" << features.Value().clipDistances << '\n';
-        // 0xffff is a legitimate vertex of this UInt16 mesh. A leaked fixed-index restart enable would drop its triangle.
-        const auto mesh = OpenGLMaterialTests::PrepareMesh(*frontend, features.Value().fixedIndexRestart);
-        const auto target = OpenGLMaterialTests::PrepareTarget(*frontend);
-        constexpr std::array<std::byte, 4> white{std::byte{255}, std::byte{255}, std::byte{255}, std::byte{255}};
-        const auto texture = OpenGLMaterialTests::PrepareTexture(*frontend,
-                                                                 {.extent = {1, 1},
-                                                                  .format = RenderTextureFormat::Rgba8Unorm,
-                                                                  .usage = RenderTextureUsage::Sampled},
-                                                                 RenderTextureAspect::Color, white);
-        const auto sampler = frontend->CreateSampler({});
-        REQUIRE(sampler.HasValue());
-        auto tableResult = MaterialBindingTable::Create(pipeline.pipeline.owner, *frontend);
-        REQUIRE(tableResult.HasValue());
-        auto table = std::move(tableResult).Value();
-        const auto published = table->Publish(OpenGLMaterialTests::Material(pipeline, texture.view, sampler.Value().handle));
-        REQUIRE(published.HasValue());
-        auto materialResult = table->Acquire(published.Value().binding);
-        REQUIRE(materialResult.HasValue());
-        auto material = std::move(materialResult).Value();
-        const auto program = Detail::RenderFrontendResourceAccess::BackendInstance(*frontend, pipeline.pipeline);
-        REQUIRE(program.HasValue());
-        const auto samplerObject = Detail::RenderFrontendResourceAccess::BackendInstance(*frontend, sampler.Value().handle);
-        REQUIRE(samplerObject.HasValue());
-        const auto targetObject = Detail::RenderFrontendResourceAccess::BackendInstance(*frontend, target.target);
-        REQUIRE(targetObject.HasValue());
+        auto frontend = PrepareFrontend(port);
+        auto draw = PrepareDraw(*frontend);
         {
-            CallerState caller{static_cast<GLuint>(program.Value()), features.Value()};
+            CallerState caller{static_cast<GLuint>(draw.program), draw.features};
             auto begun = frontend->BeginFrame({.frameNumber = 1, .outputExtent = {64, 32}});
             REQUIRE(begun.HasValue());
             auto frame = std::move(begun).Value();
-            std::array draws{RenderMaterialDraw{mesh, material}};
-            REQUIRE(frame.ExecuteMaterialPass({target.target, {64, 32}, {}, 1.0F, draws}).HasValue());
+            std::array draws{RenderMaterialDraw{draw.mesh, draw.material}};
+            REQUIRE(frame.ExecuteMaterialPass({draw.target.target, {64, 32}, {}, 1.0F, draws}).HasValue());
             caller.Check();
             // Readback is explicitly test-only and may synchronize; the normal consumer never waits for native completion.
-            GLint readFramebuffer = 0;
-            glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFramebuffer);
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(targetObject.Value()));
-            std::array<std::uint8_t, 4> pixel{};
-            glReadPixels(32, 16, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(readFramebuffer));
-            CHECK(pixel[0] >= 62);
-            CHECK(pixel[0] <= 65);
-            CHECK(pixel[1] >= 190);
-            CHECK(pixel[1] <= 193);
-            CHECK(pixel[2] >= 126);
-            CHECK(pixel[2] <= 129);
-            REQUIRE(glGetError() == GL_NO_ERROR);
+            CheckPixels(static_cast<GLuint>(draw.targetObject));
             REQUIRE(frame.Present().HasValue());
-            REQUIRE(frontend->ReleaseSampler(sampler.Value().handle).HasValue());
-            REQUIRE(frontend->ReleaseGraphicsPipeline(pipeline.pipeline).HasValue());
-            REQUIRE(table->Release(published.Value().binding).HasValue());
-            material.reset();
+            REQUIRE(frontend->ReleaseSampler(draw.sampler).HasValue());
+            REQUIRE(frontend->ReleaseGraphicsPipeline(draw.pipeline.pipeline).HasValue());
+            REQUIRE(draw.table->Release(draw.binding).HasValue());
+            draw.material.reset();
             draws[0].material.reset();
-            CHECK(glIsSampler(static_cast<GLuint>(samplerObject.Value())) == GL_TRUE);
-            CHECK(glIsProgram(static_cast<GLuint>(program.Value())) == GL_TRUE);
+            CHECK(glIsSampler(static_cast<GLuint>(draw.samplerObject)) == GL_TRUE);
+            CHECK(glIsProgram(static_cast<GLuint>(draw.program)) == GL_TRUE);
         }
         glFinish();  // Bounded opt-in qualification/teardown only; never a production frame path.
         // The selected backend polls its completed fence at frame admission, before registry retirement can release backing.
@@ -279,12 +319,12 @@ namespace Horo::Render::OpenGLMaterialSmoke {
         auto nextFrame = std::move(completed).Value();
         nextFrame.Cancel();
         REQUIRE(frontend->ProcessResourceRequests().HasValue());
-        CHECK(glIsSampler(static_cast<GLuint>(samplerObject.Value())) == GL_FALSE);
-        CHECK(glIsProgram(static_cast<GLuint>(program.Value())) == GL_FALSE);
-        REQUIRE(table->Shutdown().HasValue());
-        table.reset();
-        REQUIRE(frontend->ReleaseShaderModule(pipeline.vertex).HasValue());
-        REQUIRE(frontend->ReleaseShaderModule(pipeline.fragment).HasValue());
+        CHECK(glIsSampler(static_cast<GLuint>(draw.samplerObject)) == GL_FALSE);
+        CHECK(glIsProgram(static_cast<GLuint>(draw.program)) == GL_FALSE);
+        REQUIRE(draw.table->Shutdown().HasValue());
+        draw.table.reset();
+        REQUIRE(frontend->ReleaseShaderModule(draw.pipeline.vertex).HasValue());
+        REQUIRE(frontend->ReleaseShaderModule(draw.pipeline.fragment).HasValue());
         REQUIRE(glGetError() == GL_NO_ERROR);
         frontend.reset();
     }

@@ -265,6 +265,8 @@ namespace Horo::Render {
         [[nodiscard]] Result<void> ExecuteGraphInternal(const CompiledRenderGraphExecution &graph,
                                                         std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission *ui,
                                                         RenderGraphTransientResourcesHandle transientResources = {});
+        /** @brief Transfers one acquired material lease to backend completion; failures retain frontend rollback authority. */
+        [[nodiscard]] Result<void> ExecuteMaterialRequest(RenderMaterialExecutionRequest request);
         void Abort() noexcept;
         void Release() noexcept;
         /** @brief Enforces the one-shot frame admission gate shared by synchronous and worker routes. */

@@ -14,19 +14,19 @@ Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &request) 
         request.draws.size() > RenderMaterialPass::MaximumDraws ||
         (request.depthClear && (!std::isfinite(*request.depthClear) || *request.depthClear < 0 || *request.depthClear > 1)))
         return Result<void>::Failure(MakeError(OpenGLBackendErrors::InvalidConfig));
-    const auto target = materialTargets_.find(static_cast<std::uint32_t>(request.target));
-    if (target == materialTargets_.end() || target->second.extent != request.extent || target->second.colorTexture == 0 ||
+    const auto target = prepared_.materialTargets.find(static_cast<std::uint32_t>(request.target));
+    if (target == prepared_.materialTargets.end() || target->second.extent != request.extent || target->second.colorTexture == 0 ||
         (request.depthClear && target->second.depthTexture == 0))
         return Result<void>::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
     std::array<Detail::OpenGLMaterialDrawCommand, RenderMaterialPass::MaximumDraws> commands;
     for (std::size_t index = 0; index < request.draws.size(); ++index) {
         const auto &draw = request.draws[index];
-        const auto *material = dynamic_cast<const OpenGLMaterialBinding *>(draw.material);
+        const auto *material = dynamic_cast<const Detail::OpenGLMaterialBinding *>(draw.material);
         if (!material || material->owner != this || draw.mesh == 0 || draw.mesh > std::numeric_limits<std::uint32_t>::max())
             return Result<void>::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
-        const auto mesh = meshDescriptors_.find(static_cast<std::uint32_t>(draw.mesh));
-        const auto program = graphicsPipelines_.find(material->program);
-        if (mesh == meshDescriptors_.end() || program == graphicsPipelines_.end() ||
+        const auto mesh = prepared_.meshDescriptors.find(static_cast<std::uint32_t>(draw.mesh));
+        const auto program = prepared_.graphicsPipelines.find(material->program);
+        if (mesh == prepared_.meshDescriptors.end() || program == prepared_.graphicsPipelines.end() ||
             mesh->second.indexCount > static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()) ||
             program->second.state.colorFormat != target->second.colorFormat ||
             program->second.state.depthFormat != target->second.depthFormat ||
@@ -39,7 +39,7 @@ Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &request) 
             if (slot.kind == MaterialResidentResourceKind::Buffer) {
                 if (!bufferDescriptors_.contains(slot.object))
                     return Result<void>::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
-            } else if (!textures_.contains(slot.object) || !samplerDescriptors_.contains(slot.sampler) ||
+            } else if (!textures_.contains(slot.object) || !prepared_.samplerDescriptors.contains(slot.sampler) ||
                        slot.object == target->second.colorTexture || slot.object == target->second.depthTexture) {
                 return Result<void>::Failure(
                     MakeError(OpenGLBackendErrors::ResourceIdentityInvalid,

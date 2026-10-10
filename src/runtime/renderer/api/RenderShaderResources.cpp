@@ -65,6 +65,43 @@ namespace Horo::Render {
                    left.maximumBindings == right.maximumBindings && left.maximumInlineConstantBytes == right.maximumInlineConstantBytes &&
                    left.supportsCompute == right.supportsCompute && left.supportsStorageResources == right.supportsStorageResources;
         }
+
+        /** @brief Validates bounded native ABI metadata independently of source provenance and fixed pipeline state. */
+        [[nodiscard]] Result<PipelineCacheKey> ValidatePipelineReflection(const RenderGraphicsPipelineDescriptor &descriptor) {
+            const auto &reflection = descriptor.reflection;
+            const ShaderReflectionLimits limits;
+            if (reflection.bindings.size() > limits.maximumBindings || reflection.parameters.size() > limits.maximumParameters ||
+                reflection.stageInterface.size() > limits.maximumStageInterfaceVariables ||
+                reflection.targetBindings.size() > limits.maximumTargetBindingEntries)
+                return Result<PipelineCacheKey>::Failure(MakeError(ShaderReflectionErrors::InvalidReflection));
+            if (std::ranges::any_of(reflection.stageInterface,
+                                    [&](const ShaderReflectedInterfaceVariable &variable) {
+                return variable.nativeName.size() > limits.maximumIdentityBytes;
+            }) ||
+                std::ranges::any_of(reflection.targetBindings, [&](const auto &binding) {
+                return binding.nativeName.size() > limits.maximumIdentityBytes;
+            }))
+                return Result<PipelineCacheKey>::Failure(MakeError(ShaderReflectionErrors::InvalidReflection));
+            try {
+                // Native ABI admission validates layout independently. Source provenance remains owned by the cooked artifact.
+                const ShaderReflectionCandidate candidate{.backend = reflection.backend,
+                                                          .interfaceSchemaVersion = reflection.interfaceSchemaVersion,
+                                                          .bindings = reflection.bindings,
+                                                          .parameters = reflection.parameters,
+                                                          .stageInterface = reflection.stageInterface,
+                                                          .targetBindings = reflection.targetBindings};
+                const auto normalized = NormalizeShaderReflection(descriptor.manifest, descriptor.target, candidate);
+                if (normalized.HasError())
+                    return Result<PipelineCacheKey>::Failure(normalized.ErrorValue());
+                if (normalized.Value().interfaceCompatibility != reflection.interfaceCompatibility)
+                    return Result<PipelineCacheKey>::Failure(MakeError(RenderShaderResourceErrors::InvalidPipeline));
+                return ComputePipelineCacheKey(descriptor.compatibility);
+            } catch (const std::bad_alloc &) {
+                return Result<PipelineCacheKey>::Failure(MakeError(RenderShaderResourceErrors::AllocationFailed));
+            } catch (const std::length_error &) {
+                return Result<PipelineCacheKey>::Failure(MakeError(RenderShaderResourceErrors::AllocationFailed));
+            }
+        }
     }  // namespace
 
     /** @copydoc ValidateRenderShaderModuleDescriptor */
@@ -126,39 +163,7 @@ namespace Horo::Render {
             descriptor.compatibility.shaderFormat != descriptor.target.payloadFormat ||
             descriptor.compatibility.shaderInterface != descriptor.reflection.interfaceCompatibility)
             return failure();
-        const auto &reflection = descriptor.reflection;
-        const ShaderReflectionLimits limits;
-        if (reflection.bindings.size() > limits.maximumBindings || reflection.parameters.size() > limits.maximumParameters ||
-            reflection.stageInterface.size() > limits.maximumStageInterfaceVariables ||
-            reflection.targetBindings.size() > limits.maximumTargetBindingEntries)
-            return Result<PipelineCacheKey>::Failure(MakeError(ShaderReflectionErrors::InvalidReflection));
-        if (std::ranges::any_of(reflection.stageInterface,
-                                [&](const ShaderReflectedInterfaceVariable &variable) {
-            return variable.nativeName.size() > limits.maximumIdentityBytes;
-        }) ||
-            std::ranges::any_of(reflection.targetBindings, [&](const auto &binding) {
-            return binding.nativeName.size() > limits.maximumIdentityBytes;
-        }))
-            return Result<PipelineCacheKey>::Failure(MakeError(ShaderReflectionErrors::InvalidReflection));
-        try {
-            // Native ABI admission validates layout independently. Source provenance remains owned by the cooked artifact.
-            const ShaderReflectionCandidate candidate{.backend = reflection.backend,
-                                                      .interfaceSchemaVersion = reflection.interfaceSchemaVersion,
-                                                      .bindings = reflection.bindings,
-                                                      .parameters = reflection.parameters,
-                                                      .stageInterface = reflection.stageInterface,
-                                                      .targetBindings = reflection.targetBindings};
-            const auto normalized = NormalizeShaderReflection(descriptor.manifest, descriptor.target, candidate);
-            if (normalized.HasError())
-                return Result<PipelineCacheKey>::Failure(normalized.ErrorValue());
-            if (normalized.Value().interfaceCompatibility != reflection.interfaceCompatibility)
-                return failure();
-            return ComputePipelineCacheKey(descriptor.compatibility);
-        } catch (const std::bad_alloc &) {
-            return Result<PipelineCacheKey>::Failure(MakeError(RenderShaderResourceErrors::AllocationFailed));
-        } catch (const std::length_error &) {
-            return Result<PipelineCacheKey>::Failure(MakeError(RenderShaderResourceErrors::AllocationFailed));
-        }
+        return ValidatePipelineReflection(descriptor);
     }
 
     /** @copydoc IRenderResourceBackend::QueryPipelineDeviceIdentity */

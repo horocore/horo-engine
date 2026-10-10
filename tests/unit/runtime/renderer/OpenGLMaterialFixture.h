@@ -4,8 +4,8 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/ShaderArtifact.h"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
-#include <cstring>
 
 namespace Horo::Render::OpenGLMaterialTests {
     /** @brief Explicit GLSL fixture shared by deterministic ownership tests and separately opted-in real-device tests. */
@@ -17,6 +17,74 @@ namespace Horo::Render::OpenGLMaterialTests {
         RenderGraphicsPipelineDescriptor descriptor;
     };
 
+    /** @brief Declares the portable material interface independently of native preparation. */
+    inline ShaderManifest MaterialManifest(const ShaderTargetRequirement &target) {
+        return {.schemaVersion = 1,
+                .sourceIdentity = "tests/material.hlsl",
+                .sourceRevision = 1,
+                .entryPoints = {{ShaderStage::Vertex, "VertexMain"}, {ShaderStage::Fragment, "FragmentMain"}},
+                .bindings = {{ShaderBindingId{1}, ShaderResourceKind::UniformBuffer, ShaderResourceAccess::ReadOnly, 1,
+                              ShaderStageVisibility::Fragment},
+                             {ShaderBindingId{2}, ShaderResourceKind::SampledTexture, ShaderResourceAccess::ReadOnly, 1,
+                              ShaderStageVisibility::Fragment},
+                             {ShaderBindingId{3}, ShaderResourceKind::Sampler, ShaderResourceAccess::ReadOnly, 1,
+                              ShaderStageVisibility::Fragment}},
+                .parameters = {{ShaderParameterId{1}, ShaderBindingId{1}, ShaderValueType::Float32, 4, 1, 1}},
+                .targets = {target}};
+    }
+
+    /** @brief Declares exact final-target names and packing for the material fixture. */
+    inline ShaderReflectionCandidate MaterialReflection() {
+        return {.backend = ShaderTargetBackend::OpenGL,
+                .interfaceSchemaVersion = 1,
+                .bindings = {{ShaderBindingId{1}, ShaderResourceKind::UniformBuffer, ShaderResourceAccess::ReadOnly, 1,
+                              ShaderStageVisibility::Fragment, true},
+                             {ShaderBindingId{2}, ShaderResourceKind::SampledTexture, ShaderResourceAccess::ReadOnly, 1,
+                              ShaderStageVisibility::Fragment, true},
+                             {ShaderBindingId{3}, ShaderResourceKind::Sampler, ShaderResourceAccess::ReadOnly, 1,
+                              ShaderStageVisibility::Fragment, true}},
+                .parameters = {{ShaderParameterId{1}, ShaderBindingId{1}, ShaderValueType::Float32, 4, 1, 1, 0, 0, 0, true, true}},
+                .stageInterface = {{ShaderStage::Vertex, ShaderInterfaceDirection::Input, 0, ShaderValueType::Float32, 1, 3, 1, "Position"},
+                                   {ShaderStage::Vertex, ShaderInterfaceDirection::Output, 0, ShaderValueType::Float32, 1, 2, 1, "UV"},
+                                   {ShaderStage::Fragment, ShaderInterfaceDirection::Input, 0, ShaderValueType::Float32, 1, 2, 1, "UV"},
+                                   {ShaderStage::Fragment, ShaderInterfaceDirection::Output, 0, ShaderValueType::Float32, 1, 4, 1,
+                                    "Color"}},
+                .targetBindings = {{ShaderBindingId{1}, 0, 0, 0, "Material", {}, true},
+                                   {ShaderBindingId{2}, 0, 0, 1, "Albedo", ShaderBindingId{3}, true},
+                                   {ShaderBindingId{3}, 0, 0, 1, "AlbedoSampler", {}, true}}};
+    }
+
+    /** @brief Builds the selected-device cache identity without changing shader ownership. */
+    inline RenderGraphicsPipelineDescriptor PipelineDescriptor(RenderFrontend &frontend, RenderShaderModuleHandle vertex,
+                                                               RenderShaderModuleHandle fragment, const ShaderManifest &manifest,
+                                                               const ShaderTargetRequirement &target,
+                                                               const NormalizedShaderReflection &reflection, const Sha256Digest &artifact) {
+        const auto identity = frontend.QueryPipelineDeviceIdentity();
+        REQUIRE(identity.HasValue());
+        const RenderGraphicsPipelineState state{};
+        const auto stateDigest = ComputeRenderGraphicsPipelineStateDigest(state);
+        REQUIRE(stateDigest.HasValue());
+        const auto &device = identity.Value();
+        return {vertex,
+                fragment,
+                manifest,
+                target,
+                reflection,
+                state,
+                {.schemaVersion = 1,
+                 .backend = device.backend,
+                 .backendModuleVersion = device.backendModuleVersion,
+                 .adapter = device.adapter,
+                 .deviceCompatibilityDigest = device.deviceCompatibilityDigest,
+                 .driverIdentity = device.driverIdentity,
+                 .driverVersion = device.driverVersion,
+                 .shaderBackend = target.backend,
+                 .shaderFormat = target.payloadFormat,
+                 .shaderArtifactKey = artifact,
+                 .shaderInterface = reflection.interfaceCompatibility,
+                 .pipelineDescriptorDigest = stateDigest.Value()}};
+    }
+
     /** @brief Prepares exact cooked GLSL and final-target reflection through the real frontend admission transactions. */
     inline PipelineFixture PreparePipeline(RenderFrontend &frontend) {
         const ShaderTargetRequirement target{.backend = ShaderTargetBackend::OpenGL,
@@ -25,36 +93,8 @@ namespace Horo::Render::OpenGLMaterialTests {
                                              .interfaceSchemaVersion = 1,
                                              .maximumBindings = 16,
                                              .maximumInlineConstantBytes = 128};
-        const ShaderManifest manifest{.schemaVersion = 1,
-                                      .sourceIdentity = "tests/material.hlsl",
-                                      .sourceRevision = 1,
-                                      .entryPoints = {{ShaderStage::Vertex, "VertexMain"}, {ShaderStage::Fragment, "FragmentMain"}},
-                                      .bindings = {{ShaderBindingId{1}, ShaderResourceKind::UniformBuffer, ShaderResourceAccess::ReadOnly,
-                                                    1, ShaderStageVisibility::Fragment},
-                                                   {ShaderBindingId{2}, ShaderResourceKind::SampledTexture, ShaderResourceAccess::ReadOnly,
-                                                    1, ShaderStageVisibility::Fragment},
-                                                   {ShaderBindingId{3}, ShaderResourceKind::Sampler, ShaderResourceAccess::ReadOnly, 1,
-                                                    ShaderStageVisibility::Fragment}},
-                                      .parameters = {{ShaderParameterId{1}, ShaderBindingId{1}, ShaderValueType::Float32, 4, 1, 1}},
-                                      .targets = {target}};
-        const ShaderReflectionCandidate
-            candidate{.backend = ShaderTargetBackend::OpenGL,
-                      .interfaceSchemaVersion = 1,
-                      .bindings = {{ShaderBindingId{1}, ShaderResourceKind::UniformBuffer, ShaderResourceAccess::ReadOnly, 1,
-                                    ShaderStageVisibility::Fragment, true},
-                                   {ShaderBindingId{2}, ShaderResourceKind::SampledTexture, ShaderResourceAccess::ReadOnly, 1,
-                                    ShaderStageVisibility::Fragment, true},
-                                   {ShaderBindingId{3}, ShaderResourceKind::Sampler, ShaderResourceAccess::ReadOnly, 1,
-                                    ShaderStageVisibility::Fragment, true}},
-                      .parameters = {{ShaderParameterId{1}, ShaderBindingId{1}, ShaderValueType::Float32, 4, 1, 1, 0, 0, 0, true, true}},
-                      .stageInterface =
-                          {{ShaderStage::Vertex, ShaderInterfaceDirection::Input, 0, ShaderValueType::Float32, 1, 3, 1, "Position"},
-                           {ShaderStage::Vertex, ShaderInterfaceDirection::Output, 0, ShaderValueType::Float32, 1, 2, 1, "UV"},
-                           {ShaderStage::Fragment, ShaderInterfaceDirection::Input, 0, ShaderValueType::Float32, 1, 2, 1, "UV"},
-                           {ShaderStage::Fragment, ShaderInterfaceDirection::Output, 0, ShaderValueType::Float32, 1, 4, 1, "Color"}},
-                      .targetBindings = {{ShaderBindingId{1}, 0, 0, 0, "Material", {}, true},
-                                         {ShaderBindingId{2}, 0, 0, 1, "Albedo", ShaderBindingId{3}, true},
-                                         {ShaderBindingId{3}, 0, 0, 1, "AlbedoSampler", {}, true}}};
+        const auto manifest = MaterialManifest(target);
+        const auto candidate = MaterialReflection();
         const auto reflection = NormalizeShaderReflection(manifest, target, candidate);
         REQUIRE(reflection.HasValue());
         constexpr std::string_view vertexSource = "#version 410 core\nlayout(location=0) in vec3 Position;out vec2 UV;void "
@@ -75,30 +115,8 @@ namespace Horo::Render::OpenGLMaterialTests {
                                                            reflection.Value().interfaceCompatibility},
                                                           package.Value());
         REQUIRE(fragment.HasValue());
-        const auto identity = frontend.QueryPipelineDeviceIdentity();
-        REQUIRE(identity.HasValue());
-        const RenderGraphicsPipelineState state{};
-        const auto stateDigest = ComputeRenderGraphicsPipelineStateDigest(state);
-        REQUIRE(stateDigest.HasValue());
-        const auto &device = identity.Value();
-        RenderGraphicsPipelineDescriptor descriptor{vertex.Value().handle,
-                                                    fragment.Value().handle,
-                                                    manifest,
-                                                    target,
-                                                    reflection.Value(),
-                                                    state,
-                                                    {.schemaVersion = 1,
-                                                     .backend = device.backend,
-                                                     .backendModuleVersion = device.backendModuleVersion,
-                                                     .adapter = device.adapter,
-                                                     .deviceCompatibilityDigest = device.deviceCompatibilityDigest,
-                                                     .driverIdentity = device.driverIdentity,
-                                                     .driverVersion = device.driverVersion,
-                                                     .shaderBackend = target.backend,
-                                                     .shaderFormat = target.payloadFormat,
-                                                     .shaderArtifactKey = artifact,
-                                                     .shaderInterface = reflection.Value().interfaceCompatibility,
-                                                     .pipelineDescriptorDigest = stateDigest.Value()}};
+        auto descriptor =
+            PipelineDescriptor(frontend, vertex.Value().handle, fragment.Value().handle, manifest, target, reflection.Value(), artifact);
         const auto pipeline = frontend.CreateGraphicsPipeline(descriptor);
         if (pipeline.HasError()) {
             INFO("Pipeline admission: " << pipeline.ErrorValue().domain.Value() << '/' << pipeline.ErrorValue().code.Value() << ": "
@@ -185,9 +203,9 @@ namespace Horo::Render::OpenGLMaterialTests {
     /** @brief Builds a generic packed-parameter/texture/sampler material without settings or native handles. */
     inline MaterialBindingDescriptor Material(const PipelineFixture &pipeline, RenderTextureViewHandle texture,
                                               RenderSamplerHandle sampler) {
-        std::vector<std::byte> tint(16);
         const std::array<float, 4> color{0.25F, 0.75F, 0.5F, 1.0F};
-        std::memcpy(tint.data(), color.data(), sizeof(color));
+        const auto bytes = std::as_bytes(std::span{color});
+        std::vector<std::byte> tint(bytes.begin(), bytes.end());
         return {.material = MaterialRuntimeId{1},
                 .revision = 1,
                 .pipeline = pipeline.pipeline,

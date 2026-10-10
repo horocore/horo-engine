@@ -5,6 +5,7 @@
 #include "Horo/Runtime/Render/ShaderArtifact.h"
 #include "RenderFrontendErrors.h"
 #include "RenderFrontendResourceAccess.h"
+#include "RenderGraphResourceLeasePool.h"
 #include "RenderResourceRegistry.h"
 
 #include <algorithm>
@@ -169,6 +170,79 @@ namespace Horo::Render {
                 buffers_[bufferCount_++] = identity;
             }
 
+            /** @brief Resolves only existing generations; packed values are admitted in the second pass. */
+            Result<MaterialResidentResource> ResolveExisting(const MaterialResourceBinding &logical) {
+                if (const auto *buffer = std::get_if<MaterialBufferBinding>(&logical.value)) {
+                    const auto instance =
+                        Resolve(RenderResourceClass::Buffer, {buffer->buffer.owner, buffer->buffer.slot, buffer->buffer.generation});
+                    if (instance.HasError())
+                        return Result<MaterialResidentResource>::Failure(instance.ErrorValue());
+                    return Result<MaterialResidentResource>::Success(
+                        {MaterialResidentResourceKind::Buffer, instance.Value(), buffer->offset, buffer->byteCount});
+                }
+                if (const auto *view = std::get_if<RenderTextureViewHandle>(&logical.value)) {
+                    const auto instance = Resolve(RenderResourceClass::TextureView, {view->owner, view->slot, view->generation});
+                    if (instance.HasError())
+                        return Result<MaterialResidentResource>::Failure(instance.ErrorValue());
+                    return Result<MaterialResidentResource>::Success({MaterialResidentResourceKind::TextureView, instance.Value(), 0, 0});
+                }
+                const auto sampler = std::get<RenderSamplerHandle>(logical.value);
+                const auto instance = Resolve(RenderResourceClass::Sampler, {sampler.owner, sampler.slot, sampler.generation});
+                if (instance.HasError())
+                    return Result<MaterialResidentResource>::Failure(instance.ErrorValue());
+                return Result<MaterialResidentResource>::Success({MaterialResidentResourceKind::Sampler, instance.Value(), 0, 0});
+            }
+
+            /** @brief Completes stale-generation admission before any packed parameter allocation. */
+            Result<void> ResolveExistingResources(const MaterialBindingDescriptor &descriptor,
+                                                  std::span<MaterialResidentResource> resources) {
+                for (std::size_t index = 0; index < descriptor.resources.size(); ++index) {
+                    const auto &logical = descriptor.resources[index];
+                    if (std::holds_alternative<MaterialParameterBinding>(logical.value))
+                        continue;
+                    const auto instance = ResolveExisting(logical);
+                    if (instance.HasError())
+                        return Result<void>::Failure(instance.ErrorValue());
+                    resources[index] = instance.Value();
+                }
+                return Result<void>::Success();
+            }
+
+            struct PreparedParameter {
+                MaterialResidentResource resource;
+                RenderResourceIdentity identity;
+                RenderBufferDescriptor descriptor;
+            };
+
+            /** @brief Owns published parameter backing before any subsequent frontend metadata can allocate. */
+            Result<PreparedParameter> PrepareParameter(IRenderBackend &backend, RenderMemoryBudget &budget, RenderMemoryScopeId scope,
+                                                       std::uint64_t pipeline, const MaterialBindingDescriptor &descriptor,
+                                                       const MaterialResourceBinding &logical) {
+                using Preparation = Result<PreparedParameter>;
+                const auto &packed = std::get<MaterialParameterBinding>(logical.value);
+                const auto size = backend.QueryMaterialParameterBufferSize(pipeline, descriptor, logical.binding);
+                if (size.HasError())
+                    return Preparation::Failure(size.ErrorValue());
+                if (size.Value() < packed.bytes.size() || size.Value() > MaterialBindingLimits{}.maximumParameterBytes)
+                    return Preparation::Failure(MakeError(MaterialBindingErrors::InvalidDescriptor));
+                std::vector<std::byte> padded(size.Value());
+                std::ranges::copy(packed.bytes, padded.begin());
+                const RenderBufferDescriptor buffer{.byteSize = padded.size(), .usage = RenderBufferUsage::Uniform};
+                const auto prepared = PrepareResource(registry_, budget, backend, scope, RenderResourceClass::Buffer, {}, [&] {
+                    return backend.QueryBufferMemoryCost(buffer);
+                }, [&](const RenderMemoryPlacement &placement) {
+                    return backend.CreateBuffer(buffer, padded, placement);
+                });
+                if (prepared.HasError())
+                    return Preparation::Failure(prepared.ErrorValue());
+                const auto identity = prepared.Value().identity;
+                OwnBuffer(identity);
+                const auto instance = Resolve(RenderResourceClass::Buffer, identity);
+                if (instance.HasError())
+                    return Preparation::Failure(instance.ErrorValue());
+                return Preparation::Success({{MaterialResidentResourceKind::Buffer, instance.Value(), 0, padded.size()}, identity, buffer});
+            }
+
             std::unique_ptr<IResidentMaterialBinding> native;
 
         private:
@@ -178,8 +252,8 @@ namespace Horo::Render {
             };
 
             Detail::RenderResourceRegistry &registry_;
-            std::array<Pin, 129> pins_;
-            std::array<RenderResourceIdentity, 128> buffers_;
+            std::array<Pin, 129> pins_{};
+            std::array<RenderResourceIdentity, 128> buffers_{};
             std::size_t pinCount_{0};
             std::size_t bufferCount_{0};
         };
@@ -214,6 +288,80 @@ namespace Horo::Render {
         return frontend.BackendInstance(sampler);
     }
 
+    /** @copydoc RenderFrameScope::ExecuteMaterialRequest */
+    Result<void> RenderFrameScope::ExecuteMaterialRequest(RenderMaterialExecutionRequest request) {
+        RenderGraphLeaseTransfer transfer;
+        const auto release = [&transfer](IRenderGraphResourceLease *lease) {
+            if (transfer.authority == RenderGraphLeaseAuthority::Frontend)
+                lease->Release();
+        };
+        std::unique_ptr<IRenderGraphResourceLease, decltype(release)> lease{request.lease, release};
+        request.transfer = &transfer;
+        const auto consumed = backend_->ExecuteMaterialPass(request);
+        if (consumed.HasError()) {
+            Abort();
+            return consumed;
+        }
+        // Unsupported/default adapters never accept a lease; fail closed if a success omitted completion ownership.
+        if (transfer.authority != RenderGraphLeaseAuthority::BackendCompletion) {
+            Abort();
+            return Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady));
+        }
+        static_cast<void>(lease.release());
+        return Result<void>::Success();
+    }
+
+    /** @copydoc RenderFrameScope::ExecuteMaterialPass */
+    Result<void> RenderFrameScope::ExecuteMaterialPass(const RenderMaterialPass &pass) {
+        if (const auto admitted = ValidateExecutionAdmission(); admitted.HasError())
+            return admitted;
+        try {
+            if (!owner_->IsLiveTarget(pass.target, pass.extent) || !pass.color.IsValid() || pass.draws.empty() ||
+                pass.draws.size() > RenderMaterialPass::MaximumDraws) {
+                Abort();
+                return Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady));
+            }
+            const auto target = owner_->BackendInstance(pass.target);
+            if (target.HasError()) {
+                Abort();
+                return Result<void>::Failure(target.ErrorValue());
+            }
+            std::array<RenderMaterialDrawInstance, RenderMaterialPass::MaximumDraws> instances;
+            std::array<Detail::RenderGraphResidentIdentity, RenderMaterialPass::MaximumDraws + 1> pins;
+            pins[0] = {Detail::RenderResourceClass::RenderTarget, {pass.target.owner, pass.target.slot, pass.target.generation}};
+            for (std::size_t index = 0; index < pass.draws.size(); ++index) {
+                const auto &draw = pass.draws[index];
+                if (!draw.material || draw.material->Id().owner != owner_->resourceRegistry_->Owner()) {
+                    Abort();
+                    return Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady));
+                }
+                const auto mesh = owner_->BackendInstance(draw.mesh);
+                if (mesh.HasError()) {
+                    Abort();
+                    return Result<void>::Failure(mesh.ErrorValue());
+                }
+                instances[index] = {mesh.Value(), &draw.material->BackendBinding().NativeBinding()};
+                pins[index + 1] = {Detail::RenderResourceClass::Mesh, {draw.mesh.owner, draw.mesh.slot, draw.mesh.generation}};
+            }
+            const auto retained = owner_->graphResourceLeases_->AcquireMaterial(std::span{pins}.first(pass.draws.size() + 1), pass.draws);
+            if (retained.HasError()) {
+                Abort();
+                return Result<void>::Failure(retained.ErrorValue());
+            }
+            const auto consumed = ExecuteMaterialRequest({frame_, target.Value(), pass.extent, pass.color, pass.depthClear,
+                                                          std::span{instances}.first(pass.draws.size()), retained.Value(), nullptr});
+            if (consumed.HasError()) {
+                Abort();
+                return consumed;
+            }
+            executed_ = true;
+            return Result<void>::Success();
+        } catch (...) {  // Frame boundary contains arbitrary backend exceptions after restoring completion ownership.
+            Abort();
+            return Result<void>::Failure(MakeError(FrontendErrors::FrameException));
+        }
+    }
+
     /** @copydoc RenderFrontend::Realize */
     Result<std::unique_ptr<IResidentMaterialBinding>> RenderFrontend::Realize(const MaterialBindingDescriptor &descriptor) {
         using Realization = Result<std::unique_ptr<IResidentMaterialBinding>>;
@@ -233,59 +381,22 @@ namespace Horo::Render {
             std::array<MaterialResidentResource, 128> resources;
             // Resolve all existing generations before allocating any parameter backing. The second bounded pass owns
             // only packed parameter buffers; a stale texture/sampler cannot trigger native preparation first.
-            for (unsigned phase = 0; phase < 2; ++phase) {
-                for (std::size_t index = 0; index < descriptor.resources.size(); ++index) {
-                    const auto &logical = descriptor.resources[index];
-                    const bool packedValue = std::holds_alternative<MaterialParameterBinding>(logical.value);
-                    if ((phase == 0 && packedValue) || (phase == 1 && !packedValue))
-                        continue;
-                    auto &resolved = resources[index];
-                    if (const auto *packed = std::get_if<MaterialParameterBinding>(&logical.value)) {
-                        const auto size = backend_->QueryMaterialParameterBufferSize(pipeline.Value(), descriptor, logical.binding);
-                        if (size.HasError())
-                            return Realization::Failure(size.ErrorValue());
-                        if (size.Value() < packed->bytes.size() || size.Value() > MaterialBindingLimits{}.maximumParameterBytes)
-                            return Realization::Failure(MakeError(MaterialBindingErrors::InvalidDescriptor));
-                        std::vector<std::byte> padded(size.Value());
-                        std::ranges::copy(packed->bytes, padded.begin());
-                        const RenderBufferDescriptor buffer{.byteSize = padded.size(), .usage = RenderBufferUsage::Uniform};
-                        const auto prepared = PrepareResource(*resourceRegistry_, *memoryBudget_, *backend_,
-                                                              memoryConfig_.defaultResourceScope, RenderResourceClass::Buffer, {}, [&] {
-                            return backend_->QueryBufferMemoryCost(buffer);
-                        }, [&](const RenderMemoryPlacement &placement) {
-                            return backend_->CreateBuffer(buffer, padded, placement);
-                        });
-                        if (prepared.HasError())
-                            return Realization::Failure(prepared.ErrorValue());
-                        const auto identity = prepared.Value().identity;
-                        lease->OwnBuffer(identity);
-                        if (identity.slot >= buffers_.size())
-                            buffers_.resize(static_cast<std::size_t>(identity.slot) + 1);
-                        buffers_[identity.slot] = {.generation = identity.generation, .descriptor = buffer};
-                        const auto instance = lease->Resolve(RenderResourceClass::Buffer, identity);
-                        if (instance.HasError())
-                            return Realization::Failure(instance.ErrorValue());
-                        resolved = {MaterialResidentResourceKind::Buffer, instance.Value(), 0, padded.size()};
-                    } else if (const auto *buffer = std::get_if<MaterialBufferBinding>(&logical.value)) {
-                        const auto instance = lease->Resolve(RenderResourceClass::Buffer,
-                                                             {buffer->buffer.owner, buffer->buffer.slot, buffer->buffer.generation});
-                        if (instance.HasError())
-                            return Realization::Failure(instance.ErrorValue());
-                        resolved = {MaterialResidentResourceKind::Buffer, instance.Value(), buffer->offset, buffer->byteCount};
-                    } else if (const auto *view = std::get_if<RenderTextureViewHandle>(&logical.value)) {
-                        const auto instance = lease->Resolve(RenderResourceClass::TextureView, {view->owner, view->slot, view->generation});
-                        if (instance.HasError())
-                            return Realization::Failure(instance.ErrorValue());
-                        resolved = {MaterialResidentResourceKind::TextureView, instance.Value(), 0, 0};
-                    } else {
-                        const auto sampler = std::get<RenderSamplerHandle>(logical.value);
-                        const auto instance =
-                            lease->Resolve(RenderResourceClass::Sampler, {sampler.owner, sampler.slot, sampler.generation});
-                        if (instance.HasError())
-                            return Realization::Failure(instance.ErrorValue());
-                        resolved = {MaterialResidentResourceKind::Sampler, instance.Value(), 0, 0};
-                    }
-                }
+            if (const auto existing = lease->ResolveExistingResources(descriptor, std::span{resources}.first(descriptor.resources.size()));
+                existing.HasError())
+                return Realization::Failure(existing.ErrorValue());
+            for (std::size_t index = 0; index < descriptor.resources.size(); ++index) {
+                const auto &logical = descriptor.resources[index];
+                if (!std::holds_alternative<MaterialParameterBinding>(logical.value))
+                    continue;
+                const auto prepared = lease->PrepareParameter(*backend_, *memoryBudget_, memoryConfig_.defaultResourceScope,
+                                                              pipeline.Value(), descriptor, logical);
+                if (prepared.HasError())
+                    return Realization::Failure(prepared.ErrorValue());
+                const auto &parameter = prepared.Value();
+                if (parameter.identity.slot >= buffers_.size())
+                    buffers_.resize(static_cast<std::size_t>(parameter.identity.slot) + 1);
+                buffers_[parameter.identity.slot] = {.generation = parameter.identity.generation, .descriptor = parameter.descriptor};
+                resources[index] = parameter.resource;
             }
             auto native = backend_->RealizeResolved(descriptor, pipeline.Value(), std::span{resources}.first(descriptor.resources.size()));
             if (native.HasError())

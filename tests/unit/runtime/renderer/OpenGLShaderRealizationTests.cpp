@@ -61,9 +61,28 @@ namespace OpenGLShaderRealizationTests {
         return state.logReportedBytes == 0 ? message.size() : state.logReportedBytes;
     }
 
+    /** @brief Adds independent link outcomes and program destruction counters to fake dispatch. */
+    void ProgramFunctions(OpenGLShaderFunctions &functions) noexcept {
+        functions.createProgram = []() noexcept {
+            ++state.creations;
+            return state.program;
+        };
+        functions.attachShader = [](std::uint32_t, std::uint32_t) noexcept {
+        };
+        functions.linkProgram = [](std::uint32_t) noexcept {
+        };
+        functions.programParameter = [](std::uint32_t, std::uint32_t, std::int32_t &value) noexcept {
+            value = state.linkSuccess ? 1 : 0;
+        };
+        functions.programLog = &ReadLog;
+        functions.deleteProgram = [](std::uint32_t) noexcept {
+            ++state.programDeletes;
+        };
+    }
+
     /** @brief Returns nonthrowing synchronous fake dispatch with independently controlled native outcomes. */
     OpenGLShaderFunctions Functions() noexcept {
-        return {
+        OpenGLShaderFunctions functions{
             .isAvailable =
                 []() noexcept {
             return true;
@@ -89,31 +108,13 @@ namespace OpenGLShaderRealizationTests {
                 [](std::uint32_t) noexcept {
             ++state.shaderDeletes;
         },
-            .createProgram =
-                []() noexcept {
-            ++state.creations;
-            return state.program;
-        },
-            .attachShader =
-                [](std::uint32_t, std::uint32_t) noexcept {
-        },
-            .linkProgram =
-                [](std::uint32_t) noexcept {
-        },
-            .programParameter =
-                [](std::uint32_t, std::uint32_t, std::int32_t &value) noexcept {
-            value = state.linkSuccess ? 1 : 0;
-        },
-            .programLog = &ReadLog,
-            .deleteProgram =
-                [](std::uint32_t) noexcept {
-            ++state.programDeletes;
-        },
             .error =
                 []() noexcept {
             return state.error;
         },
         };
+        ProgramFunctions(functions);
+        return functions;
     }
 
     constexpr std::array<std::uint8_t, 5> Source{'x', 0, 'y', '\n', 'z'};

@@ -44,9 +44,9 @@ namespace Horo::Render::OpenGLMaterialTests {
         return {RenderBackendId{"opengl"}, 1, RenderAdapterId{"opengl.test"}, digest, "test-driver", "1"};
     }
 
-    Detail::OpenGLCommandFunctions Functions() {
-        auto functions = OpenGLResourceTests::ResourceProbeFunctions();
-        functions.shaders = {.isAvailable = []() noexcept {
+    /** @brief Supplies shader faults independently of material and completion dispatch. */
+    Detail::OpenGLShaderFunctions ShaderFunctions() {
+        return {.isAvailable = []() noexcept {
             return true;
         }, .createShader = [](std::uint32_t) noexcept {
             return native.nextShader++;
@@ -71,6 +71,11 @@ namespace Horo::Render::OpenGLMaterialTests {
         }, .error = []() noexcept -> std::uint32_t {
             return 0;
         }};
+    }
+
+    Detail::OpenGLCommandFunctions Functions() {
+        auto functions = OpenGLResourceTests::ResourceProbeFunctions();
+        functions.shaders = ShaderFunctions();
         functions.pipelines = {.isAvailable = []() noexcept {
             return true;
         }, .validateAndMap = [](std::uint32_t, const RenderGraphicsPipelineDescriptor &) {
