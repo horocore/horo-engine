@@ -139,9 +139,11 @@ def test_windows_screen_transition_build_and_execution_are_selected() -> None:
         assert target in targets("HORO_CI_WINDOWS_TARGETS")
         assert f"add_executable({target}" in tests_cmake
     registration = re.search(r"set\(HORO_CATCH_TEST_TARGETS\s+(.*?)\n\)", tests_cmake, re.S)
-    assert registration and suite in registration.group(1).split()
+    assert registration
+    assert suite in registration.group(1).split()
     direct_selection = re.search(r"set_property\(TEST\s+(.*?)\s+APPEND PROPERTY LABELS ci-windows\)", SUITES, re.S)
-    assert direct_selection and consumer in direct_selection.group(1).split()
+    assert direct_selection
+    assert consumer in direct_selection.group(1).split()
     assert f"add_test(NAME {consumer} COMMAND {consumer})" in tests_cmake
 
 

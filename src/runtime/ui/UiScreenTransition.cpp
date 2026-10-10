@@ -97,10 +97,9 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Refuses retirement while any canvas owns a prepared navigation mutation. */
         bool RoutesCanRetire() const noexcept {
-            for (const auto &canvas : current->Current()->Canvases())
-                if (canvas.routes && !canvas.routes->CanRetire())
-                    return false;
-            return true;
+            return std::ranges::all_of(current->Current()->Canvases(), [](const auto &canvas) {
+                return !canvas.routes || canvas.routes->CanRetire();
+            });
         }
 
         /** @brief Releases terminal preparation resources only while the collection fence is held. */
