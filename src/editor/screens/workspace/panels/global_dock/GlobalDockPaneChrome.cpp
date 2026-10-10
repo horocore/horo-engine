@@ -13,12 +13,7 @@
 namespace Horo::Editor {
     /** @copydoc DrawGlobalDockWrappedText */
     void DrawGlobalDockWrappedText(const float width, const std::string_view text, const GlobalDockTone tone, const Theme::Fonts &fonts) {
-        Theme::ScopedTextStyle style{fonts.sans, Theme::TextPx::Body(), Theme::FontPx::Sans};
-        ImGui::PushStyleColor(ImGuiCol_Text, GlobalDockToneColor(tone));
-        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + std::max(1.0F, std::min(width, ImGui::GetContentRegionAvail().x)));
-        ImGui::TextUnformatted(text.data(), text.data() + text.size());
-        ImGui::PopTextWrapPos();
-        ImGui::PopStyleColor();
+        Ui::WrappedText(width, text, GlobalDockToneColor(tone), fonts);
     }
 
     namespace {

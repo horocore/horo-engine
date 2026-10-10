@@ -7,6 +7,7 @@
 #include <vector>
 
 namespace Horo::Render::Detail {
+    struct RenderGraphTransientResourceSet;
     /** @brief Typed imported resident identity shared by graph resolution and submission pinning. */
     struct RenderGraphResidentIdentity {
         RenderResourceClass resourceClass;
@@ -27,7 +28,8 @@ namespace Horo::Render::Detail {
         RenderGraphResourceLeasePool(RenderResourceRegistry &registry, std::size_t maximumPins);
         /** @brief Acquires a bounded lease, rolling back every acquired pin on failure. */
         [[nodiscard]] Result<IRenderGraphResourceLease *> Acquire(std::span<const RenderGraphResource> resources,
-                                                                  UiRenderSubmission *ui = nullptr);
+                                                                  UiRenderSubmission *ui = nullptr,
+                                                                  RenderGraphTransientResourceSet *transient = nullptr);
 
     private:
         using Pin = RenderGraphResidentIdentity;
@@ -39,6 +41,7 @@ namespace Horo::Render::Detail {
             bool active{false};
             std::vector<Pin> pins;
             UiRenderSubmissionRetention ui;
+            RenderGraphTransientResourceSet *transient{nullptr};
         };
 
         RenderResourceRegistry *registry_;

@@ -5,6 +5,7 @@
  */
 #include "Horo/Runtime/Render/RenderGraphExecution.h"
 
+#include <cstdint>
 #include <variant>
 
 namespace Horo::Render {
@@ -58,6 +59,17 @@ namespace Horo::Render {
         virtual void Release() noexcept = 0;
     };
 
+    /** @brief Explicit completion-lease authority after a backend starts immediate native encoding. */
+    enum class RenderGraphLeaseAuthority : std::uint8_t {
+        Frontend,
+        BackendCompletion,
+    };
+
+    /** @brief Synchronous transfer receipt; a backend never retains a pointer to this value. */
+    struct RenderGraphLeaseTransfer {
+        RenderGraphLeaseAuthority authority{RenderGraphLeaseAuthority::Frontend};
+    };
+
     /**
      * @brief Synchronously borrowed compiled graph execution request for an active frame.
      *
@@ -72,5 +84,20 @@ namespace Horo::Render {
         std::span<const RenderGraphPassWorkload> workloads;
         std::span<const RenderGraphResourceInstance> resources;
         IRenderGraphResourceLease *lease{nullptr}; /**< Stable frontend-owned lease required for resident graph work. */
+        bool transientResourcesAdmitted{
+            false}; /**< Frontend validated the exact realized lifetime proof and acquired its completion lease. */
+        RenderGraphLeaseTransfer *transfer{
+            nullptr}; /**< Immediate backends record retained ownership before any queued command; never borrowed after ExecuteGraph. */
     };
+
+    /**
+     * @brief Validates a finite single-queue graph request before selected-backend native validation.
+     * @param request Borrowed graph, exact operation/resource views and completion lease.
+     * @return Success or typed malformed, unsupported-workload, queue, or transient-admission failure.
+     * @details Checks exact workload/use agreement, bounds and resolved identity coverage. It
+     * creates no native resources and proves no backend instance validity or native synchronization.
+     * Unused transient declarations may have no instance. Used transient declarations require
+     * the frontend's explicit realized-set admission; every native backend must still validate its own objects.
+     */
+    [[nodiscard]] Result<void> ValidateRenderGraphExecutionRequest(const RenderGraphExecutionRequest &request);
 }  // namespace Horo::Render

@@ -4,6 +4,195 @@
   "locale": "en-US",
   "namespace": "editor",
   "messages": {
+    "render_graph.renderer": {
+      "text": "Renderer"
+    },
+    "render_graph.frame": {
+      "text": "Frame"
+    },
+    "render_graph.revision": {
+      "text": "Capture revision"
+    },
+    "render_graph.title": {
+      "text": "Render Graph"
+    },
+    "render_graph.passes": {
+      "text": "Passes"
+    },
+    "render_graph.resources": {
+      "text": "Resources"
+    },
+    "render_graph.lifetimes": {
+      "text": "Lifetimes"
+    },
+    "render_graph.barriers": {
+      "text": "Barriers"
+    },
+    "render_graph.queues": {
+      "text": "Queues"
+    },
+    "render_graph.culling": {
+      "text": "Culling"
+    },
+    "render_graph.timing": {
+      "text": "Timing"
+    },
+    "render_graph.no_capture": {
+      "text": "No captured render graph. Graph capture must be requested explicitly by the rendering host."
+    },
+    "render_graph.query_failed": {
+      "text": "The captured graph is unavailable. Request a new capture from the rendering host."
+    },
+    "render_graph.planned": {
+      "text": "Captured logical plan. Native execution and timing are not measured."
+    },
+    "render_graph.unavailable": {
+      "text": "Unavailable"
+    },
+    "render_graph.none": {
+      "text": "None"
+    },
+    "render_graph.graphics": {
+      "text": "Graphics"
+    },
+    "render_graph.compute": {
+      "text": "Compute"
+    },
+    "render_graph.copy": {
+      "text": "Copy"
+    },
+    "render_graph.transfer": {
+      "text": "Transfer"
+    },
+    "render_graph.keep": {
+      "text": "Keep"
+    },
+    "render_graph.allow_cull": {
+      "text": "May cull unused outputs"
+    },
+    "render_graph.buffer": {
+      "text": "Buffer"
+    },
+    "render_graph.texture": {
+      "text": "Texture"
+    },
+    "render_graph.external": {
+      "text": "External"
+    },
+    "render_graph.persistent": {
+      "text": "Persistent"
+    },
+    "render_graph.transient": {
+      "text": "Transient"
+    },
+    "render_graph.history": {
+      "text": "History"
+    },
+    "render_graph.unused": {
+      "text": "Unused"
+    },
+    "render_graph.read": {
+      "text": "Read"
+    },
+    "render_graph.write": {
+      "text": "Write"
+    },
+    "render_graph.read_write": {
+      "text": "Read and write"
+    },
+    "render_graph.retained": {
+      "text": "Retained"
+    },
+    "render_graph.culled": {
+      "text": "Culled"
+    },
+    "render_graph.reason.policy": {
+      "text": "Conservative policy"
+    },
+    "render_graph.reason.export": {
+      "text": "Observable output"
+    },
+    "render_graph.reason.import": {
+      "text": "Imported resource mutation"
+    },
+    "render_graph.reason.external": {
+      "text": "External synchronization"
+    },
+    "render_graph.reason.dependency": {
+      "text": "Required dependency"
+    },
+    "render_graph.reason.producer": {
+      "text": "Required producer"
+    },
+    "render_graph.reason.unused": {
+      "text": "Unused transient outputs"
+    },
+    "render_graph.reason.culled": {
+      "text": "Only needed by culled passes"
+    },
+    "render_graph.id": {
+      "text": "Identity"
+    },
+    "render_graph.kind": {
+      "text": "Kind"
+    },
+    "render_graph.queue_role": {
+      "text": "Queue role"
+    },
+    "render_graph.policy": {
+      "text": "Policy"
+    },
+    "render_graph.class": {
+      "text": "Lifetime class"
+    },
+    "render_graph.binding": {
+      "text": "Owner : slot : generation"
+    },
+    "render_graph.first_pass": {
+      "text": "First pass"
+    },
+    "render_graph.last_pass": {
+      "text": "Last pass"
+    },
+    "render_graph.use_interval": {
+      "text": "Execution interval"
+    },
+    "render_graph.pass_edge": {
+      "text": "Source → destination pass"
+    },
+    "render_graph.access": {
+      "text": "Access transition"
+    },
+    "render_graph.queue_edge": {
+      "text": "Source → destination queue"
+    },
+    "render_graph.queue": {
+      "text": "Effective queue"
+    },
+    "render_graph.order": {
+      "text": "Execution index"
+    },
+    "render_graph.coverage": {
+      "text": "Evidence"
+    },
+    "render_graph.disposition": {
+      "text": "Disposition"
+    },
+    "render_graph.reason": {
+      "text": "Reason"
+    },
+    "render_graph.cpu": {
+      "text": "CPU time"
+    },
+    "render_graph.gpu": {
+      "text": "GPU time"
+    },
+    "render_graph.previous": {
+      "text": "Previous page"
+    },
+    "render_graph.next": {
+      "text": "Next page"
+    },
     "workspace.global_dock.network.event.admitted": {
       "text": "Gameplay session admitted"
     },

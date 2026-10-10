@@ -127,6 +127,14 @@ namespace Horo::Render {
         bool supportsMeshResources{false};
         bool supportsTextureResources{false};
         bool supportsRenderTargetResources{false};
+        /**
+         * @brief Admits exact-descriptor transient object reuse on one effective queue.
+         *
+         * The selected backend must validate resolved instances before encoding and provide
+         * equivalent visibility between consecutive non-overlapping logical occupants.
+         * This grants no permission for overlapping resources or distinct placed-resource aliasing.
+         */
+        bool supportsExactTransientResourceReuse{false};
         /** @brief Modern immutable feature, queue, limit, and format support snapshot. */
         RenderCapabilitySnapshot support;
     };

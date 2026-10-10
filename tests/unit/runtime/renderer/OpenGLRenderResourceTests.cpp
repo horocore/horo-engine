@@ -3,6 +3,7 @@
 #include "OpenGLBackendInternal.h"
 #include "OpenGLRenderTestSupport.h"
 #include "RenderMemoryTestSupport.h"
+#include "RenderTransientGraphTestSupport.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -72,6 +73,43 @@ namespace Horo::Render::OpenGLResourceTests {
     };
 
     ResourceCommandState resourceCommandState;
+
+    struct GraphCommandState {
+        std::uint32_t sourceBinding{81};
+        std::uint32_t destinationBinding{82};
+        std::array<std::array<std::uint32_t, 2>, 4> copies{};
+        std::size_t copyCount{};
+        bool failCopy{};
+    };
+
+    GraphCommandState graphCommandState;
+
+    /** @brief Captures actual copy bindings while preserving unrelated shared state probes. */
+    void GraphGetInteger(const std::uint32_t name, const std::span<std::int32_t> values) noexcept {
+        if (name == 0x8F36U)
+            values[0] = static_cast<std::int32_t>(graphCommandState.sourceBinding);
+        else if (name == 0x8F37U)
+            values[0] = static_cast<std::int32_t>(graphCommandState.destinationBinding);
+        else
+            OpenGLBackendTests::ProbeGetInteger(name, values);
+    }
+
+    /** @brief Tracks the immediate API's copy targets without allocating during encoding. */
+    void GraphBindBuffer(const std::uint32_t target, const std::uint32_t object) {
+        if (target == 0x8F36U)
+            graphCommandState.sourceBinding = object;
+        else if (target == 0x8F37U)
+            graphCommandState.destinationBinding = object;
+    }
+
+    /** @brief Records submitted native object pairs and injects a partial-command error. */
+    void GraphCopy(std::uint32_t, std::uint32_t, std::size_t, std::size_t, std::size_t) noexcept {
+        if (graphCommandState.copyCount < graphCommandState.copies.size())
+            graphCommandState.copies[graphCommandState.copyCount] = {graphCommandState.sourceBinding, graphCommandState.destinationBinding};
+        ++graphCommandState.copyCount;
+        if (graphCommandState.failCopy)
+            OpenGLBackendTests::commandState.error = 0x0502U;
+    }
 
     void ProbeNoOp(std::uint32_t) noexcept {
         // This probe intentionally records no state.
@@ -205,6 +243,28 @@ namespace Horo::Render::OpenGLResourceTests {
         Check(registry.Seal().HasValue());
         auto created = registry.Create(RenderBackendId{"opengl"});
         Check(created.HasValue());
+        return std::move(created).Value();
+    }
+
+    /** @brief Composes the real OpenGL backend with deterministic native dispatch and fence probes. */
+    [[nodiscard]] std::unique_ptr<RenderFrontend> CreateGraphFrontend(ResourcePresentationPort &port) {
+        resourceCommandState = {};
+        graphCommandState = {};
+        OpenGLBackendTests::commandState = {};
+        auto functions = ResourceProbeFunctions();
+        functions.isGraphAvailable = +[]() noexcept {
+            return true;
+        };
+        functions.state.getInteger = &GraphGetInteger;
+        functions.buffers.bindBuffer = &GraphBindBuffer;
+        functions.buffers.copyBufferSubData = &GraphCopy;
+        functions.clear = &OpenGLBackendTests::ProbeClear;
+        functions.clearColor = &OpenGLBackendTests::ProbeClearColor;
+        RenderBackendRegistry registry;
+        REQUIRE(Detail::RegisterOpenGLRenderBackendWithFunctions(registry, port, {}, functions).HasValue());
+        REQUIRE(registry.Seal().HasValue());
+        auto created = RenderFrontend::Create(registry, RenderBackendId{"opengl"}, {});
+        REQUIRE(created.HasValue());
         return std::move(created).Value();
     }
 
@@ -452,4 +512,77 @@ namespace Horo::Render::OpenGLResourceTests {
         backend->Shutdown();
     }
 
+    TEST_CASE("OpenGL transient native copies reuse one object and await the actual fence", "[renderer][opengl][transient]") {
+        ResourcePresentationPort port;
+        auto frontend = CreateGraphFrontend(port);
+        const auto buffers = TransientTest::ImportedCopyBuffers(*frontend);
+        auto sources = TransientTest::CopyGraph(buffers[0], buffers[1]);
+        const auto prepared = frontend->PrepareTransientGraphResources(sources.lifetime, {7, 1});
+        REQUIRE(prepared.HasValue());
+        CHECK(resourceCommandState.generatedBuffers == 3);
+        OpenGLBackendTests::commandState.pollStatus = 0x911BU;  // GL_TIMEOUT_EXPIRED
+        auto frame = TransientTest::BeginFrame(*frontend);
+        REQUIRE(frame.ExecuteGraph(sources.execution, sources.workloads, prepared.Value()).HasValue());
+        REQUIRE(frame.Present().HasValue());
+        REQUIRE(graphCommandState.copyCount == 4);
+        CHECK(graphCommandState.copies[0][1] == graphCommandState.copies[1][0]);
+        CHECK(graphCommandState.copies[0][1] == graphCommandState.copies[2][1]);
+        CHECK(graphCommandState.sourceBinding == 81);
+        CHECK(graphCommandState.destinationBinding == 82);
+        auto busy = TransientTest::BeginFrame(*frontend, 2);
+        REQUIRE(busy.ExecuteGraph(sources.execution, sources.workloads, prepared.Value()).HasError());
+        CHECK(graphCommandState.copyCount == 4);
+        OpenGLBackendTests::commandState.pollStatus = 0x911AU;  // GL_ALREADY_SIGNALED
+        auto completed = TransientTest::BeginFrame(*frontend, 3);
+        REQUIRE(completed.ExecuteGraph(sources.execution, sources.workloads, prepared.Value()).HasValue());
+        REQUIRE(completed.Present().HasValue());
+        REQUIRE(frontend->ReleaseTransientGraphResources(prepared.Value()).HasValue());
+        CHECK(resourceCommandState.deletedBuffers == 0);
+        {
+            const auto drain = TransientTest::BeginFrame(*frontend, 4);
+        }
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        CHECK(resourceCommandState.deletedBuffers == 1);
+    }
+
+    TEST_CASE("OpenGL partial native graph failure retains backing through fence failure and shutdown", "[renderer][opengl][transient]") {
+        ResourcePresentationPort port;
+        auto frontend = CreateGraphFrontend(port);
+        const auto buffers = TransientTest::ImportedCopyBuffers(*frontend);
+        auto sources = TransientTest::CopyGraph(buffers[0], buffers[1]);
+        const auto prepared = frontend->PrepareTransientGraphResources(sources.lifetime, {7, 1});
+        REQUIRE(prepared.HasValue());
+        graphCommandState.failCopy = true;
+        OpenGLBackendTests::commandState.fenceFails = true;
+        auto frame = TransientTest::BeginFrame(*frontend);
+        REQUIRE(frame.ExecuteGraph(sources.execution, sources.workloads, prepared.Value()).HasError());
+        CHECK(graphCommandState.copyCount == 1);
+        REQUIRE(frontend->ReleaseTransientGraphResources(prepared.Value()).HasValue());
+        CHECK(resourceCommandState.deletedBuffers == 0);
+        frontend.reset();
+        CHECK(resourceCommandState.deletedBuffers == 3);
+        CHECK(OpenGLBackendTests::commandState.fenceCount >= 1);
+    }
+
+    TEST_CASE("OpenGL transient color attachment is created once and native framebuffer retirement follows completion",
+              "[renderer][opengl][transient]") {
+        ResourcePresentationPort port;
+        auto frontend = CreateGraphFrontend(port);
+        auto sources = TransientTest::ColorGraph();
+        const auto prepared = frontend->PrepareTransientGraphResources(sources.lifetime, {7, 1});
+        REQUIRE(prepared.HasValue());
+        CHECK(resourceCommandState.generatedTextures == 1);
+        CHECK(resourceCommandState.generatedFramebuffers == 1);
+        auto frame = TransientTest::BeginFrame(*frontend);
+        REQUIRE(frame.ExecuteGraph(sources.execution, sources.workloads, prepared.Value()).HasValue());
+        REQUIRE(frame.Present().HasValue());
+        REQUIRE(frontend->ReleaseTransientGraphResources(prepared.Value()).HasValue());
+        CHECK(resourceCommandState.deletedTextures == 0);
+        {
+            const auto drain = TransientTest::BeginFrame(*frontend, 2);
+        }
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        CHECK(resourceCommandState.deletedTextures == 1);
+        CHECK(resourceCommandState.deletedFramebuffers == 1);
+    }
 }  // namespace Horo::Render::OpenGLResourceTests

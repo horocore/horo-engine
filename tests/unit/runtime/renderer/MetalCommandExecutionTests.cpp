@@ -1,5 +1,6 @@
 #include "MetalRenderTestSupport.h"
 #include "RenderGraphTestUtils.h"
+#include "RenderTransientGraphTestSupport.h"
 #include "runtime/renderer/modules/metal/MetalCommandExecution.h"
 
 #include <array>
@@ -157,6 +158,45 @@ namespace {
             return Result<void>::Success();
         }
     };
+
+    TEST_CASE("Metal admitted transient color aliases preserve native validation and canonical encoding", "[renderer][metal][transient]") {
+        auto sources = TransientTest::ColorGraph();
+        const auto resources = sources.execution.Resources();
+        REQUIRE(resources.size() == 2);
+        const std::array instances{RenderGraphResourceInstance{resources[0].id, 41}, RenderGraphResourceInstance{resources[1].id, 41}};
+        PortState state;
+        FakePresentationPort port{state};
+        GraphRuntime runtime{port, state};
+        REQUIRE(runtime.BeginFrame({2, 2}).HasValue());
+        SECTION("frontend admission is mandatory") {
+            Test::RequireError(Detail::ExecuteMetalRenderGraph(runtime, {{1}, sources.execution, sources.workloads, instances}),
+                               "render.metal.unsupported_graph_execution");
+            CHECK(runtime.validationCount == 0);
+            CHECK(runtime.encodingCount == 0);
+        }
+        SECTION("native instance validation precedes every encode") {
+            runtime.invalidInstance = 41;
+            Test::RequireError(Detail::ExecuteMetalRenderGraph(runtime,
+                                                               {{1}, sources.execution, sources.workloads, instances, nullptr, true}),
+                               "render.test.resource_stale");
+            CHECK(runtime.encodingCount == 0);
+        }
+        SECTION("one actual backing supports two ordered attachment operations") {
+            REQUIRE(
+                Detail::ExecuteMetalRenderGraph(runtime, {{1}, sources.execution, sources.workloads, instances, nullptr, true}).HasValue());
+            CHECK(runtime.validationCount == 2);
+            CHECK(runtime.encodingCount == 2);
+        }
+        SECTION("partial encoder failure discards the unsent Metal frame") {
+            runtime.failAt = 2;
+            Test::RequireError(Detail::ExecuteMetalRenderGraph(runtime,
+                                                               {{1}, sources.execution, sources.workloads, instances, nullptr, true}),
+                               "render.test.graph_encode_failed");
+            CHECK(runtime.encodingCount == 2);
+            CHECK(state.abortCount == 1);
+            CHECK_FALSE(state.frameActive);
+        }
+    }
 
     /** @brief Builds the write/read-write color dependency used by native workload validation scenarios. */
     CompiledRenderGraphExecution CompileColorHazards(RenderGraphPassRef &first, RenderGraphPassRef &second,
