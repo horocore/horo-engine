@@ -160,7 +160,8 @@ TEST_CASE("Metadata mutation outcome unknown retains last-known-good bytes until
         CHECK_FALSE(reconciled.Value());
         CHECK(fixture.Index().revision == before.revision + 1);
     }
-    CHECK(std::filesystem::exists(fixture.Generation(imported.entry->publication.generation)) == (kind == SaveSlotLifecycleKind::Rename));
+    CHECK(std::filesystem::exists(NativeProbePath(fixture.Generation(imported.entry->publication.generation))) ==
+          (kind == SaveSlotLifecycleKind::Rename));
 }
 
 TEST_CASE("External export is an independent complete archive while internal cleanup is deferred",
@@ -172,7 +173,7 @@ TEST_CASE("External export is an independent complete archive while internal cle
     const auto copied = fixture.owner->Execute(fixture.Copy(10, 11));
     REQUIRE(copied.HasValue());
     REQUIRE(copied.Value().cleanupDeferred);
-    REQUIRE(std::filesystem::exists(fixture.Slots() / ".lifecycle.journal"));
+    REQUIRE(std::filesystem::exists(NativeProbePath(fixture.Slots() / ".lifecycle.journal")));
     const auto immutable = fixture.owner->Execute(fixture.Export(11));
     REQUIRE(immutable.HasValue());
     const auto snapshot = *immutable.Value().exported.bytes;
