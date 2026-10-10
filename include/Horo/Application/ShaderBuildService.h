@@ -58,15 +58,17 @@ namespace Horo::Application {
 
         /**
          * @brief Compiles on the calling worker with one output session and at most one terminal record.
-         * @param request Owned immutable compilation, source mappings and optional application operation.
+         * @param request Compilation, source mappings and optional application operation, synchronously copied before admission.
          * @param cancellation Parent operation cancellation, observed together with service shutdown.
          * @return Complete artifacts or typed failure; diagnostics already emitted remain visible on failure.
          * @throws std::bad_alloc If even construction of the typed allocation-failure result cannot allocate.
          * @details A store allocation failure returns AllocationFailed without retrying a possibly started
          * terminal append. Successful return requires successful terminal publication.
+         * The worker owns a complete input copy before any adapter/sink callback. No caller input is retained or
+         * borrowed by admitted work; input-copy allocation failure admits nothing and allocates no output session.
          * @pre Caller and store remain alive until this call returns. The constructing thread must not call Compile.
          */
-        [[nodiscard]] Result<Render::ShaderCompilationBatch> Compile(ShaderBuildRequest request,
+        [[nodiscard]] Result<Render::ShaderCompilationBatch> Compile(const ShaderBuildRequest &request,
                                                                      const CancellationToken &cancellation = {}) const;
         /**
          * @brief Closes admission, cancels and waits for every admitted synchronous compiler call.

@@ -381,7 +381,7 @@ namespace Horo::Render {
                 return Remember(Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidAdapterOutput)));
             }
 
-            Result<void> Remember(Result<void> result) {
+            Result<void> Remember(const Result<void> &result) {
                 if (!failure_ && result.HasError())
                     failure_ = result.ErrorValue();
                 return failure_ ? Result<void>::Failure(*failure_) : result;

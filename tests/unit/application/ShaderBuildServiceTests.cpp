@@ -4,6 +4,41 @@
 using namespace Horo::Tests::ShaderCompilerFixture;
 
 namespace {
+    /** @brief Gives the caller a copy-complete fence and bounds its wait so failed tests cannot strand a worker. */
+    class InputLifetimeAdapter final : public IShaderCompilerAdapter {
+    public:
+        mutable std::atomic<bool> entered{};
+        mutable std::atomic<bool> released{};
+        mutable std::vector<std::uint8_t> observedSource;
+        mutable std::string observedIdentity;
+        mutable std::string observedEntry;
+
+        Result<ShaderCompilerAdapterOutput> Compile(const ShaderCompilerInvocation &invocation,
+                                                    const CancellationToken &cancellation) const override {
+            entered.store(true, std::memory_order_release);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+            while (!released.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            observedSource = invocation.source;
+            observedIdentity = invocation.manifest.sourceIdentity;
+            observedEntry = invocation.manifest.entryPoints.front().name;
+            if (cancellation.IsCancellationRequested())
+                return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::CancellationRequested));
+            ShaderCompilerAdapterOutput output;
+            output.backend = invocation.target.requirement.backend;
+            output.payloadFormat = invocation.target.requirement.payloadFormat;
+            output.payload = {1, 2, 3};
+            ShaderCompilerDiagnostic diagnostic;
+            diagnostic.severity = ShaderCompilerDiagnosticSeverity::Warning;
+            diagnostic.message = "Owned input remains available.";
+            diagnostic.sourceIdentity = observedIdentity;
+            diagnostic.line = 2;
+            diagnostic.column = 3;
+            output.diagnostics.push_back(std::move(diagnostic));
+            return Result<ShaderCompilerAdapterOutput>::Success(std::move(output));
+        }
+    };
+
     Application::ShaderBuildRequest BuildRequest(const TemporaryDirectory &temporary) {
         Application::ShaderBuildRequest request;
         request.compilation = Request(ShaderTargetBackend::D3D12, ShaderPayloadFormat::Dxil60,
@@ -175,7 +210,20 @@ TEST_CASE("Shader cancellation stays live and shutdown drains concurrent compile
     }
     REQUIRE(sessions.size() == 2);
     CHECK(sessions[0] != sessions[1]);
-    CHECK(snapshot->records.front().operationId != snapshot->records.back().operationId);
+    for (const OperationId operation : {OperationId{37}, OperationId{38}}) {
+        const auto terminal = std::ranges::find_if(snapshot->records, [operation](const auto &record) {
+            return record.result == BuildOutputResult::Cancelled && record.operationId == operation;
+        });
+        REQUIRE(terminal != snapshot->records.end());
+        REQUIRE(terminal->sessionId);
+        CHECK(std::ranges::all_of(snapshot->records, [session = terminal->sessionId, operation](const auto &record) {
+            return record.sessionId != session || record.operationId == operation;
+        }));
+    }
+    for (const auto &record : snapshot->records) {
+        REQUIRE(record.sessionId);
+        CHECK(std::ranges::find(sessions, *record.sessionId) != sessions.end());
+    }
 }
 
 TEST_CASE("Shader producer rejects excess concurrent admission without allocating an output session", "[shader][build_output]") {
@@ -219,6 +267,56 @@ TEST_CASE("Shader adapter allocation failure produces one failed terminal and re
     const auto snapshot = output.SnapshotIfChanged(0);
     REQUIRE(snapshot);
     RequireTerminal(*snapshot, BuildOutputResult::Failed);
+    service.Shutdown();
+}
+
+TEST_CASE("Admitted shader compilation owns inputs after caller mutation and destruction", "[shader][build_output][lifetime]") {
+    TemporaryDirectory temporary;
+    auto adapter = std::make_shared<InputLifetimeAdapter>();
+    BuildOutputStore output{128};
+    Application::ShaderBuildService service{adapter, output};
+    CancellationSource parent;
+    std::optional<Application::ShaderBuildRequest> request{BuildRequest(temporary)};
+    const auto expectedSource = request->compilation.source;
+    const auto expectedIdentity = request->compilation.manifest.sourceIdentity;
+    const auto expectedEntry = request->compilation.manifest.entryPoints.front().name;
+    const auto *input = &*request;
+    auto worker = std::async(std::launch::async, [&service, input, token = parent.Token()] {
+        return service.Compile(*input, token);
+    });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+    while (!adapter->entered.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    REQUIRE(adapter->entered.load(std::memory_order_acquire));
+    request->compilation.source.clear();
+    request->compilation.manifest.entryPoints.front().name = "ChangedAfterAdmission";
+    request->sources.clear();
+    request->operationId = 999;
+    request.reset();
+    const bool cancel = GENERATE(false, true);
+    if (cancel)
+        parent.RequestCancellation();
+    adapter->released.store(true, std::memory_order_release);
+    REQUIRE(worker.wait_for(std::chrono::seconds{2}) == std::future_status::ready);
+    const auto result = worker.get();
+    CHECK(adapter->observedSource == expectedSource);
+    CHECK(adapter->observedIdentity == expectedIdentity);
+    CHECK(adapter->observedEntry == expectedEntry);
+    const auto snapshot = output.SnapshotIfChanged(0);
+    REQUIRE(snapshot);
+    RequireTerminal(*snapshot, cancel ? BuildOutputResult::Cancelled : BuildOutputResult::Succeeded);
+    if (cancel) {
+        RequireError(result, ShaderCompilerPipelineErrors::AdapterFailure);
+        CHECK(ErrorChainContains(result.ErrorValue(), ShaderCompilerPipelineErrors::CancellationRequested.domain,
+                                 ShaderCompilerPipelineErrors::CancellationRequested.code));
+    } else {
+        REQUIRE(result.HasValue());
+        const auto diagnostic = std::ranges::find_if(snapshot->records, [](const auto &record) {
+            return record.source.has_value();
+        });
+        REQUIRE(diagnostic != snapshot->records.end());
+        CHECK(diagnostic->source->absolutePath == (temporary.Path() / "original shader.hlsl").string());
+    }
     service.Shutdown();
 }
 

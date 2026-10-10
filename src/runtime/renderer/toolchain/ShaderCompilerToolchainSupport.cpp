@@ -188,9 +188,10 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
 
         /** @brief Preserves original severity and optional native code independently of source parsing. */
         void ApplyNativeSeverity(ShaderCompilerDiagnostic &diagnostic) {
-            for (const auto &[word, severity] : {std::pair{std::string_view{"error"}, ShaderCompilerDiagnosticSeverity::Error},
-                                                 std::pair{std::string_view{"warning"}, ShaderCompilerDiagnosticSeverity::Warning},
-                                                 std::pair{std::string_view{"note"}, ShaderCompilerDiagnosticSeverity::Information}}) {
+            using enum ShaderCompilerDiagnosticSeverity;
+            for (const auto &[word, severity] :
+                 {std::pair{std::string_view{"error"}, Error}, std::pair{std::string_view{"warning"}, Warning},
+                  std::pair{std::string_view{"note"}, Information}}) {
                 auto marker = ReadSeverityMarker(diagnostic.message, word);
                 if (!marker)
                     continue;
@@ -213,9 +214,11 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
         void ApplySourceLocation(ShaderCompilerDiagnostic &diagnostic, const std::string_view sourceIdentity) {
             constexpr std::string_view SourcePrefix = "<shader>:";
             const std::string logicalPrefix = std::string{sourceIdentity} + ":";
-            const std::size_t prefixBytes = diagnostic.message.starts_with(SourcePrefix)    ? SourcePrefix.size()
-                                            : diagnostic.message.starts_with(logicalPrefix) ? logicalPrefix.size()
-                                                                                            : 0U;
+            std::size_t prefixBytes{};
+            if (diagnostic.message.starts_with(SourcePrefix))
+                prefixBytes = SourcePrefix.size();
+            else if (diagnostic.message.starts_with(logicalPrefix))
+                prefixBytes = logicalPrefix.size();
             if (prefixBytes == 0U)
                 return;
             const char *begin = diagnostic.message.data() + prefixBytes;

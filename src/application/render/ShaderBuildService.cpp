@@ -58,20 +58,21 @@ namespace Horo::Application {
 
         /** @brief Stable phase labels independent of localized presentation. */
         std::string_view PhaseName(const ShaderCompilerPhase phase) {
+            using enum ShaderCompilerPhase;
             switch (phase) {
-                case ShaderCompilerPhase::PipelineValidation:
+                case PipelineValidation:
                     return "validation";
-                case ShaderCompilerPhase::SourceCompilation:
+                case SourceCompilation:
                     return "compile";
-                case ShaderCompilerPhase::IntermediateValidation:
+                case IntermediateValidation:
                     return "intermediate-validation";
-                case ShaderCompilerPhase::Translation:
+                case Translation:
                     return "translate";
-                case ShaderCompilerPhase::NativeCompilation:
+                case NativeCompilation:
                     return "native-compile";
-                case ShaderCompilerPhase::NativeLink:
+                case NativeLink:
                     return "native-link";
-                case ShaderCompilerPhase::DebugCompilation:
+                case DebugCompilation:
                     return "debug-compile";
             }
             return "unknown";
@@ -106,16 +107,17 @@ namespace Horo::Application {
 
         /** @brief Stable Horo categories remain separate from optional tool-native codes. */
         std::string_view DiagnosticIdentity(const ShaderCompilerDiagnosticCategory category) {
+            using enum ShaderCompilerDiagnosticCategory;
             switch (category) {
-                case ShaderCompilerDiagnosticCategory::Source:
+                case Source:
                     return "render.shader_compiler.source";
-                case ShaderCompilerDiagnosticCategory::Include:
+                case Include:
                     return "render.shader_compiler.include";
-                case ShaderCompilerDiagnosticCategory::UnsupportedFeature:
+                case UnsupportedFeature:
                     return "render.shader_compiler.unsupported_feature";
-                case ShaderCompilerDiagnosticCategory::Toolchain:
+                case Toolchain:
                     return "render.shader_compiler.toolchain";
-                case ShaderCompilerDiagnosticCategory::Validation:
+                case Validation:
                     return "render.shader_compiler.validation";
             }
             return "render.shader_compiler.invalid_diagnostic";
@@ -142,29 +144,32 @@ namespace Horo::Application {
                 record.toolCode = diagnostic.toolCode;
                 if (diagnostic.truncated)
                     record.message += " [compiler output truncated]";
-                const auto mapping = std::ranges::find(request_.sources, diagnostic.sourceIdentity, &ShaderDiagnosticSource::logicalPath);
-                if (mapping != request_.sources.end() && diagnostic.line != 0)
+                if (const auto mapping =
+                        std::ranges::find(request_.sources, diagnostic.sourceIdentity, &ShaderDiagnosticSource::logicalPath);
+                    mapping != request_.sources.end() && diagnostic.line != 0)
                     record.source = DiagnosticSourceLocation{mapping->absolutePath.string(), diagnostic.line, diagnostic.column};
                 store_.Append(std::move(record));
                 return Result<void>::Success();
             }
 
             void Finish(const Result<ShaderCompilationBatch> &result) {
+                using enum DiagnosticSeverity;
+                using enum BuildOutputResult;
                 if (result.HasValue()) {
-                    Append(DiagnosticSeverity::Note, BuildOutputResult::Succeeded, "render.shader_compiler.succeeded", "shader",
-                           "Shader compilation succeeded.");
+                    Append(Note, Succeeded, "render.shader_compiler.succeeded", "shader", "Shader compilation succeeded.");
                     return;
                 }
-                const Error &error = result.ErrorValue();
+                const Horo::Error &error = result.ErrorValue();
                 const bool cancelled = ErrorChainContains(error, ShaderCompilerPipelineErrors::CancellationRequested.domain,
                                                           ShaderCompilerPipelineErrors::CancellationRequested.code);
                 const bool timedOut = ErrorChainContains(error, ShaderCompilerPipelineErrors::ToolTimedOut.domain,
                                                          ShaderCompilerPipelineErrors::ToolTimedOut.code);
-                Append(cancelled ? DiagnosticSeverity::Warning : DiagnosticSeverity::Error,
-                       cancelled  ? BuildOutputResult::Cancelled
-                       : timedOut ? BuildOutputResult::TimedOut
-                                  : BuildOutputResult::Failed,
-                       error.code.Value(), "shader", error.message);
+                BuildOutputResult outcome = Failed;
+                if (cancelled)
+                    outcome = Cancelled;
+                else if (timedOut)
+                    outcome = TimedOut;
+                Append(cancelled ? Warning : Error, outcome, error.code.Value(), "shader", error.message);
             }
 
         private:
@@ -207,6 +212,25 @@ namespace Horo::Application {
             }
             return true;
         }
+
+        /** @brief Executes a synchronous admitted request while preserving typed allocation and compiler failures. */
+        Result<Render::ShaderCompilationBatch> RunCompilation(const ShaderBuildRequest &request,
+                                                              const Render::IShaderCompilerAdapter *adapter, const CancellationToken &token,
+                                                              OutputSink &sink) {
+            using Batch = Render::ShaderCompilationBatch;
+            Result<Batch> result = Result<Batch>::Failure(MakeError(Render::ShaderCompilerPipelineErrors::ToolMissing));
+            try {
+                if (!ValidSources(request))
+                    result = Result<Batch>::Failure(MakeError(ShaderBuildErrors::InvalidSources));
+                else if (token.IsCancellationRequested())
+                    result = Result<Batch>::Failure(MakeError(Render::ShaderCompilerPipelineErrors::CancellationRequested));
+                else if (adapter)
+                    result = Render::CompileShaderTargets(request.compilation, *adapter, token, request.limits, &sink);
+            } catch (const std::bad_alloc &) {
+                result = Result<Batch>::Failure(MakeError(Render::ShaderCompilerPipelineErrors::AllocationFailed));
+            }
+            return result;
+        }
     }  // namespace
 
     struct ShaderBuildService::State {
@@ -234,11 +258,17 @@ namespace Horo::Application {
     }
 
     /** @copydoc ShaderBuildService::Compile */
-    Result<Render::ShaderCompilationBatch> ShaderBuildService::Compile(ShaderBuildRequest request,
+    Result<Render::ShaderCompilationBatch> ShaderBuildService::Compile(const ShaderBuildRequest &request,
                                                                        const CancellationToken &cancellation) const {
         using Batch = Render::ShaderCompilationBatch;
         if (std::this_thread::get_id() == state_->owner)
             return Result<Batch>::Failure(MakeError(ShaderBuildErrors::OwnerThread));
+        ShaderBuildRequest ownedRequest;
+        try {
+            ownedRequest = request;
+        } catch (const std::bad_alloc &) {
+            return Result<Batch>::Failure(MakeError(Render::ShaderCompilerPipelineErrors::AllocationFailed));
+        }
         std::size_t slot{};
         CancellationToken token;
         {
@@ -259,18 +289,8 @@ namespace Horo::Application {
         const auto session = state_->output.BeginSession();
         if (!session)
             return Result<Batch>::Failure(MakeError(Render::ShaderCompilerPipelineErrors::AllocationFailed));
-        OutputSink sink{state_->output, *session, request};
-        Result<Batch> result = Result<Batch>::Failure(MakeError(Render::ShaderCompilerPipelineErrors::ToolMissing));
-        try {
-            if (!ValidSources(request))
-                result = Result<Batch>::Failure(MakeError(ShaderBuildErrors::InvalidSources));
-            else if (token.IsCancellationRequested())
-                result = Result<Batch>::Failure(MakeError(Render::ShaderCompilerPipelineErrors::CancellationRequested));
-            else if (state_->adapter)
-                result = Render::CompileShaderTargets(request.compilation, *state_->adapter, token, request.limits, &sink);
-        } catch (const std::bad_alloc &) {
-            result = Result<Batch>::Failure(MakeError(Render::ShaderCompilerPipelineErrors::AllocationFailed));
-        }
+        OutputSink sink{state_->output, *session, ownedRequest};
+        auto result = RunCompilation(ownedRequest, state_->adapter.get(), token, sink);
         try {
             sink.Finish(result);
         } catch (const std::bad_alloc &) {

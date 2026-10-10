@@ -1,6 +1,7 @@
 #include "HoroEditorApp.h"
 
 #include "EditorUserStateMigration.h"
+#include "EditorWorkerShutdown.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/HostObservability.h"
 #include "Horo/Application/NetworkDebugger.h"
@@ -1205,29 +1206,7 @@ namespace Horo::Editor {
             Application::NetworkDebuggerService networkDebugger;
 
             // Covers constructor failure as well as startup failure: dependencies precede both join guards.
-            struct JobShutdown final {
-                explicit JobShutdown(JobSystem &scheduler, GuiScreenHost *host, Application::ShaderBuildService &compiler)
-                    : jobs(scheduler), shaderBuild(compiler), screens(host) {}
-
-                JobShutdown(const JobShutdown &) = delete;
-                JobShutdown &operator=(const JobShutdown &) = delete;
-                JobShutdown(JobShutdown &&) = delete;
-                JobShutdown &operator=(JobShutdown &&) = delete;
-
-                JobSystem &jobs;
-                Application::ShaderBuildService &shaderBuild;
-                GuiScreenHost *screens{};
-
-                ~JobShutdown() {
-                    jobs.StopAccepting();
-                    if (screens)
-                        screens->Shutdown();
-                    shaderBuild.Shutdown();
-                    jobs.Shutdown(ShutdownPolicy::Cancel);
-                }
-            };
-
-            const JobShutdown constructionRollback{p.background.jobs, nullptr, p.operationServices.shaderBuild};
+            const EditorWorkerShutdown constructionRollback{p.background.jobs, p.operationServices.shaderBuild};
             GuiScreenHost screenHost{guiContext,
                                      GuiScreenHostComposition{.modalHost = p.modalHost,
                                                               .settingsService = p.settings,
@@ -1246,7 +1225,7 @@ namespace Horo::Editor {
                                                                   extensionInventoryRefresh.HasValue() ? &extensionMarketplace : nullptr,
                                                               .nativeDialogs = &nativeDialogs}};
             // Closes route/extension scopes and joins before destroying the successfully constructed screen host.
-            const JobShutdown jobShutdown{p.background.jobs, &screenHost, p.operationServices.shaderBuild};
+            const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild, &screenHost};
             screenHost.Services().Register<IEditorViewportRenderer>(p.presentation.viewportRenderer);
             screenHost.Services().Register<IEditorGuiRenderer>(p.presentation.guiRenderer);
             screenHost.Services().Register<EditorViewportSceneState>(viewportSceneState);

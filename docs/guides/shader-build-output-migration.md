@@ -34,6 +34,21 @@ for all admitted calls and waits for them to return before the host stops its
 workers or destroys the store. Hosts must configure finite process deadlines
 and honor cancellation in their adapter. No work survives service destruction.
 
+`ShaderBuildService::Compile` borrows its input only to make a complete synchronous
+worker-owned copy before admission. Adapter and output callbacks use that owned
+copy, including source bytes, manifest, target/tool descriptors, navigation maps
+and operation correlation. Copy failure admits no work and creates no session.
+Ordinary callers remain source-compatible; member-function-pointer consumers use
+`const ShaderBuildRequest&` for the first parameter. Host scheduling must still
+capture inputs by value until the calling worker enters Compile; this is not
+permission to queue a dangling reference. This offline call may allocate its input
+copy and makes no frame-hot or zero-copy performance claim.
+
+The editor's application-private `EditorWorkerShutdown` guard preserves separate
+constructor rollback and constructed-host teardown lifetimes. Both close scheduler
+admission; the latter shuts down screens before compiler cancellation/drain and
+scheduler cancellation/join. Borrowed screen services remain alive throughout.
+
 Existing `CompileShaderTargets` calls remain source-compatible through the
 defaulted final sink argument. Function-pointer consumers must add
 `IShaderCompilerDiagnosticSink *` to their signature. Invocation and diagnostic

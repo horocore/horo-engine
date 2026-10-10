@@ -113,16 +113,17 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
 
             /** @brief Preserve diagnostic rejection before interpreting process completion. */
             [[nodiscard]] Result<void> CompleteProcess(Result<ExternalProcessResult> result) {
+                using enum ProcessTerminationReason;
                 if (diagnosticFailure_)
                     return Result<void>::Failure(std::move(*diagnosticFailure_));
                 if (result.HasError())
                     return Result<void>::Failure(
                         WrapError(ShaderCompilerPipelineErrors::ToolProcessFailed, std::move(result).ErrorValue()));
-                if (result.Value().reason == ProcessTerminationReason::Cancelled || cancellation_.IsCancellationRequested())
+                if (result.Value().reason == Cancelled || cancellation_.IsCancellationRequested())
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::CancellationRequested));
-                if (result.Value().reason == ProcessTerminationReason::TimedOut)
+                if (result.Value().reason == TimedOut)
                     return Result<void>::Failure(WrapError(ShaderCompilerPipelineErrors::ToolTimedOut, ProcessFailure()));
-                if (result.Value().reason == ProcessTerminationReason::Exited && result.Value().exitCode == 0)
+                if (result.Value().reason == Exited && result.Value().exitCode == 0)
                     return Result<void>::Success();
                 return Result<void>::Failure(ProcessFailure());
             }
@@ -172,7 +173,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                 if (diagnosticFailure_ || outputTruncated_)
                     return;
                 const auto outputBudget = DiagnosticOutputBudget();
-                if (!outputBudget)
+                if (!outputBudget.has_value())
                     return;
                 const auto origin = ResolveDiagnosticOrigin(line.text);
                 line.text = SanitizeLine(std::move(line.text), scratch_, origin.path);
