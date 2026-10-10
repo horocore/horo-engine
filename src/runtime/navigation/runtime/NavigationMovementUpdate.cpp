@@ -27,20 +27,18 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationMovementController::CheckAuthority */
     bool NavigationMovementController::CheckAuthority(const NavigationMovementObservation &current) {
-        const auto binding = registry_.ActiveBinding();
-        if (binding.HasError() || binding.Value() != binding_ || current.binding != binding_ ||
-            current.path.provenance.world != binding_.world) {
+        if (const auto binding = registry_.ActiveBinding(); binding.HasError() || binding.Value() != binding_ ||
+                                                            current.binding != binding_ ||
+                                                            current.path.provenance.world != binding_.world) {
             Finish(NavigationMovementState::WorldLost);
             return false;
         }
-        const auto record = registry_.Find(agent_.handle);
-        if (record.HasError() || record.Value() != agent_) {
+        if (const auto record = registry_.Find(agent_.handle); record.HasError() || record.Value() != agent_) {
             Finish(NavigationMovementState::AgentLost);
             return false;
         }
-        const auto lease = world_.Acquire(binding_.world);
-        if (lease.HasError() || lease.Value().Descriptor().scene != binding_.scene ||
-            lease.Value().Descriptor().sceneGeneration != binding_.sceneGeneration) {
+        if (const auto lease = world_.Acquire(binding_.world); lease.HasError() || lease.Value().Descriptor().scene != binding_.scene ||
+                                                               lease.Value().Descriptor().sceneGeneration != binding_.sceneGeneration) {
             Finish(NavigationMovementState::WorldLost);
             return false;
         }
@@ -78,8 +76,7 @@ namespace Horo::Navigation {
         const auto handle = *query_;
         query_.reset();
         if (completion->result.HasError()) {
-            const auto &error = completion->result.ErrorValue();
-            if (IsError(error, NavigationErrors::StaleSnapshot)) {
+            if (const auto &error = completion->result.ErrorValue(); IsError(error, NavigationErrors::StaleSnapshot)) {
                 static_cast<void>(policy_.ForceRepath(current));
             } else {
                 Finish(NavigationMovementState::Failed, error);
@@ -132,9 +129,9 @@ namespace Horo::Navigation {
         // RequireComplete plus Reachable proves the captured complete topology; exact regions are not fabricated.
         // The policy therefore uses the conservative whole-topology fence and invalidates any topology publication.
         const PathId id{handle.world, {handle.slot.index, handle.slot.generation}};
-        const auto installed =
-            policy_.Install(id, std::move(result), source, NavigationCoverageEvidence::CompleteTopology(), queryLink_, queryGoal_, current);
-        if (installed.HasError()) {
+        if (const auto installed = policy_.Install(id, std::move(result), source, NavigationCoverageEvidence::CompleteTopology(),
+                                                   queryLink_, queryGoal_, current);
+            installed.HasError()) {
             Finish(NavigationMovementState::Failed, installed.ErrorValue());
             return;
         }
@@ -194,11 +191,11 @@ namespace Horo::Navigation {
         while (waypoint_ + 1 < points.size() && Distance(current.position, points[waypoint_].position) <= request_.waypointRadiusMeters)
             ++waypoint_;
         const bool atEnd = waypoint_ + 1 == points.size() && Distance(current.position, goal_) <= request_.acceptanceRadiusMeters;
-        const bool acknowledged = current.feedback && lastIntent_ && current.feedback->operation == status_.id &&
-                                  current.feedback->path == intent.path && current.feedback->tick == *lastIntent_ &&
-                                  *lastIntent_ < path.tick &&
-                                  current.feedback->achievedSpeedMetersPerSecond <= request_.arrivalSpeedMetersPerSecond;
-        if (atEnd && acknowledged) {
+        if (const bool acknowledged = current.feedback && lastIntent_.has_value() && current.feedback->operation == status_.id &&
+                                      current.feedback->path == intent.path && current.feedback->tick == *lastIntent_ &&
+                                      *lastIntent_ < path.tick &&
+                                      current.feedback->achievedSpeedMetersPerSecond <= request_.arrivalSpeedMetersPerSecond;
+            atEnd && acknowledged) {
             if (request_.mode == NavigationMovementMode::MoveTo) {
                 Finish(NavigationMovementState::Arrived);
                 intent.path = {};
@@ -228,7 +225,7 @@ namespace Horo::Navigation {
     Result<NavigationMovementIntent> NavigationMovementController::Update(const NavigationMovementObservation &current) {
         using Return = Result<NavigationMovementIntent>;
         DrainRetired();
-        if (!ValidObservation(current) || (lastUpdate_ && current.path.tick <= *lastUpdate_))
+        if (!ValidObservation(current) || (lastUpdate_.has_value() && current.path.tick <= *lastUpdate_))
             return Return::Failure(MakeError(NavigationErrors::OutcomeDescriptorInvalid));
         lastUpdate_ = current.path.tick;
         const auto stopped = [&] {

@@ -116,7 +116,21 @@ namespace Horo::Navigation {
      * final host teardown must also shut down the coordinator/JobSystem before unloading provider code.
      */
     class NavigationMovementController final {
+        struct ConstructionKey {
+        private:
+            friend class NavigationMovementController;
+            ConstructionKey() = default;
+        };
+
     public:
+        /** @brief Factory-only construction; the private key preserves validated agent/caller admission.
+         * @param registry Borrowed agent authority. @param world Borrowed world authority.
+         * @param coordinator Borrowed query owner. @param agent Validated owned registration snapshot.
+         * @param binding Validated Scene/world incarnation. @param caller Validated unique host authority.
+         */
+        NavigationMovementController(ConstructionKey, NavigationAgentRegistry &registry, NavigationWorldLifecycle &world,
+                                     NavigationCoordinator &coordinator, const NavigationAgentRecord &agent,
+                                     NavigationAgentSceneBinding binding, NavigationPathCaller caller) noexcept;
         /** @brief Bind one live agent and host-selected caller authority outside fixed-tick work.
          * @param registry Scene-bound agent authority, outliving the controller.
          * @param world Navigation publication authority, outliving the controller.
@@ -159,9 +173,6 @@ namespace Horo::Navigation {
         [[nodiscard]] const NavigationMovementStatus &Status() const noexcept;
 
     private:
-        NavigationMovementController(NavigationAgentRegistry &registry, NavigationWorldLifecycle &world, NavigationCoordinator &coordinator,
-                                     NavigationAgentRecord agent, NavigationAgentSceneBinding binding,
-                                     NavigationPathCaller caller) noexcept;
         /** @brief Check complete observation shape before changing state. */
         [[nodiscard]] bool ValidObservation(const NavigationMovementObservation &current) const noexcept;
         /** @brief Validate agent, Scene/world and target identities without replacing the current operation. */
