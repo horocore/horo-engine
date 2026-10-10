@@ -17,7 +17,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceView::DrawDockContent */
     void EditorWorkspaceView::DrawDockContent(const WorkspaceDockArea area, const std::shared_ptr<IWorkspacePanel> &panel,
-                                              const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) {
+                                              const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const {
         if (area == WorkspaceDockArea::Document && DrawSequenceDocument(viewModel, outCommand))
             return;
         if (panel)

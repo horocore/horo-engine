@@ -111,7 +111,7 @@ namespace Horo::Editor {
         [[nodiscard]] float DocumentTabHeight(WorkspaceDockArea area) const;
         /** @brief Draws either the active document or its explicitly focused native panel. */
         void DrawDockContent(WorkspaceDockArea area, const std::shared_ptr<IWorkspacePanel> &panel,
-                             const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand);
+                             const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Projects the active immutable sequence through the shared timeline control. */
         bool DrawSequenceDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         void DrawDocumentTabs(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand);
