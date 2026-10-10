@@ -20,6 +20,16 @@ namespace Horo::Prefab::PrefabErrors {
         }
     }  // namespace
 
+    const ErrorCodeDescriptor ExpansionCacheCapacityExceeded =
+        Describe("prefab.expansion_cache.capacity_exceeded", "Prefab expansion cache capacity is exhausted.",
+                 "Use a positive finite cache policy or reduce the complete admitted source/result storage.");
+    const ErrorCodeDescriptor ExpansionCacheThreadViolation =
+        Describe("prefab.expansion_cache.thread_violation", "Prefab expansion cache access requires its owner thread.",
+                 "Return immutable worker results to the cache owner before lookup, insertion or retirement.");
+    const ErrorCodeDescriptor ExpansionCacheAllocationFailed =
+        Describe("prefab.expansion_cache.allocation_failed", "Prefab expansion storage allocation failed.",
+                 "Release bounded authoring storage and retry; existing immutable cache leases remain valid.");
+
     const ErrorCodeDescriptor IdentityInvalid = Describe("prefab.identity.invalid", "A prefab identity is invalid.",
                                                          "Provide the stable persisted identity required by the prefab contract.");
 
@@ -210,6 +220,9 @@ namespace Horo::Prefab::PrefabErrors {
 
     namespace {
         const std::array CanonicalDescriptors{
+            &ExpansionCacheCapacityExceeded,
+            &ExpansionCacheThreadViolation,
+            &ExpansionCacheAllocationFailed,
             &IdentityInvalid,
             &AddressInvalid,
             &ReferenceInvalid,

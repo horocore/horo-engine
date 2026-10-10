@@ -1,6 +1,16 @@
 #include "UiBindingStoreInternal.h"
 
 namespace Horo::Runtime::Ui {
+    /** @copydoc UiBindingStore::HasProvider */
+    bool UiBindingStore::HasProvider(UiBindingProviderInstanceId instance, UiBindingProviderScopeKind scope) const noexcept {
+        if (!storage_ || !storage_->active || !instance.IsValid() || instance.ownership != storage_->instance.ownership ||
+            scope >= UiBindingProviderScopeKind::Count)
+            return false;
+        const auto &providers = std::as_const(storage_->providers);
+        const auto found = std::ranges::lower_bound(providers, instance, {}, &Storage::Provider::instance);
+        return found != providers.end() && found->instance == instance && found->active && found->scope == scope;
+    }
+
     using BindingStoreInternal::Failure;
 
     namespace {

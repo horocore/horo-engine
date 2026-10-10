@@ -1,4 +1,5 @@
 #include "../../../support/AllocationProbe.h"
+#include "SaveAllocationDiagnostics.h"
 #include "SaveSlotLifecycleTestSupport.h"
 
 #include <atomic>
@@ -17,6 +18,22 @@ namespace {
         } catch (const std::bad_alloc &) {
             return false;
         }
+    }
+
+    /** @brief Reopens acknowledged publication and proves selected bytes survive before retired bytes are reconciled. */
+    void CheckRecoveredPublication(Fixture &fixture, const SlotGenerationId oldGeneration) {
+        fixture.fault.failure = {};
+        SaveAllocationPhase("[save-allocation] lifecycle-reopen-enter\n");
+        fixture.Reopen();
+        SaveAllocationPhase("[save-allocation] lifecycle-reopen-returned\n");
+        CHECK(fixture.Target(11).generation != oldGeneration);
+        CHECK_FALSE(fixture.ExportBytes(11).empty());
+        SaveAllocationPhase("[save-allocation] lifecycle-reconcile-enter\n");
+        const auto reconciled = fixture.owner->Reconcile(fixture.Access());
+        SaveAllocationPhase("[save-allocation] lifecycle-reconcile-returned\n");
+        REQUIRE(reconciled.HasValue());
+        CHECK_FALSE(reconciled.Value());
+        CHECK_FALSE(std::filesystem::exists(fixture.Generation(oldGeneration)));
     }
 }  // namespace
 
@@ -54,6 +71,11 @@ TEST_CASE("Scoped allocation failure remains on its owning thread and fires once
 
 TEST_CASE("Lifecycle allocation failure after visibility preserves publication knowledge", "[save][lifecycle]") {
     const bool syncFailure = GENERATE(false, true);
+    if (syncFailure)
+        SaveAllocationPhase("[save-allocation] lifecycle-sync-failure\n");
+    else
+        SaveAllocationPhase("[save-allocation] lifecycle-sync-success\n");
+    const SaveAllocationFixtureExit fixtureExit;
     Fixture fixture;
     fixture.Import(10);
     const auto previous = fixture.Import(11);
@@ -64,29 +86,24 @@ TEST_CASE("Lifecycle allocation failure after visibility preserves publication k
     std::optional<Horo::Tests::AllocationProbe::ScopedFailure> allocation;
     fixture.fault.failure = [&](const SaveSlotLifecycleIoStage stage, const SaveSlotLifecycleFileKind kind) {
         if (!allocation && stage == SaveSlotLifecycleIoStage::DirectorySync && kind == SaveSlotLifecycleFileKind::Catalog) {
-            allocation.emplace();
+            SaveAllocationPhase("[save-allocation] lifecycle-arm-enter\n");
+            allocation.emplace(0, SaveAllocationInjected);
+            SaveAllocationPhase("[save-allocation] lifecycle-armed\n");
             if (syncFailure)
                 return Result<void>::Failure(std::move(syncError));
         }
         return Result<void>::Success();
     };
+    SaveAllocationPhase("[save-allocation] lifecycle-execute-enter\n");
     const auto result = fixture.owner->Execute(request);
+    SaveAllocationPhase("[save-allocation] lifecycle-execute-returned\n");
     allocation.reset();
-    REQUIRE(result.HasError() == syncFailure);
-    if (syncFailure)
-        CHECK(result.ErrorValue().code.Value() == SaveErrors::SlotCommitOutcomeUnknown.code.Value());
-    else
-        CHECK(result.Value().cleanupDeferred);
+    SaveAllocationPhase("[save-allocation] lifecycle-failure-reset\n");
+    CheckSaveAllocationPublication(result, syncFailure);
     CHECK(fixture.host.leases == 0);
     CHECK(DiskBytes(fixture.Generation(oldGeneration)) == oldBytes);
-    fixture.fault.failure = {};
-    fixture.Reopen();
-    CHECK(fixture.Target(11).generation != oldGeneration);
-    CHECK_FALSE(fixture.ExportBytes(11).empty());
-    const auto reconciled = fixture.owner->Reconcile(fixture.Access());
-    REQUIRE(reconciled.HasValue());
-    CHECK_FALSE(reconciled.Value());
-    CHECK_FALSE(std::filesystem::exists(fixture.Generation(oldGeneration)));
+    CheckRecoveredPublication(fixture, oldGeneration);
+    SaveAllocationPhase("[save-allocation] lifecycle-fixture-cleanup-next\n");
 }
 
 TEST_CASE("Lifecycle provider adapters translate allocation exceptions before returning", "[save][lifecycle]") {

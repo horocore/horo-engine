@@ -39,9 +39,11 @@ namespace Horo::Runtime::Ui {
             return UiDocumentRevision::Create(value).Value();
         }
 
-        UiDocument MakeDocument(const Assets::AssetId dependency, const bool required = true) {
+        UiDocument MakeDocument(const Assets::AssetId dependency, const bool required = true,
+                                const UiCanvasPresentationPolicy presentation = {}) {
             UiDocumentBuilder builder{UiId<UiDocumentId>(1), Revision(3)};
-            REQUIRE(builder.AddCanvas({UiId<UiCanvasId>(2), UiId<UiElementId>(3)}).HasValue());
+            REQUIRE(builder.AddCanvas({.id = UiId<UiCanvasId>(2), .rootElement = UiId<UiElementId>(3), .presentation = presentation})
+                        .HasValue());
             REQUIRE(builder.RequireAsset({dependency, Type("core.texture"), required}).HasValue());
             return std::move(builder).Build().Value();
         }
@@ -95,7 +97,7 @@ namespace Horo::Runtime::Ui {
         };
 
         TEST_CASE("Runtime UI cooking is deterministic and decodes immutable runtime data", "[runtime_ui][cook]") {
-            const UiDocument source = MakeDocument(Asset(7));
+            const UiDocument source = MakeDocument(Asset(7), true, {UiSafeAreaMode::Inset, {3, 2}, {5, 4}, UiPixelSnapMode::Edges});
             const auto first = CookedUiDocument::Cook(source);
             const auto second = CookedUiDocument::Cook(source);
             REQUIRE(first.HasValue());

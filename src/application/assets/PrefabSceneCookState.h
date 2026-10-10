@@ -49,5 +49,6 @@ namespace Horo::Application::PrefabCookDetail {
                                                          const Assets::AssetCookInputSnapshot &inputs,
                                                          const Prefab::PrefabLimitProfile &limits,
                                                          const Assets::CookerCatalogSnapshot &catalog,
-                                                         const CancellationToken &cancellation);
+                                                         const CancellationToken &cancellation,
+                                                         SceneSource::ScenePrefabExpansionOwner &expansion);
 }  // namespace Horo::Application::PrefabCookDetail
