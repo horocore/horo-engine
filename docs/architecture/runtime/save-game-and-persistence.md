@@ -1305,6 +1305,19 @@ publication succeeds.
 
 ### Slot, category and catalog identity
 
+`SaveSlotLifecycle` supplies one explicit worker-side contained filesystem
+composition for delete, copy, label rename, bounded untrusted import/export and
+soft-delete restoration. Its atomic lifecycle selection manifest is the storage
+authority; immutable `SaveSlotIndex` projections remain derived. Namespace binding
+leases pin host/profile policy through publication, while hidden generation files
+and digest-bound recovery evidence preserve old-or-new selection on failure.
+Independent capabilities default to denied, unsupported recycle cannot fall back
+to permanent delete, and cross-scope import can create only an absent destination.
+See the [lifecycle composition and migration guide](../../guides/save-slot-lifecycle-migration.md)
+for generation/ownership repacking, signature/semantic admission, cancellation,
+post-rename outcome reconciliation and deliberate migration from other qualified
+storage compositions. Hosts choose one storage authority per namespace.
+
 `SaveGameSlotId` is an opaque nonzero UUID scoped to its namespace and remains stable
 across overwrites. ADR-112's `SlotGenerationId` instead identifies one durable
 publication to that slot. `SaveAddress { namespaceHandle, slot }` is the only runtime,
@@ -1619,6 +1632,17 @@ availability cannot authorize unsigned downgrade. Remote absence is not automati
 delete authority until a synchronized tombstone contract exists.
 
 ## Failure, Cancellation And Shutdown Summary
+
+Slot lifecycle qualification observers (`ISaveSlotLifecycleIoObserver::Before`)
+and recycle providers (`ISaveSlotLifecycleHost::Recycle`) use non-throwing typed
+`Result<void>` boundaries. Providers translate their failures before returning,
+including allocation failures using previously prepared error evidence. Escaping
+exceptions violate the callback contract and are not recoverable lifecycle outcomes.
+After selection visibility, a typed synchronization failure is outcome-unknown;
+after acknowledged publication, typed recycle/cleanup failure preserves retired
+bytes and reports committed/deferred cleanup. Engine allocation failures at these
+stages preserve the same publication knowledge. External provider migrations are
+documented in the [slot lifecycle guide](../../guides/save-slot-lifecycle-migration.md).
 
 All failures follow ADR-008 Result/Error, retaining operation, `SaveAddress`, source
 `SlotGenerationId`/`ArchiveContentHash` when available and nested asset/provider/
