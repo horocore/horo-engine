@@ -335,6 +335,14 @@ invalidates the old intent; the host reports cancellation or explicitly schedule
 new-session checkpoint. Autosave ring rotation advances only after durable success;
 a failed save never consumes the last good ring entry.
 
+`SaveAutosaveScheduler::CommitAtSafePoint` receives a `SaveAutosaveAdmission`
+containing the original operation descriptor, exact host catalog address and optional
+retry capability. Hosts migrate the previous separate operation/address/retry
+arguments into this value without changing capture evidence or worker ownership.
+The six-argument entry point is the sole contract; it does not retain a parallel
+legacy overload. Header ownership remains with Runtime, and the isolated autosave
+consumer plus all admission/capture regressions exercise this migration.
+
 `SaveEventTriggers` is the additive owner-thread event adapter for SAV-005.6.
 A host copies an immutable allowlist of at most 64 product-issued trigger IDs,
 typed payload requirements, Auto/Checkpoint modes, safe logical targets and
@@ -349,11 +357,45 @@ at a quiescent session boundary to change allowed targets.
 
 One pending intent survives competing arbiter work. Equivalent rapid events
 coalesce only when cooked policy permits it and return the original effective
-correlation; distinct busy intents are explicitly rejected rather than silently
-lost or queued without bound. Receipts retain one effective event per registration;
+correlation. A newer meaningful non-transition Auto payload can replace the single
+pending intent for the same trigger; its previous pending correlation becomes stale.
+One new Auto intent may wait behind admitted work, while other distinct busy intents
+are explicitly rejected. The active receipt remains immutable and separately retained,
+including when its registration has a newer pending payload. Receipts retain one effective event per registration;
 older monotonic sequences cannot replay work. Callers keep the returned handle for
 terminal observation after the bounded receipt is replaced. Cooldown is shared by
 all triggers for a mode, so a second publisher cannot bypass it.
+
+SAV-005.10 adds an opt-in retry capability to the existing session arbiter, interval
+scheduler and event admission. The host pins the original namespace/binding revision,
+runtime/scene/registry incarnation, authority, version/trust policy revision, catalog revision, exact slot and expected previous slot
+generation and newly issued publication generation before worker dispatch. Only a
+positively classified TransientIo failure with NotCommitted in Encoding can defer.
+The original operation stays nonterminal, retaining its capture, cancellation token,
+deadline and stage; no new operation, capture, callback or independent job store is made.
+The host settles the failed attempt and releases its physical mutation lease before
+deferral, retaining only the immutable archive and generation pins. The arbiter releases
+the active slot while WaitingForRetry. New manual commands and
+queued work take precedence; conflicting requests for that same slot still return busy.
+Retries resume through an explicit owner-thread call after current trusted evidence is
+observed under the storage lease and exactly matches the admitted evidence. The host
+revalidates before publication and reuses the immutable archive and publication identity.
+
+Backoff doubles from the configured initial delay, saturates at its cap and uses a
+nondecreasing host monotonic clock. At most eight automatic attempts and a finite elapsed
+budget are permitted; supplied failure counters cannot reset these bounds. Exhaustion
+publishes the original normalized cause once. Permission/quota/corruption/incompatibility,
+cancellation, Unknown and Committed never authorize replay. Failures beyond the commit
+gate terminalize or reconcile under the existing publication contract. Shutdown closes
+arbiter admission, terminalizes queued/deferred work once and requests cooperative
+cancellation of active precommit work; already-entered publication remains host-owned.
+
+Migration: the three existing Runtime public headers retain their existing owner and
+add default-disabled retry arguments/metadata. Existing callers need no changes; hosts
+opting in must retain the immutable archive, pump due attempts without I/O or sleeps on
+the owner thread, supply exact current lease evidence and publish terminal completion
+through the same arbiter. Event shutdown now requests cancellation of admitted precommit
+work; the host still settles its worker and coordinator before releasing dependencies.
 
 BeforeTransition payloads capture the exact source scene/registry incarnation;
 the transition owner waits asynchronously for durable completion before applying
