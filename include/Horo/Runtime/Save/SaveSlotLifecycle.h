@@ -282,16 +282,15 @@ namespace Horo::Runtime {
         /** @brief Executes a validated command while holding namespace and operation leases. */
         [[nodiscard]] Result<SaveSlotLifecycleResult> ExecuteLocked(Operation &operation, const SaveSlotLifecycleRequest &request,
                                                                     const CancellationToken &cancellation);
-        /** @brief Acquires exact binding and loads the sole catalog under complete operation ownership. */
-        [[nodiscard]] Result<std::unique_ptr<ISaveSlotOperationLease>> BeginRetention(Operation &operation,
-                                                                                      const SaveNamespaceAccessRequest &access) const;
+        /** @brief Pins exact binding in the operation and loads the sole catalog under complete operation ownership. */
+        [[nodiscard]] Result<void> BeginRetention(Operation &operation, const SaveNamespaceAccessRequest &access) const;
         /** @brief Validates exact selected or retained consent before any metadata mutation. */
         [[nodiscard]] Result<void> CheckRetentionTarget(const Operation &operation, const SaveSlotLifecycleTarget &target,
                                                         bool retained) const;
         /** @brief Applies exact retirement decisions to a detached catalog before publication. */
         [[nodiscard]] Result<void> PrepareRetentionPublication(Operation &operation, const SaveSlotLifecycleTarget &target,
                                                                const SaveStorageWrite &candidate, std::uint64_t clock, bool lowSpace,
-                                                               SaveSlotLifecycleResult &result);
+                                                               SaveSlotLifecycleResult &result) const;
         /** @brief Validates mutation consent after bounded reconciliation without selecting another authority. */
         [[nodiscard]] Result<void> PrepareRetentionUpdate(Operation &operation, const SaveSlotLifecycleTarget &target, bool retained) const;
         /** @brief Prepares retirement and complete result bytes before the atomic save publication gate. */

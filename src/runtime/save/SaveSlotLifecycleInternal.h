@@ -112,6 +112,9 @@ namespace Horo::Runtime {
     private:
         friend class SaveSlotLifecycle;
 
+        // Retention admission pins the exact host binding through all catalog work.
+        // Declared before catalog so the lease also outlives detached metadata destruction.
+        std::unique_ptr<ISaveSlotOperationLease> retentionLease_;
         SaveSlotLifecycleDetail::Catalog catalog;
     };
 }  // namespace Horo::Runtime

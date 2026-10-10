@@ -5,6 +5,45 @@
 namespace Horo::Runtime {
     using namespace SaveSlotRetentionTest;
 
+    TEST_CASE("Retention operations hold the exact binding through publication and backup admission", "[runtime][save][retention][lease]") {
+        RetentionFixture fixture;
+        fixture.native.owner.reset();
+        fixture.native.policy.retention.cloudTombstones = true;
+        fixture.native.Open();
+        for (std::uint8_t slot = 1; slot <= 3; ++slot)
+            fixture.Commit(slot, slot * 10);
+        std::size_t writes = 0;
+        fixture.native.fault.action = [&fixture, &writes](const auto stage, const auto) {
+            CHECK(fixture.native.host.leases == 1);
+            if (stage == SaveSlotLifecycleIoStage::Write)
+                ++writes;
+        };
+        fixture.Commit(4, 40);
+        CHECK(fixture.native.host.leases == 0);
+        const auto snapshot = fixture.Snapshot();
+        CHECK(fixture.native.host.leases == 0);
+        REQUIRE(snapshot.retained.size() == 1);
+        const auto beforePin = writes;
+        REQUIRE(fixture.native.owner->SetPinned(fixture.native.Target(4), true).HasValue());
+        CHECK(writes > beforePin);
+        CHECK(fixture.native.host.leases == 0);
+        std::size_t admitted = 0;
+        fixture.native.host.onSemantics = [&fixture, &admitted] {
+            CHECK(fixture.native.host.leases == 1);
+            ++admitted;
+        };
+        REQUIRE(fixture.native.owner->ReadBackup(fixture.RetainedTarget(snapshot.retained[0])).HasValue());
+        CHECK(admitted == 1);
+        CHECK(fixture.native.host.leases == 0);
+        const auto beforeAcknowledgement = writes;
+        REQUIRE(fixture.native.owner
+                    ->AcknowledgeCloudDelete(fixture.RetainedTarget(snapshot.retained[0]), fixture.CloudScope(), Id<SaveCloudMutationId>(9))
+                    .HasValue());
+        CHECK(writes > beforeAcknowledgement);
+        CHECK(fixture.native.host.leases == 0);
+        REQUIRE(writes > 0);
+    }
+
     TEST_CASE("Retention publishes bounded rotation and backup evidence through the real catalog", "[runtime][save][retention]") {
         RetentionFixture fixture;
         const auto first = fixture.Commit(1, 100).entry.value();

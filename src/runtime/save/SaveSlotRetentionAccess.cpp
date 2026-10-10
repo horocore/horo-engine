@@ -15,18 +15,16 @@ namespace Horo::Runtime {
     }  // namespace
 
     /** @copydoc SaveSlotLifecycle::BeginRetention */
-    Result<std::unique_ptr<ISaveSlotOperationLease>> SaveSlotLifecycle::BeginRetention(Operation &operation,
-                                                                                       const SaveNamespaceAccessRequest &access) const {
+    Result<void> SaveSlotLifecycle::BeginRetention(Operation &operation, const SaveNamespaceAccessRequest &access) const {
         if (access.expected != state_->policy.destination.name)
-            return Result<std::unique_ptr<ISaveSlotOperationLease>>::Failure(MakeError(SaveErrors::NamespaceStale));
+            return Result<void>::Failure(MakeError(SaveErrors::NamespaceStale));
         auto lease = state_->host->AcquireBinding(access);
         if (lease.HasError())
-            return lease;
+            return Result<void>::Failure(lease.ErrorValue());
         if (!lease.Value())
-            return Result<std::unique_ptr<ISaveSlotOperationLease>>::Failure(MakeError(SaveErrors::StorageResultInvalid));
-        if (auto loaded = Load(operation); loaded.HasError())
-            return Result<std::unique_ptr<ISaveSlotOperationLease>>::Failure(loaded.ErrorValue());
-        return lease;
+            return Result<void>::Failure(MakeError(SaveErrors::StorageResultInvalid));
+        operation.retentionLease_ = std::move(lease).Value();
+        return Load(operation);
     }
 
     /** @copydoc SaveSlotLifecycle::CheckRetentionTarget */
@@ -66,16 +64,15 @@ namespace Horo::Runtime {
             return Result<SaveSlotRetentionSnapshot>::Failure(MakeError(SaveErrors::StorageOperationInvalid));
         try {
             Operation operation{*state_};
-            auto lease = BeginRetention(operation, access);
-            if (lease.HasError())
+            if (auto lease = BeginRetention(operation, access); lease.HasError())
                 return Result<SaveSlotRetentionSnapshot>::Failure(lease.ErrorValue());
             SaveSlotRetentionSnapshot snapshot{operation.catalog.revision, operation.catalog.clock, {}, {}};
             for (const auto &record : operation.catalog.records)
-                snapshot.selected.push_back(
-                    {record.entry, record.sequence, record.committedAt, record.pinned, record.deleted, false, false});
+                snapshot.selected.emplace_back(record.entry, record.sequence, record.committedAt, record.pinned, record.deleted, false,
+                                               false);
             for (const auto &record : operation.catalog.retired)
-                snapshot.retained.push_back(
-                    {record.entry, record.sequence, record.committedAt, false, false, record.backup, record.tombstone, record.cloud});
+                snapshot.retained.emplace_back(record.entry, record.sequence, record.committedAt, false, false, record.backup,
+                                               record.tombstone, record.cloud);
             return Result<SaveSlotRetentionSnapshot>::Success(std::move(snapshot));
         } catch (const std::bad_alloc &) {
             return Result<SaveSlotRetentionSnapshot>::Failure(MakeError(SaveErrors::StorageAllocationFailed));
@@ -88,8 +85,7 @@ namespace Horo::Runtime {
             return Result<std::uint64_t>::Failure(MakeError(SaveErrors::StoragePermissionDenied));
         try {
             Operation operation{*state_};
-            auto lease = BeginRetention(operation, target.address.namespaceAccess);
-            if (lease.HasError())
+            if (auto lease = BeginRetention(operation, target.address.namespaceAccess); lease.HasError())
                 return Result<std::uint64_t>::Failure(lease.ErrorValue());
             if (auto checked = PrepareRetentionUpdate(operation, target, false); checked.HasError())
                 return Result<std::uint64_t>::Failure(checked.ErrorValue());
@@ -114,8 +110,7 @@ namespace Horo::Runtime {
             return Result<ImmutableSaveArchive>::Failure(MakeError(SaveErrors::StoragePermissionDenied));
         try {
             Operation operation{*state_};
-            auto lease = BeginRetention(operation, target.address.namespaceAccess);
-            if (lease.HasError())
+            if (auto lease = BeginRetention(operation, target.address.namespaceAccess); lease.HasError())
                 return Result<ImmutableSaveArchive>::Failure(lease.ErrorValue());
             if (auto checked = CheckRetentionTarget(operation, target, true); checked.HasError())
                 return Result<ImmutableSaveArchive>::Failure(checked.ErrorValue());
@@ -146,8 +141,7 @@ namespace Horo::Runtime {
             return Result<std::uint64_t>::Failure(MakeError(SaveErrors::StoragePermissionDenied));
         try {
             Operation operation{*state_};
-            auto lease = BeginRetention(operation, target.address.namespaceAccess);
-            if (lease.HasError())
+            if (auto lease = BeginRetention(operation, target.address.namespaceAccess); lease.HasError())
                 return Result<std::uint64_t>::Failure(lease.ErrorValue());
             if (auto checked = PrepareRetentionUpdate(operation, target, true); checked.HasError())
                 return Result<std::uint64_t>::Failure(checked.ErrorValue());

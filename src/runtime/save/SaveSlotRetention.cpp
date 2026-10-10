@@ -28,9 +28,10 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
 
         /** @brief Selects a diagnostic without reinterpreting low-space pressure as publication failure. */
         [[nodiscard]] SaveSlotRetentionReason Reason(const bool capacityExceeded, const bool lowSpace) noexcept {
+            using enum SaveSlotRetentionReason;
             if (!capacityExceeded)
-                return SaveSlotRetentionReason::Age;
-            return lowSpace ? SaveSlotRetentionReason::LowSpace : SaveSlotRetentionReason::Capacity;
+                return Age;
+            return lowSpace ? LowSpace : Capacity;
         }
 
         /** @brief Tests age without overflow or trusting caller-authored archive timestamps. */
@@ -51,7 +52,7 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
 
     /** @copydoc RetireForRetention */
     void RetireForRetention(Catalog &catalog, const Record &record, const SaveSlotRetentionPolicy &policy) {
-        catalog.retired.push_back({record.entry, false, record.sequence, record.committedAt, true, policy.cloudTombstones});
+        catalog.retired.emplace_back(record.entry, false, record.sequence, record.committedAt, true, policy.cloudTombstones);
     }
 
     /** @copydoc BoundRetentionBackups */
@@ -91,11 +92,10 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
         std::vector<SaveSlotRetentionDecision> decisions;
         for (const auto &record : eligible) {
             const bool capacityExceeded = count > capacity;
-            const bool ageExceeded = count > limits.minimumSlots && Expired(record, catalog, limits);
-            if (!capacityExceeded && !ageExceeded)
+            if (const bool ageExceeded = count > limits.minimumSlots && Expired(record, catalog, limits); !capacityExceeded && !ageExceeded)
                 continue;
             const auto reason = Reason(capacityExceeded, lowSpace);
-            decisions.push_back({record.entry, reason, record.sequence});
+            decisions.emplace_back(record.entry, reason, record.sequence);
             RetireForRetention(catalog, record, policy);
             std::erase_if(catalog.records, [&record](const Record &selected) {
                 return selected.entry.publication.generation == record.entry.publication.generation;

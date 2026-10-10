@@ -51,10 +51,12 @@ namespace Horo::Runtime {
             const auto before = fixture.Snapshot();
             std::size_t occurrence = 0;
             fixture.native.fault.action = [&fixture, &occurrence, failed](const auto stage, const auto kind) {
+                CHECK(fixture.native.host.leases == 1);
                 if (occurrence++ == failed)
                     fixture.native.InjectFailure(stage, kind);
             };
             auto result = fixture.native.owner->CommitSave(fixture.native.Target(4), fixture.Candidate(4), 40);
+            CHECK(fixture.native.host.leases == 0);
             fixture.native.fault.action = {};
             const auto after = fixture.Snapshot();
             const bool published = after.catalogRevision != before.catalogRevision;
@@ -96,6 +98,7 @@ namespace Horo::Runtime {
             fixture.native.host.semanticFailure = true;
         auto result = fixture.native.owner->CommitSave(fixture.native.Target(4), fixture.Candidate(4), 40, false, source.Token());
         REQUIRE(result.HasError());
+        CHECK(fixture.native.host.leases == 0);
         CHECK(fixture.Snapshot().catalogRevision == before.catalogRevision);
         CHECK(fixture.Snapshot().retained.empty());
     }
@@ -111,6 +114,7 @@ namespace Horo::Runtime {
         WriteBytes(fixture.native.Generation(backup.entry.publication.generation), bytes);
         auto read = fixture.native.owner->ReadBackup(fixture.RetainedTarget(backup));
         REQUIRE(read.HasError());
+        CHECK(fixture.native.host.leases == 0);
         CHECK(fixture.native.Index().entries.size() == 3);
         CHECK(DiskBytes(fixture.native.Generation(backup.entry.publication.generation)) == bytes);
     }

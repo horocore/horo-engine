@@ -95,11 +95,9 @@ namespace Horo::Runtime {
                                                         const SaveStorageWrite &candidate) {
             if ((policy.capabilities & (1U << static_cast<unsigned>(SaveSlotLifecycleKind::PublishSave))) == 0)
                 return Result<void>::Failure(MakeError(SaveErrors::StoragePermissionDenied));
-            if (Automatic(candidate.metadata.publication.kind)) {
-                if (!policy.retention.enabled ||
-                    (policy.capabilities & (1U << static_cast<unsigned>(SaveSlotLifecycleKind::Retention))) == 0)
-                    return Result<void>::Failure(MakeError(SaveErrors::StoragePermissionDenied));
-            }
+            if (Automatic(candidate.metadata.publication.kind) &&
+                (!policy.retention.enabled || (policy.capabilities & (1U << static_cast<unsigned>(SaveSlotLifecycleKind::Retention))) == 0))
+                return Result<void>::Failure(MakeError(SaveErrors::StoragePermissionDenied));
             if (auto valid = ValidateCandidate(target, candidate); valid.HasError())
                 return valid;
             if (candidate.archive.bytes->size() > policy.archiveLimits.maximumArchiveBytes)
@@ -119,8 +117,7 @@ namespace Horo::Runtime {
             if (auto authorized = AuthorizePublication(state_->policy, target, candidate); authorized.HasError())
                 return Result<SaveSlotLifecycleResult>::Failure(authorized.ErrorValue());
             Operation operation{*state_};
-            auto lease = BeginRetention(operation, target.address.namespaceAccess);
-            if (lease.HasError())
+            if (auto lease = BeginRetention(operation, target.address.namespaceAccess); lease.HasError())
                 return Result<SaveSlotLifecycleResult>::Failure(lease.ErrorValue());
             if (auto checked = CheckRetentionTarget(operation, target, false); checked.HasError())
                 return Result<SaveSlotLifecycleResult>::Failure(checked.ErrorValue());
@@ -136,24 +133,25 @@ namespace Horo::Runtime {
     /** @copydoc SaveSlotLifecycle::PrepareRetentionPublication */
     Result<void> SaveSlotLifecycle::PrepareRetentionPublication(Operation &operation, const SaveSlotLifecycleTarget &target,
                                                                 const SaveStorageWrite &candidate, const std::uint64_t clock,
-                                                                const bool lowSpace, SaveSlotLifecycleResult &result) {
+                                                                const bool lowSpace, SaveSlotLifecycleResult &result) const {
         auto &catalog = operation.catalog;
         const auto kind = candidate.metadata.publication.kind;
-        auto selected = std::ranges::find(catalog.records, target.address.slot, [](const Record &record) {
+        if (auto selected = std::ranges::find(catalog.records, target.address.slot,
+                                              [](const Record &record) {
             return record.entry.publication.slot;
         });
-        if (selected != catalog.records.end()) {
+            selected != catalog.records.end()) {
             if (!CanReplace(catalog, *selected, kind))
                 return Result<void>::Failure(MakeError(SaveErrors::StoragePermissionDenied));
             if (Automatic(kind)) {
-                result.retention.push_back({selected->entry, SaveSlotRetentionReason::Replacement, selected->sequence});
+                result.retention.emplace_back(selected->entry, SaveSlotRetentionReason::Replacement, selected->sequence);
                 RetireForRetention(catalog, *selected, state_->policy.retention);
             } else {
-                catalog.retired.push_back({selected->entry, false});
+                catalog.retired.emplace_back(selected->entry, false);
             }
             catalog.records.erase(selected);
         }
-        catalog.records.push_back({candidate.metadata, false, result.catalogRevision, clock, false});
+        catalog.records.emplace_back(candidate.metadata, false, result.catalogRevision, clock, false);
         catalog.revision = result.catalogRevision;
         catalog.clock = clock;
         if (Automatic(kind)) {
