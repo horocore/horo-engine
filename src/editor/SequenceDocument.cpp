@@ -50,7 +50,7 @@ namespace Horo::Editor {
         auto asset = Cinematic::ParseSequenceAsset(bytes);
         if (asset.HasError())
             return Result<SequenceDocument>::Failure(asset.ErrorValue());
-        const auto revision = Foundation::ComputeSha256(std::as_bytes(std::span(bytes.data(), bytes.size())));
+        const auto revision = ComputeSha256(std::as_bytes(std::span(bytes.data(), bytes.size())));
         return Result<SequenceDocument>::Success({identity, std::move(asset).Value(), revision});
     }
 

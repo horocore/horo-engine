@@ -34,7 +34,7 @@ namespace Horo::Editor {
     struct SequenceDocument final {
         DocumentIdentity identity;
         Cinematic::SequenceAsset asset;
-        Foundation::Sha256Digest revision; /**< Exact source bytes admitted for this session. */
+        Sha256Digest revision; /**< Exact source bytes admitted for this session. */
 
         /** @brief Opens a bounded validated sequence document at an admitted project path.
          * @param identity Sequence document identity. @param absolutePath Canonical regular source file.
