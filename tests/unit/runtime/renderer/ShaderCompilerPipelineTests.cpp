@@ -124,6 +124,52 @@ namespace {
         mutable std::vector<ShaderTargetBackend> backends;
     };
 
+    class CountingDiagnosticSink final : public IShaderCompilerDiagnosticSink {
+    public:
+        std::size_t published{};
+
+        Result<void> BeginPhase(const ShaderCompilerDiagnosticContext &) override {
+            return Result<void>::Success();
+        }
+
+        Result<void> Publish(const ShaderCompilerDiagnostic &) override {
+            ++published;
+            return Result<void>::Success();
+        }
+    };
+
+    class RejectingStreamAdapter final : public IShaderCompilerAdapter {
+    public:
+        enum class Invalid {
+            Location,
+            ToolCode,
+            Context,
+            Flood
+        } invalid{Invalid::Location};
+
+        Result<ShaderCompilerAdapterOutput> Compile(const ShaderCompilerInvocation &invocation, const CancellationToken &) const override {
+            ShaderCompilerDiagnostic diagnostic;
+            diagnostic.message = "diagnostic";
+            if (invalid == Invalid::Location)
+                diagnostic.sourceIdentity = "/tmp/private.hlsl";
+            if (invalid == Invalid::ToolCode)
+                diagnostic.toolCode = std::string(invocation.limits.maximumIdentityBytes + 1, 'x');
+            if (invalid == Invalid::Context) {
+                diagnostic.context = ShaderCompilerDiagnosticContext{ShaderCompilerPhase::SourceCompilation,
+                                                                     invocation.target.requirement.backend,
+                                                                     invocation.manifest.sourceRevision + 1,
+                                                                     {},
+                                                                     {},
+                                                                     {}};
+            }
+            const std::size_t count = invalid == Invalid::Flood ? invocation.limits.maximumDiagnosticsPerTarget + 1 : 1;
+            for (std::size_t index = 0; index < count; ++index)
+                static_cast<void>(invocation.diagnostics->Publish(diagnostic));
+            return Result<ShaderCompilerAdapterOutput>::Success(
+                {invocation.target.requirement.backend, invocation.target.requirement.payloadFormat, {1}, {}, {}});
+        }
+    };
+
 }  // namespace
 
 TEST_CASE("Shader compiler pipeline produces one deterministic artifact per exact target", "[runtime][renderer][shader-compiler]") {
@@ -348,58 +394,16 @@ TEST_CASE("Shader compiler pipeline enforces payload diagnostic and debug bounds
 
 TEST_CASE("Pipeline validates streamed diagnostics before host publication even when an adapter ignores rejection",
           "[shader][build_output]") {
-    class Sink final : public IShaderCompilerDiagnosticSink {
-    public:
-        std::size_t published{};
+    CountingDiagnosticSink sink;
+    RejectingStreamAdapter adapter;
 
-        Result<void> BeginPhase(const ShaderCompilerDiagnosticContext &) override {
-            return Result<void>::Success();
-        }
-
-        Result<void> Publish(const ShaderCompilerDiagnostic &) override {
-            ++published;
-            return Result<void>::Success();
-        }
-    } sink;
-
-    class Adapter final : public IShaderCompilerAdapter {
-    public:
-        enum class Invalid {
-            Location,
-            ToolCode,
-            Context,
-            Flood
-        } invalid{Invalid::Location};
-
-        Result<ShaderCompilerAdapterOutput> Compile(const ShaderCompilerInvocation &invocation, const CancellationToken &) const override {
-            ShaderCompilerDiagnostic diagnostic;
-            diagnostic.message = "diagnostic";
-            if (invalid == Invalid::Location)
-                diagnostic.sourceIdentity = "/tmp/private.hlsl";
-            if (invalid == Invalid::ToolCode)
-                diagnostic.toolCode = std::string(invocation.limits.maximumIdentityBytes + 1, 'x');
-            if (invalid == Invalid::Context) {
-                diagnostic.context = ShaderCompilerDiagnosticContext{ShaderCompilerPhase::SourceCompilation,
-                                                                     invocation.target.requirement.backend,
-                                                                     invocation.manifest.sourceRevision + 1,
-                                                                     {},
-                                                                     {},
-                                                                     {}};
-            }
-            const std::size_t count = invalid == Invalid::Flood ? invocation.limits.maximumDiagnosticsPerTarget + 1 : 1;
-            for (std::size_t index = 0; index < count; ++index)
-                static_cast<void>(invocation.diagnostics->Publish(diagnostic));
-            return Result<ShaderCompilerAdapterOutput>::Success(
-                {invocation.target.requirement.backend, invocation.target.requirement.payloadFormat, {1}, {}, {}});
-        }
-    } adapter;
-
-    for (const auto invalid : {Adapter::Invalid::Location, Adapter::Invalid::ToolCode, Adapter::Invalid::Context}) {
+    for (const auto invalid :
+         {RejectingStreamAdapter::Invalid::Location, RejectingStreamAdapter::Invalid::ToolCode, RejectingStreamAdapter::Invalid::Context}) {
         adapter.invalid = invalid;
         RequireError(CompileShaderTargets(ValidRequest(), adapter, {}, {}, &sink), ShaderCompilerPipelineErrors::InvalidAdapterOutput);
         CHECK(sink.published == 0);
     }
-    adapter.invalid = Adapter::Invalid::Flood;
+    adapter.invalid = RejectingStreamAdapter::Invalid::Flood;
     ShaderCompilerLimits limits;
     limits.maximumDiagnosticsPerTarget = 2;
     RequireError(CompileShaderTargets(ValidRequest(), adapter, {}, limits, &sink), ShaderCompilerPipelineErrors::InvalidAdapterOutput);

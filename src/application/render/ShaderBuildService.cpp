@@ -31,6 +31,31 @@ namespace Horo::Application {
     namespace {
         using namespace Render;
 
+        /** @brief Releases one admitted slot exactly once while service-owned synchronization remains alive. */
+        class AdmissionGuard final {
+        public:
+            AdmissionGuard(std::mutex &mutex, std::condition_variable &drained, std::optional<CancellationSource> &slot)
+                : mutex_(mutex), drained_(drained), slot_(slot) {}
+
+            AdmissionGuard(const AdmissionGuard &) = delete;
+            AdmissionGuard &operator=(const AdmissionGuard &) = delete;
+            AdmissionGuard(AdmissionGuard &&) = delete;
+            AdmissionGuard &operator=(AdmissionGuard &&) = delete;
+
+            ~AdmissionGuard() {
+                std::lock_guard lock(mutex_);
+                slot_.reset();
+                drained_.notify_all();
+            }
+
+        private:
+            std::mutex &mutex_;
+            std::condition_variable &drained_;
+            std::optional<CancellationSource> &slot_;
+        };
+
+        static_assert(!std::is_copy_constructible_v<AdmissionGuard> && !std::is_move_constructible_v<AdmissionGuard>);
+
         /** @brief Stable phase labels independent of localized presentation. */
         std::string_view PhaseName(const ShaderCompilerPhase phase) {
             switch (phase) {
@@ -230,25 +255,7 @@ namespace Horo::Application {
             token = available->value().Token();
         }
 
-        struct Admission final {
-            Admission(State &owner, const std::size_t index) : state(owner), slot(index) {}
-
-            Admission(const Admission &) = delete;
-            Admission &operator=(const Admission &) = delete;
-            Admission(Admission &&) = delete;
-            Admission &operator=(Admission &&) = delete;
-            State &state;
-            std::size_t slot;
-
-            ~Admission() {
-                std::lock_guard lock(state.mutex);
-                state.active[slot].reset();
-                state.drained.notify_all();
-            }
-        };
-
-        static_assert(!std::is_copy_constructible_v<Admission> && !std::is_move_constructible_v<Admission>);
-        const Admission admission{*state_, slot};
+        const AdmissionGuard admission{state_->mutex, state_->drained, state_->active[slot]};
         const auto session = state_->output.BeginSession();
         if (!session)
             return Result<Batch>::Failure(MakeError(Render::ShaderCompilerPipelineErrors::AllocationFailed));
