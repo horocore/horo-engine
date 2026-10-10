@@ -11,6 +11,7 @@ int main() {
     auto coordinator = Horo::Navigation::NavigationCoordinator::Create(jobs, {});
     if (coordinator.HasError())
         return 1;
-    coordinator.Value().BeginShutdown();
-    return coordinator.Value().IsDrained() ? 0 : 2;
+    auto owner = std::move(coordinator).Value();
+    owner.BeginShutdown();
+    return owner.IsDrained() ? 0 : 2;
 }

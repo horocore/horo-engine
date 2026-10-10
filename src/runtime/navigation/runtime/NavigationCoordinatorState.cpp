@@ -45,6 +45,100 @@ namespace Horo::Navigation {
         }));
     }
 
+    /** @copydoc NavigationCoordinator::State::WithinNodeBudget */
+    bool NavigationCoordinator::State::WithinNodeBudget(const Entry &entry, const Batch &staged) const noexcept {
+        const auto quota = std::ranges::find(quotas, entry.submission.caller.owner, &Quota::caller);
+        std::uint64_t callerNodes = quota == quotas.end() ? 0 : quota->nodes;
+        std::uint64_t stagedNodes{};
+        for (const auto &work : staged.work) {
+            stagedNodes += work.query.request.requirement.limits.maximumNodeExpansions;
+            if (work.caller.owner == entry.submission.caller.owner)
+                callerNodes += work.query.request.requirement.limits.maximumNodeExpansions;
+        }
+        const auto requested = entry.submission.request.requirement.limits.maximumNodeExpansions;
+        return requested <= limits.nodeExpansionsPerCaller - callerNodes && requested <= limits.nodeExpansionsPerTick - nodes - stagedNodes;
+    }
+
+    /** @copydoc NavigationCoordinator::State::PrepareBatch */
+    void NavigationCoordinator::State::PrepareBatch(const std::uint32_t index, const std::uint64_t now) {
+        auto &batch = batches[index];
+        auto caller = lastCaller;
+        while (batch.work.size() < limits.requestsPerJob && dispatched + batch.work.size() < limits.requestsPerTick) {
+            const auto selected = Select(now, caller, batch);
+            if (!selected)
+                break;
+            const auto &entry = *slots[*selected].entry;
+            const auto activePartitions = std::ranges::count_if(batches, [&](const Batch &active) {
+                return active.job && !active.work.empty() && active.work.front().query.request.world == entry.query.request.world;
+            });
+            if (activePartitions >= entry.query.worldLease.Backend().Capabilities().maximumConcurrentQueries)
+                break;
+            if (!batch.work.empty() && !Compatible(batch.work.front(), entry))
+                break;
+            batch.work.push_back({entry.query, entry.submission.caller, entry.submission.source, entry.submission.configuration});
+            caller = entry.submission.caller.owner.Value();
+        }
+    }
+
+    /** @copydoc NavigationCoordinator::State::SubmitBatch */
+    bool NavigationCoordinator::State::SubmitBatch(const std::shared_ptr<State> &state, const std::uint32_t index) {
+        auto &batch = state->batches[index];
+        const auto &first = *state->Find(batch.work.front().query.handle);
+        JobDescriptor descriptor{.configuration = first.submission.configuration, .priority = first.submission.priority};
+        // Owner submission must never wait, even if a host accidentally configures a blocking queue.
+        JobProducerScope producer{JobProducerRole::MainEditor};
+        auto accepted = state->jobs.SubmitResult(descriptor, [state, index](const CancellationToken &token) {
+            return Execute(state, index, token);
+        });
+        if (accepted.HasError()) {
+            batch.work.clear();
+            return false;
+        }
+        batch.job.emplace(std::move(accepted).Value());
+        for (const auto &work : batch.work) {
+            auto &entry = *state->Find(work.query.handle);
+            entry.executing = true;
+            entry.job = batch.job->Id();
+            state->Charge(work.caller.owner, work.query.request.requirement.limits.maximumNodeExpansions);
+            ++state->dispatched;
+        }
+        state->lastCaller = batch.work.back().caller.owner.Value();
+        return true;
+    }
+
+    /** @copydoc NavigationCoordinator::State::PublicationFailure */
+    std::optional<Error> NavigationCoordinator::State::PublicationFailure(const Entry &entry, const NavigationPathPublication &current) {
+        if (entry.cancellation.Token().IsCancellationRequested())
+            return MakeError(NavigationErrors::QueryCancelled);
+        if (!current.activation.IsValid() || entry.query.worldLease.IsRevoked() ||
+            entry.query.worldLease.Descriptor().scene != current.activation.scene ||
+            entry.query.worldLease.Descriptor().sceneGeneration != current.activation.sceneGeneration ||
+            entry.query.request.world != current.activation.world)
+            return MakeError(NavigationErrors::InvalidWorld);
+        if (std::ranges::find(current.callers, entry.submission.caller) == current.callers.end())
+            return MakeError(NavigationErrors::InvalidHandle);
+        if (!SameSource(entry.submission.source, current.source))
+            return MakeError(NavigationErrors::StaleSnapshot);
+        if (current.tick > entry.submission.deadlineTick)
+            return MakeError(NavigationErrors::CapacityExceeded);
+        return std::nullopt;
+    }
+
+    /** @copydoc NavigationCoordinator::State::Publish */
+    void NavigationCoordinator::State::Publish(Entry &entry, std::optional<Error> failure, const std::uint64_t now) {
+        if (failure) {
+            entry.cancellation.RequestCancellation();
+            entry.terminal.emplace(NavigationPathCompletion{entry.query.handle, entry.submission.caller, entry.query.acceptedSequence,
+                                                            entry.job, entry.submission.source, entry.query.worldLease.Descriptor(),
+                                                            Result<NavigationPath>::Failure(std::move(*failure))});
+        } else {
+            entry.terminal.emplace(std::move(*entry.candidate));
+        }
+        entry.candidate.reset();
+        entry.terminal->source.completionTick = now;
+        entry.published = true;
+    }
+
     /** @copydoc NavigationCoordinator::State::Select */
     std::optional<std::uint32_t> NavigationCoordinator::State::Select(const std::uint64_t now, const std::uint64_t previousCaller,
                                                                       const Batch &staged) const noexcept {
@@ -61,16 +155,7 @@ namespace Horo::Navigation {
                 return work.query.handle == entry.query.handle;
             }))
                 continue;
-            const auto quota = std::ranges::find(quotas, entry.submission.caller.owner, &Quota::caller);
-            std::uint64_t callerNodes = quota == quotas.end() ? 0 : quota->nodes;
-            std::uint64_t stagedNodes{};
-            for (const auto &work : staged.work) {
-                stagedNodes += work.query.request.requirement.limits.maximumNodeExpansions;
-                if (work.caller.owner == entry.submission.caller.owner)
-                    callerNodes += work.query.request.requirement.limits.maximumNodeExpansions;
-            }
-            const auto requested = entry.submission.request.requirement.limits.maximumNodeExpansions;
-            if (requested > limits.nodeExpansionsPerCaller - callerNodes || requested > limits.nodeExpansionsPerTick - nodes - stagedNodes)
+            if (!WithinNodeBudget(entry, staged))
                 continue;
             if (!selected) {
                 selected = index;

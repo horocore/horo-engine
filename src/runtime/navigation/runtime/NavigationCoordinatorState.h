@@ -63,6 +63,16 @@ namespace Horo::Navigation {
         void CollectCompletions();
         /** @brief Drain completion transport and reclaim only terminal partitions. */
         void Collect();
+        /** @brief Prepare one compatible fair partition without reserving scheduler authority. */
+        void PrepareBatch(std::uint32_t index, std::uint64_t tick);
+        /** @brief Submit prepared work nonblocking and charge quotas only after Foundation accepts it. */
+        [[nodiscard]] static bool SubmitBatch(const std::shared_ptr<State> &state, std::uint32_t index);
+        /** @brief Check conservative global/caller node reservations for one candidate. */
+        [[nodiscard]] bool WithinNodeBudget(const Entry &entry, const Batch &staged) const noexcept;
+        /** @brief Validate cancellation and owner-phase authority before terminal publication. */
+        [[nodiscard]] static std::optional<Error> PublicationFailure(const Entry &entry, const NavigationPathPublication &current);
+        /** @brief Perform the sole exactly-once terminal transition after owner validation. */
+        static void Publish(Entry &entry, std::optional<Error> failure, std::uint64_t tick);
         /** @brief Retire a consumed quiescent slot without generation wrap. */
         void Retire(Slot &slot) noexcept;
         /** @brief Reserve per-tick caller/global node and request quota. */

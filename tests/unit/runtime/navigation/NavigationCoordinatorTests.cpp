@@ -45,8 +45,8 @@ namespace Horo::Navigation {
         }
 
         bool ErrorIs(const NavigationPathCompletion &result, const ErrorCodeDescriptor &error) {
-            return result.result.HasError() && result.result.ErrorValue().domain == error.domain &&
-                   result.result.ErrorValue().code == error.code;
+            return result.result.HasError() && result.result.ErrorValue().domain.Value() == error.domain.Value() &&
+                   result.result.ErrorValue().code.Value() == error.code.Value();
         }
 
         NavigationPathPublication Current(const std::span<const NavigationPathCaller> callers, const std::uint64_t tick = 1) {

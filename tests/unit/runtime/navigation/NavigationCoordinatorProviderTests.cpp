@@ -6,37 +6,45 @@
 #include <catch2/catch_test_macros.hpp>
 
 namespace Horo::Navigation {
+    namespace {
+        using namespace TestSupport;
+
+        std::unique_ptr<INavigationQueryBackend> MakeProvider() {
+            const std::array<Math::Vec3, 4> vertices{{{0, 0, 0}, {10, 0, 0}, {10, 0, 10}, {0, 0, 10}}};
+            const std::array<GroundedNavigationPolygon, 1> polygons{{{.vertexIndices = {0, 1, 2, 3, 0, 0},
+                                                                      .vertexCount = 4,
+                                                                      .area = NavigationAreaId::Create(1).Value(),
+                                                                      .surface = SurfaceId::Create(1).Value()}}};
+            const std::array<NavigationAreaDescriptor, 1> areas{
+                {{.id = NavigationAreaId::Create(1).Value(),
+                  .source = {.kind = NavigationDescriptorSourceKind::Project, .id = NavigationDescriptorSourceId::Create(1).Value()},
+                  .traversalCost = 1.0F,
+                  .flags = {.bits = 1}}}};
+            const std::array<NavigationQueryFilterDescriptor, 1> filters{
+                {{.id = NavigationFilterId::Create(1).Value(),
+                  .source = {.kind = NavigationDescriptorSourceKind::Project, .id = NavigationDescriptorSourceId::Create(1).Value()},
+                  .includedFlags = {},
+                  .excludedFlags = {},
+                  .costOverrides = {}}}};
+            auto provider = CreateRecastDetourNavigationQueryBackend({.world = World(),
+                                                                      .topology = Topology(),
+                                                                      .vertices = vertices,
+                                                                      .polygons = polygons,
+                                                                      .maximumQueryNodes = 64,
+                                                                      .maximumResultPoints = 16,
+                                                                      .maximumConcurrentQueries = 1,
+                                                                      .areas = areas,
+                                                                      .filters = filters});
+            REQUIRE(provider.HasValue());
+            return std::move(provider).Value();
+        }
+    }  // namespace
+
     TEST_CASE("Compatible path partitions retain real Detour corridors through owner publication",
               "[unit][navigation][coordinator][provider]") {
         using namespace TestSupport;
-        const std::array<Math::Vec3, 4> vertices{{{0, 0, 0}, {10, 0, 0}, {10, 0, 10}, {0, 0, 10}}};
-        const std::array<GroundedNavigationPolygon, 1> polygons{{{.vertexIndices = {0, 1, 2, 3, 0, 0},
-                                                                  .vertexCount = 4,
-                                                                  .area = NavigationAreaId::Create(1).Value(),
-                                                                  .surface = SurfaceId::Create(1).Value()}}};
-        const std::array<NavigationAreaDescriptor, 1> areas{
-            {{.id = NavigationAreaId::Create(1).Value(),
-              .source = {.kind = NavigationDescriptorSourceKind::Project, .id = NavigationDescriptorSourceId::Create(1).Value()},
-              .traversalCost = 1.0F,
-              .flags = {.bits = 1}}}};
-        const std::array<NavigationQueryFilterDescriptor, 1> filters{
-            {{.id = NavigationFilterId::Create(1).Value(),
-              .source = {.kind = NavigationDescriptorSourceKind::Project, .id = NavigationDescriptorSourceId::Create(1).Value()},
-              .includedFlags = {},
-              .excludedFlags = {},
-              .costOverrides = {}}}};
-        auto provider = CreateRecastDetourNavigationQueryBackend({.world = World(),
-                                                                  .topology = Topology(),
-                                                                  .vertices = vertices,
-                                                                  .polygons = polygons,
-                                                                  .maximumQueryNodes = 64,
-                                                                  .maximumResultPoints = 16,
-                                                                  .maximumConcurrentQueries = 1,
-                                                                  .areas = areas,
-                                                                  .filters = filters});
-        REQUIRE(provider.HasValue());
         auto world = std::move(NavigationWorldLifecycle::Create(4)).Value();
-        REQUIRE(world.Stage(Activation(), std::move(provider).Value()).HasValue());
+        REQUIRE(world.Stage(Activation(), MakeProvider()).HasValue());
         REQUIRE(world.CommitAtSafePoint(Activation().scene, Activation().sceneGeneration).HasValue());
         JobSystem jobs{{.workerCount = 0}};
         auto coordinator = std::move(NavigationCoordinator::Create(jobs, {})).Value();

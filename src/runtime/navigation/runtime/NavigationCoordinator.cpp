@@ -132,45 +132,9 @@ namespace Horo::Navigation {
             auto &batch = state_->batches[index];
             if (batch.job)
                 continue;
-            auto caller = state_->lastCaller;
-            while (batch.work.size() < state_->limits.requestsPerJob &&
-                   state_->dispatched + batch.work.size() < state_->limits.requestsPerTick) {
-                const auto selected = state_->Select(tick, caller, batch);
-                if (!selected)
-                    break;
-                const auto &entry = *state_->slots[*selected].entry;
-                const auto activePartitions = std::ranges::count_if(state_->batches, [&](const State::Batch &active) {
-                    return active.job && !active.work.empty() && active.work.front().query.request.world == entry.query.request.world;
-                });
-                if (activePartitions >= entry.query.worldLease.Backend().Capabilities().maximumConcurrentQueries)
-                    break;
-                if (!batch.work.empty() && !state_->Compatible(batch.work.front(), entry))
-                    break;
-                batch.work.push_back({entry.query, entry.submission.caller, entry.submission.source, entry.submission.configuration});
-                caller = entry.submission.caller.owner.Value();
-            }
-            if (batch.work.empty())
-                continue;
-            const auto &first = *state_->Find(batch.work.front().query.handle);
-            JobDescriptor descriptor{.configuration = first.submission.configuration, .priority = first.submission.priority};
-            // Owner submission must never wait, even if a host accidentally configures a blocking queue.
-            JobProducerScope producer{JobProducerRole::MainEditor};
-            auto accepted = state_->jobs.SubmitResult(descriptor, [state = state_, index](const CancellationToken &token) {
-                return State::Execute(state, index, token);
-            });
-            if (accepted.HasError()) {
-                batch.work.clear();
-                break;  // Foundation pressure defers accepted navigation work until a later bounded attempt/deadline.
-            }
-            batch.job.emplace(std::move(accepted).Value());
-            for (const auto &work : batch.work) {
-                auto &entry = *state_->Find(work.query.handle);
-                entry.executing = true;
-                entry.job = batch.job->Id();
-                state_->Charge(work.caller.owner, work.query.request.requirement.limits.maximumNodeExpansions);
-                ++state_->dispatched;
-            }
-            state_->lastCaller = caller;
+            state_->PrepareBatch(index, tick);
+            if (!batch.work.empty() && !State::SubmitBatch(state_, index))
+                break;  // Foundation pressure retains accepted navigation requests for a later bounded attempt.
         }
         return state_->dispatched - before;
     }
@@ -199,37 +163,12 @@ namespace Horo::Navigation {
         std::uint32_t published{};
         for (const auto index : order) {
             auto &entry = *state_->slots[index].entry;
-            std::optional<Error> failure;
-            if (entry.cancellation.Token().IsCancellationRequested())
-                failure = MakeError(NavigationErrors::QueryCancelled);
-            else if (!active || entry.query.worldLease.IsRevoked() ||
-                     entry.query.worldLease.Descriptor().scene != current.activation.scene ||
-                     entry.query.worldLease.Descriptor().sceneGeneration != current.activation.sceneGeneration ||
-                     entry.query.request.world != current.activation.world)
-                failure = MakeError(NavigationErrors::InvalidWorld);
-            else if (std::ranges::find(current.callers, entry.submission.caller) == current.callers.end())
-                failure = MakeError(NavigationErrors::InvalidHandle);
-            else if (!State::SameSource(entry.submission.source, current.source))
-                failure = MakeError(NavigationErrors::StaleSnapshot);
-            else if (current.tick > entry.submission.deadlineTick)
-                failure = MakeError(NavigationErrors::CapacityExceeded);
-            if (failure)
-                entry.cancellation.RequestCancellation();
+            auto failure = State::PublicationFailure(entry, current);
             if (!failure && entry.submission.targetTick > current.tick)
                 continue;
             if (!failure && !entry.candidate)
                 break;  // Worker arrival cannot bypass an earlier eligible admitted request.
-            if (failure) {
-                entry.terminal.emplace(NavigationPathCompletion{entry.query.handle, entry.submission.caller, entry.query.acceptedSequence,
-                                                                entry.job, entry.submission.source, entry.query.worldLease.Descriptor(),
-                                                                Result<NavigationPath>::Failure(std::move(*failure))});
-                entry.candidate.reset();
-            } else {
-                entry.terminal.emplace(std::move(*entry.candidate));
-                entry.candidate.reset();
-            }
-            entry.terminal->source.completionTick = current.tick;
-            entry.published = true;
+            State::Publish(entry, std::move(failure), current.tick);
             ++published;
         }
         return published;
