@@ -4,6 +4,78 @@
   "locale": "en-US",
   "namespace": "editor",
   "messages": {
+    "workspace.play_topology.button": {
+      "text": "Play profiles"
+    },
+    "workspace.play_topology.title": {
+      "text": "Multiplayer play profiles"
+    },
+    "workspace.play_topology.profile": {
+      "text": "Saved profile"
+    },
+    "workspace.play_topology.new": {
+      "text": "New profile"
+    },
+    "workspace.play_topology.name": {
+      "text": "Profile name"
+    },
+    "workspace.play_topology.map": {
+      "text": "Project-relative scene (.horo)"
+    },
+    "workspace.play_topology.kind": {
+      "text": "Topology"
+    },
+    "workspace.play_topology.standalone": {
+      "text": "Standalone"
+    },
+    "workspace.play_topology.listen": {
+      "text": "Listen host and clients"
+    },
+    "workspace.play_topology.dedicated": {
+      "text": "Dedicated server and clients"
+    },
+    "workspace.play_topology.clients": {
+      "text": "Additional clients (0–8; listen: 0–7)"
+    },
+    "workspace.play_topology.transport": {
+      "text": "Transport provider identity"
+    },
+    "workspace.play_topology.port": {
+      "text": "Server port (1–65535)"
+    },
+    "workspace.play_topology.simulation": {
+      "text": "Simulation preset identity (optional)"
+    },
+    "workspace.play_topology.simulation_hint": {
+      "text": "References are validated against available preview capabilities before launch."
+    },
+    "workspace.play_topology.user_hint": {
+      "text": "Machine-local port overrides are stored separately and never change project defaults."
+    },
+    "workspace.play_topology.user_port": {
+      "text": "This machine’s port (0 uses project default)"
+    },
+    "workspace.play_topology.save_project": {
+      "text": "Save project profile"
+    },
+    "workspace.play_topology.save_user": {
+      "text": "Save this machine’s override"
+    },
+    "workspace.play_topology.reload": {
+      "text": "Reload saved profiles"
+    },
+    "workspace.play_topology.close": {
+      "text": "Close"
+    },
+    "workspace.play_topology.invalid": {
+      "text": "Enter a valid name, scene path, mode, counts and network references."
+    },
+    "workspace.play_topology.stale": {
+      "text": "Saved profiles changed. Reload before saving again."
+    },
+    "workspace.play_topology.storage": {
+      "text": "Profiles could not be read or saved. Check project storage access."
+    },
     "workspace.global_dock.network.event.admitted": {
       "text": "Gameplay session admitted"
     },
