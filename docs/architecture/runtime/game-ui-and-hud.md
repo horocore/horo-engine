@@ -215,6 +215,18 @@ Unrelated scopes survive. Shutdown retires all scopes before Renderer, Assets,
 Input, Localization or Platform dependencies disappear and is idempotent after
 partial activation.
 
+### Persistent UI scene reconciliation
+
+`UiSceneReconciliation` owns actual `UiHotReload` publishers by immutable semantic
+scope and exact Scene provider lineage. Complete private same-document runtime
+candidates rebind Scene providers without inventing an authored revision; aggregate
+publication preserves game/player ownership, retires only the outgoing exact Scene
+owners, and admits prepared incoming Scene UI at ADR-073 cutoffs. Required source
+loss is explicit, non-scene providers remain unchanged, and old leases drain through
+the existing publisher barriers. See the [scene reconciliation migration guide](../../guides/runtime-ui-scene-reconciliation-migration.md)
+for host Scene publication ordering, unavailable-source policy and inert identity
+target migration. Viewport attachment and audience reconciliation remain independent.
+
 ## Presentation Scope, Bands And Routes
 
 [ADR-080](../../adr/080-runtime-ui-presentation-scope-layer-and-route.md) keeps

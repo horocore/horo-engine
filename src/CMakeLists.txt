@@ -1,3 +1,7 @@
+add_library(HoroSceneIdentity INTERFACE)
+add_library(HoroEngine::SceneIdentity ALIAS HoroSceneIdentity)
+target_compile_features(HoroSceneIdentity INTERFACE cxx_std_20)
+
 add_library(HoroFoundation STATIC
         foundation/assertions/Assertions.cpp
         foundation/AssetCookTargetId.cpp
@@ -485,7 +489,7 @@ add_library(HoroRuntime STATIC
 add_library(HoroEngine::Runtime ALIAS HoroRuntime)
 target_compile_features(HoroRuntime PUBLIC cxx_std_20)
 target_include_directories(HoroRuntime PUBLIC ${PROJECT_SOURCE_DIR}/include)
-target_link_libraries(HoroRuntime PUBLIC HoroEngine::Foundation HoroEngine::SaveApi PRIVATE nlohmann_json::nlohmann_json utf8proc miniz)
+target_link_libraries(HoroRuntime PUBLIC HoroEngine::SceneIdentity HoroEngine::Foundation HoroEngine::SaveApi PRIVATE nlohmann_json::nlohmann_json utf8proc miniz)
 # Compile-only arithmetic has no archive link dependency or exported internal surface.
 target_include_directories(HoroRuntime PRIVATE
         $<TARGET_PROPERTY:HoroRationalDurationInternal,INTERFACE_INCLUDE_DIRECTORIES>)
@@ -622,6 +626,11 @@ add_library(HoroRuntimeUi STATIC
     runtime/ui/UiControlStateMachineReload.cpp
         runtime/ui/UiHotReload.cpp
         runtime/ui/UiOverlayLifecycle.cpp
+        runtime/ui/UiSceneReconciliation.cpp
+        runtime/ui/UiSceneReconciliationPreparation.cpp
+        runtime/ui/UiSceneReconciliationPublication.cpp
+        runtime/ui/UiHotReloadSceneRebind.cpp
+        runtime/ui/UiBindingSceneRebind.cpp
         runtime/ui/UiHotReloadGeneration.cpp
         runtime/ui/UiHotReloadValidation.cpp
         runtime/ui/UiHotReloadReconciliation.cpp
@@ -714,7 +723,7 @@ target_link_libraries(HoroUiAnimationIntegrationInternal INTERFACE HoroEngine::R
 
 target_compile_features(HoroRuntimeUi PUBLIC cxx_std_20)
 target_include_directories(HoroRuntimeUi PRIVATE ${PROJECT_SOURCE_DIR}/src/foundation/json)
-target_link_libraries(HoroRuntimeUi PUBLIC HoroEngine::Foundation HoroEngine::Assets
+target_link_libraries(HoroRuntimeUi PUBLIC HoroEngine::SceneIdentity HoroEngine::Foundation HoroEngine::Assets
         PRIVATE nlohmann_json::nlohmann_json utf8proc harfbuzz HoroThirdParty::Unicode)
 target_include_directories(HoroRuntimeUi PRIVATE
         $<TARGET_PROPERTY:HoroRationalDurationInternal,INTERFACE_INCLUDE_DIRECTORIES>)

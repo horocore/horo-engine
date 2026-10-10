@@ -45,6 +45,11 @@ namespace Horo::Runtime::Ui {
             return Failure<Prepared>(UiErrors::InstanceStateInvalid);
         if (!replacement.storage_ || !Newer(*storage_->current, replacement))
             return Failure<Prepared>(UiErrors::RevisionStale);
+        return PrepareQualified(std::move(replacement), cancellation);
+    }
+
+    /** @copydoc UiHotReload::PrepareQualified */
+    Result<UiHotReload::Prepared> UiHotReload::PrepareQualified(UiReloadGeneration replacement, const CancellationToken &cancellation) {
         if (const auto valid = UiReloadDetail::Validate(replacement.Instance(), replacement.Canvases()); valid.HasError())
             return Result<Prepared>::Failure(valid.ErrorValue());
         const auto slots = UiReloadDetail::Namespace(replacement.Canvases());
@@ -92,31 +97,59 @@ namespace Horo::Runtime::Ui {
         return AnimationReplacement(prepared);
     }
 
-    /** @copydoc UiHotReload::Commit */
-    Result<UiReloadReconciliation> UiHotReload::Commit(Prepared &prepared, const UiStructuralCommitPoint point) {
+    /** @copydoc UiHotReload::CanCommit */
+    Result<void> UiHotReload::CanCommit(const Prepared &prepared, const UiStructuralCommitPoint point) const {
         if (!storage_ || storage_->stopped || storage_->collecting || !prepared.storage_ || prepared.storage_->consumed)
-            return Failure<UiReloadReconciliation>(UiErrors::InstanceStateInvalid);
-        auto &candidate = *prepared.storage_;
+            return Failure<void>(UiErrors::InstanceStateInvalid);
+        const auto &candidate = *prepared.storage_;
         if (!storage_.Matches(candidate.publisher) || candidate.source != storage_->current ||
             !UiReloadDetail::MatchesSource(*storage_->current, candidate.sourceStamps))
-            return Failure<UiReloadReconciliation>(UiErrors::RevisionStale);
+            return Failure<void>(UiErrors::RevisionStale);
+        // Revoked write grants can change even when a failed provider unregister retains its value revision.
+        if (candidate.sceneRebind) {
+            for (const auto &old : storage_->current->Canvases()) {
+                const auto *next = candidate.replacement->Canvas(old.id);
+                if (!next || old.bindings.has_value() != next->bindings.has_value())
+                    return Failure<void>(UiErrors::BindingDescriptorConflict);
+                if (old.bindings) {
+                    const auto valid = next->bindings->ValidateSceneRebind(*old.bindings, old.tree, next->tree, candidate.removingScene);
+                    if (valid.HasError())
+                        return valid;
+                }
+            }
+        }
         if (point != UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands &&
             point != UiStructuralCommitPoint::CommitDeferredLifecycleChanges)
-            return Failure<UiReloadReconciliation>(UiErrors::InstanceStateInvalid);
+            return Failure<void>(UiErrors::InstanceStateInvalid);
         if (candidate.cancellation.IsCancellationRequested())
-            return Failure<UiReloadReconciliation>(UiErrors::AssetLoadCancelled);
+            return Failure<void>(UiErrors::AssetLoadCancelled);
+        const auto end = storage_->retired.begin() + storage_->limits.maximumRetiredGenerations;
+        if (std::find(storage_->retired.begin(), end, nullptr) == end)
+            return Failure<void>(UiErrors::CapacityExceeded);
+        if (candidate.replacement->Instance().State() != UiRuntimeInstanceState::Prepared)
+            return Failure<void>(UiErrors::InstanceStateInvalid);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiHotReload::CommitValidated */
+    void UiHotReload::CommitValidated(Prepared &prepared) noexcept {
+        auto &candidate = *prepared.storage_;
         const auto end = storage_->retired.begin() + storage_->limits.maximumRetiredGenerations;
         const auto free = std::find(storage_->retired.begin(), end, nullptr);
-        if (free == end)
-            return Failure<UiReloadReconciliation>(UiErrors::CapacityExceeded);
-        if (const auto activated = candidate.replacement->storage_->instance.Activate(); activated.HasError())
-            return Result<UiReloadReconciliation>::Failure(activated.ErrorValue());
+        (void)candidate.replacement->storage_->instance.Activate();
         UiReloadDetail::Retire(*storage_->current);
         (void)storage_->current->storage_->instance.BeginRetirement();
         *free = std::move(storage_->current);
         storage_->current = candidate.replacement;
         candidate.consumed = true;
-        return Result<UiReloadReconciliation>::Success(candidate.reconciliation);
+    }
+
+    /** @copydoc UiHotReload::Commit */
+    Result<UiReloadReconciliation> UiHotReload::Commit(Prepared &prepared, const UiStructuralCommitPoint point) {
+        if (const auto valid = CanCommit(prepared, point); valid.HasError())
+            return Result<UiReloadReconciliation>::Failure(valid.ErrorValue());
+        CommitValidated(prepared);
+        return Result<UiReloadReconciliation>::Success(prepared.Reconciliation());
     }
 
     /** @copydoc UiHotReload::Acquire */
