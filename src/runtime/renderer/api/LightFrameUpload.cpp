@@ -22,6 +22,21 @@ namespace Horo::Render {
                                          packed.planes[index][3]};
             return cluster;
         }
+
+        /** @brief Rejects required coverage loss without changing the conservative membership recipe. */
+        Result<void> ValidateCoverage(const LightFrameUpdate &update, const LightCluster &cluster) {
+            if (!update.budget.requireCompleteCoverage || update.budget.referencesPerCluster >= update.lights.size())
+                return Result<void>::Success();
+            std::size_t count{};
+            for (const auto &light : update.lights) {
+                if (!LightIntersectsCluster(Decode(light), cluster))
+                    continue;
+                ++count;
+                if (count > update.budget.referencesPerCluster)
+                    return Result<void>::Failure(MakeError(LightCullingErrors::Coverage));
+            }
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc ValidateLightFrameUpdate */
@@ -47,16 +62,8 @@ namespace Horo::Render {
             const auto cluster = Decode(packed);
             if (!cluster.IsValid())
                 return Result<void>::Failure(MakeError(LightCullingErrors::InvalidInput));
-            if (!update.budget.requireCompleteCoverage || update.budget.referencesPerCluster >= update.lights.size())
-                continue;
-            std::size_t count{};
-            for (const auto &light : update.lights) {
-                if (!LightIntersectsCluster(Decode(light), cluster))
-                    continue;
-                ++count;
-                if (count > update.budget.referencesPerCluster)
-                    return Result<void>::Failure(MakeError(LightCullingErrors::Coverage));
-            }
+            if (const auto coverage = ValidateCoverage(update, cluster); coverage.HasError())
+                return coverage;
         }
         return Result<void>::Success();
     }
