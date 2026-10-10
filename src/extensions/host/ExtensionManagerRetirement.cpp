@@ -15,7 +15,7 @@ namespace Horo::Extensions {
 
     /** @copydoc ExtensionManager::HasActivationCapacity */
     bool ExtensionManager::HasActivationCapacity(const std::size_t providerCount) const noexcept {
-        return m_loadedExtensions.size() < 1024 && providerCount <= 1024;
+        return m_loadedExtensions.size() + m_failedActivations.size() < 1024 && providerCount <= 1024;
     }
 
     /** @brief Admits complete provider closures before activating any dependent native module. */
@@ -52,6 +52,11 @@ namespace Horo::Extensions {
         return found == m_loadedExtensions.end() ? nullptr : found->second->retirement;
     }
 
+    /** @copydoc ExtensionManager::FailedActivationRetirements */
+    std::span<const std::shared_ptr<ExtensionRetirement>> ExtensionManager::FailedActivationRetirements() const noexcept {
+        return m_failedActivations;
+    }
+
     /** @copydoc ExtensionManager::RetireExtension */
     ExtensionRetirementReport ExtensionManager::RetireExtension(const std::string &extensionId) {
         const auto retirement = Retirement(extensionId);
@@ -84,6 +89,9 @@ namespace Horo::Extensions {
 
     /** @copydoc ExtensionManager::FinalizeRetirements */
     void ExtensionManager::FinalizeRetirements() {
+        std::erase_if(m_failedActivations, [](const auto &retirement) {
+            return retirement->IsDrained();
+        });
         for (auto id = m_activationOrder.rbegin(); id != m_activationOrder.rend(); ++id) {
             const auto found = m_loadedExtensions.find(*id);
             if (found == m_loadedExtensions.end() || !found->second->retiring || !found->second->retirement->IsDrained())

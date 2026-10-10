@@ -206,6 +206,8 @@ horo_allow_target_dependencies(TARGET HoroEditorViewportMetal
     DEPENDENCIES HoroEditorViewportScene HoroEditorViewportResources HoroRenderMetal HoroRenderFrontend)
 horo_allow_target_dependencies(TARGET HoroGui
     DEPENDENCIES HoroPlayTopologyApplication HoroEditorServices HoroCinematicCameraRuntime HoroFoundation HoroEditorRenderExtraction HoroExtensions)
+horo_allow_target_dependencies(TARGET HoroPackageLifecycle
+    DEPENDENCIES HoroFoundation HoroPackageSecurity HoroExtensions HoroAssets)
 horo_allow_target_dependencies(TARGET HoroExtensions
     DEPENDENCIES HoroFoundation HoroPlatform HoroAssets HoroSecurity)
 

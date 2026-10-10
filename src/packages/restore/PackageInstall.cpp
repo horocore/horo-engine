@@ -3,6 +3,7 @@
 #include "Horo/Packages/PackageInstallErrors.h"
 
 #include <algorithm>
+#include <limits>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <set>
@@ -83,14 +84,23 @@ namespace Horo::Packages {
         /** @brief Reads the graph under the same mutex that protects publication. */
         std::shared_ptr<const PackageRestoreGraph> ActiveGraph() const {
             std::lock_guard guard(mutex_);
-            return activeGraph_;
+            return record_ ? record_->Graph() : nullptr;
+        }
+
+        /** @brief Returns install evidence while publication is serialized. */
+        std::shared_ptr<const VerifiedPackageInstallRecord> InstalledRecord() const {
+            std::lock_guard guard(mutex_);
+            return record_;
         }
 
     private:
         /** @brief Publishes a record while the caller retains both the mutex and exclusive project lease. */
         Result<void> CommitRecord(std::shared_ptr<const PackageRestoreGraph> graph, const CancellationToken &cancellation,
                                   const std::filesystem::path &metadata) {
-            const std::string record = SerializeRecord(*graph);
+            if (revision_ == std::numeric_limits<std::uint64_t>::max())
+                return Result<void>::Failure(MakeError(PackageInstallErrors::InvalidInput));
+            auto candidate = PackageInstallService::FreezeRecord(std::move(graph), revision_ + 1U);
+            const std::string record = SerializeRecord(*candidate->Graph());
             const auto pending = metadata / "packages.install.pending";
             const auto committed = metadata / "packages.installed.json";
             const auto bytes = std::as_bytes(std::span{record.data(), record.size()});
@@ -104,7 +114,8 @@ namespace Horo::Packages {
                 static_cast<void>(files_.RemoveDurable(pending));
                 return Result<void>::Failure(MakeError(PackageInstallErrors::CommitFailed));
             }
-            activeGraph_ = std::move(graph);
+            record_ = std::move(candidate);
+            ++revision_;
             return Result<void>::Success();
         }
 
@@ -112,7 +123,8 @@ namespace Horo::Packages {
         std::filesystem::path root_;
         // Serializes file transactions and graph publication/readback for every calling thread.
         mutable std::mutex mutex_;
-        std::shared_ptr<const PackageRestoreGraph> activeGraph_;
+        std::uint64_t revision_{};
+        std::shared_ptr<const VerifiedPackageInstallRecord> record_;
     };
 
     /** @copydoc PackageInstallService::Create */
@@ -145,6 +157,18 @@ namespace Horo::Packages {
             return valid;
 
         return state_->Install(std::move(graph), cancellation);
+    }
+
+    /** @copydoc PackageInstallService::FreezeRecord */
+    std::shared_ptr<const VerifiedPackageInstallRecord> PackageInstallService::FreezeRecord(
+        std::shared_ptr<const PackageRestoreGraph> graph, const std::uint64_t revision) {
+        auto snapshot = std::make_shared<const PackageRestoreGraph>(*graph);
+        return std::shared_ptr<const VerifiedPackageInstallRecord>{new VerifiedPackageInstallRecord{std::move(snapshot), revision}};
+    }
+
+    /** @copydoc PackageInstallService::InstalledRecord */
+    std::shared_ptr<const VerifiedPackageInstallRecord> PackageInstallService::InstalledRecord() const {
+        return state_->InstalledRecord();
     }
 
     /** @copydoc PackageInstallService::ActiveGraph */

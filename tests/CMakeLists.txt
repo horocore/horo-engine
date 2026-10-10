@@ -3701,6 +3701,16 @@ foreach(abi_fixture_mode RANGE 0 11)
     target_compile_definitions(HoroExtensionManagerTests PRIVATE
             HORO_ABI_FIXTURE_${abi_fixture_mode}="$<TARGET_FILE:${abi_fixture_target}>")
 endforeach()
+add_executable(HoroPackageLifecycleTests unit/packages/PackageLifecycleTests.cpp)
+target_link_libraries(HoroPackageLifecycleTests PRIVATE HoroEngine::PackageLifecycle HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
+target_include_directories(HoroPackageLifecycleTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+add_dependencies(HoroPackageLifecycleTests HoroExtensionAbiFixture0 HoroExtensionAbiFixture4 HoroExtensionAbiFixture6)
+target_compile_definitions(HoroPackageLifecycleTests PRIVATE
+    HORO_PACKAGE_NATIVE_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture4>"
+    HORO_PACKAGE_EMPTY_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture0>"
+    HORO_PACKAGE_FAILING_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture6>")
+horo_register_catch_test(HoroPackageLifecycleTests LABELS "packages;extensions;headless")
+
 add_library(HoroExtensionAbiMissingLoadFixture MODULE fixtures/extensions/AbiModuleMissingLoad.c)
 target_compile_features(HoroExtensionAbiMissingLoadFixture PRIVATE c_std_11)
 set_target_properties(HoroExtensionAbiMissingLoadFixture PROPERTIES C_EXTENSIONS OFF)
@@ -3729,6 +3739,9 @@ foreach(abi_hostile_fixture_mode RANGE 0 7)
     target_compile_definitions(HoroExtensionManagerTests PRIVATE
             HORO_ABI_HOSTILE_FIXTURE_${abi_hostile_fixture_mode}="$<TARGET_FILE:${abi_hostile_fixture_target}>")
 endforeach()
+add_dependencies(HoroPackageLifecycleTests HoroExtensionAbiHostileFixture6)
+target_compile_definitions(HoroPackageLifecycleTests PRIVATE
+    HORO_PACKAGE_TEARDOWN_FAILING_FIXTURE="$<TARGET_FILE:HoroExtensionAbiHostileFixture6>")
 add_test(NAME HoroExtensionAbiConformanceCliSupported
     COMMAND "$<TARGET_FILE:horo-extension-conformance>" --json "$<TARGET_FILE:HoroExtensionAbiFixture1>")
 set_tests_properties(HoroExtensionAbiConformanceCliSupported PROPERTIES

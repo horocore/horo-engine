@@ -25,6 +25,28 @@
 
 namespace Horo::Extensions {
     namespace {
+        /** @brief Retains failed native activation ownership until rollback closes admission or publication commits. */
+        struct FailedActivationGuard final {
+            std::vector<std::shared_ptr<ExtensionRetirement>> &owners;
+            std::shared_ptr<ExtensionRetirement> retirement;
+            bool committed{};
+
+            /** @brief Reserves failed activation ownership before native callbacks can retain code. */
+            FailedActivationGuard(std::vector<std::shared_ptr<ExtensionRetirement>> &failedOwners,
+                                  std::shared_ptr<ExtensionRetirement> failedRetirement)
+                : owners(failedOwners), retirement(std::move(failedRetirement)) {
+                owners.reserve(owners.size() + 1);
+                owners.push_back(retirement);
+            }
+
+            ~FailedActivationGuard() {
+                if (committed)
+                    std::erase(owners, retirement);
+                else
+                    retirement->CloseAdmission();
+            }
+        };
+
         namespace fs = std::filesystem;
 
         using Detail::IsValidBoundedText;
@@ -571,6 +593,8 @@ namespace Horo::Extensions {
             return Result<std::string>::Failure(declarationsResult.ErrorValue());
         const auto platformDeclarations = std::move(declarationsResult).Value();
 
+        FailedActivationGuard failureGuard{m_failedActivations, retirement};
+
         ExtensionActivationTransaction transaction;
         auto staged = StageDeclaredNativeModules({manifest, plan, retirement, m_libraryLoader, m_artifactGate, platformDeclarations,
                                                   m_editorActivityHost},
@@ -596,6 +620,7 @@ namespace Horo::Extensions {
         record.mapped()->platformProvider = std::move(platformPublication).Value();
         m_loadedExtensions.insert(std::move(record));
         m_activationOrder.push_back(std::move(activationId));
+        failureGuard.committed = true;
         LOG_INFO("extensions", "Successfully loaded extension: %s", extensionId.c_str());
         return Result<std::string>::Success(std::move(extensionId));
     }
