@@ -3784,6 +3784,7 @@ if (HORO_BUILD_RENDER_OPENGL)
             unit/runtime/renderer/OpenGLCommandAdaptationTests.cpp
             unit/runtime/renderer/OpenGLRenderBackendQualificationTests.cpp
             unit/runtime/renderer/OpenGLRenderResourceTests.cpp
+            unit/runtime/renderer/OpenGLRenderGraphTests.cpp
     )
 
     target_compile_features(HoroRenderOpenGLTests PRIVATE cxx_std_20)

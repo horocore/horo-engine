@@ -6,6 +6,7 @@
 #include "RenderResourceOperations.h"
 
 #include <algorithm>
+#include <memory>
 #include <type_traits>
 
 namespace Horo::Render::Detail {
@@ -49,6 +50,38 @@ namespace Horo::Render::Detail {
         active = false;
     }
 
+    /** @copydoc RenderGraphResourceLeasePool::Lease::PinResource */
+    Result<void> RenderGraphResourceLeasePool::Lease::PinResource(const RenderGraphResource &resource) {
+        const auto *binding = &resource.binding;
+        if (resource.resourceClass == RenderGraphResourceClass::Transient) {
+            if (transient == nullptr || resource.id.value == 0 || resource.id.value > transient->bindings.size()) {
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+            }
+            const auto index = resource.id.value - 1U;
+            if (transient->lifetimes[index].disposition == RenderGraphLifetimeDisposition::Unused)
+                return Result<void>::Success();
+            binding = &transient->bindings[index];
+        }
+        const auto resolved = ResolveGraphResidentIdentity(*binding);
+        if (resolved.HasError()) {
+            return Result<void>::Failure(resolved.ErrorValue());
+        }
+        const auto &pin = resolved.Value();
+        if (std::any_of(pins.begin(), pins.end(), [&pin](const Pin &existing) {
+            return existing.resourceClass == pin.resourceClass && existing.identity == pin.identity;
+        }))
+            return Result<void>::Success();
+        if (pool->activePins_ == pool->maximumPins_) {
+            return Result<void>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
+        }
+        if (const auto pinned = pool->registry_->AddSubmissionPin(pin.resourceClass, pin.identity); pinned.HasError()) {
+            return Result<void>::Failure(pinned.ErrorValue());
+        }
+        pins.push_back(pin);
+        ++pool->activePins_;
+        return Result<void>::Success();
+    }
+
     /** @copydoc RenderGraphResourceLeasePool::Acquire */
     Result<IRenderGraphResourceLease *> RenderGraphResourceLeasePool::Acquire(const std::span<const RenderGraphResource> resources,
                                                                               UiRenderSubmission *ui,
@@ -63,49 +96,24 @@ namespace Horo::Render::Detail {
                 continue;
             }
             lease.active = true;
+            const auto rollback = [](Lease *pending) {
+                pending->Release();
+            };
+            std::unique_ptr<Lease, decltype(rollback)> transaction{&lease, rollback};
             lease.transient = transient;
             if (transient != nullptr)
                 transient->inFlight = true;
             for (const auto &resource : resources) {
-                const auto *binding = &resource.binding;
-                if (resource.resourceClass == RenderGraphResourceClass::Transient) {
-                    if (transient == nullptr || resource.id.value == 0 || resource.id.value > transient->bindings.size()) {
-                        lease.Release();
-                        return Result<IRenderGraphResourceLease *>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
-                    }
-                    const auto index = resource.id.value - 1U;
-                    if (transient->lifetimes[index].disposition == RenderGraphLifetimeDisposition::Unused)
-                        continue;
-                    binding = &transient->bindings[index];
-                }
-                const auto resolved = ResolveGraphResidentIdentity(*binding);
-                if (resolved.HasError()) {
-                    lease.Release();
-                    return Result<IRenderGraphResourceLease *>::Failure(resolved.ErrorValue());
-                }
-                const auto &pin = resolved.Value();
-                if (std::any_of(lease.pins.begin(), lease.pins.end(), [&pin](const Pin &existing) {
-                    return existing.resourceClass == pin.resourceClass && existing.identity == pin.identity;
-                }))
-                    continue;
-                if (activePins_ == maximumPins_) {
-                    lease.Release();
-                    return Result<IRenderGraphResourceLease *>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
-                }
-                if (const auto pinned = registry_->AddSubmissionPin(pin.resourceClass, pin.identity); pinned.HasError()) {
-                    lease.Release();
+                if (const auto pinned = lease.PinResource(resource); pinned.HasError()) {
                     return Result<IRenderGraphResourceLease *>::Failure(pinned.ErrorValue());
                 }
-                lease.pins.push_back(pin);
-                ++activePins_;
             }
             if (ui != nullptr) {
                 if (const auto captured = lease.ui.Capture(*ui, resources); captured.HasError()) {
-                    lease.Release();
                     return Result<IRenderGraphResourceLease *>::Failure(captured.ErrorValue());
                 }
             }
-            return Result<IRenderGraphResourceLease *>::Success(&lease);
+            return Result<IRenderGraphResourceLease *>::Success(transaction.release());
         }
         return Result<IRenderGraphResourceLease *>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
     }

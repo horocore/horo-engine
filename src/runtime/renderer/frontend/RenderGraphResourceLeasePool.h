@@ -37,6 +37,13 @@ namespace Horo::Render::Detail {
         class Lease final : public IRenderGraphResourceLease {
         public:
             void Release() noexcept override;
+            /**
+             * @brief Retains one distinct physical generation in this active lease.
+             * @param resource Imported or admitted transient logical binding.
+             * @return Success, including an unused declaration or existing pin, or typed binding/capacity failure.
+             * @details The outer acquisition transaction owns rollback of an already retained prefix.
+             */
+            [[nodiscard]] Result<void> PinResource(const RenderGraphResource &resource);
             RenderGraphResourceLeasePool *pool{nullptr};
             bool active{false};
             std::vector<Pin> pins;
