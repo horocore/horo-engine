@@ -155,6 +155,59 @@ Required behavior includes:
 Project and package formats remain platform-neutral. Android is an adapter over
 those formats, not a second asset model.
 
+### PLT-001.5 adapter and host migration
+
+`HoroEngine::Platform` owns the additive `AndroidStorage` public contract and
+its staged standalone header consumer. No existing filesystem/path API changes.
+Hosts compose existing, disjoint `Context.getFilesDir()` and `getCacheDir()`
+roots through the target-private `AndroidStorageAdapter`. Roots are canonicalized
+once (including native temporary-directory aliases); symlink roots and every
+symlink/hardlink in a consumer path or transaction sidecar are rejected. The
+host protects these app-owned namespaces from concurrent external replacement.
+This is blocking load/tooling work, never an activity callback or frame-hot path.
+
+Android hosts retain their Java AssetManager reference, bind the corresponding
+real `AAssetManager`, and destroy the service before releasing that owner.
+Packaged reads use `AASSET_MODE_STREAMING` and `AAsset_read`, so compressed assets
+do not require filesystem paths or an uncompressed descriptor. Native Android
+builds link the existing Platform target privately to `android`; this adds no
+GameActivity, SDK selection, ABI packaging or renderer composition.
+
+For a user-selected document the Android host verifies the exact read grant,
+then calls `ContentResolver.openFileDescriptor(uri, "r")` and transfers ownership
+with `ParcelFileDescriptor.detachFd()` into private `AdoptDocument`. The host
+keeps the URI and its Activity/persisted permission registry. Persisted lifetime
+is admitted only after `takePersistableUriPermission` succeeds; an offered grant
+flag alone is not persistence evidence. Java `SecurityException`, revoked grants,
+missing files and provider failures map through `AccessFailure` without exposing
+personal URI text. The engine sees only a service-owned opaque document handle.
+It does not obtain a portable project path or an atomic-write capability.
+
+Both actual regular descriptors and provider pipes are bounded, single-use read
+capabilities. Reads return no partial result, poll pipes at most every 100 ms,
+time out after 30 seconds, and close consumed descriptors on every result.
+Revocation and activity retirement may run on host callback threads; atomic grant
+state protects publication while descriptor ownership stays on the storage owner
+thread. The host drains callbacks before destroying the service and retires old
+Activity grants before admitting replacement grants. Persisted grants survive
+activity retirement but remain revocable. Admission has a fixed 256-document
+process budget; the host must destroy/recompose storage at a quiescent boundary
+after exhaustion rather than grow an unbounded personal-source registry.
+
+App-private/cache publication holds the destination's native writer lock, removes
+abandoned same-directory staging data, checks capacity, writes durably, then uses
+`AtomicReplaceTracked`. The caller retains the receipt across errors: a committed
+replacement with failed directory durability must never be reported as rollback.
+Interrupted staging remains recoverable on the next locked publication. Cache
+publication has these file-operation guarantees but cache eviction still makes it
+unsuitable as durable user-state authority. Packaged/document publication fails
+explicitly; Android document providers are not assumed to support atomic replace.
+
+Host regressions exercise real POSIX files/pipes and native durable transactions,
+with injected pressure/interruption/postcommit faults. They do not qualify Java
+grant acquisition, packaged reads on a physical APK, provider disconnect, or an
+Android device tuple. Those require a composed Android host/NDK/device run.
+
 ## Toolchain, Packaging, And Deployment
 
 Android builds use explicit CMake/toolchain presets and declared SDK/NDK

@@ -143,7 +143,7 @@ def test_fracture_consumer_extends_the_owned_header_boundary_target() -> None:
 
 
 def test_audio_keeps_both_modes_and_all_platforms() -> None:
-    assert set(re.findall(r"^  ([a-z-]+):$", WORKFLOW.split("jobs:\n", 1)[1], re.M)) == {"tooling", "test"}
+    assert set(re.findall(r"^  ([a-z-]+):$", WORKFLOW.split("jobs:\n", 1)[1], re.M)) == {"tooling", "android-storage", "test"}
     for platform in ("Linux / GCC", "macOS / Clang", "Windows / MSVC"):
         assert f"name: {platform}" in WORKFLOW
     assert targets("HORO_CI_AUDIO_TARGETS") == {

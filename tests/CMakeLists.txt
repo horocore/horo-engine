@@ -2713,6 +2713,12 @@ target_include_directories(HoroAndroidLifecycleTests PRIVATE
         ${PROJECT_SOURCE_DIR}/src/platform/android
 )
 target_link_libraries(HoroAndroidLifecycleTests PRIVATE HoroEngine::Platform)
+add_executable(HoroAndroidStorageTests unit/platform/AndroidStorageTests.cpp)
+target_compile_features(HoroAndroidStorageTests PRIVATE cxx_std_20)
+target_include_directories(HoroAndroidStorageTests PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/platform/android
+        ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroAndroidStorageTests PRIVATE HoroEngine::Platform)
 add_executable(HoroRuntimeSaveIdentityTests
         unit/runtime/save/SaveIdentityTests.cpp
 )
@@ -4007,6 +4013,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroFoundationJobSystemTests
         HoroPlatformTests
         HoroAndroidLifecycleTests
+        HoroAndroidStorageTests
         HoroPlatformRequestTests
         HoroGameplayBuildServiceTests
         HoroEditorViewportSceneTests
