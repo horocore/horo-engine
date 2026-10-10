@@ -107,14 +107,13 @@ namespace Horo::PCG {
                                                       const PCGCpuEvaluationLimits &, PCGCpuAdmission, CancellationToken);
 
         /** @brief Adopts only a completely evaluated, detached result.
-         * @param generation Exact cooked generation. @param sourceDigest Canonical graph source evidence.
-         * @param seed Authored deterministic seed. @param snapshot Immutable input identity.
+         * @param plan Immutable cooked source of exact generation, source digest and seed; values are copied.
+         * @param snapshot Immutable input identity.
          * @param numericProfile Explicit numeric qualification evidence. @param outputs Owned final columns.
          * @param reservedBytes Complete charged operation footprint excluding retained replacement.
          * @param provenance Owned canonical node roots with effective input/provider evidence. */
-        PCGCpuCandidate(GraphGeneration generation, const Sha256Digest &sourceDigest, std::uint64_t seed, SpatialSnapshotId snapshot,
-                        const Sha256Digest &numericProfile, std::vector<PCGCpuPointOutput> outputs, std::size_t reservedBytes,
-                        std::vector<PCGProvenance> provenance) noexcept;
+        PCGCpuCandidate(const PCGCookedPlan &plan, SpatialSnapshotId snapshot, const Sha256Digest &numericProfile,
+                        std::vector<PCGCpuPointOutput> outputs, std::size_t reservedBytes, std::vector<PCGProvenance> provenance) noexcept;
 
         GraphGeneration generation_{};
         Sha256Digest sourceDigest_{};

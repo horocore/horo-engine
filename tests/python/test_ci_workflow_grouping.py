@@ -36,6 +36,8 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
         "HoroNetworkDebuggerTests", "HoroNetworkDebuggerPublicHeaderConsumer",
         "HoroPlayTopologyTests", "HoroPlayTopologyPublicHeaderConsumer",
         "HoroTerrainAuthoringTests", "HoroTerrainAuthoringPublicHeaderConsumer",
+        "HoroPCGTests", "HoroPCGTerrainAdapterTests",
+        "HoroPCGPublicHeaderConsumer", "HoroPCGTerrainAdapterPublicHeaderConsumer",
         "HoroCliCommandRegistryTests", "HoroPlatformTests", "HoroUpdateZipPackageProducerTests",
         "HoroCliOutputPublicHeaderConsumer", "HoroCliProductionOutputContract",
         "HoroCliMcpServeTests",
@@ -86,6 +88,29 @@ def test_windows_light_qualification_has_build_and_discovery_closure() -> None:
     assert "unit/runtime/renderer/LightFrameBufferPoolTests.cpp" in tests_cmake
     assert "unit/runtime/renderer/LightSceneExtractionTests.cpp" in tests_cmake
     assert 'if(target IN_LIST HORO_CI_WINDOWS_TARGETS)\n        list(APPEND ARG_LABELS ci-windows)' in SUITES
+
+
+def test_windows_pcg_qualification_has_build_and_execution_closure() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    for target in ("HoroPCGTests", "HoroPCGTerrainAdapterTests"):
+        assert target in targets("HORO_CI_WINDOWS_TARGETS")
+        assert f"add_executable({target}" in tests_cmake
+        assert f"horo_register_catch_test({target} LABELS" in tests_cmake
+    assert tests_cmake.count("unit/runtime/pcg/PCGCpuEvaluatorTests.cpp") == 1
+    assert 'if(target IN_LIST HORO_CI_WINDOWS_TARGETS)\n        list(APPEND ARG_LABELS ci-windows)' in SUITES
+    consumers = ("HoroPCGPublicHeaderConsumer", "HoroPCGTerrainAdapterPublicHeaderConsumer")
+    ownership = (ROOT / "cmake/HoroPublicHeaderOwnership.cmake").read_text(encoding="utf-8")
+    boundaries = (ROOT / "cmake/HoroTargetBoundaries.cmake").read_text(encoding="utf-8")
+    assert 'add_library("${consumer_target}" OBJECT ${generated_sources})' in boundaries
+    direct_tests = re.search(r"set_property\(TEST\s+(.*?)\s+APPEND PROPERTY LABELS ci-windows\)", SUITES, re.S)
+    assert direct_tests
+    for consumer in consumers:
+        assert consumer in targets("HORO_CI_WINDOWS_TARGETS")
+        assert consumer not in direct_tests.group(1).split()
+        owner = consumer.removesuffix("PublicHeaderConsumer")
+        assert f"horo_configure_target_header_boundary({owner} PUBLIC_HEADERS" in ownership
+    assert preset("buildPresets", "ci-windows-debug")["targets"] == ["HoroCiWindowsChecks"]
+    assert preset("testPresets", "ci-windows-debug")["filter"]["include"]["label"] == "^ci-windows$"
 
 
 def test_ai_scheduler_qualification_has_build_discovery_and_single_source_ownership() -> None:
