@@ -129,9 +129,11 @@ namespace Horo::Runtime::Ui::AnimationTests {
     inline UiAnimationOwner OwnerAggregate(UiElementSlotAllocator &allocator, const bool routeMotion = false,
                                            const std::int64_t deadline = 1000000000, UiActionRouter **attachedActions = nullptr,
                                            WriteAttachment *writes = nullptr, UiActionRouter **routeActions = nullptr,
-                                           const std::uint64_t version = 1) {
+                                           const std::uint64_t version = 1, UiFocusGraph **attachedFocus = nullptr) {
         auto initial = Generation(allocator, version, 32, false, 0, 0, 4);
         const auto &canvas = initial.Canvases().front();
+        if (attachedFocus)
+            *attachedFocus = initial.Canvas(canvas.id)->focus ? &*initial.Canvas(canvas.id)->focus : nullptr;
         if (writes)
             AttachWrites(initial, *writes);
         if (attachedActions) {
@@ -181,6 +183,7 @@ namespace Horo::Runtime::Ui::AnimationTests {
         UiElementSlotAllocator *allocator{};
         std::uint64_t version{1};
         UiAnimationApplication application{UiAnimationApplication::Runtime};
+        bool focusAccess{}; /**< Test-only quiescent borrow; never exposed by a production owner contract. */
     };
 
     /** @brief Owns the actual lifecycle host, animation participant and source issuer. */
@@ -200,12 +203,13 @@ namespace Horo::Runtime::Ui::AnimationTests {
             }
             auto config = Config();
             config.application = options.application;
-            auto composed = UiAnimationRuntimeParticipant::Compose(OwnerAggregate(*externalIssuer, options.routeMotion, options.deadline,
-                                                                                  options.actions ? &attachedActions : nullptr,
-                                                                                  options.writes ? &attachedWrites : nullptr,
-                                                                                  options.routeActions ? &attachedRouteActions : nullptr,
-                                                                                  options.version),
-                                                                   host->DispatchSource(), config);
+            auto composed =
+                UiAnimationRuntimeParticipant::Compose(OwnerAggregate(*externalIssuer, options.routeMotion, options.deadline,
+                                                                      options.actions ? &attachedActions : nullptr,
+                                                                      options.writes ? &attachedWrites : nullptr,
+                                                                      options.routeActions ? &attachedRouteActions : nullptr,
+                                                                      options.version, options.focusAccess ? &attachedFocus : nullptr),
+                                                       host->DispatchSource(), config);
             REQUIRE(composed.HasValue());
             auto composition = std::move(composed).Value();
             participant = composition.participant.get();
@@ -221,6 +225,7 @@ namespace Horo::Runtime::Ui::AnimationTests {
         UiActionRouter *attachedActions{};
         UiActionRouter *attachedRouteActions{};
         WriteAttachment attachedWrites;
+        UiFocusGraph *attachedFocus{};
     };
 
     inline UiControlInput Edge(const UiActionSource &source, const UiControlInputKind kind, const std::uint64_t sequence,

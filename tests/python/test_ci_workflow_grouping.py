@@ -42,6 +42,8 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
         "HoroCameraCutRuntimeTests", "HoroCameraCutPublicHeaderConsumer",
         "HoroPrefabTests", "HoroPrefabSceneExpansionTests", "HoroPrefabSceneExpansionContractConsumer",
         "HoroAssetRegistryTests", "HoroInputTests", "HoroInputSdlTests", "HoroRuntimeUiInputTests",
+        "HoroRuntimeUiAnimationIntegrationTests", "HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer",
+        "HoroRuntimeUiHitTestingTests", "HoroRuntimeUiEventDispatchTests", "HoroRuntimeUiPointerPublicHeaderConsumer",
         "HoroCharacterInputTests", "HoroCharacterInputPublicHeaderConsumer",
         "HoroInputPublicHeaderConsumer", "HoroExtensionManagerTests", "HoroMcpSessionTests",
         "HoroEditorActivityBoundaryTests", "HoroExtensionsPublicHeaderConsumer",
@@ -61,6 +63,22 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
         assert not (ROOT / f".github/workflows/{workflow}.yml").exists()
     assert preset("buildPresets", "ci-windows-debug")["targets"] == ["HoroCiWindowsChecks"]
     assert preset("testPresets", "ci-windows-debug")["filter"]["include"]["label"] == "^ci-windows$"
+
+
+def test_windows_pointer_gesture_tests_and_consumers_share_build_closure() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    closure = targets("HORO_CI_WINDOWS_TARGETS")
+    for target in ("HoroRuntimeUiAnimationIntegrationTests", "HoroRuntimeUiHitTestingTests",
+                   "HoroRuntimeUiEventDispatchTests", "HoroInputSdlTests",
+                   "HoroRuntimeUiPointerPublicHeaderConsumer", "HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer"):
+        assert target in closure, f"Pointer coverage selects {target} without building it"
+        assert f"add_executable({target}" in tests_cmake
+    assert "unit/runtime/ui/UiPointerInputIntegrationTests.cpp" in tests_cmake
+    assert "unit/runtime/ui/UiPointerInteractionTests.cpp" in tests_cmake
+    assert "unit/runtime/input/SdlTouchInputTests.cpp" in tests_cmake
+    for consumer in ("HoroRuntimeUiPointerPublicHeaderConsumer", "HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer"):
+        match = re.search(rf"set_tests_properties\({consumer} PROPERTIES LABELS \"([^\"]+)\"\)", tests_cmake)
+        assert match and {"public_headers", "ci-windows"} <= set(match.group(1).split(";"))
 
 
 def test_windows_manifest_tests_and_consumer_share_the_build_closure() -> None:

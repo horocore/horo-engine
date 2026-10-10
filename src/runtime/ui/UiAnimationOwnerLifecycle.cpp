@@ -2,6 +2,7 @@
 #include "UiAnimationOwnerInternal.h"
 
 #include <algorithm>
+#include <exception>
 #include <utility>
 
 namespace Horo::Runtime::Ui {
@@ -33,12 +34,20 @@ namespace Horo::Runtime::Ui {
     }
 
     UiAnimationOwner::~UiAnimationOwner() {
+        if (storage_ && storage_->pointerDispatching)
+            std::terminate();  // Synchronous routed callbacks still borrow this public owner object.
         Shutdown();
     }
 
-    UiAnimationOwner::UiAnimationOwner(UiAnimationOwner &&) noexcept = default;
+    UiAnimationOwner::UiAnimationOwner(UiAnimationOwner &&other) noexcept {
+        if (other.storage_ && other.storage_->pointerDispatching)
+            std::terminate();
+        storage_ = std::move(other.storage_);
+    }
 
     UiAnimationOwner &UiAnimationOwner::operator=(UiAnimationOwner &&other) noexcept {
+        if ((storage_ && storage_->pointerDispatching) || (other.storage_ && other.storage_->pointerDispatching))
+            std::terminate();
         if (this != &other) {
             Shutdown();
             storage_ = std::move(other.storage_);
@@ -80,7 +89,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAnimationOwner::DrainRetired */
     Result<std::size_t> UiAnimationOwner::DrainRetired() {
-        if (!storage_ || storage_->draining || storage_->candidate.admitted)
+        if (!storage_ || storage_->draining || storage_->candidate.admitted || storage_->pointerDispatching)
             return Result<std::size_t>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         // The application calls this outside frame work; owned frame slots retain snapshots until external leases drain.
         if (storage_->stopped) {

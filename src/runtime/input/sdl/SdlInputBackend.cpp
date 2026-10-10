@@ -1,6 +1,8 @@
 #include "SdlInputBackend.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <optional>
 #include <unordered_map>
 
@@ -23,10 +25,16 @@ namespace Horo::Input {
                     return event.button.windowID;
                 case SDL_EVENT_MOUSE_WHEEL:
                     return event.wheel.windowID;
+                case SDL_EVENT_FINGER_DOWN:
+                case SDL_EVENT_FINGER_UP:
+                case SDL_EVENT_FINGER_MOTION:
+                case SDL_EVENT_FINGER_CANCELED:
+                    return event.tfinger.windowID;
                 case SDL_EVENT_WINDOW_FOCUS_GAINED:
                 case SDL_EVENT_WINDOW_FOCUS_LOST:
                 case SDL_EVENT_WINDOW_MOUSE_ENTER:
                 case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+                case SDL_EVENT_WINDOW_RESIZED:
                     return event.window.windowID;
                 default:
                     return std::nullopt;
@@ -209,18 +217,89 @@ namespace Horo::Input {
             SDL_Joystick *joystick{nullptr};
         };
 
+        /** @brief Window-local native identity mapping; terminal slots cannot be reused within a collection frame. */
+        struct TouchSlot final {
+            SDL_TouchID device{};
+            SDL_FingerID finger{};
+            TouchContactId id;
+            std::uint64_t timestamp{};
+            bool terminal{};
+        };
+
         RawInputCollector collector;
         std::unordered_map<SDL_JoystickID, Device> devices;
         WindowInputState windowState{};
         SDL_WindowID windowId{0};
         bool neutralizeOnBeginFrame{false};
+        std::array<TouchSlot, MaximumTouchContacts> touches{};
+        std::uint64_t nextTouchGeneration{1};
+        std::uint64_t lastTouchTimestamp{};
+        int pointerWidth{};
+        int pointerHeight{};
+        bool touchAdmissionClosed{};
 
         void HandleKeyboardEvent(const SDL_Event &event);
         void HandlePointerEvent(const SDL_Event &event);
         void HandleWindowEvent(const SDL_Event &event);
         void HandleGamepadEvent(const SDL_Event &event);
         void HandleJoystickEvent(const SDL_Event &event);
+        void HandleTouchEvent(const SDL_TouchFingerEvent &event);
+        void CancelTouches(TouchCancellationReason reason) noexcept;
     };
+
+    /** @brief Closes the current native touch batch; later motion cannot revive cancelled slots. */
+    void SdlInputBackend::Impl::CancelTouches(const TouchCancellationReason reason) noexcept {
+        collector.CancelTouchContacts(reason);
+        for (auto &touch : touches)
+            touch.terminal = touch.id.IsValid();
+        touchAdmissionClosed = true;
+    }
+
+    /** @brief Converts only exact-window native contacts into bounded owned physical incarnations. */
+    void SdlInputBackend::Impl::HandleTouchEvent(const SDL_TouchFingerEvent &event) {
+        if (touchAdmissionClosed || !windowState.focused || pointerWidth <= 0 || pointerHeight <= 0 || event.touchID == SDL_MOUSE_TOUCHID)
+            return;
+        if (!std::isfinite(event.x) || !std::isfinite(event.y) || event.touchID == 0 || event.timestamp < lastTouchTimestamp) {
+            CancelTouches(TouchCancellationReason::MalformedSource);
+            return;
+        }
+        lastTouchTimestamp = event.timestamp;
+        auto found = std::ranges::find_if(touches, [&event](const TouchSlot &entry) {
+            return entry.id.IsValid() && entry.device == event.touchID && entry.finger == event.fingerID;
+        });
+        if (event.type == SDL_EVENT_FINGER_DOWN) {
+            if (found != touches.end()) {
+                CancelTouches(TouchCancellationReason::MalformedSource);
+                return;
+            }
+            found = std::ranges::find_if(touches, [](const TouchSlot &entry) {
+                return !entry.id.IsValid();
+            });
+            if (found == touches.end() || nextTouchGeneration == std::numeric_limits<std::uint64_t>::max()) {
+                CancelTouches(TouchCancellationReason::CapacityExceeded);
+                return;
+            }
+            const auto slot = static_cast<std::uint64_t>(found - touches.begin()) + 1;
+            *found = {event.touchID, event.fingerID, {slot, nextTouchGeneration++}, event.timestamp, false};
+        } else if (found == touches.end() || found->terminal)
+            return;  // Stale motion/release never manufactures a new contact.
+        if (event.timestamp < found->timestamp) {
+            CancelTouches(TouchCancellationReason::MalformedSource);
+            return;
+        }
+        found->timestamp = event.timestamp;
+        // SDL normalized coordinates are deliberately not clamped: captured fingers may leave the window.
+        const auto collected =
+            collector.SetTouchContact(found->id, event.x * pointerWidth, event.y * pointerHeight, event.type != SDL_EVENT_FINGER_UP);
+        if (collected != TouchCollectionStatus::Accepted) {
+            CancelTouches(collected == TouchCollectionStatus::CapacityExceeded ? TouchCancellationReason::CapacityExceeded
+                                                                               : TouchCancellationReason::MalformedSource);
+            return;
+        }
+        if (event.type == SDL_EVENT_FINGER_CANCELED)
+            (void)collector.CancelTouchContact(found->id);
+        found->terminal = event.type == SDL_EVENT_FINGER_UP || event.type == SDL_EVENT_FINGER_CANCELED;
+    }
 
     /** @brief Applies keyboard, text-input, and text-composition events to the collector. */
     void SdlInputBackend::Impl::HandleKeyboardEvent(const SDL_Event &event) {
@@ -252,15 +331,21 @@ namespace Horo::Input {
     void SdlInputBackend::Impl::HandlePointerEvent(const SDL_Event &event) {
         switch (event.type) {
             case SDL_EVENT_MOUSE_MOTION:
+                if (event.motion.which == SDL_TOUCH_MOUSEID)
+                    break;
                 collector.SetPointerPosition(event.motion.x, event.motion.y);
                 break;
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
             case SDL_EVENT_MOUSE_BUTTON_UP:
+                if (event.button.which == SDL_TOUCH_MOUSEID)
+                    break;
                 if (const auto button = MapPointerButton(event.button.button))
                     collector.SetPointerButton(*button, event.button.down);
                 collector.SetPointerPosition(event.button.x, event.button.y);
                 break;
             case SDL_EVENT_MOUSE_WHEEL:
+                if (event.wheel.which == SDL_TOUCH_MOUSEID)
+                    break;
                 collector.AddPointerWheel(event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -event.wheel.x : event.wheel.x,
                                           event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -event.wheel.y : event.wheel.y);
                 break;
@@ -289,6 +374,7 @@ namespace Horo::Input {
                 break;
             case SDL_EVENT_WINDOW_FOCUS_LOST:
                 collector.Neutralize();
+                CancelTouches(TouchCancellationReason::SurfaceLost);
                 windowState.focused = false;
                 collector.SetWindowState(windowState);
                 break;
@@ -299,6 +385,11 @@ namespace Horo::Input {
             case SDL_EVENT_WINDOW_MOUSE_LEAVE:
                 windowState.pointerInside = false;
                 collector.SetWindowState(windowState);
+                break;
+            case SDL_EVENT_WINDOW_RESIZED:
+                pointerWidth = event.window.data1;
+                pointerHeight = event.window.data2;
+                CancelTouches(TouchCancellationReason::SurfaceLost);
                 break;
             default:
                 break;
@@ -407,6 +498,10 @@ namespace Horo::Input {
 
     void SdlInputBackend::BeginFrame(const FrameNumber frame) {
         impl_->collector.BeginFrame(frame);
+        for (auto &touch : impl_->touches)
+            if (touch.terminal)
+                touch = {};
+        impl_->touchAdmissionClosed = false;
         if (impl_->neutralizeOnBeginFrame) {
             impl_->collector.Neutralize();
             impl_->neutralizeOnBeginFrame = false;
@@ -418,7 +513,11 @@ namespace Horo::Input {
         if (impl_->windowId == windowId)
             return;
         impl_->collector.Neutralize();
+        impl_->CancelTouches(TouchCancellationReason::SurfaceLost);
         impl_->windowId = windowId;
+        impl_->pointerWidth = impl_->pointerHeight = 0;
+        if (auto *window = SDL_GetWindowFromID(windowId))
+            (void)SDL_GetWindowSize(window, &impl_->pointerWidth, &impl_->pointerHeight);
         impl_->neutralizeOnBeginFrame = true;
     }
 
@@ -440,10 +539,17 @@ namespace Horo::Input {
             case SDL_EVENT_MOUSE_REMOVED:
                 impl_->HandlePointerEvent(event);
                 break;
+            case SDL_EVENT_FINGER_DOWN:
+            case SDL_EVENT_FINGER_UP:
+            case SDL_EVENT_FINGER_MOTION:
+            case SDL_EVENT_FINGER_CANCELED:
+                impl_->HandleTouchEvent(event.tfinger);
+                break;
             case SDL_EVENT_WINDOW_FOCUS_GAINED:
             case SDL_EVENT_WINDOW_FOCUS_LOST:
             case SDL_EVENT_WINDOW_MOUSE_ENTER:
             case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+            case SDL_EVENT_WINDOW_RESIZED:
                 impl_->HandleWindowEvent(event);
                 break;
             case SDL_EVENT_GAMEPAD_ADDED:

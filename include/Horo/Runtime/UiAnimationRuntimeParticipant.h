@@ -94,7 +94,7 @@ namespace Horo::Runtime {
      *          VariableUpdate failure publishes nothing. Later extraction failure follows RuntimeHost's fatal shutdown/no-present
      *          contract, rather than claiming whole-frame success. No callback context or publicly mutable clock DTO is retained.
      */
-    class UiAnimationRuntimeParticipant final : public RuntimeLifecycleParticipant {
+    class UiAnimationRuntimeParticipant final : public RuntimeLifecycleParticipant, public Ui::UiPointerInteractionHost {
         struct Storage;
 
     public:
@@ -182,7 +182,14 @@ namespace Horo::Runtime {
          */
         [[nodiscard]] Result<bool> ApplyPresentation(const Ui::UiPresentationReceipt &receipt);
         /** @brief Checks actual current successfully presented input eligibility. @param view Composed render view. @return Eligibility. */
-        [[nodiscard]] bool InputEligible(Ui::UiRenderViewId view) const noexcept;
+        [[nodiscard]] bool InputEligible(Ui::UiRenderViewId view) const noexcept override;
+        /** @copydoc Ui::UiPointerInteractionHost::PointerInputEligible */
+        [[nodiscard]] bool PointerInputEligible(const Ui::UiPointerCaptureContext &source) const noexcept override;
+        /** @copydoc Ui::UiPointerInteractionHost::PumpPointers */
+        [[nodiscard]] Result<Ui::UiPointerInteractionResult> PumpPointers(const Ui::UiAnimationPointerInput &input,
+                                                                          Ui::UiEventHandler &routeHandler) override;
+        /** @copydoc Ui::UiPointerInteractionHost::CancelPointers */
+        [[nodiscard]] Result<void> CancelPointers(Ui::UiPointerInteraction &interaction, std::uint64_t &nextSequence) override;
         /** @brief Drains deferred cleanup after callbacks and extracted leases reach application quiescence.
          * @return Reclaimed count or typed busy/lifecycle failure. Never call inside extraction/publication.
          */

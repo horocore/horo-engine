@@ -148,5 +148,6 @@ namespace Horo::Runtime::Ui {
         std::uint64_t lastSourceFrame{};
         bool stopped{};
         bool draining{};
+        bool pointerDispatching{}; /**< Owner-thread callback fence: no reload, frame publication or reclamation during routing. */
     };
 }  // namespace Horo::Runtime::Ui

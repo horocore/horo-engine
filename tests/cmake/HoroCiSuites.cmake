@@ -47,6 +47,11 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroCharacterInputPublicHeaderConsumer
     HoroInputSdlTests
     HoroRuntimeUiInputTests
+    HoroRuntimeUiAnimationIntegrationTests
+    HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer
+    HoroRuntimeUiHitTestingTests
+    HoroRuntimeUiEventDispatchTests
+    HoroRuntimeUiPointerPublicHeaderConsumer
     HoroRuntimeUiTextUnicodeTests
     HoroRuntimeUiUnicodeStartupTests
     HoroRuntimeUiUnicodeLifecycleTests
