@@ -1,4 +1,235 @@
 /** @brief Resource realization methods kept with OpenGLRenderBackend's private definition. */
+/** @copydoc IMaterialBindingBackend::QueryMaterialParameterBufferSize */
+Result<std::size_t> QueryMaterialParameterBufferSize(const std::uint64_t pipeline, const MaterialBindingDescriptor &descriptor,
+                                                     const ShaderBindingId binding) const override {
+    if (!IsOwnerThread())
+        return WrongThread<std::size_t>();
+    if (!initialized_ || frameActive_ || !functions_.materials.IsValid())
+        return Result<std::size_t>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));
+    if (pipeline > std::numeric_limits<std::uint32_t>::max())
+        return Result<std::size_t>::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
+    const auto program = graphicsPipelines_.find(static_cast<std::uint32_t>(pipeline));
+    if (program == graphicsPipelines_.end() || !SameMaterialLayout(program->second.layout, descriptor.layout))
+        return Result<std::size_t>::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
+    const auto &layout = program->second.layout;
+    const auto resource = std::ranges::find(layout.resources, binding, &ShaderReflectedBinding::id);
+    const auto mapping = std::ranges::find_if(layout.targetBindings, [&](const auto &entry) {
+        return entry.id == binding && entry.active && entry.generatedHelperIndex == 0;
+    });
+    if (resource == layout.resources.end() || resource->kind != ShaderResourceKind::UniformBuffer || mapping == layout.targetBindings.end())
+        return Result<std::size_t>::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
+    return functions_.materials.uniformBlockSize(program->first, mapping->nativeName);
+}
+
+/** @copydoc IMaterialBindingBackend::RealizeResolved */
+Result<std::unique_ptr<IResidentMaterialBinding>> RealizeResolved(const MaterialBindingDescriptor &descriptor, const std::uint64_t pipeline,
+                                                                  const std::span<const MaterialResidentResource> resources) override {
+    using Realization = Result<std::unique_ptr<IResidentMaterialBinding>>;
+    if (!IsOwnerThread())
+        return WrongThread<std::unique_ptr<IResidentMaterialBinding>>();
+    if (!initialized_ || frameActive_ || !functions_.materials.IsValid())
+        return Realization::Failure(MakeError(MaterialBindingErrors::Unsupported));
+    const auto valid = ValidateMaterialBindingDescriptor(descriptor, descriptor.pipeline.owner);
+    if (valid.HasError())
+        return Realization::Failure(valid.ErrorValue());
+    if (pipeline > std::numeric_limits<std::uint32_t>::max() || resources.size() != descriptor.resources.size())
+        return Realization::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
+    const auto program = graphicsPipelines_.find(static_cast<std::uint32_t>(pipeline));
+    if (program == graphicsPipelines_.end() || !SameMaterialLayout(program->second.layout, descriptor.layout))
+        return Realization::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid,
+                                              "Material layout does not match the exact resident program's cooked layout."));
+    const auto alignment = functions_.materials.uniformOffsetAlignment();
+    if (alignment.HasError())
+        return Realization::Failure(alignment.ErrorValue());
+    if (alignment.Value() == 0)
+        return Realization::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
+    auto material = std::make_unique<OpenGLMaterialBinding>();
+    material->owner = this;
+    material->program = program->first;
+    for (std::size_t index = 0; index < resources.size(); ++index) {
+        const auto &logical = descriptor.resources[index];
+        const auto &resident = resources[index];
+        const auto mapping = std::ranges::find_if(descriptor.layout.targetBindings, [&](const auto &entry) {
+            return entry.id == logical.binding && entry.active && entry.generatedHelperIndex == 0;
+        });
+        const auto declaration = std::ranges::find(descriptor.layout.resources, logical.binding, &ShaderReflectedBinding::id);
+        if (mapping == descriptor.layout.targetBindings.end() || declaration == descriptor.layout.resources.end() ||
+            logical.arrayElement != 0 || declaration->arrayCount != 1 || mapping->nativeSpace != 0 || resident.instance == 0)
+            return Realization::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
+        OpenGLMaterialSlot slot{.kind = resident.kind,
+                                .binding = mapping->nativeBinding,
+                                .offset = resident.offset,
+                                .byteCount = resident.byteCount};
+        if (declaration->kind == ShaderResourceKind::UniformBuffer) {
+            if (resident.kind != MaterialResidentResourceKind::Buffer || resident.instance > std::numeric_limits<std::uint32_t>::max())
+                return Realization::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
+            const auto buffer = bufferDescriptors_.find(static_cast<std::uint32_t>(resident.instance));
+            const auto size = QueryMaterialParameterBufferSize(pipeline, descriptor, logical.binding);
+            if (size.HasError())
+                return Realization::Failure(size.ErrorValue());
+            if (buffer == bufferDescriptors_.end() || !HasBufferUsage(buffer->second.usage, RenderBufferUsage::Uniform) ||
+                resident.offset % alignment.Value() != 0 || resident.offset > buffer->second.byteSize ||
+                resident.byteCount > buffer->second.byteSize - resident.offset || resident.byteCount < size.Value())
+                return Realization::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
+            slot.object = buffer->first;
+        } else if (declaration->kind == ShaderResourceKind::SampledTexture) {
+            const auto view = textureViews_.find(resident.instance);
+            if (resident.kind != MaterialResidentResourceKind::TextureView || view == textureViews_.end() ||
+                !HasTextureUsage(view->second.usage, RenderTextureUsage::Sampled) || view->second.sampleCount != 1)
+                return Realization::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
+            const auto paired = std::ranges::find(descriptor.resources, mapping->pairedSampler, &MaterialResourceBinding::binding);
+            if (paired == descriptor.resources.end())
+                return Realization::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
+            const auto &samplerInstance = resources[static_cast<std::size_t>(paired - descriptor.resources.begin())];
+            if (samplerInstance.kind != MaterialResidentResourceKind::Sampler ||
+                samplerInstance.instance > std::numeric_limits<std::uint32_t>::max())
+                return Realization::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
+            const auto sampler = samplerDescriptors_.find(static_cast<std::uint32_t>(samplerInstance.instance));
+            const auto comparison = functions_.materials.textureComparison(program->first, mapping->nativeName);
+            if (comparison.HasError())
+                return Realization::Failure(comparison.ErrorValue());
+            if (sampler == samplerDescriptors_.end() || sampler->second.compareEnabled != comparison.Value() ||
+                (comparison.Value() && view->second.aspect != RenderTextureAspect::Depth))
+                return Realization::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
+            slot.object = view->second.texture;
+            slot.sampler = sampler->first;
+        } else if (declaration->kind == ShaderResourceKind::Sampler) {
+            if (resident.kind != MaterialResidentResourceKind::Sampler || resident.instance > std::numeric_limits<std::uint32_t>::max() ||
+                !samplerDescriptors_.contains(static_cast<std::uint32_t>(resident.instance)))
+                return Realization::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
+            continue;  // Separate sampler policy is applied only through its cooked sampled-texture pairing.
+        } else {
+            return Realization::Failure(MakeError(MaterialBindingErrors::Unsupported));
+        }
+        material->slots[material->count++] = slot;
+    }
+    return Realization::Success(std::move(material));
+}
+
+/** @copydoc IRenderResourceBackend::QueryPipelineDeviceIdentity */
+Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const override {
+    if (!IsOwnerThread())
+        return WrongThread<RenderPipelineDeviceIdentity>();
+    if (!initialized_)
+        return Result<RenderPipelineDeviceIdentity>::Failure(MakeError(OpenGLBackendErrors::NotInitialized));
+    if (frameActive_)
+        return Result<RenderPipelineDeviceIdentity>::Failure(MakeError(OpenGLBackendErrors::FrameActive));
+    if (!functions_.pipelines.queryDeviceIdentity)
+        return Result<RenderPipelineDeviceIdentity>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));
+    return functions_.pipelines.queryDeviceIdentity();
+}
+
+/** @copydoc IRenderResourceBackend::QueryGraphicsPipelineMemoryCost */
+Result<RenderMemoryCostPlan> QueryGraphicsPipelineMemoryCost(const RenderGraphicsPipelineDescriptor &descriptor, const std::uint64_t vertex,
+                                                             const std::uint64_t fragment) const override {
+    if (!IsOwnerThread())
+        return WrongThread<RenderMemoryCostPlan>();
+    const auto valid = ValidateRenderGraphicsPipelineDescriptor(descriptor);
+    if (valid.HasError())
+        return Result<RenderMemoryCostPlan>::Failure(valid.ErrorValue());
+    if (!initialized_ || !functions_.shaders.IsValid() || !functions_.pipelines.IsValid() || !functions_.pipelines.isAvailable() ||
+        !functions_.materialExecution.IsValid() || !functions_.materialExecution.isAvailable() || vertex == 0 || fragment == 0 ||
+        vertex == fragment || vertex > std::numeric_limits<std::uint32_t>::max() || fragment > std::numeric_limits<std::uint32_t>::max())
+        return Result<RenderMemoryCostPlan>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));
+    const auto vertexModule = shaderModules_.find(static_cast<std::uint32_t>(vertex));
+    const auto fragmentModule = shaderModules_.find(static_cast<std::uint32_t>(fragment));
+    const auto matches = [&](const auto &module, const ShaderStage stage) {
+        return module != shaderModules_.end() && module->second.descriptor.stage == stage &&
+               SameShaderTarget(module->second.descriptor.target, descriptor.target) &&
+               module->second.descriptor.artifactKey == descriptor.compatibility.shaderArtifactKey &&
+               module->second.descriptor.shaderInterface == descriptor.reflection.interfaceCompatibility &&
+               std::ranges::any_of(descriptor.manifest.entryPoints, [&](const auto &entry) {
+            return entry.stage == stage && entry.name == module->second.descriptor.entryPoint;
+        });
+    };
+    if (!matches(vertexModule, ShaderStage::Vertex) || !matches(fragmentModule, ShaderStage::Fragment))
+        return Result<RenderMemoryCostPlan>::Failure(
+            MakeError(OpenGLBackendErrors::ResourceIdentityInvalid,
+                      "Graphics pipeline references stale native modules or a different cooked artifact/interface/target."));
+    if (descriptor.state.sampleCount != 1 || descriptor.state.colorFormat != RenderTextureFormat::Rgba8Unorm ||
+        (descriptor.state.depthFormat && *descriptor.state.depthFormat != RenderTextureFormat::Depth24Stencil8 &&
+         *descriptor.state.depthFormat != RenderTextureFormat::Depth32Float) ||
+        !descriptor.manifest.inlineConstants.empty() || !descriptor.manifest.specializationInputs.empty())
+        return Result<RenderMemoryCostPlan>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));
+    if (std::ranges::any_of(descriptor.reflection.targetBindings, [](const auto &mapping) {
+        return mapping.active && mapping.nativeBinding >= 128;
+    }))
+        return Result<RenderMemoryCostPlan>::Failure(
+            MakeError(OpenGLBackendErrors::UnsupportedResourceOperation,
+                      "OpenGL material consumption has a fixed 128-slot resource state restoration envelope."));
+    const auto identity = QueryPipelineDeviceIdentity();
+    if (identity.HasError())
+        return Result<RenderMemoryCostPlan>::Failure(identity.ErrorValue());
+    const auto &actual = identity.Value();
+    const auto &expected = descriptor.compatibility;
+    if (expected.backend != actual.backend || expected.backendModuleVersion != actual.backendModuleVersion ||
+        expected.adapter != actual.adapter || expected.deviceCompatibilityDigest != actual.deviceCompatibilityDigest ||
+        expected.driverIdentity != actual.driverIdentity || expected.driverVersion != actual.driverVersion)
+        return Result<RenderMemoryCostPlan>::Failure(
+            MakeError(OpenGLBackendErrors::ResourceIdentityInvalid,
+                      "Pipeline compatibility facts do not identify the selected OpenGL context."));
+    const auto payload = vertexModule->second.cookedBytes + fragmentModule->second.cookedBytes;
+    constexpr std::size_t expansion = 16, overhead = 128U * 1024U;
+    if (payload > (std::numeric_limits<std::size_t>::max() - overhead) / expansion)
+        return Result<RenderMemoryCostPlan>::Failure(MakeError(OpenGLBackendErrors::ResourceCreationFailed));
+    const auto required = ConservativeRequirement(payload * expansion + overhead);
+    if (!required)
+        return Result<RenderMemoryCostPlan>::Failure(MakeError(OpenGLBackendErrors::ResourceCreationFailed));
+    // Driver program allocations are opaque. This policy is estimated, not measured native memory.
+    return Result<RenderMemoryCostPlan>::Success(MemoryCostPlan(4, payload, *required));
+}
+
+/** @copydoc IRenderResourceBackend::CreateGraphicsPipeline */
+Result<std::uint64_t> CreateGraphicsPipeline(const RenderGraphicsPipelineDescriptor &descriptor, const std::uint64_t vertex,
+                                             const std::uint64_t fragment, const RenderMemoryPlacement &placement) override {
+    if (auto failure = ResourceCreationFailure(); failure)
+        return std::move(*failure);
+    if (frameActive_)
+        return Result<std::uint64_t>::Failure(MakeError(OpenGLBackendErrors::FrameActive));
+    const auto cost = QueryGraphicsPipelineMemoryCost(descriptor, vertex, fragment);
+    if (cost.HasError())
+        return Result<std::uint64_t>::Failure(cost.ErrorValue());
+    if (!MatchesPlacement(cost.Value(), placement))
+        return Result<std::uint64_t>::Failure(MakeError(OpenGLBackendErrors::InvalidConfig));
+    const auto layout = PrepareMaterialBindingLayout(descriptor.reflection);
+    if (layout.HasError())
+        return Result<std::uint64_t>::Failure(layout.ErrorValue());
+    const auto key = ValidateRenderGraphicsPipelineDescriptor(descriptor);
+    if (key.HasError())
+        return Result<std::uint64_t>::Failure(key.ErrorValue());
+    const auto features = functions_.materialExecution.queryFeatures();
+    if (features.HasError())
+        return Result<std::uint64_t>::Failure(features.ErrorValue());
+    if (!features.Value().IsValid())
+        return Result<std::uint64_t>::Failure(MakeError(OpenGLBackendErrors::InvalidCapabilities));
+    const auto program = Detail::CreateOpenGLGraphicsProgram(static_cast<std::uint32_t>(vertex), static_cast<std::uint32_t>(fragment),
+                                                             descriptor, functions_.shaders, functions_.pipelines);
+    if (program.HasError())
+        return Result<std::uint64_t>::Failure(program.ErrorValue());
+    try {
+        graphicsPipelines_.emplace(program.Value(),
+                                   OpenGLGraphicsPipeline{layout.Value(), descriptor.state, key.Value(), features.Value()});
+    } catch (const std::bad_alloc &) {
+        functions_.shaders.deleteProgram(program.Value());
+        return Result<std::uint64_t>::Failure(
+            MakeError(OpenGLBackendErrors::ResourceCreationFailed, "OpenGL program tracking metadata allocation failed."));
+    } catch (const std::length_error &) {
+        functions_.shaders.deleteProgram(program.Value());
+        return Result<std::uint64_t>::Failure(
+            MakeError(OpenGLBackendErrors::ResourceCreationFailed, "OpenGL program tracking metadata exceeded its finite envelope."));
+    }
+    return Result<std::uint64_t>::Success(program.Value());
+}
+
+/** @copydoc IRenderResourceBackend::DestroyGraphicsPipeline */
+void DestroyGraphicsPipeline(const std::uint64_t backendInstance) noexcept override {
+    if (!IsOwnerThread() || backendInstance > std::numeric_limits<std::uint32_t>::max())
+        return;
+    const auto program = static_cast<std::uint32_t>(backendInstance);
+    if (graphicsPipelines_.erase(program) != 0)
+        functions_.shaders.deleteProgram(program);
+}
+
 /** @copydoc IRenderResourceBackend::QueryShaderModuleMemoryCost */
 Result<RenderMemoryCostPlan> QueryShaderModuleMemoryCost(const RenderShaderModuleDescriptor &descriptor,
                                                          const std::size_t cookedBytes) const override {
@@ -65,6 +296,55 @@ void DestroyShaderModule(const std::uint64_t backendInstance) noexcept override 
         functions_.shaders.deleteShader(shader);
 }
 
+/** @copydoc IRenderResourceBackend::QuerySamplerMemoryCost */
+Result<RenderMemoryCostPlan> QuerySamplerMemoryCost(const RenderSamplerDescriptor &descriptor) const override {
+    if (!IsOwnerThread())
+        return WrongThread<RenderMemoryCostPlan>();
+    if (const auto valid = ValidateRenderSamplerDescriptor(descriptor); valid.HasError())
+        return Result<RenderMemoryCostPlan>::Failure(valid.ErrorValue());
+    if (!initialized_ || !functions_.samplers.IsValid() || !functions_.samplers.isAvailable() || descriptor.maximumAnisotropy != 1.0F)
+        return Result<RenderMemoryCostPlan>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));
+    // Native sampler memory is opaque; this is an explicit estimated policy, not a driver measurement.
+    return Result<RenderMemoryCostPlan>::Success(MemoryCostPlan(5, sizeof(RenderSamplerDescriptor), 4U * 1024U));
+}
+
+/** @copydoc IRenderResourceBackend::CreateSampler */
+Result<std::uint64_t> CreateSampler(const RenderSamplerDescriptor &descriptor, const RenderMemoryPlacement &placement) override {
+    if (auto failure = ResourceCreationFailure(); failure)
+        return std::move(*failure);
+    if (frameActive_)
+        return Result<std::uint64_t>::Failure(MakeError(OpenGLBackendErrors::FrameActive));
+    const auto cost = QuerySamplerMemoryCost(descriptor);
+    if (cost.HasError())
+        return Result<std::uint64_t>::Failure(cost.ErrorValue());
+    if (!MatchesPlacement(cost.Value(), placement))
+        return Result<std::uint64_t>::Failure(MakeError(OpenGLBackendErrors::InvalidConfig));
+    const auto created = Detail::CreateOpenGLSampler(descriptor, functions_.samplers);
+    if (created.HasError())
+        return Result<std::uint64_t>::Failure(created.ErrorValue());
+    try {
+        samplerDescriptors_.emplace(created.Value(), descriptor);
+    } catch (const std::bad_alloc &) {
+        functions_.samplers.destroy(created.Value());
+        return Result<std::uint64_t>::Failure(
+            MakeError(OpenGLBackendErrors::ResourceCreationFailed, "OpenGL sampler tracking metadata allocation failed."));
+    } catch (const std::length_error &) {
+        functions_.samplers.destroy(created.Value());
+        return Result<std::uint64_t>::Failure(
+            MakeError(OpenGLBackendErrors::ResourceCreationFailed, "OpenGL sampler tracking metadata exceeded its finite envelope."));
+    }
+    return Result<std::uint64_t>::Success(created.Value());
+}
+
+/** @copydoc IRenderResourceBackend::DestroySampler */
+void DestroySampler(const std::uint64_t backendInstance) noexcept override {
+    if (!IsOwnerThread() || backendInstance > std::numeric_limits<std::uint32_t>::max())
+        return;
+    const auto sampler = static_cast<std::uint32_t>(backendInstance);
+    if (samplerDescriptors_.erase(sampler) != 0)
+        functions_.samplers.destroy(sampler);
+}
+
 /** @copydoc IRenderBackend::QueryBufferMemoryCost */
 Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
     const auto required = ConservativeRequirement(descriptor.byteSize);
@@ -124,25 +404,39 @@ Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, con
         !MatchesPlacement(cost.Value(), placement) ||
         descriptor.byteSize > static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max()))
         return Result<std::uint64_t>::Failure(MakeError(OpenGLBackendErrors::InvalidConfig, "OpenGL buffer creation request is invalid."));
+    if (functions_.state.error() != GL_NO_ERROR)
+        return Result<std::uint64_t>::Failure(MakeError(OpenGLBackendErrors::CommandFailed));
+    std::array<std::int32_t, 1> previousBinding{};
+    functions_.state.getInteger(GL_ARRAY_BUFFER_BINDING, previousBinding);
+    const auto restoreBinding = [this](const std::int32_t *binding) noexcept {
+        functions_.buffers.bindBuffer(GL_ARRAY_BUFFER, static_cast<std::uint32_t>(*binding));
+    };
+    std::unique_ptr<const std::int32_t, decltype(restoreBinding)> bindingGuard{previousBinding.data(), restoreBinding};
     std::uint32_t buffer = 0;
     functions_.buffers.generateBuffers(1, &buffer);
     if (buffer == 0)
         return Result<std::uint64_t>::Failure(
             MakeError(OpenGLBackendErrors::ResourceCreationFailed, "OpenGL failed to allocate a buffer object."));
+    const auto deleteCandidate = [this](const std::uint32_t *object) noexcept {
+        functions_.buffers.deleteBuffers(1, object);
+    };
+    std::unique_ptr<const std::uint32_t, decltype(deleteCandidate)> candidate{&buffer, deleteCandidate};
     constexpr std::uint32_t target = GL_ARRAY_BUFFER;
     functions_.buffers.bindBuffer(target, buffer);
     functions_.buffers.bufferData(target, descriptor.byteSize, initialData, GL_STATIC_DRAW);
-    functions_.buffers.bindBuffer(target, 0);
+    if (functions_.state.error() != GL_NO_ERROR) {
+        return Result<std::uint64_t>::Failure(MakeError(OpenGLBackendErrors::ResourceCreationFailed));
+    }
     try {
         buffers_.insert(buffer);
         bufferDescriptors_.insert_or_assign(buffer, descriptor);
     } catch (...) {  // NOSONAR(cpp:S2738)
         buffers_.erase(buffer);
         bufferDescriptors_.erase(buffer);
-        functions_.buffers.deleteBuffers(1, &buffer);
         return Result<std::uint64_t>::Failure(
             MakeError(OpenGLBackendErrors::ResourceCreationFailed, "OpenGL buffer tracking allocation failed."));
     }
+    static_cast<void>(candidate.release());
     return Result<std::uint64_t>::Success(buffer);
 }
 
@@ -189,7 +483,10 @@ Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, const s
     functions_.buffers.bindBuffer(GL_ARRAY_BUFFER, 0);
     try {
         meshes_.insert(vertexArray);
+        meshDescriptors_.emplace(vertexArray, descriptor);
     } catch (...) {  // NOSONAR(cpp:S2738)
+        meshes_.erase(vertexArray);
+        meshDescriptors_.erase(vertexArray);
         functions_.vertexArrays.deleteVertexArrays(1, &vertexArray);
         return Result<std::uint64_t>::Failure(
             MakeError(OpenGLBackendErrors::ResourceCreationFailed, "OpenGL mesh tracking allocation failed."));
@@ -225,6 +522,9 @@ Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &textureDescri
     functions_.textures.textureParameter(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     functions_.textures.textureParameter(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     functions_.textures.textureParameter(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    // The admitted descriptor has exactly one mip; sampler mip filtering must not make it incomplete.
+    functions_.textures.textureParameter(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+    functions_.textures.textureParameter(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
     const auto format = TextureFormat(textureDescriptor.format);
     functions_.textures.textureImage({
         .target = GL_TEXTURE_2D,
@@ -348,7 +648,19 @@ Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &descripto
     }
     try {
         renderTargets_.insert(framebuffer);
+        const auto depth = textureViews_.find(depthAttachment);
+        materialTargets_.emplace(framebuffer,
+                                 OpenGLMaterialTarget{.extent = descriptor.extent,
+                                                      .colorTexture = colorAttachment != 0 ? color->second.texture : 0,
+                                                      .depthTexture = depth != textureViews_.end() ? depth->second.texture : 0,
+                                                      .colorFormat =
+                                                          colorAttachment != 0 ? color->second.format : RenderTextureFormat::Rgba8Unorm,
+                                                      .depthFormat =
+                                                          depth != textureViews_.end() ? std::optional{depth->second.format} : std::nullopt,
+                                                      .sampleCount = descriptor.sampleCount});
     } catch (...) {  // NOSONAR(cpp:S2738)
+        renderTargets_.erase(framebuffer);
+        materialTargets_.erase(framebuffer);
         functions_.framebuffers.deleteFramebuffers(1, &framebuffer);
         return Result<std::uint64_t>::Failure(
             MakeError(OpenGLBackendErrors::ResourceCreationFailed, "OpenGL render-target tracking allocation failed."));
@@ -389,6 +701,8 @@ void DestroyBuffer(const std::uint64_t backendInstance) noexcept override {
 void DestroyMesh(const std::uint64_t backendInstance) noexcept override {
     if (!IsOwnerThread())
         return;
+    if (backendInstance <= std::numeric_limits<std::uint32_t>::max())
+        meshDescriptors_.erase(static_cast<std::uint32_t>(backendInstance));
     DeleteTrackedObject(functions_.vertexArrays.deleteVertexArrays, meshes_, backendInstance);
 }
 
@@ -425,5 +739,7 @@ void DestroyTextureView(const std::uint64_t backendInstance) noexcept override {
 void DestroyRenderTarget(const std::uint64_t backendInstance) noexcept override {
     if (!IsOwnerThread())
         return;
+    if (backendInstance <= std::numeric_limits<std::uint32_t>::max())
+        materialTargets_.erase(static_cast<std::uint32_t>(backendInstance));
     DeleteTrackedObject(functions_.framebuffers.deleteFramebuffers, renderTargets_, backendInstance);
 }

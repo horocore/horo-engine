@@ -9,6 +9,18 @@
 #include "Horo/Runtime/Render/ShaderReflection.h"
 
 namespace Horo::Render {
+    /** @brief Selected backend's native-free pipeline compatibility facts.
+     * @details Queried during owner-thread preparation after initialization. These facts identify cache compatibility;
+     * they do not enumerate adapters or authorize retargeting an explicitly selected device. */
+    struct RenderPipelineDeviceIdentity {
+        RenderBackendId backend;
+        std::uint64_t backendModuleVersion{0};
+        RenderAdapterId adapter;
+        Sha256Digest deviceCompatibilityDigest;
+        std::string driverIdentity;
+        std::string driverVersion;
+    };
+
     /** @brief Exact cooked stage identity; resident identity is issued separately by the frontend registry. */
     struct RenderShaderModuleDescriptor {
         ShaderTargetRequirement target;

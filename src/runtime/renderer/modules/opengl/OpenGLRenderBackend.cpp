@@ -1,3 +1,5 @@
+#include "Horo/Runtime/Render/MaterialBinding.h"
+#include "Horo/Runtime/Render/MaterialBindingErrors.h"
 #include "Horo/Runtime/Render/RenderShaderResources.h"
 #include "OpenGLBackendInternal.h"
 #include "OpenGLExecutionAdapter.h"
@@ -15,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -74,6 +77,60 @@ namespace Horo::Render {
             RenderShaderModuleDescriptor descriptor;
             std::size_t cookedBytes{0};
         };
+
+        /** @brief Immutable native program metadata subordinate to frontend generation and dependency pins. */
+        struct OpenGLGraphicsPipeline {
+            MaterialBindingLayout layout;
+            RenderGraphicsPipelineState state;
+            PipelineCacheKey key;
+            Detail::OpenGLMaterialContextFeatures features;
+        };
+
+        /** @brief Fixed native binding recipe; resource backing and exact generation pins remain frontend-owned. */
+        using Detail::OpenGLMaterialSlot;
+
+        /** @brief Immutable selected-backend recipe, retained by frontend material and submitted-frame leases. */
+        class OpenGLMaterialBinding final : public IResidentMaterialBinding {
+        public:
+            const IRenderBackend *owner{nullptr};
+            std::uint32_t program{0};
+            std::array<OpenGLMaterialSlot, 128> slots;
+            std::size_t count{0};
+        };
+
+        /** @brief Exact attachment facts retained with the native target while its frontend dependencies remain pinned. */
+        struct OpenGLMaterialTarget {
+            FramebufferExtent extent;
+            std::uint32_t colorTexture{0};
+            std::uint32_t depthTexture{0};
+            RenderTextureFormat colorFormat{RenderTextureFormat::Rgba8Unorm};
+            std::optional<RenderTextureFormat> depthFormat;
+            std::uint32_t sampleCount{1};
+        };
+
+        /** @brief Checks every cooked packing/placement fact, not only a caller-supplied interface digest. */
+        bool SameMaterialLayout(const MaterialBindingLayout &left, const MaterialBindingLayout &right) {
+            return left.backend == right.backend && left.shaderInterface == right.shaderInterface &&
+                   std::ranges::equal(left.resources, right.resources, [](const auto &a, const auto &b) {
+                return std::tie(a.id, a.kind, a.access, a.arrayCount, a.stages, a.active) ==
+                       std::tie(b.id, b.kind, b.access, b.arrayCount, b.stages, b.active);
+            }) && std::ranges::equal(left.parameters, right.parameters, [](const auto &a, const auto &b) {
+                return std::tie(a.id, a.binding, a.type, a.rows, a.columns, a.arrayCount, a.byteOffset, a.arrayStride, a.matrixStride,
+                                a.columnMajor, a.active) == std::tie(b.id, b.binding, b.type, b.rows, b.columns, b.arrayCount, b.byteOffset,
+                                                                     b.arrayStride, b.matrixStride, b.columnMajor, b.active);
+            }) && std::ranges::equal(left.targetBindings, right.targetBindings, [](const auto &a, const auto &b) {
+                return std::tie(a.id, a.generatedHelperIndex, a.nativeSpace, a.nativeBinding, a.nativeName, a.pairedSampler, a.active) ==
+                       std::tie(b.id, b.generatedHelperIndex, b.nativeSpace, b.nativeBinding, b.nativeName, b.pairedSampler, b.active);
+            });
+        }
+
+        /** @brief Compares the full cooked target contract before joining resident stages. */
+        bool SameShaderTarget(const ShaderTargetRequirement &left, const ShaderTargetRequirement &right) noexcept {
+            return left.backend == right.backend && left.payloadFormat == right.payloadFormat &&
+                   left.descriptorVersion == right.descriptorVersion && left.interfaceSchemaVersion == right.interfaceSchemaVersion &&
+                   left.maximumBindings == right.maximumBindings && left.maximumInlineConstantBytes == right.maximumInlineConstantBytes &&
+                   left.supportsCompute == right.supportsCompute && left.supportsStorageResources == right.supportsStorageResources;
+        }
 
         [[nodiscard]] OpenGLTextureFormat TextureFormat(const RenderTextureFormat format) noexcept {
             using enum RenderTextureFormat;
@@ -160,6 +217,10 @@ namespace Horo::Render {
                     return Result<void>::Failure(MakeError(OpenGLBackendErrors::PresentationInUse,
                                                            "OpenGL presentation attachment is already owned by another backend."));
                 }
+                if (config.adapter)
+                    return Result<void>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation,
+                                                           "This OpenGL presentation port cannot realize an explicit adapter selection; no "
+                                                           "default device substitution occurs."));
                 contextLease_->claimed = true;
                 ownsContextLease_ = true;
                 ownerThread_ = std::this_thread::get_id();
@@ -242,6 +303,7 @@ namespace Horo::Render {
             }
 
 #include "OpenGLRenderBackendGraph.inl"
+#include "OpenGLRenderBackendMaterial.inl"
 
             /** @copydoc IRenderBackend::Present */
             Result<void> Present(const FrameToken frame) override {
@@ -308,6 +370,12 @@ namespace Horo::Render {
                 // Context destruction owns queued native references; no normal-frame or teardown GPU wait is introduced.
                 CompleteActiveFrame();
                 execution_.Reset();
+                for (const auto &[program, metadata] : graphicsPipelines_)
+                    functions_.shaders.deleteProgram(program);
+                graphicsPipelines_.clear();
+                for (const auto &[sampler, descriptor] : samplerDescriptors_)
+                    functions_.samplers.destroy(sampler);
+                samplerDescriptors_.clear();
                 for (const auto &[shader, metadata] : shaderModules_)
                     functions_.shaders.deleteShader(shader);
                 shaderModules_.clear();
@@ -452,6 +520,8 @@ namespace Horo::Render {
                 textureViews_.clear();
                 textureDescriptors_.clear();
                 bufferDescriptors_.clear();
+                meshDescriptors_.clear();
+                materialTargets_.clear();
             }
 
             [[nodiscard]] Result<void> ValidateActiveFrame(const FrameToken frame) const {
@@ -510,6 +580,10 @@ namespace Horo::Render {
             std::unordered_map<std::uint32_t, Detail::OpenGLGraphTexture> textureDescriptors_;
             std::unordered_map<std::uint64_t, OpenGLTextureView> textureViews_;
             std::unordered_map<std::uint32_t, OpenGLShaderModule> shaderModules_;
+            std::unordered_map<std::uint32_t, OpenGLGraphicsPipeline> graphicsPipelines_;
+            std::unordered_map<std::uint32_t, RenderSamplerDescriptor> samplerDescriptors_;
+            std::unordered_map<std::uint32_t, RenderMeshDescriptor> meshDescriptors_;
+            std::unordered_map<std::uint32_t, OpenGLMaterialTarget> materialTargets_;
             std::uint32_t nextTextureViewIdentity_{1};
             std::unordered_set<std::uint32_t> buffers_;
             std::unordered_set<std::uint32_t> meshes_;

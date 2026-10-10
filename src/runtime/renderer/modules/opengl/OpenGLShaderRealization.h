@@ -1,11 +1,36 @@
 #pragma once
 
+#include "Horo/Runtime/Render/RenderResourceDescriptors.h"
 #include "Horo/Runtime/Render/ShaderArtifact.h"
 
 #include <cstdint>
 #include <span>
 
 namespace Horo::Render::Detail {
+    /** @brief Owner-context sampler commands; inputs are borrowed synchronously and callbacks cannot throw. */
+    struct OpenGLSamplerFunctions {
+        bool (*isAvailable)() noexcept {nullptr};
+        void (*generate)(std::uint32_t &) noexcept {nullptr};
+        void (*destroy)(std::uint32_t) noexcept {nullptr};
+        void (*parameterInteger)(std::uint32_t, std::uint32_t, std::int32_t) noexcept {nullptr};
+        void (*parameterFloat)(std::uint32_t, std::uint32_t, float) noexcept {nullptr};
+        std::uint32_t (*error)() noexcept {nullptr};
+
+        /** @brief Checks complete dispatch before invoking a native callback. @return True for complete callbacks. */
+        [[nodiscard]] bool IsValid() const noexcept {
+            return isAvailable && generate && destroy && parameterInteger && parameterFloat && error;
+        }
+    };
+
+    /** @brief Realizes exact core sampler policy without changing a texture-unit binding.
+     * @param descriptor Admitted finite policy; anisotropy above one is explicitly unsupported.
+     * @param functions Owner-context sampler dispatch.
+     * @return Owned unpublished sampler or a typed policy/native failure; candidate cleanup survives diagnostic allocation failure. */
+    [[nodiscard]] Result<std::uint32_t> CreateOpenGLSampler(const RenderSamplerDescriptor &descriptor,
+                                                            const OpenGLSamplerFunctions &functions);
+    /** @brief Supplies dynamic GLAD wrappers after owner-context loading. @return Nonthrowing sampler dispatch. */
+    [[nodiscard]] OpenGLSamplerFunctions ProductionOpenGLSamplerFunctions() noexcept;
+
     /** @brief Context-owner native shader dispatch; every callback is nonthrowing and synchronously borrows its inputs. */
     struct OpenGLShaderFunctions {
         bool (*isAvailable)() noexcept {nullptr};

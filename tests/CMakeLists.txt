@@ -3865,6 +3865,8 @@ if (HORO_BUILD_RENDER_OPENGL)
             unit/runtime/renderer/OpenGLRenderBackendTests.cpp
             unit/runtime/renderer/OpenGLCommandAdaptationTests.cpp
             unit/runtime/renderer/OpenGLShaderRealizationTests.cpp
+            unit/runtime/renderer/OpenGLSamplerRealizationTests.cpp
+            unit/runtime/renderer/OpenGLMaterialBindingTests.cpp
             unit/runtime/renderer/OpenGLRenderBackendQualificationTests.cpp
             unit/runtime/renderer/OpenGLRenderResourceTests.cpp
             unit/runtime/renderer/OpenGLRenderGraphTests.cpp
@@ -3873,6 +3875,7 @@ if (HORO_BUILD_RENDER_OPENGL)
     target_compile_features(HoroRenderOpenGLTests PRIVATE cxx_std_20)
     target_include_directories(HoroRenderOpenGLTests PRIVATE
             ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/opengl
+            ${PROJECT_SOURCE_DIR}/src/runtime/renderer/frontend
             ${PROJECT_SOURCE_DIR}/tests/support
     )
     target_link_libraries(HoroRenderOpenGLTests
@@ -3880,6 +3883,17 @@ if (HORO_BUILD_RENDER_OPENGL)
             HoroEngine::RenderFrontend
             HoroEngine::RenderOpenGL
     )
+    if (HORO_ENABLE_GPU_SMOKE_TESTS)
+        add_executable(HoroOpenGLMaterialSmoke integration/renderer/OpenGLMaterialSmoke.cpp)
+        target_compile_features(HoroOpenGLMaterialSmoke PRIVATE cxx_std_20)
+        target_include_directories(HoroOpenGLMaterialSmoke PRIVATE
+                ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/opengl
+                ${PROJECT_SOURCE_DIR}/src/runtime/renderer/frontend
+                ${PROJECT_SOURCE_DIR}/tests/unit/runtime/renderer)
+        target_link_libraries(HoroOpenGLMaterialSmoke PRIVATE Catch2::Catch2WithMain
+                HoroEngine::RenderFrontend HoroEngine::RenderOpenGL HoroThirdParty::Glad ${HORO_SDL3_TARGET})
+        horo_register_catch_test(HoroOpenGLMaterialSmoke LABELS "gpu;display;opengl;material")
+    endif ()
     if (HORO_BUILD_EDITOR_GUI)
         add_executable(HoroEditorViewportOpenGLSmoke
                 integration/renderer/EditorViewportOpenGLSmoke.cpp

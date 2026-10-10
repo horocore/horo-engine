@@ -161,6 +161,11 @@ namespace Horo::Render {
         }
     }
 
+    /** @copydoc IRenderResourceBackend::QueryPipelineDeviceIdentity */
+    Result<RenderPipelineDeviceIdentity> IRenderResourceBackend::QueryPipelineDeviceIdentity() const {
+        return Result<RenderPipelineDeviceIdentity>::Failure(MakeError(RenderShaderResourceErrors::Unsupported));
+    }
+
     /** @copydoc IRenderResourceBackend::QueryShaderModuleMemoryCost */
     Result<RenderMemoryCostPlan> IRenderResourceBackend::QueryShaderModuleMemoryCost(const RenderShaderModuleDescriptor &,
                                                                                      std::size_t) const {

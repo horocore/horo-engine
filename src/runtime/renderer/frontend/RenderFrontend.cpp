@@ -166,6 +166,69 @@ namespace Horo::Render {
         }
     }
 
+    /** @copydoc RenderFrameScope::ExecuteMaterialPass */
+    Result<void> RenderFrameScope::ExecuteMaterialPass(const RenderMaterialPass &pass) {
+        if (const auto admitted = ValidateExecutionAdmission(); admitted.HasError())
+            return admitted;
+        try {
+            if (!owner_->IsLiveTarget(pass.target, pass.extent) || !pass.color.IsValid() || pass.draws.empty() ||
+                pass.draws.size() > RenderMaterialPass::MaximumDraws) {
+                Abort();
+                return Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady));
+            }
+            const auto target = owner_->BackendInstance(pass.target);
+            if (target.HasError()) {
+                Abort();
+                return Result<void>::Failure(target.ErrorValue());
+            }
+            std::array<RenderMaterialDrawInstance, RenderMaterialPass::MaximumDraws> instances;
+            std::array<Detail::RenderGraphResidentIdentity, RenderMaterialPass::MaximumDraws + 1> pins;
+            pins[0] = {Detail::RenderResourceClass::RenderTarget, {pass.target.owner, pass.target.slot, pass.target.generation}};
+            for (std::size_t index = 0; index < pass.draws.size(); ++index) {
+                const auto &draw = pass.draws[index];
+                if (!draw.material || draw.material->Id().owner != owner_->resourceRegistry_->Owner()) {
+                    Abort();
+                    return Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady));
+                }
+                const auto mesh = owner_->BackendInstance(draw.mesh);
+                if (mesh.HasError()) {
+                    Abort();
+                    return Result<void>::Failure(mesh.ErrorValue());
+                }
+                instances[index] = {mesh.Value(), &draw.material->BackendBinding().NativeBinding()};
+                pins[index + 1] = {Detail::RenderResourceClass::Mesh, {draw.mesh.owner, draw.mesh.slot, draw.mesh.generation}};
+            }
+            const auto retained = owner_->graphResourceLeases_->AcquireMaterial(std::span{pins}.first(pass.draws.size() + 1), pass.draws);
+            if (retained.HasError()) {
+                Abort();
+                return Result<void>::Failure(retained.ErrorValue());
+            }
+            RenderGraphLeaseTransfer transfer;
+            const auto release = [&transfer](IRenderGraphResourceLease *lease) {
+                if (transfer.authority == RenderGraphLeaseAuthority::Frontend)
+                    lease->Release();
+            };
+            std::unique_ptr<IRenderGraphResourceLease, decltype(release)> lease{retained.Value(), release};
+            const auto consumed = backend_->ExecuteMaterialPass({frame_, target.Value(), pass.extent, pass.color, pass.depthClear,
+                                                                 std::span{instances}.first(pass.draws.size()), lease.get(), &transfer});
+            if (consumed.HasError()) {
+                Abort();
+                return consumed;
+            }
+            // Unsupported/default adapters never accept a lease; fail closed if a success omitted completion ownership.
+            if (transfer.authority != RenderGraphLeaseAuthority::BackendCompletion) {
+                Abort();
+                return Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady));
+            }
+            static_cast<void>(lease.release());
+            executed_ = true;
+            return Result<void>::Success();
+        } catch (...) {  // Frame boundary contains arbitrary backend exceptions after restoring completion ownership.
+            Abort();
+            return Result<void>::Failure(MakeError(FrontendErrors::FrameException));
+        }
+    }
+
     /** @copydoc RenderFrameScope::ExecuteGraph */
     Result<void> RenderFrameScope::ExecuteGraph(const CompiledRenderGraphExecution &graph,
                                                 const std::span<const RenderGraphPassWorkload> workloads) {

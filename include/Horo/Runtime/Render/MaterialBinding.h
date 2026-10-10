@@ -5,6 +5,7 @@
  */
 
 #include "Horo/Runtime/Render/MaterialBindingBackend.h"
+#include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "Horo/Runtime/Render/StandardPbrMaterial.h"
 
 #include <memory>
@@ -101,6 +102,40 @@ namespace Horo::Render {
     private:
         friend class MaterialBindingTable;
         std::unique_ptr<Storage> storage_;
+    };
+
+    /** @brief One immutable material generation applied to an exact ready MeshVertex triangle mesh. */
+    struct RenderMaterialDraw {
+        RenderMeshHandle mesh;
+        std::shared_ptr<const ResidentMaterialBinding> material;
+    };
+
+    /** @brief Bounded explicit native material consumer; no compilation, resource creation or variant selection occurs in-frame. */
+    struct RenderMaterialPass {
+        static constexpr std::size_t MaximumDraws = 128;
+        RenderTargetHandle target;
+        FramebufferExtent extent;
+        PrimaryOutputAttachment color;
+        std::optional<float> depthClear{1.0F}; /**< Null means preserve depth; a value requests an explicit depth clear. */
+        std::span<const RenderMaterialDraw> draws;
+    };
+
+    /** @brief Synchronously borrowed resolved mesh and native adapter, retained by the submitted-frame lease. */
+    struct RenderMaterialDrawInstance {
+        std::uint64_t mesh{0};
+        const IResidentMaterialBinding *material{nullptr};
+    };
+
+    /** @brief Selected-backend consumer request sharing the existing exact frame-completion ownership authority. */
+    struct RenderMaterialExecutionRequest {
+        FrameToken frame;
+        std::uint64_t target{0};
+        FramebufferExtent extent;
+        PrimaryOutputAttachment color;
+        std::optional<float> depthClear;
+        std::span<const RenderMaterialDrawInstance> draws;
+        IRenderGraphResourceLease *lease{nullptr};
+        RenderGraphLeaseTransfer *transfer{nullptr};
     };
 
     /** @brief Visible admission outcome; an authored fallback carries the exact unsupported cause. */

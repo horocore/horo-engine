@@ -26,6 +26,8 @@ namespace Horo::Render {
     struct RenderGraphExecutionRequest;
     struct RenderShaderModuleDescriptor;
     struct RenderGraphicsPipelineDescriptor;
+    struct RenderPipelineDeviceIdentity;
+    struct RenderMaterialExecutionRequest;
 
     /** @brief Stable renderer backend identity used by configuration and registries. */
     class RenderBackendId {
@@ -312,6 +314,12 @@ namespace Horo::Render {
          */
         [[nodiscard]] virtual Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const = 0;
 
+        /** @brief Queries the initialized backend's actual pipeline compatibility facts during owner-thread preparation.
+         * @return Native-free device/driver identity or typed unsupported/lifecycle failure.
+         * @details Does not select a device or mutate native rendering state. Only owned metadata allocation/length exceptions may escape.
+         */
+        [[nodiscard]] virtual Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const;
+
         /** @brief Queries native-free shader backing requirements before admission.
          * @param descriptor Exact validated cooked stage identity. @param cookedBytes Selected stage payload size.
          * @return Admitted estimate/requirements or original typed unsupported/failure; only owned metadata allocation/length exceptions
@@ -464,6 +472,12 @@ namespace Horo::Render {
          * @return Success or a typed unsupported/admission/encoding failure, without fallback.
          */
         [[nodiscard]] virtual Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request);
+        /** @brief Consumes prepared immutable material tables on exact ready meshes, with completion-owned resource retention.
+         * @param request Synchronous resolved native request with the frontend's existing frame lease/transfer authority.
+         * @return Success or original typed validation/unsupported/native failure.
+         * @details Validate all inputs before encoding. Immediate backends transfer ownership before the first queued command;
+         * a later error or cancellation retains submitted resources until completion or context teardown. */
+        [[nodiscard]] virtual Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &request);
 
         /** @brief Returns explicit worker-native support; unsupported backends return zero bounds. */
         [[nodiscard]] virtual RenderParallelRecordingCapabilities ParallelRecordingCapabilities() const noexcept;

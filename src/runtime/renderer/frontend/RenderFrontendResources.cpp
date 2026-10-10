@@ -29,7 +29,8 @@ namespace Horo::Render {
             using enum ResourceDescriptorAdmission;
             constexpr std::byte supportedUsageBits =
                 std::byte{static_cast<std::uint8_t>(Vertex)} | std::byte{static_cast<std::uint8_t>(Index)} |
-                std::byte{static_cast<std::uint8_t>(CopySource)} | std::byte{static_cast<std::uint8_t>(CopyDestination)};
+                std::byte{static_cast<std::uint8_t>(CopySource)} | std::byte{static_cast<std::uint8_t>(CopyDestination)} |
+                std::byte{static_cast<std::uint8_t>(Uniform)};
             const auto requested = static_cast<std::byte>(descriptor.usage);
             return (requested & ~supportedUsageBits) == std::byte{} ? Supported : Unsupported;
         }

@@ -1,3 +1,4 @@
+#include "OpenGLPipelineRealization.h"
 #include "OpenGLRenderBackendErrors.h"
 #include "OpenGLShaderRealization.h"
 #include "TypedIdentityTestSupport.h"
@@ -6,7 +7,32 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
+#include <new>
 #include <string_view>
+
+TEST_CASE("OpenGL reflected vector types preserve portable row and column shapes", "[render][opengl][reflection]") {
+    using namespace Horo::Render;
+    using Detail::OpenGLReflectedValueType;
+    constexpr std::array<std::uint32_t, 4> floats{0x1406, 0x8B50, 0x8B51, 0x8B52};
+    constexpr std::array<std::uint32_t, 4> integers{0x1404, 0x8B53, 0x8B54, 0x8B55};
+    constexpr std::array<std::uint32_t, 4> unsignedIntegers{0x1405, 0x8DC6, 0x8DC7, 0x8DC8};
+    constexpr std::array<std::uint32_t, 4> booleans{0x8B56, 0x8B57, 0x8B58, 0x8B59};
+    for (std::uint8_t components = 1; components <= 4; ++components) {
+        CHECK(OpenGLReflectedValueType(ShaderValueType::Float32, 1, components) == floats[components - 1]);
+        CHECK(OpenGLReflectedValueType(ShaderValueType::Float32, components, 1) == floats[components - 1]);
+        CHECK(OpenGLReflectedValueType(ShaderValueType::Int32, 1, components) == integers[components - 1]);
+        CHECK(OpenGLReflectedValueType(ShaderValueType::Int32, components, 1) == integers[components - 1]);
+        CHECK(OpenGLReflectedValueType(ShaderValueType::Uint32, 1, components) == unsignedIntegers[components - 1]);
+        CHECK(OpenGLReflectedValueType(ShaderValueType::Uint32, components, 1) == unsignedIntegers[components - 1]);
+        CHECK(OpenGLReflectedValueType(ShaderValueType::Bool32, 1, components) == booleans[components - 1]);
+        CHECK(OpenGLReflectedValueType(ShaderValueType::Bool32, components, 1) == booleans[components - 1]);
+    }
+    CHECK(OpenGLReflectedValueType(ShaderValueType::Float32, 3, 2) == 0x8B65);  // GL_FLOAT_MAT2x3
+    CHECK(OpenGLReflectedValueType(ShaderValueType::Float32, 2, 3) == 0x8B67);  // GL_FLOAT_MAT3x2
+    CHECK(OpenGLReflectedValueType(ShaderValueType::Float32, 0, 4) == 0);
+    CHECK(OpenGLReflectedValueType(ShaderValueType::Float32, 1, 5) == 0);
+    CHECK(OpenGLReflectedValueType(ShaderValueType::Int32, 2, 2) == 0);
+}
 
 namespace OpenGLShaderRealizationTests {
     using namespace Horo::Render;
@@ -172,4 +198,42 @@ TEST_CASE("OpenGL native shader failures do not leak and driver diagnostic sizes
         CHECK(program.ErrorValue().message == "driver: exact source location 3:7");
         CHECK(state.programDeletes == 1);
     }
+}
+
+TEST_CASE("OpenGL final program validation owns the candidate through mismatch and allocation failure", "[render][opengl][pipeline]") {
+    state = {};
+    OpenGLPipelineFunctions pipelines{.isAvailable = []() noexcept {
+        return true;
+    }, .validateAndMap = [](std::uint32_t, const RenderGraphicsPipelineDescriptor &) {
+        return Horo::Result<void>::Success();
+    }};
+    SECTION("Validated candidate transfers once") {
+        const auto program = CreateOpenGLGraphicsProgram(11, 12, {}, Functions(), pipelines);
+        REQUIRE(program.HasValue());
+        CHECK(program.Value() == 21);
+        CHECK(state.programDeletes == 0);
+    }
+    SECTION("Original reflection failure is preserved") {
+        pipelines.validateAndMap = [](std::uint32_t, const RenderGraphicsPipelineDescriptor &) {
+            return Horo::Result<void>::Failure(Horo::MakeError(OpenGLBackendErrors::ResourceIdentityInvalid, "exact packing mismatch"));
+        };
+        const auto program = CreateOpenGLGraphicsProgram(11, 12, {}, Functions(), pipelines);
+        Horo::Tests::RequireError(program, OpenGLBackendErrors::ResourceIdentityInvalid);
+        CHECK(program.ErrorValue().message == "exact packing mismatch");
+        CHECK(state.programDeletes == 1);
+    }
+    SECTION("Owned reflection allocation throws") {
+        pipelines.validateAndMap = [](std::uint32_t, const RenderGraphicsPipelineDescriptor &) -> Horo::Result<void> {
+            throw std::bad_alloc{};
+        };
+        CHECK_THROWS_AS(CreateOpenGLGraphicsProgram(11, 12, {}, Functions(), pipelines), std::bad_alloc);
+        CHECK(state.programDeletes == 1);
+    }
+    SECTION("Missing reflection commands fail before linking") {
+        pipelines.validateAndMap = nullptr;
+        Horo::Tests::RequireError(CreateOpenGLGraphicsProgram(11, 12, {}, Functions(), pipelines),
+                                  OpenGLBackendErrors::UnsupportedResourceOperation);
+        CHECK(state.creations == 0);
+    }
+    CHECK(state.shaderDeletes == 0);
 }

@@ -26,7 +26,7 @@ The ownership registry generates a separate consumer translation unit for this
 header; an additional consumer checks the finite borrowed-view contract using
 only RenderApi usage requirements.
 
-## Native preparation contract draft
+## Native preparation and material consumption
 
 `RenderShaderResources.h` and `RenderShaderResourceErrors.h` also belong to
 RenderApi. Shader modules carry the original cooked artifact, exact target,
@@ -49,9 +49,39 @@ Budget admission precedes native allocation. Publication guards own reservation,
 unpublished native object and committed backing independently, so an allocation
 failure while constructing diagnostics rolls all three back. Shader dependency
 pins survive logical module release until dependent pipeline retirement. Existing
-material binding layouts and tables remain the material authority; native
-realization and completion integration are still being implemented in this draft.
-No native qualification or full ticket completion is claimed by these interfaces.
+material binding layouts and tables remain the material authority. Pass the owning
+frontend as `IMaterialBindingBackend` when creating a material table: it resolves
+and pins exact pipeline, buffer, texture-view and sampler generations. Packed
+parameters become budget-admitted uniform buffers with actual linked-block size
+and zero-filled ABI tail padding; the concrete backend never allocates hidden
+material backing outside that admission path.
+
+Query `RenderFrontend::QueryPipelineDeviceIdentity()` during owner preparation to
+populate the pipeline cache identity from the selected context's driver facts.
+This identity describes context compatibility, not physical-adapter enumeration.
+An explicit adapter retarget request is unsupported rather than silently ignored.
+OpenGL validates the actual linked attributes, fragment output and complete active
+uniform-block/sampler reflection before publishing the program. Unsupported
+storage resources, arrays, inline constants, specialization and anisotropy above
+one return typed failures instead of policy substitutions.
+
+`RenderFrameScope::ExecuteMaterialPass` consumes bounded material draw records
+using the established mesh layout and target formats. Its completion lease retains
+material consumers, meshes and targets before the first native draw. Sampler and
+pipeline release are owner-thread preparation operations and are rejected during
+an active frame. After presentation or cancellation, CPU ownership may be released;
+exact native completion still controls destruction. `BeginFrame` admission polls
+native fences without waiting. `ProcessResourceRequests` drains upload/registry
+retirements and does not itself advance GPU completion. The host drains all material
+consumers before destroying the frontend and backend.
+
+The GL encoder restores caller program, mesh, buffer ranges, texture/sampler units,
+target draw buffers and affected raster state. Generic primitive restart, supported
+fixed-index restart and all admitted clip distances are neutralized during the
+draw and restored afterward. Real device qualification is opt-in through
+`HORO_ENABLE_GPU_SMOKE_TESTS`; the standalone `HoroOpenGLMaterialSmoke` uses SDL
+only as test-owned presentation composition. Its readback/teardown synchronization
+does not occur in the production material consumer.
 
 `ShaderReflectedInterfaceVariable::nativeName` carries the final target name when
 native lookup requires it. Logical reflection may omit it; names are bounded by

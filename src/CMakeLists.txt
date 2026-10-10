@@ -2145,6 +2145,9 @@ if (HORO_BUILD_RENDER_OPENGL)
             runtime/renderer/modules/opengl/OpenGLBackendModule.cpp
             runtime/renderer/modules/opengl/OpenGLCommandFunctions.cpp
             runtime/renderer/modules/opengl/OpenGLShaderRealization.cpp
+            runtime/renderer/modules/opengl/OpenGLPipelineRealization.cpp
+            runtime/renderer/modules/opengl/OpenGLMaterialExecution.cpp
+            runtime/renderer/modules/opengl/OpenGLSamplerRealization.cpp
             runtime/renderer/modules/opengl/OpenGLContextAdmission.cpp
             runtime/renderer/modules/opengl/OpenGLExecutionState.cpp
         runtime/renderer/modules/opengl/OpenGLExecutionAdapter.cpp

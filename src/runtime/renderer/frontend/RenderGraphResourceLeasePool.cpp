@@ -42,6 +42,9 @@ namespace Horo::Render::Detail {
         }
         pool->activePins_ -= pins.size();
         pins.clear();
+        for (std::size_t index = 0; index < materialCount; ++index)
+            materials[index].reset();
+        materialCount = 0;
         ui.Release();
         if (transient != nullptr) {
             transient->inFlight = false;
@@ -67,11 +70,16 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(resolved.ErrorValue());
         }
         const auto &pin = resolved.Value();
+        return PinIdentity(pin);
+    }
+
+    /** @copydoc RenderGraphResourceLeasePool::Lease::PinIdentity */
+    Result<void> RenderGraphResourceLeasePool::Lease::PinIdentity(const Pin &pin) {
         if (std::ranges::any_of(pins, [&pin](const Pin &existing) {
             return existing.resourceClass == pin.resourceClass && existing.identity == pin.identity;
         }))
             return Result<void>::Success();
-        if (pool->activePins_ == pool->maximumPins_) {
+        if (pool->activePins_ == pool->maximumPins_ || pins.size() == pins.capacity()) {
             return Result<void>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
         }
         if (const auto pinned = pool->registry_->AddSubmissionPin(pin.resourceClass, pin.identity); pinned.HasError()) {
@@ -80,6 +88,33 @@ namespace Horo::Render::Detail {
         pins.push_back(pin);
         ++pool->activePins_;
         return Result<void>::Success();
+    }
+
+    /** @copydoc RenderGraphResourceLeasePool::AcquireMaterial */
+    Result<IRenderGraphResourceLease *> RenderGraphResourceLeasePool::AcquireMaterial(
+        const std::span<const RenderGraphResidentIdentity> pins, const std::span<const RenderMaterialDraw> draws) {
+        if (draws.empty() || draws.size() > RenderMaterialPass::MaximumDraws || pins.size() > RenderMaterialPass::MaximumDraws + 1)
+            return Result<IRenderGraphResourceLease *>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
+        for (auto &lease : leases_) {
+            if (lease.active)
+                continue;
+            lease.active = true;
+            const auto release = [](Lease *pending) {
+                pending->Release();
+            };
+            std::unique_ptr<Lease, decltype(release)> rollback{&lease, release};
+            for (const auto &pin : pins) {
+                if (const auto pinned = lease.PinIdentity(pin); pinned.HasError())
+                    return Result<IRenderGraphResourceLease *>::Failure(pinned.ErrorValue());
+            }
+            for (const auto &draw : draws) {
+                if (!draw.material)
+                    return Result<IRenderGraphResourceLease *>::Failure(MakeError(FrontendErrors::ResourceNotReady));
+                lease.materials[lease.materialCount++] = draw.material;
+            }
+            return Result<IRenderGraphResourceLease *>::Success(rollback.release());
+        }
+        return Result<IRenderGraphResourceLease *>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
     }
 
     /** @copydoc RenderGraphResourceLeasePool::Acquire */

@@ -20,6 +20,7 @@
 
 namespace Horo::Render {
     class RenderFrontend;
+    struct RenderMaterialPass;
     class CompiledRenderGraphExecution;
     class RenderGraphLifetimePlan;
     struct RenderGraphPassWorkload;
@@ -152,6 +153,10 @@ namespace Horo::Render {
          * or a translated backend exception.
          */
         [[nodiscard]] Result<void> Execute(std::span<const RenderPassDescriptor> orderedPasses);
+        /** @brief Consumes one bounded prepared material pass, retaining exact generations until native completion.
+         * @param pass Ready target/meshes and immutable material leases, borrowed only during this call.
+         * @return Success or typed stage, identity, unsupported or native failure. No frame-hot preparation occurs. */
+        [[nodiscard]] Result<void> ExecuteMaterialPass(const RenderMaterialPass &pass);
 
         /**
          * @brief Resolves resident resources and executes one compiled graph exactly once.
@@ -291,7 +296,8 @@ namespace Horo::Render {
      * All methods and destruction must run serially on one host-declared render-capable
      * thread. The frontend and its frame scope are not thread-safe.
      */
-    class RenderFrontend final {  // NOSONAR(cpp:S1448) Cohesive public facade for one renderer frontend lifetime.
+    class RenderFrontend final
+        : public IMaterialBindingBackend {  // NOSONAR(cpp:S1448) Cohesive public facade for one renderer frontend lifetime.
     public:
         /**
          * @brief Creates and initializes the selected backend from a sealed registry.
@@ -324,6 +330,12 @@ namespace Horo::Render {
          */
         [[nodiscard]] const RenderBackendCapabilities &Capabilities() const noexcept;
 
+        /** @brief Queries actual selected backend/device facts for pipeline cache identity outside an active frame.
+         * @return Native-free compatibility facts or typed thread/lifecycle/unsupported failure. */
+        [[nodiscard]] Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const;
+        /** @copydoc IMaterialBindingBackend::Realize */
+        [[nodiscard]] Result<std::unique_ptr<IResidentMaterialBinding>> Realize(const MaterialBindingDescriptor &descriptor) override;
+
         /** @brief Synchronously prepares an exact cooked stage on the render owner, outside an active frame.
          * @param descriptor Validated target, stage, authored entry and original artifact/interface identity.
          * @param cookedPackage Entire immutable HOROSHDR package borrowed only during this call.
@@ -343,13 +355,16 @@ namespace Horo::Render {
          * @return Ready sampler generation and completed operation, or typed failure without policy substitution. */
         [[nodiscard]] Result<ResourceCreation<RenderSamplerHandle>> CreateSampler(const RenderSamplerDescriptor &descriptor);
         /** @brief Retires an exact shader generation once pipeline and submission pins drain.
-         * @param handle Exact frontend-owned generation. @return Success or typed identity/lifecycle failure. */
+         * @param handle Exact frontend-owned generation. @return Success or typed identity/lifecycle failure.
+         * @details Owner-thread preparation operation; resource changes during an active frame are rejected. */
         [[nodiscard]] Result<void> ReleaseShaderModule(RenderShaderModuleHandle handle);
         /** @brief Retires an exact pipeline generation once its consumer and submission pins drain.
-         * @param handle Exact frontend-owned generation. @return Success or typed identity/lifecycle failure. */
+         * @param handle Exact frontend-owned generation. @return Success or typed identity/lifecycle failure.
+         * @details Owner-thread preparation operation; resource changes during an active frame are rejected. */
         [[nodiscard]] Result<void> ReleaseGraphicsPipeline(RenderPipelineHandle handle);
         /** @brief Retires an exact sampler generation once material and submission pins drain.
-         * @param handle Exact frontend-owned generation. @return Success or typed identity/lifecycle failure. */
+         * @param handle Exact frontend-owned generation. @return Success or typed identity/lifecycle failure.
+         * @details Owner-thread preparation operation; resource changes during an active frame are rejected. */
         [[nodiscard]] Result<void> ReleaseSampler(RenderSamplerHandle handle);
         /** @brief Queries one exact shader generation. @param handle Exact identity. @return State or typed identity failure. */
         [[nodiscard]] Result<RenderResourceState> ResourceState(RenderShaderModuleHandle handle) const;
@@ -585,6 +600,8 @@ namespace Horo::Render {
         [[nodiscard]] Result<std::uint64_t> BackendInstance(RenderMeshHandle mesh) const;
         [[nodiscard]] Result<std::uint64_t> BackendInstance(RenderTextureViewHandle view) const;
         [[nodiscard]] Result<std::uint64_t> BackendInstance(RenderTargetHandle target) const;
+        [[nodiscard]] Result<std::uint64_t> BackendInstance(RenderPipelineHandle pipeline) const;
+        [[nodiscard]] Result<std::uint64_t> BackendInstance(RenderSamplerHandle sampler) const;
         [[nodiscard]] Result<void> ValidateMeshDependencies(const RenderMeshDescriptor &descriptor) const;
         [[nodiscard]] bool IsMeshBufferLayoutCompatible(const RenderMeshDescriptor &descriptor) const noexcept;
         [[nodiscard]] Result<void> ValidateTextureViewDependency(const RenderTextureViewDescriptor &descriptor) const;
