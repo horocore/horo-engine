@@ -197,6 +197,7 @@ namespace Horo::Render {
 
                 frameActive_ = true;
                 activeFrame_ = FrameToken{nextFrameToken_++};
+                activeHostFrame_ = descriptor.frameNumber;
                 return Result<FrameToken>::Success(activeFrame_);
             }
 
@@ -285,6 +286,26 @@ namespace Horo::Render {
                 frameActive_ = false;
                 activeFrame_ = {};
                 return Result<void>::Success();
+            }
+
+            /** @copydoc IRenderBackend::PresentWithTiming */
+            Result<void> PresentWithTiming(const FrameToken frame, const PresentationTimingRequest &request) override {
+                if (const auto state = ValidateActiveFrame(frame); state.HasError())
+                    return state;
+                if (request.frameNumber != activeHostFrame_ || !request.surface.IsAttachedGeneration())
+                    return Result<void>::Failure(MakeError(FramePacingErrors::InvalidSurface));
+                if (const auto presented = runtime_->PresentWithTiming(request); presented.HasError())
+                    return presented;
+                frameActive_ = false;
+                activeFrame_ = {};
+                return Result<void>::Success();
+            }
+
+            /** @copydoc IRenderBackend::PollNativePresentTiming */
+            Result<std::optional<NativePresentTiming>> PollNativePresentTiming() override {
+                if (!initialized_)
+                    return Result<std::optional<NativePresentTiming>>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                return runtime_->PollNativePresentTiming();
             }
 
             /** @copydoc IRenderBackend::AbortFrame */
@@ -406,6 +427,7 @@ namespace Horo::Render {
             std::shared_ptr<MetalPresentationLease> presentationLease_;
             RenderBackendCapabilities capabilities_{.backend = RenderBackendId{"metal"}};
             FrameToken activeFrame_{};
+            std::uint64_t activeHostFrame_{};
             std::uint64_t nextFrameToken_{1};
             bool initialized_{false};
             bool runtimeInitialized_{false};
