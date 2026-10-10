@@ -98,6 +98,7 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderGraphWorkloadPublicHeaderConsumer.cpp)
+target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/ShaderArtifactPublicHeaderConsumer.cpp)
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderGraphInspectionPublicHeaderConsumer.cpp)
 target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/RenderFrontendInspectionPublicHeaderConsumer.cpp)
 if(TARGET HoroGuiPublicHeaderConsumer)
@@ -2679,6 +2680,7 @@ target_compile_features(HoroStandardPbrPassPlanTests PRIVATE cxx_std_20)
 target_include_directories(HoroStandardPbrPassPlanTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroStandardPbrPassPlanTests PRIVATE HoroEngine::RenderApi)
 add_executable(HoroShaderCompilerPipelineTests
+        unit/runtime/renderer/ShaderArtifactTests.cpp
         unit/runtime/renderer/ShaderCompilerPipelineTests.cpp
         unit/runtime/renderer/ShaderCompilerToolchainTests.cpp
 )
