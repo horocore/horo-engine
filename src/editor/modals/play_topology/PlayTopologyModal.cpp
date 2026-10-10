@@ -10,12 +10,12 @@
 namespace Horo::Editor {
     namespace {
         /** @brief Decode inert numeric references; never resolve a provider or credential from presentation. */
-        std::optional<std::uint64_t> Identity(const std::string &value) {
+        std::optional<std::uint64_t> Identity(const std::string_view value) {
             if (value.empty())
                 return std::uint64_t{0};
             std::uint64_t number{};
-            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), number);
-            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size())
+            if (const auto parsed = std::from_chars(value.data(), value.data() + value.size(), number);
+                parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size())
                 return std::nullopt;
             return number;
         }
@@ -27,7 +27,7 @@ namespace Horo::Editor {
                 return false;
             const auto provider = Identity(providerText);
             const auto preset = Identity(presetText);
-            if (!provider || !preset || *provider == 0)
+            if (!provider.has_value() || !preset.has_value() || *provider == 0)
                 return false;
             profile.serverCount = 1;
             profile.clientCount = static_cast<std::uint8_t>(clients);
@@ -103,9 +103,9 @@ namespace Horo::Editor {
         transport_ = draft_.transport.IsValid() ? std::to_string(draft_.transport.Value()) : "";
         simulation_ = draft_.simulationPreset == 0 ? "" : std::to_string(draft_.simulationPreset);
         userPort_ = 0;
-        if (const auto override = std::ranges::find(user_.overrides, draft_.id, &Application::PlayTopologyOverride::profile);
-            override != user_.overrides.end())
-            userPort_ = override->port;
+        if (const auto portOverride = std::ranges::find(user_.overrides, draft_.id, &Application::PlayTopologyOverride::profile);
+            portOverride != user_.overrides.end())
+            userPort_ = portOverride->port;
         errorKey_.clear();
     }
 
@@ -185,7 +185,7 @@ namespace Horo::Editor {
     void PlayTopologyModal::DrawProject() {
         if (!projection_.profiles.empty()) {
             Ui::FieldLabel(Text("profile").c_str(), context_.theme.fonts);
-            const Ui::ComboItemSource source{.label = [&](int index) {
+            const Ui::ComboItemSource source{.label = [this](int index) {
                 return projection_.profiles[static_cast<std::size_t>(index)].name.c_str();
             }};
             if (Ui::ComboControl("##TopologySelect", &selected_, static_cast<int>(projection_.profiles.size()), source,

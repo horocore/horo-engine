@@ -29,14 +29,14 @@ namespace Horo::Application {
 
     namespace {
         /** @brief Require canonical relative components, without traversal or empty path segments. */
-        bool PortableComponents(const std::string &map) {
+        bool PortableComponents(const std::string_view map) {
             std::size_t offset{};
             while (offset < map.size()) {
                 const auto end = map.find('/', offset);
-                const auto part = map.substr(offset, end == std::string::npos ? map.size() - offset : end - offset);
-                if (part.empty() || part == "." || part == "..")
+                if (const auto part = map.substr(offset, end == std::string_view::npos ? map.size() - offset : end - offset);
+                    part.empty() || part == "." || part == "..")
                     return false;
-                if (end == std::string::npos)
+                if (end == std::string_view::npos)
                     break;
                 offset = end + 1;
             }
@@ -119,12 +119,12 @@ namespace Horo::Application {
 
         /** @brief Apply a machine override to the owned plan, never to the portable project snapshot. */
         Result<void> ApplyOverride(PlayTopologyProfile &profile, const PlayTopologyUserSettings &user) {
-            const auto override = std::ranges::find(user.overrides, profile.id, &PlayTopologyOverride::profile);
-            if (override == user.overrides.end())
+            const auto portOverride = std::ranges::find(user.overrides, profile.id, &PlayTopologyOverride::profile);
+            if (portOverride == user.overrides.end())
                 return Result<void>::Success();
             if (profile.kind == PlayTopologyKind::Standalone)
                 return Result<void>::Failure(MakeError(PlayTopologyErrors::Invalid));
-            profile.port = override->port;
+            profile.port = portOverride->port;
             return Result<void>::Success();
         }
     }  // namespace
@@ -164,8 +164,8 @@ namespace Horo::Application {
         if (profile.id == 0 || !ValidName(profile.name) || !PortableMap(profile.map) || profile.kind >= PlayTopologyKind::Count ||
             profile.clientCount > 8)
             return Result<void>::Failure(MakeError(PlayTopologyErrors::Invalid));
-        const bool countsValid = profile.kind == PlayTopologyKind::Standalone ? StandaloneCounts(profile) : NetworkCounts(profile);
-        if (!countsValid)
+        if (const bool countsValid = profile.kind == PlayTopologyKind::Standalone ? StandaloneCounts(profile) : NetworkCounts(profile);
+            !countsValid)
             return Result<void>::Failure(MakeError(PlayTopologyErrors::Invalid));
         return Result<void>::Success();
     }

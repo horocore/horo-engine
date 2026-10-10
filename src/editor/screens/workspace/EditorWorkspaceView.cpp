@@ -563,8 +563,8 @@ namespace Horo::Editor {
             if (x < ImGui::GetCursorPosX() + gap)
                 return;
             ImGui::SetCursorPosX(x);
-            const std::string stableLabel = label + "###workspace_play_profiles";
-            if (Ui::Button({.label = stableLabel.c_str(),
+            if (const std::string stableLabel = label + "###workspace_play_profiles";
+                Ui::Button({.label = stableLabel.c_str(),
                             .variant = Ui::ButtonVariant::Secondary,
                             .enabled = idle,
                             .font = context.theme.fonts.sans,

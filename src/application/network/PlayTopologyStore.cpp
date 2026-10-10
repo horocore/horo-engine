@@ -107,9 +107,11 @@ namespace Horo::Application {
             return Saved::Failure(valid.ErrorValue());
         auto lockPath = projectPath_;
         lockPath += ".lock";
-        auto lock = files_.TryAcquireExclusive(lockPath, "play-topology");
-        if (lock.HasError())
-            return Saved::Failure(lock.ErrorValue());
+        auto lockResult = files_.TryAcquireExclusive(lockPath, "play-topology");
+        if (lockResult.HasError())
+            return Saved::Failure(lockResult.ErrorValue());
+        // Keep exclusive ownership through the disk comparison and atomic publication.
+        [[maybe_unused]] const auto lock = std::move(lockResult).Value();
         if (const auto current = CheckCurrent(projectPath_, project_, ParsePlayTopologies); current.HasError())
             return Saved::Failure(current.ErrorValue());
         auto candidate = project_;
@@ -139,13 +141,15 @@ namespace Horo::Application {
             return Saved::Failure(MakeError(PlayTopologyErrors::Invalid));
         auto lockPath = userPath_;
         lockPath += ".lock";
-        auto lock = files_.TryAcquireExclusive(lockPath, "play-topology-user");
-        if (lock.HasError())
-            return Saved::Failure(lock.ErrorValue());
+        auto lockResult = files_.TryAcquireExclusive(lockPath, "play-topology-user");
+        if (lockResult.HasError())
+            return Saved::Failure(lockResult.ErrorValue());
+        // Keep exclusive ownership through the disk comparison and atomic publication.
+        [[maybe_unused]] const auto lock = std::move(lockResult).Value();
         if (const auto current = CheckCurrent(userPath_, user_, ParsePlayTopologyOverrides); current.HasError())
             return Saved::Failure(current.ErrorValue());
         auto candidate = user_;
-        std::erase_if(candidate.overrides, [&](const auto &entry) {
+        std::erase_if(candidate.overrides, [value](const auto &entry) {
             return entry.profile == value.profile;
         });
         if (value.port != 0)

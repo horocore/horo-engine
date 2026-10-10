@@ -14,7 +14,7 @@ namespace Horo::Application {
 
         /** @brief Reject duplicate keys and nesting before accepting a closed profile document. */
         struct Guard final {
-            std::array<std::set<std::string>, 6> keys;
+            std::array<std::set<std::string, std::less<>>, 6> keys;
             bool invalid{};
 
             bool operator()(int depth, Json::parse_event_t event, const Json &value) {
@@ -53,14 +53,17 @@ namespace Horo::Application {
 
         /** @brief Accept only the current schema and a nonzero unsigned revision. */
         bool VersionAndRevision(const Json &root) {
-            std::uint64_t version{}, revision{};
+            std::uint64_t version{};
+            std::uint64_t revision{};
             return Number(root, "version", version, 1) && version == 1 &&
                    Number(root, "revision", revision, std::numeric_limits<std::uint64_t>::max()) && revision != 0;
         }
 
         /** @brief Decode topology counts into the private candidate before semantic validation. */
         bool DecodeShape(const Json &value, PlayTopologyProfile &profile) {
-            std::uint64_t kind{}, servers{}, clients{};
+            std::uint64_t kind{};
+            std::uint64_t servers{};
+            std::uint64_t clients{};
             if (!Number(value, "kind", kind, static_cast<std::uint64_t>(PlayTopologyKind::Count) - 1) ||
                 !Number(value, "servers", servers, 1) || !Number(value, "clients", clients, 8))
                 return false;
@@ -72,7 +75,9 @@ namespace Horo::Application {
 
         /** @brief Decode network-only scalars without integer narrowing or implicit provider selection. */
         bool DecodeNetwork(const Json &value, PlayTopologyProfile &profile) {
-            std::uint64_t provider{}, port{}, preset{};
+            std::uint64_t provider{};
+            std::uint64_t port{};
+            std::uint64_t preset{};
             if (!Number(value, "transport", provider, std::numeric_limits<std::uint64_t>::max()) || !Number(value, "port", port, 65535) ||
                 !Number(value, "simulationPreset", preset, std::numeric_limits<std::uint64_t>::max()))
                 return false;
@@ -163,7 +168,8 @@ namespace Horo::Application {
             return Result<PlayTopologyUserSettings>::Failure(root.ErrorValue());
         PlayTopologyUserSettings settings{.revision = root.Value().at("revision").get<std::uint64_t>()};
         for (const auto &value : root.Value().at("overrides")) {
-            std::uint64_t identity{}, port{};
+            std::uint64_t identity{};
+            std::uint64_t port{};
             if (!Fields(value, {"profile", "port"}) || !Number(value, "profile", identity, std::numeric_limits<std::uint64_t>::max()) ||
                 !Number(value, "port", port, 65535))
                 return Result<PlayTopologyUserSettings>::Failure(MakeError(PlayTopologyErrors::Invalid));
