@@ -30,7 +30,7 @@ namespace Horo::Editor {
         for (const auto &session : viewModel.sequenceDocuments) {
             ImGui::SameLine();
             const auto instance = session.source->identity.instance;
-            const std::string id = std::to_string(instance.value);
+            const std::string id = std::to_string(instance.Value());
             ImGui::PushID(id.c_str());
             const std::string title = session.source->asset.Data().name + "###sequence";
             if (Ui::Button({.label = title.c_str(),
