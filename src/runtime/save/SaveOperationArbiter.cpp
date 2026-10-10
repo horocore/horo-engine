@@ -375,8 +375,8 @@ namespace Horo::Runtime {
         for (auto &record : state_->records) {
             if (IsTerminal(record))
                 continue;
-            const auto requested = record.controller.RequestShutdownCancellation();
-            if (requested != SaveCancellationRequestResult::Requested && requested != SaveCancellationRequestResult::AlreadyRequested)
+            if (const auto requested = record.controller.RequestShutdownCancellation();
+                requested != SaveCancellationRequestResult::Requested && requested != SaveCancellationRequestResult::AlreadyRequested)
                 continue;
             record.state = SaveArbiterState::Cancelling;
             ++record.revision;

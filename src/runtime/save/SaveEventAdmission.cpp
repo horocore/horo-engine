@@ -101,8 +101,8 @@ namespace Horo::Runtime {
     /** @copydoc SaveEventTriggers::ReadyForAdmission */
     bool SaveEventTriggers::ReadyForAdmission(const Record &record) const {
         const auto modeIndex = static_cast<std::size_t>(record.registration.mode);
-        const auto cooldown = policy_.Mode(record.registration.mode)->cooldown.minimumIntervalMilliseconds;
-        if ((admitted_[modeIndex] && host_->monotonicMilliseconds - admittedAt_[modeIndex] < cooldown) ||
+        if (const auto cooldown = policy_.Mode(record.registration.mode)->cooldown.minimumIntervalMilliseconds;
+            (admitted_[modeIndex] && host_->monotonicMilliseconds - admittedAt_[modeIndex] < cooldown) ||
             arbiter_->ActiveOperation().has_value() || arbiter_->QueuedCount() != 0)
             return false;
         const auto active = active_.Snapshot();

@@ -30,16 +30,16 @@ namespace Horo::Runtime {
 
         /** @brief Checks the operation's monotonic supplied clock without changing its admitted baseline. */
         [[nodiscard]] bool IsRetryClockValid(const State &state, const State::Record &record, const std::uint64_t clock) noexcept {
-            return (!state.retryClock || clock >= *state.retryClock) &&
+            return (!state.retryClock.has_value() || clock >= *state.retryClock) &&
                    (!record.request.retry || clock >= record.request.retry->admittedAtMilliseconds);
         }
 
         /** @brief Accepts failure evidence only in the original Save phase; uncertain publication requires its entered gate. */
         [[nodiscard]] bool IsStorageFailureStateValid(const State::Record &record, const SaveStorageFailureInput &failure) noexcept {
-            return record.request.operation.kind == SaveOperationKind::Save &&
-                   (record.state == SaveArbiterState::Encoding || record.state == SaveArbiterState::Committing) &&
+            using enum SaveArbiterState;
+            return record.request.operation.kind == SaveOperationKind::Save && (record.state == Encoding || record.state == Committing) &&
                    (failure.commitOutcome == SaveOperationCommitOutcome::NotCommitted ||
-                    (failure.commitOutcome == SaveOperationCommitOutcome::Unknown && record.state == SaveArbiterState::Committing));
+                    (failure.commitOutcome == SaveOperationCommitOutcome::Unknown && record.state == Committing));
         }
 
         /** @brief Finds only an active Save whose typed failure and supplied clock preserve the original operation contract. */
@@ -66,15 +66,15 @@ namespace Horo::Runtime {
         /** @brief Respects due time and existing active or queued work without preemption. */
         [[nodiscard]] bool ReadyToResume(const State &state, const State::Record &record, const std::uint64_t clock,
                                          const std::size_t queued) noexcept {
-            return !state.closed && clock >= record.retry.eligibleAtMilliseconds && !state.active && queued == 0;
+            return !state.closed && clock >= record.retry.eligibleAtMilliseconds && !state.active.has_value() && queued == 0;
         }
 
         /** @brief Publishes one original failure without introducing another operation or resetting its terminal receipt. */
         [[nodiscard]] Result<bool> FinishRetryFailure(State &state, State::Record &record, Error error,
                                                       const SaveOperationCommitOutcome outcome,
                                                       const std::chrono::steady_clock::time_point now) {
-            const auto finished = FinishTerminalTransition(state, record, record.controller.Fail(std::move(error), outcome, now));
-            if (finished.HasError())
+            if (const auto finished = FinishTerminalTransition(state, record, record.controller.Fail(std::move(error), outcome, now));
+                finished.HasError())
                 return Result<bool>::Failure(finished.ErrorValue());
             return Result<bool>::Success(false);
         }
@@ -133,7 +133,7 @@ namespace Horo::Runtime {
         if (!CanDefer(*found, decision.Value()))
             return FinishRetryFailure(*state_, *found, decision.Value().ErrorValue(), outcome, now);
         const auto eligible = RetryEligibleAt(*found, monotonicMilliseconds);
-        if (!eligible)
+        if (!eligible.has_value())
             return FinishRetryFailure(*state_, *found, decision.Value().ErrorValue(), outcome, now);
         found->retry.eligibleAtMilliseconds = *eligible;
         found->state = SaveArbiterState::WaitingForRetry;

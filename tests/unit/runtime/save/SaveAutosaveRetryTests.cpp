@@ -13,9 +13,9 @@ namespace Horo::Runtime {
                                                                  .catalogRevision = 1,
                                                                  .slot = fixture.Address().slot,
                                                                  .publicationGeneration = Test::Id<SlotGenerationId>(9)}};
-        const auto captured =
-            fixture.scheduler->CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, fixture.generation, fixture.Operation(91),
-                                                 fixture.Address(), fixture.provenance, fixture.participants, {}, retry);
+        const auto captured = fixture.scheduler->CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, fixture.generation,
+                                                                   {fixture.Operation(91), fixture.Address(), retry}, fixture.provenance,
+                                                                   fixture.participants);
         REQUIRE(captured.HasValue());
         REQUIRE(captured.Value());
         REQUIRE(fixture.arbiter

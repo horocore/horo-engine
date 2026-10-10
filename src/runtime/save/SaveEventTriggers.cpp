@@ -148,8 +148,8 @@ namespace Horo::Runtime {
             return std::move(*coalesced);
         if (event.correlation.sequence == found->highestSequence)
             return Return::Failure(MakeError(SaveErrors::LifecycleInvalid));
-        const auto index = static_cast<std::size_t>(found - records_.begin());
-        if (!CanRetainIntent(index, CanQueueLatest(found->registration, policy_)))
+        if (const auto index = static_cast<std::size_t>(found - records_.begin());
+            !CanRetainIntent(index, CanQueueLatest(found->registration, policy_)))
             return Return::Failure(MakeError(SaveErrors::OperationInProgress));
         found->receipt = SaveTriggerReceipt{.event = event,
                                             .access = {found->registration.target.nameSpace, host_->binding.revision},
@@ -166,8 +166,7 @@ namespace Horo::Runtime {
         if (!record.receipt || record.receipt->event.generation != event.generation || record.receipt->event.payload != event.payload)
             return {};
         const bool sameSequence = event.correlation.sequence == record.highestSequence;
-        const bool outstanding = record.receipt->pending || IsInFlight(record.receipt->operation);
-        if (!sameSequence && !outstanding)
+        if (const bool outstanding = record.receipt->pending || IsInFlight(record.receipt->operation); !sameSequence && !outstanding)
             return {};
         if (!sameSequence && !policy_.Mode(record.registration.mode)->cooldown.coalesceWhenBusy)
             return Return::Failure(MakeError(SaveErrors::OperationInProgress));
@@ -177,7 +176,7 @@ namespace Horo::Runtime {
 
     /** @copydoc SaveEventTriggers::CanRetainIntent */
     bool SaveEventTriggers::CanRetainIntent(const std::size_t index, const bool latestAuto) const {
-        if (pending_ && (*pending_ != index || !latestAuto))
+        if (pending_.has_value() && (*pending_ != index || !latestAuto))
             return false;
         return latestAuto || !IsInFlight(active_);
     }

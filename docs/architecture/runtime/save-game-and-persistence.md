@@ -335,6 +335,14 @@ invalidates the old intent; the host reports cancellation or explicitly schedule
 new-session checkpoint. Autosave ring rotation advances only after durable success;
 a failed save never consumes the last good ring entry.
 
+`SaveAutosaveScheduler::CommitAtSafePoint` receives a `SaveAutosaveAdmission`
+containing the original operation descriptor, exact host catalog address and optional
+retry capability. Hosts migrate the previous separate operation/address/retry
+arguments into this value without changing capture evidence or worker ownership.
+The six-argument entry point is the sole contract; it does not retain a parallel
+legacy overload. Header ownership remains with Runtime, and the isolated autosave
+consumer plus all admission/capture regressions exercise this migration.
+
 `SaveEventTriggers` is the additive owner-thread event adapter for SAV-005.6.
 A host copies an immutable allowlist of at most 64 product-issued trigger IDs,
 typed payload requirements, Auto/Checkpoint modes, safe logical targets and

@@ -203,10 +203,12 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc SaveAutosaveScheduler::CommitAtSafePoint */
-    Result<std::optional<SaveAutosaveCapture>> SaveAutosaveScheduler::CommitAtSafePoint(
-        const RuntimePhase phase, const SaveRuntimeGeneration generation, SaveOperationDescriptor operation, SaveArbiterAddress address,
-        const RuntimeSaveCaptureProvenance &provenance, SaveParticipantRegistrySnapshot participants,
-        const RuntimeSaveCaptureLimits &limits, std::optional<SaveArbiterRetryDescriptor> retry) {
+    Result<std::optional<SaveAutosaveCapture>> SaveAutosaveScheduler::CommitAtSafePoint(const RuntimePhase phase,
+                                                                                        const SaveRuntimeGeneration generation,
+                                                                                        SaveAutosaveAdmission admission,
+                                                                                        const RuntimeSaveCaptureProvenance &provenance,
+                                                                                        SaveParticipantRegistrySnapshot participants,
+                                                                                        const RuntimeSaveCaptureLimits &limits) {
         using Return = Result<std::optional<SaveAutosaveCapture>>;
         if (const auto valid = ValidateSafePoint(phase, generation); valid.HasError())
             return Return::Failure(valid.ErrorValue());
@@ -222,7 +224,8 @@ namespace Horo::Runtime {
             return Return::Failure(ready.ErrorValue());
         if (!ready.Value())
             return Return::Success({});
-        if (const auto admitted = Admit(std::move(operation), std::move(address), std::move(retry)); admitted.HasError())
+        if (const auto admitted = Admit(std::move(admission.operation), std::move(admission.address), std::move(admission.retry));
+            admitted.HasError())
             return Return::Failure(admitted.ErrorValue());
         return awaitingCapture_ ? Capture(phase, provenance, std::move(participants), limits) : Return::Success({});
     }
