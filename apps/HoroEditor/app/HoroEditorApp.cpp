@@ -36,6 +36,7 @@
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Runtime/Save/SaveTelemetry.h"
+#include "RenderGraphInspectionPane.h"
 #if defined(HORO_HAS_OPENTELEMETRY)
 #include "Horo/Foundation/Telemetry/OpenTelemetrySink.h"
 #endif
@@ -78,6 +79,7 @@
 
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <charconv>
 #include <cstdio>
@@ -1121,6 +1123,16 @@ namespace Horo::Editor {
                 LOG_ERROR("editor.update", "Install-on-exit handoff failed: %s", handoff.ErrorValue().message.c_str());
         }
 
+        /** @brief Composes cached graph inspection at the application host boundary. */
+        void RegisterInspectionWorkspacePanels(WorkspacePanelRegistry &registry, Render::RenderFrontend &frontend) {
+            const std::array<GlobalDockPaneFactory, 1> graphInspectionPanes{[&frontend] {
+                return MakeRenderGraphInspectionPane([&frontend] {
+                    return frontend.GraphInspectionSnapshot();
+                });
+            }};
+            RegisterDefaultWorkspacePanels(registry, graphInspectionPanes);
+        }
+
         /** @brief Runs the actual editor startup and reports failures to the process boundary. */
         std::optional<EditorRendererRestartRequest> RunEditorMainLoop(RunEditorMainLoopParams &p) {
             ThemeContext themeContext{p.fonts};
@@ -1175,7 +1187,7 @@ namespace Horo::Editor {
             RegisterProjectLoadingScreen(screenRegistry);
             RegisterEditorWorkspaceScreen(screenRegistry);
             WorkspacePanelRegistry workspacePanelRegistry;
-            RegisterDefaultWorkspacePanels(workspacePanelRegistry);
+            RegisterInspectionWorkspacePanels(workspacePanelRegistry, p.presentation.renderFrontend);
             Extensions::ExtensionInventory extensionInventory;
             const Result<void> extensionInventoryRefresh = extensionInventory.Refresh();
             if (extensionInventoryRefresh.HasError()) {

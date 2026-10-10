@@ -1052,6 +1052,16 @@ namespace Horo::Editor::Ui {
         return changed;
     }
 
+    /** @copydoc WrappedText */
+    void WrappedText(const float width, const std::string_view text, const ImVec4 color, const Theme::Fonts &fonts) {
+        Theme::ScopedTextStyle style{fonts.sans, Theme::TextPx::Body(), Theme::FontPx::Sans};
+        ImGui::PushStyleColor(ImGuiCol_Text, color);
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + std::max(1.0F, std::min(width, ImGui::GetContentRegionAvail().x)));
+        ImGui::TextUnformatted(text.data(), text.data() + text.size());
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+    }
+
     // ── InputTextControl ─────────────────────────────────────────────────
 
     /** @copydoc InputTextControl(const char *, char *, size_t, const Theme::Fonts &, const InputTextOptions &) */
