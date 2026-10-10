@@ -234,6 +234,13 @@ class AndroidAssemblyTests(unittest.TestCase):
             with self.assertRaisesRegex(AndroidError, "Output already exists"):
                 android_package.assemble(arguments)
 
+    def test_kotlin_runtime_alignment_is_locked_before_assembly(self):
+        template = (Path(__file__).resolve().parents[2] / "android/gradle/build.gradle").read_text()
+        self.assertEqual(self.tools["kotlin"], "1.8.22")
+        self.assertIn('org.jetbrains.kotlin:kotlin-bom:${contract.tools.kotlin}', template)
+        self.assertIn('component.version != contract.tools.kotlin', template)
+        self.assertIn('Kotlin runtime drift', template)
+
     def test_hosted_ninja_install_uses_lock_and_explicit_path(self):
         workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/android-package.yml").read_text()
         self.assertIn('["ninja"]', workflow)

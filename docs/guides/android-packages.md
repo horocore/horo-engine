@@ -12,6 +12,8 @@ Ninja 1.11.1, JDK 17, Gradle 8.11.1, AGP 8.10.1 and GameActivity 3.0.5. The AAR,
 distribution have checked-in SHA-256 identities. Hosted qualification selects
 the verified upstream Ninja directory explicitly ahead of runner defaults. Java dependency versions and
 artifact hashes are captured inside each package for provenance comparison.
+The locked Kotlin 1.8.22 BOM aligns the merged stdlib and legacy JDK variants;
+resolution preflight rejects Kotlin runtime version drift before APK assembly.
 
 Install the locked platform, build-tools and NDK through SDK manager, provide
 CMake and Ninja on PATH, and obtain the locked Gradle distribution and GameActivity
