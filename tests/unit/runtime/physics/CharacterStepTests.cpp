@@ -135,10 +135,17 @@ namespace Horo::Character {
                                             const Math::Vec3 velocity = {30, 0, 0}) {
             auto input = FixedTick(tick);
             input.query = probe.Context(spawned.world->Descriptor(), tick);
+            CharacterMetricCapture capture;
+            input.metrics = &capture;
+            const auto callsBefore = probe.calls;
             auto request = Movement(spawned.controller, tick, tick);
             request.desiredVelocityMetersPerSecond = velocity;
             REQUIRE(spawned.world->QueueMovementCommand(request).HasValue());
-            return spawned.world->AdvanceFixedTick(input);
+            const auto advanced = spawned.world->AdvanceFixedTick(input);
+            REQUIRE(capture.snapshot.queries == probe.calls - callsBefore);
+            if (probe.shutdownWorld == nullptr)
+                RequireMovementBudget(*spawned.world, capture);
+            return advanced;
         }
 
         TEST_CASE("Character complete step path commits eligible exact and near height boundaries", "[physics][character][step]") {

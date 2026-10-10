@@ -142,7 +142,12 @@ namespace Horo::Character {
             command.desiredVelocityMetersPerSecond = velocity;
             REQUIRE(host.world->QueueMovementCommand(command).HasValue());
             auto input = GeometryTick(host, probe, tick);
+            CharacterMetricCapture capture;
+            input.metrics = &capture;
+            const auto callsBefore = probe.calls;
             const auto result = host.world->AdvanceFixedTick(input);
+            REQUIRE(capture.snapshot.queries == probe.calls - callsBefore);
+            RequireMovementBudget(*host.world, capture);
             if (result.HasError())
                 UNSCOPED_INFO(result.ErrorValue().message);
             REQUIRE(result.HasValue());
