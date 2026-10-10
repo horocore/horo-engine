@@ -15,7 +15,6 @@ namespace Horo::PCG {
     };
 
     namespace {
-        constexpr std::size_t MaximumInputs = 64;
         constexpr std::size_t MaximumProviders = 64;
         constexpr std::size_t MaximumOutputs = 16'384;
 
@@ -152,7 +151,7 @@ namespace Horo::PCG {
     Result<PCGProvenance> CapturePCGProvenance(PCGProvenanceCandidate candidate, const PCGProvenanceAdmission admission) {
         if (admission != PCGProvenanceAdmission::Accepting)
             return Failure<PCGProvenance>(PCGErrors::ProvenanceLifecycleUnavailable);
-        if (candidate.inputs.size() > MaximumInputs || candidate.providers.size() > MaximumProviders)
+        if (candidate.inputs.size() > MaximumPCGProvenanceInputs || candidate.providers.size() > MaximumProviders)
             return Failure<PCGProvenance>(PCGErrors::ProvenanceCapacityExceeded);
         if (!candidate.graph.IsValid() || !candidate.world.IsValid() || !candidate.node.IsValid() || candidate.numericPolicyVersion == 0 ||
             !HasContent(candidate.graphContent))

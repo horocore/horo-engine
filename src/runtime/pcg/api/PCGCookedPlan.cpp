@@ -303,6 +303,11 @@ namespace Horo::PCG {
         return data_.tier;
     }
 
+    /** @copydoc PCGCookedPlan::Seed */
+    std::uint64_t PCGCookedPlan::Seed() const noexcept {
+        return data_.seed;
+    }
+
     /** @copydoc PCGCookedPlan::SourceSchema */
     PCGGraphSchemaVersion PCGCookedPlan::SourceSchema() const noexcept {
         return data_.sourceSchema;
@@ -391,6 +396,7 @@ namespace Horo::PCG {
             return Result<PCGCookedPlan>::Failure(bytes.ErrorValue());
         PCGCookedPlan::Data data{source.generation,
                                  source.tier,
+                                 source.deterministicSeed,
                                  source.version,
                                  sourceDigest,
                                  capabilities.Value(),

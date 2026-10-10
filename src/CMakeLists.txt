@@ -1376,6 +1376,8 @@ target_link_libraries(HoroAnimationGraphSourceCodec PUBLIC HoroEngine::Animation
 
 
 add_library(HoroPCG STATIC
+        runtime/pcg/api/PCGCpuEvaluator.cpp
+        runtime/pcg/api/PCGCpuNodeDispatch.cpp
         runtime/pcg/api/PCGCookedPlan.cpp
         runtime/pcg/api/PCGErrors.cpp
         runtime/pcg/api/PCGGenerationPlan.cpp
