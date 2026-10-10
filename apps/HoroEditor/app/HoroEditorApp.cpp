@@ -872,11 +872,13 @@ namespace Horo::Editor {
             }
 
             void Shutdown() noexcept override {
+                p_->background.jobs.StopAccepting();
                 frame_.reset();
                 *rendererRestart_ = screenHost_->RendererRestartRequest();
                 p_->inputRouter.CancelCapture(Input::CaptureCancellationReason::OwnerDestroyed);
                 p_->modalHost.ForceDetachAllForShutdown();
                 screenHost_->Shutdown();
+                p_->background.jobs.Shutdown(ShutdownPolicy::Cancel);
             }
 
         private:
@@ -1186,6 +1188,28 @@ namespace Horo::Editor {
                                                                          Extensions::ExtensionMarketplaceService::DefaultRegistryUrl()};
             PfdNativeDialogs nativeDialogs;
             Application::NetworkDebuggerService networkDebugger;
+
+            // Covers constructor failure as well as startup failure: dependencies precede both join guards.
+            struct JobShutdown final {
+                explicit JobShutdown(JobSystem &scheduler, GuiScreenHost *host = nullptr) : jobs(scheduler), screens(host) {}
+
+                JobShutdown(const JobShutdown &) = delete;
+                JobShutdown &operator=(const JobShutdown &) = delete;
+                JobShutdown(JobShutdown &&) = delete;
+                JobShutdown &operator=(JobShutdown &&) = delete;
+
+                JobSystem &jobs;
+                GuiScreenHost *screens{};
+
+                ~JobShutdown() {
+                    jobs.StopAccepting();
+                    if (screens)
+                        screens->Shutdown();
+                    jobs.Shutdown(ShutdownPolicy::Cancel);
+                }
+            };
+
+            const JobShutdown constructionRollback{p.background.jobs};
             GuiScreenHost screenHost{guiContext,
                                      GuiScreenHostComposition{.modalHost = p.modalHost,
                                                               .settingsService = p.settings,
@@ -1203,6 +1227,8 @@ namespace Horo::Editor {
                                                               .extensionMarketplace =
                                                                   extensionInventoryRefresh.HasValue() ? &extensionMarketplace : nullptr,
                                                               .nativeDialogs = &nativeDialogs}};
+            // Closes route/extension scopes and joins before destroying the successfully constructed screen host.
+            const JobShutdown jobShutdown{p.background.jobs, &screenHost};
             screenHost.Services().Register<IEditorViewportRenderer>(p.presentation.viewportRenderer);
             screenHost.Services().Register<IEditorGuiRenderer>(p.presentation.guiRenderer);
             screenHost.Services().Register<EditorViewportSceneState>(viewportSceneState);
@@ -1427,7 +1453,7 @@ namespace Horo::Editor {
     /** @brief Owns runtime services and routes for one graphical editor session. */
     [[nodiscard]] static EditorSessionResult RunEditorSession(EditorSessionLaunch launch) {
         EngineDataBus engineEvents;
-        JobSystem jobSystem{JobSystemConfig{.workerCount = 2, .maxQueuedJobs = 256}};
+        JobSystem jobSystem{JobSystemConfig{.workerCount = 2, .maxQueuedJobs = 256, .ioWorkerCount = 1, .reservedInteractiveJobs = 8}};
         ProjectCreationService projectCreationService{jobSystem, engineEvents};
         EditorDataBus editorEvents;
         LOG_INFO("editor.startup", "Loaded language tag from disk: '%s'", launch.startup.settings.languageTag.c_str());

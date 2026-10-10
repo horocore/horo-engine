@@ -2365,6 +2365,7 @@ target_compile_features(HoroFoundationValidationResultTests PRIVATE cxx_std_20)
 target_link_libraries(HoroFoundationValidationResultTests PRIVATE HoroEngine::Foundation)
 add_executable(HoroFoundationJobSystemTests
         unit/foundation/JobSystemTests.cpp
+        unit/foundation/JobResourceSchedulingTests.cpp
         unit/foundation/JobAdmissionTests.cpp
         unit/foundation/JobAdmissionTelemetryTests.cpp
         support/AllocationProbe.cpp

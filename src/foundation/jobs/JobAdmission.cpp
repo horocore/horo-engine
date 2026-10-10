@@ -14,19 +14,21 @@ namespace Horo {
     }
 
     /** @copydoc JobSystem::State::PopNext */
-    std::shared_ptr<JobRecord> JobSystem::State::PopNext() {
+    std::shared_ptr<JobRecord> JobSystem::State::PopNext(const JobResource resource) {
         static constexpr std::array<std::size_t, 7> order{0, 0, 0, 0, 1, 1, 2};
-        const auto initialCursor = dispatchCursor;
+        auto &cursor = dispatchCursor[static_cast<std::size_t>(resource)];
+        auto &resourceQueues = Queues(resource);
+        const auto initialCursor = cursor;
         do {
-            const auto priority = order[dispatchCursor];
-            dispatchCursor = (dispatchCursor + 1) % order.size();
-            if (queues[priority].empty())
+            const auto priority = order[cursor];
+            cursor = (cursor + 1) % order.size();
+            if (resourceQueues[priority].empty())
                 continue;
-            auto record = std::move(queues[priority].front());
-            queues[priority].pop_front();
+            auto record = std::move(resourceQueues[priority].front());
+            resourceQueues[priority].pop_front();
             spaceAvailable->notify_all();
             return record;
-        } while (dispatchCursor != initialCursor);
+        } while (cursor != initialCursor);
         return {};
     }
 
@@ -58,7 +60,7 @@ namespace Horo {
             return Result<void>::Failure(MakeError(JobErrors::QueueShed, "Incoming optional job was shed at capacity."));
         if (policy.overloadPolicy != JobOverloadPolicy::Block)
             return Result<void>::Failure(MakeError(JobErrors::QueueFull, "Job queue is at capacity."));
-        if (const auto validated = ValidateBlockingAdmission(priority, executionThread); validated.HasError())
+        if (const auto validated = ValidateBlockingAdmission(priority, executionThread, descriptor.resource); validated.HasError())
             return validated;
 
         const auto cancellationWake = descriptor.parentCancellation.RegisterAdmissionWake(spaceAvailable);
@@ -70,10 +72,11 @@ namespace Horo {
     }
 
     /** @copydoc JobSystem::State::ValidateBlockingAdmission */
-    Result<void> JobSystem::State::ValidateBlockingAdmission(const std::size_t priority, const bool executionThread) const {
+    Result<void> JobSystem::State::ValidateBlockingAdmission(const std::size_t priority, const bool executionThread,
+                                                             const JobResource resource) const {
         if (!JobProducerScope::BlockingPermission().value_or(false) || executionThread)
             return Result<void>::Failure(MakeError(JobErrors::WaitForbidden, "This producer may not block on admission."));
-        if (config.workerCount == 0 || config.maxQueuedJobs == 0 ||
+        if ((resource == JobResource::Cpu ? config.workerCount : config.ioWorkerCount) == 0 || config.maxQueuedJobs == 0 ||
             config.priorityQueues[priority].capacity.value_or(config.maxQueuedJobs) == 0)
             return Result<void>::Failure(MakeError(JobErrors::WaitCapacityDeadlock, "Queue has no execution or admission capacity."));
         if (admission.waitingProducers >= config.maxWaitingProducers)
@@ -102,10 +105,15 @@ namespace Horo {
     }
 
     /** @copydoc JobSystem::State::ValidateAdmission */
-    Result<void> JobSystem::State::ValidateAdmission(const std::size_t priority, const JobRequirement requirement) const {
+    Result<void> JobSystem::State::ValidateAdmission(const std::size_t priority, const JobRequirement requirement,
+                                                     const JobResource resource) const {
         using enum JobOverloadPolicy;
         if (priority >= queues.size())
             return Result<void>::Failure(MakeError(JobErrors::InvalidSubmission, "Job priority is not recognized."));
+        if (resource != JobResource::Cpu && resource != JobResource::Io)
+            return Result<void>::Failure(MakeError(JobErrors::InvalidSubmission, "Job resource is not recognized."));
+        if (resource == JobResource::Io && config.ioWorkerCount == 0)
+            return Result<void>::Failure(MakeError(JobErrors::WaitCapacityDeadlock, "Host has no I/O execution capacity."));
         if (requirement != JobRequirement::Required && requirement != JobRequirement::Optional)
             return Result<void>::Failure(MakeError(JobErrors::InvalidSubmission, "Job requirement is not recognized."));
         const auto &queueConfig = config.priorityQueues[priority];

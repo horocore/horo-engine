@@ -62,7 +62,9 @@ namespace Horo::Editor {
         const auto completion = state_->completion;
         const auto *preflight = &state_->preflight;
         for (std::size_t lane = 0; lane < concurrency; ++lane) {
-            auto submitted = state_->jobs.SubmitResult({.parentCancellation = state_->cancellation.Token()},
+            auto submitted = state_->jobs.SubmitResult({.parentCancellation = state_->cancellation.Token(),
+                                                        .priority = JobPriority::Background,
+                                                        .resource = JobResource::Io},
                                                        [sharedRoots, lane, concurrency, generation, completion,
                                                         preflight](const CancellationToken &cancellation) {
                 for (std::size_t index = lane; index < sharedRoots->size(); index += concurrency) {
