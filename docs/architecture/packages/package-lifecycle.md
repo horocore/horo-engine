@@ -313,3 +313,78 @@ The modal must show:
 - [Editor Document Model](../editor/editor-document-model.md)
 - [Extension System](../extensions/plugin-system.md)
 - [Application Security](../security/application-security.md)
+
+## PKG-001.9 Native Activation Boundary and Migration
+
+`HoroEngine::PackageLifecycle` is the application-owned composition bridge. It
+links PackageSecurity and Extensions explicitly; neither availability verification
+nor the native host gains a reverse dependency. Its two public headers are solely
+owned by that target and compiled by its generated standalone header consumer.
+
+Hosts construct `PackageLifecycleService` with the existing install authority,
+a separate local/organization `IPackageExtensionTrust`, mandatory native artifact
+gate, approved temporary parent, host capabilities and loader. Construction is
+inert. The application invokes `Activate` only at startup or after quiescing
+runtime consumers, and serializes installation with activation on that owner lane.
+The executable regression composition exercises this same public route with real
+native ABI fixtures and importer registration, rather than synthetic active state.
+No install call activates code.
+
+The present native/importer archive/lock bridge accepts one enabled descriptor per package, with
+multiple dependency-ordered modules within that descriptor. The explicit file
+inventory contribution root is `extensions/<group>`; `<group>` must also be
+selected in the installed lock record. The descriptor is the declared regular
+file `extensions/<group>/extension.json`. Its legacy package ID/version assertions
+must match the sealed install, and every selected native entry must belong to the
+same verified root. Missing artifacts, absent groups, incompatible modules,
+duplicate packages and cyclic selected dependencies fail before code loads. This composition
+rejects contributions for other extension points because it owns no registry for them.
+Package-manifest semantic expansion, independent descriptors per package and
+hybrid presentation composition remain subsequent integration work.
+
+The immutable internal candidate binds a sealed install lease, exact archive,
+manifest and file digests, descriptor bytes, host-selected entries, external exact
+trust approval, capability policy and non-wrapping activation generation. Only
+verified declared files are materialized into an exclusively created private
+host directory. The existing ExtensionManager reads that exact descriptor and
+loads the selected native artifacts through a digest-bound signature gate. It
+registers actual contributions into a detached catalog. The lifecycle service
+owns real capability admissions and exposes their `ExtensionActivationLease`
+proofs only alongside the completely registered sealed catalog.
+
+A transient process-local attempt journal is published before native preparation.
+Runtime registration is not portable durable state: failure records the original
+typed diagnostic and leaves the last published runtime graph usable. Cancellation,
+load/ABI failure, registration conflict, reentrant shutdown and changed install identity retire the
+detached host without publishing it. All fallible preparation completes before
+one allocation-free publication of graph, generation and catalog. Cancellation
+observed after that commit does not reverse success. Durable availability uses
+the existing pending-record transaction; no trust grant is written to project
+metadata.
+
+Retirement closes real admission leases, withdraws contributions and drains the
+existing ExtensionRetirement owners in reverse dependency order. Retained old
+catalog snapshots reject new native calls and keep code/content alive until
+owner-lane finalization. Bounded retired compositions prevent unbounded repeated
+activation. Busy shutdown owners retain private verified files for restart; the
+service never deletes content still usable by admitted native work.
+
+`PackageInstallService::ActiveGraph` now returns a frozen owned graph rather than
+preserving caller pointer identity. Existing availability consumers need no
+signature changes, but must compare content or the new `InstalledRecord` identity
+rather than the input restore pointer. This deliberate change prevents a mutable
+restore alias from rewriting installation evidence after durable publication.
+Old sealed records retain their verified archive snapshots through later installs.
+
+The raw-directory ExtensionManager API remains a legacy authoring/discovery adapter.
+Production package activation uses the explicit PackageLifecycle route, which has
+no caller-supplied extension directory. It does not infer execution trust from a
+legacy directory, publisher verification, successful install or portable enablement.
+
+Rejected native activation retains its actual `ExtensionRetirement` before ABI
+callbacks begin. `ExtensionManager::FailedActivationRetirements()` is an additive
+owner-lane view for composition owners; existing successful-load callers retain
+their contracts. Clean rollback owners are removed during finalization, while
+failed teardown owners count against the manager retention limit and require
+restart. The package bridge includes those owners when deciding whether private
+verified content may be deleted. A failed load never constitutes drain evidence.

@@ -1611,3 +1611,20 @@ is target-private. Existing callers require no signature migration; preview laun
 hosts opt into complete capability preflight and revision/generation revalidation
 as described in Networking Architecture. The generated staged header consumer and
 `HoroPlayTopologyPublicHeaderConsumer` verify this additive target boundary.
+
+## PKG-001.9 Package Activation Composition
+
+`HoroPackageLifecycle` alone owns `Horo/Packages/PackageLifecycle.h` and
+`PackageLifecycleErrors.h`. It explicitly composes PackageSecurity, Extensions,
+Assets and Foundation. The generated `HoroPackageLifecyclePublicHeaderConsumer`
+compiles both headers with only declared dependencies. Internal candidate and
+native composition implementation remain target-private under `src/packages/lifecycle`.
+PackageSecurity additionally exposes the sealed install lease in its existing
+PackageInstall header; Packages owns the bounded archive-file accessor in its
+existing PackageArchive header. Frozen install-pointer migration and explicit
+host wiring are recorded in [Package Lifecycle](../packages/package-lifecycle.md).
+
+The additive `ExtensionManager::FailedActivationRetirements()` contract remains
+owned by `HoroExtensions`. Composition callers migrate their resource cleanup
+checks to include rejected activation owners as well as successful load owners;
+`HoroExtensionsPublicHeaderConsumer` verifies the existing owning boundary.

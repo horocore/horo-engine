@@ -2821,6 +2821,17 @@ target_link_libraries(HoroExtensions
         PRIVATE nlohmann_json::nlohmann_json CURL::libcurl miniz lunasvg::lunasvg
 )
 
+# Application-owned package-to-extension composition; neither package verification nor the native host owns the other's lifecycle.
+add_library(HoroPackageLifecycle STATIC
+        packages/lifecycle/PackageLifecycle.cpp
+        packages/lifecycle/PackageLifecycleErrors.cpp
+        packages/lifecycle/PackageActivationCandidates.cpp
+        packages/lifecycle/PackageActivationComposition.cpp
+)
+add_library(HoroEngine::PackageLifecycle ALIAS HoroPackageLifecycle)
+target_compile_features(HoroPackageLifecycle PUBLIC cxx_std_20)
+target_link_libraries(HoroPackageLifecycle PUBLIC HoroEngine::Foundation HoroEngine::PackageSecurity HoroEngine::Extensions HoroEngine::Assets)
+
 # Host-side bridge: sequence model and runtime remain independent of Extensions.
 add_library(HoroCinematicScriptBridge STATIC
         runtime/cinematic/script/ScriptEventCook.cpp

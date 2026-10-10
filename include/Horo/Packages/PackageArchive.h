@@ -40,6 +40,14 @@ namespace Horo::Packages {
          */
         [[nodiscard]] const Sha256Digest &PackageManifestDigest() const noexcept;
 
+        /**
+         * @brief Reads one exact declared regular file from the immutable verified archive.
+         * @param path Canonical inventory identity, never a host path.
+         * @param maximumBytes Caller bound applied before allocation.
+         * @return Owned bytes or typed missing/size/decompression failure.
+         */
+        [[nodiscard]] Result<std::vector<std::byte>> ReadDeclaredFile(const PackagePath &path, std::uint64_t maximumBytes) const;
+
     private:
         /** @brief Constructs only after checking the complete inventory and every file's actual content. */
         ValidatedPackageArchive(std::vector<std::byte> bytes, ValidatedPackageFileManifestV1 manifest, const Sha256Digest &digest,
