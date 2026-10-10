@@ -72,7 +72,9 @@ namespace Horo::Render {
         /** @brief Returns the runtime-owned Metal device while the backend is initialized. */
         [[nodiscard]] void *Device() const noexcept;
 
-        /** @brief Returns the runtime-owned Metal command queue while the backend is initialized. */
+        /** @brief Borrows the runtime queue identity; does not authorize independent command-buffer allocation or submission.
+         * Editor encoders use CurrentCommandBuffer so native admission remains within the runtime's finite queue budget.
+         */
         [[nodiscard]] void *CommandQueue() const noexcept;
 
         /** @brief Returns the active frame command buffer, or nullptr outside a frame. */
