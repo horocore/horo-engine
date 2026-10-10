@@ -159,7 +159,7 @@ namespace Horo::JsonEncoding::Detail {
         }
 
         /** @brief Establishes valid string storage before a fallible copy, preserving the pinned codec's escaping. */
-        static void WriteString(std::string &bytes, const std::string &value) {
+        static void WriteString(std::string &bytes, const std::string_view value) {
             // Compatible-type construction sets the string tag before allocating in the pinned codec.
             // The typed constructor completes storage first, so failure never destroys a null string pointer.
             nlohmann::ordered_json scalar(nlohmann::ordered_json::value_t::string);
