@@ -237,6 +237,15 @@ namespace Horo::Editor::Ui {
 
     // ── Typography primitives ────────────────────────────────────────────
 
+    /**
+     * @brief Draws body text constrained to the available content width with shared typography.
+     * @param width Maximum available width in screen pixels, clamped to the current content region.
+     * @param text Complete text, including optional line breaks.
+     * @param color Semantic text color supplied by the active theme.
+     * @param fonts Editor font roles valid for this frame.
+     */
+    void WrappedText(float width, std::string_view text, ImVec4 color, const Theme::Fonts &fonts);
+
     /** @brief Draws an uppercase section label. */
     void SectionTitle(const char *upperCaseLabel, const Theme::Fonts &fonts);
 

@@ -933,6 +933,16 @@ cannot qualify native fault evidence or crash-handler safety.
 
 ### Render graph and resource inspector
 
+RND-009.10 exposes the implemented narrow graph-only projection through
+`RenderGraphInspectionSnapshot`, explicit real-frame capture, an owner-thread
+publication feed and deterministic debug encoding. The optional editor graph
+pane consumes cached owned values with finite pages and explicit unavailable
+timing; it cannot capture or inspect native state during drawing. These are planned
+logical facts, not submission or native-realization evidence. See
+[Render graph inspection](../../guides/render-graph-inspection.md) for limits,
+lifetime/migration rules, export schema and the distinction from the composite
+inspector below.
+
 [ADR-049](../../adr/049-render-graph-and-resource-inspector-ui.md) defines an
 explicit immutable inspection bundle for one exact renderer/device/frame/graph
 generation. The frontend projects post-compilation pass/resource/use/dependency/
