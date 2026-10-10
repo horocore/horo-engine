@@ -45,20 +45,29 @@ namespace Horo::Platform {
 
         /** @brief Rejects unsafe names before native paths or AssetManager keys are constructed. */
         [[nodiscard]] bool ValidName(const std::string_view name) {
-            if (name.empty() || name.size() > 4096 || name.front() == '/' || name.find_first_of("\\:\0", 0, 3) != name.npos ||
+            if (name.empty() || name.size() > 4096 || name.front() == '/' || name.find_first_of("\\:\0", 0, 3) != std::string_view::npos ||
                 !IsValidUtf8ScalarSequence(name))
                 return false;
             std::size_t begin = 0;
             while (begin < name.size()) {
                 const std::size_t end = name.find('/', begin);
-                const auto segment = name.substr(begin, end == name.npos ? name.size() - begin : end - begin);
-                if (!ValidSegment(segment))
+                if (const auto segment = name.substr(begin, end == std::string_view::npos ? name.size() - begin : end - begin);
+                    !ValidSegment(segment))
                     return false;
-                if (end == name.npos)
+                if (end == std::string_view::npos)
                     return true;
                 begin = end + 1;
             }
             return false;
+        }
+
+        /** @brief Constructs a native path from validated UTF-8 without locale-dependent narrow conversion. */
+        [[nodiscard]] std::filesystem::path Utf8Path(const std::string_view name) {
+            std::u8string utf8;
+            utf8.reserve(name.size());
+            for (const unsigned char byte : name)
+                utf8.push_back(static_cast<char8_t>(byte));
+            return std::filesystem::path(utf8);
         }
 
         /** @brief Reports a rejected logical path without logging personal native paths. */
@@ -135,7 +144,7 @@ namespace Horo::Platform {
 
         ~State() {
 #if !defined(_WIN32)
-            for (auto &document : documents)
+            for (const auto &document : documents)
                 if (document.descriptor >= 0)
                     close(document.descriptor);
 #endif
@@ -167,7 +176,10 @@ namespace Horo::Platform {
             if (!path.is_absolute() || std::filesystem::is_symlink(std::filesystem::symlink_status(path, error)) || error)
                 return Result<std::filesystem::path>::Failure(InvalidName());
             const auto canonical = std::filesystem::canonical(path, error);
-            if (error || !std::filesystem::is_directory(canonical, error) || error)
+            if (error)
+                return Result<std::filesystem::path>::Failure(Android::AndroidStorageAdapter::AccessFailure(false, true));
+            const bool directory = std::filesystem::is_directory(canonical, error);
+            if (!directory || error)
                 return Result<std::filesystem::path>::Failure(Android::AndroidStorageAdapter::AccessFailure(false, true));
             if (!SafePath(canonical))
                 return Result<std::filesystem::path>::Failure(InvalidName());
@@ -219,7 +231,7 @@ namespace Horo::Platform {
         /** @brief Reads a protected native source with a strict complete-result bound. */
         [[nodiscard]] Result<std::vector<std::byte>> ReadNative(const std::filesystem::path &path, const std::size_t maximumBytes) {
             std::vector<std::byte> bytes;
-            std::array<std::byte, 8192> buffer{};
+            std::array<char, 8192> buffer{};
             if (!SafePath(path))
                 return Result<std::vector<std::byte>>::Failure(InvalidName());
             std::ifstream input(path, std::ios::binary);
@@ -229,9 +241,9 @@ namespace Horo::Platform {
                     Android::AndroidStorageAdapter::AccessFailure(false, !std::filesystem::exists(path, error) && !error));
             }
             while (input) {
-                input.read(reinterpret_cast<char *>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+                input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
                 const auto count = static_cast<std::size_t>(input.gcount());
-                if (!Append(bytes, std::span(buffer).first(count), maximumBytes))
+                if (!Append(bytes, std::as_bytes(std::span(buffer).first(count)), maximumBytes))
                     return Result<std::vector<std::byte>>::Failure(TooLarge());
             }
             if (input.bad())
@@ -242,6 +254,13 @@ namespace Horo::Platform {
         /** @brief Closes an owner-thread descriptor after every stream outcome. */
         struct DescriptorOwner {
             int value;
+
+            explicit DescriptorOwner(const int descriptor) noexcept : value(descriptor) {}
+
+            DescriptorOwner(const DescriptorOwner &) = delete;
+            DescriptorOwner &operator=(const DescriptorOwner &) = delete;
+            DescriptorOwner(DescriptorOwner &&) = delete;
+            DescriptorOwner &operator=(DescriptorOwner &&) = delete;
 
             ~DescriptorOwner() {
                 if (value >= 0)
@@ -267,7 +286,8 @@ namespace Horo::Platform {
         /** @brief Waits for provider readiness with bounded revocation and timeout observation. */
         [[nodiscard]] Result<void> WaitReadable(const int descriptor, const std::atomic<bool> &revoked,
                                                 const std::chrono::steady_clock::time_point deadline) {
-            while (!revoked.load(std::memory_order_acquire)) {
+            while (
+                !revoked.load(std::memory_order_acquire)) {  // NOSONAR: S8417; observes cancellation without descriptor ownership transfer.
                 if (std::chrono::steady_clock::now() >= deadline)
                     return Result<void>::Failure(StorageError("android_storage.timeout", "The document provider did not complete.",
                                                               "Reopen the selected document and retry when its provider responds."));
@@ -311,7 +331,8 @@ namespace Horo::Platform {
 
             const DescriptorOwner ownedDescriptor{descriptor};
 
-            if (document.revoked.load(std::memory_order_acquire))
+            if (document.revoked.load(
+                    std::memory_order_acquire))  // NOSONAR: S8417; observes cancellation without descriptor ownership transfer.
                 return Result<std::vector<std::byte>>::Failure(Android::AndroidStorageAdapter::AccessFailure(true, false));
             if (descriptor < 0)
                 return Result<std::vector<std::byte>>::Failure(Android::AndroidStorageAdapter::AccessFailure(false, true));
@@ -320,12 +341,14 @@ namespace Horo::Platform {
             std::vector<std::byte> bytes;
             std::array<std::byte, 8192> buffer{};
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-            while (!document.revoked.load(std::memory_order_acquire)) {
+            while (!document.revoked.load(
+                std::memory_order_acquire)) {  // NOSONAR: S8417; observes cancellation without descriptor ownership transfer.
                 auto count = ReadChunk(descriptor, buffer, document.revoked, deadline);
                 if (count.HasError())
                     return Result<std::vector<std::byte>>::Failure(count.ErrorValue());
                 if (count.Value() == 0) {
-                    if (document.revoked.load(std::memory_order_acquire))
+                    if (document.revoked.load(
+                            std::memory_order_acquire))  // NOSONAR: S8417; observes cancellation without descriptor ownership transfer.
                         break;
                     return Result<std::vector<std::byte>>::Success(std::move(bytes));
                 }
@@ -349,24 +372,25 @@ namespace Horo::Platform {
             prepared += ".horo-android-stage";
             if (!SafeTransaction(path, lockPath, prepared))
                 return Result<void>::Failure(InvalidName());
-            auto lock = files.TryAcquireExclusive(lockPath, "horo.android.storage");
-            if (lock.HasError())
+            if (auto lock = files.TryAcquireExclusive(lockPath, "horo.android.storage"); lock.HasError()) {
                 return Result<void>::Failure(lock.ErrorValue());
-            if (!SafeTransaction(path, lockPath, prepared))
-                return Result<void>::Failure(InvalidName());
-            // The same writer authority removes an abandoned stage before touching published data.
-            if (auto removed = files.RemoveDurable(prepared); removed.HasError())
-                return removed;
-            auto capacity = files.AvailableBytes(path.parent_path());
-            if (capacity.HasError())
-                return Result<void>::Failure(capacity.ErrorValue());
-            if (capacity.Value() < bytes.size())
-                return Result<void>::Failure(StorageError("android_storage.storage_pressure",
-                                                          "Insufficient space to stage the complete file.",
-                                                          "Free app storage or evict disposable cache data and retry."));
-            if (auto written = files.WriteDurable(prepared, bytes); written.HasError())
-                return written;
-            return files.AtomicReplaceTracked(prepared, path, receipt);
+            } else {
+                if (!SafeTransaction(path, lockPath, prepared))
+                    return Result<void>::Failure(InvalidName());
+                // The same writer authority removes an abandoned stage before touching published data.
+                if (auto removed = files.RemoveDurable(prepared); removed.HasError())
+                    return removed;
+                auto capacity = files.AvailableBytes(path.parent_path());
+                if (capacity.HasError())
+                    return Result<void>::Failure(capacity.ErrorValue());
+                if (capacity.Value() < bytes.size())
+                    return Result<void>::Failure(StorageError("android_storage.storage_pressure",
+                                                              "Insufficient space to stage the complete file.",
+                                                              "Free app storage or evict disposable cache data and retry."));
+                if (auto written = files.WriteDurable(prepared, bytes); written.HasError())
+                    return written;
+                return files.AtomicReplaceTracked(prepared, path, receipt);
+            }
         }
     }  // namespace
 
@@ -389,7 +413,7 @@ namespace Horo::Platform {
         auto rootPath = Root(*state_, root);
         if (rootPath.HasError())
             return Result<std::vector<std::byte>>::Failure(rootPath.ErrorValue());
-        return ReadNative(rootPath.Value() / std::filesystem::u8path(name), maximumBytes);
+        return ReadNative(rootPath.Value() / Utf8Path(name), maximumBytes);
     }
 
     /** @copydoc AndroidStorage::AvailableBytes */
@@ -414,7 +438,7 @@ namespace Horo::Platform {
         auto rootPath = Root(*state_, root);
         if (rootPath.HasError())
             return Result<void>::Failure(rootPath.ErrorValue());
-        const auto path = rootPath.Value() / std::filesystem::u8path(name);
+        const auto path = rootPath.Value() / Utf8Path(name);
         return PublishNative(state_->files, path, bytes, receipt);
     }
 
@@ -425,7 +449,7 @@ namespace Horo::Platform {
         if (maximumBytes == 0 || maximumBytes > MaximumBytes)
             return Result<std::vector<std::byte>>::Failure(TooLarge());
         if (handle.owner_ != state_->identity || handle.value_ == 0 ||
-            handle.value_ > state_->documentCount.load(std::memory_order_acquire))
+            handle.value_ > state_->documentCount.load(std::memory_order_acquire))  // NOSONAR: S8417; observes published immutable slots.
             return Result<std::vector<std::byte>>::Failure(Android::AndroidStorageAdapter::AccessFailure(false, true));
         auto &document = state_->documents[static_cast<std::size_t>(handle.value_ - 1)];
         return ReadDocumentStream(document, maximumBytes);
@@ -444,8 +468,9 @@ namespace Horo::Platform {
                 return Result<std::unique_ptr<AndroidStorage>>::Failure(cacheRoot.ErrorValue());
             if (ContainsRoot(privateRoot.Value(), cacheRoot.Value()) || ContainsRoot(cacheRoot.Value(), privateRoot.Value()))
                 return Result<std::unique_ptr<AndroidStorage>>::Failure(InvalidName());
-            return Result<std::unique_ptr<AndroidStorage>>::Success(std::unique_ptr<AndroidStorage>(
-                new AndroidStorage(std::make_unique<AndroidStorage::State>(files, privateRoot.Value(), cacheRoot.Value()))));
+            return Result<std::unique_ptr<AndroidStorage>>::Success(
+                std::unique_ptr<AndroidStorage>(  // NOSONAR: S5950; friend factory alone accesses this private constructor.
+                    new AndroidStorage(std::make_unique<AndroidStorage::State>(files, privateRoot.Value(), cacheRoot.Value()))));
         }
 
 #if defined(__ANDROID__)
@@ -476,7 +501,7 @@ namespace Horo::Platform {
 #if !defined(_WIN32)
             const bool validDescriptor = ValidDocument(descriptor);
             const auto owned = Owner(*storage.state_);
-            const auto count = storage.state_->documentCount.load(std::memory_order_relaxed);
+            const auto count = storage.state_->documentCount.load(std::memory_order_relaxed);  // NOSONAR: S8417; owner alone admits slots.
             if (!validDescriptor || owned.HasError() || count >= MaximumDocuments ||
                 (lifetime != AndroidDocumentGrantLifetime::Activity && lifetime != AndroidDocumentGrantLifetime::Persisted)) {
                 if (descriptor >= 0)
@@ -488,7 +513,8 @@ namespace Horo::Platform {
             auto &document = storage.state_->documents[count];
             document.descriptor = descriptor;
             document.lifetime = lifetime;
-            storage.state_->documentCount.store(count + 1, std::memory_order_release);
+            storage.state_->documentCount.store(count + 1,
+                                                std::memory_order_release);  // NOSONAR: S8417; publishes immutable slot initialization.
             return Result<AndroidDocumentHandle>::Success(AndroidDocumentHandle{count + 1, storage.state_->identity});
 #else
             static_cast<void>(storage);
@@ -501,18 +527,24 @@ namespace Horo::Platform {
         /** @copydoc AndroidStorageAdapter::Revoke */
         Result<void> AndroidStorageAdapter::Revoke(AndroidStorage &storage, const AndroidDocumentHandle handle) {
             if (handle.owner_ != storage.state_->identity || handle.value_ == 0 ||
-                handle.value_ > storage.state_->documentCount.load(std::memory_order_acquire))
+                handle.value_ >
+                    storage.state_->documentCount.load(std::memory_order_acquire))  // NOSONAR: S8417; observes published immutable slots.
                 return Result<void>::Failure(AccessFailure(false, true));
-            storage.state_->documents[static_cast<std::size_t>(handle.value_ - 1)].revoked.store(true, std::memory_order_release);
+            storage.state_->documents[static_cast<std::size_t>(handle.value_ - 1)]
+                .revoked.store(true,
+                               std::memory_order_release);  // NOSONAR: S8417; publishes revocation only; callback never closes descriptors.
             return Result<void>::Success();
         }
 
         /** @copydoc AndroidStorageAdapter::RetireActivityGrants */
         Result<void> AndroidStorageAdapter::RetireActivityGrants(AndroidStorage &storage) {
-            const auto count = storage.state_->documentCount.load(std::memory_order_acquire);
+            const auto count =
+                storage.state_->documentCount.load(std::memory_order_acquire);  // NOSONAR: S8417; observes published immutable slots.
             for (std::size_t index = 0; index < count; ++index)
                 if (storage.state_->documents[index].lifetime == AndroidDocumentGrantLifetime::Activity)
-                    storage.state_->documents[index].revoked.store(true, std::memory_order_release);
+                    storage.state_->documents[index].revoked.store(true,
+                                                                   std::memory_order_release);  // NOSONAR: S8417; publishes revocation
+                                                                                                // only; callback never closes descriptors.
             return Result<void>::Success();
         }
     }  // namespace Android
