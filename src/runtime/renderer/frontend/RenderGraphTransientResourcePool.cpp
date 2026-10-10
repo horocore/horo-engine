@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <limits>
+#include <new>
+#include <stdexcept>
 #include <type_traits>
 
 namespace Horo::Render::Detail {
@@ -23,29 +25,50 @@ namespace Horo::Render::Detail {
         /** @brief Cancels unconsumed claims even when a native callback unwinds preparation. */
         class PendingClaims final {
         public:
-            PendingClaims(RenderResourceRegistry &registry, RenderMemoryBudget &budget) : registry_(registry), budget_(budget) {}
+            PendingClaims(RenderResourceRegistry &registry, RenderMemoryBudget &budget, bool &rollbackIncomplete)
+                : registry_(registry), budget_(budget), rollbackIncomplete_(rollbackIncomplete) {}
 
-            ~PendingClaims() {
-                for (const auto &claim : slots) {
-                    const auto state = registry_.State(claim.resourceClass, claim.resource.identity);
-                    if (state.HasValue() && state.Value() == RenderResourceState::Pending) {
-                        static_cast<void>(budget_.Cancel(claim.memory));
-                        static_cast<void>(registry_.CancelPending(claim.resourceClass, claim.resource.identity));
-                    } else if (state.HasValue() && state.Value() == RenderResourceState::Ready)
-                        static_cast<void>(registry_.Release(claim.resourceClass, claim.resource.identity));
-                }
+            PendingClaims(const PendingClaims &) = delete;
+            PendingClaims &operator=(const PendingClaims &) = delete;
+            PendingClaims(PendingClaims &&) = delete;
+            PendingClaims &operator=(PendingClaims &&) = delete;
+
+            ~PendingClaims() noexcept {
+                for (const auto &claim : slots_)
+                    RollbackClaim(claim);
                 static_cast<void>(registry_.DrainRetirements());
             }
 
-            void Commit() noexcept {
-                slots.clear();
+            [[nodiscard]] std::vector<SlotClaim> &Slots() noexcept {
+                return slots_;
             }
 
-            std::vector<SlotClaim> slots;
+            void Commit() noexcept {
+                slots_.clear();
+            }
 
         private:
+            /** @brief Keeps rollback allocation failures inside the registry's remaining shutdown ownership. */
+            void RollbackClaim(const SlotClaim &claim) noexcept {
+                try {
+                    const auto state = registry_.State(claim.resourceClass, claim.resource.identity);
+                    if (state.HasValue() && state.Value() == RenderResourceState::Pending) {
+                        if (claim.memory.IsValid())
+                            static_cast<void>(budget_.Cancel(claim.memory));
+                        static_cast<void>(registry_.CancelPending(claim.resourceClass, claim.resource.identity));
+                    } else if (state.HasValue() && state.Value() == RenderResourceState::Ready)
+                        static_cast<void>(registry_.Release(claim.resourceClass, claim.resource.identity));
+                } catch (const std::bad_alloc &) {
+                    rollbackIncomplete_ = true;
+                } catch (const std::length_error &) {
+                    rollbackIncomplete_ = true;
+                }
+            }
+
+            std::vector<SlotClaim> slots_;
             RenderResourceRegistry &registry_;
             RenderMemoryBudget &budget_;
+            bool &rollbackIncomplete_;
         };
 
         /** @brief Queries the selected backend without reclassifying its native placement requirements. */
@@ -59,31 +82,30 @@ namespace Horo::Render::Detail {
         }
 
         /** @brief Reserves a registry generation and memory claim before any native slot allocation. */
-        [[nodiscard]] Result<SlotClaim> ReserveSlot(IRenderBackend &backend, RenderResourceRegistry &registry, RenderMemoryBudget &budget,
-                                                    const RenderMemoryScopeId scope,
-                                                    const RenderGraphTransientAllocationRequirement &requirement) {
+        [[nodiscard]] Result<void> ReserveSlot(IRenderBackend &backend, RenderResourceRegistry &registry, RenderMemoryBudget &budget,
+                                               std::vector<SlotClaim> &slots, const RenderMemoryScopeId scope,
+                                               const RenderGraphTransientAllocationRequirement &requirement) {
             const auto cost = QueryCost(backend, requirement.descriptor);
             if (cost.HasError())
-                return Result<SlotClaim>::Failure(cost.ErrorValue());
+                return Result<void>::Failure(cost.ErrorValue());
             const auto resourceClass = std::holds_alternative<RenderBufferDescriptor>(requirement.descriptor)
                                            ? RenderResourceClass::Buffer
                                            : RenderResourceClass::Texture;
             const auto reserved = registry.Reserve(resourceClass);
             if (reserved.HasError())
-                return Result<SlotClaim>::Failure(reserved.ErrorValue());
+                return Result<void>::Failure(reserved.ErrorValue());
+            slots.emplace_back(requirement.slot, requirement.descriptor, reserved.Value(), RenderMemoryReservationId{},
+                               RenderMemoryPlacement{}, resourceClass);
+            SlotClaim &claim = slots.back();
             const auto memory = budget.Reserve(scope, reserved.Value().operation, cost.Value());
-            if (memory.HasError()) {
-                static_cast<void>(registry.CancelPending(resourceClass, reserved.Value().identity));
-                return Result<SlotClaim>::Failure(memory.ErrorValue());
-            }
+            if (memory.HasError())
+                return Result<void>::Failure(memory.ErrorValue());
+            claim.memory = memory.Value();
             const auto placement = budget.Placement(memory.Value());
-            if (placement.HasError()) {
-                static_cast<void>(budget.Cancel(memory.Value()));
-                static_cast<void>(registry.CancelPending(resourceClass, reserved.Value().identity));
-                return Result<SlotClaim>::Failure(placement.ErrorValue());
-            }
-            return Result<SlotClaim>::Success(
-                {requirement.slot, requirement.descriptor, reserved.Value(), memory.Value(), placement.Value(), resourceClass});
+            if (placement.HasError())
+                return Result<void>::Failure(placement.ErrorValue());
+            claim.placement = placement.Value();
+            return Result<void>::Success();
         }
 
         /** @brief Uses the existing native realization and publication transaction for one admitted slot. */
@@ -111,6 +133,16 @@ namespace Horo::Render::Detail {
                 return BufferHandle(claim.resource.identity);
             return TextureHandle(claim.resource.identity);
         }
+
+        /** @brief Binds a proven logical resource to its admitted physical slot before native realization. */
+        [[nodiscard]] Result<void> BindLogicalResource(RenderGraphTransientResourceSet &set, const RenderGraphResourceId resource,
+                                                       const SlotClaim &claim) {
+            const auto lifetime = std::ranges::find(set.lifetimes, resource, &RenderGraphResourceLifetime::resource);
+            if (lifetime == set.lifetimes.end())
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
+            set.bindings[static_cast<std::size_t>(lifetime - set.lifetimes.begin())] = Binding(claim);
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc RenderGraphTransientResourcePool::RenderGraphTransientResourcePool */
@@ -122,12 +154,16 @@ namespace Horo::Render::Detail {
     Result<RenderGraphTransientResourcesHandle> RenderGraphTransientResourcePool::Prepare(const RenderGraphLifetimePlan &plan,
                                                                                           const RenderMemoryScopeId scope) {
         using PrepareResult = Result<RenderGraphTransientResourcesHandle>;
+        if (rollbackIncomplete_)
+            return PrepareResult::Failure(
+                MakeError(FrontendErrors::ResourceBackendException,
+                          "Transient rollback remains registry-owned; shut down the frontend before preparing more backing."));
         if (!plan.Owner().IsValid() || plan.Lifetimes().size() > RenderGraphLimits::HardMaxResources)
             return PrepareResult::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
         if (!backend_->Capabilities().supportsExactTransientResourceReuse)
             return PrepareResult::Failure(
                 MakeError(FrontendErrors::ResourceUnsupported, "The selected backend does not admit exact transient resource reuse."));
-        const auto available = std::find_if(sets_.begin(), sets_.end(), [](const auto &set) {
+        const auto available = std::ranges::find_if(sets_, [](const auto &set) {
             return !set || (set->released && !set->inFlight);
         });
         if (available == sets_.end() || nextIdentity_ == std::numeric_limits<std::uint64_t>::max())
@@ -137,30 +173,26 @@ namespace Horo::Render::Detail {
         set->lifetimes.assign(plan.Lifetimes().begin(), plan.Lifetimes().end());
         set->bindings.resize(plan.Lifetimes().size());
         set->backing.reserve(plan.AllocationRequirements().size());
-        PendingClaims claims{*registry_, *budget_};
-        claims.slots.reserve(plan.AllocationRequirements().size());
+        PendingClaims claims{*registry_, *budget_, rollbackIncomplete_};
+        auto &slots = claims.Slots();
+        slots.reserve(plan.AllocationRequirements().size());
         for (const auto &requirement : plan.AllocationRequirements()) {
-            auto existing = std::find_if(claims.slots.begin(), claims.slots.end(), [&requirement](const SlotClaim &claim) {
+            auto existing = std::ranges::find_if(slots, [&requirement](const SlotClaim &claim) {
                 return claim.slot == requirement.slot;
             });
-            if (existing == claims.slots.end()) {
-                auto reserved = ReserveSlot(*backend_, *registry_, *budget_, scope, requirement);
+            if (existing == slots.end()) {
+                auto reserved = ReserveSlot(*backend_, *registry_, *budget_, slots, scope, requirement);
                 if (reserved.HasError())
                     return PrepareResult::Failure(reserved.ErrorValue());
-                claims.slots.push_back(std::move(reserved).Value());
-                existing = std::prev(claims.slots.end());
+                existing = std::prev(slots.end());
             }
-            const auto resource = std::find_if(set->lifetimes.begin(), set->lifetimes.end(), [&requirement](const auto &lifetime) {
-                return lifetime.resource == requirement.resource;
-            });
-            if (resource == set->lifetimes.end())
-                return PrepareResult::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
-            set->bindings[static_cast<std::size_t>(resource - set->lifetimes.begin())] = Binding(*existing);
+            if (const auto bound = BindLogicalResource(*set, requirement.resource, *existing); bound.HasError())
+                return PrepareResult::Failure(bound.ErrorValue());
         }
-        for (const auto &claim : claims.slots) {
+        for (const auto &claim : slots) {
             if (const auto realized = RealizeSlot(*backend_, *registry_, *budget_, claim); realized.HasError())
                 return PrepareResult::Failure(realized.ErrorValue());
-            set->backing.push_back({claim.resourceClass, claim.resource.identity});
+            set->backing.emplace_back(claim.resourceClass, claim.resource.identity);
         }
         const auto handle = set->handle;
         *available = std::move(set);
@@ -169,7 +201,8 @@ namespace Horo::Render::Detail {
     }
 
     /** @copydoc RenderGraphTransientResourcePool::Find */
-    Result<RenderGraphTransientResourceSet *> RenderGraphTransientResourcePool::Find(const RenderGraphTransientResourcesHandle handle) {
+    Result<RenderGraphTransientResourceSet *> RenderGraphTransientResourcePool::Find(
+        const RenderGraphTransientResourcesHandle handle) const {
         if (!handle.IsValid())
             return Result<RenderGraphTransientResourceSet *>::Failure(MakeError(FrontendErrors::ResourceHandleMalformed));
         if (handle.renderer != registry_->Owner())

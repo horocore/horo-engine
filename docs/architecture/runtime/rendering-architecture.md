@@ -1564,6 +1564,20 @@ manually order backend commands around hidden global state.
 
 ### Prepared graph transient resources
 
+The in-process C++ `IRenderResourceBackend::QueryBufferMemoryCost` and
+`QueryTextureMemoryCost` callbacks return expected descriptor, capability and native
+failures as `Result<RenderMemoryCostPlan>`, preserving backend error identity and
+context. Only `std::bad_alloc` and `std::length_error` from owned metadata are
+permitted exceptions. Queries release any temporary native probes before return
+or unwind. These callbacks are not `noexcept`: their returned `Error` owns strings
+and may require allocation. This narrow metadata exception contract does not
+change other backend callbacks or permit exceptions across a C ABI or job boundary.
+Frontend admission catches the two documented metadata exceptions and rolls back
+its exact registry and budget claims. Constructing the resulting owned failure
+may itself fail under persistent memory exhaustion; RAII still owns cleanup.
+Runtime errors and other exceptions from custom query implementations violate the
+contract and are no longer translated into a generic backend exception.
+
 `RenderGraphLifetimePlan` remains an inert logical proof. The host explicitly calls
 `RenderFrontend::PrepareTransientGraphResources(plan, scope)` outside an active
 frame to realize its used allocation slots. The selected backend must advertise

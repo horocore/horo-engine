@@ -79,25 +79,33 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
+    /** @copydoc OpenGLExecutionAdapter::PollFrameSlot */
+    bool OpenGLExecutionAdapter::PollFrameSlot(const std::size_t slot) noexcept {
+        std::uintptr_t &fence = frameFences_[slot];
+        if (fence == 0)
+            return true;
+        const std::uint32_t status = functions_.sync.poll(fence);
+        if (status == GL_TIMEOUT_EXPIRED)
+            return true;
+        if (status != GL_ALREADY_SIGNALED && status != GL_CONDITION_SATISFIED) {
+            synchronizationFailed_ = true;
+            return false;
+        }
+        functions_.sync.destroy(std::exchange(fence, 0));
+        if (frameLeases_[slot] != nullptr)
+            std::exchange(frameLeases_[slot], nullptr)->Release();
+        return true;
+    }
+
     /** @copydoc OpenGLExecutionAdapter::AdmitFrameSlot */
     Result<std::size_t> OpenGLExecutionAdapter::AdmitFrameSlot(const std::size_t slotCount) {
         if (synchronizationFailed_)
             return SynchronizationFailure<std::size_t>();
         std::optional<std::size_t> available;
         for (std::size_t index = 0; index < slotCount; ++index) {
-            std::uintptr_t &fence = frameFences_[index];
-            if (fence != 0) {
-                const std::uint32_t status = functions_.sync.poll(fence);
-                if (status == GL_ALREADY_SIGNALED || status == GL_CONDITION_SATISFIED) {
-                    functions_.sync.destroy(std::exchange(fence, 0));
-                    if (frameLeases_[index] != nullptr)
-                        std::exchange(frameLeases_[index], nullptr)->Release();
-                } else if (status != GL_TIMEOUT_EXPIRED) {
-                    synchronizationFailed_ = true;
-                    return SynchronizationFailure<std::size_t>();
-                }
-            }
-            if (fence == 0 && frameLeases_[index] == nullptr && !available.has_value())
+            if (!PollFrameSlot(index))
+                return SynchronizationFailure<std::size_t>();
+            if (frameFences_[index] == 0 && frameLeases_[index] == nullptr && !available.has_value())
                 available = index;
         }
         if (!available.has_value())

@@ -69,7 +69,7 @@ namespace Horo::Render {
 
         /** @brief Rejects overlapping transient native objects and reuse of imported physical storage. */
         [[nodiscard]] bool CompatibleAliases(const std::span<AliasUse> aliases) {
-            std::sort(aliases.begin(), aliases.end(), [](const AliasUse &left, const AliasUse &right) {
+            std::ranges::sort(aliases, [](const AliasUse &left, const AliasUse &right) {
                 return std::tie(left.kind, left.instance, left.first) < std::tie(right.kind, right.instance, right.first);
             });
             for (std::size_t index = 1; index < aliases.size(); ++index) {
@@ -129,9 +129,8 @@ namespace Horo::Render {
                                                    "Single-queue workload admission does not implement ownership transfers."));
         std::array<AliasUse, RenderGraphLimits::HardMaxResources> storage;
         const auto aliases = std::span{storage}.first(graph.Resources().size());
-        std::fill(aliases.begin(), aliases.end(),
-                  AliasUse{0, std::numeric_limits<std::size_t>::max(), 0, RenderGraphResourceKind::Buffer,
-                           RenderGraphResourceClass::Persistent});
+        std::ranges::fill(aliases, AliasUse{0, std::numeric_limits<std::size_t>::max(), 0, RenderGraphResourceKind::Buffer,
+                                            RenderGraphResourceClass::Persistent});
         if (!RecordUses(request, aliases))
             return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
         return ValidateInstances(request, aliases);

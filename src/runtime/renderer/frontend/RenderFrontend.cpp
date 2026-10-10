@@ -411,9 +411,6 @@ namespace Horo::Render {
         } catch (const std::length_error &) {
             static_cast<void>(memoryBudget_->ReclaimEmptyBlocks(memoryConfig_.budget.maximumBlocks));
             return PrepareResult::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
-        } catch (const std::exception &) {
-            static_cast<void>(memoryBudget_->ReclaimEmptyBlocks(memoryConfig_.budget.maximumBlocks));
-            return PrepareResult::Failure(MakeError(FrontendErrors::ResourceBackendException));
         }
     }
 

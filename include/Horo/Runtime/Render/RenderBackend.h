@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Runtime/Render/MaterialBindingBackend.h"
 #include "Horo/Runtime/Render/PresentMode.h"
 #include "Horo/Runtime/Render/RenderAdapter.h"
 #include "Horo/Runtime/Render/RenderCapabilities.h"
@@ -285,6 +286,13 @@ namespace Horo::Render {
          * @brief Queries native-free backing requirements before a buffer allocation is admitted.
          * @param descriptor Valid backend-neutral buffer descriptor.
          * @return Exact or conservative requirements, or a typed unsupported/failure result.
+         * @throws std::bad_alloc Owned requirement or error metadata allocation failed.
+         * @throws std::length_error Owned metadata exceeds its representable capacity.
+         * @details Expected descriptor, capability and native failures must use Result and retain
+         * their original error identity. Implementations may throw only the two documented
+         * metadata exceptions; other exceptions violate this callback contract. Queries must
+         * release temporary native probes before returning or unwinding. This is not noexcept
+         * because the returned Error owns its metadata.
          */
         [[nodiscard]] virtual Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const = 0;
 
@@ -292,6 +300,13 @@ namespace Horo::Render {
          * @brief Queries native-free backing requirements before a texture allocation is admitted.
          * @param descriptor Valid backend-neutral texture descriptor.
          * @return Exact or conservative requirements, or a typed unsupported/failure result.
+         * @throws std::bad_alloc Owned requirement or error metadata allocation failed.
+         * @throws std::length_error Owned metadata exceeds its representable capacity.
+         * @details Expected descriptor, capability and native failures must use Result and retain
+         * their original error identity. Implementations may throw only the two documented
+         * metadata exceptions; other exceptions violate this callback contract. Queries must
+         * release temporary native probes before returning or unwinding. This is not noexcept
+         * because the returned Error owns its metadata.
          */
         [[nodiscard]] virtual Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const = 0;
 
@@ -379,7 +394,7 @@ namespace Horo::Render {
      * resources safely from their destructor; explicit Shutdown remains the
      * deterministic lifecycle path and must be idempotent.
      */
-    class IRenderBackend : public IRenderResourceBackend {
+    class IRenderBackend : public IRenderResourceBackend, public IMaterialBindingBackend {
     public:
         ~IRenderBackend() override = default;
 

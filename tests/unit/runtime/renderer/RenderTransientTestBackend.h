@@ -3,11 +3,14 @@
 #include "Horo/Runtime/Render/NullBackendModule.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
+#include "support/AllocationProbe.h"
 
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
+#include <new>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -21,9 +24,18 @@ namespace Horo::Render::TransientTest {
     };
 
     /** @brief Controlled failure points exercised through the normal public frontend. */
+    enum class QueryFaultKind : std::uint8_t {
+        TypedFailure,
+        Allocation,
+        Length,
+        RollbackAllocation,
+    };
+
+    /** @brief Controlled failure points exercised through the normal public frontend. */
     struct Faults {
         std::size_t failCreate{};
-        std::size_t throwQuery{};
+        std::size_t failQuery{};
+        QueryFaultKind queryFault{QueryFaultKind::TypedFailure};
         bool delayCompletion{};
         bool failAfterTransfer{};
         bool supportsReuse{true};
@@ -38,6 +50,7 @@ namespace Horo::Render::TransientTest {
         IRenderGraphResourceLease *retained{};
         bool completionObserved{};
         std::size_t shutdowns{};
+        std::optional<Tests::AllocationProbe::ScopedFailure> rollbackAllocationFailure;
 
         void Complete() noexcept {
             if (retained != nullptr)
@@ -69,12 +82,14 @@ namespace Horo::Render::TransientTest {
         }
 
         Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
-            ObserveQuery();
+            if (auto failure = QueryFailure(); failure.has_value())
+                return Result<RenderMemoryCostPlan>::Failure(std::move(*failure));
             return backend_->QueryBufferMemoryCost(descriptor);
         }
 
         Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override {
-            ObserveQuery();
+            if (auto failure = QueryFailure(); failure.has_value())
+                return Result<RenderMemoryCostPlan>::Failure(std::move(*failure));
             return backend_->QueryTextureMemoryCost(descriptor);
         }
 
@@ -192,9 +207,22 @@ namespace Horo::Render::TransientTest {
             Audit &audit_;
         };
 
-        void ObserveQuery() const {
-            if (++audit_->resources.queries == audit_->faults.throwQuery)
-                throw std::runtime_error{"Injected native requirement failure."};
+        std::optional<Error> QueryFailure() const {
+            if (++audit_->resources.queries != audit_->faults.failQuery)
+                return std::nullopt;
+            if (audit_->faults.queryFault == QueryFaultKind::Allocation)
+                throw std::bad_alloc{};
+            if (audit_->faults.queryFault == QueryFaultKind::Length)
+                throw std::length_error{"Injected requirement metadata capacity failure."};
+            if (audit_->faults.queryFault == QueryFaultKind::RollbackAllocation) {
+                audit_->rollbackAllocationFailure.emplace();
+                throw std::bad_alloc{};
+            }
+            return WithCause(CreationError(), {ErrorCode{"render.test.native_requirement_cause"},
+                                               ErrorDomainId{"render.test.native"},
+                                               ErrorSeverity::Warning,
+                                               "Original native requirement evidence.",
+                                               {}});
         }
 
         bool FailCreation() {
@@ -237,7 +265,8 @@ namespace Horo::Render::TransientTest {
     };
 
     inline std::unique_ptr<RenderFrontend> MakeFrontend(const std::shared_ptr<Audit> &audit, const RenderFrontendMemoryConfig &memory = {},
-                                                        const RenderResourceRetirementLimits &retirement = {}) {
+                                                        const RenderResourceRetirementLimits &retirement = {},
+                                                        const RenderResourceUploadLimits &upload = {}) {
         RenderBackendRegistry registry;
         REQUIRE(registry
                     .Register({.id = RenderBackendId{"transient-probe"},
@@ -245,7 +274,7 @@ namespace Horo::Render::TransientTest {
                                .provider = std::make_unique<ProbeProvider>(audit)})
                     .HasValue());
         REQUIRE(registry.Seal().HasValue());
-        auto frontend = RenderFrontend::Create(registry, RenderBackendId{"transient-probe"}, {}, {}, memory, retirement);
+        auto frontend = RenderFrontend::Create(registry, RenderBackendId{"transient-probe"}, {}, upload, memory, retirement);
         REQUIRE(frontend.HasValue());
         return std::move(frontend).Value();
     }

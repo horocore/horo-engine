@@ -82,6 +82,8 @@ namespace Horo::Runtime {
             using enum SaveStorageRecoveryAction;
             if (input.commitOutcome == SaveOperationCommitOutcome::Unknown)
                 return ReconcilePublication;
+            if (input.commitOutcome == SaveOperationCommitOutcome::Committed)
+                return Abort;
             if (input.category == SaveStorageFailureCategory::TransientIo)
                 return input.completedAutomaticRetries < input.maximumAutomaticRetries ? RetryWithBackoff : Abort;
             return NonTransientRecoveryAction(input.category);

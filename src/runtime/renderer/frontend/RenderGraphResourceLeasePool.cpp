@@ -67,7 +67,7 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(resolved.ErrorValue());
         }
         const auto &pin = resolved.Value();
-        if (std::any_of(pins.begin(), pins.end(), [&pin](const Pin &existing) {
+        if (std::ranges::any_of(pins, [&pin](const Pin &existing) {
             return existing.resourceClass == pin.resourceClass && existing.identity == pin.identity;
         }))
             return Result<void>::Success();

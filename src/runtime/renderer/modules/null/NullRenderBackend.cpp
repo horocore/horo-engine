@@ -142,7 +142,7 @@ namespace Horo::Render {
                 }
                 const auto instance = NextGraphResourceInstance();
                 if (instance.HasValue())
-                    graphResources_.buffers.emplace(instance.Value(), descriptor);
+                    graphResources_.buffers.try_emplace(instance.Value(), descriptor);
                 return instance;
             }
 
@@ -174,7 +174,7 @@ namespace Horo::Render {
                         MakeBackendError(NullBackendErrors::InvalidConfig, "Null texture realization request is invalid."));
                 const auto instance = NextGraphResourceInstance();
                 if (instance.HasValue())
-                    graphResources_.textures.emplace(instance.Value(), descriptor);
+                    graphResources_.textures.try_emplace(instance.Value(), descriptor);
                 return instance;
             }
 

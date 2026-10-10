@@ -13,6 +13,31 @@ returned `RenderGraphTransientResourcesHandle` to
 generations use the additional `prepared, ui` overload. Check every result; budget,
 capacity, native allocation and unsupported backend errors retain their causes.
 
+## Memory-cost callback migration
+
+Custom `IRenderResourceBackend` implementations must update only
+`QueryBufferMemoryCost` and `QueryTextureMemoryCost`: expected invalid, unsupported
+or native failures return `Result<RenderMemoryCostPlan>::Failure` with the original
+owned error code, domain, severity, message and cause. Replace deliberate
+`std::runtime_error` or `std::exception` throws with that typed failure. Neither
+method is `noexcept`; only `std::bad_alloc` and `std::length_error` caused by owned
+metadata may escape. Release temporary native probes before returning or unwinding.
+
+The public signatures and header ownership remain unchanged: `RenderBackend.h`
+belongs to `HoroRenderApi`; consumers use its staged headers through declared
+target dependencies. Null and OpenGL already return typed validation failures;
+Metal's runtime and planning delegates and Vulkan's requirement probes already
+use the same result contract. Their expected failures retain their existing codes.
+Custom test backends now exercise typed native errors and the two permitted
+metadata exceptions instead of relying on generic exception translation.
+
+Ordinary buffer/texture admission and transient preparation preserve typed backend
+errors. Documented metadata exceptions become frontend capacity failures after
+rollback. If constructing that owned error also exhausts memory, the metadata
+exception can propagate while RAII retains cleanup ownership. No allocation-free
+failure or broader backend exception guarantee is introduced. This migration
+does not change create, frame, execution or shutdown callback contracts.
+
 Prepare reserves all unique backing slots before creating any resource. Exact
 descriptor equality, disjoint scheduled use and the lifetime compiler's queue-role
 proof permit one physical native object per compatible slot. Incompatible,

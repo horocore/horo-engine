@@ -513,6 +513,10 @@ namespace Horo::Render {
          * @details Owner-thread preparation allocates bounded metadata and reserves all slot costs
          * before native creation. Backend-native requirement classifications remain authoritative.
          * No normal-frame waits or concurrent set reuse are permitted.
+         * Expected memory-cost callback failures preserve their backend identity; documented
+         * metadata allocation/length exceptions become capacity failures after rollback.
+         * @throws std::bad_alloc Owned failure metadata cannot be allocated after rollback.
+         * @throws std::length_error Owned failure metadata exceeds its representable capacity.
          */
         [[nodiscard]] Result<RenderGraphTransientResourcesHandle> PrepareTransientGraphResources(const RenderGraphLifetimePlan &plan,
                                                                                                  RenderMemoryScopeId scope);

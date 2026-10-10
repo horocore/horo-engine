@@ -295,6 +295,7 @@ namespace Horo::Editor {
                 stackId = "workspace.left";
                 break;
             case Document:
+                m_viewModel.workspacePanelHost.ClearDocumentFocus();
                 stackId = "workspace.document";
                 break;
             case Right:

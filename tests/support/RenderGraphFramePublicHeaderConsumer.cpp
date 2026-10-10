@@ -7,6 +7,17 @@
 #include <type_traits>
 #include <utility>
 
+static_assert(std::is_same_v<decltype(std::declval<const Horo::Render::IRenderResourceBackend &>().QueryBufferMemoryCost(
+                                 std::declval<const Horo::Render::RenderBufferDescriptor &>())),
+                             Horo::Result<Horo::Render::RenderMemoryCostPlan>>);
+static_assert(std::is_same_v<decltype(std::declval<const Horo::Render::IRenderResourceBackend &>().QueryTextureMemoryCost(
+                                 std::declval<const Horo::Render::RenderTextureDescriptor &>())),
+                             Horo::Result<Horo::Render::RenderMemoryCostPlan>>);
+static_assert(!noexcept(std::declval<const Horo::Render::IRenderResourceBackend &>().QueryBufferMemoryCost(
+    std::declval<const Horo::Render::RenderBufferDescriptor &>())));
+static_assert(!noexcept(std::declval<const Horo::Render::IRenderResourceBackend &>().QueryTextureMemoryCost(
+    std::declval<const Horo::Render::RenderTextureDescriptor &>())));
+
 static_assert(std::is_same_v<decltype(std::declval<Horo::Render::RenderFrameScope &>().ExecuteGraph(
                                  std::declval<const Horo::Render::CompiledRenderGraphExecution &>(),
                                  std::span<const Horo::Render::RenderGraphPassWorkload>{})),

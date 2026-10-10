@@ -94,7 +94,8 @@ namespace Horo::Runtime::SaveFilesystemNative {
     }
 
     [[nodiscard]] inline Result<Handle> RelativeOpen(const Handle &parent, const std::wstring &name, const ACCESS_MASK access,
-                                                     const ULONG disposition, const ULONG options, const ULONG attributes) {
+                                                     const ULONG disposition, const ULONG options, const ULONG attributes,
+                                                     bool *missing = nullptr) {
         if (name.empty() || name.size() > std::numeric_limits<USHORT>::max() / sizeof(wchar_t))
             return Result<Handle>::Failure(Failure(SaveErrors::StorageOperationInvalid, "Windows component length"));
         const HMODULE library = ::GetModuleHandleW(L"ntdll.dll");
@@ -108,6 +109,8 @@ namespace Horo::Runtime::SaveFilesystemNative {
         const NTSTATUS result = create(&opened, access | SYNCHRONIZE, &object, &status, nullptr, attributes,
                                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, disposition,
                                        options | kOpenReparsePoint | kSynchronousIo, nullptr, 0);
+        if (missing)
+            *missing = static_cast<std::uint32_t>(result) == 0xC0000034U;
         if (result < 0)
             return Result<Handle>::Failure(Failure(SaveErrors::StoragePermanentIo, "relative Windows open", result));
         Handle value{opened};
@@ -183,7 +186,8 @@ namespace Horo::Runtime::SaveFilesystemNative {
         return Result<void>::Success();
     }
 
-    [[nodiscard]] inline Result<void> RenameWindowsFile(HANDLE file, HANDLE directory, const std::wstring &destination) {
+    [[nodiscard]] inline Result<void> RenameWindowsFile(HANDLE file, HANDLE directory, const std::wstring &destination,
+                                                        const bool replaceExisting = true) {
         if (destination.empty() || destination.size() > (std::numeric_limits<DWORD>::max() / sizeof(wchar_t)))
             return Result<void>::Failure(Failure(SaveErrors::StorageOperationInvalid, "Windows destination length"));
         const std::size_t byteLength = destination.size() * sizeof(wchar_t);
@@ -199,7 +203,7 @@ namespace Horo::Runtime::SaveFilesystemNative {
         // Published readers retain the old immutable file while this rename selects the new one.
         constexpr DWORD kReplaceIfExists = 0x00000001;
         constexpr DWORD kPosixSemantics = 0x00000002;
-        rename->Flags = kReplaceIfExists | kPosixSemantics;
+        rename->Flags = (replaceExisting ? kReplaceIfExists : 0U) | kPosixSemantics;
         rename->RootDirectory = directory;
         rename->FileNameLength = static_cast<DWORD>(byteLength);
         std::copy(destination.begin(), destination.end(), rename->FileName);
@@ -274,17 +278,23 @@ namespace Horo::Runtime::SaveFilesystemNative {
         return Result<void>::Success();
     }
 
-    [[nodiscard]] inline Result<void> WritePosixBytes(const int fd, const std::span<const std::byte> bytes) {
+    template <typename ProgressHook, typename SyncHook>
+    [[nodiscard]] inline Result<void> WritePosixBytes(const int fd, const std::span<const std::byte> bytes, ProgressHook &&onProgress,
+                                                      SyncHook &&beforeSync) {
         std::size_t offset = 0;
         while (offset < bytes.size()) {
-            const std::size_t remaining = std::min(bytes.size() - offset, static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
+            const std::size_t remaining = std::min<std::size_t>(bytes.size() - offset, 64ULL << 10U);
             const ssize_t written = ::write(fd, bytes.data() + offset, remaining);
             if (written < 0 && errno == EINTR)
                 continue;
             if (written <= 0)
                 return Result<void>::Failure(Failure(SaveErrors::StoragePermanentIo, "temporary write", written < 0 ? errno : 0));
             offset += static_cast<std::size_t>(written);
+            if (auto admitted = onProgress(); admitted.HasError())
+                return admitted;
         }
+        if (auto admitted = beforeSync(); admitted.HasError())
+            return admitted;
         if (::fsync(fd) != 0)
             return Result<void>::Failure(Failure(SaveErrors::StoragePermanentIo, "temporary synchronization", errno));
         return Result<void>::Success();

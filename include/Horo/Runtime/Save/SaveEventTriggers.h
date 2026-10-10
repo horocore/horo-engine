@@ -142,16 +142,20 @@ namespace Horo::Runtime {
                                                                                SaveSafePointCoordinator &safePoints);
         /** @brief Retains one intent; equivalent rapid events reuse the original correlation without adding work.
          * @param event Exact registered payload and current capture incarnation.
-         * @return Effective receipt, or invalid/stale/busy/eligibility error. Distinct busy intents are explicitly rejected.
-         * @post A repeated sequence with different data is rejected; older sequences never replay saves.
+         * @return Effective receipt, or invalid/stale/busy/eligibility error. Distinct busy intents are rejected except newer
+         * non-transition Auto payloads for the same pending trigger.
+         * @post A replaced pending correlation becomes stale; admitted receipts remain immutable. A repeated sequence with different data
+         * is rejected; older sequences never replay saves.
          */
         [[nodiscard]] Result<SaveTriggerReceipt> Submit(const SaveTriggerEvent &event);
         /** @brief Admits pending intent only at the actual lifecycle commit safe point, idle and after product cooldown.
          * @param phase Actual runtime phase. @param operation Fresh host-issued Save descriptor, used only on admission.
+         * @param retry Optional original storage retry capability; exact resolved preconditions must match.
          * @return Empty while busy/cooling down, one correlated handoff, or original typed failure.
          * @post Capture is fenced by the existing safe-point coordinator for the exact source (before) or destination (after).
          */
-        [[nodiscard]] Result<std::optional<SaveTriggerHandoff>> CommitAtSafePoint(RuntimePhase phase, SaveOperationDescriptor operation);
+        [[nodiscard]] Result<std::optional<SaveTriggerHandoff>> CommitAtSafePoint(RuntimePhase phase, SaveOperationDescriptor operation,
+                                                                                  std::optional<SaveArbiterRetryDescriptor> retry = {});
         /** @brief Rechecks target/CAS and trusted context under the host capture/publication lease.
          * @param handoff Exact issued evidence. @return Success or stale/denied error; no mutation or I/O.
          */
@@ -160,7 +164,8 @@ namespace Horo::Runtime {
          * @param correlation Effective identity returned by Submit. @return Receipt or stale identity error.
          */
         [[nodiscard]] Result<SaveTriggerReceipt> Receipt(SaveTriggerCorrelation correlation) const;
-        /** @brief Closes admission and drops pending intent with a visible cancellation cause; admitted work stays host-owned.
+        /** @brief Closes admission and drops pending intent with a visible cancellation cause; admitted precommit work is cooperatively
+         * cancelled; publication beyond its gate stays host-owned.
          * @return Success or thread-affinity error. Idempotent.
          */
         [[nodiscard]] Result<void> BeginShutdown();
@@ -192,12 +197,19 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> ValidateOwner() const;
         /** @brief Checks host authority, activity, namespace and capture incarnation. */
         [[nodiscard]] Result<void> ValidateContext(const Record &record, const SaveTriggerEvent &event) const;
+        /** @brief Reuses an equivalent effective correlation only under the existing busy-coalescing policy. */
+        [[nodiscard]] std::optional<Result<SaveTriggerReceipt>> TryCoalesce(Record &record, const SaveTriggerEvent &event);
+        /** @brief Checks the single pending bound while preserving any separately retained active receipt. */
+        [[nodiscard]] bool CanRetainIntent(std::size_t index, bool latestAuto) const;
+        /** @brief Checks shared cooldown and sole-arbiter readiness after the caller validated the monotonic clock. */
+        [[nodiscard]] bool ReadyForAdmission(const Record &record) const;
         /** @brief Resolves only a registered target, validating catalog kind, capacity and exact generation. */
         [[nodiscard]] Result<SaveTriggerHandoff> Resolve(const Record &record) const;
         /** @brief Retains the original failure for transition decisions and releases the single pending slot. */
         void RejectPending(Error error);
         /** @brief Reserves arbiter and safe-point records together and returns exact correlation. */
-        [[nodiscard]] Result<SaveTriggerHandoff> Admit(Record &record, SaveTriggerHandoff handoff, SaveOperationDescriptor operation);
+        [[nodiscard]] Result<SaveTriggerHandoff> Admit(Record &record, SaveTriggerHandoff handoff, SaveOperationDescriptor operation,
+                                                       std::optional<SaveArbiterRetryDescriptor> retry);
         CookedSaveProjectPolicy policy_;
         const SaveTriggerHostState *host_;
         SaveOperationArbiter *arbiter_;
@@ -205,6 +217,7 @@ namespace Horo::Runtime {
         std::vector<Record> records_;
         std::optional<std::size_t> pending_;
         SaveOperationHandle active_;
+        std::optional<SaveTriggerReceipt> activeReceipt_;
         std::array<std::uint64_t, SaveProjectPolicy::ModeCount> admittedAt_{};
         std::array<bool, SaveProjectPolicy::ModeCount> admitted_{};
         std::thread::id owner_;

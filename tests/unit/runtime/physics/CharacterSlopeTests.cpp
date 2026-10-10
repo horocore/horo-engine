@@ -109,10 +109,15 @@ namespace Horo::Character {
             auto input = FixedTick(tick);
             input.fixedDelta = Duration::FromNanoseconds(deltaNanoseconds);
             input.query = probe.Context(spawned.world->Descriptor(), tick);
+            CharacterMetricCapture capture;
+            input.metrics = &capture;
+            const auto callsBefore = probe.calls;
             auto command = Movement(spawned.controller, tick, tick);
             command.desiredVelocityMetersPerSecond = velocity;
             REQUIRE(spawned.world->QueueMovementCommand(command).HasValue());
             REQUIRE(spawned.world->AdvanceFixedTick(input).HasValue());
+            REQUIRE(capture.snapshot.queries == probe.calls - callsBefore);
+            RequireMovementBudget(*spawned.world, capture);
             const auto snapshot = spawned.world->ControllerLocomotionSnapshot(spawned.controller);
             REQUIRE(snapshot.HasValue());
             REQUIRE(ValidateCharacterLocomotionSnapshot(snapshot.Value(), spawned.world->ControllerDescriptor(spawned.controller).Value())

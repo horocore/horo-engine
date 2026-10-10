@@ -7,6 +7,13 @@
 
 namespace Horo::Runtime {
     namespace {
+        /** @brief Keeps optional retry evidence bound to this exact autosave capture incarnation. */
+        [[nodiscard]] bool IsCaptureOperationValid(const SaveOperationDescriptor &operation,
+                                                   const std::optional<SaveArbiterRetryDescriptor> &retry,
+                                                   const SaveRuntimeGeneration generation) noexcept {
+            return operation.kind == SaveOperationKind::Save && (!retry || retry->preconditions.runtime == generation);
+        }
+
         /** @brief Rejects nested mutations through adapters and operation terminal observers. */
         class ExecutionScope final {
         public:
@@ -41,8 +48,10 @@ namespace Horo::Runtime {
         if (!operation_.IsValid() || awaitingCapture_ || arbiter_->ActiveOperation() == operation_.Id())
             return Result<void>::Success();
         const auto terminal = operation_.Snapshot();
-        if (!terminal || !terminal->IsTerminal())
+        if (!terminal)
             return Result<void>::Failure(MakeError(SaveErrors::CompletionInvalid));
+        if (!terminal->IsTerminal())
+            return Result<void>::Success();
         operation_ = {};
         if (terminal->state == SaveOperationState::Failed) {
             snapshot_.disposition = SaveAutosaveDisposition::Failed;
@@ -56,15 +65,17 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc SaveAutosaveScheduler::Admit */
-    Result<void> SaveAutosaveScheduler::Admit(SaveOperationDescriptor operation, SaveArbiterAddress address) {
-        if (operation.kind != SaveOperationKind::Save)
+    Result<void> SaveAutosaveScheduler::Admit(SaveOperationDescriptor operation, SaveArbiterAddress address,
+                                              std::optional<SaveArbiterRetryDescriptor> retry) {
+        if (!IsCaptureOperationValid(operation, retry, last_.generation))
             return Result<void>::Failure(MakeError(SaveErrors::OperationInvalid));
         auto callbackFailure = Result<void>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed));
         auto admitted = arbiter_->Admit({.operation = std::move(operation),
                                          .mode = SavePolicyMode::Auto,
                                          .address = std::move(address),
                                          .priority = SaveArbiterPriority::Background,
-                                         .conflict = SaveArbiterConflictPolicy::Reject});
+                                         .conflict = SaveArbiterConflictPolicy::Reject,
+                                         .retry = std::move(retry)});
         if (admitted.HasError()) {
             snapshot_.cooldownRemaining = policy_.cooldown;
             return Result<void>::Failure(admitted.ErrorValue());
@@ -192,10 +203,12 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc SaveAutosaveScheduler::CommitAtSafePoint */
-    Result<std::optional<SaveAutosaveCapture>> SaveAutosaveScheduler::CommitAtSafePoint(
-        const RuntimePhase phase, const SaveRuntimeGeneration generation, SaveOperationDescriptor operation, SaveArbiterAddress address,
-        const RuntimeSaveCaptureProvenance &provenance, SaveParticipantRegistrySnapshot participants,
-        const RuntimeSaveCaptureLimits &limits) {
+    Result<std::optional<SaveAutosaveCapture>> SaveAutosaveScheduler::CommitAtSafePoint(const RuntimePhase phase,
+                                                                                        const SaveRuntimeGeneration generation,
+                                                                                        SaveAutosaveAdmission admission,
+                                                                                        const RuntimeSaveCaptureProvenance &provenance,
+                                                                                        SaveParticipantRegistrySnapshot participants,
+                                                                                        const RuntimeSaveCaptureLimits &limits) {
         using Return = Result<std::optional<SaveAutosaveCapture>>;
         if (const auto valid = ValidateSafePoint(phase, generation); valid.HasError())
             return Return::Failure(valid.ErrorValue());
@@ -211,7 +224,8 @@ namespace Horo::Runtime {
             return Return::Failure(ready.ErrorValue());
         if (!ready.Value())
             return Return::Success({});
-        if (const auto admitted = Admit(std::move(operation), std::move(address)); admitted.HasError())
+        if (const auto admitted = Admit(std::move(admission.operation), std::move(admission.address), std::move(admission.retry));
+            admitted.HasError())
             return Return::Failure(admitted.ErrorValue());
         return awaitingCapture_ ? Capture(phase, provenance, std::move(participants), limits) : Return::Success({});
     }

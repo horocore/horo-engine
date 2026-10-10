@@ -6,6 +6,7 @@
 
 #include "Horo/Editor/EditorIcons.h"
 #include "Horo/Editor/EditorTheme.h"
+#include "Horo/Editor/SequenceDocument.h"
 
 #include <array>
 #include <cstdint>
@@ -18,6 +19,25 @@
 #include <vector>
 
 namespace Horo::Editor::Ui {
+
+    /** @brief Localized copy supplied by the workspace host to the shared timeline control. */
+    struct SequenceTimelineLabels {
+        std::string zoom;
+        std::string scroll;
+        std::string playhead;
+        std::string noContext;
+        std::string unavailable;
+        std::string empty;
+        std::string keys;
+        std::array<std::string, static_cast<std::size_t>(Cinematic::SequenceTrackType::Count)> trackTypes;
+    };
+
+    /** @brief Draws themed native navigation controls and token-backed track lanes without authoring mutations.
+     * @param asset Immutable authored sequence metadata. @param state Transient timeline state updated by interaction.
+     * @param labels Localized visible copy. @param fonts Shared editor typography.
+     * @return True when transient presentation changed; source data is never modified. */
+    [[nodiscard]] bool SequenceTimeline(const Cinematic::SequenceAsset &asset, SequenceTimelineState &state,
+                                        const SequenceTimelineLabels &labels, const Theme::Fonts &fonts);
 
     // ── Semantic button variant ──────────────────────────────────────────
 

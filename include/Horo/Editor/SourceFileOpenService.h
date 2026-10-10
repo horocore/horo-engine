@@ -31,6 +31,7 @@ namespace Horo::Editor {
         ProjectText,
         Unsupported,
         UiCanvas,
+        Sequence,
     };
 
     /** @brief Caller that requested one source-open operation. */
@@ -66,10 +67,11 @@ namespace Horo::Editor {
         bool embeddedEditorAvailable{true};              /**< Embedded workspace route is installed. */
         bool externalEditorAvailable{true};              /**< External fallback route is installed. */
         std::vector<std::string> uiCanvasExtensions;     /**< Runtime UI canvas document suffixes. */
+        std::vector<std::string> sequenceExtensions;     /**< Versioned cinematic sequence source suffixes. */
 
         /**
-         * @brief Returns the default M2 source/text policy.
-         * @return A value containing native source, Horo Script, project-text, and UI Canvas extensions.
+         * @brief Returns the default source and authored-document opening policy.
+         * @return A value containing native source, Horo Script, project-text, UI Canvas, and cinematic sequence extensions.
          */
         [[nodiscard]] static SourceFilePolicy Default();
     };
@@ -79,7 +81,7 @@ namespace Horo::Editor {
         SourceFileKind kind{SourceFileKind::Unsupported};
         std::string extension;
 
-        /** @brief Reports whether the policy recognizes this file as editable source/text. */
+        /** @brief Reports whether the policy recognizes this file as an embedded source or authored document. */
         [[nodiscard]] bool IsSupported() const noexcept {
             return kind != SourceFileKind::Unsupported;
         }

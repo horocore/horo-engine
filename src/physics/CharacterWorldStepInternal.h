@@ -261,19 +261,51 @@ namespace Horo::Character::Detail {
         return Result<bool>::Success(true);
     }
 
-    /** @brief Includes the authored riser range without letting capsule curvature bypass final height checks. */
-    [[nodiscard]] bool HasLowStepObstacle(const CharacterSweepProbeResult &evidence, const CharacterControllerDescriptor &descriptor,
-                                          const SweepMotionState &motion, const Math::Vec3 direction, const float nearest) {
+    /** @brief Identifies one nearest blocking contact within the capsule's authored riser range. */
+    [[nodiscard]] bool IsLowStepContact(const CharacterSweepHit &hit, const CharacterControllerDescriptor &descriptor,
+                                        const SweepMotionState &motion, const Math::Vec3 direction, const float nearest) {
         const float lowerCenter = -descriptor.capsule.cylindricalHalfHeightMeters;
         const float eligibleHeight = descriptor.maximumStepHeightMeters - descriptor.capsule.cylindricalHalfHeightMeters -
                                      descriptor.capsule.radiusMeters - descriptor.skinWidthMeters;
-        const float height = std::max(lowerCenter, eligibleHeight);
-        return std::ranges::any_of(evidence.hits.begin(), evidence.hits.begin() + evidence.hitCount,
-                                   [&descriptor, &motion, direction, nearest, height](const CharacterSweepHit &hit) {
-            return IsBlockingSweepHit(hit, descriptor) && hit.distanceMeters <= nearest + GroundDistanceTolerance &&
-                   Math::Dot(hit.normal, direction) < -GroundNormalTolerance &&
-                   Math::Dot(hit.point - motion.position, descriptor.up) <= height + GroundDistanceTolerance;
+        return IsBlockingSweepHit(hit, descriptor) && hit.distanceMeters <= nearest + GroundDistanceTolerance &&
+               Math::Dot(hit.normal, direction) < -GroundNormalTolerance &&
+               Math::Dot(hit.point - motion.position, descriptor.up) <= std::max(lowerCenter, eligibleHeight) + GroundDistanceTolerance;
+    }
+
+    /** @brief Includes the authored riser range without letting capsule curvature bypass final height checks. */
+    [[nodiscard]] bool HasLowStepObstacle(const CharacterSweepProbeResult &evidence, const CharacterControllerDescriptor &descriptor,
+                                          const SweepMotionState &motion, const Math::Vec3 direction, const float nearest) {
+        return std::ranges::any_of(evidence.hits.begin(), evidence.hits.begin() + evidence.hitCount, [&](const CharacterSweepHit &hit) {
+            return IsLowStepContact(hit, descriptor, motion, direction, nearest);
         });
+    }
+
+    /** @brief Proves all low blockers are the touching walkable support plane before allowing ordinary slope ascent. */
+    [[nodiscard]] Result<std::optional<Math::Vec3>> ReadContinuousSlopeSupport(auto &impl, const StepQueryContext &query,
+                                                                               const SweepMotionState &motion,
+                                                                               const CharacterSweepProbeResult &evidence,
+                                                                               const Math::Vec3 direction, const float nearest) {
+        const auto &descriptor = query.descriptor;
+        if (const float walkableCosine = std::cos(descriptor.maximumSlopeDegrees * Math::Pi / 180.0F);
+            std::ranges::any_of(evidence.hits.begin(), evidence.hits.begin() + evidence.hitCount, [&](const CharacterSweepHit &hit) {
+            return IsLowStepContact(hit, descriptor, motion, direction, nearest) &&
+                   !IsWalkableGroundNormal(hit.normal, descriptor.up, walkableCosine);
+        }))
+            return Result<std::optional<Math::Vec3>>::Success(std::nullopt);
+        const float distance = descriptor.skinWidthMeters + GroundDistanceTolerance;
+        const auto ground = ProbeStep(impl, query, {motion.position, -descriptor.up, distance, motion.iteration});
+        if (ground.HasError())
+            return Result<std::optional<Math::Vec3>>::Failure(ground.ErrorValue());
+        const auto support = SelectGroundHit(ground.Value(), descriptor);
+        if (!support)
+            return Result<std::optional<Math::Vec3>>::Success(std::nullopt);
+        const auto block = SelectNearestSweepBlock(ground.Value(), -descriptor.up, distance, descriptor);
+        const bool matches =
+            std::ranges::all_of(evidence.hits.begin(), evidence.hits.begin() + evidence.hitCount, [&](const CharacterSweepHit &hit) {
+            return !IsLowStepContact(hit, descriptor, motion, direction, nearest) ||
+                   (Math::Dot(hit.normal, support->normal) >= 1.0F - GroundNormalTolerance && MatchesStepPlane(hit, support, block));
+        });
+        return Result<std::optional<Math::Vec3>>::Success(matches ? std::optional{support->normal} : std::nullopt);
     }
 
     /** @brief Removes manufactured ascent after rejection and stops any resulting motion back into the obstacle. */

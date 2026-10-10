@@ -420,6 +420,17 @@ intent; contour and downhill travel remain available. Conflicting simultaneous
 planes fail closed when a later projection violates an earlier blocking plane.
 No speed restoration scales a wall-clipped vector back through an obstacle.
 
+A capsule's low contact point on a walkable plane is not by itself a stair.
+Before applying rejected-step ascent clipping, the runtime may certify continuous
+support with one budgeted downward cast from the current collision root. Every
+nearest low blocking contact must match the closest touching walkable support's
+body, shape, subshape, normal and plane. The entire remaining displacement is then projected onto that slope and
+re-swept before any travel commits, preserving horizontal speed and initial
+clearance even when its elevation change exceeds the authored stair-height limit.
+Different normals, offset planes or foreign surfaces still require the complete
+step path; query errors, malformed evidence and exhausted capacity roll back the
+candidate tick.
+
 Stop adds no automatic surface drift. Slide uses the committed Character-owned
 `gravityVelocityMetersPerSecond` from the locomotion snapshot, distinct from
 caller-owned desired velocity and displacement-derived achieved velocity. It

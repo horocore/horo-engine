@@ -143,6 +143,14 @@ namespace Horo::Runtime {
             CHECK(exhausted.Value().Action() == SaveStorageRecoveryAction::Abort);
             CHECK_FALSE(exhausted.Value().CanRetryAutomatically());
 
+            const auto committed = MakeSaveStorageFailureDecision({.category = SaveStorageFailureCategory::TransientIo,
+                                                                   .commitOutcome = SaveOperationCommitOutcome::Committed,
+                                                                   .maximumAutomaticRetries = 3,
+                                                                   .nativeCause = MakeError(NativeFailure)});
+            REQUIRE(committed.HasValue());
+            CHECK(committed.Value().Action() == SaveStorageRecoveryAction::Abort);
+            CHECK_FALSE(committed.Value().CanRetryAutomatically());
+
             auto unknown = MakeSaveStorageFailureDecision({.category = SaveStorageFailureCategory::DiskFull,
                                                            .commitOutcome = SaveOperationCommitOutcome::Unknown,
                                                            .maximumAutomaticRetries = 3,

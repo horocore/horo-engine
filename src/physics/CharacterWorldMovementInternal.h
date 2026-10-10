@@ -38,6 +38,18 @@ namespace Horo::Character::Detail {
         }
         const bool lowObstacle = HasLowStepObstacle(evidence, descriptor, motion, direction, selection.nearest);
         if (lowObstacle) {
+            const auto continuous =
+                ReadContinuousSlopeSupport(impl, {command, input, descriptor}, motion, evidence, direction, selection.nearest);
+            if (continuous.HasError())
+                return Result<bool>::Failure(continuous.ErrorValue());
+            if (continuous.Value()) {
+                // Re-sweep the full slope-projected path before committing any travel.
+                motion.remaining = ClipSlopeMotion(motion.remaining, *continuous.Value(), descriptor,
+                                                   std::cos(descriptor.maximumSlopeDegrees * Math::Pi / 180.0F));
+                return Result<bool>::Success(true);
+            }
+        }
+        if (lowObstacle) {
             const auto step = TryCapsuleStep(impl, result, command, input, descriptor, motion);
             if (step.HasError())
                 return Result<bool>::Failure(step.ErrorValue());
