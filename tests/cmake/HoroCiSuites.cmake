@@ -78,6 +78,15 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroExtensionsPublicHeaderConsumer
     HoroMcpSessionTests
     HoroMcpSessionPublicHeaderConsumer
+    HoroProjectCodeQueryTests
+    HoroProjectReadFilesTests
+    HoroMcpProjectCodeQueryTests
+    HoroSourceDocumentCodeQueryTests
+    HoroProjectReadFilesApiPublicHeaderConsumer
+    HoroPlatformProjectReadFilesPublicHeaderConsumer
+    HoroProjectCodeQueryPublicHeaderConsumer
+    HoroMcpProjectCodeQueryPublicHeaderConsumer
+    HoroSourceDocumentCodeQueryPublicHeaderConsumer
     HoroRuntimeSaveRootResolverTests
     HoroRuntimeSaveStorageQualificationTests
     HoroSaveStorageUserStateQualificationTests
@@ -128,6 +137,7 @@ set(HORO_SONAR_EDITOR_TARGETS
     HoroCameraCutEditorIntegrationTests
     HoroCinematicPropertyIntegrationTests
     HoroConfiguredEditorUpdateBackendTests
+    HoroSourceDocumentCodeQueryTests
 )
 
 function(horo_ci_catch_labels target)
