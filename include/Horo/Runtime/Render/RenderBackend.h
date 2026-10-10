@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Runtime/Render/MaterialBindingBackend.h"
 #include "Horo/Runtime/Render/PresentMode.h"
 #include "Horo/Runtime/Render/RenderAdapter.h"
 #include "Horo/Runtime/Render/RenderCapabilities.h"
@@ -393,7 +394,7 @@ namespace Horo::Render {
      * resources safely from their destructor; explicit Shutdown remains the
      * deterministic lifecycle path and must be idempotent.
      */
-    class IRenderBackend : public IRenderResourceBackend {
+    class IRenderBackend : public IRenderResourceBackend, public IMaterialBindingBackend {
     public:
         ~IRenderBackend() override = default;
 
