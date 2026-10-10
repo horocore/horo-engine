@@ -1049,6 +1049,7 @@ add_test(NAME HoroNavigationBakeDiagnosticsPublicConsumer COMMAND HoroNavigation
 
 if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     add_executable(HoroNavigationBakeServiceTests unit/runtime/navigation/NavigationBakeServiceTests.cpp
+            unit/runtime/navigation/NavigationBakeQualificationTests.cpp
             unit/runtime/navigation/NavigationBakeDiagnosticsTests.cpp
             unit/runtime/navigation/NavigationBakeDiagnosticRecoveryTests.cpp
             unit/application/navigation/NavigationBakePublicationTests.cpp)

@@ -55,11 +55,29 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
         "HoroTerrainProducerSnapshotTests", "HoroTerrainProducerSnapshotPublicHeaderConsumer",
         "HoroRuntimeSaveEventTriggersTests", "HoroSaveEventTriggersPublicHeaderConsumer",
         "HoroRuntimeSaveRestoreTransactionTests", "HoroSaveGameplayCheckpointPublicHeaderConsumer",
+        "HoroNavigationRuntimeTests", "HoroNavigationBakeServiceTests",
     }
     for workflow in ("prefab-foundation-windows", "extension-abi-windows", "mcp-session-windows", "save-path-windows"):
         assert not (ROOT / f".github/workflows/{workflow}.yml").exists()
     assert preset("buildPresets", "ci-windows-debug")["targets"] == ["HoroCiWindowsChecks"]
     assert preset("testPresets", "ci-windows-debug")["filter"]["include"]["label"] == "^ci-windows$"
+
+
+def test_windows_navigation_qualification_has_build_and_discovery_closure() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    for target in ("HoroNavigationRuntimeTests", "HoroNavigationBakeServiceTests"):
+        assert target in targets("HORO_CI_WINDOWS_TARGETS")
+        assert f"add_executable({target}" in tests_cmake
+    assert "unit/runtime/navigation/NavigationBakeJobsTests.cpp" in tests_cmake
+    assert "unit/runtime/navigation/NavigationBakeServiceTests.cpp" in tests_cmake
+    assert "unit/runtime/navigation/NavigationBakeQualificationTests.cpp" in tests_cmake
+    assert 'horo_register_catch_test(HoroNavigationBakeServiceTests LABELS "unit;navigation;headless;cook")' in tests_cmake
+    assert 'horo_register_catch_test(HoroNavigationRuntimeTests LABELS "unit;navigation;headless;lifecycle")' in tests_cmake
+    assert 'if(target IN_LIST HORO_CI_WINDOWS_TARGETS)\n        list(APPEND ARG_LABELS ci-windows)' in SUITES
+    for name in ("ci-base", "ci-headless", "ci-windows-debug"):
+        assert preset("configurePresets", name)["cacheVariables"].get("HORO_BUILD_NAVIGATION_RECAST_DETOUR", "ON") == "ON"
+    root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    assert 'option(HORO_BUILD_NAVIGATION_RECAST_DETOUR "Build the default grounded navigation query provider" ON)' in root_cmake
 
 
 def test_windows_manifest_tests_and_consumer_share_the_build_closure() -> None:
