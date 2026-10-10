@@ -188,16 +188,47 @@ namespace Horo::Render::TransientTest {
         REQUIRE(frontend->PrepareTransientGraphResources(sources.lifetime, {7, 1}).HasValue());
     }
 
-    TEST_CASE("Transient native requirement exceptions cancel the complete reserved prefix", "[renderer][transient][rollback]") {
+    TEST_CASE("Transient typed native requirement failure cancels the complete reserved prefix", "[renderer][transient][rollback]") {
         auto audit = std::make_shared<Audit>();
-        audit->faults.throwQuery = 2;
+        audit->faults.failQuery = 2;
         auto frontend = MakeFrontend(audit);
         auto sources = CopyGraph({{41}, 1, 1}, {{41}, 2, 1}, CopyShape::Incompatible);
-        Test::RequireError(frontend->PrepareTransientGraphResources(sources.lifetime, {7, 1}),
-                           "render.frontend.resource.backend_exception");
+        const auto failed = frontend->PrepareTransientGraphResources(sources.lifetime, {7, 1});
+        Test::RequireError(failed, "render.test.transient_native_failure");
+        CHECK(failed.ErrorValue().domain.Value() == "render.test");
+        CHECK(failed.ErrorValue().severity == ErrorSeverity::Error);
+        CHECK(failed.ErrorValue().message == "Injected native resource failure.");
         CHECK(audit->resources.creates == 0);
         CHECK(frontend->MemorySnapshot().committedBackingBytes == 0);
         CHECK(frontend->MemorySnapshot().reservedUnallocatedBytes == 0);
+        const auto retry = frontend->PrepareTransientGraphResources(sources.lifetime, {7, 1});
+        REQUIRE(retry.HasValue());
+        REQUIRE(frontend->ReleaseTransientGraphResources(retry.Value()).HasValue());
+        CHECK(frontend->MemorySnapshot().committedBackingBytes == 0);
+        CHECK(frontend->MemorySnapshot().reservedUnallocatedBytes == 0);
+    }
+
+    TEST_CASE("Transient rollback metadata allocation failure retains shutdown ownership", "[renderer][transient][rollback]") {
+        auto audit = std::make_shared<Audit>();
+        audit->faults.failQuery = 2;
+        audit->faults.queryFault = QueryFaultKind::RollbackAllocation;
+        auto frontend = MakeFrontend(audit);
+        auto sources = CopyGraph({{41}, 1, 1}, {{41}, 2, 1}, CopyShape::Incompatible);
+        Test::RequireError(frontend->PrepareTransientGraphResources(sources.lifetime, {7, 1}),
+                           "render.frontend.resource.capacity_exhausted");
+        CHECK(audit->resources.queries == 2);
+        CHECK(audit->resources.creates == 0);
+        CHECK(frontend->MemorySnapshot().reservationCount == 0);
+        CHECK(frontend->MemorySnapshot().allocationCount == 0);
+        CHECK(frontend->MemorySnapshot().reservedUnallocatedBytes == 0);
+        CHECK(frontend->MemorySnapshot().committedBackingBytes == 0);
+        const auto retry = frontend->PrepareTransientGraphResources(sources.lifetime, {7, 1});
+        Test::RequireError(retry, "render.frontend.resource.backend_exception");
+        CHECK(retry.ErrorValue().message.find("shut down") != std::string::npos);
+        CHECK(audit->resources.queries == 2);
+        frontend.reset();
+        CHECK(audit->shutdowns == 1);
+        CHECK(audit->resources.destroyed == 0);
     }
 
     TEST_CASE("Transient preparation rejects unsupported backends and malformed moved proofs", "[renderer][transient][validation]") {

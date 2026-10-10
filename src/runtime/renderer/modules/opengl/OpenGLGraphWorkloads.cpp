@@ -6,6 +6,7 @@
 #include <glad/gl.h>
 #include <limits>
 #include <memory>
+#include <type_traits>
 
 namespace Horo::Render::Detail {
     namespace {
@@ -26,6 +27,11 @@ namespace Horo::Render::Detail {
                 functions_.state.getInteger(GL_DRAW_FRAMEBUFFER_BINDING, std::span{&framebuffer_, 1});
             }
 
+            DrawTargetRestore(const DrawTargetRestore &) = delete;
+            DrawTargetRestore &operator=(const DrawTargetRestore &) = delete;
+            DrawTargetRestore(DrawTargetRestore &&) = delete;
+            DrawTargetRestore &operator=(DrawTargetRestore &&) = delete;
+
             ~DrawTargetRestore() noexcept {
                 functions_.state.bindDrawFramebuffer(static_cast<std::uint32_t>(framebuffer_));
             }
@@ -42,6 +48,11 @@ namespace Horo::Render::Detail {
                 functions_.state.getInteger(GL_COPY_READ_BUFFER, std::span{&source_, 1});
                 functions_.state.getInteger(GL_COPY_WRITE_BUFFER, std::span{&destination_, 1});
             }
+
+            CopyBindingsRestore(const CopyBindingsRestore &) = delete;
+            CopyBindingsRestore &operator=(const CopyBindingsRestore &) = delete;
+            CopyBindingsRestore(CopyBindingsRestore &&) = delete;
+            CopyBindingsRestore &operator=(CopyBindingsRestore &&) = delete;
 
             ~CopyBindingsRestore() noexcept {
                 functions_.buffers.bindBuffer(GL_COPY_READ_BUFFER, static_cast<std::uint32_t>(source_));
@@ -81,19 +92,19 @@ namespace Horo::Render::Detail {
         /** @brief Encodes a previously admitted whole-color attachment with complete scoped state isolation. */
         [[nodiscard]] bool EncodeColor(const PrimaryOutputAttachment &operations, const FramebufferExtent extent,
                                        const std::uint32_t framebuffer, const OpenGLCommandFunctions &functions) {
-            OpenGLExecutionState state{functions};
-            if (!state.Apply(extent))
-                return false;
-            if (framebuffer != 0) {
-                functions.state.bindDrawFramebuffer(framebuffer);
-                functions.state.drawBuffer(GL_COLOR_ATTACHMENT0);
+            if (OpenGLExecutionState state{functions}; state.Apply(extent)) {
+                if (framebuffer != 0) {
+                    functions.state.bindDrawFramebuffer(framebuffer);
+                    functions.state.drawBuffer(GL_COLOR_ATTACHMENT0);
+                }
+                if (operations.loadOperation == AttachmentLoadOperation::Clear) {
+                    const auto &color = operations.clearColor;
+                    functions.clearColor(color.red, color.green, color.blue, color.alpha);
+                    functions.clear(GL_COLOR_BUFFER_BIT);
+                }
+                return true;
             }
-            if (operations.loadOperation == AttachmentLoadOperation::Clear) {
-                const auto &color = operations.clearColor;
-                functions.clearColor(color.red, color.green, color.blue, color.alpha);
-                functions.clear(GL_COLOR_BUFFER_BIT);
-            }
-            return true;
+            return false;
         }
     }  // namespace
 
@@ -140,13 +151,18 @@ namespace Horo::Render::Detail {
                 return Result<void>::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
         }
         for (const auto &binding : request.workloads) {
-            if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&binding.workload)) {
-                if (!ValidCopy(*copy, request, resources))
-                    return Result<void>::Failure(MakeError(OpenGLBackendErrors::InvalidExecutionPlan));
-            } else if (const auto *color = std::get_if<RenderGraphColorAttachment>(&binding.workload)) {
-                if (!ValidColor(*color, request, resources))
-                    return Result<void>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));
-            }
+            const auto valid = std::visit([&request, &resources]<typename Workload>(const Workload &workload) {
+                if constexpr (std::is_same_v<Workload, RenderGraphBufferCopy>) {
+                    if (!ValidCopy(workload, request, resources))
+                        return Result<void>::Failure(MakeError(OpenGLBackendErrors::InvalidExecutionPlan));
+                } else if constexpr (std::is_same_v<Workload, RenderGraphColorAttachment>) {
+                    if (!ValidColor(workload, request, resources))
+                        return Result<void>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));
+                }
+                return Result<void>::Success();
+            }, binding.workload);
+            if (valid.HasError())
+                return valid;
         }
         return Result<void>::Success();
     }
@@ -157,21 +173,24 @@ namespace Horo::Render::Detail {
         if (functions.state.error() != GL_NO_ERROR)
             return Result<void>::Failure(MakeError(OpenGLBackendErrors::CommandFailed));
         for (const auto &binding : request.workloads) {
-            if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&binding.workload)) {
-                CopyBindingsRestore restore{functions};
-                functions.buffers.bindBuffer(GL_COPY_READ_BUFFER, Instance(copy->source, request));
-                functions.buffers.bindBuffer(GL_COPY_WRITE_BUFFER, Instance(copy->destination, request));
-                functions.buffers.copyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, copy->sourceOffset, copy->destinationOffset,
-                                                    copy->byteCount);
-            } else if (const auto *color = std::get_if<RenderGraphColorAttachment>(&binding.workload)) {
-                const auto &texture = resources.textures.at(Instance(color->texture, request));
-                if (!EncodeColor(color->operations, texture.descriptor.extent, texture.graphFramebuffer, functions))
-                    return Result<void>::Failure(MakeError(OpenGLBackendErrors::CommandFailed));
-            } else if (const auto *primary = std::get_if<PrimaryOutputAttachment>(&binding.workload)) {
-                if (!EncodeColor(*primary, outputExtent, 0, functions))
-                    return Result<void>::Failure(MakeError(OpenGLBackendErrors::CommandFailed));
-            }
-            if (functions.state.error() != GL_NO_ERROR)
+            const bool encoded = std::visit([&]<typename Workload>(const Workload &workload) {
+                if constexpr (std::is_same_v<Workload, RenderGraphBufferCopy>) {
+                    CopyBindingsRestore restore{functions};
+                    functions.buffers.bindBuffer(GL_COPY_READ_BUFFER, Instance(workload.source, request));
+                    functions.buffers.bindBuffer(GL_COPY_WRITE_BUFFER, Instance(workload.destination, request));
+                    functions.buffers.copyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, workload.sourceOffset,
+                                                        workload.destinationOffset, workload.byteCount);
+                    return true;
+                } else if constexpr (std::is_same_v<Workload, RenderGraphColorAttachment>) {
+                    const auto &texture = resources.textures.at(Instance(workload.texture, request));
+                    return EncodeColor(workload.operations, texture.descriptor.extent, texture.graphFramebuffer, functions);
+                } else if constexpr (std::is_same_v<Workload, PrimaryOutputAttachment>) {
+                    return EncodeColor(workload, outputExtent, 0, functions);
+                } else {
+                    return true;
+                }
+            }, binding.workload);
+            if (!encoded || functions.state.error() != GL_NO_ERROR)
                 return Result<void>::Failure(MakeError(OpenGLBackendErrors::CommandFailed));
         }
         return Result<void>::Success();

@@ -428,9 +428,9 @@ namespace Horo::Render {
                     objects.clear();
                 };
                 if (functions_.HasResourceFunctions()) {
-                    for (const auto &entry : textureDescriptors_) {
-                        if (entry.second.graphFramebuffer != 0)
-                            functions_.framebuffers.deleteFramebuffers(1, &entry.second.graphFramebuffer);
+                    for (const auto &[texture, descriptor] : textureDescriptors_) {
+                        if (descriptor.graphFramebuffer != 0)
+                            functions_.framebuffers.deleteFramebuffers(1, &descriptor.graphFramebuffer);
                     }
                     destroyAll(functions_.framebuffers.deleteFramebuffers, renderTargets_);
                     destroyAll(functions_.vertexArrays.deleteVertexArrays, meshes_);

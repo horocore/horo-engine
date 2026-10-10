@@ -61,7 +61,7 @@ namespace Horo::Render::Detail {
 
     private:
         /** @brief Looks up one unreleased identity under the exact frontend incarnation. */
-        [[nodiscard]] Result<RenderGraphTransientResourceSet *> Find(RenderGraphTransientResourcesHandle handle);
+        [[nodiscard]] Result<RenderGraphTransientResourceSet *> Find(RenderGraphTransientResourcesHandle handle) const;
         /** @brief Releases each physical registry generation once; submission pins gate native destruction. */
         void Rollback(RenderGraphTransientResourceSet &set) noexcept;
 
@@ -69,6 +69,8 @@ namespace Horo::Render::Detail {
         RenderResourceRegistry *registry_;
         RenderMemoryBudget *budget_;
         std::uint64_t nextIdentity_{1};
+        bool rollbackIncomplete_{
+            false}; /**< Closes preparation after cleanup allocation failure; registry/budget retain shutdown ownership. */
         std::array<std::unique_ptr<RenderGraphTransientResourceSet>, MaximumSets> sets_;
     };
 }  // namespace Horo::Render::Detail

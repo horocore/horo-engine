@@ -1,7 +1,9 @@
 #include "RenderResourceRegistry.h"
+#include "support/AllocationProbe.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <new>
 #include <type_traits>
 
 namespace {  // NOSONAR(cpp:S1000) File-local registry fixtures intentionally have internal linkage.
@@ -430,6 +432,52 @@ namespace {  // NOSONAR(cpp:S1000) File-local registry fixtures intentionally ha
         REQUIRE(released.count == 1);
         REQUIRE(released.instances[0] == 91);
         REQUIRE(released.modes[0] == BackendResourceReleaseMode::NativeUnavailable);
+    }
+
+    TEST_CASE("Allocation failures before resource admission preserve slots operation identity and dependency pins",
+              "[unit][runtime][renderer][resource][rollback]") {
+        bool successfulAdmissionObserved = false;
+        for (std::size_t successfulAllocations = 0; successfulAllocations < 16; ++successfulAllocations) {
+            const auto owner = AcquireRenderResourceOwnerId();
+            REQUIRE(owner.HasValue());
+            ReleasedBackendResources released;
+            auto registry = MakeRegistry(owner.Value(), released, {.maximumSlots = 2});
+            const auto parent = registry.Reserve(RenderResourceClass::Buffer);
+            REQUIRE(parent.HasValue());
+            REQUIRE(registry.Publish(RenderResourceClass::Buffer, parent.Value().identity, 71).HasValue());
+            const std::array dependencies{parent.Value().identity};
+            std::optional<ResourceReservation> admitted;
+            bool allocationFailed = false;
+            {
+                Tests::AllocationProbe::ScopedFailure failure{successfulAllocations};
+                try {
+                    const auto child = registry.Reserve(RenderResourceClass::Texture, dependencies);
+                    if (child.HasValue())
+                        admitted = child.Value();
+                } catch (const std::bad_alloc &) {
+                    allocationFailed = true;
+                }
+            }
+            REQUIRE(registry.OperationResult(parent.Value().operation).HasValue());
+            if (allocationFailed) {
+                const auto retried = registry.Reserve(RenderResourceClass::Texture, dependencies);
+                REQUIRE(retried.HasValue());
+                admitted = retried.Value();
+            } else {
+                successfulAdmissionObserved = true;
+            }
+            REQUIRE(admitted.has_value());
+            CHECK(admitted->operation.value == parent.Value().operation.value + 1);
+            REQUIRE(registry.Publish(RenderResourceClass::Texture, admitted->identity, 91).HasValue());
+            REQUIRE(registry.Release(RenderResourceClass::Buffer, parent.Value().identity).HasValue());
+            CHECK(registry.DrainRetirements() == 0);
+            REQUIRE(registry.Release(RenderResourceClass::Texture, admitted->identity).HasValue());
+            CHECK(registry.DrainRetirements() == 2);
+            CHECK(released.count == 2);
+            if (successfulAdmissionObserved)
+                break;
+        }
+        REQUIRE(successfulAdmissionObserved);
     }
 
     TEST_CASE("Failure and shutdown preserve terminal operation results", "[unit][runtime][renderer][resource]") {

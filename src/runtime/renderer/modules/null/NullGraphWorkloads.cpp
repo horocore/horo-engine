@@ -2,6 +2,8 @@
 
 #include "NullRenderBackendErrors.h"
 
+#include <type_traits>
+
 namespace Horo::Render::Detail {
     namespace {
         /** @brief Resolves one exact graph-local identity without a linear instance search. */
@@ -57,13 +59,18 @@ namespace Horo::Render::Detail {
                 return Result<void>::Failure(MakeError(NullBackendErrors::InvalidExecutionPlan));
         }
         for (const auto &binding : request.workloads) {
-            if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&binding.workload)) {
-                if (!ValidCopy(resources, request, *copy))
-                    return Result<void>::Failure(MakeError(NullBackendErrors::InvalidExecutionPlan));
-            } else if (const auto *color = std::get_if<RenderGraphColorAttachment>(&binding.workload)) {
-                if (!ValidColor(resources, request, *color))
-                    return Result<void>::Failure(MakeError(NullBackendErrors::UnsupportedResourceOperation));
-            }
+            const auto valid = std::visit([&request, &resources]<typename Workload>(const Workload &workload) {
+                if constexpr (std::is_same_v<Workload, RenderGraphBufferCopy>) {
+                    if (!ValidCopy(resources, request, workload))
+                        return Result<void>::Failure(MakeError(NullBackendErrors::InvalidExecutionPlan));
+                } else if constexpr (std::is_same_v<Workload, RenderGraphColorAttachment>) {
+                    if (!ValidColor(resources, request, workload))
+                        return Result<void>::Failure(MakeError(NullBackendErrors::UnsupportedResourceOperation));
+                }
+                return Result<void>::Success();
+            }, binding.workload);
+            if (valid.HasError())
+                return valid;
         }
         return Result<void>::Success();
     }

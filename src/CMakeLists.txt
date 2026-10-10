@@ -2034,6 +2034,7 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderQueryErrors.cpp
         runtime/renderer/frontend/RenderResourceOperations.cpp
         runtime/renderer/frontend/RenderResourceRegistry.cpp
+        runtime/renderer/frontend/RenderResourceReservationGuard.cpp
         runtime/renderer/frontend/RenderResourceSubmissionPins.cpp
         runtime/renderer/frontend/UiRenderComposition.cpp
         runtime/renderer/frontend/UiRenderSubmission.cpp

@@ -51,6 +51,8 @@ namespace Horo::Render::Detail {
         void Reset() noexcept;
 
     private:
+        /** @brief Polls one owned fence once, releasing its lease only after native completion. */
+        [[nodiscard]] bool PollFrameSlot(std::size_t slot) noexcept;
         const OpenGLCommandFunctions &functions_;
         std::array<std::uintptr_t, 8> frameFences_{};
         std::array<IRenderGraphResourceLease *, 8> frameLeases_{};
