@@ -8,6 +8,7 @@
 #include "Horo/Runtime/Save/SaveFilesystemStorage.h"
 #include "Horo/Runtime/Save/SaveSlotCommitTransaction.h"
 #include "Horo/Runtime/Save/SaveSlotIndex.h"
+#include "Horo/Runtime/Save/SaveSlotRetention.h"
 
 #include <memory>
 #include <span>
@@ -21,6 +22,8 @@ namespace Horo::Runtime {
         Import,
         Export,
         RestoreDeleted,
+        PublishSave,
+        Retention,
         Count
     };
     /** @brief Explicit deletion policy; unsupported recycle never falls back to permanent deletion. */
@@ -83,6 +86,7 @@ namespace Horo::Runtime {
         std::vector<SaveSlotArchiveScope> importSources; /**< Explicit source scopes; never supplied by an operation. */
         SaveCompatibilityPolicy compatibility;
         SaveArchiveReaderLimits archiveLimits;
+        SaveSlotRetentionPolicy retention;
         std::size_t maximumSlots{4096}; /**< Includes retained soft-deleted slots. */
         std::size_t maximumCatalogBytes{8ULL << 20U};
     };
@@ -148,6 +152,7 @@ namespace Horo::Runtime {
         std::uint64_t catalogRevision{};
         std::optional<SaveSlotCatalogEntry> entry;
         ImmutableSaveArchive exported;
+        std::vector<SaveSlotRetentionDecision> retention; /**< Exact decisions acknowledged with this publication. */
         bool cleanupDeferred{}; /**< Publication succeeded; exact retired generation/journal cleanup remains recoverable. */
     };
 
@@ -200,6 +205,45 @@ namespace Horo::Runtime {
          * never reach the destination. The export capability is distinct from import/copy authority. */
         [[nodiscard]] Result<SaveSlotLifecycleResult> ExportTo(SaveSlotLifecycleRequest request, const SaveFilesystemStorage &destination,
                                                                SaveGameSlotId slot, const CancellationToken &cancellation = {});
+        /** @brief Publishes finalized host-owned save bytes and applies automatic retention through the same atomic catalog gate.
+         * @param target Exact destination CAS; capture it under the catalog policy before finalizing the archive.
+         * @param candidate Complete immutable bytes and metadata matching target, parent generation and host scope.
+         * @param committedAtMilliseconds Trusted nondecreasing host time; persisted only with successful publication.
+         * @param lowSpace Explicit host pressure observation; never inferred from I/O failure.
+         * @param cancellation Observed before catalog visibility.
+         * @param cloud Current validated cloud/index pair under the same namespace/catalog lease; required to retire cloud-tracked
+         * generations.
+         * @return Durable publication and retirement diagnostics, unchanged-state rejection, or outcome unknown requiring Reconcile.
+         * @details Requires PublishSave capability. Auto/Checkpoint additionally require enabled retention and Retention capability.
+         * The host pumps this worker call from its existing operation; it is not another scheduler. Pinned/manual slots cannot be
+         * evicted by automatic policy. The newest prior publication is never overwritten. Backups and cloud tombstones share the
+         * selection manifest and survive restart; no cleanup occurs before durable catalog success.
+         */
+        [[nodiscard]] Result<SaveSlotLifecycleResult> CommitSave(const SaveSlotLifecycleTarget &target, SaveStorageWrite candidate,
+                                                                 std::uint64_t committedAtMilliseconds, bool lowSpace = false,
+                                                                 const CancellationToken &cancellation = {},
+                                                                 const SaveCloudRevisionSnapshot *cloud = nullptr);
+        /** @brief Reads retention, pin and tombstone evidence from the authoritative catalog.
+         * @param access Exact binding. @return Bounded immutable-value snapshot or typed failure. */
+        [[nodiscard]] Result<SaveSlotRetentionSnapshot> RetentionSnapshot(const SaveNamespaceAccessRequest &access) const;
+        /** @brief Sets a selected slot pin under exact catalog/generation consent.
+         * @param target Current selected publication. @param pinned Desired protection.
+         * @return New catalog revision or failure; requires Retention capability. */
+        [[nodiscard]] Result<std::uint64_t> SetPinned(const SaveSlotLifecycleTarget &target, bool pinned);
+        /** @brief Reads a verified independent archive retained as a recovery backup.
+         * @param target Exact retained generation and current catalog revision.
+         * @return Owned immutable archive or rejection; requires Export capability. */
+        [[nodiscard]] Result<ImmutableSaveArchive> ReadBackup(const SaveSlotLifecycleTarget &target) const;
+        /** @brief Acknowledges host-confirmed remote deletion for an exact durable tombstone.
+         * @param target Exact retired generation and current catalog revision.
+         * @param scope Exact provider/account and local namespace captured by the authenticated coordinator.
+         * @param confirmed Host-issued nonzero mutation receipt after durable provider confirmation, never a local-save result.
+         * @return New catalog revision or failure; retained backups remain readable. Requires Retention capability.
+         * @details The authenticated sync owner validates provider/account/CAS evidence before this call. The catalog only accepts
+         * its current exact generation consent, clears the explicit tombstone durably, then permits physical cleanup.
+         */
+        [[nodiscard]] Result<std::uint64_t> AcknowledgeCloudDelete(const SaveSlotLifecycleTarget &target,
+                                                                   const SaveCloudMetadataScope &scope, SaveCloudMutationId confirmed);
         /** @brief Reconciles outcome-unknown publication and cleans only journal-owned/retired artifacts.
          * @param access Exact binding to pin. @return True when cleanup remains deferred, or fail-closed malformed-evidence error. */
         [[nodiscard]] Result<bool> Reconcile(const SaveNamespaceAccessRequest &access);
@@ -216,6 +260,8 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> Publish(const Operation &operation) const;
         /** @brief Removes only unpublished journal-owned or retired generations after selecting durable evidence. */
         [[nodiscard]] Result<bool> Cleanup(Operation &operation) const;
+        /** @brief Defers typed cleanup/allocation failure without relabeling durable save success. */
+        [[nodiscard]] bool CleanupAfterPublication(Operation &operation) const noexcept;
         /** @brief Validates selected evidence before retiring any last-known-good generation. */
         [[nodiscard]] Result<void> VerifySelected(const Operation &operation) const;
         /** @brief Reconciles only the namespace/generation/digest-bound unpublished candidate. */
@@ -242,6 +288,22 @@ namespace Horo::Runtime {
         /** @brief Executes a validated command while holding namespace and operation leases. */
         [[nodiscard]] Result<SaveSlotLifecycleResult> ExecuteLocked(Operation &operation, const SaveSlotLifecycleRequest &request,
                                                                     const CancellationToken &cancellation);
+        /** @brief Pins exact binding in the operation and loads the sole catalog under complete operation ownership. */
+        [[nodiscard]] Result<void> BeginRetention(Operation &operation, const SaveNamespaceAccessRequest &access) const;
+        /** @brief Validates exact selected or retained consent before any metadata mutation. */
+        [[nodiscard]] Result<void> CheckRetentionTarget(const Operation &operation, const SaveSlotLifecycleTarget &target,
+                                                        bool retained) const;
+        /** @brief Applies exact retirement decisions to a detached catalog before publication. */
+        [[nodiscard]] Result<void> PrepareRetentionPublication(Operation &operation, const SaveSlotLifecycleTarget &target,
+                                                               const SaveStorageWrite &candidate, std::uint64_t clock, bool lowSpace,
+                                                               SaveSlotLifecycleResult &result) const;
+        /** @brief Validates mutation consent after bounded reconciliation without selecting another authority. */
+        [[nodiscard]] Result<void> PrepareRetentionUpdate(Operation &operation, const SaveSlotLifecycleTarget &target, bool retained) const;
+        /** @brief Prepares retirement and complete result bytes before the atomic save publication gate. */
+        [[nodiscard]] Result<SaveSlotLifecycleResult> CommitSaveLocked(Operation &operation, const SaveSlotLifecycleTarget &target,
+                                                                       SaveStorageWrite candidate, std::uint64_t clock, bool lowSpace,
+                                                                       const CancellationToken &cancellation,
+                                                                       const SaveCloudRevisionSnapshot *cloud);
         std::unique_ptr<State> state_;
     };
 }  // namespace Horo::Runtime

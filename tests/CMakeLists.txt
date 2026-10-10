@@ -3251,9 +3251,11 @@ add_executable(HoroRuntimeSaveSlotLifecycleTests
         unit/runtime/save/SaveSlotLifecycleAllocationTests.cpp
         unit/runtime/save/SaveSlotLifecycleTests.cpp
         unit/runtime/save/SaveSlotLifecycleFailureTests.cpp
+        unit/runtime/save/SaveSlotRetentionTests.cpp
+        unit/runtime/save/SaveSlotRetentionFailureTests.cpp
 )
 target_compile_features(HoroRuntimeSaveSlotLifecycleTests PRIVATE cxx_std_20)
-target_link_libraries(HoroRuntimeSaveSlotLifecycleTests PRIVATE HoroEngine::Runtime)
+target_link_libraries(HoroRuntimeSaveSlotLifecycleTests PRIVATE HoroEngine::Runtime nlohmann_json::nlohmann_json)
 add_executable(HoroSaveSlotLifecyclePublicHeaderConsumer support/SaveSlotLifecyclePublicHeaderConsumer.cpp)
 target_compile_features(HoroSaveSlotLifecyclePublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroSaveSlotLifecyclePublicHeaderConsumer PRIVATE HoroEngine::Runtime)

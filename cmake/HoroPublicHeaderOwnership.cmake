@@ -283,6 +283,7 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/Save/SaveManagerProjection.h
     Horo/Runtime/Save/SaveStorageAdapter.h
     Horo/Runtime/Save/SaveSlotCommitTransaction.h
+    Horo/Runtime/Save/SaveSlotRetention.h
     Horo/Runtime/Save/SaveSlotLifecycle.h
     Horo/Runtime/Save/SaveSlotRecovery.h
     Horo/Runtime/Save/SaveStoragePolicy.h

@@ -9,17 +9,26 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
     struct Record final {
         SaveSlotCatalogEntry entry;
         bool deleted{};
+        std::uint64_t sequence{};
+        std::uint64_t committedAt{};
+        bool pinned{};
     };
 
     /** @brief Exact generation retired only after an atomic catalog publication. */
     struct Retired final {
         SaveSlotCatalogEntry entry;
         bool recycle{};
+        std::uint64_t sequence{};
+        std::uint64_t committedAt{};
+        bool backup{};
+        bool tombstone{};
+        std::optional<SaveSlotRetentionCloudDeletion> cloud;
     };
 
     /** @brief Atomic selection evidence; derived UI indexes are never a competing storage authority. */
     struct Catalog final {
         std::uint64_t revision{1};
+        std::uint64_t clock{};
         std::vector<Record> records;
         std::vector<Retired> retired;
     };
@@ -32,6 +41,15 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
 
     /** @brief Validates fixed host scopes and finite policy before opening storage. */
     [[nodiscard]] Result<void> ValidatePolicy(const SaveSlotLifecyclePolicy &policy);
+    /** @brief Validates immutable finite automatic retention policy. */
+    [[nodiscard]] Result<void> ValidateRetentionPolicy(const SaveSlotRetentionPolicy &policy);
+    /** @brief Prepares deterministic retirements in the detached authoritative catalog only. */
+    [[nodiscard]] Result<std::vector<SaveSlotRetentionDecision>> ApplyRetention(Catalog &catalog, SaveSlotKind kind,
+                                                                                const SaveSlotRetentionPolicy &policy, bool lowSpace);
+    /** @brief Expires only excess backups of the current automatic category; tombstones remain independent holds. */
+    void BoundRetentionBackups(Catalog &catalog, SaveSlotKind kind, const SaveSlotRetentionPolicy &policy);
+    /** @brief Moves exact selected evidence to durable backup/tombstone ownership. */
+    void RetireForRetention(Catalog &catalog, const Record &record, const SaveSlotRetentionPolicy &policy);
     /** @brief Allows cancellation only before the atomic visibility gate. */
     [[nodiscard]] Result<void> CheckCancellation(const CancellationToken &cancellation);
     /** @brief Encodes complete bounded canonical catalog selection evidence and its integrity digest. */
@@ -94,6 +112,9 @@ namespace Horo::Runtime {
     private:
         friend class SaveSlotLifecycle;
 
+        // Retention admission pins the exact host binding through all catalog work.
+        // Declared before catalog so the lease also outlives detached metadata destruction.
+        std::unique_ptr<ISaveSlotOperationLease> retentionLease_;
         SaveSlotLifecycleDetail::Catalog catalog;
     };
 }  // namespace Horo::Runtime

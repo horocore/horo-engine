@@ -49,6 +49,8 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
             policy.archiveLimits.maximumArchiveBytes == 0 || policy.importSources.size() > 32 ||
             (policy.profile == SaveSlotLifecycleProfile::Server && policy.signature != SaveSignaturePolicy::Required))
             return Result<void>::Failure(MakeError(SaveErrors::StoragePolicyInvalid));
+        if (auto retention = ValidateRetentionPolicy(policy.retention); retention.HasError())
+            return retention;
         for (std::size_t index = 0; index < policy.importSources.size(); ++index) {
             const auto &scope = policy.importSources[index];
             if (!ValidScope(scope))

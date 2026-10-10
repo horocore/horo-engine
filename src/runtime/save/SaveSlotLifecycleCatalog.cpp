@@ -1,4 +1,5 @@
 #include "SaveSlotLifecycleInternal.h"
+#include "SaveSlotRetentionCloudCatalog.h"
 
 #include <algorithm>
 #include <limits>
@@ -80,35 +81,115 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
             Json records = Json::array();
             Json retired = Json::array();
             for (const auto &record : catalog.records)
-                records.push_back(Json::array({EncodeEntry(record.entry), record.deleted}));
+                records.push_back(
+                    Json::array({EncodeEntry(record.entry), record.deleted, record.sequence, record.committedAt, record.pinned}));
             for (const auto &record : catalog.retired)
-                retired.push_back(Json::array({EncodeEntry(record.entry), record.recycle}));
-            return Json::array({1U, ScopeKey(policy.destination.name), catalog.revision, std::move(records), std::move(retired)});
+                retired.push_back(Json::array({EncodeEntry(record.entry), record.recycle, record.sequence, record.committedAt,
+                                               record.backup, record.tombstone, EncodeRetentionCloud(record.cloud)}));
+            return Json::array(
+                {2U, ScopeKey(policy.destination.name), catalog.revision, std::move(records), std::move(retired), catalog.clock});
+        }
+
+        /** @brief Validates catalog entry fields without granting authority to advisory display. */
+        [[nodiscard]] bool ValidEntry(const SaveSlotCatalogEntry &entry) {
+            return ValidateSaveSlotPublicationMetadata(entry.publication).HasValue() &&
+                   ValidateSaveSlotDisplayMetadata(entry.display).HasValue();
+        }
+
+        /** @brief Rejects contradictory durable retention causality and clock evidence. */
+        [[nodiscard]] bool ValidOrder(const std::uint64_t sequence, const std::uint64_t clock, const Catalog &catalog) noexcept {
+            return sequence <= catalog.revision && clock <= catalog.clock && (sequence != 0 || clock == 0);
+        }
+
+        /** @brief Enforces selected slot order and independent retention evidence. */
+        [[nodiscard]] bool ValidRecord(const Record &record, const SaveGameSlotId previous, const Catalog &catalog) {
+            return (!previous.IsValid() || previous < record.entry.publication.slot) && ValidEntry(record.entry) &&
+                   ValidOrder(record.sequence, record.committedAt, catalog);
+        }
+
+        /** @brief A platform-recycle receipt cannot also represent a retained automatic backup or cloud hold. */
+        [[nodiscard]] bool ValidRetired(const Retired &record, const Catalog &catalog) {
+            return ValidEntry(record.entry) && ValidOrder(record.sequence, record.committedAt, catalog) &&
+                   (!record.recycle || (!record.backup && !record.tombstone));
         }
 
         /** @brief Enforces finite counts and unique selected/retired generation ownership. */
         [[nodiscard]] bool ValidCatalog(const Catalog &catalog, const SaveSlotLifecyclePolicy &policy) {
             if (catalog.revision == 0 || catalog.records.size() > policy.maximumSlots || catalog.retired.size() > policy.maximumSlots)
                 return false;
+            std::vector<std::uint64_t> sequences;
             std::vector<SlotGenerationId> generations;
             generations.reserve(catalog.records.size() + catalog.retired.size());
             SaveGameSlotId previous;
             for (const auto &record : catalog.records) {
-                if ((previous.IsValid() && previous >= record.entry.publication.slot) ||
-                    ValidateSaveSlotPublicationMetadata(record.entry.publication).HasError() ||
-                    ValidateSaveSlotDisplayMetadata(record.entry.display).HasError())
+                if (!ValidRecord(record, previous, catalog))
                     return false;
                 previous = record.entry.publication.slot;
                 generations.push_back(record.entry.publication.generation);
+                if (record.sequence != 0)
+                    sequences.push_back(record.sequence);
             }
             for (const auto &retired : catalog.retired) {
-                if (ValidateSaveSlotPublicationMetadata(retired.entry.publication).HasError() ||
-                    ValidateSaveSlotDisplayMetadata(retired.entry.display).HasError())
+                if (!ValidRetired(retired, catalog) || !ValidRetentionCloud(retired, policy.destination.name))
                     return false;
                 generations.push_back(retired.entry.publication.generation);
+                if (retired.sequence != 0)
+                    sequences.push_back(retired.sequence);
             }
+            std::ranges::sort(sequences);
+            if (std::ranges::adjacent_find(sequences) != sequences.end())
+                return false;
             std::ranges::sort(generations);
             return std::ranges::adjacent_find(generations) == generations.end();
+        }
+
+        /** @brief Decodes exact record tuple widths, including the safe legacy format. */
+        [[nodiscard]] Record DecodeRecord(const Json &item, const bool legacy) {
+            if (!item.is_array() || item.size() != (legacy ? 2U : 5U) || !item.at(1).is_boolean())
+                throw std::invalid_argument("Invalid lifecycle record");
+            Record record{DecodeEntry(item.at(0)), item.at(1).get<bool>()};
+            if (!legacy) {
+                if (!item.at(2).is_number_unsigned() || !item.at(3).is_number_unsigned() || !item.at(4).is_boolean())
+                    throw std::invalid_argument("Invalid retention evidence");
+                record.sequence = item.at(2).get<std::uint64_t>();
+                record.committedAt = item.at(3).get<std::uint64_t>();
+                record.pinned = item.at(4).get<bool>();
+            }
+            return record;
+        }
+
+        /** @brief Decodes exact retired tuple widths, including the safe legacy format. */
+        [[nodiscard]] Retired DecodeRetired(const Json &item, const bool legacy, const SaveNamespaceId &name) {
+            if (!item.is_array() || item.size() != (legacy ? 2U : 7U) || !item.at(1).is_boolean())
+                throw std::invalid_argument("Invalid lifecycle retirement");
+            Retired record{DecodeEntry(item.at(0)), item.at(1).get<bool>()};
+            if (!legacy) {
+                if (!item.at(2).is_number_unsigned() || !item.at(3).is_number_unsigned() || !item.at(4).is_boolean() ||
+                    !item.at(5).is_boolean())
+                    throw std::invalid_argument("Invalid retention retirement");
+                record.sequence = item.at(2).get<std::uint64_t>();
+                record.committedAt = item.at(3).get<std::uint64_t>();
+                record.backup = item.at(4).get<bool>();
+                record.tombstone = item.at(5).get<bool>();
+                record.cloud = DecodeRetentionCloud(item.at(6), name);
+            }
+            return record;
+        }
+
+        /** @brief Checks versioned framing before indexing any field. */
+        [[nodiscard]] bool ValidFraming(const Json &value, const bool legacy) {
+            if (!value.is_array() || value.empty() || !value.at(0).is_number_unsigned())
+                return false;
+            if (legacy)
+                return value.size() == 5;
+            return value.size() == 6 && value.at(0) == 2U && value.at(5).is_number_unsigned();
+        }
+
+        /** @brief Applies exact scope, count and field-type checks before constructing records. */
+        [[nodiscard]] bool ValidCatalogFields(const Json &value, const SaveSlotLifecyclePolicy &policy) {
+            return value.at(1).is_string() && value.at(1) == ScopeKey(policy.destination.name) && value.at(2).is_number_unsigned() &&
+                   value.at(3).is_array() && value.at(4).is_array() && value.at(3).size() <= policy.maximumSlots &&
+                   value.at(4).size() <= policy.maximumSlots;
         }
 
         /** @brief Prepends a digest so truncation or damaged evidence cannot turn into an empty namespace. */
@@ -156,27 +237,18 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
                 return std::to_integer<char>(value);
             });
             auto value = Json::parse(text, [](const int depth, Json::parse_event_t, Json &) {
-                if (depth > 6)
+                if (depth > 8)
                     throw std::invalid_argument("Lifecycle catalog nesting bound exceeded");
                 return true;
             });
-            if (!value.is_array() || value.size() != 5 || !value.at(0).is_number_unsigned() || value.at(0) != 1U ||
-                !value.at(1).is_string() || value.at(1) != ScopeKey(policy.destination.name) || !value.at(2).is_number_unsigned() ||
-                !value.at(3).is_array() || !value.at(4).is_array() || value.at(3).size() > policy.maximumSlots ||
-                value.at(4).size() > policy.maximumSlots || value.dump() != text)
+            const bool legacy = value.is_array() && value.size() == 5 && value.at(0) == 1U;
+            if (!ValidFraming(value, legacy) || !ValidCatalogFields(value, policy) || value.dump() != text)
                 return Result<Catalog>::Failure(MakeError(SaveErrors::SlotCommitInvalid));
-            Catalog catalog{.revision = value.at(2).get<std::uint64_t>()};
-            const auto decode = [](const Json &record) {
-                if (!record.is_array() || record.size() != 2 || !record.at(1).is_boolean())
-                    throw std::invalid_argument("Invalid lifecycle record");
-                return Record{DecodeEntry(record.at(0)), record.at(1).get<bool>()};
-            };
+            Catalog catalog{.revision = value.at(2).get<std::uint64_t>(), .clock = legacy ? 0 : value.at(5).get<std::uint64_t>()};
             for (const auto &item : value.at(3))
-                catalog.records.push_back(decode(item));
-            for (const auto &item : value.at(4)) {
-                auto record = decode(item);
-                catalog.retired.emplace_back(std::move(record.entry), record.deleted);
-            }
+                catalog.records.push_back(DecodeRecord(item, legacy));
+            for (const auto &item : value.at(4))
+                catalog.retired.push_back(DecodeRetired(item, legacy, policy.destination.name));
             if (!ValidCatalog(catalog, policy))
                 return Result<Catalog>::Failure(MakeError(SaveErrors::SlotCommitInvalid));
             return Result<Catalog>::Success(std::move(catalog));

@@ -54,12 +54,7 @@ namespace Horo::Runtime {
         if (auto published = PublishPrepared(prepared.Value(), encoded.Value(), cancellation); published.HasError())
             return Result<SaveSlotLifecycleResult>::Failure(std::move(published).ErrorValue());
         // Publication is acknowledged; fallible cleanup cannot relabel it as unchanged-state failure.
-        try {
-            auto cleaned = Cleanup(operation);
-            result.cleanupDeferred = cleaned.HasError() || cleaned.Value();
-        } catch (const std::bad_alloc &) {
-            result.cleanupDeferred = true;
-        }
+        result.cleanupDeferred = CleanupAfterPublication(operation);
         return Result<SaveSlotLifecycleResult>::Success(std::move(result));
     }
 
@@ -151,6 +146,9 @@ namespace Horo::Runtime {
             prepared.metadata.publication.kind = destination->entry.publication.kind;
             catalog.retired.emplace_back(destination->entry, false);
             destination->entry = prepared.metadata;
+            // Explicit copy/import does not establish trusted automatic-retention order.
+            destination->sequence = 0;
+            destination->committedAt = 0;
         } else {
             catalog.records.emplace_back(prepared.metadata, false);
         }

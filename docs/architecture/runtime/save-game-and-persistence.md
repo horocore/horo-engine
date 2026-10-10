@@ -343,6 +343,30 @@ The six-argument entry point is the sole contract; it does not retain a parallel
 legacy overload. Header ownership remains with Runtime, and the isolated autosave
 consumer plus all admission/capture regressions exercise this migration.
 
+`SaveSlotLifecycle::CommitSave` implements opt-in durable automatic rotation in the
+existing lifecycle owner (SAV-005.8). Its immutable policy grants no capabilities:
+publication and retention are independently authorized. The finalized candidate,
+oldest-first count/age/explicit low-space retirements, catalog-issued causal order,
+nondecreasing host commit clock, selected pins, retained backups and exact cloud
+tombstones share one selection-manifest commit. Pre-publication failure changes no
+rotation; unknown outcome requires reconciliation under the same lease. Automatic
+policy excludes manual and pinned publications, protects the newest generation and
+legacy unknown order, and fails closed if protected capacity or tombstone storage
+is exhausted. Auto/Checkpoint budgets are independent and retain at least one
+last-known-good backup. `ReadBackup` verifies complete retained archive evidence.
+Intentional holds do not stall unrelated future publication.
+
+Cloud retirement receives the current validated `SaveCloudRevisionSnapshot`, checks
+its exact namespace/index revision and rows, and persists provider/account/object
+CAS evidence before removing a selected row. Absence never invents a tombstone.
+The authenticated coordinator confirms remote deletion before acknowledging exact
+scope/generation/catalog consent; the durable receipt clears only the cloud hold,
+never a backup hold. Physical cleanup requires both holds released. No provider call,
+new sync queue or second catalog authority is introduced. The private catalog schema
+migrates 1 to 2 with protected unknown legacy order; older runtimes reject schema 2.
+Hosts deliberately migrate their existing save worker to this same lifecycle
+publication authority as described in [retention migration](../../guides/save-retention-migration.md).
+
 `SaveEventTriggers` is the additive owner-thread event adapter for SAV-005.6.
 A host copies an immutable allowlist of at most 64 product-issued trigger IDs,
 typed payload requirements, Auto/Checkpoint modes, safe logical targets and
@@ -350,10 +374,9 @@ Continue/Block transition-failure policy. Publishers supply only an ID, monotoni
 sequence, generation and a bounded gameplay/milestone/project/transition payload;
 paths and target selection are absent from that contract. Registrations cannot
 publish Manual/Quick slots or bypass namespace, catalog capacity, generation CAS,
-product eligibility, cooldown or confirmation policy. A fixed registered target
-is chosen by the host's catalog policy; ring selection/rotation remains a separate
-host responsibility and advances only on durable success. Recompose registrations
-at a quiescent session boundary to change allowed targets.
+product eligibility, cooldown or confirmation policy. The host's catalog policy chooses a fixed registered target. Opt-in lifecycle
+retention enforces deterministic oldest-first replacement and durable-success-only
+rotation. Recompose registrations at a quiescent session boundary to change targets.
 
 One pending intent survives competing arbiter work. Equivalent rapid events
 coalesce only when cooked policy permits it and return the original effective
