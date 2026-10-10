@@ -63,7 +63,7 @@ namespace Horo::Navigation {
     /** @copydoc NavigationCoordinator::Submit */
     Result<NavRequestHandle> NavigationCoordinator::Submit(const NavigationWorldLifecycle &world, NavigationPathSubmission input,
                                                            const std::uint64_t tick) {
-        auto &state = MutableState();
+        const auto &state = MutableState();
         if (!state || state->closed)
             return Failure<NavRequestHandle>(NavigationErrors::AdmissionRejected);
         if (tick < state->tick || !ValidSubmission(input, tick))
@@ -113,7 +113,7 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationCoordinator::Cancel */
     bool NavigationCoordinator::Cancel(const NavRequestHandle handle) noexcept {
-        auto &state = MutableState();
+        const auto &state = MutableState();
         const auto *entry = state ? state->Find(handle) : nullptr;
         if (!entry || entry->published)
             return false;
@@ -123,7 +123,7 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationCoordinator::Dispatch */
     std::uint32_t NavigationCoordinator::Dispatch(const std::uint64_t tick) {
-        auto &state = MutableState();
+        const auto &state = MutableState();
         if (!state || state->closed || tick < state->tick)
             return 0;
         state->tick = tick;
@@ -149,7 +149,7 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationCoordinator::Commit */
     std::uint32_t NavigationCoordinator::Commit(const NavigationPathPublication &current) {
-        auto &state = MutableState();
+        const auto &state = MutableState();
         if (!state || !state->ValidPublication(current))
             return 0;
         state->tick = current.tick;
@@ -179,7 +179,7 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationCoordinator::Take */
     std::optional<NavigationPathCompletion> NavigationCoordinator::Take(const NavRequestHandle handle) {
-        auto &state = MutableState();
+        const auto &state = MutableState();
         if (!state)
             return std::nullopt;
         state->Collect();
@@ -189,13 +189,13 @@ namespace Horo::Navigation {
         auto result = std::move(entry->terminal);
         entry->terminal.reset();
         entry->taken = true;
-        state->Retire(state->slots[handle.slot.index]);
+        State::Retire(state->slots[handle.slot.index]);
         return result;
     }
 
     /** @copydoc NavigationCoordinator::BeginShutdown */
     void NavigationCoordinator::BeginShutdown() noexcept {
-        auto &state = MutableState();
+        const auto &state = MutableState();
         if (!state)
             return;
         state->closed = true;

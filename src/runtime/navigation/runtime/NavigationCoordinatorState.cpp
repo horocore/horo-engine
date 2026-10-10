@@ -141,8 +141,8 @@ namespace Horo::Navigation {
             entry.query.worldLease.Descriptor().sceneGeneration != current.activation.sceneGeneration ||
             entry.query.request.world != current.activation.world)
             return MakeError(NavigationErrors::InvalidWorld);
-        const auto caller = std::ranges::lower_bound(current.callers, entry.submission.caller.owner, {}, &NavigationPathCaller::owner);
-        if (caller == current.callers.end() || *caller != entry.submission.caller)
+        if (const auto caller = std::ranges::lower_bound(current.callers, entry.submission.caller.owner, {}, &NavigationPathCaller::owner);
+            caller == current.callers.end() || *caller != entry.submission.caller)
             return MakeError(NavigationErrors::InvalidHandle);
         if (!SameSource(entry.submission.source, current.source))
             return MakeError(NavigationErrors::StaleSnapshot);
