@@ -2913,6 +2913,14 @@ add_executable(HoroUiTemplateGraphTests unit/ui_templates/UiTemplateDependencyGr
 target_compile_features(HoroUiTemplateGraphTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUiTemplateGraphTests PRIVATE HoroEngine::UiTemplateGraph)
 horo_register_catch_test(HoroUiTemplateGraphTests LABELS "unit;runtime_ui;template;headless")
+add_executable(HoroUiTemplateInstancesTests
+        unit/ui_templates/UiTemplateModelTests.cpp
+        unit/ui_templates/UiTemplateExpansionTests.cpp
+        unit/ui_templates/UiTemplateDocumentOwnerTests.cpp
+)
+target_compile_features(HoroUiTemplateInstancesTests PRIVATE cxx_std_20)
+target_link_libraries(HoroUiTemplateInstancesTests PRIVATE HoroEngine::UiTemplateInstances)
+horo_register_catch_test(HoroUiTemplateInstancesTests LABELS "unit;runtime_ui;template;headless")
 add_executable(HoroRuntimeUiLocalizationTests
         unit/runtime/ui/UiLocalizationTests.cpp
 )
