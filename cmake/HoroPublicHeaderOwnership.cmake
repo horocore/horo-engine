@@ -659,7 +659,11 @@ horo_configure_target_header_boundary(HoroAISceneIntegration PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroAISightIntegration PUBLIC_HEADERS
     Horo/AI/PerceptionSight.h
 )
+horo_configure_target_header_boundary(HoroAnimationGraphSourceCodec PUBLIC_HEADERS
+    Horo/Animation/AnimationGraphSource.h
+)
 horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
+    Horo/Animation/AnimationGraph.h
     Horo/Animation/AnimationCompression.h
     Horo/Animation/AnimationClip.h
     Horo/Animation/AnimationComponents.h

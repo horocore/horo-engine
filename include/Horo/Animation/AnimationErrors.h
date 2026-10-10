@@ -134,4 +134,22 @@ namespace Horo::Animation::AnimationErrors {
     extern const ErrorCodeDescriptor CompressionUnsupported;
     /** @brief Compression cook or decompression exceeds its captured finite work budget. */
     extern const ErrorCodeDescriptor CompressionBudgetExceeded;
+    /** @brief Graph schema version requires an unavailable migration. */
+    extern const ErrorCodeDescriptor GraphVersionUnsupported;
+    /** @brief Graph compilation owner has closed admission. */
+    extern const ErrorCodeDescriptor GraphAdmissionRejected;
+    /** @brief Graph compilation or migration was cancelled. */
+    extern const ErrorCodeDescriptor GraphOperationCancelled;
+    /** @brief Graph replacement targets another stable identity. */
+    extern const ErrorCodeDescriptor GraphReloadMismatch;
+    /** @brief Graph compilation exceeds a captured finite work limit. */
+    extern const ErrorCodeDescriptor GraphLimitExceeded;
+    /** @brief Graph identities, node schemas or endpoints are malformed. */
+    extern const ErrorCodeDescriptor GraphMalformed;
+    /** @brief Graph parameter, interface or connection types disagree. */
+    extern const ErrorCodeDescriptor GraphTypeMismatch;
+    /** @brief Graph nodes or subgraph calls contain a cycle. */
+    extern const ErrorCodeDescriptor GraphCycle;
+    /** @brief A graph dependency is missing, duplicated, extra, stale or incompatible with its exact skeleton publication. */
+    extern const ErrorCodeDescriptor GraphBindingMismatch;
 }  // namespace Horo::Animation::AnimationErrors

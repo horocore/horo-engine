@@ -1342,6 +1342,8 @@ target_compile_features(HoroGameplayPerceptionIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroGameplayPerceptionIntegration PUBLIC HoroEngine::AISceneIntegration HoroEngine::NetworkRuntime)
 
 add_library(HoroAnimationApi STATIC
+        runtime/animation/api/AnimationGraph.cpp
+        runtime/animation/api/AnimationGraphBinding.cpp
         runtime/animation/api/AnimationCompression.cpp
         runtime/animation/api/AnimationClip.cpp
         runtime/animation/api/AnimationComponents.cpp
@@ -1354,6 +1356,14 @@ add_library(HoroAnimationApi STATIC
 add_library(HoroEngine::AnimationApi ALIAS HoroAnimationApi)
 target_compile_features(HoroAnimationApi PUBLIC cxx_std_20)
 target_link_libraries(HoroAnimationApi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
+
+add_library(HoroAnimationGraphSourceCodec STATIC
+        runtime/animation/source/AnimationGraphSourceRead.cpp
+        runtime/animation/source/AnimationGraphSourceWrite.cpp)
+add_library(HoroEngine::AnimationGraphSourceCodec ALIAS HoroAnimationGraphSourceCodec)
+target_compile_features(HoroAnimationGraphSourceCodec PUBLIC cxx_std_20)
+target_link_libraries(HoroAnimationGraphSourceCodec PUBLIC HoroEngine::AnimationApi PRIVATE nlohmann_json::nlohmann_json)
+
 
 add_library(HoroPCG STATIC
         runtime/pcg/api/PCGCookedPlan.cpp
