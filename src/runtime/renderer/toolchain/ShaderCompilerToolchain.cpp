@@ -118,9 +118,20 @@ namespace Horo::Render {
                 return installed == configuration_.tools.end() ? nullptr : std::to_address(installed);
             }
 
-            [[nodiscard]] Result<void> Run(const ShaderCompilerToolInstallation &tool, std::vector<std::string> arguments) {
+            [[nodiscard]] Result<void> Run(const ShaderCompilerToolInstallation &tool, std::vector<std::string> arguments,
+                                           const ShaderCompilerPhase phase, const ShaderEntryPoint &entry) {
                 if (cancellation_.IsCancellationRequested())
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::CancellationRequested));
+                diagnosticContext_ = {phase,
+                                      invocation_.target.requirement.backend,
+                                      invocation_.manifest.sourceRevision,
+                                      entry.stage,
+                                      entry.name,
+                                      tool.identity};
+                if (invocation_.diagnostics != nullptr) {
+                    if (auto admitted = invocation_.diagnostics->BeginPhase(diagnosticContext_); admitted.HasError())
+                        return admitted;
+                }
                 ExternalProcessRequest request;
                 request.executable = tool.executable.string();
                 request.arguments = std::move(arguments);
@@ -133,30 +144,77 @@ namespace Horo::Render {
                     CaptureDiagnostic(std::move(line));
                 };
                 auto result = processes_.Run(request, cancellation_);
+                if (diagnosticFailure_)
+                    return Result<void>::Failure(std::move(*diagnosticFailure_));
                 if (result.HasError())
                     return Result<void>::Failure(
                         WrapError(ShaderCompilerPipelineErrors::ToolProcessFailed, std::move(result).ErrorValue()));
                 if (result.Value().reason == ProcessTerminationReason::Cancelled || cancellation_.IsCancellationRequested())
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::CancellationRequested));
+                if (result.Value().reason == ProcessTerminationReason::TimedOut)
+                    return Result<void>::Failure(WrapError(ShaderCompilerPipelineErrors::ToolTimedOut, ProcessFailure()));
                 if (result.Value().reason == ProcessTerminationReason::Exited && result.Value().exitCode == 0)
                     return Result<void>::Success();
                 return Result<void>::Failure(ProcessFailure());
             }
 
             void CaptureDiagnostic(ProcessOutputLine line) {
-                if (diagnostics_.size() >= invocation_.limits.maximumDiagnosticsPerTarget ||
-                    diagnosticBytes_ >= configuration_.maximumProcessOutputBytes)
+                if (diagnosticFailure_ || outputTruncated_)
                     return;
-                line.text = SanitizeLine(std::move(line.text), scratch_.Path(), sourcePath_);
-                if (const std::size_t remaining = configuration_.maximumProcessOutputBytes - diagnosticBytes_;
-                    line.text.size() > remaining) {
+                const std::string marker = "Compiler diagnostic output truncated.";
+                const std::size_t markerBytes =
+                    std::min({marker.size(), invocation_.limits.maximumDiagnosticMessageBytes, configuration_.maximumProcessOutputBytes});
+                const std::size_t outputBudget = configuration_.maximumProcessOutputBytes - markerBytes;
+                if (diagnostics_.size() + 1U >= invocation_.limits.maximumDiagnosticsPerTarget || diagnosticBytes_ >= outputBudget) {
+                    outputTruncated_ = true;
+                    ShaderCompilerDiagnostic diagnostic;
+                    diagnostic.category = ShaderCompilerDiagnosticCategory::Toolchain;
+                    diagnostic.severity = ShaderCompilerDiagnosticSeverity::Warning;
+                    diagnostic.message = marker.substr(0, markerBytes);
+                    diagnostic.truncated = true;
+                    diagnostic.context = diagnosticContext_;
+                    PublishDiagnostic(std::move(diagnostic));
+                    return;
+                }
+                std::string sourceIdentity = invocation_.manifest.sourceIdentity;
+                bool include = false;
+                std::filesystem::path diagnosticPath = sourcePath_;
+                for (const auto &dependency : invocation_.dependencies) {
+                    const auto path = scratch_.Path() / dependency.logicalPath;
+                    if (line.text.starts_with(path.string() + ":") || line.text.starts_with(dependency.logicalPath + ":")) {
+                        diagnosticPath = path;
+                        sourceIdentity = dependency.logicalPath;
+                        include = true;
+                        break;
+                    }
+                }
+                line.text = SanitizeLine(std::move(line.text), scratch_.Path(), diagnosticPath);
+                if (line.text.size() > invocation_.limits.maximumDiagnosticMessageBytes) {
+                    line.text.resize(invocation_.limits.maximumDiagnosticMessageBytes);
+                    line.truncated = true;
+                }
+                if (const std::size_t remaining = outputBudget - diagnosticBytes_; line.text.size() > remaining) {
                     line.text.resize(remaining);
                     line.truncated = true;
                 }
                 diagnosticBytes_ += line.text.size();
-                if (!line.text.empty())
-                    diagnostics_.push_back(
-                        MakeToolDiagnostic(std::move(line.text), line.truncated, invocation_.manifest.sourceIdentity, line.stream));
+                if (line.text.empty())
+                    return;
+                auto diagnostic = MakeToolDiagnostic(std::move(line.text), line.truncated, sourceIdentity, line.stream);
+                if (include && diagnostic.category == ShaderCompilerDiagnosticCategory::Source)
+                    diagnostic.category = ShaderCompilerDiagnosticCategory::Include;
+                diagnostic.context = diagnosticContext_;
+                PublishDiagnostic(std::move(diagnostic));
+            }
+
+            void PublishDiagnostic(ShaderCompilerDiagnostic diagnostic) {
+                if (invocation_.diagnostics != nullptr) {
+                    if (auto published = invocation_.diagnostics->Publish(diagnostic); published.HasError()) {
+                        diagnosticFailure_ = std::move(published).ErrorValue();
+                        return;
+                    }
+                }
+                diagnostics_.push_back(std::move(diagnostic));
             }
 
             [[nodiscard]] Error ProcessFailure() const {
@@ -207,12 +265,15 @@ namespace Horo::Render {
                                                          const std::size_t index) {
                 const std::string stem = std::format("stage-{}", index);
                 const std::filesystem::path spirvPath = scratch_.Path() / (stem + ".spv");
-                if (auto compiled = Run(dxc, DxcArguments(entry, true, spirvPath)); compiled.HasError())
+                if (auto compiled = Run(dxc, DxcArguments(entry, true, spirvPath), ShaderCompilerPhase::SourceCompilation, entry);
+                    compiled.HasError())
                     return compiled;
                 const ShaderCompilerToolInstallation *validator = Lookup(ShaderCompilerTool::SpirvTools);
                 if (validator == nullptr)
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
-                if (auto validated = Run(*validator, {"--target-env", "vulkan1.3", spirvPath.string()}); validated.HasError())
+                if (auto validated = Run(*validator, {"--target-env", "vulkan1.3", spirvPath.string()},
+                                         ShaderCompilerPhase::IntermediateValidation, entry);
+                    validated.HasError())
                     return validated;
                 auto spirv =
                     ReadBoundedFile(spirvPath, invocation_.limits.maximumPayloadBytes, ShaderCompilerPipelineErrors::ToolOutputInvalid);
@@ -271,7 +332,7 @@ namespace Horo::Render {
                     arguments.insert(arguments.end(), {"--msl", "--msl-version", "20400"});
                 else
                     arguments.insert(arguments.end(), {"--version", "410", "--no-es", "--no-420pack-extension"});
-                return Run(*translator, std::move(arguments));
+                return Run(*translator, std::move(arguments), ShaderCompilerPhase::Translation, entry);
             }
 
             [[nodiscard]] Result<void> CompileOpenGLRoute(const ShaderEntryPoint &entry, const std::string &stem,
@@ -300,12 +361,15 @@ namespace Horo::Render {
                     native.HasError())
                     return Result<void>::Failure(std::move(native).ErrorValue());
                 const std::filesystem::path airPath = scratch_.Path() / (stem + ".air");
-                if (auto compiled = Run(*metal, {"-sdk", "macosx", "metal", "-std=macos-metal2.4", "-mmacosx-version-min=14.0", "-c",
-                                                 nativePath.string(), "-o", airPath.string()});
+                if (auto compiled = Run(*metal,
+                                        {"-sdk", "macosx", "metal", "-std=macos-metal2.4", "-mmacosx-version-min=14.0", "-c",
+                                         nativePath.string(), "-o", airPath.string()},
+                                        ShaderCompilerPhase::NativeCompilation, entry);
                     compiled.HasError())
                     return compiled;
                 const std::filesystem::path libraryPath = scratch_.Path() / (stem + ".metallib");
-                if (auto linked = Run(*metal, {"-sdk", "macosx", "metallib", airPath.string(), "-o", libraryPath.string()});
+                if (auto linked = Run(*metal, {"-sdk", "macosx", "metallib", airPath.string(), "-o", libraryPath.string()},
+                                      ShaderCompilerPhase::NativeLink, entry);
                     linked.HasError())
                     return linked;
                 auto library = ReadValidatedPayload(libraryPath, invocation_.limits.maximumPayloadBytes,
@@ -332,7 +396,7 @@ namespace Horo::Render {
                     *optimization = "-Od";
                 arguments.insert(arguments.end() - 3, std::make_move_iterator(debugArguments.begin()),
                                  std::make_move_iterator(debugArguments.end()));
-                if (auto compiled = Run(dxc, std::move(arguments)); compiled.HasError())
+                if (auto compiled = Run(dxc, std::move(arguments), ShaderCompilerPhase::DebugCompilation, entry); compiled.HasError())
                     return compiled;
                 auto debug = spirv ? ReadValidatedPayload(debugPath, invocation_.limits.maximumDebugPayloadBytes, IsSpirV)
                                    : ReadBoundedFile(debugPath, invocation_.limits.maximumDebugPayloadBytes,
@@ -347,12 +411,14 @@ namespace Horo::Render {
                                                          const std::size_t index) {
                 const std::string stem = std::format("stage-{}", index);
                 const std::filesystem::path nativePath = scratch_.Path() / (stem + ".native");
-                if (auto compiled = Run(dxc, DxcArguments(entry, false, nativePath)); compiled.HasError())
+                if (auto compiled = Run(dxc, DxcArguments(entry, false, nativePath), ShaderCompilerPhase::SourceCompilation, entry);
+                    compiled.HasError())
                     return compiled;
                 const ShaderCompilerToolInstallation *validator = Lookup(ShaderCompilerTool::DxilValidator);
                 if (validator == nullptr)
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
-                if (auto validated = Run(*validator, {nativePath.string()}); validated.HasError())
+                if (auto validated = Run(*validator, {nativePath.string()}, ShaderCompilerPhase::IntermediateValidation, entry);
+                    validated.HasError())
                     return validated;
                 auto native = ReadValidatedPayload(nativePath, invocation_.limits.maximumPayloadBytes, IsDxil);
                 if (native.HasError())
@@ -414,6 +480,9 @@ namespace Horo::Render {
             std::vector<ToolArtifactRecord> payloadStages_;
             std::vector<ToolArtifactRecord> debugStages_;
             std::vector<ShaderCompilerDiagnostic> diagnostics_;
+            ShaderCompilerDiagnosticContext diagnosticContext_;
+            bool outputTruncated_{};
+            std::optional<Error> diagnosticFailure_;
             std::size_t diagnosticBytes_{0};
         };
     }  // namespace

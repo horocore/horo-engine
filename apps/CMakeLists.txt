@@ -268,6 +268,7 @@ if(HORO_BUILD_EDITOR_GUI)
 
     target_link_libraries(HoroEditor
         PRIVATE
+            HoroEngine::ShaderBuild
             HoroEngine::Gui
             HoroEngine::EditorServices
             HoroEngine::EditorRenderExtraction

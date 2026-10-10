@@ -2,11 +2,14 @@
 
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <fstream>
 #include <limits>
+#include <ranges>
 #include <type_traits>
+#include <utility>
 
 namespace Horo::Render::ShaderCompilerToolchainDetail {
     namespace {
@@ -148,24 +151,56 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                                                                            : ShaderCompilerDiagnosticSeverity::Information;
         diagnostic.message = std::move(message);
         diagnostic.truncated = truncated;
+        // Keep native codes separate from severity and the stable Horo category.
+        for (const auto &[word, severity] : {std::pair{std::string_view{"error"}, ShaderCompilerDiagnosticSeverity::Error},
+                                             std::pair{std::string_view{"warning"}, ShaderCompilerDiagnosticSeverity::Warning},
+                                             std::pair{std::string_view{"note"}, ShaderCompilerDiagnosticSeverity::Information}}) {
+            const auto offset = diagnostic.message.find(word);
+            if (offset == std::string::npos || (offset != 0 && diagnostic.message[offset - 1] != ' '))
+                continue;
+            const std::size_t start = offset + word.size();
+            if (start >= diagnostic.message.size())
+                continue;
+            if (diagnostic.message[start] == ':') {
+                diagnostic.severity = severity;
+                break;
+            }
+            if (diagnostic.message[start] != ' ')
+                continue;
+            const auto colon = diagnostic.message.find(':', start + 1);
+            if (colon == std::string::npos || colon == start + 1 || colon - start > 128U)
+                continue;
+            const auto code = diagnostic.message.substr(start + 1, colon - start - 1);
+            if (!std::ranges::all_of(code, [](const unsigned char character) {
+                return (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z') ||
+                       (character >= '0' && character <= '9') || character == '_' || character == '-';
+            }))
+                continue;
+            diagnostic.toolCode = code;
+            diagnostic.severity = severity;
+            break;
+        }
         constexpr std::string_view SourcePrefix = "<shader>:";
-        if (!diagnostic.message.starts_with(SourcePrefix))
+        const std::string logicalPrefix = std::string{sourceIdentity} + ":";
+        const std::size_t prefixBytes = diagnostic.message.starts_with(SourcePrefix)    ? SourcePrefix.size()
+                                        : diagnostic.message.starts_with(logicalPrefix) ? logicalPrefix.size()
+                                                                                        : 0U;
+        if (prefixBytes == 0U)
             return diagnostic;
-        const char *begin = diagnostic.message.data() + SourcePrefix.size();
+        const char *begin = diagnostic.message.data() + prefixBytes;
         const char *end = diagnostic.message.data() + diagnostic.message.size();
         std::uint32_t line = 0;
         const auto parsedLine = std::from_chars(begin, end, line);
         if (parsedLine.ec != std::errc{} || parsedLine.ptr == end || *parsedLine.ptr != ':')
             return diagnostic;
         std::uint32_t column = 0;
-        if (const auto parsedColumn = std::from_chars(parsedLine.ptr + 1, end, column); parsedColumn.ec != std::errc{} || line == 0)
+        if (const auto parsedColumn = std::from_chars(parsedLine.ptr + 1, end, column);
+            parsedColumn.ec != std::errc{} || parsedColumn.ptr == end || *parsedColumn.ptr != ':' || line == 0)
             return diagnostic;
         diagnostic.category = ShaderCompilerDiagnosticCategory::Source;
         diagnostic.sourceIdentity = sourceIdentity;
         diagnostic.line = line;
         diagnostic.column = column;
-        if (diagnostic.message.find("error:") != std::string::npos)
-            diagnostic.severity = ShaderCompilerDiagnosticSeverity::Error;
         return diagnostic;
     }
 }  // namespace Horo::Render::ShaderCompilerToolchainDetail

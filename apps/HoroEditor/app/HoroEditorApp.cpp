@@ -5,6 +5,7 @@
 #include "Horo/Application/HostObservability.h"
 #include "Horo/Application/NetworkDebugger.h"
 #include "Horo/Application/ProjectCompatibility.h"
+#include "Horo/Application/ShaderBuildService.h"
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Editor/DefaultScreenFactories.h"
 #include "Horo/Editor/DefaultWorkspacePanels.h"
@@ -774,6 +775,7 @@ namespace Horo::Editor {
         struct EditorOperationServices {
             BuildOutputStore &buildOutputStore;
             OperationStore &operationStore;
+            Application::ShaderBuildService &shaderBuild;
         };
 
         struct EditorBackgroundServices {
@@ -878,6 +880,7 @@ namespace Horo::Editor {
                 p_->inputRouter.CancelCapture(Input::CaptureCancellationReason::OwnerDestroyed);
                 p_->modalHost.ForceDetachAllForShutdown();
                 screenHost_->Shutdown();
+                p_->operationServices.shaderBuild.Shutdown();
                 p_->background.jobs.Shutdown(ShutdownPolicy::Cancel);
             }
 
@@ -1191,7 +1194,8 @@ namespace Horo::Editor {
 
             // Covers constructor failure as well as startup failure: dependencies precede both join guards.
             struct JobShutdown final {
-                explicit JobShutdown(JobSystem &scheduler, GuiScreenHost *host = nullptr) : jobs(scheduler), screens(host) {}
+                explicit JobShutdown(JobSystem &scheduler, GuiScreenHost *host, Application::ShaderBuildService &compiler)
+                    : jobs(scheduler), shaderBuild(compiler), screens(host) {}
 
                 JobShutdown(const JobShutdown &) = delete;
                 JobShutdown &operator=(const JobShutdown &) = delete;
@@ -1199,17 +1203,19 @@ namespace Horo::Editor {
                 JobShutdown &operator=(JobShutdown &&) = delete;
 
                 JobSystem &jobs;
+                Application::ShaderBuildService &shaderBuild;
                 GuiScreenHost *screens{};
 
                 ~JobShutdown() {
                     jobs.StopAccepting();
                     if (screens)
                         screens->Shutdown();
+                    shaderBuild.Shutdown();
                     jobs.Shutdown(ShutdownPolicy::Cancel);
                 }
             };
 
-            const JobShutdown constructionRollback{p.background.jobs};
+            const JobShutdown constructionRollback{p.background.jobs, nullptr, p.operationServices.shaderBuild};
             GuiScreenHost screenHost{guiContext,
                                      GuiScreenHostComposition{.modalHost = p.modalHost,
                                                               .settingsService = p.settings,
@@ -1228,7 +1234,7 @@ namespace Horo::Editor {
                                                                   extensionInventoryRefresh.HasValue() ? &extensionMarketplace : nullptr,
                                                               .nativeDialogs = &nativeDialogs}};
             // Closes route/extension scopes and joins before destroying the successfully constructed screen host.
-            const JobShutdown jobShutdown{p.background.jobs, &screenHost};
+            const JobShutdown jobShutdown{p.background.jobs, &screenHost, p.operationServices.shaderBuild};
             screenHost.Services().Register<IEditorViewportRenderer>(p.presentation.viewportRenderer);
             screenHost.Services().Register<IEditorGuiRenderer>(p.presentation.guiRenderer);
             screenHost.Services().Register<EditorViewportSceneState>(viewportSceneState);
@@ -1242,6 +1248,7 @@ namespace Horo::Editor {
             screenHost.Services().Register<RecentProjectInspectionService>(recentProjectInspection);
             screenHost.Services().RegisterConst<Log::IStructuredLogQuery>(p.logQuery);
             screenHost.Services().RegisterConst<IBuildOutputQuery>(p.operationServices.buildOutputStore);
+            screenHost.Services().Register<Application::ShaderBuildService>(p.operationServices.shaderBuild);
             screenHost.Services().Register<OperationStore>(p.operationServices.operationStore);
             screenHost.Services().RegisterConst<IOperationQuery>(p.operationServices.operationStore);
             screenHost.Services().Register<IOperationControl>(p.operationServices.operationStore);
@@ -1443,6 +1450,7 @@ namespace Horo::Editor {
         BuildOutputStore &buildOutput;
         OperationStore &operations;
         const EditorUpdateHostServices *updateHost;
+        std::shared_ptr<const Render::IShaderCompilerAdapter> shaderCompiler;
     };
 
     struct EditorSessionResult final {
@@ -1454,6 +1462,7 @@ namespace Horo::Editor {
     [[nodiscard]] static EditorSessionResult RunEditorSession(EditorSessionLaunch launch) {
         EngineDataBus engineEvents;
         JobSystem jobSystem{JobSystemConfig{.workerCount = 2, .maxQueuedJobs = 256, .ioWorkerCount = 1, .reservedInteractiveJobs = 8}};
+        Application::ShaderBuildService shaderBuild{std::move(launch.shaderCompiler), launch.buildOutput};
         ProjectCreationService projectCreationService{jobSystem, engineEvents};
         EditorDataBus editorEvents;
         LOG_INFO("editor.startup", "Loaded language tag from disk: '%s'", launch.startup.settings.languageTag.c_str());
@@ -1490,7 +1499,7 @@ namespace Horo::Editor {
                                            inputBackend,
                                            inputRouter,
                                            launch.logs,
-                                           {launch.buildOutput, launch.operations}};
+                                           {launch.buildOutput, launch.operations, shaderBuild}};
         auto rendererRestart = RunEditorMainLoop(loopParams);
         return {std::move(rendererRestart), loopParams.healthy};
     }
@@ -1582,7 +1591,8 @@ namespace Horo::Editor {
     // ── public entry ─────────────────────────────────────────────────────────
 
     /** @copydoc RunEditorGuiApp */
-    int RunEditorGuiApp(const int argc, char **argv, const EditorUpdateHostServices *updateHost) {
+    int RunEditorGuiApp(const int argc, char **argv, const EditorUpdateHostServices *updateHost,
+                        std::shared_ptr<const Render::IShaderCompilerAdapter> shaderCompiler) {
         // ── Bootstrap logging before any subsystem ───────────────────────
         auto observabilitySession = InitializeEditorObservability();
         auto saveTelemetryResult = Runtime::SaveTelemetryRegistration::Create();
@@ -1632,9 +1642,9 @@ namespace Horo::Editor {
 
         LOG_INFO("editor.startup", "Editor initialised with renderer '%s' — entering main loop", prepared->options.rendererBackend.c_str());
 
-        const EditorSessionResult session = RunEditorSession({*prepared, *presentation->window, ImGui::GetIO(), presentation->fonts,
-                                                              presentation->textures, presentation->composition, editorTelemetry,
-                                                              *structuredLogStore, buildOutputStore, operationStore, updateHost});
+        const EditorSessionResult session = RunEditorSession(
+            {*prepared, *presentation->window, ImGui::GetIO(), presentation->fonts, presentation->textures, presentation->composition,
+             editorTelemetry, *structuredLogStore, buildOutputStore, operationStore, updateHost, std::move(shaderCompiler)});
 
         ShutdownEditorPresentation(presentation->window, presentation->composition, presentation->textures);
         saveTelemetry.reset();

@@ -1991,6 +1991,11 @@ target_link_libraries(HoroShaderCompilerToolchain
         PRIVATE HoroEngine::Platform
 )
 
+add_library(HoroShaderBuild STATIC application/render/ShaderBuildService.cpp)
+add_library(HoroEngine::ShaderBuild ALIAS HoroShaderBuild)
+target_compile_features(HoroShaderBuild PUBLIC cxx_std_20)
+target_link_libraries(HoroShaderBuild PUBLIC HoroEngine::Foundation HoroEngine::RenderApi)
+
 add_library(HoroRenderBackendRegistry STATIC
         runtime/renderer/backend_registry/RenderBackendRegistry.cpp
         runtime/renderer/backend_registry/RenderBackendRegistryErrors.cpp

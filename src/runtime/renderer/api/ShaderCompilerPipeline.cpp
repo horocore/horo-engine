@@ -305,8 +305,83 @@ namespace Horo::Render {
                    (diagnostic.sourceIdentity.empty() || IsValidLogicalPath(diagnostic.sourceIdentity, limits.maximumIdentityBytes)) &&
                    !diagnostic.message.empty() && diagnostic.message.size() <= limits.maximumDiagnosticMessageBytes &&
                    (diagnostic.line != 0 || diagnostic.column == 0) &&
-                   (!diagnostic.sourceIdentity.empty() || (diagnostic.line == 0 && diagnostic.column == 0));
+                   (!diagnostic.sourceIdentity.empty() || (diagnostic.line == 0 && diagnostic.column == 0)) &&
+                   (!diagnostic.toolCode || IsValidIdentity(*diagnostic.toolCode, limits.maximumIdentityBytes));
         }
+
+        /** @brief Validates provenance against the admitted invocation rather than trusting streamed adapter metadata. */
+        [[nodiscard]] bool IsValidContext(const ShaderCompilerDiagnosticContext &context, const ShaderManifest &manifest,
+                                          const ShaderCompilerTargetDescriptor &target, const ShaderCompilerLimits &limits) {
+            if (static_cast<unsigned>(context.phase) > static_cast<unsigned>(ShaderCompilerPhase::DebugCompilation) ||
+                context.backend != target.requirement.backend || context.sourceRevision != manifest.sourceRevision ||
+                (!context.entryPoint.empty() && !IsValidIdentity(context.entryPoint, limits.maximumIdentityBytes)))
+                return false;
+            if (context.shaderStage) {
+                if (std::ranges::none_of(manifest.entryPoints, [&](const auto &entry) {
+                    return entry.stage == *context.shaderStage && entry.name == context.entryPoint;
+                }))
+                    return false;
+            } else if (!context.entryPoint.empty())
+                return false;
+            return !context.tool || std::ranges::any_of(target.tools, [&](const auto &tool) {
+                return tool.tool == context.tool->tool && tool.release == context.tool->release &&
+                       tool.buildDigest == context.tool->buildDigest;
+            });
+        }
+
+        /** @brief Validates and bounds live output before it can reach the host store, including failed adapter routes. */
+        class ValidatingSink final : public IShaderCompilerDiagnosticSink {
+        public:
+            ValidatingSink(IShaderCompilerDiagnosticSink &host, const ShaderManifest &manifest,
+                           const ShaderCompilerTargetDescriptor &target, const ShaderCompilerLimits &limits)
+                : host_(host), manifest_(manifest), target_(target), limits_(limits) {}
+
+            Result<void> BeginPhase(const ShaderCompilerDiagnosticContext &context) override {
+                if (failure_)
+                    return Result<void>::Failure(*failure_);
+                // Each entry has at most seven compiler phases; repeated/unbounded adapter callbacks are rejected.
+                if (++phases_ > 7U * manifest_.entryPoints.size() + 1U || !IsValidContext(context, manifest_, target_, limits_))
+                    return Reject();
+                return Remember(host_.BeginPhase(context));
+            }
+
+            Result<void> Publish(const ShaderCompilerDiagnostic &diagnostic) override {
+                if (failure_)
+                    return Result<void>::Failure(*failure_);
+                if (published_ >= limits_.maximumDiagnosticsPerTarget || !IsValidDiagnostic(diagnostic, limits_) ||
+                    (diagnostic.context && !IsValidContext(*diagnostic.context, manifest_, target_, limits_)))
+                    return Reject();
+                ++published_;
+                return Remember(host_.Publish(diagnostic));
+            }
+
+            [[nodiscard]] std::size_t Published() const noexcept {
+                return published_;
+            }
+
+            [[nodiscard]] const std::optional<Error> &Failure() const noexcept {
+                return failure_;
+            }
+
+        private:
+            Result<void> Reject() {
+                return Remember(Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidAdapterOutput)));
+            }
+
+            Result<void> Remember(Result<void> result) {
+                if (!failure_ && result.HasError())
+                    failure_ = result.ErrorValue();
+                return failure_ ? Result<void>::Failure(*failure_) : result;
+            }
+
+            IShaderCompilerDiagnosticSink &host_;
+            const ShaderManifest &manifest_;
+            const ShaderCompilerTargetDescriptor &target_;
+            const ShaderCompilerLimits &limits_;
+            std::size_t published_{};
+            std::size_t phases_{};
+            std::optional<Error> failure_;
+        };
 
         [[nodiscard]] bool IsValidOutput(const ShaderCompilerAdapterOutput &output, const ShaderCompilerTargetDescriptor &target,
                                          const ShaderCompilerLimits &limits) noexcept {
@@ -331,6 +406,8 @@ namespace Horo::Render {
                     return Result<ShaderCompilerAdapterOutput>::Failure(
                         WrapError(ShaderCompilerPipelineErrors::AdapterFailure, std::move(output).ErrorValue(), context));
                 return output;
+            } catch (const std::bad_alloc &) {
+                return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::AllocationFailed));
             } catch (...) {  // NOSONAR(cpp:S1181) Private/native toolchain adapters must not leak exceptions across the typed API.
                 return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::AdapterFailure, context));
             }
@@ -339,7 +416,8 @@ namespace Horo::Render {
 
     /** @copydoc CompileShaderTargets */
     Result<ShaderCompilationBatch> CompileShaderTargets(const ShaderCompilationRequest &request, const IShaderCompilerAdapter &adapter,
-                                                        const CancellationToken &cancellation, const ShaderCompilerLimits &limits) {
+                                                        const CancellationToken &cancellation, const ShaderCompilerLimits &limits,
+                                                        IShaderCompilerDiagnosticSink *diagnostics) {
         if (!IsValidLimits(limits))
             return Result<ShaderCompilationBatch>::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidLimits));
         if (const auto validation = ValidateRequest(request, limits); validation.HasError())
@@ -361,15 +439,43 @@ namespace Horo::Render {
                 if (key.HasError())
                     return Result<ShaderCompilationBatch>::Failure(key.ErrorValue());
 
-                const ShaderCompilerInvocation invocation{request.manifest, request.source, request.dependencies, request.defines, target,
-                                                          key.Value(),      limits};
+                std::optional<ValidatingSink> stream;
+                if (diagnostics)
+                    stream.emplace(*diagnostics, request.manifest, target, limits);
+                if (stream) {
+                    const ShaderCompilerDiagnosticContext context{ShaderCompilerPhase::PipelineValidation,
+                                                                  target.requirement.backend,
+                                                                  request.manifest.sourceRevision,
+                                                                  {},
+                                                                  {},
+                                                                  {}};
+                    if (auto admitted = stream->BeginPhase(context); admitted.HasError())
+                        return Result<ShaderCompilationBatch>::Failure(admitted.ErrorValue());
+                }
+                const ShaderCompilerInvocation
+                    invocation{request.manifest, request.source, request.dependencies,       request.defines, target,
+                               key.Value(),      limits,         stream ? &*stream : nullptr};
                 auto output = InvokeAdapter(adapter, invocation, cancellation);
+                if (stream && stream->Failure())
+                    return Result<ShaderCompilationBatch>::Failure(*stream->Failure());
                 if (output.HasError())
                     return Result<ShaderCompilationBatch>::Failure(std::move(output).ErrorValue());
                 if (cancellation.IsCancellationRequested())
                     return Result<ShaderCompilationBatch>::Failure(MakeError(ShaderCompilerPipelineErrors::CancellationRequested));
                 if (!IsValidOutput(output.Value(), target, limits))
                     return Result<ShaderCompilationBatch>::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidAdapterOutput));
+                if (stream && stream->Published() != 0 && stream->Published() != output.Value().diagnostics.size())
+                    return Result<ShaderCompilationBatch>::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidAdapterOutput));
+                for (const auto &diagnostic : output.Value().diagnostics) {
+                    if (diagnostic.context && !IsValidContext(*diagnostic.context, request.manifest, target, limits))
+                        return Result<ShaderCompilationBatch>::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidAdapterOutput));
+                }
+                // Older adapters publish only owned output diagnostics; streaming adapters must publish the complete sequence.
+                if (stream && stream->Published() == 0) {
+                    for (const auto &diagnostic : output.Value().diagnostics)
+                        if (auto published = stream->Publish(diagnostic); published.HasError())
+                            return Result<ShaderCompilationBatch>::Failure(published.ErrorValue());
+                }
 
                 auto value = std::move(output).Value();
                 batch.artifacts.emplace_back(value.backend, value.payloadFormat, key.Value(), std::move(value.payload),
