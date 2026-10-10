@@ -18,6 +18,10 @@ from android_elf import native_closure
 from android_preflight import extract_game_activity, tools_preflight
 
 
+ASSET_PREFIX = "assets/"
+PROVENANCE_ASSET = ASSET_PREFIX + "horo-package-provenance.json"
+
+
 def copy_assets(profile: dict, destination: Path) -> list[dict]:
     records = []
     for target, name in sorted(profile["assets"].items()):
@@ -78,7 +82,7 @@ def write_project(stage: Path, tools: dict, profile: dict, abis: list[str], acti
         raise AndroidError("GameActivity changed during staging; retry with the admitted AAR.")
 
 
-def build_native(arguments: argparse.Namespace, tools: dict, profile: dict, activity_root: Path, workspace: Path) -> Path:
+def build_native(arguments: argparse.Namespace, profile: dict, activity_root: Path, workspace: Path) -> Path:
     if arguments.native_root:
         if arguments.native_root.is_symlink():
             raise AndroidError("Native input roots cannot be links.")
@@ -128,7 +132,7 @@ def canonical_apk(source: Path, destination: Path, provenance_bytes: bytes | Non
             info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_STORED if name.endswith(".so") else zipfile.ZIP_DEFLATED
             info.external_attr = 0o100644 << 16
-            payload = provenance_bytes if name == "assets/horo-package-provenance.json" and provenance_bytes is not None else original.read(name)
+            payload = provenance_bytes if name == PROVENANCE_ASSET and provenance_bytes is not None else original.read(name)
             result.writestr(info, payload)
 
 
@@ -147,7 +151,7 @@ def inspect_package(package: Path, expected: dict) -> dict:
         names = archive.namelist()
         if len(names) != len(set(names)) or "classes.dex" not in names or "AndroidManifest.xml" not in names:
             raise AndroidError("APK is ambiguous or missing its Android application payload.")
-        provenance_bytes = archive.read("assets/horo-package-provenance.json")
+        provenance_bytes = archive.read(PROVENANCE_ASSET)
         if provenance_bytes != canonical_json(expected):
             raise AndroidError("APK provenance differs from its admitted inputs.")
         verify_native_contents(archive, expected)
@@ -168,9 +172,9 @@ def verify_native_contents(archive: zipfile.ZipFile, expected: dict) -> None:
 
 
 def verify_assets(archive: zipfile.ZipFile, expected: dict) -> None:
-    admitted = {f"assets/{record['name']}": record for record in expected["assets"]}
-    actual = {name for name in archive.namelist() if name.startswith("assets/")}
-    if actual != set(admitted) | {"assets/horo-package-provenance.json"}:
+    admitted = {ASSET_PREFIX + record["name"]: record for record in expected["assets"]}
+    actual = {name for name in archive.namelist() if name.startswith(ASSET_PREFIX)}
+    if actual != set(admitted) | {PROVENANCE_ASSET}:
         raise AndroidError("APK runtime assets differ from the declared profile.")
     for name, record in admitted.items():
         if hashlib.sha256(archive.read(name)).hexdigest() != record["sha256"]:
@@ -186,7 +190,7 @@ def assemble(arguments: argparse.Namespace) -> None:
     workspace.mkdir(parents=True)
     activity_root = workspace / "game-activity"
     extract_game_activity(arguments.game_activity, activity_root, tools, arguments.abi)
-    native_root = build_native(arguments, tools, profile, activity_root, workspace)
+    native_root = build_native(arguments, profile, activity_root, workspace)
     stage = workspace / "gradle-project"
     stage.mkdir()
     native = stage_native(native_root, stage, tools, profile, arguments.abi)
@@ -199,7 +203,7 @@ def assemble(arguments: argparse.Namespace) -> None:
     dependencies = stage / "assets/horo-java-dependencies.json"
     assets.append({"name": dependencies.name, "sha256": digest(dependencies), "size": dependencies.stat().st_size})
     evidence = provenance(tools, profile, native, assets)
-    (stage / "assets/horo-package-provenance.json").write_bytes(canonical_json(evidence))
+    (stage / PROVENANCE_ASSET).write_bytes(canonical_json(evidence))
     task = "assemble" + profile["configuration"]
     run([str(arguments.gradle.resolve()), "--no-daemon", "--console=plain", task], stage, workspace / "gradle.log")
     complete_package(stage, workspace, profile, tools, capability, evidence, arguments.unsigned)
@@ -209,16 +213,16 @@ def include_generated_assets(package: Path, evidence: dict) -> None:
     """Bind explicitly declared Gradle-produced runtime assets before canonical alignment/signing."""
     with zipfile.ZipFile(package) as archive:
         archive_limits(archive)
-        if archive.read("assets/horo-package-provenance.json") != canonical_json(evidence):
+        if archive.read(PROVENANCE_ASSET) != canonical_json(evidence):
             raise AndroidError("Gradle changed the admitted source provenance before final assembly.")
         generated = evidence["profile"]["generatedAssets"]
-        ordinary = {"assets/" + record["name"] for record in evidence["assets"]}
-        expected = ordinary | {"assets/" + name for name in generated} | {"assets/horo-package-provenance.json"}
-        actual = {name for name in archive.namelist() if name.startswith("assets/")}
+        ordinary = {ASSET_PREFIX + record["name"] for record in evidence["assets"]}
+        expected = ordinary | {ASSET_PREFIX + name for name in generated} | {PROVENANCE_ASSET}
+        actual = {name for name in archive.namelist() if name.startswith(ASSET_PREFIX)}
         if actual != expected:
             raise AndroidError("Gradle output has absent or undeclared generated runtime assets.")
         for name in generated:
-            payload = archive.read("assets/" + name)
+            payload = archive.read(ASSET_PREFIX + name)
             evidence["assets"].append({"name":name, "sha256":hashlib.sha256(payload).hexdigest(),
                                        "size":len(payload), "origin":"androidGradlePlugin"})
 
@@ -278,7 +282,7 @@ def main() -> int:
     arguments = parser.parse_args()
     try:
         assemble(arguments)
-    except (AndroidError, OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile) as error:
+    except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile) as error:
         print(f"Android preflight: {error}", file=sys.stderr)
         return 1
     return 0

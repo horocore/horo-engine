@@ -81,3 +81,11 @@ ABI, native dependency, asset, permission or feature, change the checked-in prof
 update its compatibility tests and hosted package evidence together. New runtime
 hosts must supply their own explicit composition rather than extending this probe
 into backend discovery.
+
+The Gradle template commits `gradle.lockfile` for both admitted runtime graphs and
+uses strict dependency locking before provenance generation and APK assembly.
+Update the runtime lock deliberately alongside the toolchain contract; ordinary
+qualification runs must never use `--write-locks`. Repository downloads restrict
+both initial requests and redirects to HTTPS, and the CMake wheel installation
+requires binary distributions. External tool and AAR paths are explicit local
+build-host capabilities; this command is not a service accepting remote paths.

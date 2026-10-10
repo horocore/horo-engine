@@ -32,12 +32,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m pip install --disable-pip-version-check --no-cache-dir cmake==3.31.6
+          python3 -m pip install --disable-pip-version-check --no-cache-dir --only-binary :all: cmake==3.31.6
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
           ninja_version=$(python3 -c 'import json; print(json.load(open("android/toolchain-lock.json"))["ninja"])')
-          curl --fail --location --retry 3 "https://github.com/ninja-build/ninja/releases/download/v$ninja_version/ninja-linux.zip" -o "$RUNNER_TEMP/ninja.zip"
-          curl --fail --location --retry 3 https://services.gradle.org/distributions/gradle-8.11.1-bin.zip -o "$RUNNER_TEMP/gradle.zip"
-          curl --fail --location --retry 3 https://dl.google.com/dl/android/maven2/androidx/games/games-activity/3.0.5/games-activity-3.0.5.aar -o "$RUNNER_TEMP/game-activity.aar"
+          curl --proto =https --proto-redir =https --fail --location --retry 3 "https://github.com/ninja-build/ninja/releases/download/v$ninja_version/ninja-linux.zip" -o "$RUNNER_TEMP/ninja.zip"
+          curl --proto =https --proto-redir =https --fail --location --retry 3 https://services.gradle.org/distributions/gradle-8.11.1-bin.zip -o "$RUNNER_TEMP/gradle.zip"
+          curl --proto =https --proto-redir =https --fail --location --retry 3 https://dl.google.com/dl/android/maven2/androidx/games/games-activity/3.0.5/games-activity-3.0.5.aar -o "$RUNNER_TEMP/game-activity.aar"
           python3 - <<'PYTHON'
           import hashlib, json, os
           from pathlib import Path

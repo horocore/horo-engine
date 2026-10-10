@@ -37,6 +37,14 @@ dependencies {
     implementation files('game-activity.aar')
     implementation "androidx.appcompat:appcompat:${contract.tools.appcompat}"
 }
+// Lock runtime dependency graphs before provenance or APK assembly resolves them.
+configurations.configureEach {
+    if (name in ['debugRuntimeClasspath', 'releaseRuntimeClasspath']) {
+        resolutionStrategy.activateDependencyLocking()
+    }
+}
+dependencyLocking { lockMode = LockMode.STRICT }
+
 tasks.withType(AbstractArchiveTask).configureEach {
     preserveFileTimestamps = false
     reproducibleFileOrder = true

@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import android_package
+import android_contract
 import android_preflight
 from android_contract import AndroidError, bounded_bytes, canonical_json, input_path, load_contract, relative_name
 from android_elf import inspect_elf, native_closure
@@ -58,6 +59,32 @@ class AndroidPackageTests(unittest.TestCase):
         path.write_bytes(elf(**options))
         return path
 
+    def test_external_version_tool_is_an_explicit_argv_capability(self):
+        command = ["/host tools/gradle;echo injected", "--version"]
+        result = argparse.Namespace(stdout="Gradle 8.11.1", stderr="", returncode=0)
+        with patch.object(android_contract.subprocess, "run", return_value=result) as execute:
+            self.assertEqual(android_contract.version_output(command), "Gradle 8.11.1")
+        execute.assert_called_once_with(command, check=False, capture_output=True, text=True,
+                                        timeout=30, shell=False)
+
+    def test_tool_downloads_enforce_https_and_binary_wheels(self):
+        workflow = (android_package.ROOT / ".github/workflows/android-package.yml").read_text()
+        self.assertIn("--only-binary :all:", workflow)
+        downloads = [line for line in workflow.splitlines() if "curl --" in line]
+        self.assertEqual(len(downloads), 3)
+        for line in downloads:
+            self.assertIn("--proto =https --proto-redir =https", line)
+
+    def test_runtime_dependency_lock_is_staged_and_enforced(self):
+        template = android_package.ROOT / "android/gradle"
+        build = (template / "build.gradle").read_text()
+        self.assertIn("resolutionStrategy.activateDependencyLocking()", build)
+        self.assertIn("lockMode = LockMode.STRICT", build)
+        lock = (template / "gradle.lockfile").read_text()
+        for module in ("androidx.appcompat:appcompat:1.7.0", "org.jetbrains.kotlin:kotlin-bom:1.8.22",
+                       "org.jetbrains.kotlin:kotlin-stdlib:1.8.22"):
+            self.assertIn(module + "=debugRuntimeClasspath,releaseRuntimeClasspath", lock)
+
     def test_real_elf_admits_declared_abi_api_and_alignment(self):
         record = inspect_elf(self.library(), 183)
         self.assertEqual(record["needed"], ["libc.so"])
@@ -65,8 +92,10 @@ class AndroidPackageTests(unittest.TestCase):
 
     def test_elf_rejects_abi_api_alignment_and_search_paths(self):
         for options in ({"machine":62}, {"api":30}, {"alignment":4096}, {"rpath":True}):
-            with self.subTest(options=options), self.assertRaises(AndroidError):
-                inspect_elf(self.library(**options), 183)
+            with self.subTest(options=options):
+                path = self.library(**options)
+                with self.assertRaises(AndroidError):
+                    inspect_elf(path, 183)
 
     def test_truncated_elf_is_actionable(self):
         path = self.library()
@@ -97,11 +126,12 @@ class AndroidPackageTests(unittest.TestCase):
         source.write_bytes(b"ok")
         (self.root / "link").symlink_to(source)
         with self.assertRaises(AndroidError):
-            bounded_bytes(input_path(self.root, "link"))
+            input_path(self.root, "link")
 
     def test_oversized_input_rejected(self):
+        path = self.library()
         with self.assertRaises(AndroidError):
-            bounded_bytes(self.library(), 100)
+            bounded_bytes(path, 100)
 
     def test_tool_revision_drift_and_missing_are_actionable(self):
         with self.assertRaisesRegex(AndroidError, "unavailable"):
@@ -191,10 +221,12 @@ class AndroidPackageTests(unittest.TestCase):
                 "minSdkVersion:'29'\ntargetSdkVersion:'36'\n"
                 "uses-permission: name='org.horocore.packagequalification.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'\n")
         verify_manifest(text, self.profile)
+        ambiguous = text + "sdkVersion:'29'\n"
         with self.assertRaisesRegex(AndroidError, "profile API 29"):
-            verify_manifest(text + "sdkVersion:'29'\n", self.profile)
+            verify_manifest(ambiguous, self.profile)
+        wrong_api = text.replace("'29'", "'30'")
         with self.assertRaisesRegex(AndroidError, "profile API 29"):
-            verify_manifest(text.replace("'29'", "'30'"), self.profile)
+            verify_manifest(wrong_api, self.profile)
 
     def test_profiles_fail_closed_on_undeclared_abi(self):
         for profile, abis in (("qualification-debug", ["armeabi-v7a"]), ("qualification-release", ["x86_64"]),
@@ -340,7 +372,7 @@ class AndroidAssemblyTests(unittest.TestCase):
                 output.mkdir(parents=True)
                 (output / "libhoro-package-qualification.so").write_bytes(elf())
         with patch.dict(os.environ,{},clear=False), patch.object(android_package,"run",side_effect=build):
-            native = android_package.build_native(arguments,self.tools,self.profile,self.root / "activity",workspace)
+            native = android_package.build_native(arguments,self.profile,self.root / "activity",workspace)
             self.assertTrue((native / "arm64-v8a/libc++_shared.so").is_file())
             self.assertIn("android-debug",commands[0])
             self.assertEqual(os.environ["HORO_ANDROID_ABI"],"arm64-v8a")

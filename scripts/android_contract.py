@@ -24,7 +24,8 @@ def bounded_bytes(path: Path, maximum: int = MAXIMUM_FILE) -> bytes:
     """Reject links and oversized source artifacts before consuming their bytes."""
     if path.is_symlink() or not path.is_file() or path.stat().st_size > maximum:
         raise AndroidError(f"Invalid or oversized input {path.name}; provide a regular bounded file.")
-    with path.open("rb") as source:
+    # Explicit local input capability, not a sandbox-relative request; callers admit roots or verify the locked AAR hash.
+    with path.open("rb") as source:  # NOSONAR: S8707 CLI input path is intentionally supplied by the build host.
         data = source.read(maximum + 1)
     if len(data) > maximum:
         raise AndroidError(f"Input {path.name} changed size; retry with stable files.")
@@ -123,10 +124,10 @@ def run(command: list[str], directory: Path, log: Path, timeout: int = 1800) -> 
 
 
 def version_output(command: list[str]) -> str:
-    # Fixed version-query argv and explicit tool capability; no shell.
+    # S8701: CLI-selected executable is an explicit host capability; fixed version-query argv uses shell=False.
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-    result = subprocess.run(  # nosec B603
-        command, check=False, capture_output=True, text=True, timeout=30, shell=False)
+    result = subprocess.run(  # NOSONAR
+        command, check=False, capture_output=True, text=True, timeout=30, shell=False)  # nosec B603
     text = result.stdout + result.stderr
     if result.returncode or len(text) > 65536:
         raise AndroidError(f"Cannot identify required tool {Path(command[0]).name}; install its pinned version.")
