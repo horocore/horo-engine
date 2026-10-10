@@ -86,6 +86,8 @@ jobs:
           path: |
             ${{ runner.temp }}/first/*.json
             ${{ runner.temp }}/first/*.log
+            ${{ runner.temp }}/first/manifest-badging.txt
             ${{ runner.temp }}/first/signed.apk
             ${{ runner.temp }}/second/*.json
             ${{ runner.temp }}/second/*.log
+            ${{ runner.temp }}/second/manifest-badging.txt

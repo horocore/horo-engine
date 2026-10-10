@@ -151,13 +151,23 @@ class AndroidPackageTests(unittest.TestCase):
 
     def test_manifest_rejects_permission_feature_and_api_drift(self):
         text = ("package: name='org.horocore.packagequalification' versionCode='1' versionName='0.2.0'\n"
-                "sdkVersion:'29'\ntargetSdkVersion:'36'\n"
+                "minSdkVersion:'29'\ntargetSdkVersion:'36'\n"
                 "uses-permission: name='org.horocore.packagequalification.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'\n")
         verify_manifest(text, self.profile)
         for changed in (text.replace("'29'", "'30'"), text + "uses-permission: name='android.permission.CAMERA'\n",
                         text + "uses-feature: name='android.hardware.vulkan.level'\n"):
             with self.assertRaises(AndroidError):
                 verify_manifest(changed, self.profile)
+
+    def test_current_aapt2_min_sdk_badging_and_ambiguous_alias(self):
+        text = ("package: name='org.horocore.packagequalification' versionCode='1' versionName='0.2.0'\n"
+                "minSdkVersion:'29'\ntargetSdkVersion:'36'\n"
+                "uses-permission: name='org.horocore.packagequalification.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'\n")
+        verify_manifest(text, self.profile)
+        with self.assertRaisesRegex(AndroidError, "profile API 29"):
+            verify_manifest(text + "sdkVersion:'29'\n", self.profile)
+        with self.assertRaisesRegex(AndroidError, "profile API 29"):
+            verify_manifest(text.replace("'29'", "'30'"), self.profile)
 
     def test_profiles_fail_closed_on_undeclared_abi(self):
         for profile, abis in (("qualification-debug", ["armeabi-v7a"]), ("qualification-release", ["x86_64"]),
@@ -178,7 +188,7 @@ class AndroidAssemblyTests(unittest.TestCase):
 
     def badging(self):
         return ("package: name='org.horocore.packagequalification' versionCode='1' versionName='0.2.0'\n"
-                "sdkVersion:'29'\ntargetSdkVersion:'36'\n"
+                "minSdkVersion:'29'\ntargetSdkVersion:'36'\n"
                 "uses-permission: name='org.horocore.packagequalification.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'\n")
 
     def prepare(self, arguments):

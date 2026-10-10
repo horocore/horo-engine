@@ -217,7 +217,9 @@ def complete_package(stage: Path, workspace: Path, profile: dict, tools: dict, c
         package = workspace / "signed.apk"
         sign_package(aligned, package, tools, capability, workspace)
     run([capability["commands"]["zipalign"], "-c", "-P", "16", "4", str(package)], workspace, workspace / "verify-align.log")
-    verify_manifest(version_output([capability["commands"]["aapt2"], "dump", "badging", str(package)]), profile)
+    badging = version_output([capability["commands"]["aapt2"], "dump", "badging", str(package)])
+    (workspace / "manifest-badging.txt").write_text(badging, encoding="utf-8")
+    verify_manifest(badging, profile)
     inspection = inspect_package(package, evidence)
     inspection["signed"] = not unsigned
     (workspace / "inspection.json").write_bytes(canonical_json(inspection))
@@ -225,13 +227,18 @@ def complete_package(stage: Path, workspace: Path, profile: dict, tools: dict, c
     print(json.dumps({"package": package.name, "sha256": inspection["apkSha256"], "signed": not unsigned}))
 
 
+def verify_api_badging(badging: str, field: str, expected: int) -> None:
+    values = re.findall(rf"^{field}:'([^']+)'$", badging, re.MULTILINE)
+    if values != [str(expected)]:
+        raise AndroidError(f"Manifest {field} differs from profile API {expected}: {values}; inspect manifest-badging.txt.")
+
+
 def verify_manifest(badging: str, profile: dict) -> None:
     package = re.search(r"^package: name='([^']+)' versionCode='([^']+)' versionName='([^']+)'", badging, re.MULTILINE)
     if package is None or package.groups() != (profile["applicationId"], str(profile["versionCode"]), profile["versionName"]):
         raise AndroidError("Assembled manifest identity differs from the declared package profile.")
-    for name, expected in (("sdkVersion", profile["minimumApi"]), ("targetSdkVersion", profile["targetApi"])):
-        if re.search(rf"^{name}:'{expected}'$", badging, re.MULTILINE) is None:
-            raise AndroidError("Assembled manifest API contract differs from the admitted profile.")
+    verify_api_badging(badging, "(?:minSdkVersion|sdkVersion)", profile["minimumApi"])
+    verify_api_badging(badging, "targetSdkVersion", profile["targetApi"])
     permissions = set(re.findall(r"^uses-permission: name='([^']+)'", badging, re.MULTILINE))
     if permissions != set(profile["permissions"]):
         raise AndroidError("Assembled manifest has absent or undeclared permissions.")
