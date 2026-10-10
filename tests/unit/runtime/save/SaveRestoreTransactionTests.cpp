@@ -84,6 +84,7 @@ namespace Horo::Runtime {
             Fixup,
             Throw,
             ThrowNonStandard,
+            ThrowAllocation,
         };
 
         struct ParticipantLog final {
@@ -161,6 +162,8 @@ namespace Horo::Runtime {
             }
 
             Result<void> Run(const std::string_view phase, const InjectedFailure phaseFailure) {
+                if (failure_ == InjectedFailure::ThrowAllocation && phase == "decode")
+                    throw std::bad_alloc{};
                 log_.phases.push_back(requirement_.participant.Value() + ":" + std::string{phase});
                 if (failure_ == InjectedFailure::Throw && phase == "apply")
                     throw std::runtime_error{"participant contract violation"};
@@ -479,6 +482,28 @@ namespace Horo::Runtime {
             CHECK(Snapshot(handle).terminalError->code.Value() == SaveErrors::OperationAbandoned.code.Value());
         }
 
+        TEST_CASE("Restore participant allocation exceptions roll back candidates and terminalize the operation",
+                  "[unit][save][restore][allocation]") {
+            const auto registry = Registry({Descriptor("horo.test.scene", 1)});
+            ParticipantLog log;
+            std::vector<std::unique_ptr<IStagedRestoreParticipant>> staged;
+            staged.push_back(Candidate("horo.test.scene", log, InjectedFailure::ThrowAllocation));
+            auto operation = Operation(599);
+            const auto handle = operation.Handle();
+            auto created =
+                StagedRestoreTransaction::Create(Context(registry, handle.Id()), std::move(operation), registry, std::move(staged));
+            REQUIRE(created.HasValue());
+            auto transaction = std::move(created).Value();
+            const auto prepared = transaction.Prepare();
+            REQUIRE(prepared.HasError());
+            CHECK(prepared.ErrorValue().code.Value() == SaveErrors::RestoreAdapterContractInvalid.code.Value());
+            CHECK(Snapshot(handle).terminalError->code.Value() == SaveErrors::RestoreAdapterContractInvalid.code.Value());
+            CHECK(log.rolledBack == std::vector<std::string>{"horo.test.scene"});
+        }
+
+        // MSVC Debug allocates iterator proxies in noexcept vector construction/moves.
+        // The full global-new sweep remains mandatory in Windows Release CI; controlled participant failure runs in Debug too.
+#if !defined(_MSC_VER) || _ITERATOR_DEBUG_LEVEL == 0
         TEST_CASE("Restore admission maps every bookkeeping allocation failure to a typed terminal result",
                   "[unit][save][restore][allocation]") {
             const auto registry = Registry({Descriptor("horo.test.scene", 1)});
@@ -503,5 +528,6 @@ namespace Horo::Runtime {
             }
             CHECK(admitted);
         }
+#endif
     }  // namespace
 }  // namespace Horo::Runtime

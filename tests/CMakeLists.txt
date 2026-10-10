@@ -813,6 +813,7 @@ horo_register_catch_test(HoroPCGTerrainAdapterTests LABELS "unit;pcg;terrain;hea
 add_executable(HoroVfxApiTests
         support/AllocationProbe.cpp
         unit/runtime/vfx/CpuParticleBufferTests.cpp
+        unit/runtime/vfx/CpuParticleCollisionTests.cpp
         unit/runtime/vfx/CpuParticleSimulatorTests.cpp
         unit/runtime/vfx/CpuSimulationQualificationTests.cpp
         unit/runtime/vfx/CpuParticleForceQualificationTests.cpp
@@ -2716,6 +2717,12 @@ target_include_directories(HoroAndroidLifecycleTests PRIVATE
         ${PROJECT_SOURCE_DIR}/src/platform/android
 )
 target_link_libraries(HoroAndroidLifecycleTests PRIVATE HoroEngine::Platform)
+add_executable(HoroAndroidStorageTests unit/platform/AndroidStorageTests.cpp)
+target_compile_features(HoroAndroidStorageTests PRIVATE cxx_std_20)
+target_include_directories(HoroAndroidStorageTests PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/platform/android
+        ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroAndroidStorageTests PRIVATE HoroEngine::Platform)
 add_executable(HoroRuntimeSaveIdentityTests
         unit/runtime/save/SaveIdentityTests.cpp
 )
@@ -2775,6 +2782,7 @@ target_link_libraries(HoroRuntimeSaveCaptureSnapshotTests PRIVATE HoroEngine::Ru
 add_executable(HoroRuntimeSaveRestoreTransactionTests
         support/AllocationProbe.cpp
         unit/runtime/save/SaveRestoreTransactionTests.cpp
+        unit/runtime/save/SaveGameplayCheckpointTests.cpp
 )
 target_compile_features(HoroRuntimeSaveRestoreTransactionTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSaveRestoreTransactionTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
@@ -3098,6 +3106,8 @@ target_compile_features(HoroRuntimeSaveReferenceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveReferenceTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveSlotMetadataTests
         unit/runtime/save/SaveSlotMetadataTests.cpp
+        unit/runtime/save/SaveThumbnailCaptureTests.cpp
+        unit/runtime/save/SaveThumbnailArchiveTests.cpp
 )
 target_compile_features(HoroRuntimeSaveSlotMetadataTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveSlotMetadataTests PRIVATE HoroEngine::Runtime)
@@ -3202,6 +3212,18 @@ add_executable(HoroRuntimeSaveSafePointCoordinatorTests
 target_compile_features(HoroRuntimeSaveSafePointCoordinatorTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSaveSafePointCoordinatorTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_link_libraries(HoroRuntimeSaveSafePointCoordinatorTests PRIVATE HoroEngine::Runtime)
+
+add_executable(HoroSaveGameplayCheckpointPublicHeaderConsumer support/SaveGameplayCheckpointPublicHeaderConsumer.cpp)
+target_compile_features(HoroSaveGameplayCheckpointPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroSaveGameplayCheckpointPublicHeaderConsumer PRIVATE HoroEngine::Runtime)
+add_test(NAME HoroSaveGameplayCheckpointPublicHeaderConsumer COMMAND HoroSaveGameplayCheckpointPublicHeaderConsumer)
+set_tests_properties(HoroSaveGameplayCheckpointPublicHeaderConsumer PROPERTIES LABELS "unit;save;headless;ci-windows")
+
+add_executable(HoroSaveThumbnailCapturePublicHeaderConsumer support/SaveThumbnailCapturePublicHeaderConsumer.cpp)
+target_compile_features(HoroSaveThumbnailCapturePublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroSaveThumbnailCapturePublicHeaderConsumer PRIVATE HoroEngine::Runtime)
+add_test(NAME HoroSaveThumbnailCapturePublicHeaderConsumer COMMAND HoroSaveThumbnailCapturePublicHeaderConsumer)
+set_tests_properties(HoroSaveThumbnailCapturePublicHeaderConsumer PROPERTIES LABELS "unit;save;headless")
 
 add_executable(HoroSaveCaptureBarrierPublicHeaderConsumer support/SaveCaptureBarrierPublicHeaderConsumer.cpp)
 target_compile_features(HoroSaveCaptureBarrierPublicHeaderConsumer PRIVATE cxx_std_20)
@@ -4005,6 +4027,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroFoundationJobSystemTests
         HoroPlatformTests
         HoroAndroidLifecycleTests
+        HoroAndroidStorageTests
         HoroPlatformRequestTests
         HoroGameplayBuildServiceTests
         HoroEditorViewportSceneTests

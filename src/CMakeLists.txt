@@ -137,6 +137,7 @@ add_library(HoroPlatform STATIC
         platform/ConfigurationFileStore.cpp
         platform/android/AndroidLifecycle.cpp
         platform/android/AndroidLifecycleAdapter.cpp
+        platform/android/AndroidStorage.cpp
 )
 
 if (WIN32)
@@ -154,6 +155,10 @@ else ()
     if (APPLE)
         target_link_libraries(HoroPlatform PRIVATE "-framework Security")
     endif ()
+endif ()
+
+if (ANDROID)
+    target_link_libraries(HoroPlatform PRIVATE android)
 endif ()
 
 add_library(HoroEngine::Platform ALIAS HoroPlatform)
@@ -414,6 +419,7 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveParticipation.cpp
         runtime/save/SaveCaptureSnapshot.cpp
         runtime/save/SaveRestoreTransaction.cpp
+        runtime/save/SaveGameplayCheckpoint.cpp
         runtime/save/SaveRestoreTransactionReferences.cpp
         runtime/save/SaveArchiveMetadata.cpp
         runtime/save/SaveCompatibility.cpp
@@ -439,6 +445,10 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveCanonicalCompositeWriter.cpp
         runtime/save/SaveCanonicalCompositeReader.cpp
         runtime/save/SaveReference.cpp
+        runtime/save/SaveThumbnailArchive.cpp
+        runtime/save/SaveThumbnailCodec.cpp
+        runtime/save/SaveThumbnailCapture.cpp
+        runtime/save/SaveThumbnailErrors.cpp
         runtime/save/SaveSlotMetadata.cpp
         runtime/save/SaveSlotIndex.cpp
         runtime/save/SaveCloudRevisionMetadata.cpp
