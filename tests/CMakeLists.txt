@@ -2750,14 +2750,20 @@ target_compile_features(HoroShaderCompilerPipelineTests PRIVATE cxx_std_20)
 target_include_directories(HoroShaderCompilerPipelineTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroShaderCompilerPipelineTests PRIVATE HoroEngine::ShaderCompilerToolchain HoroEngine::ShaderBuild HoroEngine::Platform)
 add_executable(HoroRenderFrontendTests
+        support/AllocationProbe.cpp
         unit/runtime/renderer/RenderParallelWorkTests.cpp
         unit/runtime/renderer/RenderFrameInputTests.cpp
         unit/runtime/renderer/RenderGraphResourceLeaseTests.cpp
+        unit/runtime/renderer/RenderGraphTransientResourceTests.cpp
+        unit/runtime/renderer/RenderGraphTransientReservationTests.cpp
         unit/runtime/renderer/RenderFrontendTests.cpp
+        unit/runtime/renderer/RenderFrontendReservationTests.cpp
+        unit/runtime/renderer/RenderMemoryCostQueryContractTests.cpp
         unit/runtime/renderer/RenderFrontendInspectionTests.cpp
         unit/runtime/renderer/RenderReadbackTests.cpp
         unit/runtime/renderer/RenderTransferTests.cpp
         unit/runtime/renderer/RenderResourceRegistryTests.cpp
+        unit/runtime/renderer/RenderResourceRegistryRollbackTests.cpp
         unit/runtime/renderer/UiRenderCompositionTests.cpp
         unit/runtime/renderer/UiRenderSubmissionTests.cpp
 )
@@ -2765,6 +2771,7 @@ add_executable(HoroRenderFrontendTests
 target_compile_features(HoroRenderFrontendTests PRIVATE cxx_std_20)
 target_include_directories(HoroRenderFrontendTests PRIVATE
         ${PROJECT_SOURCE_DIR}/src/runtime/renderer/frontend
+        ${PROJECT_SOURCE_DIR}/tests
 )
 target_link_libraries(HoroRenderFrontendTests
         PRIVATE
@@ -3890,6 +3897,7 @@ if (HORO_BUILD_RENDER_OPENGL)
             unit/runtime/renderer/OpenGLCommandAdaptationTests.cpp
             unit/runtime/renderer/OpenGLRenderBackendQualificationTests.cpp
             unit/runtime/renderer/OpenGLRenderResourceTests.cpp
+            unit/runtime/renderer/OpenGLRenderGraphTests.cpp
     )
 
     target_compile_features(HoroRenderOpenGLTests PRIVATE cxx_std_20)

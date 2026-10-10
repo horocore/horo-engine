@@ -1,5 +1,6 @@
 #include "OpenGLBackendInternal.h"
 #include "OpenGLExecutionAdapter.h"
+#include "OpenGLGraphWorkloads.h"
 #include "OpenGLRenderBackendErrors.h"
 
 #include <algorithm>
@@ -63,12 +64,6 @@ namespace Horo::Render {
             RenderTextureUsage usage{RenderTextureUsage::None};
             std::uint32_t sampleCount{1};
             std::uint32_t references{1};
-        };
-
-        /** @brief Native texture descriptor plus deferred parent-release state. */
-        struct OpenGLTrackedTexture {
-            RenderTextureDescriptor descriptor;
-            bool destroyRequested{false};
         };
 
         [[nodiscard]] OpenGLTextureFormat TextureFormat(const RenderTextureFormat format) noexcept {
@@ -237,6 +232,8 @@ namespace Horo::Render {
                 return execution_.Execute(plan, activeExtent_);
             }
 
+#include "OpenGLRenderBackendGraph.inl"
+
             /** @copydoc IRenderBackend::Present */
             Result<void> Present(const FrameToken frame) override {
                 if (!IsOwnerThread())
@@ -357,6 +354,10 @@ namespace Horo::Render {
                 capabilities_.support = Detail::MakeOpenGLCapabilitySnapshot(contextFacts_, resourcesAvailable);
                 capabilities_.supportsOffscreenTargets = resourcesAvailable && contextFacts_.maxColorAttachments > 0;
                 capabilities_.supportsBufferResources = resourcesAvailable;
+                capabilities_.supportsExactTransientResourceReuse = resourcesAvailable && functions_.isGraphAvailable != nullptr &&
+                                                                    functions_.isGraphAvailable() &&
+                                                                    functions_.buffers.copyBufferSubData != nullptr;
+                capabilities_.support.queues.copy = capabilities_.supportsExactTransientResourceReuse;
                 capabilities_.supportsMeshResources = resourcesAvailable && contextFacts_.maxVertexAttributes > 0;
                 capabilities_.supportsTextureResources = resourcesAvailable && contextFacts_.maxTexture2DSize > 0;
                 capabilities_.supportsRenderTargetResources = resourcesAvailable && contextFacts_.maxColorAttachments > 0;
@@ -414,6 +415,8 @@ namespace Horo::Render {
                 });
                     hasViews)
                     return;
+                if (tracked->second.graphFramebuffer != 0)
+                    functions_.framebuffers.deleteFramebuffers(1, &tracked->second.graphFramebuffer);
                 textureDescriptors_.erase(tracked);
                 DeleteTrackedObject(functions_.textures.deleteTextures, textures_, texture);
             }
@@ -425,6 +428,10 @@ namespace Horo::Render {
                     objects.clear();
                 };
                 if (functions_.HasResourceFunctions()) {
+                    for (const auto &[texture, descriptor] : textureDescriptors_) {
+                        if (descriptor.graphFramebuffer != 0)
+                            functions_.framebuffers.deleteFramebuffers(1, &descriptor.graphFramebuffer);
+                    }
                     destroyAll(functions_.framebuffers.deleteFramebuffers, renderTargets_);
                     destroyAll(functions_.vertexArrays.deleteVertexArrays, meshes_);
                     destroyAll(functions_.textures.deleteTextures, textures_);
@@ -469,6 +476,7 @@ namespace Horo::Render {
                 contextFacts_ = {};
                 capabilities_.supportsOffscreenTargets = false;
                 capabilities_.supportsBufferResources = false;
+                capabilities_.supportsExactTransientResourceReuse = false;
                 capabilities_.supportsMeshResources = false;
                 capabilities_.supportsTextureResources = false;
                 capabilities_.supportsRenderTargetResources = false;
@@ -487,7 +495,7 @@ namespace Horo::Render {
             Detail::OpenGLCommandFunctions functions_{};
             std::shared_ptr<OpenGLContextLease> contextLease_;
             std::unordered_map<std::uint32_t, RenderBufferDescriptor> bufferDescriptors_;
-            std::unordered_map<std::uint32_t, OpenGLTrackedTexture> textureDescriptors_;
+            std::unordered_map<std::uint32_t, Detail::OpenGLGraphTexture> textureDescriptors_;
             std::unordered_map<std::uint64_t, OpenGLTextureView> textureViews_;
             std::uint32_t nextTextureViewIdentity_{1};
             std::unordered_set<std::uint32_t> buffers_;

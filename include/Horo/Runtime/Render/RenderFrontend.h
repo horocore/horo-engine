@@ -8,6 +8,7 @@
  */
 
 #include "Horo/Runtime/Render/RenderBackendRegistry.h"
+#include "Horo/Runtime/Render/RenderGraphTransientResources.h"
 #include "Horo/Runtime/Render/RenderMemoryBudget.h"
 #include "Horo/Runtime/Render/RenderParallelWork.h"
 
@@ -18,6 +19,7 @@
 namespace Horo::Render {
     class RenderFrontend;
     class CompiledRenderGraphExecution;
+    class RenderGraphLifetimePlan;
     struct RenderGraphPassWorkload;
     struct UiRenderSubmission;
     class UiRenderImageTexture;
@@ -40,6 +42,7 @@ namespace Horo::Render {
         class RenderResourceUploadQueue;
         class RenderFrontendResourceAccess;
         class RenderGraphResourceLeasePool;
+        class RenderGraphTransientResourcePool;
         class RenderParallelWorkState;
         class RenderParallelGraphWorkState;
     }  // namespace Detail
@@ -212,6 +215,31 @@ namespace Horo::Render {
                                                 std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission ui);
 
         /**
+         * @brief Executes a graph using an explicitly prepared transient resource set.
+         * @param graph Exact execution matching the prepared graph and lifetime proof.
+         * @param workloads One typed operation per retained pass.
+         * @param transientResources Exact ready set owned by this frame's frontend.
+         * @return Success or typed identity, lifetime, capacity, in-flight, or backend failure.
+         * @post Accepted native work retains one combined imported/transient completion lease.
+         */
+        [[nodiscard]] Result<void> ExecuteGraph(const CompiledRenderGraphExecution &graph,
+                                                std::span<const RenderGraphPassWorkload> workloads,
+                                                RenderGraphTransientResourcesHandle transientResources);
+
+        /**
+         * @brief Executes prepared transient resources while retaining exact UI generations until native completion.
+         * @param graph Exact execution matching the prepared graph and lifetime proof.
+         * @param workloads One typed operation per retained pass.
+         * @param transientResources Exact ready set owned by this frame's frontend.
+         * @param ui Synchronous UI source borrows and owned sealed atlas pins, consumed on success or abandonment.
+         * @return Success or typed identity, lifetime, UI generation, capacity, stage or backend failure.
+         * @post Accepted work retains one combined imported, transient and UI completion lease.
+         */
+        [[nodiscard]] Result<void> ExecuteGraph(const CompiledRenderGraphExecution &graph,
+                                                std::span<const RenderGraphPassWorkload> workloads,
+                                                RenderGraphTransientResourcesHandle transientResources, UiRenderSubmission ui);
+
+        /**
          * @brief Presents and consumes a successfully executed frame.
          * @param timing Optional synchronous host clock/identity for native feedback registration.
          * @return Success, a typed invalid-stage error, the original backend failure,
@@ -228,7 +256,8 @@ namespace Horo::Render {
         RenderFrameScope(RenderFrontend &owner, IRenderBackend &backend, FrameToken frame, std::uint64_t hostFrame) noexcept;
         /** @brief Common graph admission preserving one authoritative native completion lease. */
         [[nodiscard]] Result<void> ExecuteGraphInternal(const CompiledRenderGraphExecution &graph,
-                                                        std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission *ui);
+                                                        std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission *ui,
+                                                        RenderGraphTransientResourcesHandle transientResources = {});
         void Abort() noexcept;
         void Release() noexcept;
         /** @brief Enforces the one-shot frame admission gate shared by synchronous and worker routes. */
@@ -483,6 +512,29 @@ namespace Horo::Render {
         /** @brief Returns non-additive renderer memory accounting for the current frontend envelope. */
         [[nodiscard]] RenderMemoryBudgetSnapshot MemorySnapshot() const noexcept;
 
+        /**
+         * @brief Allocates one physical generation per admitted graph alias slot outside active frames.
+         * @param plan Immutable graph lifetime and exact-descriptor compatibility proof.
+         * @param scope Explicit admitted memory scope incarnation.
+         * @return Completely realized set identity or a typed failure after partial admission rollback.
+         * @details Owner-thread preparation allocates bounded metadata and reserves all slot costs
+         * before native creation. Backend-native requirement classifications remain authoritative.
+         * No normal-frame waits or concurrent set reuse are permitted.
+         * Expected memory-cost callback failures preserve their backend identity; documented
+         * metadata allocation/length exceptions become capacity failures after rollback.
+         * @throws std::bad_alloc Owned failure metadata cannot be allocated after rollback.
+         * @throws std::length_error Owned failure metadata exceeds its representable capacity.
+         */
+        [[nodiscard]] Result<RenderGraphTransientResourcesHandle> PrepareTransientGraphResources(const RenderGraphLifetimePlan &plan,
+                                                                                                 RenderMemoryScopeId scope);
+
+        /**
+         * @brief Releases one graph set while retaining backing needed by accepted GPU readers.
+         * @param resources Exact unreleased frontend-issued set identity.
+         * @return Success or typed malformed, foreign, stale, or active-frame failure.
+         */
+        [[nodiscard]] Result<void> ReleaseTransientGraphResources(RenderGraphTransientResourcesHandle resources);
+
     private:
         friend class RenderFrameScope;
         friend class Detail::RenderFrontendResourceAccess;
@@ -536,6 +588,7 @@ namespace Horo::Render {
         std::unique_ptr<Detail::RenderResourceRegistry> resourceRegistry_;
         std::unique_ptr<Detail::RenderResourceUploadQueue> resourceUploadQueue_;
         std::unique_ptr<Detail::RenderGraphResourceLeasePool> graphResourceLeases_;
+        std::unique_ptr<Detail::RenderGraphTransientResourcePool> graphTransientResources_;
         RenderGraphInspectionFeed inspectionFeed_;
         std::uint64_t inspectionRevision_{};
         RenderFrameScope *activeFrameScope_{nullptr};

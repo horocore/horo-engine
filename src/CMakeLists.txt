@@ -1990,6 +1990,7 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderGraphSynchronization.cpp
         runtime/renderer/api/RenderGraphSynchronizationErrors.cpp
         runtime/renderer/api/RenderGraphLifetime.cpp
+        runtime/renderer/api/RenderGraphWorkload.cpp
         runtime/renderer/api/RenderGraphLifetimeErrors.cpp
         runtime/renderer/api/RenderGraphValidation.cpp
         runtime/renderer/api/RenderResourceDescriptorErrors.cpp
@@ -2061,6 +2062,7 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderFrameInputInternal.cpp
         runtime/renderer/frontend/RenderFrameParallelExecution.cpp
         runtime/renderer/frontend/RenderFrameGraphResources.cpp
+        runtime/renderer/frontend/RenderGraphTransientResourcePool.cpp
         runtime/renderer/frontend/RenderParallelWorkInternal.cpp
         runtime/renderer/frontend/RenderParallelWorkErrors.cpp
         runtime/renderer/frontend/RenderFrontend.cpp
@@ -2079,6 +2081,7 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderQueryErrors.cpp
         runtime/renderer/frontend/RenderResourceOperations.cpp
         runtime/renderer/frontend/RenderResourceRegistry.cpp
+        runtime/renderer/frontend/RenderResourceReservationGuard.cpp
         runtime/renderer/frontend/RenderResourceSubmissionPins.cpp
         runtime/renderer/frontend/UiRenderComposition.cpp
         runtime/renderer/frontend/UiRenderSubmission.cpp
@@ -2128,6 +2131,7 @@ target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::SceneModel HoroEngine:
 
 add_library(HoroRenderNull STATIC
         runtime/renderer/modules/null/NullRenderBackend.cpp
+        runtime/renderer/modules/null/NullGraphWorkloads.cpp
         runtime/renderer/modules/null/NullRenderBackendErrors.cpp
 )
 add_library(HoroEngine::RenderNull ALIAS HoroRenderNull)
@@ -2149,10 +2153,12 @@ if (HORO_BUILD_RENDER_OPENGL)
             runtime/renderer/modules/opengl/OpenGLCommandFunctions.cpp
             runtime/renderer/modules/opengl/OpenGLContextAdmission.cpp
             runtime/renderer/modules/opengl/OpenGLExecutionState.cpp
-            runtime/renderer/modules/opengl/OpenGLExecutionAdapter.cpp
+        runtime/renderer/modules/opengl/OpenGLExecutionAdapter.cpp
+        runtime/renderer/modules/opengl/OpenGLGraphWorkloads.cpp
             runtime/renderer/modules/opengl/OpenGLRenderBackend.cpp
             runtime/renderer/modules/opengl/OpenGLRenderBackendErrors.cpp
             runtime/renderer/modules/opengl/OpenGLRenderBackendResources.inl
+            runtime/renderer/modules/opengl/OpenGLRenderBackendGraph.inl
     )
     add_library(HoroEngine::RenderOpenGL ALIAS HoroRenderOpenGL)
 
