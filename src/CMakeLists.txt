@@ -1918,6 +1918,9 @@ target_link_libraries(HoroRuntimeUiInput PUBLIC HoroEngine::Input HoroEngine::Ru
 add_library(HoroRenderApi STATIC
         runtime/renderer/api/MotionHistory.cpp
         runtime/renderer/api/MotionHistoryErrors.cpp
+        runtime/renderer/api/MaterialBinding.cpp
+        runtime/renderer/api/MaterialBindingValidation.cpp
+        runtime/renderer/api/MaterialBindingErrors.cpp
         runtime/renderer/api/PipelinePreparation.cpp
         runtime/renderer/api/PipelinePreparationErrors.cpp
         runtime/renderer/api/PipelineCache.cpp
