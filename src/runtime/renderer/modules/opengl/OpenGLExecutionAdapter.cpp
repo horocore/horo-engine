@@ -88,14 +88,16 @@ namespace Horo::Render::Detail {
             std::uintptr_t &fence = frameFences_[index];
             if (fence != 0) {
                 const std::uint32_t status = functions_.sync.poll(fence);
-                if (status == GL_ALREADY_SIGNALED || status == GL_CONDITION_SATISFIED)
+                if (status == GL_ALREADY_SIGNALED || status == GL_CONDITION_SATISFIED) {
                     functions_.sync.destroy(std::exchange(fence, 0));
-                else if (status != GL_TIMEOUT_EXPIRED) {
+                    if (frameLeases_[index] != nullptr)
+                        std::exchange(frameLeases_[index], nullptr)->Release();
+                } else if (status != GL_TIMEOUT_EXPIRED) {
                     synchronizationFailed_ = true;
                     return SynchronizationFailure<std::size_t>();
                 }
             }
-            if (fence == 0 && !available.has_value())
+            if (fence == 0 && frameLeases_[index] == nullptr && !available.has_value())
                 available = index;
         }
         if (!available.has_value())
@@ -120,6 +122,14 @@ namespace Horo::Render::Detail {
         return true;
     }
 
+    /** @copydoc OpenGLExecutionAdapter::RetainFrameLease */
+    bool OpenGLExecutionAdapter::RetainFrameLease(const std::size_t slot, IRenderGraphResourceLease &lease) noexcept {
+        if (slot >= frameLeases_.size() || frameLeases_[slot] != nullptr || frameFences_[slot] != 0 || synchronizationFailed_)
+            return false;
+        frameLeases_[slot] = &lease;
+        return true;
+    }
+
     /** @copydoc OpenGLExecutionAdapter::Reset */
     void OpenGLExecutionAdapter::Reset() noexcept {
         if (functions_.sync.IsValid()) {
@@ -127,6 +137,10 @@ namespace Horo::Render::Detail {
                 if (fence != 0)
                     functions_.sync.destroy(std::exchange(fence, 0));
             }
+        }
+        for (auto &lease : frameLeases_) {
+            if (lease != nullptr)
+                std::exchange(lease, nullptr)->Release();
         }
         synchronizationFailed_ = false;
     }

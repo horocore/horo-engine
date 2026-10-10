@@ -4,6 +4,7 @@
  * @brief Private ownership of bounded OpenGL command translation and frame retirement.
  */
 
+#include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "OpenGLBackendInternal.h"
 
 namespace Horo::Render::Detail {
@@ -39,12 +40,20 @@ namespace Horo::Render::Detail {
          * @return False if fence creation fails; failure remains sticky until Reset.
          */
         [[nodiscard]] bool FenceFrame(std::size_t slot) noexcept;
+        /**
+         * @brief Transfers one stable registry lease into the admitted frame's completion slot.
+         * @param slot Exact reserved frame slot, not already retaining a graph stream.
+         * @param lease Frontend-owned lease that outlives native completion or context shutdown.
+         * @return False for an occupied, invalid, or failed completion slot, before encoding.
+         */
+        [[nodiscard]] bool RetainFrameLease(std::size_t slot, IRenderGraphResourceLease &lease) noexcept;
         /** @brief Deletes owned fences without waiting; called before native context destruction on its owner thread. */
         void Reset() noexcept;
 
     private:
         const OpenGLCommandFunctions &functions_;
         std::array<std::uintptr_t, 8> frameFences_{};
+        std::array<IRenderGraphResourceLease *, 8> frameLeases_{};
         bool synchronizationFailed_{false};
     };
 }  // namespace Horo::Render::Detail

@@ -4,6 +4,195 @@
   "locale": "tr-TR",
   "namespace": "editor",
   "messages": {
+    "render_graph.renderer": {
+      "text": "İşleyici"
+    },
+    "render_graph.frame": {
+      "text": "Kare"
+    },
+    "render_graph.revision": {
+      "text": "Yakalama revizyonu"
+    },
+    "render_graph.title": {
+      "text": "Render Grafiği"
+    },
+    "render_graph.passes": {
+      "text": "Geçişler"
+    },
+    "render_graph.resources": {
+      "text": "Kaynaklar"
+    },
+    "render_graph.lifetimes": {
+      "text": "Yaşam süreleri"
+    },
+    "render_graph.barriers": {
+      "text": "Bariyerler"
+    },
+    "render_graph.queues": {
+      "text": "Kuyruklar"
+    },
+    "render_graph.culling": {
+      "text": "Eleme"
+    },
+    "render_graph.timing": {
+      "text": "Zamanlama"
+    },
+    "render_graph.no_capture": {
+      "text": "Yakalanmış render grafiği yok. Grafik yakalama, render sahibi tarafından açıkça istenmelidir."
+    },
+    "render_graph.query_failed": {
+      "text": "Yakalanan grafik kullanılamıyor. Render sahibinden yeni bir yakalama isteyin."
+    },
+    "render_graph.planned": {
+      "text": "Yakalanmış mantıksal plan. Yerel yürütme ve zamanlama ölçülmedi."
+    },
+    "render_graph.unavailable": {
+      "text": "Kullanılamıyor"
+    },
+    "render_graph.none": {
+      "text": "Yok"
+    },
+    "render_graph.graphics": {
+      "text": "Grafik"
+    },
+    "render_graph.compute": {
+      "text": "Hesaplama"
+    },
+    "render_graph.copy": {
+      "text": "Kopyalama"
+    },
+    "render_graph.transfer": {
+      "text": "Aktarım"
+    },
+    "render_graph.keep": {
+      "text": "Koru"
+    },
+    "render_graph.allow_cull": {
+      "text": "Kullanılmayan çıktılar elenebilir"
+    },
+    "render_graph.buffer": {
+      "text": "Arabellek"
+    },
+    "render_graph.texture": {
+      "text": "Doku"
+    },
+    "render_graph.external": {
+      "text": "Harici"
+    },
+    "render_graph.persistent": {
+      "text": "Kalıcı"
+    },
+    "render_graph.transient": {
+      "text": "Geçici"
+    },
+    "render_graph.history": {
+      "text": "Geçmiş"
+    },
+    "render_graph.unused": {
+      "text": "Kullanılmıyor"
+    },
+    "render_graph.read": {
+      "text": "Okuma"
+    },
+    "render_graph.write": {
+      "text": "Yazma"
+    },
+    "render_graph.read_write": {
+      "text": "Okuma ve yazma"
+    },
+    "render_graph.retained": {
+      "text": "Korundu"
+    },
+    "render_graph.culled": {
+      "text": "Elendi"
+    },
+    "render_graph.reason.policy": {
+      "text": "Muhafazakâr politika"
+    },
+    "render_graph.reason.export": {
+      "text": "Gözlemlenebilir çıktı"
+    },
+    "render_graph.reason.import": {
+      "text": "İçe aktarılan kaynak değişikliği"
+    },
+    "render_graph.reason.external": {
+      "text": "Harici eşzamanlama"
+    },
+    "render_graph.reason.dependency": {
+      "text": "Gerekli bağımlılık"
+    },
+    "render_graph.reason.producer": {
+      "text": "Gerekli üretici"
+    },
+    "render_graph.reason.unused": {
+      "text": "Kullanılmayan geçici çıktılar"
+    },
+    "render_graph.reason.culled": {
+      "text": "Yalnızca elenen geçişler için gerekli"
+    },
+    "render_graph.id": {
+      "text": "Kimlik"
+    },
+    "render_graph.kind": {
+      "text": "Tür"
+    },
+    "render_graph.queue_role": {
+      "text": "Kuyruk rolü"
+    },
+    "render_graph.policy": {
+      "text": "Politika"
+    },
+    "render_graph.class": {
+      "text": "Yaşam süresi sınıfı"
+    },
+    "render_graph.binding": {
+      "text": "Sahip : yuva : nesil"
+    },
+    "render_graph.first_pass": {
+      "text": "İlk geçiş"
+    },
+    "render_graph.last_pass": {
+      "text": "Son geçiş"
+    },
+    "render_graph.use_interval": {
+      "text": "Yürütme aralığı"
+    },
+    "render_graph.pass_edge": {
+      "text": "Kaynak → hedef geçiş"
+    },
+    "render_graph.access": {
+      "text": "Erişim geçişi"
+    },
+    "render_graph.queue_edge": {
+      "text": "Kaynak → hedef kuyruk"
+    },
+    "render_graph.queue": {
+      "text": "Etkin kuyruk"
+    },
+    "render_graph.order": {
+      "text": "Yürütme sırası"
+    },
+    "render_graph.coverage": {
+      "text": "Kanıt"
+    },
+    "render_graph.disposition": {
+      "text": "Sonuç"
+    },
+    "render_graph.reason": {
+      "text": "Neden"
+    },
+    "render_graph.cpu": {
+      "text": "CPU süresi"
+    },
+    "render_graph.gpu": {
+      "text": "GPU süresi"
+    },
+    "render_graph.previous": {
+      "text": "Önceki sayfa"
+    },
+    "render_graph.next": {
+      "text": "Sonraki sayfa"
+    },
     "workspace.play_topology.button": {
       "text": "Oyun profilleri"
     },

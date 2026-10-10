@@ -96,6 +96,7 @@ namespace Horo::Render::Detail {
         OpenGLDeleteObjectsFunction deleteBuffers{nullptr};
         OpenGLBindObjectFunction bindBuffer{nullptr};
         OpenGLBufferDataFunction bufferData{nullptr};
+        void (*copyBufferSubData)(std::uint32_t, std::uint32_t, std::size_t, std::size_t, std::size_t) noexcept {nullptr};
     };
 
     struct OpenGLVertexArrayFunctions {
@@ -127,6 +128,7 @@ namespace Horo::Render::Detail {
     struct OpenGLCommandFunctions {
         /** Reports actual native entry-point readiness after the owning port loads dispatch. */
         bool (*isAvailable)() noexcept {nullptr};
+        bool (*isGraphAvailable)() noexcept {nullptr};
         OpenGLViewportFunction viewport{nullptr};
         OpenGLClearColorFunction clearColor{nullptr};
         OpenGLClearFunction clear{nullptr};
