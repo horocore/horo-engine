@@ -60,6 +60,38 @@ TEST_CASE("Native project reads retain contained bytes and independent enumerati
     CHECK(files->Text("nested/a file.cpp", QueryTest::Context(), {}).Value().revision != text.Value().revision);
 }
 
+TEST_CASE("Native recursive enumeration cancellation retires cursors and leaves the root reusable", "[unit][platform][code-query]") {
+    QueryTest::Directory directory;
+    directory.Write("nested/a.cpp", "a");
+    directory.Write("nested/deep/b.cpp", "b");
+    bool observed{};
+    bool revoked{};
+    auto files = CodeFilesTesting::Create(directory.root, "project-one", 3,
+                                          [&](const CodeFilesTesting::Boundary boundary, const std::string_view path) {
+        if (!observed && boundary == CodeFilesTesting::Boundary::BeforeDirectoryEntryOpen && path.starts_with("nested/")) {
+            observed = true;
+            revoked = true;
+        }
+    });
+    REQUIRE(files.HasValue());
+    auto context = QueryTest::Context();
+    context.authorityStopped = [&] {
+        return revoked;
+    };
+    const auto cancelled = files.Value()->Files({}, context, {});
+    REQUIRE(observed);
+    REQUIRE(cancelled.HasError());
+    CHECK(QueryTest::Matches(cancelled.ErrorValue(), ProjectReadErrors::Cancelled));
+    revoked = false;
+    const auto first = files.Value()->Files({}, context, {});
+    const auto second = files.Value()->Files({}, context, {});
+    REQUIRE(first.HasValue());
+    REQUIRE(second.HasValue());
+    CHECK(first.Value().entries.size() == 2);
+    CHECK(second.Value().revision == first.Value().revision);
+    CHECK(*files.Value()->Text("nested/a.cpp", context, {}).Value().text == "a");
+}
+
 TEST_CASE("Native read budgets stop oversized bytes entries and expired authority", "[unit][platform][code-query]") {
     QueryTest::Directory directory;
     directory.Write("a.cpp", "12345");

@@ -98,7 +98,16 @@ namespace Horo::Platform {
             };
 
             /** @brief Borrows one opened directory and its caller-owned state only for the current Visit call. */
-            struct CaptureVisit final {
+            struct CaptureVisit final : Native::EntryVisitor {
+                CaptureVisit(const NativeFiles &owner, const Native::Handle &openedDirectory, const std::string_view pathPrefix,
+                             CaptureState &captureState) noexcept
+                    : files(owner), directory(openedDirectory), prefix(pathPrefix), state(captureState) {}
+
+                /** @copydoc Native::EntryVisitor::operator() */
+                [[nodiscard]] Result<void> operator()(const std::string_view name) const override {
+                    return files.CaptureEntry(directory, prefix, name, state);
+                }
+
                 const NativeFiles &files;
                 const Native::Handle &directory;
                 std::string_view prefix;
@@ -188,10 +197,7 @@ namespace Horo::Platform {
                                  std::vector<ProjectReadEntry> &records) const {
                 CaptureState state{context, limits, entries, bytes, records};
                 CaptureVisit capture{*this, directory, prefix, state};
-                return Native::Visit(directory, context, {&capture, [](void *opaque, const std::string_view name) {
-                    const auto &visit = *static_cast<const CaptureVisit *>(opaque);
-                    return visit.files.CaptureEntry(visit.directory, visit.prefix, name, visit.state);
-                }});
+                return Native::Visit(directory, context, capture);
             }
 
             /** @brief Admits one entry before recursion or publication, preserving the shared byte and entry ceilings. */

@@ -40,15 +40,21 @@ namespace Horo::Platform::ProjectReadNative {
         [[nodiscard]] bool operator==(const FileInfo &) const noexcept = default;
     };
 
-    /** @brief Allocation-free synchronous callback view; the caller owns the state until Visit returns. */
-    struct EntryVisitor final {
-        void *state;
-        Result<void> (*invoke)(void *, std::string_view);
+    /** @brief Typed synchronous entry admission; the caller owns this visitor and its state until Visit returns.
+     * @details Stack-owned implementations borrow typed traversal state only during this load/tooling operation.
+     * Virtual invocation replaces the former erased function-pointer call without allocating callback storage
+     * or adding per-entry allocations. Visit never retains or destroys the borrowed visitor. The public virtual
+     * destructor preserves normal typed interface destruction; it does not transfer ownership to Visit.
+     */
+    class EntryVisitor {
+    public:
+        virtual ~EntryVisitor() = default;
 
-        /** @brief Invokes the borrowed caller's bounded entry admission without retaining its state. */
-        [[nodiscard]] Result<void> operator()(const std::string_view name) const {
-            return invoke(state, name);
-        }
+        /** @brief Admits one borrowed name without retaining it or allocating callback storage.
+         * @param name Native entry name valid only for this call.
+         * @return Success or the exact bounded admission/recursion failure.
+         */
+        [[nodiscard]] virtual Result<void> operator()(std::string_view name) const = 0;
     };
 
     /** @brief Normalizes the concrete invalid value without exposing native handle types. */
