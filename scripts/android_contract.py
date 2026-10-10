@@ -24,8 +24,8 @@ def bounded_bytes(path: Path, maximum: int = MAXIMUM_FILE) -> bytes:
     """Reject links and oversized source artifacts before consuming their bytes."""
     if path.is_symlink() or not path.is_file() or path.stat().st_size > maximum:
         raise AndroidError(f"Invalid or oversized input {path.name}; provide a regular bounded file.")
-    # Explicit local input capability, not a sandbox-relative request; callers admit roots or verify the locked AAR hash.
-    with path.open("rb") as source:  # NOSONAR: S8707 CLI input path is intentionally supplied by the build host.
+    # S8707: explicit CLI input capability; callers admit roots or verify the locked AAR hash.
+    with path.open("rb") as source:  # NOSONAR
         data = source.read(maximum + 1)
     if len(data) > maximum:
         raise AndroidError(f"Input {path.name} changed size; retry with stable files.")
