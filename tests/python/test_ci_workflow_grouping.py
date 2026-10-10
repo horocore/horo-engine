@@ -162,7 +162,8 @@ def test_windows_runtime_ui_tests_and_owned_consumers_share_the_build_closure() 
     assert "HoroRuntimeUiOverlayLifecycleTests" in registration.group(1).split()
     assert "HoroRuntimeUiHudAssociationTests" in registration.group(1).split()
     direct_windows = re.search(r"set_property\(TEST\s+(.*?)APPEND PROPERTY LABELS ci-windows\)", SUITES, re.S)
-    assert direct_windows and "HoroRuntimeUiHudPublicHeaderConsumer" in direct_windows.group(1).split()
+    assert direct_windows
+    assert "HoroRuntimeUiHudPublicHeaderConsumer" in direct_windows.group(1).split()
     assert 'target_link_libraries(HoroRuntimeUiHudPublicHeaderConsumer PRIVATE HoroEngine::RuntimeUi)' in tests_cmake
     assert 'foreach (target IN LISTS HORO_CATCH_TEST_TARGETS)' in tests_cmake
     assert 'horo_register_catch_test(${target} LABELS "native")' in tests_cmake

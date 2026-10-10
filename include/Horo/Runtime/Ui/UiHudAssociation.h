@@ -80,7 +80,7 @@ namespace Horo::Runtime::Ui {
 
     private:
         friend class UiHudAssociation;
-        UiHudFrame(UiHudAssociationDescriptor association, UiResolvedScreenCanvas metrics, UiLayoutSnapshot layout,
+        UiHudFrame(UiHudAssociationDescriptor association, const UiResolvedScreenCanvas &metrics, UiLayoutSnapshot layout,
                    UiLayoutClipSnapshot clipping, UiReloadLease generation, UiRenderSnapshotRevision snapshot,
                    std::uint64_t revision) noexcept;
         UiHudAssociationDescriptor association_;
@@ -112,7 +112,7 @@ namespace Horo::Runtime::Ui {
          * @param descriptor Host-resolved player/attachment/provider evidence. @param publisher Existing owner-thread publisher.
          * @return Association or typed identity, route, focus, provider, camera or viewport failure.
          */
-        [[nodiscard]] static Result<UiHudAssociation> Create(const UiHudAssociationDescriptor &descriptor, UiHotReload &publisher);
+        [[nodiscard]] static Result<UiHudAssociation> Create(const UiHudAssociationDescriptor &descriptor, const UiHotReload &publisher);
         /** @brief Releases retained evidence; host must call Shutdown before retiring an admitted input context. */
         ~UiHudAssociation() = default;
         /** @brief Transfers association identity and invalidates the source. @param other Association to transfer. */

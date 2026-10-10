@@ -30,7 +30,8 @@ namespace Horo::Runtime::Ui::CookPresentationDetail {
     /** @brief Reads bounded v2 fields and validates the existing typed presentation contract. */
     template <typename Reader> [[nodiscard]] Result<UiCanvasPresentationPolicy> Read(Reader &reader) {
         UiCanvasPresentationPolicy policy;
-        std::uint8_t safeArea{}, pixelSnap{};
+        std::uint8_t safeArea{};
+        std::uint8_t pixelSnap{};
         if (!reader.Byte(safeArea) || !reader.U32(policy.uiScale.numerator) || !reader.U32(policy.uiScale.denominator) ||
             !reader.U32(policy.fontScale.numerator) || !reader.U32(policy.fontScale.denominator) || !reader.Byte(pixelSnap))
             return Result<UiCanvasPresentationPolicy>::Failure(MakeError(UiErrors::CookedPayloadMalformed));

@@ -53,8 +53,8 @@ namespace Horo::Runtime::Ui {
         Result<void> Route(const UiReloadCanvas &canvas, UiRouteId id) {
             if (!canvas.routes || canvas.routes->State() != UiScreenStackState::Active || canvas.routes->Size() != 1)
                 return Failure<void>(UiErrors::RouteOperationInvalid);
-            const auto &route = canvas.routes->Routes().front().metadata;
-            if (route.id != id || route.band != UiPresentationBand::Hud || route.modal)
+            if (const auto &route = canvas.routes->Routes().front().metadata;
+                route.id != id || route.band != UiPresentationBand::Hud || route.modal)
                 return Failure<void>(UiErrors::RouteOperationInvalid);
             return Result<void>::Success();
         }
@@ -121,8 +121,8 @@ namespace Horo::Runtime::Ui {
             if (root.HasError())
                 return Result<void>::Failure(root.ErrorValue());
             const auto record = canvas.layout->Get(root.Value().handle);
-            const UiLogicalRect expected{{0, 0}, {metrics.logicalExtent.width, metrics.logicalExtent.height}};
-            if (record.HasError() || record.Value().arrangement.contentBox != expected)
+            if (const UiLogicalRect expected{{0, 0}, {metrics.logicalExtent.width, metrics.logicalExtent.height}};
+                record.HasError() || record.Value().arrangement.contentBox != expected)
                 return Failure<void>(UiErrors::LayoutSourceStale);
             if (!ClippingMatches(canvas))
                 return Failure<void>(UiErrors::LayoutClipSourceStale);
@@ -138,7 +138,7 @@ namespace Horo::Runtime::Ui {
     }  // namespace
 
     /** @copydoc UiHudAssociation::Create */
-    Result<UiHudAssociation> UiHudAssociation::Create(const UiHudAssociationDescriptor &descriptor, UiHotReload &publisher) {
+    Result<UiHudAssociation> UiHudAssociation::Create(const UiHudAssociationDescriptor &descriptor, const UiHotReload &publisher) {
         auto lease = publisher.Acquire();
         if (lease.HasError())
             return Result<UiHudAssociation>::Failure(lease.ErrorValue());
@@ -301,7 +301,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @brief Constructs an immutable exact-generation extraction ticket after actual geometry validation. */
-    UiHudFrame::UiHudFrame(UiHudAssociationDescriptor association, UiResolvedScreenCanvas metrics, UiLayoutSnapshot layout,
+    UiHudFrame::UiHudFrame(UiHudAssociationDescriptor association, const UiResolvedScreenCanvas &metrics, UiLayoutSnapshot layout,
                            UiLayoutClipSnapshot clipping, UiReloadLease generation, UiRenderSnapshotRevision snapshot,
                            std::uint64_t revision) noexcept
         : association_(std::move(association)), metrics_(metrics), layout_(std::move(layout)), clipping_(std::move(clipping)),
