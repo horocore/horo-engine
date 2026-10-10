@@ -4,12 +4,12 @@
 #include <variant>
 
 namespace Horo::SceneSource::Detail {
-    [[nodiscard]] Json PhysicsPoseJson(const Runtime::AuthoredPhysicsPose &pose) {
+    [[nodiscard]] WireJson PhysicsPoseJson(const Runtime::AuthoredPhysicsPose &pose) {
         return {{"translation", Vec3Json(pose.translation)},
-                {"rotation", {pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w}}};
+                {"rotation", WireJson::array({pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w})}};
     }
 
-    [[nodiscard]] Json PhysicsBodyReferenceJson(const Runtime::PhysicsBodyReference &reference) {
+    [[nodiscard]] WireJson PhysicsBodyReferenceJson(const Runtime::PhysicsBodyReference &reference) {
         return {{"object", reference.object.value}, {"body", reference.body.value}};
     }
 
@@ -28,8 +28,8 @@ namespace Horo::SceneSource::Detail {
         return "dynamic";
     }
 
-    [[nodiscard]] Json PhysicsMassJson(const Runtime::AuthoredPhysicsMassPolicy &policy) {
-        return std::visit([]<typename Mass>(const Mass &mass) -> Json {
+    [[nodiscard]] WireJson PhysicsMassJson(const Runtime::AuthoredPhysicsMassPolicy &policy) {
+        return std::visit([]<typename Mass>(const Mass &mass) -> WireJson {
             if constexpr (std::is_same_v<Mass, Runtime::AuthoredPhysicsNoMass>)
                 return {{"kind", "none"}};
             else if constexpr (std::is_same_v<Mass, Runtime::AuthoredPhysicsMass>)
@@ -39,7 +39,7 @@ namespace Horo::SceneSource::Detail {
         }, policy);
     }
 
-    [[nodiscard]] Json PhysicsColliderSourceJson(const Runtime::PhysicsColliderSource &source) {
+    [[nodiscard]] WireJson PhysicsColliderSourceJson(const Runtime::PhysicsColliderSource &source) {
         if (const auto *asset = std::get_if<Runtime::PhysicsShapeAssetReference>(&source))
             return {{"kind", "asset"}, {"asset", asset->asset.ToString()}, {"subresource", asset->subresource.value}};
         const Runtime::PhysicsAnalyticCollider &analytic = std::get<Runtime::PhysicsAnalyticCollider>(source);
@@ -55,7 +55,7 @@ namespace Horo::SceneSource::Detail {
         return {{"kind", "static_plane"}, {"normal", Vec3Json(plane.normal)}, {"signedDistanceMeters", plane.signedDistanceMeters}};
     }
 
-    void AppendRigidBody(Json &value, const Runtime::RigidBodyComponent &body) {
+    void AppendRigidBody(WireJson &value, const Runtime::RigidBodyComponent &body) {
         value["rigidBody"] = {{"id", body.id.value},
                               {"body", body.body.value},
                               {"schemaVersion", body.schemaVersion},
@@ -71,10 +71,10 @@ namespace Horo::SceneSource::Detail {
                               {"enabled", body.enabled}};
     }
 
-    void AppendColliders(Json &value, const std::vector<Runtime::ColliderComponent> &components) {
-        Json colliders = Json::array();
+    void AppendColliders(WireJson &value, const std::vector<Runtime::ColliderComponent> &components) {
+        WireJson colliders = WireJson::array();
         for (const Runtime::ColliderComponent &collider : components) {
-            Json materials = Json::array();
+            WireJson materials = WireJson::array();
             for (const Runtime::PhysicsColliderMaterialBinding &binding : collider.materials)
                 materials.push_back({{"slot", binding.slot.Value()}, {"material", binding.material.ToString()}});
             colliders.push_back({{"id", collider.id.value},
@@ -94,21 +94,21 @@ namespace Horo::SceneSource::Detail {
             value["colliders"] = std::move(colliders);
     }
 
-    [[nodiscard]] Json PhysicsConstraintEndpointJson(const Runtime::PhysicsConstraintSecondEndpoint &endpoint) {
+    [[nodiscard]] WireJson PhysicsConstraintEndpointJson(const Runtime::PhysicsConstraintSecondEndpoint &endpoint) {
         if (const auto *body = std::get_if<Runtime::PhysicsConstraintBodyEndpoint>(&endpoint))
             return {{"kind", "body"}, {"body", PhysicsBodyReferenceJson(body->body)}, {"frame", PhysicsPoseJson(body->localFrame)}};
         return {{"kind", "world"}, {"frame", PhysicsPoseJson(std::get<Runtime::PhysicsConstraintWorldEndpoint>(endpoint).frame)}};
     }
 
-    [[nodiscard]] Json PhysicsConstraintParametersJson(
+    [[nodiscard]] WireJson PhysicsConstraintParametersJson(
         const std::variant<Runtime::PhysicsFixedConstraint, Runtime::PhysicsDistanceConstraint> &parameters) {
         if (const auto *distance = std::get_if<Runtime::PhysicsDistanceConstraint>(&parameters))
             return {{"kind", "distance"}, {"minimumMeters", distance->minimumMeters}, {"maximumMeters", distance->maximumMeters}};
         return {{"kind", "fixed"}};
     }
 
-    void AppendPhysicsConstraints(Json &value, const std::vector<Runtime::PhysicsConstraintComponent> &components) {
-        Json constraints = Json::array();
+    void AppendPhysicsConstraints(WireJson &value, const std::vector<Runtime::PhysicsConstraintComponent> &components) {
+        WireJson constraints = WireJson::array();
         for (const Runtime::PhysicsConstraintComponent &constraint : components) {
             constraints.push_back(
                 {{"id", constraint.id.value},
@@ -125,7 +125,7 @@ namespace Horo::SceneSource::Detail {
             value["physicsConstraints"] = std::move(constraints);
     }
 
-    void AppendPhysicsComponents(Json &value, const SceneObjectComponentSet &components) {
+    void AppendPhysicsComponents(WireJson &value, const SceneObjectComponentSet &components) {
         if (components.rigidBody)
             AppendRigidBody(value, *components.rigidBody);
         AppendColliders(value, components.colliders);

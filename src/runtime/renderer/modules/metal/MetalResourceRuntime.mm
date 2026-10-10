@@ -127,6 +127,10 @@ namespace Horo::Render::Detail {
     }
 
     void MetalResourceRuntime::Initialize(void *device, void *commandQueue) noexcept {
+        if (impl_->lightKernelIncarnation == std::numeric_limits<std::uint64_t>::max())
+            impl_->lightKernelIdentityExhausted = true;
+        else
+            ++impl_->lightKernelIncarnation;
         impl_->device = (__bridge id<MTLDevice>)device;
         impl_->commandQueue = (__bridge id<MTLCommandQueue>)commandQueue;
     }

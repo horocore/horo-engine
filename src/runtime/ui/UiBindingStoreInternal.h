@@ -120,6 +120,21 @@ namespace Horo::Runtime::Ui {
             return found != providers.end() && found->instance == id ? std::to_address(found) : nullptr;
         }
 
+        /** @brief Reads exact provider identity without allowing source mutation. */
+        [[nodiscard]] const Provider *FindProvider(UiBindingProviderInstanceId id) const noexcept;
+        /** @brief Requires a foreign provider to retain exact snapshot and write-admission evidence. */
+        [[nodiscard]] Result<void> ValidatePersistentProvider(const Provider &before) const;
+        /** @brief Qualifies one new or explicitly removed Scene registration against the actual old schema. */
+        [[nodiscard]] Result<void> ValidateSceneProvider(const Provider &after, const Storage &source, bool removing) const;
+        /** @brief Preserves stable element and typed binding target contracts across a new tree namespace. */
+        [[nodiscard]] Result<void> ValidateTargetContract(const Target &before, const Target &after, const UiElementTree &sourceTree,
+                                                          const UiElementTree &tree) const;
+        /** @brief Preserves copied values, origins and admitted write authority for a foreign provider. */
+        [[nodiscard]] Result<void> ValidatePersistentTarget(const Target &before, const Target &after) const;
+        /** @brief Qualifies one persistent binding target, keeping independent foreign source grants unchanged. */
+        [[nodiscard]] Result<void> ValidateSceneTarget(const Target &before, const Target &after, const Storage &source,
+                                                       const UiElementTree &sourceTree, const UiElementTree &tree, bool removing) const;
+
         /** @brief Validates the exact tree and binding admission before any borrowed inputs are inspected. */
         [[nodiscard]] Result<void> ValidateTree(const UiElementTree &tree) const;
         /** @brief Checks readable exact tree generation without constructing an error or allocating. */

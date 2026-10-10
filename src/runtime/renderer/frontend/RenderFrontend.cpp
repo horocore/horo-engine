@@ -6,6 +6,7 @@
 #include "RenderFrameGraphResources.h"
 #include "RenderFrontendErrors.h"
 #include "RenderGraphResourceLeasePool.h"
+#include "RenderGraphTransientResourcePool.h"
 #include "RenderParallelWorkErrors.h"
 #include "RenderParallelWorkInternal.h"
 #include "RenderResourceOperations.h"
@@ -177,25 +178,38 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrameScope::ExecuteGraphInternal */
     Result<void> RenderFrameScope::ExecuteGraphInternal(const CompiledRenderGraphExecution &graph,
-                                                        const std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission *ui) {
+                                                        const std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission *ui,
+                                                        const RenderGraphTransientResourcesHandle transientResources) {
         if (const auto admitted = ValidateExecutionAdmission(); admitted.HasError())
             return admitted;
         try {
-            const auto resolved = Detail::ResolveFrameGraphResources(graph, *owner_->resourceRegistry_);
+            Detail::RenderGraphTransientResourceSet *transient = nullptr;
+            if (transientResources.IsValid()) {
+                const auto found = owner_->graphTransientResources_->Resolve(transientResources, graph);
+                if (found.HasError()) {
+                    Abort();
+                    return Result<void>::Failure(found.ErrorValue());
+                }
+                transient = found.Value();
+            }
+            const auto resolved = Detail::ResolveFrameGraphResources(graph, *owner_->resourceRegistry_, transient);
             if (resolved.HasError()) {
                 Abort();
                 return Result<void>::Failure(resolved.ErrorValue());
             }
-            const auto leased = owner_->graphResourceLeases_->Acquire(graph.Resources(), ui);
+            const auto leased = owner_->graphResourceLeases_->Acquire(graph.Resources(), ui, transient);
             if (leased.HasError()) {
                 Abort();
                 return Result<void>::Failure(leased.ErrorValue());
             }
-            const auto releaseLease = [](IRenderGraphResourceLease *lease) {
-                lease->Release();
+            RenderGraphLeaseTransfer transfer;
+            const auto releaseLease = [&transfer](IRenderGraphResourceLease *lease) {
+                if (transfer.authority == RenderGraphLeaseAuthority::Frontend)
+                    lease->Release();
             };
             std::unique_ptr<IRenderGraphResourceLease, decltype(releaseLease)> lease{leased.Value(), releaseLease};
-            if (const auto result = backend_->ExecuteGraph({frame_, graph, workloads, resolved.Value().View(), lease.get()});
+            if (const auto result = backend_->ExecuteGraph(
+                    {frame_, graph, workloads, resolved.Value().View(), lease.get(), transient != nullptr, &transfer});
                 result.HasError()) {
                 Abort();
                 return result;
@@ -207,6 +221,30 @@ namespace Horo::Render {
             Abort();
             return Result<void>::Failure(MakeError(FrontendErrors::FrameException));
         }
+    }
+
+    /** @copydoc RenderFrameScope::ExecuteGraph(const CompiledRenderGraphExecution &, std::span<const RenderGraphPassWorkload>,
+     * RenderGraphTransientResourcesHandle) */
+    Result<void> RenderFrameScope::ExecuteGraph(const CompiledRenderGraphExecution &graph,
+                                                const std::span<const RenderGraphPassWorkload> workloads,
+                                                const RenderGraphTransientResourcesHandle transientResources) {
+        if (!transientResources.IsValid()) {
+            Abort();
+            return Result<void>::Failure(MakeError(FrontendErrors::ResourceHandleMalformed));
+        }
+        return ExecuteGraphInternal(graph, workloads, nullptr, transientResources);
+    }
+
+    /** @copydoc RenderFrameScope::ExecuteGraph(const CompiledRenderGraphExecution &, std::span<const RenderGraphPassWorkload>,
+     * RenderGraphTransientResourcesHandle, UiRenderSubmission) */
+    Result<void> RenderFrameScope::ExecuteGraph(const CompiledRenderGraphExecution &graph,
+                                                const std::span<const RenderGraphPassWorkload> workloads,
+                                                const RenderGraphTransientResourcesHandle transientResources, UiRenderSubmission ui) {
+        if (!transientResources.IsValid()) {
+            Abort();
+            return Result<void>::Failure(MakeError(FrontendErrors::ResourceHandleMalformed));
+        }
+        return ExecuteGraphInternal(graph, workloads, &ui, transientResources);
     }
 
     /** @copydoc RenderFrontend::PollNativePresentTiming */
@@ -339,6 +377,8 @@ namespace Horo::Render {
           resourceUploadQueue_(std::make_unique<Detail::RenderResourceUploadQueue>(uploadLimits)),
           graphResourceLeases_(
               std::make_unique<Detail::RenderGraphResourceLeasePool>(*resourceRegistry_, retirementLimits.maximumSubmissionPins)),
+          graphTransientResources_(
+              std::make_unique<Detail::RenderGraphTransientResourcePool>(*backend_, *resourceRegistry_, *memoryBudget_)),
           inspectionFeed_(resourceOwner) {}
 
     /** @copydoc RenderFrontend::~RenderFrontend */
@@ -369,6 +409,34 @@ namespace Horo::Render {
     /** @copydoc RenderFrontend::MemorySnapshot */
     RenderMemoryBudgetSnapshot RenderFrontend::MemorySnapshot() const noexcept {
         return memoryBudget_->Snapshot();
+    }
+
+    /** @copydoc RenderFrontend::PrepareTransientGraphResources */
+    Result<RenderGraphTransientResourcesHandle> RenderFrontend::PrepareTransientGraphResources(const RenderGraphLifetimePlan &plan,
+                                                                                               const RenderMemoryScopeId scope) {
+        using PrepareResult = Result<RenderGraphTransientResourcesHandle>;
+        if (activeFrameScope_ != nullptr)
+            return PrepareResult::Failure(MakeError(FrontendErrors::ResourceChangeDuringFrame));
+        try {
+            auto prepared = graphTransientResources_->Prepare(plan, scope);
+            static_cast<void>(memoryBudget_->ReclaimEmptyBlocks(memoryConfig_.budget.maximumBlocks));
+            return prepared;
+        } catch (const std::bad_alloc &) {
+            static_cast<void>(memoryBudget_->ReclaimEmptyBlocks(memoryConfig_.budget.maximumBlocks));
+            return PrepareResult::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
+        } catch (const std::length_error &) {
+            static_cast<void>(memoryBudget_->ReclaimEmptyBlocks(memoryConfig_.budget.maximumBlocks));
+            return PrepareResult::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
+        }
+    }
+
+    /** @copydoc RenderFrontend::ReleaseTransientGraphResources */
+    Result<void> RenderFrontend::ReleaseTransientGraphResources(const RenderGraphTransientResourcesHandle resources) {
+        if (activeFrameScope_ != nullptr)
+            return Result<void>::Failure(MakeError(FrontendErrors::ResourceChangeDuringFrame));
+        const auto released = graphTransientResources_->Release(resources);
+        static_cast<void>(memoryBudget_->ReclaimEmptyBlocks(memoryConfig_.budget.maximumBlocks));
+        return released;
     }
 
     /** @copydoc RenderFrontend::BeginFrame */

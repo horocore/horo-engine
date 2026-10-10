@@ -4,33 +4,33 @@
 #include <utility>
 
 namespace Horo::SceneSource::Detail {
-    [[nodiscard]] Json SceneJson(const SceneSourceView &snapshot) {
-        Json objects = Json::array();
+    [[nodiscard]] WireJson SceneJson(const SceneSourceView &snapshot) {
+        WireJson objects = WireJson::array();
         for (const SceneObjectSnapshot &object : snapshot.objects) {
-            Json value{
+            WireJson value{
                 {"id", object.id.value},
-                {"parent", object.parent.has_value() ? Json(object.parent->value) : Json(nullptr)},
+                {"parent", object.parent.has_value() ? WireJson(object.parent->value) : WireJson(nullptr)},
                 {"name", object.name},
                 {"transform", TransformJson(object.localTransform)},
                 {"components", ComponentsJson(object.components)},
                 {"editor", {{"visible", object.editorState.visible}, {"locked", object.editorState.locked}}},
             };
-            value["primitiveMesh"] = object.primitiveMesh.has_value() ? PrimitiveJson(*object.primitiveMesh) : Json(nullptr);
-            value["meshAsset"] = object.meshAsset.has_value() ? Json(object.meshAsset->ToString()) : Json(nullptr);
+            value["primitiveMesh"] = object.primitiveMesh.has_value() ? PrimitiveJson(*object.primitiveMesh) : WireJson(nullptr);
+            value["meshAsset"] = object.meshAsset.has_value() ? WireJson(object.meshAsset->ToString()) : WireJson(nullptr);
             objects.push_back(std::move(value));
         }
-        Json prefabInstances = Json::array();
+        WireJson prefabInstances = WireJson::array();
         for (const ScenePrefabInstance &instance : snapshot.prefabInstances) {
             prefabInstances.push_back({
                 {"instanceId", instance.instanceId.Value()},
                 {"sourceAsset", instance.sourcePrefab.Asset().ToString()},
-                {"parent", instance.parent.has_value() ? Json(instance.parent->value) : Json(nullptr)},
+                {"parent", instance.parent.has_value() ? WireJson(instance.parent->value) : WireJson(nullptr)},
                 {"rootTransform", TransformJson(instance.rootTransform)},
             });
         }
-        return Json{{"schemaVersion", kSceneSchemaVersion},
-                    {"objects", std::move(objects)},
-                    {"prefabInstances", std::move(prefabInstances)}};
+        return WireJson{{"schemaVersion", kSceneSchemaVersion},
+                        {"objects", std::move(objects)},
+                        {"prefabInstances", std::move(prefabInstances)}};
     }
 
     /** @brief Parses an optional authored parent identity. */

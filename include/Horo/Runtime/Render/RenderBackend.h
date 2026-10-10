@@ -7,6 +7,8 @@
 
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Render/FramePacing.h"
+#include "Horo/Runtime/Render/LightCullingKernel.h"
+#include "Horo/Runtime/Render/LightFrameUpload.h"
 #include "Horo/Runtime/Render/MaterialBindingBackend.h"
 #include "Horo/Runtime/Render/PresentMode.h"
 #include "Horo/Runtime/Render/RenderAdapter.h"
@@ -129,6 +131,14 @@ namespace Horo::Render {
         bool supportsMeshResources{false};
         bool supportsTextureResources{false};
         bool supportsRenderTargetResources{false};
+        /**
+         * @brief Admits exact-descriptor transient object reuse on one effective queue.
+         *
+         * The selected backend must validate resolved instances before encoding and provide
+         * equivalent visibility between consecutive non-overlapping logical occupants.
+         * This grants no permission for overlapping resources or distinct placed-resource aliasing.
+         */
+        bool supportsExactTransientResourceReuse{false};
         /** @brief Modern immutable feature, queue, limit, and format support snapshot. */
         RenderCapabilitySnapshot support;
     };
@@ -279,6 +289,13 @@ namespace Horo::Render {
          * @brief Queries native-free backing requirements before a buffer allocation is admitted.
          * @param descriptor Valid backend-neutral buffer descriptor.
          * @return Exact or conservative requirements, or a typed unsupported/failure result.
+         * @throws std::bad_alloc Owned requirement or error metadata allocation failed.
+         * @throws std::length_error Owned metadata exceeds its representable capacity.
+         * @details Expected descriptor, capability and native failures must use Result and retain
+         * their original error identity. Implementations may throw only the two documented
+         * metadata exceptions; other exceptions violate this callback contract. Queries must
+         * release temporary native probes before returning or unwinding. This is not noexcept
+         * because the returned Error owns its metadata.
          */
         [[nodiscard]] virtual Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const = 0;
 
@@ -286,6 +303,13 @@ namespace Horo::Render {
          * @brief Queries native-free backing requirements before a texture allocation is admitted.
          * @param descriptor Valid backend-neutral texture descriptor.
          * @return Exact or conservative requirements, or a typed unsupported/failure result.
+         * @throws std::bad_alloc Owned requirement or error metadata allocation failed.
+         * @throws std::length_error Owned metadata exceeds its representable capacity.
+         * @details Expected descriptor, capability and native failures must use Result and retain
+         * their original error identity. Implementations may throw only the two documented
+         * metadata exceptions; other exceptions violate this callback contract. Queries must
+         * release temporary native probes before returning or unwinding. This is not noexcept
+         * because the returned Error owns its metadata.
          */
         [[nodiscard]] virtual Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const = 0;
 
@@ -376,6 +400,23 @@ namespace Horo::Render {
     class IRenderBackend : public IRenderResourceBackend, public IMaterialBindingBackend {
     public:
         ~IRenderBackend() override = default;
+
+        /**
+         * @brief Realizes an exact cooked light-culling kernel at an owner-thread preparation boundary.
+         * @param kernel Admitted artifact, stage, entry point and final-target binding evidence.
+         * @return Native preparation lease or typed unsupported/original admission failure.
+         * @details No source compilation, discovery or policy fallback. The host drains leases before teardown.
+         */
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
+            const CookedLightCullingKernel &kernel);
+
+        /**
+         * @brief Updates a reusable frame slot only after all prior native buffer use has completed.
+         * @param update Exact resolved buffers and bounded synchronously borrowed packed frame.
+         * @return Success, typed pending without mutation, unsupported, or original validation failure.
+         * @details Owner-thread safe point only; no CPU wait, source compilation, allocation or implicit fallback.
+         */
+        [[nodiscard]] virtual Result<void> UpdateLightFrame(const NativeLightFrameUpdate &update);
 
         /** @brief Initializes the inert backend instance and acquires its runtime resources. */
         [[nodiscard]] virtual Result<void> Initialize(const RenderBackendConfig &config) = 0;
