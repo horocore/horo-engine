@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -112,6 +113,27 @@ namespace Horo::Render {
         Error
     };
 
+    /** @brief Exact offline compiler phase; shader stage and tool role remain separate identities. */
+    enum class ShaderCompilerPhase : std::uint8_t {
+        PipelineValidation,
+        SourceCompilation,
+        IntermediateValidation,
+        Translation,
+        NativeCompilation,
+        NativeLink,
+        DebugCompilation
+    };
+
+    /** @brief Owned provenance for one diagnostic from an explicitly selected compiler invocation. */
+    struct ShaderCompilerDiagnosticContext {
+        ShaderCompilerPhase phase{ShaderCompilerPhase::PipelineValidation};
+        ShaderTargetBackend backend{ShaderTargetBackend::Null};
+        std::uint64_t sourceRevision{};
+        std::optional<ShaderStage> shaderStage;
+        std::string entryPoint;
+        std::optional<ShaderCompilerToolIdentity> tool;
+    };
+
     /** @brief Bounded source diagnostic emitted by one exact target route. */
     struct ShaderCompilerDiagnostic {
         ShaderCompilerDiagnosticCategory category{ShaderCompilerDiagnosticCategory::Source};
@@ -121,6 +143,22 @@ namespace Horo::Render {
         std::uint32_t column{0};
         std::string message;
         bool truncated{false};
+        std::optional<ShaderCompilerDiagnosticContext> context; /**< Absent when an adapter cannot supply invocation provenance. */
+        std::optional<std::string> toolCode; /**< Original tool-native code; never substitutes for the stable Horo category. */
+    };
+
+    /** @brief Borrowed synchronous compiler output capability; the host owns correlation, retention and navigation. */
+    class IShaderCompilerDiagnosticSink {
+    public:
+        virtual ~IShaderCompilerDiagnosticSink() = default;
+        /** @brief Publishes entry into an exact compiler phase without a terminal result.
+         * @param context Owned invocation provenance borrowed only during this call.
+         * @return Success, or a typed host admission/publication failure which stops the compiler route. */
+        [[nodiscard]] virtual Result<void> BeginPhase(const ShaderCompilerDiagnosticContext &context) = 0;
+        /** @brief Publishes one bounded diagnostic before success or failure discards the candidate artifact.
+         * @param diagnostic Owned compiler diagnostic borrowed only during this call.
+         * @return Success, or a typed host publication failure which stops further diagnostic admission. */
+        [[nodiscard]] virtual Result<void> Publish(const ShaderCompilerDiagnostic &diagnostic) = 0;
     };
 
     /** @brief Opaque target output returned by a private concrete toolchain adapter. */
@@ -141,6 +179,7 @@ namespace Horo::Render {
         const ShaderCompilerTargetDescriptor &target;
         Sha256Digest artifactKey;
         ShaderCompilerLimits limits;
+        IShaderCompilerDiagnosticSink *diagnostics{}; /**< Optional host sink; callbacks run synchronously and must not retain borrows. */
     };
 
     /** @brief Private-toolchain seam; implementations must not retain borrowed invocation data. */
@@ -153,6 +192,9 @@ namespace Horo::Render {
          * @param invocation Immutable borrowed inputs and output bounds.
          * @param cancellation Cooperative cancellation owned by the calling host operation.
          * @return Opaque target payload and bounded diagnostics, or a typed adapter failure.
+         * @details When streaming through invocation.diagnostics, publish the complete diagnostic sequence
+         * once and return that same sequence on success. Sink failures stop admission. Adapters without
+         * streaming support retain their owned diagnostics; the pipeline forwards them after validation.
          */
         [[nodiscard]] virtual Result<ShaderCompilerAdapterOutput> Compile(const ShaderCompilerInvocation &invocation,
                                                                           const CancellationToken &cancellation) const = 0;
@@ -190,10 +232,12 @@ namespace Horo::Render {
      * @param adapter Host-selected private toolchain adapter.
      * @param cancellation Cooperative operation cancellation checked before and between targets.
      * @param limits Finite input/output envelope.
+     * @param diagnostics Optional host-owned synchronous sink, alive for the complete call; no pointer is retained after return.
      * @return Complete ordered artifact batch, or a stable ShaderCompilerPipelineErrors failure.
      */
     [[nodiscard]] Result<ShaderCompilationBatch> CompileShaderTargets(const ShaderCompilationRequest &request,
                                                                       const IShaderCompilerAdapter &adapter,
                                                                       const CancellationToken &cancellation,
-                                                                      const ShaderCompilerLimits &limits = {});
+                                                                      const ShaderCompilerLimits &limits = {},
+                                                                      IShaderCompilerDiagnosticSink *diagnostics = nullptr);
 }  // namespace Horo::Render

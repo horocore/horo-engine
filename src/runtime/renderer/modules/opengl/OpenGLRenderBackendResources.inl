@@ -27,7 +27,14 @@ Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescripto
             "OpenGL texture memory-cost query failed: " + DescribeRenderTextureRequest(descriptor) +
                 "; this path implements only single-mip, single-layer, single-sample 2d textures with sampled or attachment usage."));
     const auto payload = RenderTextureBaseLevelByteSize(descriptor);
-    const auto required = payload.has_value() ? ConservativeRequirement(*payload) : std::nullopt;
+    auto required = payload.has_value() ? ConservativeRequirement(*payload) : std::nullopt;
+    const bool graphColor = capabilities_.supportsExactTransientResourceReuse && descriptor.format == RenderTextureFormat::Rgba8Unorm &&
+                            HasTextureUsage(descriptor.usage, RenderTextureUsage::RenderAttachment);
+    if (graphColor && required.has_value()) {
+        constexpr std::size_t attachmentEstimate = 256;
+        required = *required <= std::numeric_limits<std::size_t>::max() - attachmentEstimate ? std::optional{*required + attachmentEstimate}
+                                                                                             : std::nullopt;
+    }
     if (!payload.has_value() || !required.has_value())
         return Result<RenderMemoryCostPlan>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation,
                                                                "OpenGL texture memory-cost query failed: " +
@@ -159,12 +166,25 @@ Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &textureDescri
         .initialData = textureData,
     });
     functions_.textures.bindTexture(GL_TEXTURE_2D, 0);
+    std::uint32_t graphFramebuffer{};
+    if (capabilities_.supportsExactTransientResourceReuse && textureDescriptor.format == RenderTextureFormat::Rgba8Unorm &&
+        HasTextureUsage(textureDescriptor.usage, RenderTextureUsage::RenderAttachment)) {
+        const auto attachment = Detail::CreateOpenGLGraphFramebuffer(functions_, texture);
+        if (attachment.HasError()) {
+            functions_.textures.deleteTextures(1, &texture);
+            return Result<std::uint64_t>::Failure(attachment.ErrorValue());
+        }
+        graphFramebuffer = attachment.Value();
+    }
     try {
         textures_.insert(texture);
-        textureDescriptors_.insert_or_assign(texture, OpenGLTrackedTexture{.descriptor = textureDescriptor});
+        textureDescriptors_.insert_or_assign(texture, Detail::OpenGLGraphTexture{.descriptor = textureDescriptor,
+                                                                                 .graphFramebuffer = graphFramebuffer});
     } catch (...) {  // NOSONAR(cpp:S2738)
         textures_.erase(texture);
         textureDescriptors_.erase(texture);
+        if (graphFramebuffer != 0)
+            functions_.framebuffers.deleteFramebuffers(1, &graphFramebuffer);
         functions_.textures.deleteTextures(1, &texture);
         return Result<std::uint64_t>::Failure(
             MakeError(OpenGLBackendErrors::ResourceCreationFailed, "OpenGL texture tracking allocation failed."));

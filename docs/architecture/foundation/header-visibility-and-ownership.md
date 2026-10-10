@@ -1585,6 +1585,21 @@ accepted readers; exact old/new payload revisions coexist only within reserved
 peaks and retire independently. The public-header consumer verifies the target's
 staged dependency surface without broad source/include paths.
 
+## AUD-009.1 additive preview contracts
+
+`Horo/Audio/AudioFrontend.h` belongs exclusively to `HoroAudioFrontend`, with
+AudioCommands public and VoiceRender/output protocol private dependencies.
+`Horo/Editor/AudioEditorDocument.h` belongs to EditorServices, whose deliberate
+AudioFrontend public dependency supplies the typed preview capability.
+
+`HoroAudioFrontendComposition` is a non-installed host-only interface with a
+narrow include root under `src/audio/frontend/include`. Application roots and
+tests consume detached resource/output composition; editor features never expose
+or select backends. Existing APIs and persistent formats are unchanged. Rebuild
+consumers for these additive headers. Generated staged consumers and explicit
+contract translation units verify visibility; preview tests verify playback and
+retirement. No broad source/include path is introduced.
+
 ## NET-008.3 Play Topology Profile Boundary
 
 `HoroPlayTopologyApplication` solely owns the additive public

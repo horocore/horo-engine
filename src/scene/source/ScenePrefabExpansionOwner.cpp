@@ -121,8 +121,6 @@ namespace Horo::SceneSource {
                     bytes.size() > MaximumSceneSourceBytes)
                     return Result<void>::Failure(MakeError(Prefab::PrefabErrors::PayloadTooLarge));
                 return Result<void>::Success();
-            } catch (const std::bad_alloc &) {
-                throw;  // The public admission/completion boundary returns the allocation-specific typed failure.
             } catch (const nlohmann::json::exception &error) {
                 return Result<void>::Failure(MakeError(Prefab::PrefabErrors::AdmissionRejected, error.what()));
             }
@@ -308,8 +306,8 @@ namespace Horo::SceneSource {
     /** @copydoc ScenePrefabExpansionOwner::MemoizeCandidate */
     Result<void> ScenePrefabExpansionOwner::MemoizeCandidate(Work &completed, const std::size_t index) {
         try {
-            const auto stored = cache_.Store(std::move(completed.keys[index]), std::move(*completed.candidates[index]));
-            if (stored.HasError() &&
+            if (const auto stored = cache_.Store(std::move(completed.keys[index]), std::move(*completed.candidates[index]));
+                stored.HasError() &&
                 stored.ErrorValue().code.Value() != Prefab::PrefabErrors::ExpansionCacheCapacityExceeded.code.Value() &&
                 stored.ErrorValue().code.Value() != Prefab::PrefabErrors::ExpansionCacheAllocationFailed.code.Value())
                 return Result<void>::Failure(stored.ErrorValue());

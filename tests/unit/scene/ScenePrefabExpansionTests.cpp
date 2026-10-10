@@ -1,11 +1,16 @@
 #include "AllocationProbe.h"
+#include "CanonicalJsonWriter.h"
 #include "ScenePrefabExpansionTestSupport.h"
 
 #include <algorithm>
 #include <array>
+#include <catch2/catch_template_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <new>
+#include <optional>
 #include <semaphore>
 #include <thread>
+#include <type_traits>
 
 using namespace Horo;
 using namespace Horo::Prefab;
@@ -329,4 +334,130 @@ TEST_CASE("Resource dependencies remain exact graph evidence without requiring a
     const auto hit = cache.Resolve(resolver.Value(), fixture.asset, instance, fixture.limits);
     REQUIRE(hit.HasValue());
     CHECK(hit.Value() == result.Value());
+}
+
+using OrderedWireValue = Horo::JsonEncoding::Detail::CanonicalJsonValue<false>;
+using SortedWireValue = Horo::JsonEncoding::Detail::CanonicalJsonValue<true>;
+
+namespace {
+    /** @brief Checks allocation-free move transfer, null source retirement and self-move preservation. */
+    template <typename Wire> void RequireNonthrowingAllocationFreeMoves(const Wire &source, const std::string &sourceBytes) {
+        Wire moving{source};
+        std::optional<Wire> constructed;
+        Wire destination{{"previous", std::string(128, 'p')}};
+        std::size_t moveAllocations{};
+        {
+            Tests::AllocationProbe::ScopedMeasurement measurement;
+            Tests::AllocationProbe::ScopedFailure failure{0};
+            constructed.emplace(std::move(moving));
+            destination = std::move(*constructed);
+            Wire &self = destination;
+            destination = std::move(self);
+            moveAllocations = measurement.Snapshot().requests;
+        }
+        CHECK(moveAllocations == 0);
+        CHECK(moving.dump(2) == "null");
+        REQUIRE(constructed.has_value());
+        CHECK(constructed->dump(2) == "null");
+        CHECK(destination.dump(2) == sourceBytes);
+        CHECK(source.dump(2) == sourceBytes);
+    }
+
+    /** @brief Verifies nested member RAII cleanup and move traits without allowing allocating assertions in the failure scope. */
+    template <typename Wire> void RequireNonthrowingAllocationFreeDestruction(const Wire &source, const std::string &sourceBytes) {
+        STATIC_REQUIRE(std::is_nothrow_destructible_v<Wire>);
+        STATIC_REQUIRE(std::is_nothrow_move_constructible_v<Wire>);
+        STATIC_REQUIRE(std::is_nothrow_move_assignable_v<Wire>);
+        std::optional<Wire> retiring{source};
+        const std::size_t freedBefore = Tests::AllocationProbe::FreeCount();
+        std::size_t destructionAllocations{};
+        {
+            Tests::AllocationProbe::ScopedMeasurement measurement;
+            Tests::AllocationProbe::ScopedFailure failure{0};
+            retiring.reset();
+            destructionAllocations = measurement.Snapshot().requests;
+        }
+        CHECK(destructionAllocations == 0);
+        CHECK(Tests::AllocationProbe::FreeCount() > freedBefore);
+        CHECK(source.dump(2) == sourceBytes);
+    }
+}  // namespace
+
+TEMPLATE_TEST_CASE("Canonical moves retire every wire alternative without allocation", "[native][prefab][wire][allocation]",
+                   OrderedWireValue, SortedWireValue) {
+    using Wire = TestType;
+    const unsigned alternative = GENERATE(0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U);
+    const Wire source = [alternative] {
+        switch (alternative) {
+            case 0:
+                return Wire{nullptr};
+            case 1:
+                return Wire{true};
+            case 2:
+                return Wire{std::int64_t{-7}};
+            case 3:
+                return Wire{std::uint64_t{7}};
+            case 4:
+                return Wire{1.25};
+            case 5:
+                return Wire{std::string(128, 's')};
+            case 6:
+                return Wire::array({std::string(128, 'a'), Wire{{"nested", true}}});
+            default:
+                return Wire{{"nested", Wire::array({std::string(128, 'o'), nullptr})}};
+        }
+    }();
+    const std::string sourceBytes = source.dump(2);
+    RequireNonthrowingAllocationFreeMoves(source, sourceBytes);
+}
+
+TEMPLATE_TEST_CASE("Recursive canonical copies preserve source and destination at every allocation failure",
+                   "[native][prefab][wire][allocation]", OrderedWireValue, SortedWireValue) {
+    using Wire = TestType;
+    const bool arrayRoot = GENERATE(false, true);
+    const bool assignment = GENERATE(false, true);
+    const Wire child{{"values", Wire::array({std::string(128, 'x'), Wire{{"nested", Wire::array({1, 2, 3})}}})}};
+    const Wire source = arrayRoot ? Wire::array({child, child}) : Wire{{"first", child}, {"second", child}};
+    const std::string sourceBytes = source.dump(2);
+    RequireNonthrowingAllocationFreeDestruction(source, sourceBytes);
+    const Wire previous{{"preserved", std::string(128, 'p')}};
+    const std::string previousBytes = previous.dump(2);
+    std::size_t allocations{};
+    {
+        Wire destination{previous};
+        std::optional<Wire> constructed;
+        Tests::AllocationProbe::ScopedMeasurement measurement;
+        if (assignment)
+            destination = source;
+        else
+            constructed.emplace(source);
+        allocations = measurement.Snapshot().requests;
+    }
+    REQUIRE(allocations > 0);
+    REQUIRE(allocations < 4096);
+    for (std::size_t index = 0; index < allocations; ++index) {
+        INFO("recursive copy allocation index " << index << ", array root " << arrayRoot << ", assignment " << assignment);
+        Wire destination{previous};
+        std::optional<Wire> constructed;
+        bool rejected{};
+        {
+            Tests::AllocationProbe::ScopedFailure failure{index};
+            try {
+                if (assignment)
+                    destination = source;
+                else
+                    constructed.emplace(source);
+            } catch (const std::bad_alloc &) {
+                rejected = true;
+            }
+        }
+        REQUIRE(rejected);
+        CHECK_FALSE(constructed.has_value());
+        CHECK(destination.dump(2) == previousBytes);
+        CHECK(source.dump(2) == sourceBytes);
+        constructed.emplace(source);
+        CHECK(constructed->dump(2) == sourceBytes);
+        destination = source;
+        CHECK(destination.dump(2) == sourceBytes);
+    }
 }

@@ -1,5 +1,21 @@
 # PCG Generation Plan Migration
 
+## CPU evaluator migration (HORO-2019)
+
+The pure `EvaluatePCGCpu` boundary dispatches only explicit version-1 PCG built-ins
+over cooked pins and one validated immutable spatial snapshot. Hosts must compose
+matching inert runtime descriptors, declare one bounded PointSet output shape per
+cooked output pin, grant every required capability, and supply a nonzero numeric
+profile fingerprint when a profile-deterministic node is present. The cooked plan
+now exposes its already-encoded authored seed without changing canonical bytes.
+
+The result owns detached immutable point candidates plus exact source, seed, snapshot
+and profile evidence; it is not an authority to publish scene or target state. A
+generation-plan adapter must still derive typed target intents and exact ownership
+receipts at the later host/commit boundary. Old snapshots and candidates remain
+valid after a source/provider replacement; callers charge old/new overlap and do not
+reinterpret an old candidate as current merely because its storage remains alive.
+
 ## Point-cloud workspace migration (HORO-2022)
 
 PCG evaluators obtain one `PCGPointCloudWorkspace` per admitted operation from the
@@ -48,3 +64,18 @@ execution, the same graph/lineage/set/cell/owner, and a strictly newer set revis
 The previous plan stays memory-valid for readers until their ordinary value handles
 are released. Cancellation or shutdown must pass the corresponding admission state;
 the API then returns a typed lifecycle failure without publishing a candidate.
+
+CPU evaluator callers must now supply stable world/cell scope, numeric policy,
+certified profile and a digest of the captured provider's canonical content in
+`PCGCpuEvaluationLimits`. Do not replace content evidence with a revision hash.
+Optional exposed overrides carry their owner-issued revision; cooked defaults are
+bound to the graph revision. Detached candidates retain canonical per-node roots
+for reuse validation. `RequiredBytes` permits complete operation admission before
+point-column allocation; the scratch slice includes workers and provenance too.
+
+Provenance input admission now accepts 512 individual stamps, matching the High
+graph tier (Standard requires 128). Provider admission stays at 64. Existing
+caller signatures, public ownership, schema-1 encoding, keys and sample streams
+for previously accepted records are unchanged. The only runtime capture caller
+is the CPU evaluator; provenance unit tests also exercise direct captures.
+Callers must continue to charge all captured records against operation budgets.

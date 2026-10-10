@@ -1,9 +1,12 @@
+#include "Horo/Editor/SequenceDocument.h"
 #include "Horo/Editor/SourceDocumentService.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 
 #include <type_traits>
 
 static_assert(std::is_copy_constructible_v<Horo::Editor::SourceDocumentSnapshot>);
+static_assert(std::is_copy_constructible_v<Horo::Editor::SequenceDocument>);
+static_assert(std::is_same_v<decltype(Horo::Editor::SequenceTimelineState::playhead), std::uint64_t>);
 static_assert(std::is_nothrow_move_constructible_v<Horo::Editor::SourceDocumentService>);
 static_assert(!std::is_copy_constructible_v<Horo::Editor::SourceDocumentService>);
 

@@ -274,8 +274,21 @@ publishes paths/desired velocities before character locomotion. Stale results re
 `StaleSnapshot` or `InvalidHandle` and may be resubmitted within budget; they are never applied
 to replacement agents or tiles. A held path/corridor must be revalidated before later use too.
 
-`NavigationPathPolicy` is the owner-thread held-corridor boundary while a full coordinator
-is not yet present. The owner assigns a generation-safe `PathId` to each accepted
+The implemented best-effort `NavigationCoordinator` composes the process JobSystem
+with bounded request/result storage and compatible immutable-read partitions.
+Rotating logical-owner service and request/node/outstanding-result quotas prevent
+one owner or replacement incarnations from consuming all configured capacity.
+Deadlines, priority aging, cancellation, Foundation overload deferral and stable
+owner-only publication are described in
+[Asynchronous Grounded Path Batching](../../guides/navigation-path-batching.md).
+The additive runtime header and public consumer test preserve existing provider
+APIs. Completion transport retains the exact provider `Result<NavigationPath>`
+and Scene/root/caller fences; it does not invent missing-region evidence or
+weaken `NavigationOutcome` coverage invariants. Combined-root freshness is checked
+conservatively for the whole topology. Deterministic kernels and automatic stale
+retry remain separate capabilities, rather than implicit fallback modes.
+
+`NavigationPathPolicy` remains the owner-thread held-corridor boundary. The owner assigns a generation-safe `PathId` to each accepted
 path and retains its query provenance, complete or partial region evidence, link
 revision and goal revision. Before handing out a movement corridor, the owner
 compares one fresh combined-world observation with the retained world, topology,
@@ -294,8 +307,8 @@ under the old world identity; the owner clears the policy and creates new-world
 path identity before admitting work. Same-world revision rollback is rejected.
 The new runtime-owned public header is additive; existing query/result callers
 require no source migration, and providers retain the unchanged `NavigationApi`
-boundary. Future coordinator integration must use this owner-phase check rather
-than create a second path-currentness authority.
+boundary. Coordinator result consumption must use this owner-phase check rather
+than create a second held-path currentness authority.
 
 ADR-018 `OwnerThreadNextFrame` console handlers submit typed navigation commands for this
 phase; they do not introduce a second mutation phase in `PreUpdate` / `DebugPhase`. Heavy
@@ -2413,6 +2426,64 @@ through the Foundation `JobSystem`:
 - **Scene-Scoped Cancellation**: Every async AI job captures a `CancellationToken` bound to the active `SceneRuntime` generation. When a scene unloads or transitions, all active AI jobs are cancelled immediately.
 - **Worker Thread Invariant**: Background AI jobs never mutate scene ECS components or live blackboard instances directly. Completed results (e.g. `PathfindingResult`, visibility test results) are queued into thread-safe result buffers and applied to agent memory on the main simulation thread at designated phase safe points.
 
+### Fixed-Tick Agent Work Admission (GAI-001.8)
+
+`AiTaskScheduler` in `HoroAI` is the scene owner's cooperative admission policy
+above the existing Foundation `JobSystem`, not a worker executor. The host
+composes it through `AiSceneRuntime::ConfigureTaskSchedulerAtSafePoint`, binds
+exact active agents with `RegisterDecisionAtSafePoint`, and calls
+`EvaluateAtDecision` in `AiDecisionEvaluate` and `CommitAtIntentDispatch` in
+`AiIntentDispatch`. Restore, scene replacement, disable, structural retirement
+and shutdown fence retained decisions and intents and cancel their workers.
+The process JobSystem and worker-owned image pins must drain before code unload.
+
+Each registration owns one coalesced wake slot. Existing `DecisionWakePolicy`
+requests can be forwarded as typed `DecisionWakeReasons`; activation, blackboard,
+perception, task completion and explicit requests bypass cadence. Fixed-tick
+polling coalesces missed intervals without catch-up. Authored priority, overdue
+age and persistent `AgentId` determine stable admission independently of registration
+order. After the declared starvation age, overdue agents precede ordinary priority.
+`AiSchedulingReport` exposes starved/deferred, exhausted/yielded, failure and
+cancellation counts plus the original first callback error.
+
+Positive finite per-agent and global evaluation/work/command/submission limits
+are validated before registration. Deterministic admission requires interval one
+and reserves the complete work, command and evaluation allowances for every
+registered agent within the global envelope; oversubscribed registration fails
+explicitly instead of accepting agents that would later be skipped. The host
+binds all active controllers before entering fixed simulation. Each
+consecutive deterministic tick evaluates that admitted population once in stable
+authored `AgentId` order; priority, cadence skips and starvation promotion apply
+only to best-effort mode. An undrained deterministic command batch fails admission
+of the next tick with `SchedulerBudgetExhausted`, rather than silently skipping
+its agent or borrowing future tick capacity. `AiWorkBudget` is cooperative: a provider
+must consume before every bounded node/query/command step and check cancellation
+between steps. It does not preempt arbitrary C++ code or bound the elapsed time
+of a single step. A slice is reserved before invoking callbacks; repeated calls
+in the same tick cannot renew allowances. Incomplete command batches retain their
+bounded storage and fence further evaluation until drained; no command or decision
+catch-up extends the tick. Hosts provide an executor with immutable frozen inputs
+and preallocated resumable state/intents; its owner-only commit queues Scene
+commands at the safe point instead of mutating ECS from a worker.
+
+Best-effort `SubmitWorker` accepts only precomposed `AiWorkerSliceLease` work
+implementing `IAiBudgetedTaskJob`. Its finite cost is charged from the executing
+owner slice before admission, and the worker receives its own non-copyable
+allowance. Over-budget attempts produce a typed `SchedulerBudgetExhausted` task
+failure. Per-agent retained-work and per-tick submission limits and the shared
+service capacity also apply; cancelled running jobs retain capacity until terminal.
+Completion remains a candidate in the existing continuation mailbox: only owner
+evaluation advances task state. Deterministic full-rate mode deliberately rejects async
+worker submission with `SchedulerWorkerUnsupported`; the host uses bounded owner
+slices so worker completion timing cannot affect declared deterministic flow.
+
+This is an additive public contract owned by `HoroAI`; scene composition methods
+belong to `HoroAISceneIntegration`. Existing tree, state-machine and task-service
+callers retain their contracts. Hosts opting into scene-wide scheduling must bind
+one executor per exact live agent, forward coalesced wakes, call the two declared
+phases and recompose/rebind after restore or scene replacement. Scheduling state,
+worker leases and outstanding intent batches are transient and never serialized.
+
 ## Debugging And Visualization
 
 [ADR-110](../../adr/110-navigation-editor-surface-and-command-ownership.md)
@@ -2553,7 +2624,7 @@ The engine supports two explicit simulation scheduling modes for AI:
 
 | Simulation Mode | Scheduling Contract | Primary Use Cases | Allowed Host Roles |
 |---|---|---|---|
-| **Deterministic Fixed-Tick** | Strict lockstep execution. Every active agent is evaluated on every fixed tick in deterministic entity-ID order. Time-slicing skips, frame-rate dependent heuristics, and random job interleavings are forbidden. | Lockstep multiplayer, replay recording and bit-identical playback, automated AI regression testing. | Standalone, Dedicated Server, Headless Test Harness |
+| **Deterministic Fixed-Tick** | Strict lockstep execution. Every active agent is evaluated on every fixed tick in stable authored `AgentId` order for its entity binding. Time-slicing skips, frame-rate dependent heuristics, and random job interleavings are forbidden. | Lockstep multiplayer, replay recording and bit-identical playback, automated AI regression testing. | Standalone, Dedicated Server, Headless Test Harness |
 | **Best-Effort Bounded Time-Slicing** | Distance- and significance-based Level of Detail (Simulation LOD). Agents near players update at full frequency; distant agents update at fractional rates (e.g. 1/2, 1/4 rate) with bounded maximum latency guarantees. Job queues are amortized across workers within fixed per-tick execution budgets. | High-density open-world scenes, large-scale RTS/RPG titles, single-player games exceeding per-tick CPU budgets. | Standalone, Dedicated Server |
 
 Client hosts in networked multiplayer run neither mode for remote AI; they perform presentation-only state interpolation.

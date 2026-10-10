@@ -104,7 +104,16 @@ namespace Horo::Editor {
                           std::string_view activePanelId, const EditorWorkspaceViewModel &viewModel,
                           EditorWorkspaceViewCommandData &outCommand);
         /** @brief Draws one persistent document tab and emits its select or close command. */
-        void DrawDocumentTab(const TabStackNode &stack, const std::string &panelId, EditorWorkspaceViewCommandData &outCommand);
+        void DrawDocumentTab(const std::string &panelId, EditorWorkspaceViewCommandData &outCommand, bool active);
+        /** @brief Draws persistent sequence tabs and their explicit focus/close affordances. */
+        void DrawSequenceDocumentTabs(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Resolves theme-sized document chrome, including its overflow affordance. */
+        [[nodiscard]] float DocumentTabHeight(WorkspaceDockArea area) const;
+        /** @brief Draws either the active document or its explicitly focused native panel. */
+        void DrawDockContent(WorkspaceDockArea area, const std::shared_ptr<IWorkspacePanel> &panel,
+                             const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Projects the active immutable sequence through the shared timeline control. */
+        bool DrawSequenceDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         void DrawDocumentTabs(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand);
         /** @brief Calculates clamped dock geometry from native and extension visibility without mutating layout or submitting UI. */
         [[nodiscard]] WorkspaceLayoutGeometry CalculateWorkspaceGeometry(const EditorWorkspaceViewModel &viewModel, const ImVec2 &display,

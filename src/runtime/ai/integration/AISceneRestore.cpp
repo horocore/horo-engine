@@ -295,6 +295,10 @@ namespace Horo::AI {
                 return valid;
         }
         // All allocations and fallible checks finish before the first live mutation.
+        if (active_->scheduler) {
+            active_->scheduler->Shutdown();
+            active_->scheduler.reset();
+        }
         for (auto &agent : staged.agents) {
             auto &slot = *Detail::FindAgent(*active_, agent.handle);
             Detail::CancelOwnedWork(slot);

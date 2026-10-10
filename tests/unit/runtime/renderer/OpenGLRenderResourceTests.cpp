@@ -2,6 +2,7 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "OpenGLBackendInternal.h"
 #include "OpenGLRenderTestSupport.h"
+#include "OpenGLResourceGraphTestSupport.h"
 #include "RenderMemoryTestSupport.h"
 
 #include <array>
@@ -15,63 +16,36 @@ namespace Horo::Render::OpenGLResourceTests {
         REQUIRE((condition));
     }
 
-    class ResourcePresentationPort final : public IOpenGLPresentationPort {
-    public:
-        Result<void> CreateContext(const OpenGLContextDescriptor &) override {
-            return Result<void>::Success();
-        }
-
-        Result<void> MakeCurrent() override {
-            return Result<void>::Success();
-        }
-
-        Result<void> LoadCommandDispatch() override {
-            return Result<void>::Success();
-        }
-
-        Result<OpenGLContextFacts> QueryContextFacts() override {
-            return Result<OpenGLContextFacts>::Success({.apiFamily = OpenGLApiFamily::Desktop,
-                                                        .majorVersion = 4,
-                                                        .minorVersion = 1,
-                                                        .profile = OpenGLContextProfile::Core,
-                                                        .requiredEntryPointsAvailable = true,
-                                                        .maxTexture2DSize = 16384,
-                                                        .maxColorAttachments = 8,
-                                                        .maxVertexAttributes = 16});
-        }
-
-        Result<void> SetPresentMode(PresentMode) override {
-            return Result<void>::Success();
-        }
-
-        Result<void> SwapBuffers() override {
-            return Result<void>::Success();
-        }
-
-        void DestroyContext() noexcept override {
-            // This test double owns no native context.
-        }
-    };
-
-    struct ResourceCommandState {
-        std::uint32_t nextObject{10};
-        int generatedBuffers{0};
-        int deletedBuffers{0};
-        int generatedVertexArrays{0};
-        int deletedVertexArrays{0};
-        int generatedTextures{0};
-        int deletedTextures{0};
-        int generatedFramebuffers{0};
-        int deletedFramebuffers{0};
-        int uploads{0};
-        std::size_t emptyBufferBytes{0};
-        int attachments{0};
-        std::array<std::uint32_t, 2> attachedTextures{};
-        bool framebufferComplete{true};
-        bool failBufferAllocation{false};
-    };
-
     ResourceCommandState resourceCommandState;
+
+    GraphCommandState graphCommandState;
+
+    /** @brief Captures actual copy bindings while preserving unrelated shared state probes. */
+    void GraphGetInteger(const std::uint32_t name, const std::span<std::int32_t> values) noexcept {
+        if (name == 0x8F36U)
+            values[0] = static_cast<std::int32_t>(graphCommandState.sourceBinding);
+        else if (name == 0x8F37U)
+            values[0] = static_cast<std::int32_t>(graphCommandState.destinationBinding);
+        else
+            OpenGLBackendTests::ProbeGetInteger(name, values);
+    }
+
+    /** @brief Tracks the immediate API's copy targets without allocating during encoding. */
+    void GraphBindBuffer(const std::uint32_t target, const std::uint32_t object) {
+        if (target == 0x8F36U)
+            graphCommandState.sourceBinding = object;
+        else if (target == 0x8F37U)
+            graphCommandState.destinationBinding = object;
+    }
+
+    /** @brief Records submitted native object pairs and injects a partial-command error. */
+    void GraphCopy(std::uint32_t, std::uint32_t, std::size_t, std::size_t, std::size_t) noexcept {
+        if (graphCommandState.copyCount < graphCommandState.copies.size())
+            graphCommandState.copies[graphCommandState.copyCount] = {graphCommandState.sourceBinding, graphCommandState.destinationBinding};
+        ++graphCommandState.copyCount;
+        if (graphCommandState.failCopy)
+            OpenGLBackendTests::commandState.error = 0x0502U;
+    }
 
     void ProbeNoOp(std::uint32_t) noexcept {
         // This probe intentionally records no state.
@@ -205,6 +179,28 @@ namespace Horo::Render::OpenGLResourceTests {
         Check(registry.Seal().HasValue());
         auto created = registry.Create(RenderBackendId{"opengl"});
         Check(created.HasValue());
+        return std::move(created).Value();
+    }
+
+    /** @copydoc CreateGraphFrontend */
+    [[nodiscard]] std::unique_ptr<RenderFrontend> CreateGraphFrontend(ResourcePresentationPort &port) {
+        resourceCommandState = {};
+        graphCommandState = {};
+        OpenGLBackendTests::commandState = {};
+        auto functions = ResourceProbeFunctions();
+        functions.isGraphAvailable = +[]() noexcept {
+            return true;
+        };
+        functions.state.getInteger = &GraphGetInteger;
+        functions.buffers.bindBuffer = &GraphBindBuffer;
+        functions.buffers.copyBufferSubData = &GraphCopy;
+        functions.clear = &OpenGLBackendTests::ProbeClear;
+        functions.clearColor = &OpenGLBackendTests::ProbeClearColor;
+        RenderBackendRegistry registry;
+        REQUIRE(Detail::RegisterOpenGLRenderBackendWithFunctions(registry, port, {}, functions).HasValue());
+        REQUIRE(registry.Seal().HasValue());
+        auto created = RenderFrontend::Create(registry, RenderBackendId{"opengl"}, {});
+        REQUIRE(created.HasValue());
         return std::move(created).Value();
     }
 

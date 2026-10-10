@@ -53,11 +53,8 @@ namespace Horo::Editor {
         }
 
         const SourceOpenResult &result = opened.Value();
-        if (result.classification.kind == SourceFileKind::UiCanvas && result.document.has_value() &&
-            result.route == SourceOpenRoute::EmbeddedWorkspace) {
-            OpenEmbeddedUiCanvasSource(result);
+        if (OpenEmbeddedAuthoredDocument(result))
             return;
-        }
         bool navigated = false;
         if (m_sourceOpenNavigator) {
             navigated = m_sourceOpenNavigator(result);

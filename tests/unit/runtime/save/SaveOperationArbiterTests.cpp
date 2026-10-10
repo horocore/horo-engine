@@ -1,59 +1,15 @@
 #include "Horo/Runtime/Save/SaveErrors.h"
 #include "Horo/Runtime/Save/SaveOperationArbiter.h"
-#include "unit/runtime/save/SaveTestUtils.h"
+#include "SaveOperationArbiterTestSupport.h"
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+#include <limits>
 #include <optional>
 #include <string>
 
-namespace {
-    using namespace Horo;
-    using namespace Horo::Runtime;
-    using namespace Horo::Runtime::Test;
-
-    SaveNamespaceId NameSpace() {
-        return {.product = Id<ProductStorageId>(1),
-                .environment = Id<EnvironmentStorageId>(2),
-                .owner = ServerWorldOwner{.owner = Id<ServerStorageOwnerId>(3)}};
-    }
-
-    SaveArbiterRequest Request(const OperationId operation, const SaveOperationKind kind = SaveOperationKind::Save,
-                               const std::uint8_t slot = 1, const SaveArbiterPriority priority = SaveArbiterPriority::Normal,
-                               const SaveArbiterConflictPolicy conflict = SaveArbiterConflictPolicy::Queue,
-                               const SavePolicyMode mode = SavePolicyMode::Manual) {
-        return {.operation = {.operation = operation, .kind = kind, .maximumCompletionCallbacks = 4},
-                .mode = mode,
-                .address = kind == SaveOperationKind::RefreshCatalog
-                               ? std::nullopt
-                               : std::optional<SaveArbiterAddress>{{.nameSpace = NameSpace(), .slot = Id<SaveGameSlotId>(slot)}},
-                .priority = priority,
-                .conflict = conflict};
-    }
-
-    SaveOperationArbiter Arbiter(const std::size_t capacity = 8) {
-        auto created = CreateSaveOperationArbiter({.maximumRetainedOperations = capacity});
-        REQUIRE(created.HasValue());
-        return std::move(created).Value();
-    }
-
-    SaveArbiterAdmission Admit(SaveOperationArbiter &arbiter, SaveArbiterRequest request) {
-        auto admitted = arbiter.Admit(std::move(request));
-        REQUIRE(admitted.HasValue());
-        return std::move(admitted).Value();
-    }
-
-    SaveArbiterSnapshot Snapshot(const SaveOperationArbiter &arbiter, const OperationId operation) {
-        const auto snapshot = arbiter.Snapshot(operation);
-        REQUIRE(snapshot.has_value());
-        return *snapshot;
-    }
-
-    void RequireError(const Error &error, const ErrorCodeDescriptor &descriptor) {
-        CHECK(error.domain.Value() == descriptor.domain.Value());
-        CHECK(error.code.Value() == descriptor.code.Value());
-    }
-}  // namespace
+using namespace Horo::Runtime::ArbiterTestSupport;
 
 TEST_CASE("Save operation arbiter validates bounded typed admission", "[unit][runtime][save][arbiter]") {
     const auto zeroCapacity = CreateSaveOperationArbiter({});

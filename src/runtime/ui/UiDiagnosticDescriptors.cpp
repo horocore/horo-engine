@@ -1,11 +1,16 @@
 #include "UiDiagnosticDescriptors.h"
 
+#include "Horo/Runtime/Ui/UiScreenTransition.h"
+
 #include <algorithm>
 #include <array>
 
 namespace Horo::Runtime::Ui::DiagnosticsInternal {
     namespace {
         const std::array core{
+            &UiScreenTransitionErrors::Invalid,
+            &UiScreenTransitionErrors::Busy,
+            &UiScreenTransitionErrors::Timeout,
             &UiErrors::LayoutCandidateBusy,
             &UiErrors::StyleCandidateBusy,
             &UiErrors::ClockInputInvalid,

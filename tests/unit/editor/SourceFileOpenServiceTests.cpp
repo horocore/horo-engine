@@ -54,6 +54,7 @@ TEST_CASE("Source policy classifies editable source and project text by extensio
     REQUIRE(service.Classify("Player.CPP").kind == SourceFileKind::NativeSource);
     REQUIRE(service.Classify("player.horo_script").kind == SourceFileKind::HoroScript);
     REQUIRE(service.Classify("assets/ui/Hud.UICANVAS").kind == SourceFileKind::UiCanvas);
+    REQUIRE(service.Classify("assets/cinematics/Intro.HSEQUENCE").kind == SourceFileKind::Sequence);
     REQUIRE(service.Classify(".horo/project.JSON").kind == SourceFileKind::ProjectText);
     REQUIRE(service.Classify("README.bin").kind == SourceFileKind::Unsupported);
     REQUIRE(service.Classify(".gitignore").kind == SourceFileKind::ProjectText);

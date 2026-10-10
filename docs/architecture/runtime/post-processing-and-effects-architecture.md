@@ -54,6 +54,16 @@ struct PostProcessVolume {
 The active settings are computed by blending all volumes overlapping the
 camera, weighted by priority and blend radius.
 
+The implemented backend-neutral model is owned by `HoroEngine::RenderApi`.
+`PreparePostProcessVolumes` resolves reusable profile IDs and explicit typed
+group overrides into an immutable bounded snapshot. Evaluation applies ascending
+priority then stable volume ID; higher priority applies last. Inclusive bounds
+use unit spatial influence inside, and an outside-bound smoothstep fade over a
+positive blend radius. Numeric fields blend convexly; group presence and discrete
+algorithm/sample/seed fields switch at weight 0.5. See the
+[model migration guide](../../guides/post-process-model-migration.md) for ownership,
+limits, integration and the RND-013.3 color/exposure migration boundary.
+
 ### Settings Structure
 
 ```cpp
@@ -111,6 +121,16 @@ produces an input consumed during scene lighting rather than pretending every
 effect is a serial color filter. Enabling/disabling settings requests a new graph
 plan at a render safe point. Compatible passes may be fused only when precision,
 color/exposure semantics, diagnostics and observable output remain equivalent.
+
+`PreparePostProcessGraph` prepares a fresh candidate through the existing
+`RenderGraphBuilder` and validates its schedule. It retains complete
+`TemporalHistoryCompatibility` metadata and admits only explicitly authored
+cooked recipe preferences within capability, format and cumulative work/reservation
+bounds. AO exports visibility independently for host lighting integration;
+scene-color effects retain the source ACEScg representation. Disabled settings
+produce a pass-through candidate without invented GPU work. This logical model
+does not implement individual shaders or replace exposure, color-output,
+accessibility, residency or frame-publication authorities.
 
 ### Pass Dependencies
 

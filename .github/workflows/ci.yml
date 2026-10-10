@@ -286,6 +286,36 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
+      - name: Record Windows Save allocation diagnostic provenance
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $diagnosticDirectory = Join-Path $env:RUNNER_TEMP 'save-allocation-diagnostics'
+          New-Item -ItemType Directory -Force -Path $diagnosticDirectory | Out-Null
+          $files = @('build/ci/tests/HoroRuntimeSaveSlotLifecycleTests.exe',
+                     'build/ci/tests/HoroRuntimeSaveSlotLifecycleTests.pdb') | ForEach-Object {
+            $path = Join-Path $env:GITHUB_WORKSPACE $_
+            if (Test-Path -LiteralPath $path -PathType Leaf) {
+              @{ path = $path; sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
+            } else {
+              @{ path = $path; missing = $true }
+            }
+          }
+          $tools = @('procdump64.exe', 'cdb.exe') | ForEach-Object {
+            $tool = Get-Command $_ -CommandType Application -ErrorAction SilentlyContinue
+            @{ name = $_; path = @($tool | ForEach-Object { $_.Source }) }
+          }
+          @{
+            source = (git rev-parse HEAD)
+            run = $env:GITHUB_RUN_ID
+            attempt = $env:GITHUB_RUN_ATTEMPT
+            files = @($files)
+            toolsOnPath = @($tools)
+            symbolMatch = 'unverified; file hashes alone do not establish executable/PDB matching'
+            stackCapture = 'not performed; no debugger installation or attachment assumed'
+            timeoutSeconds = 90
+          } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $diagnosticDirectory 'provenance.json')
+
       - name: Test Debug
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
         run: ctest --preset "${{ matrix.preset }}"
@@ -319,6 +349,20 @@ jobs:
       - name: Test OpenXR rollback replacement and shutdown
         if: ${{ !cancelled() && steps.xr_build.outcome == 'success' }}
         run: ctest --preset ci-xr-openxr
+
+      - name: Upload Windows Save allocation diagnostics
+        if: ${{ always() && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: save-allocation-Windows-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/save-allocation-diagnostics/provenance.json
+            build/ci/Testing/Temporary/LastTest.log
+            build/ci/ctest.xml
+            build/ci/tests/HoroRuntimeSaveSlotLifecycleTests.exe
+            build/ci/tests/HoroRuntimeSaveSlotLifecycleTests.pdb
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload test reports
         if: always()
