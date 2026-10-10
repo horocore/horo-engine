@@ -40,6 +40,9 @@ namespace Horo::JsonEncoding::Detail {
         /** @brief Transfers complete owned storage without allocation. */
         CanonicalJsonValue(CanonicalJsonValue &&) noexcept = default;
 
+        /** @brief Releases complete owned alternatives through their allocation-free RAII cleanup. */
+        ~CanonicalJsonValue() = default;
+
         /** @brief Preserves the destination if copying any nested child fails. */
         CanonicalJsonValue &operator=(const CanonicalJsonValue &other) {
             if (this != &other) {
