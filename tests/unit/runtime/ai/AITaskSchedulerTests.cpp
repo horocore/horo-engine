@@ -174,28 +174,93 @@ namespace Horo::AI {
             }
         }
 
-        TEST_CASE("AI deterministic scheduling uses priority then persistent identity regardless of registration order",
+        TEST_CASE("AI declared modes preserve stable identity or authored priority independent of registration order",
                   "[unit][ai][scheduler]") {
-            for (const bool reverse : {false, true}) {
-                Harness h;
-                std::vector<std::uint64_t> order;
-                auto a = h.Register(reverse ? 2 : 0);
-                auto b = h.Register(reverse ? 0 : 2);
-                auto urgent = h.Register(1, {.priority = AiTaskPriority::Urgent});
-                a->order = b->order = urgent->order = &order;
-                REQUIRE(h.scheduler->EvaluateAtDecision(1).HasValue());
-                CHECK(order == std::vector<std::uint64_t>{1, 0, 2});
-                CHECK(a->committed == 0);
-                REQUIRE(h.scheduler->CommitAtIntentDispatch(1).HasValue());
-                CHECK(a->committed == 1);
-                REQUIRE(h.scheduler->CommitAtIntentDispatch(1).HasValue());
-                CHECK(a->committed == 1);
-                ExpectError(h.scheduler->EvaluateAtDecision(1), AIErrors::SchedulerPhaseInvalid);
+            for (const auto mode : {AiSchedulingMode::Deterministic, AiSchedulingMode::BestEffort}) {
+                for (const bool reverse : {false, true}) {
+                    Harness h({.mode = mode});
+                    std::vector<std::uint64_t> order;
+                    auto a = h.Register(reverse ? 2 : 0);
+                    auto b = h.Register(reverse ? 0 : 2);
+                    auto urgent = h.Register(1, {.priority = AiTaskPriority::Urgent});
+                    a->order = b->order = urgent->order = &order;
+                    REQUIRE(h.scheduler->EvaluateAtDecision(1).HasValue());
+                    CHECK(order == (mode == AiSchedulingMode::Deterministic ? std::vector<std::uint64_t>{0, 1, 2}
+                                                                            : std::vector<std::uint64_t>{1, 0, 2}));
+                    CHECK(a->committed == 0);
+                    REQUIRE(h.scheduler->CommitAtIntentDispatch(1).HasValue());
+                    CHECK(a->committed == 1);
+                    REQUIRE(h.scheduler->CommitAtIntentDispatch(1).HasValue());
+                    CHECK(a->committed == 1);
+                    ExpectError(h.scheduler->EvaluateAtDecision(1), AIErrors::SchedulerPhaseInvalid);
+                    if (mode == AiSchedulingMode::Deterministic) {
+                        const auto next = h.scheduler->EvaluateAtDecision(2);
+                        REQUIRE(next.HasValue());
+                        CHECK(next.Value().evaluated == 3);
+                        CHECK(next.Value().deferred == 0);
+                        CHECK(a->evaluations == 2);
+                        CHECK(b->evaluations == 2);
+                        CHECK(urgent->evaluations == 2);
+                    }
+                }
             }
         }
 
+        TEST_CASE("AI deterministic admission rejects cadence and aggregate oversubscription before a tick", "[unit][ai][scheduler]") {
+            for (const auto dimension : {0, 1, 2}) {
+                auto limits =
+                    AiTaskSchedulerSettings{.maximumAgents = 4, .evaluationsPerTick = 4, .workUnitsPerTick = 4, .commandsPerTick = 4};
+                if (dimension == 0)
+                    limits.evaluationsPerTick = 1;
+                if (dimension == 1)
+                    limits.workUnitsPerTick = 1;
+                if (dimension == 2)
+                    limits.commandsPerTick = 1;
+                Harness h(limits);
+                const AiAgentSchedulePolicy policy{.workUnitsPerTick = 1, .commandsPerTick = 1};
+                auto first = h.Register(0, policy);
+                auto extra = std::make_shared<Probe>();
+                ExpectError(h.scheduler->Register(h.Handle(1), MakeIdentity<AgentId>(2), policy, h.image, extra),
+                            AIErrors::SchedulerBudgetExhausted);
+                auto cadence = policy;
+                cadence.intervalTicks = 2;
+                ExpectError(h.scheduler->Register(h.Handle(1), MakeIdentity<AgentId>(2), cadence, h.image, extra),
+                            AIErrors::SchedulerPolicyInvalid);
+                const auto tick = h.scheduler->EvaluateAtDecision(1);
+                REQUIRE(tick.HasValue());
+                CHECK(tick.Value().evaluated == 1);
+                CHECK(tick.Value().deferred == 0);
+                CHECK(first->evaluations == 1);
+                CHECK(extra->evaluations == 0);
+                ExpectError(h.scheduler->EvaluateAtDecision(2), AIErrors::SchedulerPhaseInvalid);
+                REQUIRE(h.scheduler->CommitAtIntentDispatch(1).HasValue());
+                ExpectError(h.scheduler->EvaluateAtDecision(3), AIErrors::SchedulerPhaseInvalid);
+                const auto next = h.scheduler->EvaluateAtDecision(2);
+                REQUIRE(next.HasValue());
+                CHECK(next.Value().evaluated == 1);
+                CHECK(first->evaluations == 2);
+            }
+        }
+
+        TEST_CASE("AI deterministic command exhaustion fails the next tick explicitly instead of skipping its agent",
+                  "[unit][ai][scheduler]") {
+            Harness h({.workUnitsPerTick = 3, .commandsPerTick = 2});
+            auto probe = h.Register(0, {.workUnitsPerTick = 3, .commandsPerTick = 2});
+            probe->remaining = 3;
+            REQUIRE(h.scheduler->EvaluateAtDecision(1).HasValue());
+            const auto commit = h.scheduler->CommitAtIntentDispatch(1);
+            REQUIRE(commit.HasValue());
+            CHECK(commit.Value().exhausted == 1);
+            CHECK(probe->committed == 2);
+            ExpectError(h.scheduler->EvaluateAtDecision(2), AIErrors::SchedulerBudgetExhausted);
+            CHECK(probe->evaluations == 1);
+            CHECK(probe->intents == 1);
+            REQUIRE(h.scheduler->CommitAtIntentDispatch(1).HasValue());
+            CHECK(probe->committed == 2);  // An exhausted tick cannot borrow the next tick's command allowance.
+        }
+
         TEST_CASE("AI starvation promotion gives bounded service under sustained urgent traffic", "[unit][ai][scheduler]") {
-            Harness h({.evaluationsPerTick = 1, .starvationTicks = 2});
+            Harness h({.evaluationsPerTick = 1, .starvationTicks = 2, .mode = AiSchedulingMode::BestEffort});
             auto urgent = h.Register(0, {.priority = AiTaskPriority::Urgent});
             auto background = h.Register(1, {.priority = AiTaskPriority::Background});
             for (std::uint64_t tick = 1; tick <= 3; ++tick) {
@@ -211,7 +276,11 @@ namespace Horo::AI {
         }
 
         TEST_CASE("AI same tick calls and wake floods cannot replenish work or grow admission", "[unit][ai][scheduler]") {
-            Harness h({.maximumAgents = 1, .evaluationsPerTick = 1, .workUnitsPerTick = 3, .commandsPerTick = 2});
+            Harness h({.maximumAgents = 1,
+                       .evaluationsPerTick = 1,
+                       .workUnitsPerTick = 3,
+                       .commandsPerTick = 2,
+                       .mode = AiSchedulingMode::BestEffort});
             auto probe = h.Register(0, {.workUnitsPerTick = 3, .commandsPerTick = 2});
             probe->remaining = 7;
             for (std::size_t i = 0; i < 10'000; ++i)
@@ -243,7 +312,7 @@ namespace Horo::AI {
         }
 
         TEST_CASE("AI frequency coalesces missed intervals and handles clock exhaustion", "[unit][ai][scheduler]") {
-            Harness h;
+            Harness h({.mode = AiSchedulingMode::BestEffort});
             auto probe = h.Register(0, {.intervalTicks = 10});
             REQUIRE(h.scheduler->EvaluateAtDecision(1).HasValue());
             REQUIRE(h.scheduler->CommitAtIntentDispatch(1).HasValue());

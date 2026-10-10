@@ -2434,7 +2434,16 @@ order. After the declared starvation age, overdue agents precede ordinary priori
 cancellation counts plus the original first callback error.
 
 Positive finite per-agent and global evaluation/work/command/submission limits
-are validated before registration. `AiWorkBudget` is cooperative: a provider
+are validated before registration. Deterministic admission requires interval one
+and reserves the complete work, command and evaluation allowances for every
+registered agent within the global envelope; oversubscribed registration fails
+explicitly instead of accepting agents that would later be skipped. The host
+binds all active controllers before entering fixed simulation. Each
+consecutive deterministic tick evaluates that admitted population once in stable
+authored `AgentId` order; priority, cadence skips and starvation promotion apply
+only to best-effort mode. An undrained deterministic command batch fails admission
+of the next tick with `SchedulerBudgetExhausted`, rather than silently skipping
+its agent or borrowing future tick capacity. `AiWorkBudget` is cooperative: a provider
 must consume before every bounded node/query/command step and check cancellation
 between steps. It does not preempt arbitrary C++ code or bound the elapsed time
 of a single step. A slice is reserved before invoking callbacks; repeated calls
@@ -2451,7 +2460,7 @@ allowance. Over-budget attempts produce a typed `SchedulerBudgetExhausted` task
 failure. Per-agent retained-work and per-tick submission limits and the shared
 service capacity also apply; cancelled running jobs retain capacity until terminal.
 Completion remains a candidate in the existing continuation mailbox: only owner
-evaluation advances task state. Deterministic mode deliberately rejects async
+evaluation advances task state. Deterministic full-rate mode deliberately rejects async
 worker submission with `SchedulerWorkerUnsupported`; the host uses bounded owner
 slices so worker completion timing cannot affect declared deterministic flow.
 
@@ -2602,7 +2611,7 @@ The engine supports two explicit simulation scheduling modes for AI:
 
 | Simulation Mode | Scheduling Contract | Primary Use Cases | Allowed Host Roles |
 |---|---|---|---|
-| **Deterministic Fixed-Tick** | Strict lockstep execution. Every active agent is evaluated on every fixed tick in deterministic entity-ID order. Time-slicing skips, frame-rate dependent heuristics, and random job interleavings are forbidden. | Lockstep multiplayer, replay recording and bit-identical playback, automated AI regression testing. | Standalone, Dedicated Server, Headless Test Harness |
+| **Deterministic Fixed-Tick** | Strict lockstep execution. Every active agent is evaluated on every fixed tick in stable authored `AgentId` order for its entity binding. Time-slicing skips, frame-rate dependent heuristics, and random job interleavings are forbidden. | Lockstep multiplayer, replay recording and bit-identical playback, automated AI regression testing. | Standalone, Dedicated Server, Headless Test Harness |
 | **Best-Effort Bounded Time-Slicing** | Distance- and significance-based Level of Detail (Simulation LOD). Agents near players update at full frequency; distant agents update at fractional rates (e.g. 1/2, 1/4 rate) with bounded maximum latency guarantees. Job queues are amortized across workers within fixed per-tick execution budgets. | High-density open-world scenes, large-scale RTS/RPG titles, single-player games exceeding per-tick CPU budgets. | Standalone, Dedicated Server |
 
 Client hosts in networked multiplayer run neither mode for remote AI; they perform presentation-only state interpolation.

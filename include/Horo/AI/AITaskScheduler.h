@@ -21,7 +21,7 @@ namespace Horo::AI {
         BudgetExhausted,
         Count
     };
-    /** @brief Execution selection; deterministic admission excludes timing-dependent worker execution. */
+    /** @brief Deterministic full-rate owner admission versus best-effort bounded time slicing. */
     enum class AiSchedulingMode : std::uint8_t {
         Deterministic,
         BestEffort,
@@ -125,7 +125,7 @@ namespace Horo::AI {
     /** @brief Lowerable per-agent frequency, work, command and worker-admission policy. */
     struct AiAgentSchedulePolicy final {
         AiTaskPriority priority{AiTaskPriority::Normal};
-        std::uint64_t intervalTicks{1}; /**< Missed intervals coalesce; no catch-up work. */
+        std::uint64_t intervalTicks{1}; /**< Deterministic mode requires one; best-effort misses coalesce without catch-up. */
         std::size_t workUnitsPerTick{64};
         std::size_t commandsPerTick{16};
         std::size_t workerSubmissionsPerTick{1};
@@ -157,9 +157,10 @@ namespace Horo::AI {
     /**
      * @brief Single-owner scene admission policy; Foundation remains the only worker scheduler.
      * @details All methods and destruction run serially on the simulation owner. Composition/registration allocate
-     * bounded storage; tick sorting and callbacks allocate no scheduler storage. Priority, overdue age and persistent
-     * AgentId define order; starvation promotion is explicit. Budget-deferred wakes remain coalesced. Deterministic
-     * mode uses cooperative owner evaluation and rejects worker submission; best-effort workers publish through the
+     * bounded storage; tick sorting and callbacks allocate no scheduler storage. Best-effort priority, overdue age and
+     * persistent AgentId define order; starvation promotion is explicit and deferred wakes remain coalesced. Deterministic
+     * mode reserves every registration's complete per-tick allowances, evaluates every active registration in stable
+     * AgentId order each consecutive tick and rejects worker submission. Best-effort workers publish through the
      * existing continuation mailbox and terminal authority. JobSystem must outlive the service and drain image pins.
      */
     class AiTaskScheduler final {
@@ -180,6 +181,8 @@ namespace Horo::AI {
          * @param agent Runtime handle. @param identity Stable ordering identity. @param policy Positive lowerable limits.
          * @param image Pin covering callbacks and destruction. @param executor Owned bounded evaluator/committer.
          * @param cancellation Agent/scene lifetime token. @return Success or typed validation/capacity/duplicate failure.
+         * @details Deterministic admission requires interval one and aggregate evaluation/work/command allowances
+         * within scene limits; oversubscription rejects the new registration without changing existing registrations.
          * @pre Before the first decision phase or after current intent dispatch; never between phases. */
         [[nodiscard]] Result<void> Register(AgentHandle agent, AgentId identity, const AiAgentSchedulePolicy &policy,
                                             std::shared_ptr<const void> image, std::shared_ptr<IAiScheduledDecision> executor,
@@ -190,7 +193,9 @@ namespace Horo::AI {
         /** @brief Cancels and removes one registration. @param agent Exact handle. @return Success or typed stale/reentrant failure. */
         [[nodiscard]] Result<void> Unregister(AgentHandle agent);
         /** @brief Executes bounded owner slices at AiDecisionEvaluate. @param tick Positive nondecreasing simulation tick.
-         * @return Current cumulative report or typed clock/lifecycle failure. */
+         * @details Deterministic ticks must be consecutive after intent dispatch. Undrained prior intents reject the
+         * next tick with SchedulerBudgetExhausted before advancing state or renewing any allowance.
+         * @return Current cumulative report or typed clock/lifecycle/budget failure. */
         [[nodiscard]] Result<AiSchedulingReport> EvaluateAtDecision(std::uint64_t tick);
         /** @brief Commits bounded intents at AiIntentDispatch; no worker waits. @param tick Exact evaluated tick.
          * @return Cumulative report or typed phase/lifecycle failure. */
@@ -215,6 +220,11 @@ namespace Horo::AI {
         void EvaluateEntry(Entry &entry);
         /** @brief Commits one retained bounded intent prefix. @param entry Exact live agent. */
         void CommitEntry(Entry &entry);
+        /** @brief Validates phase and full-rate tick progression without mutation. @param tick Requested simulation tick.
+         * @return Success or typed phase/backlog failure. */
+        [[nodiscard]] Result<void> ValidateDecisionTick(std::uint64_t tick) const;
+        /** @brief Checks aggregate full-rate admission. @param policy New registration limits. @return Whether all agents fit. */
+        [[nodiscard]] bool FitsDeterministic(const AiAgentSchedulePolicy &policy) const noexcept;
         /** @brief Compares stable priority, age and persistent identity. @param a Left slot. @param b Right slot.
          * @return Whether the left slot precedes the right. */
         [[nodiscard]] bool Before(const Entry &a, const Entry &b) const noexcept;

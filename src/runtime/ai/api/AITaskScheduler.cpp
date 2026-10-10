@@ -97,6 +97,24 @@ namespace Horo::AI {
         return found == entries_.end() ? nullptr : std::to_address(found);
     }
 
+    /** @copydoc AiTaskScheduler::FitsDeterministic */
+    bool AiTaskScheduler::FitsDeterministic(const AiAgentSchedulePolicy &policy) const noexcept {
+        std::size_t evaluations{};
+        auto remainingWork = settings_.workUnitsPerTick;
+        auto remainingCommands = settings_.commandsPerTick;
+        for (const auto &entry : entries_) {
+            if (!entry.executor)
+                continue;
+            ++evaluations;
+            if (evaluations >= settings_.evaluationsPerTick || entry.policy.workUnitsPerTick > remainingWork ||
+                entry.policy.commandsPerTick > remainingCommands)
+                return false;
+            remainingWork -= entry.policy.workUnitsPerTick;
+            remainingCommands -= entry.policy.commandsPerTick;
+        }
+        return policy.workUnitsPerTick <= remainingWork && policy.commandsPerTick <= remainingCommands;
+    }
+
     /** @copydoc AiTaskScheduler::Register */
     Result<void> AiTaskScheduler::Register(const AgentHandle agent, const AgentId identity, const AiAgentSchedulePolicy &policy,
                                            std::shared_ptr<const void> image, std::shared_ptr<IAiScheduledDecision> executor,
@@ -106,7 +124,8 @@ namespace Horo::AI {
         captured.executor = std::move(executor);
         if (closed_ || inPhase_ || (report_.tick != 0 && !committed_) || !agent.IsValid() || agent.incarnation != incarnation_ ||
             !identity.IsValid() || !captured.image || !captured.executor || cancellation.IsCancellationRequested() ||
-            policy.priority >= AiTaskPriority::Count || policy.intervalTicks == 0 || policy.workUnitsPerTick == 0 ||
+            policy.priority >= AiTaskPriority::Count || policy.intervalTicks == 0 ||
+            (settings_.mode == AiSchedulingMode::Deterministic && policy.intervalTicks != 1) || policy.workUnitsPerTick == 0 ||
             policy.workUnitsPerTick > settings_.workUnitsPerTick || policy.commandsPerTick == 0 ||
             policy.commandsPerTick > settings_.commandsPerTick || policy.workerSubmissionsPerTick == 0 ||
             policy.workerSubmissionsPerTick > settings_.workerSubmissionsPerTick || policy.pendingWorkers == 0 ||
@@ -121,6 +140,8 @@ namespace Horo::AI {
         }
         if (!free)
             return Result<void>::Failure(MakeError(AIErrors::AgentCapacityExceeded));
+        if (settings_.mode == AiSchedulingMode::Deterministic && !FitsDeterministic(policy))
+            return Result<void>::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
         free->agent = agent;
         free->identity = identity;
         free->policy = policy;
@@ -202,6 +223,8 @@ namespace Horo::AI {
 
     /** @copydoc AiTaskScheduler::Before */
     bool AiTaskScheduler::Before(const Entry &a, const Entry &b) const noexcept {
+        if (settings_.mode == AiSchedulingMode::Deterministic)
+            return a.identity < b.identity;
         const auto aSince = a.intents ? std::min(a.waitingSince, a.intentSince) : a.waitingSince;
         const auto bSince = b.intents ? std::min(b.waitingSince, b.intentSince) : b.waitingSince;
         const bool aStarved = (a.pending.Any() || a.intents) && report_.tick - aSince >= settings_.starvationTicks;
@@ -255,10 +278,26 @@ namespace Horo::AI {
         }
     }
 
+    /** @copydoc AiTaskScheduler::ValidateDecisionTick */
+    Result<void> AiTaskScheduler::ValidateDecisionTick(const std::uint64_t tick) const {
+        if (closed_ || inPhase_ || tick == 0 || tick < report_.tick || (tick == report_.tick && committed_))
+            return Result<void>::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
+        if (settings_.mode != AiSchedulingMode::Deterministic || tick == report_.tick || report_.tick == 0)
+            return Result<void>::Success();
+        if (tick != report_.tick + 1 || !committed_)
+            return Result<void>::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
+        if (std::ranges::any_of(entries_, [](const Entry &entry) {
+            return entry.intents && !entry.cancellation.IsCancellationRequested();
+        }))
+            return Result<void>::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
+        return Result<void>::Success();
+    }
+
     /** @copydoc AiTaskScheduler::EvaluateAtDecision */
     Result<AiSchedulingReport> AiTaskScheduler::EvaluateAtDecision(const std::uint64_t tick) {
-        if (closed_ || inPhase_ || tick == 0 || tick < report_.tick || (tick == report_.tick && committed_))
-            return Result<AiSchedulingReport>::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
+        const auto validated = ValidateDecisionTick(tick);
+        if (validated.HasError())
+            return Result<AiSchedulingReport>::Failure(validated.ErrorValue());
         if (tick != report_.tick) {
             report_ = {.tick = tick};
             committed_ = false;
