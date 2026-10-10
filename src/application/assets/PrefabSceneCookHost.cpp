@@ -37,9 +37,16 @@ namespace Horo::Application {
     PrefabSceneCookHost::PrefabSceneCookHost(JobSystem &jobs, std::shared_ptr<const Assets::CookerCatalogSnapshot> catalog,
                                              const Assets::AssetRegistry &registry, const ProjectCompatibilityInspector &compatibility,
                                              Editor::ProjectMutationCoordinator &mutations,
-                                             const Editor::ProjectMigrationTransactionService &migrations) noexcept
+                                             const Editor::ProjectMigrationTransactionService &migrations)
         : jobs_(jobs), catalog_(std::move(catalog)), registry_(registry), compatibility_(compatibility), mutations_(mutations),
-          migrations_(migrations) {}
+          migrations_(migrations), expansion_(jobs) {}
+
+    /** @copydoc PrefabSceneCookHost::~PrefabSceneCookHost */
+    PrefabSceneCookHost::~PrefabSceneCookHost() {
+        static_cast<void>(expansion_.Shutdown({WaitPolicy::MainThreadPumpAllowed, Duration::FromMilliseconds(30'000)}));
+        // If interrupted, the expansion member retains and drains the exact owned attempt before
+        // destruction can release host authorities. No worker captures those authorities.
+    }
 
     /** @copydoc PrefabSceneCookHost::Cook */
     Result<Assets::AssetCookReport> PrefabSceneCookHost::Cook(const PrefabSceneCookRequest &request,
@@ -88,7 +95,14 @@ namespace Horo::Application {
             return Result<Assets::AssetCookReport>::Failure(captured.ErrorValue());
         auto inputs = std::make_shared<const Assets::AssetCookInputSnapshot>(std::move(captured).Value());
         const auto capturedRevision = inputs->Registry().Revision();
-        auto composed = PrefabCookDetail::PrepareCatalog(request, host.Value(), *inputs, limits, *catalog_, cancellation);
+        // Each cook owns a detached source session. Replacement drains any interrupted previous
+        // operation before this session can admit work; source closure precedes asset publication.
+        const JoinOptions sourceJoin{WaitPolicy::MainThreadPumpAllowed, Duration::FromMilliseconds(30'000)};
+        if (auto replaced = expansion_.ReplaceScene(sourceJoin); replaced.HasError())
+            return Result<Assets::AssetCookReport>::Failure(replaced.ErrorValue());
+        auto composed = PrefabCookDetail::PrepareCatalog(request, host.Value(), *inputs, limits, *catalog_, cancellation, expansion_);
+        if (auto closed = expansion_.CloseDocument(sourceJoin); closed.HasError())
+            return Result<Assets::AssetCookReport>::Failure(closed.ErrorValue());
         if (composed.HasError())
             return Result<Assets::AssetCookReport>::Failure(composed.ErrorValue());
         auto selected = SelectRuntimeRecords(*inputs, request.runtimePrefabRoots);

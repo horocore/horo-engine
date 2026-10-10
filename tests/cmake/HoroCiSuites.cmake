@@ -9,11 +9,17 @@ set(HORO_CI_AUDIO_TARGETS
     HoroCoreAudioDspTests
     HoroAudioCommandTests
     HoroAudioMixerTests
+    HoroAudioEditorPreviewTests
+    HoroAudioFrontendPublicHeaderConsumer
 )
 
 # The full Windows suite remains disabled. Preserve all existing focused checks
 # in one headless Debug build, including their public-header compile consumers.
 set(HORO_CI_WINDOWS_TARGETS
+    HoroLightCullingTests
+    HoroLightFramePoolTests
+    HoroAITaskSchedulerTests
+    HoroAITaskSchedulerPublicConsumer
     HoroMaterialBindingTests
     HoroMaterialBindingPublicHeaderConsumer
     HoroD3D12InitializationTests
@@ -58,6 +64,14 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroRuntimeUiOverlayLifecycleTests
     HoroRuntimeUiHudAssociationTests
     HoroRuntimeUiHudPublicHeaderConsumer
+    HoroRuntimeUiSceneReconciliationTests
+    HoroRuntimeUiSceneReconciliationPublicHeaderConsumer
+    HoroRuntimeUiHotReloadTests
+    HoroRuntimeUiHotReloadPublicHeaderConsumer
+    HoroSceneIdentityPublicHeaderConsumer
+    HoroSceneIdentityContractConsumer
+    HoroRuntimeUiScreenTransitionTests
+    HoroRuntimeUiScreenTransitionPublicHeaderConsumer
     HoroInputPublicHeaderConsumer
     HoroExtensionManagerTests
     HoroEditorActivityBoundaryTests
@@ -83,6 +97,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroTerrainProducerSnapshotTests
     HoroTerrainProducerSnapshotPublicHeaderConsumer
     HoroNavigationRuntimeTests
+    HoroNavigationTransportReservationTests
+    HoroNavigationCoordinatorPublicConsumer
     HoroNavigationBakeServiceTests
 )
 
@@ -92,6 +108,7 @@ set(HORO_CI_NAVIGATION_TARGETS
     HoroNavigationRecastDetour
     HoroNavigationApiPublicHeaderConsumer
     HoroNavigationRuntimePublicHeaderConsumer
+    HoroNavigationCoordinatorPublicConsumer
     HoroNavigationNullPublicHeaderConsumer
     HoroNavigationRecastDetourPublicHeaderConsumer
     HoroNavigationBakeServicePublicHeaderConsumer
@@ -153,17 +170,23 @@ function(horo_finalize_ci_suites)
     endif()
 
     set_property(TEST
+        HoroRuntimeUiSceneReconciliationPublicHeaderConsumer
+        HoroRuntimeUiHotReloadPublicHeaderConsumer
+        HoroSceneIdentityContractConsumer
         HoroPlayTopologyPublicHeaderConsumer
         HoroRuntimeUiHudPublicHeaderConsumer
         HoroNetworkDebuggerPublicHeaderConsumer
         HoroAudioCallbackLockPolicyTest
         HoroPrefabSceneExpansionContractConsumer
+        HoroRuntimeUiScreenTransitionPublicHeaderConsumer
         HoroExtensionManagerTests
+        HoroNavigationCoordinatorPublicConsumer
         HoroExtensionAbiConformanceCliSupported
         HoroExtensionAbiConformanceCliIncompatible
         HoroExtensionAbiConformanceCliRequiresModule
         APPEND PROPERTY LABELS ci-windows)
-    set_property(TEST HoroNavigationBakeDiagnosticsPublicConsumer APPEND PROPERTY LABELS ci-navigation)
+    set_property(TEST HoroNavigationBakeDiagnosticsPublicConsumer HoroNavigationCoordinatorPublicConsumer
+        APPEND PROPERTY LABELS ci-navigation)
 
     # Catch tests receive coverage labels during registration. Direct CTest
     # contracts use the same former gui/editor exclusion. Python tooling runs

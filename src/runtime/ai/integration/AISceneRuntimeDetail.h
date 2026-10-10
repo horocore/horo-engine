@@ -29,6 +29,7 @@ namespace Horo::AI::Detail {
         std::unordered_multimap<Runtime::EntityRef, std::size_t, EntityRefHash> agentsByOwner;
         std::uint32_t nextTaskSlot{};
         std::uint64_t revision{1};
+        std::unique_ptr<AiTaskScheduler> scheduler;
         bool closed{};
     };
 

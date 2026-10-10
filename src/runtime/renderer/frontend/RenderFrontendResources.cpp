@@ -10,7 +10,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <new>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -21,10 +23,12 @@ namespace Horo::Render {
             Unsupported,
         };
 
-        [[nodiscard]] constexpr ResourceDescriptorAdmission AdmitCurrentBufferDescriptor(
-            const RenderBufferDescriptor &descriptor) noexcept {
+        [[nodiscard]] constexpr ResourceDescriptorAdmission AdmitCurrentBufferDescriptor(const RenderBufferDescriptor &descriptor,
+                                                                                         const bool lightStorageAvailable) noexcept {
             using enum RenderBufferUsage;
             using enum ResourceDescriptorAdmission;
+            if (lightStorageAvailable && descriptor.access == RenderBufferAccess::HostVisible && descriptor.usage == (Storage | CopySource))
+                return Supported;
             constexpr std::byte supportedUsageBits =
                 std::byte{static_cast<std::uint8_t>(Vertex)} | std::byte{static_cast<std::uint8_t>(Index)} |
                 std::byte{static_cast<std::uint8_t>(CopySource)} | std::byte{static_cast<std::uint8_t>(CopyDestination)};
@@ -72,18 +76,17 @@ namespace Horo::Render {
         };
 
         [[nodiscard]] Result<AdmittedMemory> AdmitMemory(RenderMemoryBudget &budget, const RenderMemoryScopeId scope,
-                                                         const ResourceOperationId operation, const Result<RenderMemoryCostPlan> &queried) {
+                                                         const ResourceOperationId operation, const Result<RenderMemoryCostPlan> &queried,
+                                                         Detail::ResourceReservationGuard &rollback) {
             if (queried.HasError())
                 return Result<AdmittedMemory>::Failure(queried.ErrorValue());
             auto reserved = budget.Reserve(scope, operation, queried.Value());
             if (reserved.HasError())
                 return Result<AdmittedMemory>::Failure(reserved.ErrorValue());
+            rollback.OwnMemory(budget, reserved.Value());
             auto placement = budget.Placement(reserved.Value());
-            if (placement.HasError()) {
-                const Error error = placement.ErrorValue();
-                static_cast<void>(budget.Cancel(reserved.Value()));
-                return Result<AdmittedMemory>::Failure(error);
-            }
+            if (placement.HasError())
+                return Result<AdmittedMemory>::Failure(placement.ErrorValue());
             return Result<AdmittedMemory>::Success({reserved.Value(), placement.Value()});
         }
 
@@ -95,28 +98,26 @@ namespace Horo::Render {
             auto reserved = registry.Reserve(resourceClass);
             if (reserved.HasError())
                 return Result<AdmittedResource>::Failure(reserved.ErrorValue());
+            Detail::ResourceReservationGuard rollback{registry, resourceClass, reserved.Value()};
 
-            Result<RenderMemoryCostPlan> cost = Result<RenderMemoryCostPlan>::Failure(
-                MakeFrontendError(FrontendErrors::ResourceBackendException, "Renderer backend memory requirement query threw."));
             try {
-                cost = std::forward<QueryCost>(queryCost)();
-            } catch (...) {  // NOSONAR(cpp:S2738)
+                const auto cost = std::forward<QueryCost>(queryCost)();
+                auto admitted = AdmitMemory(memoryBudget, scope, reserved.Value().operation, cost, rollback);
+                if (admitted.HasError())
+                    return Result<AdmittedResource>::Failure(admitted.ErrorValue());
+                rollback.Commit();
+                return Result<AdmittedResource>::Success({reserved.Value(), admitted.Value()});
+            } catch (const std::bad_alloc &) {
+                return Result<AdmittedResource>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
+            } catch (const std::length_error &) {
+                return Result<AdmittedResource>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
             }
-            auto admitted = AdmitMemory(memoryBudget, scope, reserved.Value().operation, cost);
-            if (admitted.HasError()) {
-                const Error error = admitted.ErrorValue();
-                static_cast<void>(registry.CancelPending(resourceClass, reserved.Value().identity));
-                static_cast<void>(registry.DrainRetirements());
-                return Result<AdmittedResource>::Failure(error);
-            }
-            return Result<AdmittedResource>::Success({reserved.Value(), admitted.Value()});
         }
 
         void CancelAdmittedResource(Detail::RenderResourceRegistry &registry, RenderMemoryBudget &memoryBudget,
                                     const Detail::RenderResourceClass resourceClass, const AdmittedResource &admitted) noexcept {
-            static_cast<void>(memoryBudget.Cancel(admitted.memory.reservation));
-            static_cast<void>(registry.CancelPending(resourceClass, admitted.resource.identity));
-            static_cast<void>(registry.DrainRetirements());
+            Detail::ResourceReservationGuard rollback{registry, resourceClass, admitted.resource};
+            rollback.OwnMemory(memoryBudget, admitted.memory.reservation);
         }
 
         [[nodiscard]] Result<void> ReleaseOrCancelResource(Detail::RenderResourceRegistry &registry,
@@ -152,6 +153,7 @@ namespace Horo::Render {
         if (reservation.HasError()) {
             return Result<RenderTargetHandle>::Failure(reservation.ErrorValue());
         }
+        Detail::ResourceReservationGuard rollback{*resourceRegistry_, Detail::RenderResourceClass::RenderTarget, reservation.Value()};
         const Detail::RenderResourceIdentity identity = reservation.Value().identity;
         if (identity.slot >= targets_.size()) {
             targets_.resize(static_cast<std::size_t>(identity.slot) + 1);
@@ -165,6 +167,7 @@ namespace Horo::Render {
             targets_[identity.slot] = {};
             return Result<RenderTargetHandle>::Failure(publicationError);
         }
+        rollback.Commit();
         return Result<RenderTargetHandle>::Success(RenderTargetHandle{identity.owner, identity.slot, identity.generation});
     }
 
@@ -217,7 +220,8 @@ namespace Horo::Render {
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidBufferDescriptor,
                                   "The buffer descriptor is structurally invalid: " + DescribeRenderBufferRequest(descriptor)));
-        if (AdmitCurrentBufferDescriptor(descriptor) == ResourceDescriptorAdmission::Unsupported)
+        if (AdmitCurrentBufferDescriptor(descriptor, backend_->Capabilities().support.features.Supports(RenderCapability::LightCulling)) ==
+            ResourceDescriptorAdmission::Unsupported)
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported,
                                   "The current renderer frontend does not implement this buffer usage combination: " +
@@ -293,7 +297,9 @@ namespace Horo::Render {
             return Result<ResourceCreation<RenderMeshHandle>>::Failure(reserved.ErrorValue());
         }
         const Detail::ResourceReservation reservation = reserved.Value();
+        Detail::ResourceReservationGuard rollback{*resourceRegistry_, Detail::RenderResourceClass::Mesh, reservation};
         resourceUploadQueue_->EnqueueMesh(reservation.identity, descriptor, std::nullopt);
+        rollback.Commit();
         return Result<ResourceCreation<RenderMeshHandle>>::Success(
             {.handle = MeshHandle(reservation.identity), .operation = reservation.operation});
     }
@@ -388,10 +394,12 @@ namespace Horo::Render {
         if (reserved.HasError())
             return Result<ResourceCreation<RenderTextureViewHandle>>::Failure(reserved.ErrorValue());
         const Detail::ResourceReservation reservation = reserved.Value();
+        Detail::ResourceReservationGuard rollback{*resourceRegistry_, Detail::RenderResourceClass::TextureView, reservation};
         if (reservation.identity.slot >= textureViews_.size())
             textureViews_.resize(static_cast<std::size_t>(reservation.identity.slot) + 1);
         textureViews_[reservation.identity.slot] = {.generation = reservation.identity.generation, .descriptor = descriptor};
         resourceUploadQueue_->EnqueueTextureView(reservation.identity, descriptor);
+        rollback.Commit();
         return Result<ResourceCreation<RenderTextureViewHandle>>::Success(
             {.handle = TextureViewHandle(reservation.identity), .operation = reservation.operation});
     }
@@ -429,10 +437,12 @@ namespace Horo::Render {
         if (reserved.HasError())
             return Result<ResourceCreation<RenderTargetHandle>>::Failure(reserved.ErrorValue());
         const Detail::ResourceReservation reservation = reserved.Value();
+        Detail::ResourceReservationGuard rollback{*resourceRegistry_, Detail::RenderResourceClass::RenderTarget, reservation};
         if (reservation.identity.slot >= targets_.size())
             targets_.resize(static_cast<std::size_t>(reservation.identity.slot) + 1);
         targets_[reservation.identity.slot].extent = descriptor.extent;
         resourceUploadQueue_->EnqueueRenderTarget(reservation.identity, descriptor);
+        rollback.Commit();
         return Result<ResourceCreation<RenderTargetHandle>>::Success(
             {.handle = TargetHandle(reservation.identity), .operation = reservation.operation});
     }

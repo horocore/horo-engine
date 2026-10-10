@@ -3,8 +3,10 @@
 /** @file RenderGraphWorkload.h
  * @brief Typed workloads bound to one immutable compiled render graph.
  */
+#include "Horo/Runtime/Render/LightCullingKernel.h"
 #include "Horo/Runtime/Render/RenderGraphExecution.h"
 
+#include <cstdint>
 #include <variant>
 
 namespace Horo::Render {
@@ -23,8 +25,24 @@ namespace Horo::Render {
         std::size_t byteCount{0};
     };
 
+    /** @brief One bounded cooked light-culling dispatch over four distinct whole graph buffers.
+     * @details The owned preparation lease pins the kernel; graph submission leases pin the buffers.
+     * All buffers use Storage semantics: Lights/Clusters read, Membership/References write.
+     * Outputs contain exact table indices in canonical order plus explicit omitted counts.
+     */
+    struct RenderGraphLightCulling {
+        RenderGraphResourceId lights;
+        RenderGraphResourceId clusters;
+        RenderGraphResourceId membership;
+        RenderGraphResourceId references;
+        LightCullingDispatch dispatch;
+        std::uint64_t tableRevision{}; /**< Exact uploaded slot revision; stale graph reuse fails before encoding. */
+        std::shared_ptr<IResidentLightCullingKernel> kernel;
+    };
+
     /** @brief Exact typed operation; an empty workload represents an ordering-only pass. */
-    using RenderGraphWorkload = std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy>;
+    using RenderGraphWorkload =
+        std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy, RenderGraphLightCulling>;
 
     /** @brief Explicit operation for one retained pass in compiled order. */
     struct RenderGraphPassWorkload {
@@ -58,6 +76,17 @@ namespace Horo::Render {
         virtual void Release() noexcept = 0;
     };
 
+    /** @brief Explicit completion-lease authority after a backend starts immediate native encoding. */
+    enum class RenderGraphLeaseAuthority : std::uint8_t {
+        Frontend,
+        BackendCompletion,
+    };
+
+    /** @brief Synchronous transfer receipt; a backend never retains a pointer to this value. */
+    struct RenderGraphLeaseTransfer {
+        RenderGraphLeaseAuthority authority{RenderGraphLeaseAuthority::Frontend};
+    };
+
     /**
      * @brief Synchronously borrowed compiled graph execution request for an active frame.
      *
@@ -72,5 +101,22 @@ namespace Horo::Render {
         std::span<const RenderGraphPassWorkload> workloads;
         std::span<const RenderGraphResourceInstance> resources;
         IRenderGraphResourceLease *lease{nullptr}; /**< Stable frontend-owned lease required for resident graph work. */
+        bool transientResourcesAdmitted{
+            false}; /**< Frontend validated the exact realized lifetime proof and acquired its completion lease. */
+        RenderGraphLeaseTransfer *transfer{
+            nullptr}; /**< Immediate backends record retained ownership before any queued command; never borrowed after ExecuteGraph. */
     };
+
+    /**
+     * @brief Validates a finite single-queue graph request before selected-backend native validation.
+     * @param request Borrowed graph, exact operation/resource views and completion lease.
+     * @return Success or typed malformed, unsupported-workload, queue, or transient-admission failure.
+     * @details Checks exact workload/use agreement, bounds, resolved identity coverage and
+     * non-overlapping intervals for actual repeated transient instances. Imported storage cannot
+     * serve as a transient alias. Native namespaces are compared by resource kind. It
+     * creates no native resources and proves no backend instance validity or native synchronization.
+     * Unused transient declarations may have no instance. Used transient declarations require
+     * the frontend's explicit realized-set admission; every native backend must still validate its own objects.
+     */
+    [[nodiscard]] Result<void> ValidateRenderGraphExecutionRequest(const RenderGraphExecutionRequest &request);
 }  // namespace Horo::Render

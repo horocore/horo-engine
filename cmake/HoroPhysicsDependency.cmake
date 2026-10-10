@@ -40,6 +40,9 @@ function(horo_add_canonical_physics_dependency)
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
     FetchContent_Declare(horo_jolt
+        # Presets share populated sources, but Debug/Release SDK consumers must
+        # retain the matching archive (Jolt's Debug assertion ABI differs).
+        BINARY_DIR "${CMAKE_BINARY_DIR}/third-party/horo_jolt"
         URL https://codeload.github.com/jrouwe/JoltPhysics/tar.gz/e77f175595e64cb44218cc9d9d56fc365ad0e36a
         URL_HASH SHA256=1f32328fb763135de10a244568d6ccb2ed9b1e6593fafe6dc6db5b2719d330bd
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE

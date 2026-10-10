@@ -95,6 +95,8 @@ namespace Horo::AI {
         /** @copydoc ShutdownStateContents */
         void ShutdownStateContents(AiSceneRuntimeState &state) noexcept {
             state.closed = true;
+            if (state.scheduler)
+                state.scheduler->Shutdown();
             for (AgentRuntimeState &agent : state.agents)
                 CancelOwnedWork(agent);
             state.agents.clear();
@@ -379,6 +381,44 @@ namespace Horo::AI {
         }
     }
 
+    /** @copydoc AiSceneRuntime::ConfigureTaskSchedulerAtSafePoint */
+    Result<void> AiSceneRuntime::ConfigureTaskSchedulerAtSafePoint(JobSystem &jobs, const AiTaskSchedulerSettings &settings) const {
+        if (shutdown_ || !active_ || active_->scheduler)
+            return Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
+        auto scheduler = AiTaskScheduler::Create(jobs, active_->binding.incarnation, settings);
+        if (scheduler.HasError())
+            return Result<void>::Failure(scheduler.ErrorValue());
+        active_->scheduler = std::move(scheduler).Value();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc AiSceneRuntime::RegisterDecisionAtSafePoint */
+    Result<void> AiSceneRuntime::RegisterDecisionAtSafePoint(const AgentHandle agent, const AiAgentSchedulePolicy &policy,
+                                                             std::shared_ptr<const void> image,
+                                                             std::shared_ptr<IAiScheduledDecision> executor) const {
+        // Preserve callback-before-image destruction on every rejection, including an inactive Scene.
+        struct PinnedExecutor final {
+            std::shared_ptr<const void> image;
+            std::shared_ptr<IAiScheduledDecision> executor;
+        };
+
+        PinnedExecutor captured{std::move(image), std::move(executor)};
+        if (shutdown_ || !active_ || !active_->scheduler)
+            return Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
+        const auto *slot = FindAgent(*active_, agent);
+        if (!slot || slot->record.state != AiAgentActivationState::Active)
+            return Result<void>::Failure(MakeError(AIErrors::HandleInvalid));
+        return active_->scheduler->Register(agent, slot->record.agent.agent, policy, std::move(captured.image),
+                                            std::move(captured.executor), slot->cancellation.Token());
+    }
+
+    /** @copydoc AiSceneRuntime::TaskSchedulerAtSafePoint */
+    Result<AiTaskScheduler *> AiSceneRuntime::TaskSchedulerAtSafePoint() const {
+        if (shutdown_ || !active_ || !active_->scheduler)
+            return Result<AiTaskScheduler *>::Failure(MakeError(AIErrors::RuntimeUnavailable));
+        return Result<AiTaskScheduler *>::Success(active_->scheduler.get());
+    }
+
     /** @copydoc AiSceneRuntime::StartTaskAtSafePoint */
     Result<TaskHandle> AiSceneRuntime::StartTaskAtSafePoint(const AgentHandle agent, const TaskId taskDefinition) const {
         if (shutdown_ || active_ == nullptr)
@@ -426,6 +466,8 @@ namespace Horo::AI {
         if (slot->record.state == AiAgentActivationState::Disabled)
             return Result<void>::Success();
         ++active_->revision;
+        if (active_->scheduler)
+            static_cast<void>(active_->scheduler->Unregister(agent));
         CancelOwnedWork(*slot);
         slot->record.state = AiAgentActivationState::Disabled;
         return Result<void>::Success();
@@ -445,6 +487,8 @@ namespace Horo::AI {
             AgentRuntimeState &slot = active_->agents[ownerIt->second];
             if (slot.retired || slot.record.owner != owner)
                 continue;
+            if (active_->scheduler)
+                static_cast<void>(active_->scheduler->Unregister(slot.record.handle));
             CancelOwnedWork(slot);
             slot.record.state = AiAgentActivationState::Retired;
             slot.retired = true;

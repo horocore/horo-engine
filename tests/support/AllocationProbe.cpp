@@ -64,13 +64,13 @@ namespace {
         }
 
         static void FailAfter(const std::size_t successfulAllocations, Horo::Tests::AllocationProbe::FailureObserver observer) noexcept {
-            failureObserver_.store(observer, std::memory_order_relaxed);
-            failureCountdown_.store(successfulAllocations, std::memory_order_relaxed);
+            failureObserver_ = observer;
+            failureCountdown_ = successfulAllocations;
         }
 
         static void DisableFailures() noexcept {
-            failureCountdown_.store(DisabledFailureCountdown, std::memory_order_relaxed);
-            failureObserver_.store(nullptr, std::memory_order_relaxed);
+            failureCountdown_ = DisabledFailureCountdown;
+            failureObserver_ = nullptr;
         }
 
     private:
@@ -85,25 +85,25 @@ namespace {
                 activeMeasurement->largestRequest = std::max(activeMeasurement->largestRequest, byteCount);
             }
             count_.fetch_add(1, std::memory_order_relaxed);
-            std::size_t remaining = failureCountdown_.load(std::memory_order_relaxed);
-            while (remaining != DisabledFailureCountdown) {
-                if (remaining == 0) {
-                    if (failureCountdown_.compare_exchange_weak(remaining, DisabledFailureCountdown, std::memory_order_relaxed)) {
-                        if (const auto observer = failureObserver_.load(std::memory_order_relaxed); observer != nullptr)
-                            observer(byteCount);
-                        throw std::bad_alloc{};
-                    }
-                } else if (failureCountdown_.compare_exchange_weak(remaining, remaining - 1, std::memory_order_relaxed)) {
-                    break;
-                }
+            if (failureCountdown_ == DisabledFailureCountdown)
+                return;
+            if (failureCountdown_ != 0) {
+                --failureCountdown_;
+                return;
             }
+            const auto observer = failureObserver_;
+            DisableFailures();
+            if (observer != nullptr)
+                observer(byteCount);
+            throw std::bad_alloc{};
         }
 
         static constexpr std::size_t DisabledFailureCountdown = std::numeric_limits<std::size_t>::max();
         static inline std::atomic<std::size_t> count_{};
         static inline std::atomic<std::size_t> freeCount_{};
-        static inline std::atomic<std::size_t> failureCountdown_{DisabledFailureCountdown};
-        static inline std::atomic<Horo::Tests::AllocationProbe::FailureObserver> failureObserver_{};
+        // Only the scope's calling thread may consume its failure or invoke its observer.
+        static inline thread_local std::size_t failureCountdown_{DisabledFailureCountdown};
+        static inline thread_local Horo::Tests::AllocationProbe::FailureObserver failureObserver_{};
     };
 }  // namespace
 

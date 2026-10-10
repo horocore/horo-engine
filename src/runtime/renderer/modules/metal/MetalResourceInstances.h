@@ -18,6 +18,8 @@ namespace Horo::Render::Detail {
         RenderBufferUsage usage{RenderBufferUsage::None};
         RenderMemoryPoolId pool;
         MetalResidentUse use;
+        std::uint64_t lightTableRevision{};
+        LightCullingDispatch lightTableDispatch;
     };
 
     struct MetalMeshInstance {

@@ -431,9 +431,14 @@ namespace Horo::Runtime::Ui {
          */
         [[nodiscard]] Result<std::optional<UiAsyncActionSnapshot>> AsyncAction() const;
 
-        /** @brief Closes input/default admission and releases transient focus/press state. @return Success or lifecycle failure. */
+        /** @brief Closes input/default admission and releases transient focus/press state. @return Success or lifecycle failure.
+         * @details Retains immutable asynchronous action/error projections until load-time Shutdown or owner destruction;
+         * retirement never releases their final allocation or provider-owned deleter.
+         */
         [[nodiscard]] Result<void> BeginRetirement();
-        /** @brief Idempotently stops the machine and clears pending actions. */
+        /** @brief Idempotently stops the machine and clears pending actions and retained error projections.
+         * @pre Load-time/quiescent operation; final immutable projection ownership may be released.
+         */
         void Shutdown() noexcept;
 
     private:

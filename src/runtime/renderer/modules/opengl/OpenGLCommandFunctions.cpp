@@ -26,6 +26,19 @@ namespace Horo::Render::Detail {
             glViewportIndexedf(0, x, y, width, height);
         }
 
+        /** @brief Reports actual baseline copy dispatch readiness after context loading. */
+        bool ProductionIsGraphAvailable() noexcept {
+            return glCopyBufferSubData != nullptr;
+        }
+
+        /** @brief Copies checked resident ranges through the owning context's baseline dispatch. */
+        void ProductionCopyBufferSubData(const std::uint32_t sourceTarget, const std::uint32_t destinationTarget,
+                                         const std::size_t sourceOffset, const std::size_t destinationOffset,
+                                         const std::size_t byteCount) noexcept {
+            glCopyBufferSubData(sourceTarget, destinationTarget, static_cast<GLintptr>(sourceOffset),
+                                static_cast<GLintptr>(destinationOffset), static_cast<GLsizeiptr>(byteCount));
+        }
+
         void ProductionClearColor(const float red, const float green, const float blue, const float alpha) noexcept {
             glClearColor(red, green, blue, alpha);
         }
@@ -196,6 +209,7 @@ namespace Horo::Render::Detail {
     OpenGLCommandFunctions ProductionOpenGLCommandFunctions() noexcept {
         return OpenGLCommandFunctions{
             .isAvailable = &ProductionIsAvailable,
+            .isGraphAvailable = &ProductionIsGraphAvailable,
             .viewport = &ProductionViewport,
             .clearColor = &ProductionClearColor,
             .clear = &ProductionClear,
@@ -213,7 +227,8 @@ namespace Horo::Render::Detail {
             .buffers = {.generateBuffers = &ProductionGenerateBuffers,
                         .deleteBuffers = &ProductionDeleteBuffers,
                         .bindBuffer = &ProductionBindBuffer,
-                        .bufferData = &ProductionBufferData},
+                        .bufferData = &ProductionBufferData,
+                        .copyBufferSubData = &ProductionCopyBufferSubData},
             .vertexArrays = {.generateVertexArrays = &ProductionGenerateVertexArrays,
                              .deleteVertexArrays = &ProductionDeleteVertexArrays,
                              .bindVertexArray = &ProductionBindVertexArray,
