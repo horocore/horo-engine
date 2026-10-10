@@ -172,11 +172,12 @@ namespace Horo::Render {
         /** @brief A volume's explicit override takes precedence over its reusable profile. */
         template <typename T>
         [[nodiscard]] PostProcessOverride<T> Resolve(const std::optional<T> &profile, const PostProcessOverride<T> &over) noexcept {
-            if (over.mode != PostProcessOverrideMode::Inherit)
+            using enum PostProcessOverrideMode;
+            if (over.mode != Inherit)
                 return over;
             if (profile.has_value())
-                return {PostProcessOverrideMode::Replace, *profile};
-            return {PostProcessOverrideMode::Disable, {}};
+                return {Replace, *profile};
+            return {Disable, {}};
         }
     }  // namespace
 

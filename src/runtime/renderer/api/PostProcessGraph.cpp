@@ -115,7 +115,7 @@ namespace Horo::Render {
     PostProcessGraphPlan::PostProcessGraphPlan(std::optional<RenderGraph> graph, std::vector<PostProcessPass> passes,
                                                const PostProcessGraphRequest &request, const RenderGraphResourceId color,
                                                const std::optional<RenderGraphResourceId> visibility, const RenderTextureHandle source,
-                                               const std::array<RenderGraphResourceId, 6> inputs) noexcept
+                                               const std::array<RenderGraphResourceId, 6> &inputs) noexcept
         : graph_(std::move(graph)), passes_(std::move(passes)), settings_(request.settings), compatibility_(request.compatibility),
           generation_(request.settingsGeneration), color_(color), visibility_(visibility), source_(source), inputs_(inputs) {}
 

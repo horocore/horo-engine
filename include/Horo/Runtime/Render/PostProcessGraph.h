@@ -134,7 +134,7 @@ namespace Horo::Render {
         /** @brief Adopts a fully validated candidate and its exact owned settings/resource mappings. */
         PostProcessGraphPlan(std::optional<RenderGraph> graph, std::vector<PostProcessPass> passes, const PostProcessGraphRequest &request,
                              RenderGraphResourceId color, std::optional<RenderGraphResourceId> visibility, RenderTextureHandle source,
-                             std::array<RenderGraphResourceId, 6> inputs) noexcept;
+                             const std::array<RenderGraphResourceId, 6> &inputs) noexcept;
         std::optional<RenderGraph> graph_;
         std::vector<PostProcessPass> passes_;
         PostProcessSettings settings_;

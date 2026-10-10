@@ -59,8 +59,9 @@ namespace Horo::Render::Detail {
                     !HasTextureUsage(input.descriptor.usage, RenderTextureUsage::Sampled) ||
                     !ValidFormat(input.semantic, input.descriptor.format) || input.compatibility != request.compatibility)
                     return Result<void>::Failure(MakeError(PostProcessErrors::IncompatibleInput));
-                const bool color = input.semantic == PostProcessSemantic::SceneColor || input.semantic == PostProcessSemantic::HistoryColor;
-                if (color ? (input.representation != PostProcessRepresentation::UnexposedAcesCg &&
+                if (const bool color =
+                        input.semantic == PostProcessSemantic::SceneColor || input.semantic == PostProcessSemantic::HistoryColor;
+                    color ? (input.representation != PostProcessRepresentation::UnexposedAcesCg &&
                              input.representation != PostProcessRepresentation::PreExposedAcesCg)
                           : input.representation != PostProcessRepresentation::Data)
                     return Result<void>::Failure(MakeError(PostProcessErrors::IncompatibleInput));
@@ -215,11 +216,11 @@ namespace Horo::Render::Detail {
 
     /** @copydoc PostProcessOutputDescriptor */
     RenderTextureDescriptor PostProcessOutputDescriptor(const PostProcessGraphRequest &request, const PostProcessRecipe &recipe) noexcept {
+        using enum RenderTextureUsage;
         return {.extent = request.compatibility.renderExtent,
                 .format =
                     recipe.effect == PostProcessEffect::AmbientOcclusion ? RenderTextureFormat::R8Unorm : RenderTextureFormat::Rgba16Float,
-                .usage = RenderTextureUsage::Sampled |
-                         (recipe.passKind == RenderPassKind::Compute ? RenderTextureUsage::Storage : RenderTextureUsage::RenderAttachment)};
+                .usage = Sampled | (recipe.passKind == RenderPassKind::Compute ? Storage : RenderAttachment)};
     }
 
     /** @copydoc AdmitPostProcessGraph */
