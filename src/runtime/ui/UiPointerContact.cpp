@@ -111,8 +111,6 @@ namespace Horo::Runtime::Ui {
     Result<bool> UiPointerInteraction::MoveTouch(Contact &contact, const UiLogicalPoint previous, UiGestureEvent &gesture,
                                                  const SampleContext &context) {
         const auto &environment = context.environment;
-        auto &nextSequence = context.nextSequence;
-        auto &result = context.result;
         const auto position = context.position;
         const auto target = contact.capture.Request().route.target;
         auto slots = std::span{contacts_}.first(descriptor_.pointerCapacity);
@@ -131,6 +129,8 @@ namespace Horo::Runtime::Ui {
             const double newLength = std::hypot(newX, newY);
             // Coincident contacts are valid but cannot establish a scale or angle baseline.
             if (oldLength >= 1.0 && newLength >= 1.0) {
+                auto &nextSequence = context.nextSequence;
+                auto &result = context.result;
                 gesture.kind = UiGestureKind::PinchRotate;
                 gesture.scale = newLength / oldLength;
                 gesture.rotation = std::atan2(oldX * newY - oldY * newX, oldX * newX + oldY * newY);
