@@ -283,6 +283,8 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/Save/SaveManagerProjection.h
     Horo/Runtime/Save/SaveStorageAdapter.h
     Horo/Runtime/Save/SaveSlotCommitTransaction.h
+    Horo/Runtime/Save/SaveSlotRetention.h
+    Horo/Runtime/Save/SaveSlotLifecycle.h
     Horo/Runtime/Save/SaveSlotRecovery.h
     Horo/Runtime/Save/SaveStoragePolicy.h
     Horo/Runtime/Save/SaveOperation.h
@@ -960,6 +962,13 @@ horo_configure_target_header_boundary(HoroPrefabCookHost PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
+    Horo/Runtime/Render/PostProcessSettings.h
+    Horo/Runtime/Render/PostProcessVolumes.h
+    Horo/Runtime/Render/PostProcessGraph.h
+    Horo/Runtime/Render/PostProcessErrors.h
+    Horo/Runtime/Render/MaterialBindingBackend.h
+    Horo/Runtime/Render/MaterialBinding.h
+    Horo/Runtime/Render/MaterialBindingErrors.h
     Horo/Runtime/Render/MotionHistory.h
     Horo/Runtime/Render/MotionHistoryErrors.h
     Horo/Runtime/Render/PipelinePreparation.h
@@ -1089,6 +1098,7 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/RecentProjectInspectionService.h
     Horo/Editor/SourceFileOpenService.h
     Horo/Editor/SourceDocumentService.h
+    Horo/Editor/SequenceDocument.h
     Horo/Editor/UiCanvasDocument.h
     Horo/Editor/WelcomeController.h
     Horo/Editor/WorkspaceDockArea.h
