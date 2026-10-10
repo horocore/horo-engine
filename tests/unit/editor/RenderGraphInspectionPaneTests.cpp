@@ -23,16 +23,34 @@ namespace {
     /** @brief Owns state shared with the retained query callback across GUI draw frames. */
     struct InspectionProbe {
         using Snapshot = std::shared_ptr<const Render::RenderGraphInspectionSnapshot>;
+        enum class QueryPhase {
+            Hidden,
+            Active,
+            Detached
+        };
         Snapshot publication;
         std::size_t queries{};
         bool failed{};
+        QueryPhase phase{QueryPhase::Hidden};
 
         Result<Snapshot> Read() {
+            REQUIRE(phase == QueryPhase::Active);
             ++queries;
             return failed ? Result<Snapshot>::Failure(MakeError(Render::RenderGraphInspectionErrors::Closed))
                           : Result<Snapshot>::Success(publication);
         }
+
+        void RequireQueries(const std::size_t expected) const {
+            CHECK(queries == expected);
+        }
     };
+
+    /** @brief Retains the probe with the callback for the exact lifetime owned by the composed pane. */
+    std::unique_ptr<IGlobalDockPane> MakeProbePane(const std::shared_ptr<InspectionProbe> &probe) {
+        return MakeRenderGraphInspectionPane([probe] {
+            return probe->Read();
+        });
+    }
 
     /** @brief Owns the complete software GUI fixture, with no window/device or native renderer. */
     struct GuiFixture {
@@ -205,21 +223,20 @@ TEST_CASE("Render graph pane is inert while hidden and renders localized narrow 
     const EditorSettingsSnapshot settings{};
     const EditorGuiContext context{engineEvents, editorEvents, localization, theme, settings};
     const auto probe = std::make_shared<InspectionProbe>();
-    auto pane = MakeRenderGraphInspectionPane([probe] {
-        return probe->Read();
-    });
-    CHECK(probe->queries == 0);
+    auto pane = MakeProbePane(probe);
+    probe->RequireQueries(0);
     IGlobalDockPane *inspectionPane = pane.get();
     GlobalDockPanel panel;
     REQUIRE(panel.RegisterPane(std::move(pane)));
     DrawPane(panel, context, 700);
-    CHECK(probe->queries == 0);
+    probe->RequireQueries(0);
+    probe->phase = InspectionProbe::QueryPhase::Active;
     REQUIRE(panel.ActivatePane("horo.global_dock.render_graph"));
     DrawPane(panel, context, 220);
-    CHECK(probe->queries == 1);
+    probe->RequireQueries(1);
     probe->failed = true;
     DrawPane(panel, context, 220);
-    CHECK(probe->queries == 2);
+    probe->RequireQueries(2);
     probe->failed = false;
     const auto sources = Render::Test::CompileSources();
     const auto captured =
@@ -229,12 +246,14 @@ TEST_CASE("Render graph pane is inert while hidden and renders localized narrow 
     ExerciseSections(panel, context, localization);
     ExercisePaging(panel, context, probe->publication);
     const auto beforeHidden = probe->queries;
+    probe->phase = InspectionProbe::QueryPhase::Hidden;
     REQUIRE(panel.ActivatePane("horo.global_dock.assets"));
     DrawPane(panel, context, 500);
-    CHECK(probe->queries == beforeHidden);
+    probe->RequireQueries(beforeHidden);
+    probe->phase = InspectionProbe::QueryPhase::Detached;
     inspectionPane->Detach();
     REQUIRE(panel.ActivatePane("horo.global_dock.render_graph"));
     DrawPane(panel, context, 220);
-    CHECK(probe->queries == beforeHidden);
+    probe->RequireQueries(beforeHidden);
     CHECK(probe.use_count() == 1);
 }
