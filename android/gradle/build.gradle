@@ -1,0 +1,53 @@
+plugins { id 'com.android.application' }
+
+def contract = new groovy.json.JsonSlurper().parse(file('contract.json'))
+android {
+    namespace contract.profile.applicationId
+    compileSdk contract.tools.sdkApi
+    buildToolsVersion contract.tools.buildTools
+    defaultConfig {
+        applicationId contract.profile.applicationId
+        minSdk contract.profile.minimumApi
+        targetSdk contract.profile.targetApi
+        versionCode contract.profile.versionCode
+        versionName contract.profile.versionName
+        ndk { abiFilters.addAll(contract.abis) }
+    }
+    buildTypes {
+        debug { signingConfig null }
+        release { minifyEnabled false; signingConfig null }
+    }
+    sourceSets {
+        main {
+            manifest.srcFile 'AndroidManifest.xml'
+            java.srcDirs = ['java']
+            jniLibs.srcDirs = ['native']
+            assets.srcDirs = ['assets']
+        }
+    }
+    packaging { jniLibs { useLegacyPackaging = false; keepDebugSymbols += ["**/*.so"] } }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+dependencies {
+    implementation files('game-activity.aar')
+    implementation "androidx.appcompat:appcompat:${contract.tools.appcompat}"
+}
+tasks.withType(AbstractArchiveTask).configureEach {
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+tasks.register('writeDependencyProvenance') {
+    doLast {
+        def configurationName = contract.profile.configuration.toLowerCase() + 'RuntimeClasspath'
+        def records = configurations[configurationName].resolvedConfiguration.resolvedArtifacts.collect { artifact ->
+            def component = artifact.moduleVersion.id
+            [group: component.group, module: component.name, version: component.version,
+             sha256: java.security.MessageDigest.getInstance('SHA-256').digest(artifact.file.bytes).encodeHex().toString()]
+        }.sort { a, b -> (a.group + ':' + a.module) <=> (b.group + ':' + b.module) }
+        file('assets/horo-java-dependencies.json').text = groovy.json.JsonOutput.toJson(records) + '\n'
+    }
+}

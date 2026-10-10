@@ -1,0 +1,87 @@
+name: Android Package Qualification
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  package:
+    name: Android APK · ${{ matrix.profile }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [qualification-debug, qualification-release]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install locked SDK and build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --no-cache-dir cmake==3.31.6 ninja==1.11.1.4
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
+          curl --fail --location --retry 3 https://services.gradle.org/distributions/gradle-8.11.1-bin.zip -o "$RUNNER_TEMP/gradle.zip"
+          curl --fail --location --retry 3 https://dl.google.com/dl/android/maven2/androidx/games/games-activity/3.0.5/games-activity-3.0.5.aar -o "$RUNNER_TEMP/game-activity.aar"
+          python3 - <<'PYTHON'
+          import hashlib, json, os
+          from pathlib import Path
+          lock = json.loads(Path('android/toolchain-lock.json').read_text())
+          temporary = Path(os.environ['RUNNER_TEMP'])
+          for name, expected in [('gradle.zip', lock['gradleSha256']), ('game-activity.aar', lock['gameActivity']['sha256'])]:
+              actual = hashlib.sha256((temporary / name).read_bytes()).hexdigest()
+              if actual != expected:
+                  raise SystemExit('Locked tool/dependency digest mismatch: ' + name)
+          PYTHON
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+      - name: Create external disposable qualification signing identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          keytool -genkeypair -keystore "$RUNNER_TEMP/qualification.p12" -storetype PKCS12 -alias qualification -keyalg RSA -keysize 2048 -validity 2 -dname CN=HoroQualification -storepass qualification -keypass qualification
+      - name: Build two isolated signed packages and compare evidence
+        shell: bash
+        env:
+          PACKAGE_PROFILE: ${{ matrix.profile }}
+          HORO_ANDROID_KEY_ALIAS: qualification
+          HORO_ANDROID_STORE_PASSWORD: qualification
+          HORO_ANDROID_KEY_PASSWORD: qualification
+        run: |
+          set -euo pipefail
+          export HORO_ANDROID_KEYSTORE="$RUNNER_TEMP/qualification.p12"
+          abi_args=(--abi arm64-v8a)
+          if [[ "$PACKAGE_PROFILE" == qualification-debug ]]; then
+            abi_args+=(--abi x86_64)
+          fi
+          for iteration in first second; do
+            python3 scripts/android_package.py --profile "$PACKAGE_PROFILE" "${abi_args[@]}" --sdk "$ANDROID_HOME" --ndk "$ANDROID_HOME/ndk/28.2.13676358" --gradle "$RUNNER_TEMP/gradle-8.11.1/bin/gradle" --game-activity "$RUNNER_TEMP/game-activity.aar" --output "$RUNNER_TEMP/$iteration"
+          done
+          cmp "$RUNNER_TEMP/first/signed.apk" "$RUNNER_TEMP/second/signed.apk"
+          cmp "$RUNNER_TEMP/first/provenance.json" "$RUNNER_TEMP/second/provenance.json"
+          cmp "$RUNNER_TEMP/first/inspection.json" "$RUNNER_TEMP/second/inspection.json"
+      - name: Preserve portable package inspection and failure logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-${{ matrix.profile }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/first/*.json
+            ${{ runner.temp }}/first/*.log
+            ${{ runner.temp }}/first/signed.apk
+            ${{ runner.temp }}/second/*.json
+            ${{ runner.temp }}/second/*.log

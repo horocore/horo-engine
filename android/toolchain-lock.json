@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "sdkApi": 36,
+  "minimumApi": 29,
+  "buildTools": "36.0.0",
+  "ndk": "28.2.13676358",
+  "cmake": "3.31.6",
+  "jdkMajor": 17,
+  "gradle": "8.11.1",
+  "gradleSha256": "f397b287023acdba1e9f6fc5ea72d22dd63669d59ed4a289a29b1a76eee151c6",
+  "androidGradlePlugin": "8.10.1",
+  "appcompat": "1.7.0",
+  "gameActivity": {
+    "version": "3.0.5",
+    "sha256": "619fd47907eb1db4294ee1b770af90181d44a41d54e7a555457e3d92efe3c6cb",
+    "url": "https://dl.google.com/dl/android/maven2/androidx/games/games-activity/3.0.5/games-activity-3.0.5.aar"
+  },
+  "abis": {
+    "arm64-v8a": 183,
+    "x86_64": 62
+  },
+  "systemLibraries": [
+    "libandroid.so",
+    "libc.so",
+    "libdl.so",
+    "liblog.so",
+    "libm.so"
+  ],
+  "ninja": "1.11.1"
+}
