@@ -216,6 +216,9 @@ namespace {
         REQUIRE((service.Get("editor", "workspace.content_browser.project_asset_dock") == "Project asset dock"));
         REQUIRE((service.Get("editor", "workspace.content_browser.empty") == "This folder is empty."));
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.assets") == "Assets"));
+        CHECK(service.Get("editor", "render_graph.title") == "Render Graph");
+        CHECK(service.Get("editor", "render_graph.unavailable") == "Unavailable");
+        CHECK(service.Get("editor", "render_graph.next") == "Next page");
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.localization") == "L10n"));
         REQUIRE((service.Get("editor", "workspace.game_asset.category.missing") == "Missing Gameplay Asset Type"));
         RequireSettingsCatalogKeys(service);
@@ -231,6 +234,9 @@ namespace {
         REQUIRE((service.Get("editor", "workspace.content_browser.project_asset_dock") == "Proje varlık paneli"));
         REQUIRE((service.Get("editor", "workspace.content_browser.empty") == "Bu klasör boş."));
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.assets") == "Varlıklar"));
+        CHECK(service.Get("editor", "render_graph.title") == "Render Grafiği");
+        CHECK(service.Get("editor", "render_graph.unavailable") == "Kullanılamıyor");
+        CHECK(service.Get("editor", "render_graph.next") == "Sonraki sayfa");
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.localization") == "L10n"));
         REQUIRE((service.Get("editor", "workspace.game_asset.category.missing") == "Eksik Oynanış Asset Türü"));
         RequireSettingsCatalogKeys(service);
