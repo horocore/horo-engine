@@ -13,6 +13,17 @@ namespace Horo::Render::Detail {
     public:
         ~IMetalRuntime() override = default;
 
+        /** @brief Unsupported injected runtimes never claim frame-slot upload completion. */
+        [[nodiscard]] virtual Result<void> UpdateLightFrame(const NativeLightFrameUpdate &) {
+            return Result<void>::Failure(MakeError(LightCullingErrors::Unsupported));
+        }
+
+        /** @brief Default injected runtimes decline native cooked light preparation explicitly. */
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
+            const CookedLightCullingKernel &) {
+            return Result<std::shared_ptr<IResidentLightCullingKernel>>::Failure(MakeError(LightCullingErrors::Unsupported));
+        }
+
         [[nodiscard]] virtual Result<MetalDeviceCapabilities> Initialize(const MetalPresentationDescriptor &descriptor,
                                                                          const MetalDeviceAdmissionRequest &request) = 0;
         [[nodiscard]] virtual Result<void> BeginFrame(FramebufferExtent extent) = 0;

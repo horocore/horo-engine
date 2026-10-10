@@ -3,6 +3,7 @@
 /** @file RenderGraphWorkload.h
  * @brief Typed workloads bound to one immutable compiled render graph.
  */
+#include "Horo/Runtime/Render/LightCullingKernel.h"
 #include "Horo/Runtime/Render/RenderGraphExecution.h"
 
 #include <cstdint>
@@ -24,8 +25,24 @@ namespace Horo::Render {
         std::size_t byteCount{0};
     };
 
+    /** @brief One bounded cooked light-culling dispatch over four distinct whole graph buffers.
+     * @details The owned preparation lease pins the kernel; graph submission leases pin the buffers.
+     * All buffers use Storage semantics: Lights/Clusters read, Membership/References write.
+     * Outputs contain exact table indices in canonical order plus explicit omitted counts.
+     */
+    struct RenderGraphLightCulling {
+        RenderGraphResourceId lights;
+        RenderGraphResourceId clusters;
+        RenderGraphResourceId membership;
+        RenderGraphResourceId references;
+        LightCullingDispatch dispatch;
+        std::uint64_t tableRevision{}; /**< Exact uploaded slot revision; stale graph reuse fails before encoding. */
+        std::shared_ptr<IResidentLightCullingKernel> kernel;
+    };
+
     /** @brief Exact typed operation; an empty workload represents an ordering-only pass. */
-    using RenderGraphWorkload = std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy>;
+    using RenderGraphWorkload =
+        std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy, RenderGraphLightCulling>;
 
     /** @brief Explicit operation for one retained pass in compiled order. */
     struct RenderGraphPassWorkload {

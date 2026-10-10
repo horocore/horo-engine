@@ -21,10 +21,12 @@ namespace Horo::Render {
             Unsupported,
         };
 
-        [[nodiscard]] constexpr ResourceDescriptorAdmission AdmitCurrentBufferDescriptor(
-            const RenderBufferDescriptor &descriptor) noexcept {
+        [[nodiscard]] constexpr ResourceDescriptorAdmission AdmitCurrentBufferDescriptor(const RenderBufferDescriptor &descriptor,
+                                                                                         const bool lightStorageAvailable) noexcept {
             using enum RenderBufferUsage;
             using enum ResourceDescriptorAdmission;
+            if (lightStorageAvailable && descriptor.access == RenderBufferAccess::HostVisible && descriptor.usage == (Storage | CopySource))
+                return Supported;
             constexpr std::byte supportedUsageBits =
                 std::byte{static_cast<std::uint8_t>(Vertex)} | std::byte{static_cast<std::uint8_t>(Index)} |
                 std::byte{static_cast<std::uint8_t>(CopySource)} | std::byte{static_cast<std::uint8_t>(CopyDestination)};
@@ -217,7 +219,8 @@ namespace Horo::Render {
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidBufferDescriptor,
                                   "The buffer descriptor is structurally invalid: " + DescribeRenderBufferRequest(descriptor)));
-        if (AdmitCurrentBufferDescriptor(descriptor) == ResourceDescriptorAdmission::Unsupported)
+        if (AdmitCurrentBufferDescriptor(descriptor, backend_->Capabilities().support.features.Supports(RenderCapability::LightCulling)) ==
+            ResourceDescriptorAdmission::Unsupported)
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported,
                                   "The current renderer frontend does not implement this buffer usage combination: " +

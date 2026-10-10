@@ -140,6 +140,8 @@ namespace Horo::Render::Detail {
                 return Result<void>::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
         }
         for (const auto &binding : request.workloads) {
+            if (std::holds_alternative<RenderGraphLightCulling>(binding.workload))
+                return Result<void>::Failure(MakeError(LightCullingErrors::Unsupported));
             if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&binding.workload)) {
                 if (!ValidCopy(*copy, request, resources))
                     return Result<void>::Failure(MakeError(OpenGLBackendErrors::InvalidExecutionPlan));

@@ -6,6 +6,8 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Runtime/Render/LightCullingKernel.h"
+#include "Horo/Runtime/Render/LightFrameUpload.h"
 #include "Horo/Runtime/Render/MaterialBindingBackend.h"
 #include "Horo/Runtime/Render/PresentMode.h"
 #include "Horo/Runtime/Render/RenderAdapter.h"
@@ -383,6 +385,23 @@ namespace Horo::Render {
     class IRenderBackend : public IRenderResourceBackend, public IMaterialBindingBackend {
     public:
         ~IRenderBackend() override = default;
+
+        /**
+         * @brief Realizes an exact cooked light-culling kernel at an owner-thread preparation boundary.
+         * @param kernel Admitted artifact, stage, entry point and final-target binding evidence.
+         * @return Native preparation lease or typed unsupported/original admission failure.
+         * @details No source compilation, discovery or policy fallback. The host drains leases before teardown.
+         */
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
+            const CookedLightCullingKernel &kernel);
+
+        /**
+         * @brief Updates a reusable frame slot only after all prior native buffer use has completed.
+         * @param update Exact resolved buffers and bounded synchronously borrowed packed frame.
+         * @return Success, typed pending without mutation, unsupported, or original validation failure.
+         * @details Owner-thread safe point only; no CPU wait, source compilation, allocation or implicit fallback.
+         */
+        [[nodiscard]] virtual Result<void> UpdateLightFrame(const NativeLightFrameUpdate &update);
 
         /** @brief Initializes the inert backend instance and acquires its runtime resources. */
         [[nodiscard]] virtual Result<void> Initialize(const RenderBackendConfig &config) = 0;

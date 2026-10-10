@@ -79,6 +79,21 @@ namespace Horo::Render {
                 return capabilities_;
             }
 
+            /** @copydoc IRenderBackend::RealizeLightCullingKernel */
+            Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
+                const CookedLightCullingKernel &kernel) override {
+                if (!capabilities_.support.features.Supports(RenderCapability::LightCulling))
+                    return Result<std::shared_ptr<IResidentLightCullingKernel>>::Failure(MakeError(LightCullingErrors::Unsupported));
+                return runtime_->RealizeLightCullingKernel(kernel);
+            }
+
+            /** @copydoc IRenderBackend::UpdateLightFrame */
+            Result<void> UpdateLightFrame(const NativeLightFrameUpdate &update) override {
+                if (!capabilities_.support.features.Supports(RenderCapability::LightCulling))
+                    return Result<void>::Failure(MakeError(LightCullingErrors::Unsupported));
+                return runtime_->UpdateLightFrame(update);
+            }
+
             /** @copydoc IRenderBackend::QueryBufferMemoryCost */
             Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
                 return QueryMemoryCost("Metal buffer memory requirements require an initialized backend.", [this, &descriptor] {

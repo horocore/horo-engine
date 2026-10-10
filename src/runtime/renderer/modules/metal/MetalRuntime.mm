@@ -76,7 +76,7 @@ namespace Horo::Render::Detail {
                 // buffers and sixty-four retained uploads stay below this native cap.
                 // The editor bridge borrows our current buffer; it must not allocate its own.
                 commandQueue_ = [device_ newCommandQueueWithMaxCommandBufferCount:MetalRecordingBudget::NativeQueueCapacity];
-                const Result<MetalDeviceCapabilities> admitted =
+                Result<MetalDeviceCapabilities> admitted =
                     AdmitMetalDevice(QueryMetalDeviceFacts(device_, discoveryRevision, commandQueue_ != nil), request);
                 if (admitted.HasError()) {
                     Shutdown();
@@ -97,11 +97,7 @@ namespace Horo::Render::Detail {
                                               "The platform presentation port did not expose a CAMetalLayer."));
                 }
 
-                layer_.device = device_;
-                layer_.pixelFormat = MTLPixelFormatBGRA8Unorm;
-                layer_.framebufferOnly = YES;
-                layer_.opaque = YES;
-                layer_.maximumDrawableCount = descriptor.maxFramesInFlight;
+                ConfigurePresentationLayer(descriptor.maxFramesInFlight);
                 maxFramesInFlight_ = descriptor.maxFramesInFlight;
                 ownerThread_ = std::this_thread::get_id();
                 submitted_.Initialize(maxFramesInFlight_);
@@ -109,7 +105,29 @@ namespace Horo::Render::Detail {
                 MetalEditorGraphicsAccess::PublishPersistent(*editorGraphicsBridge_, (__bridge void *)device_,
                                                              (__bridge void *)commandQueue_, this, &WaitUntilIdleThunk);
                 resources_.Initialize((__bridge void *)device_, (__bridge void *)commandQueue_);
-                return admitted;
+                auto capabilities = std::move(admitted).Value();
+                capabilities.implemented.support.features.Enable(RenderCapability::LightCulling);
+                return Result<MetalDeviceCapabilities>::Success(std::move(capabilities));
+            }
+
+            Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
+                const CookedLightCullingKernel &kernel) override {
+                using Preparation = Result<std::shared_ptr<IResidentLightCullingKernel>>;
+                if (std::this_thread::get_id() != ownerThread_)
+                    return Preparation::Failure(MakeError(MetalBackendErrors::WrongThread));
+                if (commandBuffer_ != nil)
+                    return Preparation::Failure(
+                        MakeError(LightCullingErrors::InvalidInput, "Kernel realization requires a preparation safe point."));
+                return resources_.RealizeLightCullingKernel(kernel);
+            }
+
+            Result<void> UpdateLightFrame(const NativeLightFrameUpdate &update) override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return WrongThread();
+                if (commandBuffer_ != nil)
+                    return Result<void>::Failure(
+                        MakeError(LightCullingErrors::InvalidInput, "Light slots update only outside an active frame."));
+                return resources_.UpdateLightFrame(update);
             }
 
             Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
@@ -400,6 +418,15 @@ namespace Horo::Render::Detail {
             }
 
         private:
+            /** @brief Configures the admitted native presentation layer before publishing graphics access. */
+            void ConfigurePresentationLayer(const std::uint32_t maxFramesInFlight) {
+                layer_.device = device_;
+                layer_.pixelFormat = MTLPixelFormatBGRA8Unorm;
+                layer_.framebufferOnly = YES;
+                layer_.opaque = YES;
+                layer_.maximumDrawableCount = maxFramesInFlight;
+            }
+
             /** @brief Checks native capture state and all command-count bounds before any buffer allocation. */
             [[nodiscard]] Result<void> ValidateParallelCapture(const RenderGraphExecutionRequest &request) const {
                 if (commandBuffer_ == nil || drawable_ == nil || renderEncoder_ != nil || activeGraphLease_ != nullptr || activeRecording_)

@@ -1953,6 +1953,10 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderGraphSynchronizationErrors.cpp
         runtime/renderer/api/RenderGraphLifetime.cpp
         runtime/renderer/api/RenderGraphWorkload.cpp
+        runtime/renderer/api/LightCulling.cpp
+        runtime/renderer/api/LightCullingKernel.cpp
+        runtime/renderer/api/LightFrameLayout.cpp
+        runtime/renderer/api/LightFrameUpload.cpp
         runtime/renderer/api/RenderGraphLifetimeErrors.cpp
         runtime/renderer/api/RenderGraphValidation.cpp
         runtime/renderer/api/RenderResourceDescriptorErrors.cpp
@@ -2022,6 +2026,8 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderParallelWorkInternal.cpp
         runtime/renderer/frontend/RenderParallelWorkErrors.cpp
         runtime/renderer/frontend/RenderFrontend.cpp
+        runtime/renderer/frontend/LightCullingPreparation.cpp
+        runtime/renderer/frontend/LightFrameBufferPool.cpp
         runtime/renderer/frontend/RenderFrontendInspection.cpp
         runtime/renderer/frontend/RenderFrontendResourceAccess.cpp
         runtime/renderer/frontend/RenderFrontendResourceValidation.cpp
@@ -2056,6 +2062,11 @@ target_link_libraries(HoroRenderFrontend
         HoroEngine::RenderBackendRegistry
         HoroEngine::RuntimeUi
 )
+
+add_library(HoroSceneRenderExtraction STATIC runtime/renderer/frontend/LightSceneExtraction.cpp)
+add_library(HoroEngine::SceneRenderExtraction ALIAS HoroSceneRenderExtraction)
+target_compile_features(HoroSceneRenderExtraction PUBLIC cxx_std_20)
+target_link_libraries(HoroSceneRenderExtraction PUBLIC HoroEngine::RuntimeScene HoroEngine::RenderApi)
 
 add_library(HoroSceneModel STATIC
         runtime/scene/PropertyBindingErrors.cpp
@@ -2145,6 +2156,8 @@ if (HORO_BUILD_RENDER_METAL)
             runtime/renderer/modules/metal/MetalDeviceDiscovery.mm
             runtime/renderer/modules/metal/MetalSubmittedGraphQueue.mm
             runtime/renderer/modules/metal/MetalResourceGraphRuntime.mm
+            runtime/renderer/modules/metal/MetalLightCullingKernel.mm
+            runtime/renderer/modules/metal/MetalLightFrameUpload.mm
             runtime/renderer/modules/metal/MetalRuntime.mm
     )
     add_library(HoroEngine::RenderMetal ALIAS HoroRenderMetal)
