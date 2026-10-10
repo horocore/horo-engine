@@ -4,6 +4,8 @@
 #include "SecurityTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <cstdio>
 #include <fstream>
 #include <iterator>
 #include <thread>
@@ -12,6 +14,35 @@ using namespace Horo;
 using namespace Horo::Packages;
 
 namespace {
+    /** @brief Emits bounded test-only phase evidence without using Catch2 reporting
+     * from a worker. */
+    void LifecycleProgress(const char *stage) {
+        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        std::fprintf(stderr, "[lifecycle progress %.6f] %s\n", seconds, stage);
+        std::fflush(stderr);
+    }
+
+    /** @brief Reports fixture construction and complete teardown without changing member lifetime order. */
+    class LifecycleProgressScope final {
+    public:
+        LifecycleProgressScope() {
+            LifecycleProgress("before fixture construction");
+            std::error_code error;
+            const auto bytes = std::filesystem::file_size(HORO_PACKAGE_NATIVE_FIXTURE, error);
+            std::fprintf(stderr, "[lifecycle fixture] bytes=%llu error=%d\n", static_cast<unsigned long long>(bytes), error.value());
+            std::fflush(stderr);
+        }
+
+        LifecycleProgressScope(const LifecycleProgressScope &) = delete;
+        LifecycleProgressScope &operator=(const LifecycleProgressScope &) = delete;
+        LifecycleProgressScope(LifecycleProgressScope &&) = delete;
+        LifecycleProgressScope &operator=(LifecycleProgressScope &&) = delete;
+
+        ~LifecycleProgressScope() {
+            LifecycleProgress("after fixture teardown");
+        }
+    };
+
     template <class T> T Parse(std::string_view text) {
         auto result = T::Parse(text);
         REQUIRE(result.HasValue());
@@ -126,6 +157,7 @@ namespace {
         bool replaceInstallOnLoad{};
         bool journalObserved{};
         bool shutdownOnLoad{};
+        bool progress{};
 
         explicit Fixture(std::size_t maximumRetired = 16U)
             : install(std::move(PackageInstallService::Create(files, std::filesystem::canonical(project.Path()))).Value()) {
@@ -158,15 +190,27 @@ namespace {
         }
 
         ~Fixture() {
+            if (progress)
+                LifecycleProgress("before service destruction");
             service.reset();
+            if (progress)
+                LifecycleProgress("after service destruction");
         }
 
         void Install(std::shared_ptr<PackageRestoreGraph> graph = Graph(HORO_PACKAGE_NATIVE_FIXTURE)) {
+            if (progress)
+                LifecycleProgress("graph built; before install");
             REQUIRE(install.Install(std::move(graph), CancellationSource{}.Token()).HasValue());
+            if (progress)
+                LifecycleProgress("after install");
         }
 
         Result<void> Activate() {
+            if (progress)
+                LifecycleProgress("before owner activation");
             auto result = service->Activate(enabled, PackageActivationBoundary::Quiescent, cancellation.Token());
+            if (progress)
+                LifecycleProgress("after owner activation");
             if (result.HasError()) {
                 for (const Error *error = &result.ErrorValue(); error; error = error->cause.Get())
                     UNSCOPED_INFO("Package activation domain=" << error->domain.Value() << " code=" << error->code.Value()
@@ -179,20 +223,26 @@ namespace {
     /** @brief Exercises owner-lane, runtime and cancellation rejection before any native preparation. */
     void CheckRuntimeBoundaryRejection(Fixture &fixture) {
         SECTION("running host") {
+            LifecycleProgress("SECTION running host");
             fixture.Install();
             CHECK(fixture.service->Activate(fixture.enabled, PackageActivationBoundary::Running, fixture.cancellation.Token()).HasError());
         }
         SECTION("off owner lane") {
+            LifecycleProgress("SECTION off owner lane");
             fixture.Install();
             bool rejected{};
+            LifecycleProgress("before worker creation");
             std::thread worker{[&fixture, &rejected] {
                 rejected = fixture.service->Activate(fixture.enabled, PackageActivationBoundary::Quiescent, fixture.cancellation.Token())
                                .HasError();
             }};
+            LifecycleProgress("before worker join");
             worker.join();
+            LifecycleProgress("after worker join");
             CHECK(rejected);
         }
         SECTION("cancelled before load") {
+            LifecycleProgress("SECTION cancelled before load");
             fixture.Install();
             fixture.cancellation.RequestCancellation();
             CHECK(fixture.Activate().HasError());
@@ -236,39 +286,49 @@ TEST_CASE("Package lifecycle activates the exact installed native module and pub
 
 TEST_CASE("Package lifecycle fails closed before native loading for missing enablement evidence trust and runtime boundaries",
           "[packages][activation]") {
+    [[maybe_unused]] const LifecycleProgressScope progress;
     Fixture fixture;
+    fixture.progress = true;
     SECTION("not installed") {
+        LifecycleProgress("SECTION not installed");
         CHECK(fixture.Activate().HasError());
     }
     SECTION("untrusted") {
+        LifecycleProgress("SECTION untrusted");
         fixture.Install();
         fixture.trust.deny = true;
         CHECK(fixture.Activate().HasError());
     }
     SECTION("stale digest approval") {
+        LifecycleProgress("SECTION stale digest approval");
         fixture.Install();
         fixture.trust.stale = true;
         CHECK(fixture.Activate().HasError());
     }
     SECTION("undeclared binary") {
+        LifecycleProgress("SECTION undeclared binary");
         fixture.Install(Graph(HORO_PACKAGE_NATIVE_FIXTURE, false));
         CHECK(fixture.Activate().HasError());
     }
     SECTION("undeclared root") {
+        LifecycleProgress("SECTION undeclared root");
         fixture.Install(Graph(HORO_PACKAGE_NATIVE_FIXTURE, true, false));
         CHECK(fixture.Activate().HasError());
     }
     SECTION("duplicate selection") {
+        LifecycleProgress("SECTION duplicate selection");
         fixture.Install();
         fixture.enabled.push_back(fixture.enabled.front());
         CHECK(fixture.Activate().HasError());
     }
     SECTION("excess selection") {
+        LifecycleProgress("SECTION excess selection");
         fixture.Install();
         fixture.enabled.assign(65U, fixture.enabled.front());
         CHECK(fixture.Activate().HasError());
     }
     CheckRuntimeBoundaryRejection(fixture);
+    LifecycleProgress("before common oracles");
     CHECK(fixture.loads == 0U);
     CHECK_FALSE(fixture.service->Active());
     CHECK(std::filesystem::is_empty(fixture.temporary.Path()));

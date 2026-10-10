@@ -131,9 +131,9 @@ namespace Horo::Packages {
             if (capability.empty() || capability.size() > 256U)
                 return Result<std::unique_ptr<PackageLifecycleService>>::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
         // The validated factory retains the private constructor; make_unique cannot invoke it.
-        return Result<std::unique_ptr<PackageLifecycleService>>::Success(std::unique_ptr<PackageLifecycleService>{
-            new PackageLifecycleService{// NOSONAR(cpp:S5950) Private validated constructor.
-                                        std::make_unique<Impl>(install, trust, std::move(configuration))}});
+        auto service = std::unique_ptr<PackageLifecycleService>(  // NOSONAR(cpp:S5950) Sealed private constructor.
+            new PackageLifecycleService{std::make_unique<Impl>(install, trust, std::move(configuration))});
+        return Result<std::unique_ptr<PackageLifecycleService>>::Success(std::move(service));
     }
 
     /** @copydoc PackageLifecycleService::PackageLifecycleService */
