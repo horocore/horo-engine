@@ -19,6 +19,7 @@ namespace Horo::Editor::Detail {
         std::shared_ptr<const SourceText> text;
         std::shared_ptr<const SourceText> base;
         SourceExternalState external{SourceExternalState::InSync};
+        bool saveUnconfirmed{};
     };
 
     /** @brief Validates bounded scalar text and captures exact non-normalized encoding metadata. */
@@ -45,6 +46,7 @@ namespace Horo::Editor {
         SourceDocumentLimits limits;
         std::thread::id owner{std::this_thread::get_id()};
         bool closed{};
+        bool saving{};
         std::vector<Record> records;
         /** @brief Validates owner-thread access, open lifecycle and project admission. */
         [[nodiscard]] Result<void> Check() const;
@@ -61,6 +63,10 @@ namespace Horo::Editor {
         /** @brief Validates/reserves/copies one borrowed patch without changing the current root. */
         [[nodiscard]] Result<std::shared_ptr<const Detail::SourceText>> PrepareEdit(const Record &record, const SourceTextEdit &edit,
                                                                                     CancellationToken cancellation) const;
+        /** @brief Validates save intent/path and read reservation before filesystem callback admission. */
+        [[nodiscard]] Result<std::filesystem::path> PrepareSavePath(const Record &record, const SourceSaveRequest &request,
+                                                                    const DocumentIdentity &identity, std::filesystem::path path,
+                                                                    CancellationToken cancellation) const;
         /** @brief Revalidates the stored path and reserves a bounded complete disk observation. */
         [[nodiscard]] Result<std::shared_ptr<const Detail::SourceText>> ReadRecord(const Record &record,
                                                                                    CancellationToken cancellation) const;

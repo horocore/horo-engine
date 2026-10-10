@@ -2071,6 +2071,7 @@ target_link_libraries(HoroEditorSurfaceIdentityTests PRIVATE HoroEngine::EditorS
 add_executable(HoroSourceFileOpenServiceTests
         unit/editor/SourceFileOpenServiceTests.cpp
         unit/editor/SourceDocumentServiceTests.cpp
+        unit/editor/SourceDocumentSaveTests.cpp
         unit/editor/SequenceDocumentTests.cpp
         support/AllocationProbe.cpp
 )

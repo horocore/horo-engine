@@ -50,7 +50,8 @@ namespace Horo::Editor {
 
         /** @brief Recognizes exact already-clean disk bytes without advancing a revision. */
         bool MatchesCurrentDisk(const Detail::SourceDocumentRoot &root, const Detail::SourceText &disk) {
-            return disk.bytes == root.text->bytes && disk.bytes == root.base->bytes && root.external == SourceExternalState::InSync;
+            return disk.bytes == root.text->bytes && disk.bytes == root.base->bytes && root.external == SourceExternalState::InSync &&
+                   !root.saveUnconfirmed;
         }
     }  // namespace
 
@@ -163,6 +164,7 @@ namespace Horo::Editor {
             next.Value()->text = std::move(loaded).Value();
             next.Value()->base = next.Value()->text;
             next.Value()->baseRevision = next.Value()->revision;
+            next.Value()->saveUnconfirmed = false;
             next.Value()->external = SourceExternalState::InSync;
             if (cancellation.IsCancellationRequested())
                 return Failure<SourceDocumentSnapshot>(SourceDocumentErrors::Cancelled);

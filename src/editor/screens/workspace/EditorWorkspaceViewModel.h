@@ -69,6 +69,10 @@ namespace Horo::Editor {
         CloseSequenceDocument,
         UpdateSequenceTimeline,
         ReturnToWelcome,
+        SaveSourceDocument,
+        SaveSourceDocumentAs,
+        SaveAllSourceDocuments,
+        CloseSourceDocument,
         SaveScene,
         SaveSceneAs,
         SaveSceneCopyAs,
@@ -220,6 +224,8 @@ namespace Horo::Editor {
     struct EditorWorkspaceViewCommandData {  // NOSONAR(cpp:S1820) Command payload variant container
         EditorWorkspaceViewCommand command = EditorWorkspaceViewCommand::None;
         std::optional<DocumentInstanceId> documentInstance;
+        std::optional<SourceSaveRequest> sourceSave;
+        SourceCloseDecision sourceCloseDecision{SourceCloseDecision::Cancel};
         std::optional<SequenceTimelineState> sequenceTimeline;
         std::optional<EditorMenuInvocation> menuInvocation = std::nullopt;
         std::optional<ObjectSelectionRequest> objectSelection = std::nullopt;

@@ -19,3 +19,13 @@ void QualifySourceDocumentPublicContract(Horo::Editor::SourceFileOpenService &op
     const auto result = open.Documents().Edit(snapshot.Identity().instance, edit);
     static_cast<void>(result);
 }
+
+/** @brief Qualifies source persistence without importing editor implementation headers. */
+void QualifySourceSavePublicContract(Horo::Editor::SourceFileOpenService &open, Horo::DurableFileSystem &files,
+                                     const Horo::Editor::SourceDocumentSnapshot &snapshot) {
+    const Horo::Editor::SourceSaveRequest request{snapshot.Identity().instance, snapshot.Revision(), {}};
+    static_cast<void>(open.Documents().Save(request, files));
+    static_cast<void>(open.Documents().SaveAll(files));
+    static_cast<void>(open.SaveAs(request, "copy.cpp", files));
+    static_cast<void>(open.ResolveClose(request, Horo::Editor::SourceCloseDecision::Cancel, files));
+}
