@@ -1,7 +1,7 @@
 # Character movement qualification
 
 `HORO-952` / `[CHR-002.8]` qualifies the movement contract through
-`HoroPhysicsTests`. No public API or runtime policy changes are required.
+`HoroPhysicsTests`. The continuous-support proof fixes low capsule contacts being mistaken for stairs; no public API changes are required.
 
 The canonical reference corpus in `CharacterMovementQualificationTests.cpp`
 uses actual Physics fixtures and the ordinary `CharacterPhysicsQueryAdapter`,
@@ -26,7 +26,7 @@ correctness tolerances, not performance measurements.
 Every successful native scene validates its locomotion snapshot, grounded state,
 complete termination, query count, movement iteration bound and matching
 publication revision. Separate native cases cover query exhaustion without
-publication, a one-iteration conservative stop, stale Physics snapshots and
+publication, a one-iteration conservative stop, stale Character query-context revisions and
 copied snapshots surviving teardown. Null compositions must return explicit
 `CapabilityUnavailable` without a spawned transform.
 

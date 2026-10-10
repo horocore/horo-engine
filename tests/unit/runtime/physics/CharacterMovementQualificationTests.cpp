@@ -199,6 +199,9 @@ namespace Horo::Character {
             const auto snapshot = host.character->ControllerLocomotionSnapshot(host.controller).Value();
             REQUIRE(
                 ValidateCharacterLocomotionSnapshot(snapshot, host.character->ControllerDescriptor(host.controller).Value()).HasValue());
+            INFO("native terminal pose: " << snapshot.transform.position.x << ", " << snapshot.transform.position.y << ", "
+                                          << snapshot.transform.position.z << "; grounded=" << snapshot.movement.grounded
+                                          << "; termination=" << static_cast<unsigned>(snapshot.movement.termination));
             // Native contact tolerance is 5 mm; headless exact oracles retain their tighter authored tolerances.
             REQUIRE(snapshot.transform.position.x == Catch::Approx(plan.expected.position.x).margin(0.005F));
             REQUIRE(snapshot.transform.position.y == Catch::Approx(plan.expected.position.y).margin(0.005F));
@@ -251,8 +254,23 @@ namespace Horo::Character {
             REQUIRE(host.Move({1, 0, 0}, capture).HasValue());
             const auto before = host.character->ControllerLocomotionSnapshot(host.controller).Value();
             const auto descriptor = host.character->ControllerDescriptor(host.controller).Value();
-            host.Add(Physics::PhysicsBoxShape{{0.5F, 0.5F, 0.5F}}, {10, 0, 0});
-            RequireError(host.Move({1, 0, 0}, capture, 2), Physics::PhysicsErrors::QuerySnapshotStale);
+            CharacterPhysicsQueryAdapter adapter(*host.physics);
+            const auto stale = adapter.Context(QueryExpectations(host.character->Descriptor(), 2));
+            REQUIRE(
+                host.physics
+                    ->AdvanceFixedTick({.simulationTick = 2, .sceneGeneration = 61, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                    .HasValue());
+            REQUIRE(host.character->RefreshPhysicsSnapshot(host.physics->Identity(), host.physics->PublishedTick().publicationRevision)
+                        .HasValue());
+            REQUIRE(stale.physicsSnapshotRevision != host.character->Descriptor().physicsSnapshotRevision);
+            auto command = Movement(host.controller, 2, 2);
+            command.desiredVelocityMetersPerSecond = Math::Vec3{1, 0, 0};
+            REQUIRE(host.character->QueueMovementCommand(command).HasValue());
+            auto input = FixedTick(2);
+            input.query = stale;
+            input.metrics = &capture;
+            RequireError(host.character->AdvanceFixedTick(input), CharacterErrors::QuerySnapshotStale);
+            REQUIRE(capture.snapshot.queries == 0);
             REQUIRE(capture.snapshot.failed);
             REQUIRE(host.character->PublishedTick().completedTick == 1);
             const auto after = host.character->ControllerLocomotionSnapshot(host.controller).Value();
