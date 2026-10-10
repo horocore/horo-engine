@@ -631,6 +631,7 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/AITaskLifecycle.h
     Horo/AI/AITaskContinuation.h
     Horo/AI/AITaskJobService.h
+    Horo/AI/AITaskScheduler.h
     Horo/AI/BehaviorTree.h
     Horo/AI/BehaviorTreeRuntime.h
     Horo/AI/DecisionWakePolicy.h
