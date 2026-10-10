@@ -2,6 +2,7 @@
 
 #include "Horo/Runtime/Save/SaveErrors.h"
 #include "Horo/Runtime/Save/SaveTelemetry.h"
+#include "SaveOperationArbiterState.h"
 
 #include <algorithm>
 #include <format>
@@ -12,6 +13,8 @@
 #include <vector>
 
 namespace Horo::Runtime {
+    using namespace SaveOperationArbiterDetail;
+
     namespace {
         [[nodiscard]] Error ArbiterError(const ErrorCodeDescriptor &descriptor, const char *message) {
             return MakeError(descriptor, message);
@@ -43,7 +46,7 @@ namespace Horo::Runtime {
 
         [[nodiscard]] bool IsRequestValid(const SaveArbiterRequest &request) noexcept {
             if (request.operation.operation == 0 || request.operation.maximumCompletionCallbacks == 0 ||
-                request.operation.maximumCompletionCallbacks > MaximumSaveOperationCompletionCallbacks ||
+                request.operation.maximumCompletionCallbacks > MaximumSaveOperationCompletionCallbacks || !IsRetryValid(request) ||
                 !IsKnown(request.operation.kind) || !IsKnown(request.mode) || !IsKnown(request.priority) || !IsKnown(request.conflict))
                 return false;
             return RequiresAddress(request.operation.kind) ? IsAddressValid(request.address) : !request.address.has_value();
@@ -113,38 +116,14 @@ namespace Horo::Runtime {
         }
     }  // namespace
 
-    struct SaveOperationArbiterDetail::State final {
-        struct Record final {
-            SaveArbiterRequest request;
-            SaveOperationController controller;
-            SaveArbiterState state{SaveArbiterState::Queued};
-            std::uint64_t enqueueOrder{};
-            std::uint64_t revision{1};
-        };
-
-        SaveOperationArbiterLimits limits;
-        std::vector<Record> records;
-        std::optional<OperationId> active;
-        std::uint64_t nextEnqueueOrder{1};
-    };
-
     namespace {
         using State = SaveOperationArbiterDetail::State;
 
-        template <typename StateType> [[nodiscard]] auto Find(StateType &state, const OperationId operation) {
-            return std::ranges::find_if(state.records, [operation](const State::Record &record) {
-                return record.request.operation.operation == operation;
-            });
-        }
-
-        [[nodiscard]] bool IsTerminal(const State::Record &record) {
-            const std::optional<SaveOperationSnapshot> snapshot = record.controller.Handle().Snapshot();
-            return snapshot.has_value() && snapshot->IsTerminal();
-        }
-
         [[nodiscard]] bool Equivalent(const State::Record &record, const SaveArbiterRequest &request) noexcept {
             return record.request.operation.kind == request.operation.kind && record.request.mode == request.mode &&
-                   record.request.address == request.address;
+                   record.request.address == request.address && record.request.retry.has_value() == request.retry.has_value() &&
+                   (!request.retry || (record.request.retry->policy == request.retry->policy &&
+                                       record.request.retry->preconditions == request.retry->preconditions));
         }
 
         [[nodiscard]] bool Conflicts(const State::Record &record, const SaveArbiterRequest &request) {
@@ -153,26 +132,6 @@ namespace Horo::Runtime {
             if (!record.request.address.has_value() || !request.address.has_value())
                 return true;
             return record.request.address == request.address;
-        }
-
-        [[nodiscard]] SaveArbiterSnapshot CopySnapshot(const State::Record &record) {
-            return {.operation = *record.controller.Handle().Snapshot(),
-                    .state = IsTerminal(record) ? SaveArbiterState::Terminal : record.state,
-                    .mode = record.request.mode,
-                    .address = record.request.address,
-                    .priority = record.request.priority,
-                    .enqueueOrder = record.enqueueOrder,
-                    .revision = record.revision};
-        }
-
-        [[nodiscard]] bool SynchronizeTerminal(State &state, State::Record &record) {
-            if (!IsTerminal(record))
-                return false;
-            record.state = SaveArbiterState::Terminal;
-            ++record.revision;
-            if (state.active == record.request.operation.operation)
-                state.active.reset();
-            return true;
         }
 
         void CancelRecord(State &state, State::Record &record) {
@@ -298,6 +257,12 @@ namespace Horo::Runtime {
             return Result<void>::Failure(ArbiterError(SaveErrors::ArbiterInvalid, "The operation rejected phase progress."));
         }
 
+        /** @brief Compares stable admission order within typed priority without preempting active work. */
+        [[nodiscard]] bool Precedes(const State::Record &candidate, const State::Record &selected) noexcept {
+            return candidate.request.priority > selected.request.priority ||
+                   (candidate.request.priority == selected.request.priority && candidate.enqueueOrder < selected.enqueueOrder);
+        }
+
         [[nodiscard]] bool IsReadyToComplete(const State::Record &record) noexcept {
             using enum SaveArbiterState;
             using enum SaveOperationKind;
@@ -313,22 +278,6 @@ namespace Horo::Runtime {
             return false;
         }
 
-        [[nodiscard]] RecordIterator FindActiveRecord(State &state, const OperationId operation) {
-            if (!state.active.has_value() || *state.active != operation)
-                return state.records.end();
-            return Find(state, operation);
-        }
-
-        [[nodiscard]] Result<void> FinishTerminalTransition(State &state, State::Record &record,
-                                                            const SaveOperationTransitionResult transition) {
-            if (transition != SaveOperationTransitionResult::Applied)
-                return SynchronizeTerminal(state, record) ? Result<void>::Success()
-                                                          : Result<void>::Failure(MakeError(SaveErrors::ArbiterInvalid));
-            record.state = SaveArbiterState::Terminal;
-            ++record.revision;
-            state.active.reset();
-            return Result<void>::Success();
-        }
     }  // namespace
 
     /** @copydoc SaveOperationArbiter::~SaveOperationArbiter */
@@ -343,7 +292,7 @@ namespace Horo::Runtime {
     Result<SaveArbiterAdmission> SaveOperationArbiter::Admit(SaveArbiterRequest request) {
         SaveStageObservation observation{SaveTelemetryStage::Queue, request.operation.operation};
         auto admitted = [this, &request] {
-            if (!IsRequestValid(request) || Find(*state_, request.operation.operation) != state_->records.end())
+            if (state_->closed || !IsRequestValid(request) || Find(*state_, request.operation.operation) != state_->records.end())
                 return Result<SaveArbiterAdmission>::Failure(
                     ArbiterError(SaveErrors::ArbiterInvalid, "The arbiter request is malformed or reuses an operation identity."));
 
@@ -366,14 +315,13 @@ namespace Horo::Runtime {
 
     /** @copydoc SaveOperationArbiter::StartNext */
     std::optional<SaveArbiterSnapshot> SaveOperationArbiter::StartNext() {
-        if (state_->active.has_value())
+        if (state_->closed || state_->active.has_value())
             return std::nullopt;
         auto selected = state_->records.end();
         for (auto iterator = state_->records.begin(); iterator != state_->records.end(); ++iterator) {
             if (iterator->state != SaveArbiterState::Queued || IsTerminal(*iterator))
                 continue;
-            if (selected == state_->records.end() || iterator->request.priority > selected->request.priority ||
-                (iterator->request.priority == selected->request.priority && iterator->enqueueOrder < selected->enqueueOrder))
+            if (selected == state_->records.end() || Precedes(*iterator, *selected))
                 selected = iterator;
         }
         if (selected == state_->records.end())
@@ -419,6 +367,25 @@ namespace Horo::Runtime {
         if (found == state_->records.end())
             return Result<void>::Failure(MakeError(SaveErrors::ArbiterInvalid));
         return FinishTerminalTransition(*state_, *found, found->controller.Fail(std::move(error), outcome));
+    }
+
+    /** @copydoc SaveOperationArbiter::BeginShutdown */
+    Result<void> SaveOperationArbiter::BeginShutdown() {
+        state_->closed = true;
+        for (auto &record : state_->records) {
+            if (IsTerminal(record))
+                continue;
+            const auto requested = record.controller.RequestShutdownCancellation();
+            if (requested != SaveCancellationRequestResult::Requested && requested != SaveCancellationRequestResult::AlreadyRequested)
+                continue;
+            record.state = SaveArbiterState::Cancelling;
+            ++record.revision;
+            if (state_->active != record.request.operation.operation) {
+                static_cast<void>(record.controller.ObserveCancellation());
+                static_cast<void>(SynchronizeTerminal(*state_, record));
+            }
+        }
+        return Result<void>::Success();
     }
 
     /** @copydoc SaveOperationArbiter::Cancel */

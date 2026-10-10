@@ -468,6 +468,7 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveCommands.cpp
         runtime/save/SaveCommandErrors.cpp
         runtime/save/SaveOperationArbiter.cpp
+        runtime/save/SaveOperationRetry.cpp
         runtime/save/SaveProjectPolicy.cpp
         runtime/save/SaveSafePointCoordinator.cpp
         runtime/save/SaveCaptureBarrier.cpp

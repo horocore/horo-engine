@@ -3200,6 +3200,7 @@ set_tests_properties(HoroSaveCommandsPublicHeaderConsumer PROPERTIES LABELS "uni
 
 add_executable(HoroRuntimeSaveOperationArbiterTests
         unit/runtime/save/SaveOperationArbiterTests.cpp
+        unit/runtime/save/SaveOperationRetryTests.cpp
 )
 target_compile_features(HoroRuntimeSaveOperationArbiterTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSaveOperationArbiterTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -3256,6 +3257,7 @@ add_executable(HoroRuntimeSaveAutosaveSchedulerTests
         support/AllocationProbe.cpp
         unit/runtime/save/SaveAutosaveSchedulerTests.cpp
         unit/runtime/save/SaveAutosaveIntegrationTests.cpp
+        unit/runtime/save/SaveAutosaveRetryTests.cpp
 )
 target_compile_features(HoroRuntimeSaveAutosaveSchedulerTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSaveAutosaveSchedulerTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)

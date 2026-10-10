@@ -16,6 +16,9 @@ static_assert(!std::is_constructible_v<Horo::Runtime::SaveAutosaveScheduler, con
                                        Horo::Runtime::SaveCaptureBarrier &>);
 
 int main() {
+    const Horo::Runtime::SaveArbiterRetrySnapshot retry;
+    if (retry.completedRetries != 0 || retry.lastError)
+        return 1;
     const Horo::Runtime::SaveAutosaveSchedulerSnapshot snapshot;
     return snapshot.pending || snapshot.operation != 0 ? 1 : 0;
 }

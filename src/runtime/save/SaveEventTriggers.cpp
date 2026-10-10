@@ -14,6 +14,18 @@ namespace Horo::Runtime {
             return kind == BeforeTransition || kind == AfterTransition;
         }
 
+        /** @brief Tests whether an existing consumer handle still represents nonterminal work. */
+        [[nodiscard]] bool IsInFlight(const SaveOperationHandle &operation) {
+            const auto state = operation.Snapshot();
+            return state && !state->IsTerminal();
+        }
+
+        /** @brief Keeps newer non-transition Auto payloads within the one pending-intent bound. */
+        [[nodiscard]] bool CanQueueLatest(const SaveTriggerRegistration &registration, const CookedSaveProjectPolicy &policy) {
+            return registration.mode == SavePolicyMode::Auto && !IsTransition(registration.kind) &&
+                   policy.Mode(registration.mode)->cooldown.coalesceWhenBusy;
+        }
+
         /** @brief Checks exact typed payload shape and bounded schema requirements. */
         bool ValidPayload(const SaveTriggerRegistration &registration, const SaveTriggerEvent &event) {
             using enum SaveTriggerKind;
@@ -132,19 +144,12 @@ namespace Horo::Runtime {
             return Return::Failure(context.ErrorValue());
         if (event.correlation.sequence < found->highestSequence)
             return Return::Failure(MakeError(SaveErrors::GenerationStale));
-        if (found->receipt && found->receipt->event.generation == event.generation && found->receipt->event.payload == event.payload) {
-            const auto state = found->receipt->operation.Snapshot();
-            if (event.correlation.sequence == found->highestSequence || found->receipt->pending || (state && !state->IsTerminal())) {
-                if (event.correlation.sequence != found->highestSequence &&
-                    !policy_.Mode(found->registration.mode)->cooldown.coalesceWhenBusy)
-                    return Return::Failure(MakeError(SaveErrors::OperationInProgress));
-                found->highestSequence = event.correlation.sequence;
-                return Return::Success(*found->receipt);
-            }
-        }
+        if (auto coalesced = TryCoalesce(*found, event); coalesced)
+            return std::move(*coalesced);
         if (event.correlation.sequence == found->highestSequence)
             return Return::Failure(MakeError(SaveErrors::LifecycleInvalid));
-        if (pending_.has_value() || (active_.IsValid() && !active_.Snapshot()->IsTerminal()))
+        const auto index = static_cast<std::size_t>(found - records_.begin());
+        if (!CanRetainIntent(index, CanQueueLatest(found->registration, policy_)))
             return Return::Failure(MakeError(SaveErrors::OperationInProgress));
         found->receipt = SaveTriggerReceipt{.event = event,
                                             .access = {found->registration.target.nameSpace, host_->binding.revision},
@@ -155,11 +160,35 @@ namespace Horo::Runtime {
         return Return::Success(*found->receipt);
     }
 
+    /** @copydoc SaveEventTriggers::TryCoalesce */
+    std::optional<Result<SaveTriggerReceipt>> SaveEventTriggers::TryCoalesce(Record &record, const SaveTriggerEvent &event) {
+        using Return = Result<SaveTriggerReceipt>;
+        if (!record.receipt || record.receipt->event.generation != event.generation || record.receipt->event.payload != event.payload)
+            return {};
+        const bool sameSequence = event.correlation.sequence == record.highestSequence;
+        const bool outstanding = record.receipt->pending || IsInFlight(record.receipt->operation);
+        if (!sameSequence && !outstanding)
+            return {};
+        if (!sameSequence && !policy_.Mode(record.registration.mode)->cooldown.coalesceWhenBusy)
+            return Return::Failure(MakeError(SaveErrors::OperationInProgress));
+        record.highestSequence = event.correlation.sequence;
+        return Return::Success(*record.receipt);
+    }
+
+    /** @copydoc SaveEventTriggers::CanRetainIntent */
+    bool SaveEventTriggers::CanRetainIntent(const std::size_t index, const bool latestAuto) const {
+        if (pending_ && (*pending_ != index || !latestAuto))
+            return false;
+        return latestAuto || !IsInFlight(active_);
+    }
+
     /** @copydoc SaveEventTriggers::Receipt */
     Result<SaveTriggerReceipt> SaveEventTriggers::Receipt(const SaveTriggerCorrelation correlation) const {
         using Return = Result<SaveTriggerReceipt>;
         if (owner_ != std::this_thread::get_id())
             return Return::Failure(MakeError(SaveErrors::ThreadAffinityViolation));
+        if (activeReceipt_ && activeReceipt_->event.correlation == correlation)
+            return Return::Success(*activeReceipt_);
         for (const auto &record : records_)
             if (record.receipt && record.receipt->event.correlation == correlation)
                 return Return::Success(*record.receipt);
@@ -180,6 +209,8 @@ namespace Horo::Runtime {
             return Result<void>::Failure(MakeError(SaveErrors::ThreadAffinityViolation));
         if (pending_.has_value())
             RejectPending(MakeError(SaveErrors::OperationCancelled));
+        if (active_.IsValid())
+            static_cast<void>(arbiter_->Cancel(active_.Id()));
         closed_ = true;
         return Result<void>::Success();
     }

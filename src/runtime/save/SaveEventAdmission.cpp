@@ -5,6 +5,24 @@
 #include <utility>
 
 namespace Horo::Runtime {
+    namespace {
+        /** @brief Compares immutable logical target, binding and storage CAS evidence. */
+        [[nodiscard]] bool SameTargetEvidence(const SaveTriggerHandoff &left, const SaveTriggerHandoff &right) noexcept {
+            return left.target == right.target && left.access.expected == right.access.expected &&
+                   left.access.expectedRevision == right.access.expectedRevision && left.catalogRevision == right.catalogRevision &&
+                   left.expectedGeneration == right.expectedGeneration;
+        }
+
+        /** @brief Checks optional retry evidence against the actual event admission rather than caller-selected storage. */
+        [[nodiscard]] bool MatchesRetryHandoff(const SaveArbiterRetryDescriptor &retry, const SaveTriggerHandoff &handoff) noexcept {
+            return retry.preconditions.access.expected == handoff.access.expected &&
+                   retry.preconditions.access.expectedRevision == handoff.access.expectedRevision &&
+                   retry.preconditions.runtime == handoff.receipt.event.generation &&
+                   retry.preconditions.catalogRevision == handoff.catalogRevision && retry.preconditions.slot == handoff.target.slot &&
+                   retry.preconditions.expectedGeneration == handoff.expectedGeneration;
+        }
+    }  // namespace
+
     /** @copydoc SaveEventTriggers::Resolve */
     Result<SaveTriggerHandoff> SaveEventTriggers::Resolve(const Record &record) const {
         using Return = Result<SaveTriggerHandoff>;
@@ -35,25 +53,24 @@ namespace Horo::Runtime {
         if (const auto owner = ValidateOwner(); owner.HasError())
             return owner;
         const auto found = std::ranges::find_if(records_, [&handoff](const auto &record) {
-            return record.receipt && record.receipt->event == handoff.receipt.event &&
-                   record.receipt->operation.Id() == handoff.receipt.operation.Id();
+            return record.registration.id == handoff.receipt.event.correlation.trigger;
         });
-        if (found == records_.end() || !handoff.receipt.operation.IsValid())
+        if (found == records_.end() || !handoff.receipt.operation.IsValid() || !activeReceipt_ ||
+            activeReceipt_->event != handoff.receipt.event || activeReceipt_->operation.Id() != handoff.receipt.operation.Id())
             return Result<void>::Failure(MakeError(SaveErrors::GenerationStale));
-        const auto resolved = Resolve(*found);
+        const Record admitted{.registration = found->registration, .receipt = *activeReceipt_};
+        const auto resolved = Resolve(admitted);
         if (resolved.HasError())
             return Result<void>::Failure(resolved.ErrorValue());
-        if (const auto &current = resolved.Value();
-            current.target != handoff.target || current.access.expected != handoff.access.expected ||
-            current.access.expectedRevision != handoff.access.expectedRevision || current.catalogRevision != handoff.catalogRevision ||
-            current.expectedGeneration != handoff.expectedGeneration)
+        if (!SameTargetEvidence(resolved.Value(), handoff))
             return Result<void>::Failure(MakeError(SaveErrors::GenerationStale));
         return Result<void>::Success();
     }
 
     /** @copydoc SaveEventTriggers::CommitAtSafePoint */
     Result<std::optional<SaveTriggerHandoff>> SaveEventTriggers::CommitAtSafePoint(const RuntimePhase phase,
-                                                                                   SaveOperationDescriptor operation) {
+                                                                                   SaveOperationDescriptor operation,
+                                                                                   std::optional<SaveArbiterRetryDescriptor> retry) {
         using Return = Result<std::optional<SaveTriggerHandoff>>;
         if (const auto owner = ValidateOwner(); owner.HasError())
             return Return::Failure(owner.ErrorValue());
@@ -73,26 +90,37 @@ namespace Horo::Runtime {
             RejectPending(error);
             return Return::Failure(error);
         }
-        if (const auto cooldown = policy_.Mode(record.registration.mode)->cooldown.minimumIntervalMilliseconds;
-            (admitted_[modeIndex] && host_->monotonicMilliseconds - admittedAt_[modeIndex] < cooldown) ||
-            arbiter_->ActiveOperation().has_value() || arbiter_->QueuedCount() != 0)
+        if (!ReadyForAdmission(record))
             return Return::Success({});
-        auto result = Admit(record, std::move(resolved).Value(), std::move(operation));
+        auto result = Admit(record, std::move(resolved).Value(), std::move(operation), std::move(retry));
         if (result.HasError())
             return Return::Failure(result.ErrorValue());
         return Return::Success(std::move(result).Value());
     }
 
+    /** @copydoc SaveEventTriggers::ReadyForAdmission */
+    bool SaveEventTriggers::ReadyForAdmission(const Record &record) const {
+        const auto modeIndex = static_cast<std::size_t>(record.registration.mode);
+        const auto cooldown = policy_.Mode(record.registration.mode)->cooldown.minimumIntervalMilliseconds;
+        if ((admitted_[modeIndex] && host_->monotonicMilliseconds - admittedAt_[modeIndex] < cooldown) ||
+            arbiter_->ActiveOperation().has_value() || arbiter_->QueuedCount() != 0)
+            return false;
+        const auto active = active_.Snapshot();
+        return !active || active->IsTerminal();
+    }
+
     /** @copydoc SaveEventTriggers::Admit */
-    Result<SaveTriggerHandoff> SaveEventTriggers::Admit(Record &record, SaveTriggerHandoff handoff, SaveOperationDescriptor operation) {
+    Result<SaveTriggerHandoff> SaveEventTriggers::Admit(Record &record, SaveTriggerHandoff handoff, SaveOperationDescriptor operation,
+                                                        std::optional<SaveArbiterRetryDescriptor> retry) {
         using Return = Result<SaveTriggerHandoff>;
-        if (operation.kind != SaveOperationKind::Save)
+        if (operation.kind != SaveOperationKind::Save || (retry && !MatchesRetryHandoff(*retry, handoff)))
             return Return::Failure(MakeError(SaveErrors::OperationInvalid));
         auto admitted = arbiter_->Admit({.operation = std::move(operation),
                                          .mode = record.registration.mode,
                                          .address = record.registration.target,
                                          .priority = SaveArbiterPriority::Background,
-                                         .conflict = SaveArbiterConflictPolicy::Reject});
+                                         .conflict = SaveArbiterConflictPolicy::Reject,
+                                         .retry = std::move(retry)});
         if (admitted.HasError()) {
             RejectPending(admitted.ErrorValue());
             return Return::Failure(admitted.ErrorValue());
@@ -107,6 +135,7 @@ namespace Horo::Runtime {
         }
         active_ = record.receipt->operation;
         record.receipt->pending = false;
+        activeReceipt_ = *record.receipt;
         const auto modeIndex = static_cast<std::size_t>(record.registration.mode);
         admitted_[modeIndex] = true;
         admittedAt_[modeIndex] = host_->monotonicMilliseconds;

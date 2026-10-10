@@ -144,15 +144,14 @@ namespace Horo::Runtime {
          * @param provenance Current coherent capture evidence, never timer-time state.
          * @param participants Pinned actual registry snapshot.
          * @param limits Existing immutable capture limits.
+         * @param retry Optional host-issued storage retry capability; its runtime and namespace must match this capture.
          * @return Empty while deferred/busy; one handoff after capture; original typed admission/capture/operation failure.
          * @post No callback or runtime snapshot is retained after handoff. Reentry is rejected.
          */
-        [[nodiscard]] Result<std::optional<SaveAutosaveCapture>> CommitAtSafePoint(RuntimePhase phase, SaveRuntimeGeneration generation,
-                                                                                   SaveOperationDescriptor operation,
-                                                                                   SaveArbiterAddress address,
-                                                                                   const RuntimeSaveCaptureProvenance &provenance,
-                                                                                   SaveParticipantRegistrySnapshot participants,
-                                                                                   const RuntimeSaveCaptureLimits &limits = {});
+        [[nodiscard]] Result<std::optional<SaveAutosaveCapture>> CommitAtSafePoint(
+            RuntimePhase phase, SaveRuntimeGeneration generation, SaveOperationDescriptor operation, SaveArbiterAddress address,
+            const RuntimeSaveCaptureProvenance &provenance, SaveParticipantRegistrySnapshot participants,
+            const RuntimeSaveCaptureLimits &limits = {}, std::optional<SaveArbiterRetryDescriptor> retry = {});
         /** @brief Explicitly cancels pending intent and cooperatively cancels owned pre-commit work.
          * @return Success or typed affinity/reentrancy failure; post-commit completion remains host-owned.
          */
@@ -198,7 +197,8 @@ namespace Horo::Runtime {
         /** @brief Observes the exact retained terminal handle and preserves failure cause. */
         [[nodiscard]] Result<void> ObserveTerminal();
         /** @brief Creates one background arbiter operation and requests its barrier. */
-        [[nodiscard]] Result<void> Admit(SaveOperationDescriptor operation, SaveArbiterAddress address);
+        [[nodiscard]] Result<void> Admit(SaveOperationDescriptor operation, SaveArbiterAddress address,
+                                         std::optional<SaveArbiterRetryDescriptor> retry);
         /** @brief Polls cancellation and hands off the current immutable barrier cut once. */
         [[nodiscard]] Result<std::optional<SaveAutosaveCapture>> Capture(RuntimePhase phase, const RuntimeSaveCaptureProvenance &provenance,
                                                                          SaveParticipantRegistrySnapshot participants,

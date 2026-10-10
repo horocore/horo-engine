@@ -69,7 +69,8 @@ namespace Horo::Runtime {
             CHECK(duplicate.event.correlation == first.event.correlation);
             CHECK(fixture.arbiter.QueuedCount() == 0);
             CHECK(fixture.triggers->Submit(fixture.Event(1, 1)).HasError());
-            CHECK(fixture.triggers->Submit(fixture.Event(2)).HasError());
+            CHECK(fixture.triggers->Submit(fixture.Event(2)).Value().pending);
+            CHECK_FALSE(fixture.Poll().Value());
             auto altered = fixture.Event(1, 1001);
             ++altered.generation.scene;
             CHECK(fixture.triggers->Submit(altered).HasError());
@@ -136,4 +137,76 @@ namespace Horo::Runtime {
             CHECK(fixture.triggers->BeginShutdown().HasValue());
         }
     }  // namespace
+}  // namespace Horo::Runtime
+
+namespace Horo::Runtime {
+    TEST_CASE("Newest meaningful autosave payload replaces only one pending intent while retaining active correlation",
+              "[unit][save][event][backpressure]") {
+        using namespace EventTriggerTestSupport;
+        Fixture fixture;
+        const auto active = fixture.Admit(fixture.Event(3));
+        fixture.CaptureNow();
+        auto newest = fixture.Event(3, 2);
+        for (std::uint64_t sequence = 2; sequence != 1002; ++sequence) {
+            newest.correlation.sequence = sequence;
+            std::get<SaveProjectTriggerPayload>(newest.payload).bytes[0] = std::byte(sequence % 256);
+            const auto pending = fixture.triggers->Submit(newest);
+            REQUIRE(pending.HasValue());
+            CHECK(pending.Value().pending);
+            CHECK_FALSE(pending.Value().operation.IsValid());
+            CHECK_FALSE(fixture.Poll().Value());
+            CHECK(fixture.arbiter.QueuedCount() == 0);
+        }
+        const auto observed = fixture.triggers->Receipt(active.receipt.event.correlation);
+        REQUIRE(observed.HasValue());
+        CHECK(observed.Value().operation.Id() == active.receipt.operation.Id());
+        CHECK(observed.Value().event == active.receipt.event);
+        REQUIRE(fixture.triggers->Revalidate(active).HasValue());
+        CHECK(fixture.triggers->Receipt({{3}, 2}).HasError());
+        fixture.Complete();
+        fixture.host.monotonicMilliseconds = 10;
+        const auto handoff = fixture.Poll().Value();
+        REQUIRE(handoff);
+        CHECK(handoff->receipt.event == newest);
+        CHECK(handoff->receipt.operation.Id() != active.receipt.operation.Id());
+        CHECK(active.receipt.operation.Snapshot()->state == SaveOperationState::Completed);
+    }
+
+    TEST_CASE("Triggered retry retains handoff CAS active receipt and pending newest payload until explicit shutdown",
+              "[unit][save][event][retry]") {
+        using namespace EventTriggerTestSupport;
+        Fixture fixture;
+        const SaveArbiterRetryDescriptor retry{.policy = {2, 10, 20, 100},
+                                               .preconditions = {.access = {fixture.registrations[2].target.nameSpace,
+                                                                            fixture.host.binding.revision},
+                                                                 .runtime = fixture.host.generation,
+                                                                 .catalogRevision = fixture.host.catalog.revision,
+                                                                 .slot = fixture.registrations[2].target.slot,
+                                                                 .publicationGeneration = Test::Id<SlotGenerationId>(9)}};
+        REQUIRE(fixture.triggers->Submit(fixture.Event(3)).HasValue());
+        const auto admitted = fixture.triggers->CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges,
+                                                                  {.operation = 101, .maximumCompletionCallbacks = 2}, retry);
+        REQUIRE(admitted.HasValue());
+        REQUIRE(admitted.Value());
+        fixture.forwarded = *admitted.Value();
+        fixture.CaptureNow();
+        const auto operation = fixture.forwarded->receipt.operation.Id();
+        REQUIRE(fixture.arbiter
+                    .DeferStorageRetry(operation,
+                                       {.category = SaveStorageFailureCategory::TransientIo,
+                                        .nativeCause = MakeError(SaveErrors::StorageTransientIo)},
+                                       0)
+                    .Value());
+        auto newest = fixture.Event(3, 2);
+        std::get<SaveProjectTriggerPayload>(newest.payload).bytes[0] = std::byte{99};
+        REQUIRE(fixture.triggers->Submit(newest).Value().pending);
+        REQUIRE(fixture.triggers->Revalidate(*fixture.forwarded).HasValue());
+        CHECK_FALSE(fixture.Poll().Value());
+        CHECK(fixture.captures == 1);
+        REQUIRE(fixture.triggers->BeginShutdown().HasValue());
+        REQUIRE(fixture.triggers->BeginShutdown().HasValue());
+        CHECK(fixture.forwarded->receipt.operation.Snapshot()->state == SaveOperationState::Cancelled);
+        CHECK(fixture.triggers->Receipt(newest.correlation).Value().error);
+        CHECK_FALSE(fixture.arbiter.ResumeStorageRetry(operation, retry.preconditions, 10).Value());
+    }
 }  // namespace Horo::Runtime
