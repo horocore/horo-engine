@@ -32,8 +32,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m pip install --disable-pip-version-check --no-cache-dir cmake==3.31.6 ninja==1.11.1.4
+          python3 -m pip install --disable-pip-version-check --no-cache-dir cmake==3.31.6
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
+          ninja_version=$(python3 -c 'import json; print(json.load(open("android/toolchain-lock.json"))["ninja"])')
+          curl --fail --location --retry 3 "https://github.com/ninja-build/ninja/releases/download/v$ninja_version/ninja-linux.zip" -o "$RUNNER_TEMP/ninja.zip"
           curl --fail --location --retry 3 https://services.gradle.org/distributions/gradle-8.11.1-bin.zip -o "$RUNNER_TEMP/gradle.zip"
           curl --fail --location --retry 3 https://dl.google.com/dl/android/maven2/androidx/games/games-activity/3.0.5/games-activity-3.0.5.aar -o "$RUNNER_TEMP/game-activity.aar"
           python3 - <<'PYTHON'
@@ -41,12 +43,14 @@ jobs:
           from pathlib import Path
           lock = json.loads(Path('android/toolchain-lock.json').read_text())
           temporary = Path(os.environ['RUNNER_TEMP'])
-          for name, expected in [('gradle.zip', lock['gradleSha256']), ('game-activity.aar', lock['gameActivity']['sha256'])]:
+          for name, expected in [('ninja.zip', lock['ninjaSha256']), ('gradle.zip', lock['gradleSha256']), ('game-activity.aar', lock['gameActivity']['sha256'])]:
               actual = hashlib.sha256((temporary / name).read_bytes()).hexdigest()
               if actual != expected:
                   raise SystemExit('Locked tool/dependency digest mismatch: ' + name)
           PYTHON
           unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          unzip -q "$RUNNER_TEMP/ninja.zip" -d "$RUNNER_TEMP/android-bin"
+          printf '%s\n' "$RUNNER_TEMP/android-bin" >> "$GITHUB_PATH"
       - name: Create external disposable qualification signing identity
         shell: bash
         run: |

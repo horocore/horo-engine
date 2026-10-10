@@ -234,6 +234,14 @@ class AndroidAssemblyTests(unittest.TestCase):
             with self.assertRaisesRegex(AndroidError, "Output already exists"):
                 android_package.assemble(arguments)
 
+    def test_hosted_ninja_install_uses_lock_and_explicit_path(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/android-package.yml").read_text()
+        self.assertIn('["ninja"]', workflow)
+        self.assertIn("lock['ninjaSha256']", workflow)
+        self.assertIn('"$RUNNER_TEMP/android-bin" >> "$GITHUB_PATH"', workflow)
+        self.assertNotIn('ninja==', workflow)
+        self.assertEqual(len(self.tools["ninjaSha256"]), 64)
+
     def test_tool_preflight_actual_metadata_and_version_commands(self):
         arguments = self.arguments()
         for root, revision in ((arguments.ndk,self.tools["ndk"]),

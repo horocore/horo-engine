@@ -22,13 +22,12 @@ namespace {
 extern "C" void android_main(android_app *app) {
     CheckAsset(*app);
     while (app->destroyRequested == 0) {
-        android_poll_source *source{};
         void *data{};
         const int result = ALooper_pollOnce(-1, nullptr, nullptr, &data);
         if (result == ALOOPER_POLL_ERROR)
             break;
         if (result >= 0 && data != nullptr) {
-            source = static_cast<android_poll_source *>(data);
+            auto *source = static_cast<android_poll_source *>(data);
             source->process(app, source);
         }
     }

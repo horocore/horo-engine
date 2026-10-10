@@ -98,6 +98,7 @@ def run(command: list[str], directory: Path, log: Path, timeout: int = 1800) -> 
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("wb") as output:
         # Caller supplies an explicit host tool capability and argv; no shell.
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
         process = subprocess.Popen(  # nosec B603
             command, cwd=directory, stdout=output, stderr=subprocess.STDOUT, start_new_session=True, shell=False)
         try:
@@ -112,6 +113,7 @@ def run(command: list[str], directory: Path, log: Path, timeout: int = 1800) -> 
 
 def version_output(command: list[str]) -> str:
     # Fixed version-query argv and explicit tool capability; no shell.
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
     result = subprocess.run(  # nosec B603
         command, check=False, capture_output=True, text=True, timeout=30, shell=False)
     text = result.stdout + result.stderr

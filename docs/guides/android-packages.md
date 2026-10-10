@@ -8,8 +8,9 @@ capabilities are supplied explicitly; they never enter portable provenance.
 The debug profile admits arm64-v8a and the x86_64 development ABI; release admits
 arm64-v8a. Each native CMake configure selects exactly one ABI. The API tuple is
 minSdk 29 / targetSdk 36 / compileSdk 36, with NDK 28.2.13676358, CMake 3.31.6,
-Ninja 1.11.1, JDK 17, Gradle 8.11.1, AGP 8.10.1 and GameActivity 3.0.5. The AAR and Gradle
-distribution have checked-in SHA-256 identities. Java dependency versions and
+Ninja 1.11.1, JDK 17, Gradle 8.11.1, AGP 8.10.1 and GameActivity 3.0.5. The AAR, upstream Ninja binary and Gradle
+distribution have checked-in SHA-256 identities. Hosted qualification selects
+the verified upstream Ninja directory explicitly ahead of runner defaults. Java dependency versions and
 artifact hashes are captured inside each package for provenance comparison.
 
 Install the locked platform, build-tools and NDK through SDK manager, provide
