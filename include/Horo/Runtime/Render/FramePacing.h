@@ -23,7 +23,7 @@ namespace Horo::Render {
         std::uint64_t frameNumber{};           /**< Exact successfully submitted host frame. */
         std::uint64_t displayOrdinal{};        /**< Increasing native refresh ordinal; zero when unavailable. */
         Duration displayTime;                  /**< Qualified native display timestamp in the host clock domain. */
-        Duration clockUncertainty;             /**< Maximum host/native calibration half-span. */
+        Duration clockUncertainty;             /**< Maximum calibration half-span; bounds timestamp comparison to observation time. */
         std::uint64_t discardedObservations{}; /**< Native provider coalescing, invalid and stale feedback count. */
     };
 
@@ -110,7 +110,7 @@ namespace Horo::Render {
          * @return Success or typed clock, identity, stale, native-evidence or lifecycle failure.
          */
         [[nodiscard]] Result<void> RecordPresent(std::uint64_t frameNumber, Duration start, Duration end, bool succeeded,
-                                                 std::optional<NativePresentTiming> native = std::nullopt,
+                                                 const std::optional<NativePresentTiming> &native = std::nullopt,
                                                  std::optional<Duration> observedAt = std::nullopt);
         /** @brief Clears timing baselines after a host focus change without changing policy.
          * @return Success or typed owner/stopped failure.

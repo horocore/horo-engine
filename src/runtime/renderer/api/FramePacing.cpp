@@ -26,7 +26,7 @@ namespace Horo::Render {
             if (!surface.surface.HasOwner() || surface.revision == 0 || surface.state > RenderSurfaceState::Closing)
                 return false;
             if (surface.state == RenderSurfaceState::Ready &&
-                (!surface.surface.IsAttachedGeneration() || !surface.active || surface.inFlightSequence))
+                (!surface.surface.IsAttachedGeneration() || !surface.active || surface.inFlightSequence.has_value()))
                 return false;
             if (!surface.active)
                 return true;
@@ -48,8 +48,8 @@ namespace Horo::Render {
 
         /** @brief Validates native timestamps and explicit calibration span against observation time. */
         [[nodiscard]] bool ValidNativeClock(const NativePresentTiming &native, const Duration observed) noexcept {
-            return native.displayTime.ToNanoseconds() > 0 && native.displayTime <= observed &&
-                   native.clockUncertainty.ToNanoseconds() >= 0 && native.clockUncertainty <= Duration::FromMilliseconds(1);
+            return native.displayTime.ToNanoseconds() > 0 && native.clockUncertainty.ToNanoseconds() >= 0 &&
+                   native.clockUncertainty <= Duration::FromMilliseconds(1) && native.displayTime <= observed + native.clockUncertainty;
         }
 
         /** @brief Computes one refresh interval only when both native samples expose real refresh ordinals. */
@@ -136,7 +136,7 @@ namespace Horo::Render {
             return Result<void>::Failure(MakeError(FramePacingErrors::Cancelled));
         if (!surface_)
             return Result<void>::Failure(MakeError(FramePacingErrors::InvalidSurface));
-        if (stamp < 0 || stamp > MaximumClock || (lastPoll_ && stamp < *lastPoll_))
+        if (stamp < 0 || stamp > MaximumClock || (lastPoll_.has_value() && stamp < *lastPoll_))
             return Result<void>::Failure(MakeError(FramePacingErrors::InvalidClock));
         return Result<void>::Success();
     }
@@ -151,11 +151,11 @@ namespace Horo::Render {
             return Result<FramePacingDecision>::Success({FramePacingDisposition::Suspended, {}});
         if (policy_.maximumFramesPerSecond == 0)
             return Result<FramePacingDecision>::Success({});
-        if (deadline_ && stamp < *deadline_)
+        if (deadline_.has_value() && stamp < *deadline_)
             return Result<FramePacingDecision>::Success(
                 {FramePacingDisposition::Wait, Duration::FromNanoseconds(std::min(*deadline_ - stamp, std::int64_t{2'000'000}))});
         const auto period = (Second + policy_.maximumFramesPerSecond - 1) / policy_.maximumFramesPerSecond;
-        if (deadline_ && stamp - *deadline_ >= period)
+        if (deadline_.has_value() && stamp - *deadline_ >= period)
             ++statistics_.missedDeadlines;
         // Rebase after lateness: never emit a burst of catch-up frames or replace simulation time.
         deadline_ = stamp + period;
@@ -187,7 +187,7 @@ namespace Horo::Render {
 
     /** @copydoc FramePacer::RecordPresent */
     Result<void> FramePacer::RecordPresent(const std::uint64_t frameNumber, const Duration start, const Duration end, const bool succeeded,
-                                           const std::optional<NativePresentTiming> native, const std::optional<Duration> observedAt) {
+                                           const std::optional<NativePresentTiming> &native, const std::optional<Duration> observedAt) {
         const Duration observed = observedAt.value_or(end);
         if (auto valid = ValidatePresent(frameNumber, start, end, observed); valid.HasError())
             return valid;
@@ -218,7 +218,7 @@ namespace Horo::Render {
                 statistics_.estimatedRefreshHertz.reset();
             }
         }
-        if (interval)
+        if (interval.has_value())
             AppendInterval(*interval);
         return Result<void>::Success();
     }

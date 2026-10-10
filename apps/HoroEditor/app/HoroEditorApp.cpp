@@ -478,6 +478,15 @@ namespace Horo::Editor {
         // Modal implementations live under src/editor/modals.
     }  // namespace
 
+    /** @brief Parses one cap value; the invalid sentinel is rejected by the typed pacing policy. */
+    [[nodiscard]] static std::uint32_t ParseFrameRateLimit(const std::string_view value) noexcept {
+        std::uint32_t limit{};
+        if (const auto parsed = std::from_chars(value.data(), value.data() + value.size(), limit);
+            parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size())
+            return limit;
+        return 1001;
+    }
+
     [[nodiscard]] static EditorGuiOptions ParseOptions(const std::span<char *> args) noexcept {
         EditorGuiOptions opts;
         std::optional<std::string_view> pendingValue;
@@ -494,9 +503,7 @@ namespace Horo::Editor {
                 continue;
             }
             if (pendingValue == "frame-rate-limit") {
-                if (const auto parsed = std::from_chars(a.data(), a.data() + a.size(), opts.frameRateLimit);
-                    parsed.ec != std::errc{} || parsed.ptr != a.data() + a.size())
-                    opts.frameRateLimit = 1001;
+                opts.frameRateLimit = ParseFrameRateLimit(a);
                 pendingValue.reset();
                 continue;
             }
@@ -804,9 +811,7 @@ namespace Horo::Editor {
         };
 
         struct RunEditorMainLoopParams {
-            bool exitAfterFirstFrame;
-            std::uint64_t exitAfterFrames;
-            std::uint32_t frameRateLimit;
+            const EditorGuiOptions &options;
             EditorTelemetry &telemetry;
             EditorPresentationPorts presentation;
             const Fonts &fonts;
@@ -827,24 +832,46 @@ namespace Horo::Editor {
             bool healthy{false}; /**< Set only after runtime startup and a normal, completed main-loop closure. */
         };
 
+        /** @brief Owner-thread pacing state bound to the current editor host and its selected backend. */
+        struct EditorPacingState {
+            explicit EditorPacingState(Clock &hostClock) noexcept : clock(hostClock) {}
+
+            Clock &clock;
+            std::optional<CancellationToken> hostCancellation;
+            Render::FramePacer pacer;
+            std::optional<Render::RenderSurfaceLifecycle> surface;
+            std::uint64_t surfaceSequence{};
+            std::uint64_t presentingFrameNumber{};
+            bool focused{};
+            bool nativeFeedbackSupported{};
+            Render::FramebufferExtent committedOutputExtent{};
+        };
+
         class EditorRuntimeParticipant final : public Runtime::RuntimeLifecycleParticipant {
         public:
             EditorRuntimeParticipant(RunEditorMainLoopParams &params, GuiScreenHost &screenHost,
                                      EditorViewportSceneState &viewportSceneState, EditorSettingsSnapshot &settingsSnapshot,
                                      std::optional<EditorRendererRestartRequest> &rendererRestart, Clock &clock) noexcept
                 : p_(&params), screenHost_(&screenHost), viewportSceneState_(&viewportSceneState), settingsSnapshot_(&settingsSnapshot),
-                  rendererRestart_(&rendererRestart), clock_(&clock) {}
+                  rendererRestart_(&rendererRestart), pacing_{clock} {}
 
             void BindHost(Runtime::RuntimeHost &host) noexcept {
                 host_ = &host;
             }
 
             Result<void> Startup(const CancellationToken &cancellation) override {
-                hostCancellation_ = cancellation;
+                pacing_.hostCancellation = cancellation;
+                const auto timing = p_->presentation.renderFrontend.PollNativePresentTiming();
+                if (timing.HasError() &&
+                    timing.ErrorValue().code.Value() != Render::FramePacingErrors::NativeTimingUnsupported.code.Value())
+                    return Result<void>::Failure(timing.ErrorValue());
+                // The selected backend remains fixed for this participant's lifetime.
+                pacing_.nativeFeedbackSupported = timing.HasValue();
+                p_->telemetry.nativeFeedbackSupported.Set(pacing_.nativeFeedbackSupported ? 1.0 : 0.0);
                 auto created = Render::RenderSurfaceLifecycle::Create(1);
                 if (created.HasError())
                     return Result<void>::Failure(created.ErrorValue());
-                surface_.emplace(std::move(created).Value());
+                pacing_.surface.emplace(std::move(created).Value());
                 return UpdatePacingSurface();
             }
 
@@ -856,8 +883,8 @@ namespace Horo::Editor {
                         return Result<void>::Success();  // Runtime event phase performs the actual close operation.
                     if (auto updated = UpdatePacingSurface(); updated.HasError())
                         return updated;
-                    const auto decision =
-                        pacer_.Poll(clock_->MonotonicNow(), *hostCancellation_, screenHost_->IsApplicationCloseRequested());
+                    const auto decision = pacing_.pacer.Poll(pacing_.clock.MonotonicNow(), *pacing_.hostCancellation,
+                                                             screenHost_->IsApplicationCloseRequested());
                     if (decision.HasError())
                         return Result<void>::Failure(decision.ErrorValue());
                     if (decision.Value().disposition == Render::FramePacingDisposition::Ready)
@@ -907,7 +934,8 @@ namespace Horo::Editor {
                             p_->telemetry.droppedRecords.Set(static_cast<double>(statistics.droppedRecords));
                             p_->telemetry.sinkFailures.Set(static_cast<double>(statistics.sinkFailures));
                         }
-                        if (p_->exitAfterFirstFrame || (p_->exitAfterFrames > 0 && context.frameNumber >= p_->exitAfterFrames)) {
+                        if (p_->options.exitAfterFirstFrame ||
+                            (p_->options.exitAfterFrames > 0 && context.frameNumber >= p_->options.exitAfterFrames)) {
                             static_cast<void>(screenHost_->RequestCloseApplication());
                         }
                         return Result<void>::Success();
@@ -925,7 +953,7 @@ namespace Horo::Editor {
 
             void Shutdown() noexcept override {
                 p_->background.jobs.StopAccepting();
-                static_cast<void>(pacer_.Stop());
+                static_cast<void>(pacing_.pacer.Stop());
                 frame_.reset();
                 *rendererRestart_ = screenHost_->RendererRestartRequest();
                 p_->inputRouter.CancelCapture(Input::CaptureCancellationReason::OwnerDestroyed);
@@ -1071,12 +1099,12 @@ namespace Horo::Editor {
                                                                      const Render::FramebufferExtent extent) {
                 if (const auto resized = p_->presentation.renderFrontend.Resize(extent); resized.HasError())
                     return Result<Render::RenderSurfaceCommand>::Failure(resized.ErrorValue());
-                const auto mode =
-                    p_->exitAfterFirstFrame || p_->exitAfterFrames > 0 ? Render::PresentMode::Immediate : Render::PresentMode::Fifo;
+                const auto mode = p_->options.exitAfterFirstFrame || p_->options.exitAfterFrames > 0 ? Render::PresentMode::Immediate
+                                                                                                     : Render::PresentMode::Fifo;
                 const auto kind = snapshot.state == Render::RenderSurfaceState::Unattached ? Render::RenderSurfaceCommandKind::Attach
                                                                                            : Render::RenderSurfaceCommandKind::Resize;
-                committedOutputExtent_ = extent;
-                const auto sequence = ++surfaceSequence_;
+                pacing_.committedOutputExtent = extent;
+                const auto sequence = ++pacing_.surfaceSequence;
                 return Result<Render::RenderSurfaceCommand>::Success(
                     {sequence, kind,
                      Render::RenderSurfaceConfiguration{extent, {mode, mode, Render::PresentModeResolution::Exact, 0}, sequence}});
@@ -1085,21 +1113,20 @@ namespace Horo::Editor {
             /** @brief Commits one already realized native outcome through the surface safe-point contract. */
             Result<Render::RenderSurfaceSnapshot> CommitPacingSurface(const Render::RenderSurfaceCommand &command,
                                                                       const Render::RenderSurfaceRealization realization) {
-                if (auto queued = surface_->Queue(command); queued.HasError())
+                if (auto queued = pacing_.surface->Queue(command); queued.HasError())
                     return Result<Render::RenderSurfaceSnapshot>::Failure(queued.ErrorValue());
-                auto transition = surface_->BeginFrameBoundary();
+                auto transition = pacing_.surface->BeginFrameBoundary();
                 if (transition.HasError())
                     return Result<Render::RenderSurfaceSnapshot>::Failure(transition.ErrorValue());
-                return surface_->Complete(transition.Value(), realization);
+                return pacing_.surface->Complete(transition.Value(), realization);
             }
 
             /** @brief Publishes surface facts after native resize and resets pacing on focus changes. */
             Result<void> UpdatePacingSurface() {
                 const auto flags = SDL_GetWindowFlags(p_->presentation.window);
-                const bool focused = (flags & SDL_WINDOW_INPUT_FOCUS) != 0;
-                if (focused != focused_) {
-                    focused_ = focused;
-                    if (auto reset = pacer_.Reset(); reset.HasError())
+                if (const bool focused = (flags & SDL_WINDOW_INPUT_FOCUS) != 0; focused != pacing_.focused) {
+                    pacing_.focused = focused;
+                    if (auto reset = pacing_.pacer.Reset(); reset.HasError())
                         return reset;
                 }
                 int width = 0;
@@ -1107,16 +1134,17 @@ namespace Horo::Editor {
                 if (!SDL_GetWindowSizeInPixels(p_->presentation.window, &width, &height))
                     return Result<void>::Failure(MakeEditorRendererError("editor.renderer.extent_unavailable", SDL_GetError()));
                 const bool suspended = (flags & SDL_WINDOW_MINIMIZED) != 0 || width <= 0 || height <= 0;
-                auto snapshot = surface_->Snapshot();
+                auto snapshot = pacing_.surface->Snapshot();
                 if (snapshot.HasError())
                     return Result<void>::Failure(snapshot.ErrorValue());
                 std::optional<Render::RenderSurfaceCommand> command;
                 if (suspended) {
                     if (snapshot.Value().state == Render::RenderSurfaceState::Ready)
-                        command = Render::RenderSurfaceCommand{++surfaceSequence_, Render::RenderSurfaceCommandKind::Suspend, std::nullopt};
+                        command = Render::RenderSurfaceCommand{++pacing_.surfaceSequence, Render::RenderSurfaceCommandKind::Suspend,
+                                                               std::nullopt};
                 } else {
                     const Render::FramebufferExtent extent{static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)};
-                    if (snapshot.Value().state != Render::RenderSurfaceState::Ready || extent != committedOutputExtent_) {
+                    if (snapshot.Value().state != Render::RenderSurfaceState::Ready || extent != pacing_.committedOutputExtent) {
                         auto resized = ResizePacingSurface(snapshot.Value(), extent);
                         if (resized.HasError())
                             return Result<void>::Failure(resized.ErrorValue());
@@ -1129,7 +1157,7 @@ namespace Horo::Editor {
                     if (snapshot.HasError())
                         return Result<void>::Failure(snapshot.ErrorValue());
                 }
-                return pacer_.Configure({p_->frameRateLimit}, snapshot.Value());
+                return pacing_.pacer.Configure({p_->options.frameRateLimit}, snapshot.Value());
             }
 
             Result<bool> BeginRenderFrame(const Runtime::FrameContext &context) {
@@ -1138,13 +1166,13 @@ namespace Horo::Editor {
 
                 if (auto updated = UpdatePacingSurface(); updated.HasError())
                     return Result<bool>::Failure(updated.ErrorValue());
-                const auto snapshot = surface_->Snapshot();
+                const auto snapshot = pacing_.surface->Snapshot();
                 if (snapshot.HasError())
                     return Result<bool>::Failure(snapshot.ErrorValue());
                 if (snapshot.Value().state != Render::RenderSurfaceState::Ready)
                     return Result<bool>::Success(false);
-                const Render::FramebufferExtent outputExtent = committedOutputExtent_;
-                presentingFrameNumber_ = context.frameNumber;
+                const Render::FramebufferExtent outputExtent = pacing_.committedOutputExtent;
+                pacing_.presentingFrameNumber = context.frameNumber;
 
                 auto begun = p_->presentation.renderFrontend.BeginFrame(
                     Render::FrameDescriptor{.frameNumber = context.frameNumber, .outputExtent = outputExtent});
@@ -1191,30 +1219,27 @@ namespace Horo::Editor {
             Result<void> PresentFrame() {
                 if (!frame_.has_value())
                     return Result<void>::Success();
-                const auto surface = surface_->Snapshot();
+                const auto surface = pacing_.surface->Snapshot();
                 if (surface.HasError())
                     return Result<void>::Failure(surface.ErrorValue());
-                const Render::PresentationTimingRequest timingRequest{surface.Value().surface, presentingFrameNumber_, *clock_};
-                const Duration start = clock_->MonotonicNow();
-                Result<void> result = frame_->Present(&timingRequest);
-                const Duration end = clock_->MonotonicNow();
+                const Render::PresentationTimingRequest timingRequest{surface.Value().surface, pacing_.presentingFrameNumber,
+                                                                      pacing_.clock};
+                const Duration start = pacing_.clock.MonotonicNow();
+                Result<void> result = frame_->Present(pacing_.nativeFeedbackSupported ? &timingRequest : nullptr);
+                const Duration end = pacing_.clock.MonotonicNow();
                 frame_.reset();
                 std::optional<Render::NativePresentTiming> native;
-                if (result.HasValue()) {
+                if (result.HasValue() && pacing_.nativeFeedbackSupported) {
                     auto timing = p_->presentation.renderFrontend.PollNativePresentTiming();
-                    if (timing.HasValue()) {
-                        p_->telemetry.nativeFeedbackSupported.Set(1.0);
-                        native = timing.Value();
-                    } else if (timing.ErrorValue().code.Value() != Render::FramePacingErrors::NativeTimingUnsupported.code.Value())
+                    if (timing.HasError())
                         return Result<void>::Failure(timing.ErrorValue());
-                    else
-                        p_->telemetry.nativeFeedbackSupported.Set(0.0);
+                    native = timing.Value();
                 }
-                if (auto recorded =
-                        pacer_.RecordPresent(presentingFrameNumber_, start, end, result.HasValue(), native, clock_->MonotonicNow());
+                if (auto recorded = pacing_.pacer.RecordPresent(pacing_.presentingFrameNumber, start, end, result.HasValue(), native,
+                                                                pacing_.clock.MonotonicNow());
                     recorded.HasError())
                     return result.HasError() ? Result<void>::Failure(WithCause(recorded.ErrorValue(), result.ErrorValue())) : recorded;
-                const auto statistics = pacer_.Statistics();
+                const auto statistics = pacing_.pacer.Statistics();
                 if (statistics.HasError())
                     return Result<void>::Failure(statistics.ErrorValue());
                 p_->telemetry.presentCallDuration.Set(static_cast<double>(statistics.Value().lastPresentCallDuration.ToNanoseconds()) /
@@ -1229,16 +1254,9 @@ namespace Horo::Editor {
             EditorSettingsSnapshot *settingsSnapshot_{};
             std::optional<EditorRendererRestartRequest> *rendererRestart_{};
             Runtime::RuntimeHost *host_{};
-            Clock *clock_{};
-            std::optional<CancellationToken> hostCancellation_;
-            Render::FramePacer pacer_;
-            std::optional<Render::RenderSurfaceLifecycle> surface_;
-            std::uint64_t surfaceSequence_{};
-            std::uint64_t presentingFrameNumber_{};
-            bool focused_{};
+            EditorPacingState pacing_;
             Input::FrameNumber inputFrameNumber_{1};
             Input::InputContextToken focusedWidgetInputContext_;
-            Render::FramebufferExtent committedOutputExtent_{};
             std::array<Render::RenderPassDescriptor, 2> passes_{};
             std::size_t passCount_{};
             std::uint64_t preparedViewportMeshResourceGeneration_{};
@@ -1247,6 +1265,13 @@ namespace Horo::Editor {
             ImGuiMouseSource scrollSource_{ImGuiMouseSource_Mouse};
             bool nativeMenuInstalled_{false};
         };
+
+        /** @brief Applies host admission before the runtime samples its independent simulation clock. */
+        [[nodiscard]] Result<void> RunPacedEditorFrame(EditorRuntimeParticipant &participant, Runtime::RuntimeHost &runtime) {
+            if (const Result<void> paced = participant.WaitForFrame(); paced.HasError())
+                return paced;
+            return runtime.RunFrame();
+        }
 
         /** @brief Binds an authenticated installed-host update context before the settings view is created. */
         void ConfigureUpdateExperience(RunEditorMainLoopParams &p, EditorGuiContext &guiContext,
@@ -1435,19 +1460,11 @@ namespace Horo::Editor {
             bool completedFrame = false;
             while (!screenHost.IsApplicationCloseRequested() && (runtime->State() == Runtime::RuntimeLifecycleState::Running ||
                                                                  runtime->State() == Runtime::RuntimeLifecycleState::Suspended)) {
-                const Result<void> paced = pacingParticipant->WaitForFrame();
-                if (paced.HasError()) {
-                    if (paced.ErrorValue().code.Value() != Render::FramePacingErrors::Cancelled.code.Value()) {
-                        LOG_ERROR("editor.pacing", "Host pacing failed: %s", paced.ErrorValue().message.c_str());
-                        screenHost.RequestFatalShutdown();
-                        healthy = false;
-                    }
-                    break;
-                }
-                const Result<void> frame = runtime->RunFrame();
+                const Result<void> frame = RunPacedEditorFrame(*pacingParticipant, *runtime);
                 if (frame.HasError()) {
-                    if (frame.ErrorValue().code.Value() != "runtime.host.cancelled") {
-                        LOG_ERROR("editor.runtime", "Runtime frame failed: %s", frame.ErrorValue().message.c_str());
+                    if (frame.ErrorValue().code.Value() != "runtime.host.cancelled" &&
+                        frame.ErrorValue().code.Value() != Render::FramePacingErrors::Cancelled.code.Value()) {
+                        LOG_ERROR("editor.runtime", "Host frame failed: %s", frame.ErrorValue().message.c_str());
                         screenHost.RequestFatalShutdown();
                         healthy = false;
                     }
@@ -1456,7 +1473,7 @@ namespace Horo::Editor {
                 completedFrame = true;
             }
             healthy = healthy && screenHost.IsApplicationCloseRequested() &&
-                      ((!p.exitAfterFirstFrame && p.exitAfterFrames == 0) || completedFrame);
+                      ((!p.options.exitAfterFirstFrame && p.options.exitAfterFrames == 0) || completedFrame);
             runtime->Shutdown();
             p.healthy = healthy;
             RequestUpdateActivationOnExit(updateSession, screenHost.IsApplicationCloseRequested(), rendererRestart.has_value());
@@ -1630,9 +1647,7 @@ namespace Horo::Editor {
         ConfigureEditorInput(launch.window, inputBackend, inputRouter);
         EditorModalHost modalHost{editorEvents, inputRouter};
         GuiRoute initialRoute = InitialEditorRoute(launch.startup);
-        RunEditorMainLoopParams loopParams{launch.startup.options.exitAfterFirstFrame,
-                                           launch.startup.options.exitAfterFrames,
-                                           launch.startup.options.frameRateLimit,
+        RunEditorMainLoopParams loopParams{launch.startup.options,
                                            launch.telemetry,
                                            {&launch.window, launch.io, *launch.composition.frontend, *launch.composition.guiRenderer,
                                             *launch.composition.viewportRenderer, launch.composition.viewportTarget},

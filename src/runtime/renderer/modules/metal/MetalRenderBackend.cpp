@@ -17,6 +17,11 @@ namespace Horo::Render {
             bool claimed{false};
         };
 
+        /** @brief Creates a typed resource-admission failure without accessing backend state. */
+        template <typename T> [[nodiscard]] Result<T> UnsupportedResource(std::string message) {
+            return Result<T>::Failure(MakeMetalError(MetalBackendErrors::UnsupportedResourceOperation, std::move(message)));
+        }
+
         class MetalRenderBackend final : public IRenderBackend {
         public:
             MetalRenderBackend(std::unique_ptr<Detail::IMetalRuntime> runtime,
@@ -350,10 +355,6 @@ namespace Horo::Render {
             }
 
         private:
-            template <typename T> [[nodiscard]] static Result<T> UnsupportedResource(std::string message) {
-                return Result<T>::Failure(MakeMetalError(MetalBackendErrors::UnsupportedResourceOperation, std::move(message)));
-            }
-
             template <typename Query> [[nodiscard]] Result<RenderMemoryCostPlan> QueryMemoryCost(const char *message, Query &&query) const {
                 if (!initialized_)
                     return Result<RenderMemoryCostPlan>::Failure(MakeMetalError(MetalBackendErrors::NotInitialized, message));

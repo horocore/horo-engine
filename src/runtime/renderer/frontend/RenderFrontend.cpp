@@ -231,8 +231,8 @@ namespace Horo::Render {
         if (timing != nullptr && (!timing->surface.IsAttachedGeneration() || timing->frameNumber != hostFrame_))
             return Result<void>::Failure(MakeError(FramePacingErrors::InvalidSurface));
         try {
-            const Result<void> presented = timing != nullptr ? backend_->PresentWithTiming(frame_, *timing) : backend_->Present(frame_);
-            if (presented.HasError()) {
+            if (const Result<void> presented = timing != nullptr ? backend_->PresentWithTiming(frame_, *timing) : backend_->Present(frame_);
+                presented.HasError()) {
                 Abort();
                 return Result<void>::Failure(presented.ErrorValue());
             }

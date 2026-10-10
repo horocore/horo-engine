@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CharacterControllerRegistry.h"
+#include "Horo/Physics/CharacterMetrics.h"
 #include "Horo/Physics/CharacterWorld.h"
 #include "PhysicsTestUtils.h"
 
@@ -131,6 +132,14 @@ namespace Horo::Character::TestDetail {
         OverlapProbe probe;
         REQUIRE(active.world->SpawnController(controller, probe.Context(active.world->Descriptor())).HasValue());
         return {std::move(active.world), controller};
+    }
+
+    /** @brief Checks actual fixed-tick work against the prepared one-controller qualification budgets. */
+    inline void RequireMovementBudget(const CharacterWorld &world, const CharacterMetricCapture &capture) {
+        const auto &work = world.Settings().Values().work;
+        REQUIRE(capture.snapshot.queries <= work.maximumQueriesPerTick);
+        REQUIRE(capture.snapshot.movementIterations <= work.maximumMovementIterations);
+        REQUIRE(capture.snapshot.failed == (capture.snapshot.publicationRevision == 0));
     }
 
     struct CommandTrace final {

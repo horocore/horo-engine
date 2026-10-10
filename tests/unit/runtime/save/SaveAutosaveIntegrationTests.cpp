@@ -92,14 +92,14 @@ namespace Horo::Runtime {
             Fixture fixture;
             fixture.Sample(100);
             CHECK(fixture.scheduler
-                      ->CommitAtSafePoint(RuntimePhase::EndFrame, fixture.generation, fixture.Operation(91), fixture.Address(),
+                      ->CommitAtSafePoint(RuntimePhase::EndFrame, fixture.generation, {fixture.Operation(91), fixture.Address(), {}},
                                           fixture.provenance, fixture.participants)
                       .HasError());
             auto stale = fixture.generation;
             ++stale.scene;
             CHECK(fixture.scheduler
-                      ->CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, stale, fixture.Operation(91), fixture.Address(),
-                                          fixture.provenance, fixture.participants)
+                      ->CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, stale,
+                                          {fixture.Operation(91), fixture.Address(), {}}, fixture.provenance, fixture.participants)
                       .HasError());
             REQUIRE(fixture.barrier->Request(55, fixture.generation).HasValue());
             REQUIRE(fixture.Poll().HasValue());
@@ -179,8 +179,8 @@ namespace Horo::Runtime {
             descriptor.parentCancellation = source.Token();
             fixture.Sample(100);
             REQUIRE(fixture.scheduler
-                        ->CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, fixture.generation, descriptor, fixture.Address(),
-                                            fixture.provenance, fixture.participants)
+                        ->CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, fixture.generation,
+                                            {descriptor, fixture.Address(), {}}, fixture.provenance, fixture.participants)
                         .HasValue());
             const auto reason = GENERATE(SaveCancellationReason::Caller, SaveCancellationReason::Parent);
             if (reason == SaveCancellationReason::Parent)
@@ -299,8 +299,8 @@ namespace Horo::Runtime {
             auto descriptor = fixture.Operation(91);
             descriptor.deadline = std::chrono::steady_clock::time_point{};
             const auto result =
-                fixture.scheduler->CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, fixture.generation, descriptor,
-                                                     fixture.Address(), fixture.provenance, fixture.participants);
+                fixture.scheduler->CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, fixture.generation,
+                                                     {descriptor, fixture.Address(), {}}, fixture.provenance, fixture.participants);
             REQUIRE(result.HasValue());
             CHECK_FALSE(result.Value());
             CHECK(fixture.captures == 0);

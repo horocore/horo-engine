@@ -163,6 +163,31 @@ namespace Horo::Render::PacingTests {
         REQUIRE(pacer.RecordPresent(3, Ns(30'000'000), Ns(30'000'001), true, NativePresentTiming{{1, 1}, 2, 2, Ns(30'000'000)}).HasValue());
     }
 
+    TEST_CASE("Native observation admits only its bounded calibration uncertainty", "[renderer][pacing]") {
+        FramePacer pacer;
+        REQUIRE(pacer.Configure({}, Ready()).HasValue());
+        const Duration observed = Ns(30'000'000);
+        NativePresentTiming native{{1, 1}, 1, 0, observed + Ns(500'001), Ns(500'000)};
+        CHECK(HasCode(pacer.RecordPresent(1, Ns(20'000'000), Ns(20'000'001), true, native, observed),
+                      FramePacingErrors::InvalidNativeTiming));
+        native.displayTime = observed;
+        native.clockUncertainty = Ns(-1);
+        CHECK(HasCode(pacer.RecordPresent(1, Ns(20'000'000), Ns(20'000'001), true, native, observed),
+                      FramePacingErrors::InvalidNativeTiming));
+        native.clockUncertainty = Ns(1'000'001);
+        CHECK(HasCode(pacer.RecordPresent(1, Ns(20'000'000), Ns(20'000'001), true, native, observed),
+                      FramePacingErrors::InvalidNativeTiming));
+        CHECK(pacer.Statistics().Value().presentedFrames == 0);
+        native.displayTime = observed + Ns(1'000'000);
+        native.clockUncertainty = Ns(1'000'000);
+        REQUIRE(pacer.RecordPresent(1, Ns(20'000'000), Ns(20'000'001), true, native, observed).HasValue());
+        CHECK(pacer.Statistics().Value().lastNativeDisplayTime == native.displayTime);
+        const Duration maximumObserved = Ns(std::numeric_limits<std::int64_t>::max() - 1'000'000'000);
+        native.frameNumber = 2;
+        native.displayTime = maximumObserved + native.clockUncertainty;
+        REQUIRE(pacer.RecordPresent(2, maximumObserved - Ns(1), maximumObserved, true, native, maximumObserved).HasValue());
+    }
+
     TEST_CASE("Surface suspension, resize, focus reset and shutdown discard pacing baselines", "[renderer][pacing]") {
         FramePacer pacer;
         REQUIRE(pacer.Configure({60}, Ready()).HasValue());
