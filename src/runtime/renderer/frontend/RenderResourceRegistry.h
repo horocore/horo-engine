@@ -13,6 +13,10 @@
 #include <span>
 #include <vector>
 
+namespace Horo::Render {
+    class RenderMemoryBudget;
+}
+
 namespace Horo::Render::Detail {
     enum class RenderResourceClass : std::uint8_t {
         Buffer,
@@ -81,6 +85,8 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> Fail(RenderResourceClass resourceClass, RenderResourceIdentity identity, Error error);
         [[nodiscard]] Result<void> Release(RenderResourceClass resourceClass, RenderResourceIdentity identity);
         [[nodiscard]] Result<void> CancelPending(RenderResourceClass resourceClass, RenderResourceIdentity identity);
+        /** @brief Cancels a still-pending exact reservation using its pre-owned rollback error; terminal records are unchanged. */
+        void RollbackPending(RenderResourceClass resourceClass, ResourceReservation reservation) noexcept;
         [[nodiscard]] Result<RenderResourceState> State(RenderResourceClass resourceClass, RenderResourceIdentity identity) const;
         [[nodiscard]] Result<void> OperationResult(ResourceOperationId operation) const;
         [[nodiscard]] Result<std::uint64_t> BackendInstance(RenderResourceClass resourceClass, RenderResourceIdentity identity) const;
@@ -93,7 +99,8 @@ namespace Horo::Render::Detail {
         /** @brief Advances one queue monotonically and releases a bounded number of completed pins. */
         [[nodiscard]] Result<std::size_t> AcknowledgeCompletion(RenderTimelinePoint completion);
         /** @brief Destroys a bounded number of dependency- and submission-free retiring generations. */
-        [[nodiscard]] std::size_t DrainRetirements(BackendResourceReleaseMode releaseMode = BackendResourceReleaseMode::DestroyNative);
+        [[nodiscard]] std::size_t DrainRetirements(
+            BackendResourceReleaseMode releaseMode = BackendResourceReleaseMode::DestroyNative) noexcept;
         /** @brief Stops admission and invalidates all generations under an explicit native-resource disposition. */
         void Shutdown(BackendResourceReleaseMode releaseMode) noexcept;
 
@@ -117,7 +124,9 @@ namespace Horo::Render::Detail {
         struct OperationRecord {
             ResourceOperationId id;
             bool complete{false};
+            /** While pending, owns the shutdown failure prepared before admission; completion replaces or publishes it. */
             std::optional<Error> error;
+            std::optional<Error> rollbackError; /**< Pre-owned cancellation identity for non-allocating admission rollback. */
         };
 
         struct SubmissionPin {
@@ -138,7 +147,7 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> EnsureOperationResultCapacity();
         [[nodiscard]] Result<std::size_t> AcquireSlot();
         [[nodiscard]] const Entry *FindExact(RenderResourceIdentity identity) const noexcept;
-        void CompleteOperation(ResourceOperationId operation, std::optional<Error> error);
+        void CompleteOperation(ResourceOperationId operation, std::optional<Error> error) noexcept;
         void QueueRetirementIfEligible(std::size_t slot);
         void Retire(std::size_t slot, BackendResourceReleaseMode releaseMode = BackendResourceReleaseMode::DestroyNative) noexcept;
 
@@ -158,6 +167,32 @@ namespace Horo::Render::Detail {
         std::uint32_t activeSubmissionPins_{0};
         bool acceptingRequests_{true};
         BackendResourceRelease releaseBackendResource_;
+    };
+
+    /** @brief Rolls back an unpublished registry generation and optional valid memory claim on the owner thread. */
+    class ResourceReservationGuard final {
+    public:
+        /** @brief Borrows the sole registry and an exact unpublished reservation without allocating. */
+        ResourceReservationGuard(RenderResourceRegistry &registry, RenderResourceClass resourceClass,
+                                 ResourceReservation reservation) noexcept;
+        /** @brief Cancels retained claims without creating error metadata; borrowed authorities must still be alive. */
+        ~ResourceReservationGuard() noexcept;
+        ResourceReservationGuard(const ResourceReservationGuard &) = delete;
+        ResourceReservationGuard &operator=(const ResourceReservationGuard &) = delete;
+        ResourceReservationGuard(ResourceReservationGuard &&) = delete;
+        ResourceReservationGuard &operator=(ResourceReservationGuard &&) = delete;
+        /** @brief Retains one valid unconsumed budget reservation for rollback. */
+        void OwnMemory(RenderMemoryBudget &budget, RenderMemoryReservationId reservation) noexcept;
+        /** @brief Transfers all claims to their next explicit owner after successful publication or enqueue. */
+        void Commit() noexcept;
+
+    private:
+        RenderResourceRegistry &registry_;
+        RenderResourceClass resourceClass_;
+        ResourceReservation reservation_;
+        RenderMemoryBudget *budget_{};
+        RenderMemoryReservationId memory_;
+        bool armed_{true};
     };
 
     [[nodiscard]] Result<RenderResourceOwnerId> AcquireRenderResourceOwnerId();

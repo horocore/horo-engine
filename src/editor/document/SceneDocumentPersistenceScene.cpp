@@ -3,7 +3,7 @@
 
 namespace Horo::Editor::ScenePersistenceDetail {
     Json SceneJson(const SceneDocumentSnapshot &snapshot) {
-        return SceneSource::Detail::SceneJson({snapshot.objects, snapshot.prefabInstances});
+        return SceneSource::Detail::SceneJson({snapshot.objects, snapshot.prefabInstances}).ToJson();
     }
 
     [[nodiscard]] std::vector<std::byte> Bytes(const std::string_view value) {

@@ -22,6 +22,19 @@ namespace Horo::Render {
             return Result<T>::Failure(MakeMetalError(MetalBackendErrors::UnsupportedResourceOperation, std::move(message)));
         }
 
+        /** @brief Runs a memory-cost query only for an initialized backend. */
+        template <typename Query>
+        [[nodiscard]] Result<RenderMemoryCostPlan> QueryMemoryCost(const bool initialized, const char *message, Query &&query) {
+            if (!initialized)
+                return Result<RenderMemoryCostPlan>::Failure(MakeMetalError(MetalBackendErrors::NotInitialized, message));
+            return std::forward<Query>(query)();
+        }
+
+        /** @brief Creates the original typed failure without accessing backend state. */
+        [[nodiscard]] Result<std::uint64_t> ResourceNotInitialized(std::string message) {
+            return Result<std::uint64_t>::Failure(MakeMetalError(MetalBackendErrors::NotInitialized, std::move(message)));
+        }
+
         class MetalRenderBackend final : public IRenderBackend {
         public:
             MetalRenderBackend(std::unique_ptr<Detail::IMetalRuntime> runtime,
@@ -84,9 +97,25 @@ namespace Horo::Render {
                 return capabilities_;
             }
 
+            /** @copydoc IRenderBackend::RealizeLightCullingKernel */
+            Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
+                const CookedLightCullingKernel &kernel) override {
+                if (!capabilities_.support.features.Supports(RenderCapability::LightCulling))
+                    return Result<std::shared_ptr<IResidentLightCullingKernel>>::Failure(MakeError(LightCullingErrors::Unsupported));
+                return runtime_->RealizeLightCullingKernel(kernel);
+            }
+
+            /** @copydoc IRenderBackend::UpdateLightFrame */
+            Result<void> UpdateLightFrame(const NativeLightFrameUpdate &update) override {
+                if (!capabilities_.support.features.Supports(RenderCapability::LightCulling))
+                    return Result<void>::Failure(MakeError(LightCullingErrors::Unsupported));
+                return runtime_->UpdateLightFrame(update);
+            }
+
             /** @copydoc IRenderBackend::QueryBufferMemoryCost */
             Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
-                return QueryMemoryCost("Metal buffer memory requirements require an initialized backend.", [this, &descriptor] {
+                return QueryMemoryCost(initialized_, "Metal buffer memory requirements require an initialized backend.",
+                                       [this, &descriptor] {
                     if (!capabilities_.support.Supports(descriptor))
                         return UnsupportedResource<RenderMemoryCostPlan>(
                             "Metal buffer memory-cost query failed: " +
@@ -97,7 +126,8 @@ namespace Horo::Render {
 
             /** @copydoc IRenderBackend::QueryTextureMemoryCost */
             Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override {
-                return QueryMemoryCost("Metal texture memory requirements require an initialized backend.", [this, &descriptor] {
+                return QueryMemoryCost(initialized_, "Metal texture memory requirements require an initialized backend.",
+                                       [this, &descriptor] {
                     if (!capabilities_.support.Supports(descriptor))
                         return UnsupportedResource<RenderMemoryCostPlan>(
                             "Metal texture memory-cost query failed: " +
@@ -355,16 +385,6 @@ namespace Horo::Render {
             }
 
         private:
-            template <typename Query> [[nodiscard]] Result<RenderMemoryCostPlan> QueryMemoryCost(const char *message, Query &&query) const {
-                if (!initialized_)
-                    return Result<RenderMemoryCostPlan>::Failure(MakeMetalError(MetalBackendErrors::NotInitialized, message));
-                return std::forward<Query>(query)();
-            }
-
-            [[nodiscard]] static Result<std::uint64_t> ResourceNotInitialized(std::string message) {
-                return Result<std::uint64_t>::Failure(MakeMetalError(MetalBackendErrors::NotInitialized, std::move(message)));
-            }
-
             [[nodiscard]] Result<void> ValidateActiveFrame(const FrameToken frame) const {
                 if (!initialized_) {
                     return Result<void>::Failure(

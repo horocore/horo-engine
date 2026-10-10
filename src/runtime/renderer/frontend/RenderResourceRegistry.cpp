@@ -7,6 +7,8 @@
 #include <atomic>
 #include <cassert>
 #include <limits>
+#include <new>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -50,11 +52,26 @@ namespace Horo::Render::Detail {
         if (const Result<void> resultCapacity = EnsureOperationResultCapacity(); resultCapacity.HasError()) {
             return Result<ResourceReservation>::Failure(resultCapacity.ErrorValue());
         }
+        std::vector<RenderResourceIdentity> ownedDependencies(dependencies.begin(), dependencies.end());
+        OperationRecord operation{.id = ResourceOperationId{nextOperation_},
+                                  .error = RegistryError(FrontendErrors::ResourceRegistryStopped,
+                                                         "The pending resource operation was cancelled by frontend shutdown."),
+                                  .rollbackError = RegistryError(FrontendErrors::ResourceOperationCancelled,
+                                                                 "The pending resource operation was cancelled before realization.")};
         auto acquiredSlot = AcquireSlot();
         if (acquiredSlot.HasError()) {
             return Result<ResourceReservation>::Failure(acquiredSlot.ErrorValue());
         }
         const std::size_t slot = acquiredSlot.Value();
+        try {
+            operations_.push_back(std::move(operation));
+        } catch (const std::bad_alloc &) {
+            freeSlots_.emplace_back(static_cast<std::uint32_t>(slot));
+            throw;
+        } catch (const std::length_error &) {
+            freeSlots_.emplace_back(static_cast<std::uint32_t>(slot));
+            throw;
+        }
         Entry &entry = entries_[slot];
         entry.resourceClass = resourceClass;
         entry.state = RenderResourceState::Pending;
@@ -63,12 +80,11 @@ namespace Horo::Render::Detail {
         entry.backendInstance = 0;
         entry.memoryAllocation.reset();
         entry.operation = ResourceOperationId{nextOperation_++};
-        entry.dependencies.assign(dependencies.begin(), dependencies.end());
+        entry.dependencies = std::move(ownedDependencies);
         entry.retirementQueued = false;
         for (const RenderResourceIdentity dependency : dependencies) {
             ++entries_[dependency.slot].dependentPins;
         }
-        operations_.push_back(OperationRecord{.id = entry.operation});
         ++pendingRequests_;
         return Result<ResourceReservation>::Success(
             ResourceReservation{.identity = {owner_, static_cast<std::uint32_t>(slot), entry.generation}, .operation = entry.operation});
@@ -209,9 +225,10 @@ namespace Horo::Render::Detail {
         if (entry.state != RenderResourceState::Pending)
             return Result<void>::Failure(
                 RegistryError(FrontendErrors::ResourceNotPending, "Only a pending resource operation can be cancelled."));
+        Error cancelled =
+            RegistryError(FrontendErrors::ResourceOperationCancelled, "The pending resource operation was cancelled before realization.");
         --pendingRequests_;
-        CompleteOperation(entry.operation, RegistryError(FrontendErrors::ResourceOperationCancelled,
-                                                         "The pending resource operation was cancelled before realization."));
+        CompleteOperation(entry.operation, std::move(cancelled));
         entry.state = RenderResourceState::Retiring;
         QueueRetirementIfEligible(identity.slot);
         return Result<void>::Success();
@@ -224,6 +241,20 @@ namespace Horo::Render::Detail {
             return Result<RenderResourceState>::Failure(validated.ErrorValue());
         }
         return Result<RenderResourceState>::Success(entries_[validated.Value()].state);
+    }
+
+    /** @copydoc RenderResourceRegistry::RollbackPending */
+    void RenderResourceRegistry::RollbackPending(const RenderResourceClass resourceClass, const ResourceReservation reservation) noexcept {
+        if (const Entry *found = FindExact(reservation.identity); found == nullptr || found->state != RenderResourceState::Pending ||
+                                                                  found->resourceClass != resourceClass ||
+                                                                  found->operation != reservation.operation)
+            return;
+        const auto operation = std::ranges::find(operations_, reservation.operation, &OperationRecord::id);
+        assert(operation != operations_.end() && operation->rollbackError.has_value());
+        CompleteOperation(reservation.operation, std::move(operation->rollbackError));
+        --pendingRequests_;
+        entries_[reservation.identity.slot].state = RenderResourceState::Retiring;
+        QueueRetirementIfEligible(reservation.identity.slot);
     }
 
     Result<void> RenderResourceRegistry::OperationResult(const ResourceOperationId operation) const {
@@ -342,7 +373,7 @@ namespace Horo::Render::Detail {
         return Result<std::size_t>::Success(released);
     }
 
-    std::size_t RenderResourceRegistry::DrainRetirements(const BackendResourceReleaseMode releaseMode) {
+    std::size_t RenderResourceRegistry::DrainRetirements(const BackendResourceReleaseMode releaseMode) noexcept {
         std::size_t retired = 0;
         while (retired < limits_.retirementDrainBudget && retirementQueueCount_ > 0) {
             const std::uint32_t slot = retirementQueue_[retirementQueueHead_];
@@ -369,8 +400,10 @@ namespace Horo::Render::Detail {
         for (std::size_t slot = 1; slot < entries_.size(); ++slot) {
             Entry &entry = entries_[slot];
             if (entry.state == Pending) {
-                CompleteOperation(entry.operation, RegistryError(FrontendErrors::ResourceRegistryStopped,
-                                                                 "The pending resource operation was cancelled by frontend shutdown."));
+                const auto operation = std::ranges::find(operations_, entry.operation, &OperationRecord::id);
+                assert(operation != operations_.end() && operation->error.has_value());
+                operation->complete = true;
+                operation->rollbackError.reset();
                 entry.state = Retiring;
             } else if (entry.state == Ready) {
                 entry.state = Retiring;
@@ -435,11 +468,12 @@ namespace Horo::Render::Detail {
         return &entry;
     }
 
-    void RenderResourceRegistry::CompleteOperation(const ResourceOperationId operationId, std::optional<Error> error) {
+    void RenderResourceRegistry::CompleteOperation(const ResourceOperationId operationId, std::optional<Error> error) noexcept {
         const auto operation = std::ranges::find(operations_, operationId, &OperationRecord::id);
         assert(operation != operations_.end());
         operation->complete = true;
         operation->error = std::move(error);
+        operation->rollbackError.reset();
     }
 
     void RenderResourceRegistry::QueueRetirementIfEligible(const std::size_t slot) {

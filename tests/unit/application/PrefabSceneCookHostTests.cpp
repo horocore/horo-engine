@@ -128,6 +128,33 @@ TEST_CASE("Host prefab scene cook publishes expanded source-free scenes and vali
     CHECK(changed.Value().generation.manifestDigest != first.Value().generation.manifestDigest);
 }
 
+TEST_CASE("Persistent cook host closes detached source attempts before replacement and teardown", "[native][prefab-cook][host][jobs]") {
+    HostFixture fixture;
+    {
+        auto host = fixture.MakeHost();
+        const auto first = host.Cook(fixture.request);
+        REQUIRE(first.HasValue());
+        CHECK(fixture.jobs.AdmissionSnapshot().waitingProducers == 0);
+        CHECK(fixture.jobs.AdmissionSnapshot().queued == std::array<std::size_t, 3>{});
+        CancellationSource cancelled;
+        cancelled.RequestCancellation();
+        CHECK(host.Cook(fixture.request, cancelled.Token()).HasError());
+        fixture.AssertRetained(first.Value().generation);
+        fixture.WritePrefab(9);
+        const auto replacement = host.Cook(fixture.request);
+        REQUIRE(replacement.HasValue());
+        CHECK(replacement.Value().generation.manifestDigest != first.Value().generation.manifestDigest);
+        CHECK(fixture.jobs.AdmissionSnapshot().queued == std::array<std::size_t, 3>{});
+    }
+    CHECK(fixture.jobs.AdmissionSnapshot().waitingProducers == 0);
+    CHECK(fixture.jobs.AdmissionSnapshot().queued == std::array<std::size_t, 3>{});
+    // Teardown drains only this host's work, not the injected process scheduler.
+    const auto remaining = fixture.jobs.Submit({}, [](const CancellationToken &) {
+    });
+    REQUIRE(remaining.HasValue());
+    REQUIRE(remaining.Value().Wait({WaitPolicy::MainThreadPumpAllowed, Duration::FromMilliseconds(5'000)}).HasValue());
+}
+
 TEST_CASE("Host cook rejects malformed compatibility and prefab inputs without replacing the old generation",
           "[native][prefab-cook][host]") {
     HostFixture fixture;

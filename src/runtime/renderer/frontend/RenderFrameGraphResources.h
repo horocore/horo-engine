@@ -6,6 +6,7 @@
 
 namespace Horo::Render::Detail {
     class RenderResourceRegistry;
+    struct RenderGraphTransientResourceSet;
 
     /** @brief Bounded owner-thread resolution; it neither acquires pins nor publishes backend state. */
     struct ResolvedFrameGraphResources final {
@@ -18,6 +19,7 @@ namespace Horo::Render::Detail {
     };
 
     /** @brief Resolves exact resident generations synchronously without escaping the owner registry. */
-    [[nodiscard]] Result<ResolvedFrameGraphResources> ResolveFrameGraphResources(const CompiledRenderGraphExecution &graph,
-                                                                                 const RenderResourceRegistry &registry);
+    [[nodiscard]] Result<ResolvedFrameGraphResources> ResolveFrameGraphResources(
+        const CompiledRenderGraphExecution &graph, const RenderResourceRegistry &registry,
+        const RenderGraphTransientResourceSet *transient = nullptr);
 }  // namespace Horo::Render::Detail
