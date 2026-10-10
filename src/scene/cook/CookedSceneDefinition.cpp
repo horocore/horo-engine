@@ -62,9 +62,9 @@ namespace Horo::SceneCook {
             return Result<Json>::Success(
                 {{"id", entity.object.value},
                  {"parent", entity.parent ? Json(entity.parent->value) : Json(nullptr)},
-                 {"transform", TransformJson(entity.localTransform)},
-                 {"primitiveMesh", entity.primitiveMesh ? PrimitiveJson(*entity.primitiveMesh) : Json(nullptr)},
-                 {"components", ComponentsJson(CopyComponents<SceneSource::SceneObjectComponentSet>(entity.components))}});
+                 {"transform", TransformJson(entity.localTransform).ToJson()},
+                 {"primitiveMesh", entity.primitiveMesh ? PrimitiveJson(*entity.primitiveMesh).ToJson() : Json(nullptr)},
+                 {"components", ComponentsJson(CopyComponents<SceneSource::SceneObjectComponentSet>(entity.components)).ToJson()}});
         }
 
         /** @brief Decodes an exact entity shape; authoring-only trigger and prefab data cannot enter runtime bytes. */

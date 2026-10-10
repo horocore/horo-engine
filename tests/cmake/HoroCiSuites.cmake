@@ -18,6 +18,8 @@ set(HORO_CI_AUDIO_TARGETS
 set(HORO_CI_WINDOWS_TARGETS
     HoroAnimationApiTests
     HoroAnimationGraphPublicHeaderConsumer
+    HoroLightCullingTests
+    HoroLightFramePoolTests
     HoroAITaskSchedulerTests
     HoroAITaskSchedulerPublicConsumer
     HoroMaterialBindingTests
@@ -62,6 +64,14 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroRuntimeUiTextLayoutTests
     HoroRuntimeUiPublicHeaderConsumer
     HoroRuntimeUiOverlayLifecycleTests
+    HoroRuntimeUiHudAssociationTests
+    HoroRuntimeUiHudPublicHeaderConsumer
+    HoroRuntimeUiSceneReconciliationTests
+    HoroRuntimeUiSceneReconciliationPublicHeaderConsumer
+    HoroRuntimeUiHotReloadTests
+    HoroRuntimeUiHotReloadPublicHeaderConsumer
+    HoroSceneIdentityPublicHeaderConsumer
+    HoroSceneIdentityContractConsumer
     HoroRuntimeUiScreenTransitionTests
     HoroRuntimeUiScreenTransitionPublicHeaderConsumer
     HoroInputPublicHeaderConsumer
@@ -162,7 +172,11 @@ function(horo_finalize_ci_suites)
     endif()
 
     set_property(TEST
+        HoroRuntimeUiSceneReconciliationPublicHeaderConsumer
+        HoroRuntimeUiHotReloadPublicHeaderConsumer
+        HoroSceneIdentityContractConsumer
         HoroPlayTopologyPublicHeaderConsumer
+        HoroRuntimeUiHudPublicHeaderConsumer
         HoroNetworkDebuggerPublicHeaderConsumer
         HoroAudioCallbackLockPolicyTest
         HoroPrefabSceneExpansionContractConsumer

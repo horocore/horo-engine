@@ -49,10 +49,13 @@ namespace Horo::Render::Detail {
             REQUIRE(registry.DrainRetirements() == 1);
             REQUIRE(destroyed == 1);
         }
-        SECTION("bounded pin capacity rejects without changing residents") {
+        SECTION("duplicate logical resources retain one resident pin") {
             const std::array resources{resource, resource, resource};
-            REQUIRE(pool.Acquire(resources).HasError());
+            const auto leased = pool.Acquire(resources);
+            REQUIRE(leased.HasValue());
             REQUIRE(registry.Release(RenderResourceClass::Buffer, identity).HasValue());
+            REQUIRE(registry.DrainRetirements() == 0);
+            leased.Value()->Release();
             REQUIRE(registry.DrainRetirements() == 1);
         }
         SECTION("independent submissions preserve every outstanding use") {
@@ -74,10 +77,14 @@ namespace Horo::Render::Detail {
                      "[renderer][render-graph][resource]") {
         REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, identity, {{1}, 1}).HasValue());
         const std::array resources{resource, resource};
+        const auto leased = pool.Acquire(resources);
+        REQUIRE(leased.HasValue());
         REQUIRE(pool.Acquire(resources).HasError());
         REQUIRE(registry.Release(RenderResourceClass::Buffer, identity).HasValue());
         REQUIRE(registry.DrainRetirements() == 0);
         REQUIRE(registry.AcknowledgeCompletion({{1}, 1}).Value() == 1);
+        REQUIRE(registry.DrainRetirements() == 0);
+        leased.Value()->Release();
         REQUIRE(registry.DrainRetirements() == 1);
     }
 

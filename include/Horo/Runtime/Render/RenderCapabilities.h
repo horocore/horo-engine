@@ -26,7 +26,8 @@ namespace Horo::Render {
         MeshResources,
         TextureResources,
         RenderTargetResources,
-        Count, /**< Number of defined capabilities; not itself a capability bit. */
+        LightCulling, /**< Cooked native light-culling operation; does not imply general compute dispatch. */
+        Count,        /**< Number of defined capabilities; not itself a capability bit. */
     };
 
     /** @brief Bounded bitset of backend-neutral renderer capabilities. */

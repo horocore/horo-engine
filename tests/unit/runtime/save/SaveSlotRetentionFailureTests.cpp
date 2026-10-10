@@ -1,4 +1,5 @@
 #include "../../../support/AllocationProbe.h"
+#include "SaveAllocationDiagnostics.h"
 #include "SaveSlotRetentionTestSupport.h"
 
 #include <algorithm>
@@ -36,6 +37,24 @@ namespace Horo::Runtime {
             };
             probe.Commit(4, 40);
             return occurrences;
+        }
+
+        /** @brief Reopens the selected rotation and proves reconciliation preserves the exact backup and binding release. */
+        void CheckRecoveredRetention(RetentionFixture &fixture, const SaveSlotCatalogEntry &oldest) {
+            fixture.native.fault.failure = {};
+            SaveAllocationPhase("[save-allocation] retention-reopen-enter\n");
+            fixture.native.Reopen();
+            SaveAllocationPhase("[save-allocation] retention-reopen-returned\n");
+            SaveAllocationPhase("[save-allocation] retention-reconcile-enter\n");
+            REQUIRE(fixture.native.owner->Reconcile(fixture.native.Access()).HasValue());
+            SaveAllocationPhase("[save-allocation] retention-reconcile-returned\n");
+            const auto snapshot = fixture.Snapshot();
+            CHECK(snapshot.lastCommitMilliseconds == 40);
+            CHECK(snapshot.selected.size() == 3);
+            REQUIRE(snapshot.retained.size() == 1);
+            CHECK(snapshot.retained[0].entry == oldest);
+            CHECK(snapshot.retained[0].backup);
+            CHECK(fixture.native.host.leases == 0);
         }
     }  // namespace
 
@@ -107,6 +126,11 @@ namespace Horo::Runtime {
     TEST_CASE("Retention allocation failure after selection preserves publication and binding ownership",
               "[runtime][save][retention][failure]") {
         const bool syncFailure = GENERATE(false, true);
+        if (syncFailure)
+            SaveAllocationPhase("[save-allocation] retention-sync-failure\n");
+        else
+            SaveAllocationPhase("[save-allocation] retention-sync-success\n");
+        const SaveAllocationFixtureExit fixtureExit;
         RetentionFixture fixture;
         const auto oldest = fixture.Commit(1, 10).entry.value();
         fixture.Commit(2, 20);
@@ -121,32 +145,25 @@ namespace Horo::Runtime {
             if (stage == SaveSlotLifecycleIoStage::Replace && kind == SaveSlotLifecycleFileKind::Catalog)
                 replaced = true;
             if (replaced && !allocation && stage == SaveSlotLifecycleIoStage::DirectorySync && kind == SaveSlotLifecycleFileKind::Catalog) {
-                allocation.emplace();
+                SaveAllocationPhase("[save-allocation] retention-arm-enter\n");
+                allocation.emplace(0, SaveAllocationInjected);
+                SaveAllocationPhase("[save-allocation] retention-armed\n");
                 if (syncFailure)
                     return Result<void>::Failure(std::move(syncError));
             }
             return Result<void>::Success();
         };
+        SaveAllocationPhase("[save-allocation] retention-commit-enter\n");
         const auto result = fixture.native.owner->CommitSave(target, std::move(candidate), 40, false, {}, &cloud);
+        SaveAllocationPhase("[save-allocation] retention-commit-returned\n");
         allocation.reset();
+        SaveAllocationPhase("[save-allocation] retention-failure-reset\n");
         REQUIRE(replaced);
-        REQUIRE(result.HasError() == syncFailure);
-        if (syncFailure)
-            CHECK(result.ErrorValue().code.Value() == SaveErrors::SlotCommitOutcomeUnknown.code.Value());
-        else
-            CHECK(result.Value().cleanupDeferred);
+        CheckSaveAllocationPublication(result, syncFailure);
         CHECK(fixture.native.host.leases == 0);
         CHECK(std::filesystem::exists(fixture.native.Generation(oldest.publication.generation)));
-        fixture.native.fault.failure = {};
-        fixture.native.Reopen();
-        REQUIRE(fixture.native.owner->Reconcile(fixture.native.Access()).HasValue());
-        const auto snapshot = fixture.Snapshot();
-        CHECK(snapshot.lastCommitMilliseconds == 40);
-        CHECK(snapshot.selected.size() == 3);
-        REQUIRE(snapshot.retained.size() == 1);
-        CHECK(snapshot.retained[0].entry == oldest);
-        CHECK(snapshot.retained[0].backup);
-        CHECK(fixture.native.host.leases == 0);
+        CheckRecoveredRetention(fixture, oldest);
+        SaveAllocationPhase("[save-allocation] retention-fixture-cleanup-next\n");
     }
 
     TEST_CASE("Retention reads reject corrupted backups without modifying valid current publication",

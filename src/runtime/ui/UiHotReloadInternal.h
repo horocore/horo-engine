@@ -78,6 +78,8 @@ namespace Horo::Runtime::Ui {
         UiReloadReconciliation reconciliation;
         std::vector<UiReloadDetail::CanvasStamp> sourceStamps;
         bool consumed{};
+        bool sceneRebind{};
+        bool removingScene{};
         bool admitted{};
     };
 }  // namespace Horo::Runtime::Ui
