@@ -189,7 +189,11 @@ namespace Horo::Tests::VoiceRenderFixture {
                 CHECK(rig.frontend->Start({2, 1'000'000'000}).HasError());
                 CHECK(rig.output->null->State() == Audio::Backend::NullAudioBackendState::Closed);
                 rig.frontend->Close();
-                REQUIRE(rig.frontend->Pump({1, 1'000'000'000}).HasValue());
+                const auto retired = rig.frontend->Pump({1, 1'000'000'000});
+                REQUIRE(retired.HasError());
+                CHECK(retired.ErrorValue().code.Value() == AudioErrors::IdentityInvalid.code.Value());
+                REQUIRE(rig.frontend->Snapshot().failure.has_value());
+                CHECK(rig.frontend->Snapshot().failure->code.Value() == AudioErrors::IdentityInvalid.code.Value());
             }
             SECTION("open is still pending") {
                 REQUIRE(rig.frontend->Start({1, 1'000'000'000}).HasValue());
