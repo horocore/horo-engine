@@ -336,7 +336,7 @@ namespace Horo {
                                 (record->resource == JobResource::Io && !sameLane)))
                     return false;
                 const auto lane = static_cast<std::size_t>(record->resource);
-                const auto hasSlot = [&] {
+                const auto hasSlot = [&record, sameLane, lane] {
                     return sameLane || record->execution->occupied[lane] < record->execution->limits[lane];
                 };
                 if (worker)
@@ -469,9 +469,10 @@ namespace Horo {
 
     /** @copydoc JobSystem::JobSystem */
     JobSystem::JobSystem(const JobSystemConfig &config) : m_state(std::make_shared<State>(config)) {
+        using enum JobResource;
         try {
-            for (const auto resource : {JobResource::Cpu, JobResource::Io}) {
-                const auto count = resource == JobResource::Cpu ? config.workerCount : config.ioWorkerCount;
+            for (const auto resource : {Cpu, Io}) {
+                const auto count = resource == Cpu ? config.workerCount : config.ioWorkerCount;
                 for (std::size_t index = 0; index < count; ++index)
                     m_state->workers.emplace_back([state = m_state, resource] {
                         activeSchedulerIdentity = state->schedulerIdentity;

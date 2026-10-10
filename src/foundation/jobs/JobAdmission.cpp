@@ -108,11 +108,12 @@ namespace Horo {
     Result<void> JobSystem::State::ValidateAdmission(const std::size_t priority, const JobRequirement requirement,
                                                      const JobResource resource) const {
         using enum JobOverloadPolicy;
+        using enum JobResource;
         if (priority >= queues.size())
             return Result<void>::Failure(MakeError(JobErrors::InvalidSubmission, "Job priority is not recognized."));
-        if (resource != JobResource::Cpu && resource != JobResource::Io)
+        if (resource != Cpu && resource != Io)
             return Result<void>::Failure(MakeError(JobErrors::InvalidSubmission, "Job resource is not recognized."));
-        if (resource == JobResource::Io && config.ioWorkerCount == 0)
+        if (resource == Io && config.ioWorkerCount == 0)
             return Result<void>::Failure(MakeError(JobErrors::WaitCapacityDeadlock, "Host has no I/O execution capacity."));
         if (requirement != JobRequirement::Required && requirement != JobRequirement::Optional)
             return Result<void>::Failure(MakeError(JobErrors::InvalidSubmission, "Job requirement is not recognized."));

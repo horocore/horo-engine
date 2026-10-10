@@ -59,6 +59,40 @@ namespace {
         }
     };
 
+    /** @brief Releases callback barriers and joins while stream inputs remain alive. */
+    struct StreamScope final {
+        JobSystem &jobs;
+        ResourceGate &gate;
+        std::atomic<bool> &stop;
+        ResourceGate *io{};
+
+        ~StreamScope() {
+            stop.store(true);
+            gate.Release();
+            if (io)
+                io->Release();
+            jobs.Shutdown(ShutdownPolicy::Cancel);
+        }
+    };
+
+    /** @brief Observes when the final callback capture releases its borrowed service. */
+    struct BorrowedServiceCapture final {
+        std::atomic<int> &released;
+
+        ~BorrowedServiceCapture() {
+            ++released;
+        }
+    };
+
+    /** @brief Announces execution and waits for cancellation with a bounded failure escape. */
+    Result<void> WaitForResourceCancellation(std::promise<void> &started, const CancellationToken &token) {
+        started.set_value();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!token.IsCancellationRequested() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::yield();
+        return token.IsCancellationRequested() ? JobCancelled() : Result<void>::Success();
+    }
+
     TEST_CASE("Interactive CPU and I/O jobs progress while background callbacks continuously replenish their lane",
               "[foundation][jobs][resource]") {
         for (const auto resource : {JobResource::Cpu, JobResource::Io}) {
@@ -81,18 +115,6 @@ namespace {
                 if (!stop.load())
                     static_cast<void>(jobs.SubmitResult({.priority = JobPriority::Background, .resource = resource}, background));
                 return Result<void>::Success();
-            };
-
-            struct StreamScope final {
-                JobSystem &jobs;
-                ResourceGate &gate;
-                std::atomic<bool> &stop;
-
-                ~StreamScope() {
-                    stop.store(true);
-                    gate.Release();
-                    jobs.Shutdown(ShutdownPolicy::Cancel);
-                }
             };
 
             const StreamScope stream{jobs, gate, stop};
@@ -148,21 +170,7 @@ namespace {
             return Result<void>::Success();
         };
 
-        struct DrainGuard final {
-            JobSystem &jobs;
-            ResourceGate &cpu;
-            ResourceGate &io;
-            std::atomic<bool> &stop;
-
-            ~DrainGuard() {
-                stop.store(true);
-                cpu.Release();
-                io.Release();
-                jobs.Shutdown(ShutdownPolicy::Cancel);
-            }
-        };
-
-        const DrainGuard guard{jobs, cpu, io, stop};
+        const StreamScope guard{jobs, cpu, stop, &io};
         REQUIRE(jobs.Submit({.priority = JobPriority::Background}, [&](const CancellationToken &) {
             cpu.Enter();
         }).HasValue());
@@ -329,34 +337,19 @@ namespace {
             JobSystem jobs{{.workerCount = workers, .maxRetainedTerminalJobs = 0, .ioWorkerCount = 1}};
             std::atomic<int> released{};
 
-            struct BorrowedServiceCapture final {
-                std::atomic<int> &released;
-
-                ~BorrowedServiceCapture() {
-                    ++released;
-                }
-            };
-
             auto capture = std::make_shared<BorrowedServiceCapture>(released);
             std::promise<void> cpuStarted;
             std::promise<void> ioStarted;
             auto startCpu = cpuStarted.get_future();
             auto startIo = ioStarted.get_future();
-            const auto work = [](std::promise<void> &started, const CancellationToken &token) {
-                started.set_value();
-                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-                while (!token.IsCancellationRequested() && std::chrono::steady_clock::now() < deadline)
-                    std::this_thread::yield();
-                return token.IsCancellationRequested() ? JobCancelled() : Result<void>::Success();
-            };
             const ShutdownScope scope{jobs};
             auto cpu = jobs.SubmitResult({}, [&, capture](const CancellationToken &token) {
                 static_cast<void>(capture);
-                return work(cpuStarted, token);
+                return WaitForResourceCancellation(cpuStarted, token);
             });
             auto io = jobs.SubmitResult({.resource = JobResource::Io}, [&, capture](const CancellationToken &token) {
                 static_cast<void>(capture);
-                return work(ioStarted, token);
+                return WaitForResourceCancellation(ioStarted, token);
             });
             REQUIRE(cpu.HasValue());
             REQUIRE(io.HasValue());
