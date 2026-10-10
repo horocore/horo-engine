@@ -3,6 +3,7 @@
 /** @file SceneRuntimeConversion.h
  * @brief Headless immutable authored-scene and prefab projection into runtime-owned definitions.
  */
+#include "Horo/Prefab/PrefabExpansionCache.h"
 #include "Horo/Prefab/PrefabSourceResolver.h"
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
 #include "Horo/Scene/SceneSource.h"
@@ -44,6 +45,20 @@ namespace Horo::SceneSource {
     [[nodiscard]] Result<ScenePrefabProjection> BuildScenePrefabProjection(const SceneSourceView &document,
                                                                            const Prefab::PrefabSourceResolverSnapshot &resolver,
                                                                            const Prefab::PrefabLimitProfile &limits);
+
+    /**
+     * @brief Uses the owner cache for complete equivalent-to-fresh prefab candidates before ordinary Scene conversion.
+     * @param document Coherent authored values borrowed only during this call.
+     * @param resolver Exact immutable source publication. @param limits Complete captured expansion policy.
+     * @param cache Calling document/cook owner's bounded cache, accessed only on its owning thread.
+     * @param cancellation Cooperative token checked between placements and before result publication.
+     * @return Owned projection or cancellation/capacity failure; individual malformed sources retain repairable errors.
+     */
+    [[nodiscard]] Result<ScenePrefabProjection> BuildScenePrefabProjection(const SceneSourceView &document,
+                                                                           const Prefab::PrefabSourceResolverSnapshot &resolver,
+                                                                           const Prefab::PrefabLimitProfile &limits,
+                                                                           Prefab::PrefabExpansionCache &cache,
+                                                                           const CancellationToken &cancellation = {});
 
     /**
      * @brief Marks retained projections stale after affected source/resource publications without replacing their evidence.
@@ -99,4 +114,17 @@ namespace Horo::SceneSource {
                                                                                       Runtime::SceneDefinitionRevision revision,
                                                                                       const Prefab::PrefabSourceResolverSnapshot &resolver,
                                                                                       const Prefab::PrefabLimitProfile &limits);
+
+    /**
+     * @brief Converts actual cached expansion through the same all-or-nothing SceneSource transaction.
+     * @param document Coherent authored objects and placement values, including current transforms and parents.
+     * @param sceneId Stable logical scene identity. @param revision Exact containing document revision.
+     * @param resolver Immutable source publication. @param limits Complete captured policy.
+     * @param cache Explicit owner-thread memoization authority. @param cancellation Cooperative operation cancellation.
+     * @return Complete source-free runtime definition, or typed failure; no partial definition escapes.
+     */
+    [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> ConvertSceneSourceToRuntime(
+        const SceneSourceView &document, Runtime::SceneDefinitionId sceneId, Runtime::SceneDefinitionRevision revision,
+        const Prefab::PrefabSourceResolverSnapshot &resolver, const Prefab::PrefabLimitProfile &limits, Prefab::PrefabExpansionCache &cache,
+        const CancellationToken &cancellation = {});
 }  // namespace Horo::SceneSource

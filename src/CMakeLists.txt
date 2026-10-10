@@ -1889,6 +1889,12 @@ add_library(HoroEngine::SceneCellPayload ALIAS HoroSceneCellPayload)
 target_compile_features(HoroSceneCellPayload PUBLIC cxx_std_20)
 target_link_libraries(HoroSceneCellPayload PUBLIC HoroEngine::RuntimeScene HoroEngine::WorldStreaming)
 
+# Narrow non-installed wire helper: neither a repository-wide include root nor a public API.
+add_library(HoroJsonEncodingInternal INTERFACE)
+target_include_directories(HoroJsonEncodingInternal INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/foundation/json>)
+target_link_libraries(HoroJsonEncodingInternal INTERFACE nlohmann_json::nlohmann_json)
+
 add_library(HoroPrefab STATIC
         runtime/prefab/CookedPrefab.cpp
         runtime/prefab/CookedPrefabCodec.cpp
@@ -1914,6 +1920,7 @@ target_link_libraries(HoroPrefabRuntime PUBLIC HoroEngine::Prefab HoroEngine::Ru
 add_library(HoroPrefabAuthoring STATIC
         runtime/prefab/PrefabAssetDependencyClosure.cpp
         runtime/prefab/PrefabDependencyGraph.cpp
+        runtime/prefab/PrefabExpansionCache.cpp
         runtime/prefab/PrefabDiagnostics.cpp
         runtime/prefab/PrefabDocumentBehaviorComposition.cpp
         runtime/prefab/PrefabDocumentCanonical.cpp
@@ -1927,7 +1934,7 @@ add_library(HoroEngine::PrefabAuthoring ALIAS HoroPrefabAuthoring)
 target_compile_features(HoroPrefabAuthoring PUBLIC cxx_std_20)
 target_include_directories(HoroPrefabAuthoring PRIVATE ${PROJECT_SOURCE_DIR}/src/foundation/json)
 target_link_libraries(HoroPrefabAuthoring PUBLIC HoroEngine::Prefab HoroEngine::Application
-        PRIVATE nlohmann_json::nlohmann_json)
+        PRIVATE nlohmann_json::nlohmann_json HoroJsonEncodingInternal)
 
 # Load/cook bridge. RuntimeScene never depends on prefab source authoring or Editor.
 add_library(HoroPrefabSceneExpansion STATIC runtime/prefab/PrefabSceneExpansion.cpp)
@@ -2267,7 +2274,7 @@ add_library(HoroEngine::SceneSource ALIAS HoroSceneSource)
 target_compile_features(HoroSceneSource PUBLIC cxx_std_20)
 target_link_libraries(HoroSceneSource
         PUBLIC HoroEngine::SceneSourceModel
-        PRIVATE nlohmann_json::nlohmann_json
+        PRIVATE nlohmann_json::nlohmann_json HoroJsonEncodingInternal
 )
 
 # Non-installed, narrow codec bridge for existing Editor JSON adapters.
@@ -2277,11 +2284,14 @@ target_include_directories(HoroSceneSourceCodecInternal INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/scene/source>
 )
 target_link_libraries(HoroSceneSourceCodecInternal INTERFACE
-        HoroEngine::SceneSource nlohmann_json::nlohmann_json
+        HoroEngine::SceneSource nlohmann_json::nlohmann_json HoroJsonEncodingInternal
 )
 
 # Shared headless conversion owner. Editor is a downstream snapshot adapter, not a cook dependency.
-add_library(HoroSceneRuntimeConversion STATIC scene/source/SceneRuntimeConversion.cpp)
+add_library(HoroSceneRuntimeConversion STATIC
+        scene/source/ScenePrefabCachedConversion.cpp
+        scene/source/SceneRuntimeConversion.cpp
+        scene/source/ScenePrefabExpansionOwner.cpp)
 add_library(HoroEngine::SceneRuntimeConversion ALIAS HoroSceneRuntimeConversion)
 target_compile_features(HoroSceneRuntimeConversion PUBLIC cxx_std_20)
 target_link_libraries(HoroSceneRuntimeConversion
