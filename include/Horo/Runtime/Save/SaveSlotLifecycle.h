@@ -192,7 +192,7 @@ namespace Horo::Runtime {
          * @return Export result or typed destination failure; a post-replacement sync failure is outcome-unknown.
          * @details The external copy includes complete archive bytes only. Internal catalogs, journals and staging files
          * never reach the destination. The export capability is distinct from import/copy authority. */
-        [[nodiscard]] Result<SaveSlotLifecycleResult> ExportTo(SaveSlotLifecycleRequest request, SaveFilesystemStorage &destination,
+        [[nodiscard]] Result<SaveSlotLifecycleResult> ExportTo(SaveSlotLifecycleRequest request, const SaveFilesystemStorage &destination,
                                                                SaveGameSlotId slot, const CancellationToken &cancellation = {});
         /** @brief Reconciles outcome-unknown publication and cleans only journal-owned/retired artifacts.
          * @param access Exact binding to pin. @return True when cleanup remains deferred, or fail-closed malformed-evidence error. */
@@ -200,36 +200,41 @@ namespace Horo::Runtime {
 
     private:
         struct State;
+        struct Operation;
         explicit SaveSlotLifecycle(std::unique_ptr<State> state) noexcept;
         /** @brief Reads the selection manifest under owner operation ownership. */
-        [[nodiscard]] Result<void> Load() const;
+        [[nodiscard]] Result<void> Load(Operation &operation) const;
         /** @brief Builds a visible or retained-deleted index under namespace and operation ownership. */
         [[nodiscard]] Result<SaveSlotIndex> ListSelected(const SaveNamespaceAccessRequest &access, bool deleted) const;
         /** @brief Publishes a complete detached selection manifest; no fallible allocation follows this gate. */
-        [[nodiscard]] Result<void> Publish() const;
+        [[nodiscard]] Result<void> Publish(const Operation &operation) const;
         /** @brief Removes only unpublished journal-owned or retired generations after selecting durable evidence. */
-        [[nodiscard]] Result<bool> Cleanup() const;
+        [[nodiscard]] Result<bool> Cleanup(Operation &operation) const;
         /** @brief Validates selected evidence before retiring any last-known-good generation. */
-        [[nodiscard]] Result<void> VerifySelected() const;
+        [[nodiscard]] Result<void> VerifySelected(const Operation &operation) const;
         /** @brief Reconciles only the namespace/generation/digest-bound unpublished candidate. */
-        [[nodiscard]] Result<bool> CleanupJournal() const;
+        [[nodiscard]] Result<bool> CleanupJournal(const Operation &operation) const;
+        /** @brief Verifies exact candidate ownership and preserves missing selected or retired evidence. */
+        [[nodiscard]] Result<bool> CheckJournalGeneration(SlotGenerationId generation, const Sha256Digest &bytesHash, bool required) const;
         /** @brief Persists recycle receipts before retiring exact previously selected generations. */
-        [[nodiscard]] Result<bool> CleanupRetired() const;
+        [[nodiscard]] Result<bool> CleanupRetired(Operation &operation) const;
+        /** @brief Preserves recycled archives and persists their receipts before physical retirement. */
+        [[nodiscard]] Result<bool> PreserveRetired(Operation &operation) const;
         /** @brief Acquires and admits exact source bytes without mutating the detached selection. */
-        [[nodiscard]] Result<ValidatedSaveArchive> AcquireArchive(const SaveSlotLifecycleRequest &request,
+        [[nodiscard]] Result<ValidatedSaveArchive> AcquireArchive(const Operation &operation, const SaveSlotLifecycleRequest &request,
                                                                   std::vector<std::byte> &bytes) const;
         /** @brief Prepares the detached catalog mutation and all result metadata before staging. */
-        [[nodiscard]] Result<std::optional<SaveStorageWrite>> PrepareMutation(const SaveSlotLifecycleRequest &request,
+        [[nodiscard]] Result<std::optional<SaveStorageWrite>> PrepareMutation(Operation &operation, const SaveSlotLifecycleRequest &request,
                                                                               const ValidatedSaveArchive &archive,
                                                                               SaveSlotLifecycleResult &result);
         /** @brief Rebinds a copy/import destination and records its exact retired predecessor. */
-        [[nodiscard]] Result<SaveStorageWrite> PrepareCopy(const SaveSlotLifecycleTarget &target, const ValidatedSaveArchive &archive,
-                                                           const SaveSlotDisplayMetadata &display);
+        [[nodiscard]] Result<SaveStorageWrite> PrepareCopy(Operation &operation, const SaveSlotLifecycleTarget &target,
+                                                           const ValidatedSaveArchive &archive, const SaveSlotDisplayMetadata &display);
         /** @brief Creates journal-owned candidate bytes and crosses the non-cancellable selection gate. */
         [[nodiscard]] Result<void> PublishPrepared(const std::optional<SaveStorageWrite> &prepared, std::span<const std::byte> catalog,
                                                    const CancellationToken &cancellation) const;
         /** @brief Executes a validated command while holding namespace and operation leases. */
-        [[nodiscard]] Result<SaveSlotLifecycleResult> ExecuteLocked(const SaveSlotLifecycleRequest &request,
+        [[nodiscard]] Result<SaveSlotLifecycleResult> ExecuteLocked(Operation &operation, const SaveSlotLifecycleRequest &request,
                                                                     const CancellationToken &cancellation);
         std::unique_ptr<State> state_;
     };
