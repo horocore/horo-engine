@@ -50,7 +50,7 @@ namespace Horo::Render::Detail {
          * @return Stable record or a typed identity, lifetime, or in-flight rejection.
          */
         [[nodiscard]] Result<RenderGraphTransientResourceSet *> Resolve(RenderGraphTransientResourcesHandle handle,
-                                                                        const CompiledRenderGraphExecution &graph);
+                                                                        const CompiledRenderGraphExecution &graph) const;
 
         /**
          * @brief Retires a set's backing without revoking accepted GPU readers.

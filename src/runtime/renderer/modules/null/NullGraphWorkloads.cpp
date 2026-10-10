@@ -41,6 +41,20 @@ namespace Horo::Render::Detail {
                    HasTextureUsage(descriptor.usage, RenderTextureUsage::RenderAttachment) &&
                    descriptor.format == RenderTextureFormat::Rgba8Unorm;
         }
+
+        /** @brief Validates one workload against resolved native resources before submission. */
+        template <typename Workload>
+        [[nodiscard]] Result<void> ValidateWorkload(const NullGraphResources &resources, const RenderGraphExecutionRequest &request,
+                                                    const Workload &workload) {
+            if constexpr (std::is_same_v<Workload, RenderGraphBufferCopy>) {
+                if (!ValidCopy(resources, request, workload))
+                    return Result<void>::Failure(MakeError(NullBackendErrors::InvalidExecutionPlan));
+            } else if constexpr (std::is_same_v<Workload, RenderGraphColorAttachment>) {
+                if (!ValidColor(resources, request, workload))
+                    return Result<void>::Failure(MakeError(NullBackendErrors::UnsupportedResourceOperation));
+            }
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc ValidateNullGraphWorkloads */
@@ -60,14 +74,7 @@ namespace Horo::Render::Detail {
         }
         for (const auto &binding : request.workloads) {
             const auto valid = std::visit([&request, &resources]<typename Workload>(const Workload &workload) {
-                if constexpr (std::is_same_v<Workload, RenderGraphBufferCopy>) {
-                    if (!ValidCopy(resources, request, workload))
-                        return Result<void>::Failure(MakeError(NullBackendErrors::InvalidExecutionPlan));
-                } else if constexpr (std::is_same_v<Workload, RenderGraphColorAttachment>) {
-                    if (!ValidColor(resources, request, workload))
-                        return Result<void>::Failure(MakeError(NullBackendErrors::UnsupportedResourceOperation));
-                }
-                return Result<void>::Success();
+                return ValidateWorkload(resources, request, workload);
             }, binding.workload);
             if (valid.HasError())
                 return valid;
