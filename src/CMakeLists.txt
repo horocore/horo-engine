@@ -415,6 +415,15 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveTelemetrySummary.cpp
         runtime/save/SaveRootResolver.cpp
         runtime/save/SaveFilesystemStorage.cpp
+        runtime/save/SaveSlotRetentionCloudCatalog.cpp
+        runtime/save/SaveSlotRetention.cpp
+        runtime/save/SaveSlotRetentionPublication.cpp
+        runtime/save/SaveSlotRetentionAccess.cpp
+        runtime/save/SaveSlotLifecycle.cpp
+        runtime/save/SaveSlotLifecycleExecution.cpp
+        runtime/save/SaveSlotLifecycleRecovery.cpp
+        runtime/save/SaveSlotLifecycleArchive.cpp
+        runtime/save/SaveSlotLifecycleCatalog.cpp
         runtime/save/SaveNamespace.cpp
         runtime/save/SaveParticipation.cpp
         runtime/save/SaveCaptureSnapshot.cpp
@@ -463,6 +472,7 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveCommands.cpp
         runtime/save/SaveCommandErrors.cpp
         runtime/save/SaveOperationArbiter.cpp
+        runtime/save/SaveOperationRetry.cpp
         runtime/save/SaveProjectPolicy.cpp
         runtime/save/SaveSafePointCoordinator.cpp
         runtime/save/SaveCaptureBarrier.cpp
@@ -1927,6 +1937,11 @@ target_compile_features(HoroRuntimeUiInput PUBLIC cxx_std_20)
 target_link_libraries(HoroRuntimeUiInput PUBLIC HoroEngine::Input HoroEngine::RuntimeUi)
 
 add_library(HoroRenderApi STATIC
+        runtime/renderer/api/PostProcessErrors.cpp
+        runtime/renderer/api/PostProcessSettings.cpp
+        runtime/renderer/api/PostProcessVolumes.cpp
+        runtime/renderer/api/PostProcessGraph.cpp
+        runtime/renderer/api/PostProcessGraphAdmission.cpp
         runtime/renderer/api/MotionHistory.cpp
         runtime/renderer/api/MotionHistoryErrors.cpp
         runtime/renderer/api/MaterialBinding.cpp
@@ -2374,6 +2389,7 @@ add_library(HoroEditorServices STATIC
         editor/SourceDocumentChanges.cpp
         editor/SourceDocumentSnapshot.cpp
         editor/SourceDocumentText.cpp
+        editor/SequenceDocument.cpp
         editor/UiCanvasDocument.cpp
         editor/UiCanvasDocumentSerialization.cpp
         editor/document/SceneDocumentComparison.cpp
@@ -2498,6 +2514,7 @@ endif ()
 if (HORO_BUILD_EDITOR_GUI)
     add_library(HoroGui STATIC
             editor/design_system/components/EditorUiComponents.cpp
+            editor/design_system/components/SequenceTimelineControl.cpp
             editor/design_system/icons/EditorIcons.cpp
             editor/design_system/components/EditorSnackbarHost.cpp
             editor/app/EditorTheme.cpp
@@ -2583,6 +2600,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserGameplay.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserAssetOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
+            editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
+            editor/screens/workspace/EditorWorkspaceViewSequence.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
             editor/screens/workspace/ExtensionActivityView.cpp
             editor/screens/workspace/EditorWorkspaceScreen.cpp

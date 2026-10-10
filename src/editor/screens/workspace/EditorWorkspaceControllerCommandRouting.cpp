@@ -25,9 +25,15 @@ namespace Horo::Editor {
             cmd.command != EditorWorkspaceViewCommand::CancelAssetPlacementPreview) {
             CancelAssetPlacementPreview();
         }
-        static_cast<void>(ProcessDocumentCommand(cmd) || ProcessPlayCommand(cmd) || ProcessSceneObjectCommand(cmd) ||
-                          ProcessViewportPickCommand(cmd) || ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd) ||
-                          ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd));
+        DispatchWorkspaceCommand(cmd);
+    }
+
+    /** @copydoc EditorWorkspaceController::DispatchWorkspaceCommand */
+    void EditorWorkspaceController::DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &cmd) {
+        static_cast<void>(ProcessSequenceDocumentCommand(cmd) || ProcessDocumentCommand(cmd) || ProcessPlayCommand(cmd) ||
+                          ProcessSceneObjectCommand(cmd) || ProcessViewportPickCommand(cmd) || ProcessViewportCommand(cmd) ||
+                          ProcessComponentCommand(cmd) || ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) ||
+                          ProcessLayoutCommand(cmd));
     }
 
     bool EditorWorkspaceController::ProcessDocumentCommand(const EditorWorkspaceViewCommandData &cmd) {

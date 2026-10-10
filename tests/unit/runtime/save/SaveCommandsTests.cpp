@@ -288,3 +288,38 @@ namespace Horo::Runtime {
         }
     }  // namespace
 }  // namespace Horo::Runtime
+
+namespace Horo::Runtime {
+    TEST_CASE("Real manual command admission proceeds ahead of deferred background storage retry", "[unit][save][commands][retry]") {
+        Fixture fixture(Policy(SaveConfirmationPolicy::None));
+        const SaveArbiterRetryDescriptor retry{.policy = {2, 10, 20, 100},
+                                               .preconditions = {.access = {*fixture.host.binding.active, fixture.host.binding.revision},
+                                                                 .runtime = {13, 1, 1},
+                                                                 .catalogRevision = fixture.host.catalog.revision,
+                                                                 .slot = Id<SaveGameSlotId>(3),
+                                                                 .publicationGeneration = Id<SlotGenerationId>(99)}};
+        const auto autosave = fixture.arbiter.Admit({.operation = {.operation = 91, .maximumCompletionCallbacks = 1},
+                                                     .mode = SavePolicyMode::Auto,
+                                                     .address = SaveArbiterAddress{*fixture.host.binding.active, Id<SaveGameSlotId>(3)},
+                                                     .priority = SaveArbiterPriority::Background,
+                                                     .retry = retry});
+        REQUIRE(autosave.HasValue());
+        REQUIRE(fixture.arbiter.StartNext());
+        REQUIRE(fixture.arbiter.Advance(91, SaveArbiterState::WaitingForSafePoint).HasValue());
+        ErrorIs(fixture.Submit(fixture.Request()), SaveErrors::OperationInProgress);
+        REQUIRE(fixture.arbiter.Advance(91, SaveArbiterState::Capturing).HasValue());
+        REQUIRE(fixture.arbiter.Advance(91, SaveArbiterState::Encoding).HasValue());
+        REQUIRE(fixture.arbiter
+                    .DeferStorageRetry(91,
+                                       {.category = SaveStorageFailureCategory::TransientIo,
+                                        .nativeCause = MakeError(SaveErrors::StorageTransientIo)},
+                                       0)
+                    .Value());
+        const auto manual = fixture.Submit(fixture.Request());
+        REQUIRE(manual.HasValue());
+        CHECK(manual.Value().disposition == SaveCommandDisposition::Admitted);
+        CHECK_FALSE(fixture.arbiter.ResumeStorageRetry(91, retry.preconditions, 10).Value());
+        CHECK(fixture.arbiter.StartNext()->operation.operation == manual.Value().operation.Id());
+        CHECK_FALSE(autosave.Value().handle.Snapshot()->IsTerminal());
+    }
+}  // namespace Horo::Runtime
