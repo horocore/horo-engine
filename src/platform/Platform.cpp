@@ -33,12 +33,15 @@ namespace Horo {
 #if defined(_WIN32)
         /** @brief Appends only through a private Windows regular-file handle at the exact offset. */
         [[nodiscard]] bool AppendPrivateBytes(const std::filesystem::path &path, const std::uint64_t expectedOffset,
-                                              const std::span<const std::byte> bytes) {
+                                              const std::span<const std::byte> bytes, bool *created = nullptr,
+                                              const std::filesystem::perms permissions = std::filesystem::perms::unknown) {
             const DWORD disposition = expectedOffset == 0U ? CREATE_NEW : OPEN_EXISTING;
             HANDLE handle = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, disposition,
                                         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
             if (handle == INVALID_HANDLE_VALUE)
                 return false;
+            if (created)
+                *created = true;
             BY_HANDLE_FILE_INFORMATION info{};
             LARGE_INTEGER size{};
             bool ok = GetFileType(handle) == FILE_TYPE_DISK && GetFileInformationByHandle(handle, &info) &&
@@ -55,6 +58,13 @@ namespace Horo {
                 ok = WriteFile(handle, bytes.data() + offset, count, &written, nullptr) && written == count;
                 offset += written;
             }
+            if (ok && permissions != std::filesystem::perms::unknown) {
+                FILE_BASIC_INFO basic{};
+                basic.FileAttributes = (permissions & std::filesystem::perms::owner_write) == std::filesystem::perms::none
+                                           ? FILE_ATTRIBUTE_READONLY
+                                           : FILE_ATTRIBUTE_NORMAL;
+                ok = SetFileInformationByHandle(handle, FileBasicInfo, &basic, sizeof(basic)) != 0;
+            }
             if (ok)
                 ok = FlushFileBuffers(handle) != 0;
             if (!CloseHandle(handle))
@@ -64,13 +74,16 @@ namespace Horo {
 #else
         /** @brief Appends only through a private POSIX regular-file descriptor at the exact offset. */
         [[nodiscard]] bool AppendPrivateBytes(const std::filesystem::path &path, const std::uint64_t expectedOffset,
-                                              const std::span<const std::byte> bytes) {
+                                              const std::span<const std::byte> bytes, bool *created = nullptr,
+                                              const std::filesystem::perms permissions = std::filesystem::perms::unknown) {
             if (expectedOffset > static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()))
                 return false;
             const int flags = O_WRONLY | O_NOFOLLOW | O_CLOEXEC | (expectedOffset == 0U ? O_CREAT | O_EXCL : 0);
             const int descriptor = open(path.c_str(), flags, 0600);
             if (descriptor < 0)
                 return false;
+            if (created)
+                *created = true;
             struct stat status{};
             bool ok = fstat(descriptor, &status) == 0 && S_ISREG(status.st_mode) && status.st_nlink == 1U && status.st_size >= 0 &&
                       static_cast<std::uint64_t>(status.st_size) == expectedOffset;
@@ -86,6 +99,8 @@ namespace Horo {
                 }
                 offset += static_cast<std::size_t>(written);
             }
+            if (ok && permissions != std::filesystem::perms::unknown)
+                ok = fchmod(descriptor, static_cast<mode_t>(permissions) & 07777U) == 0;
             if (ok)
                 ok = FlushFileDescriptor(descriptor);
             if (close(descriptor) != 0)
@@ -243,6 +258,16 @@ namespace Horo {
         if (!ok)
             return Result<void>::Failure(FsError(IoFailed, path));
 #endif
+        return SyncDirectory(path.parent_path());
+    }
+
+    /** @copydoc NativeDurableFileSystem::WritePrivateDurable */
+    Result<void> NativeDurableFileSystem::WritePrivateDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes,
+                                                              bool &created, const std::filesystem::perms permissions) {
+        if (created || path.empty() || !path.is_absolute() || path.parent_path().empty())
+            return Result<void>::Failure(FsError(IoFailed, path));
+        if (!AppendPrivateBytes(path, 0, bytes, &created, permissions))
+            return Result<void>::Failure(FsError(IoFailed, path));
         return SyncDirectory(path.parent_path());
     }
 

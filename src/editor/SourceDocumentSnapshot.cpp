@@ -31,7 +31,7 @@ namespace Horo::Editor {
 
     /** @copydoc SourceDocumentSnapshot::Dirty */
     bool SourceDocumentSnapshot::Dirty() const noexcept {
-        return root_ && root_->text->bytes != root_->base->bytes;
+        return root_ && (root_->saveUnconfirmed || root_->text->bytes != root_->base->bytes);
     }
 
     /** @copydoc SourceDocumentSnapshot::Metadata */

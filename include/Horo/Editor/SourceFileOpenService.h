@@ -119,6 +119,13 @@ namespace Horo::Editor {
         std::optional<SourceDocumentSnapshot> sourceSnapshot;      /**< Owned text lease for embedded Source routes only. */
     };
 
+    /** @brief Explicit host decision for a revision-fenced dirty source close. */
+    enum class SourceCloseDecision : std::uint8_t {
+        Cancel,
+        Save,
+        Discard
+    };
+
     /**
      * @brief Classifies and routes project source files through one containment boundary.
      * @details The service resolves relative and absolute inputs to a canonical project
@@ -201,6 +208,20 @@ namespace Horo::Editor {
             return sourceDocuments_;
         }
 
+        /** @brief Publishes source bytes at a permitted project destination and rebinds its routing key atomically.
+         * @param request Exact revision and optional destination-byte overwrite consent. @param destination Project-relative or absolute
+         * path.
+         * @param files Host filesystem. @param cancellation Cooperative precommit cancellation.
+         * @return Visible/durable receipt or typed precommit failure; original file remains unchanged.
+         * @pre The shared registry is quiescent for this synchronous call, including provider callbacks.
+         */
+        [[nodiscard]] Result<SourceSaveResult> SaveAs(const SourceSaveRequest &request, const std::filesystem::path &destination,
+                                                      DurableFileSystem &files, CancellationToken cancellation = {});
+        /** @brief Applies the explicit close choice; a failed or unconfirmed save keeps the session open.
+         * @param request Exact source revision and optional save overwrite consent. @param decision Explicit host choice.
+         * @param files Host filesystem. @return True only after text and routing ownership close together; false for Cancel.
+         */
+        [[nodiscard]] Result<bool> ResolveClose(const SourceSaveRequest &request, SourceCloseDecision decision, DurableFileSystem &files);
         /** @brief Closes both text ownership and its routing identity after an explicit host close decision.
          * @param instance Exact open session. @param discardDirty Explicit permission to discard unsaved text.
          * @return Success or typed stale/dirty/thread failure; presentation-only destruction must not call this.
@@ -217,6 +238,7 @@ namespace Horo::Editor {
                                                             const SourceFileClassification &classification,
                                                             const SourceOpenLocation &location);
 
+        bool publishing_{};
         bool projectRootValid_{false};
         std::filesystem::path projectRoot_;
         SourceFilePolicy policy_;

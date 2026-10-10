@@ -29,6 +29,11 @@ namespace Horo::Editor {
         const ErrorCodeDescriptor WrongThread =
             Descriptor("editor.source_document.wrong_thread", "Source owner called from another thread.");
         const ErrorCodeDescriptor Cancelled = Descriptor("editor.source_document.cancelled", "Source document work was cancelled.");
+        const ErrorCodeDescriptor SaveConflict =
+            Descriptor("editor.source_document.save_conflict", "Disk changed; explicit overwrite approval is required.");
+        const ErrorCodeDescriptor SaveOutcomeUnknown =
+            Descriptor("editor.source_document.save_outcome_unknown", "Source replacement is visible but durability is unconfirmed.");
+        const ErrorCodeDescriptor Busy = Descriptor("editor.source_document.busy", "Source publication is in progress.");
     }  // namespace SourceDocumentErrors
 }  // namespace Horo::Editor
 

@@ -65,6 +65,8 @@ namespace Horo::Editor {
     Result<void> SourceDocumentService::Storage::Check() const {
         if (owner != std::this_thread::get_id())
             return Failure<void>(SourceDocumentErrors::WrongThread);
+        if (saving)
+            return Failure<void>(SourceDocumentErrors::Busy);
         if (closed)
             return Failure<void>(SourceDocumentErrors::Closed);
         if (projectRoot.empty())
@@ -183,6 +185,8 @@ namespace Horo::Editor {
             return Result<void>::Success();
         if (storage_->owner != std::this_thread::get_id())
             return Failure<void>(SourceDocumentErrors::WrongThread);
+        if (storage_->saving)
+            return Failure<void>(SourceDocumentErrors::Busy);
         storage_->closed = true;
         storage_->records.clear();
         return Result<void>::Success();

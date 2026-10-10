@@ -135,6 +135,16 @@ namespace Horo {
         /** @brief Creates missing parent directories, then writes and flushes a complete file. @param path Destination path.
          * @param bytes Complete contents. @return Success after file and directory durability, or typed I/O failure. */
         [[nodiscard]] virtual Result<void> WriteDurable(const std::filesystem::path &path, std::span<const std::byte> bytes) = 0;
+        /** @brief Exclusively creates a private regular file in an existing host-owned parent and flushes it.
+         * @param path Absolute prepared path whose parent is protected from replacement.
+         * @param bytes Complete contents, including an empty document. @param created Fresh false receipt.
+         * @param permissions Existing destination mode to apply before flushing; unknown keeps private defaults.
+         * @return Durable success or typed failure; created is set immediately after native exclusive creation,
+         * including failures and exceptions after creation. Existing files and redirects are never truncated.
+         */
+        [[nodiscard]] virtual Result<void> WritePrivateDurable(const std::filesystem::path &path, std::span<const std::byte> bytes,
+                                                               bool &created,
+                                                               std::filesystem::perms permissions = std::filesystem::perms::unknown);
         /** @brief Creates missing destination parents, then copies and flushes a file. @param source Existing source file.
          * @param destination Destination on the transaction filesystem. @return Success after destination durability, or typed I/O failure.
          */
@@ -194,6 +204,9 @@ namespace Horo {
          */
         [[nodiscard]] Result<void> AppendPrivateDurable(const std::filesystem::path &path, std::uint64_t expectedOffset,
                                                         std::span<const std::byte> bytes);
+        /** @copydoc DurableFileSystem::WritePrivateDurable */
+        [[nodiscard]] Result<void> WritePrivateDurable(const std::filesystem::path &path, std::span<const std::byte> bytes, bool &created,
+                                                       std::filesystem::perms permissions = std::filesystem::perms::unknown) override;
         [[nodiscard]] Result<void> CopyDurable(const std::filesystem::path &source, const std::filesystem::path &destination) override;
         [[nodiscard]] Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override;
         /** @copydoc DurableFileSystem::AtomicReplaceTracked */
@@ -215,6 +228,19 @@ namespace Horo {
                                               .defaultSeverity = ErrorSeverity::Error,
                                               .summary = "The filesystem does not support tracked atomic replacement.",
                                               .remediationHint = "Compose a filesystem implementation with native commit tracking.",
+                                              .retryable = false,
+                                              .userActionable = false};
+        return Result<void>::Failure(MakeError(unsupported));
+    }
+
+    /** @copydoc DurableFileSystem::WritePrivateDurable */
+    inline Result<void> DurableFileSystem::WritePrivateDurable(const std::filesystem::path &, std::span<const std::byte>, bool &,
+                                                               std::filesystem::perms) {
+        const ErrorCodeDescriptor unsupported{.domain = ErrorDomainId{"horo.platform.filesystem"},
+                                              .code = ErrorCode{"filesystem.private_creation_unsupported"},
+                                              .defaultSeverity = ErrorSeverity::Error,
+                                              .summary = "The filesystem does not support exclusive private creation.",
+                                              .remediationHint = "Compose a filesystem with exclusive creation receipts.",
                                               .retryable = false,
                                               .userActionable = false};
         return Result<void>::Failure(MakeError(unsupported));

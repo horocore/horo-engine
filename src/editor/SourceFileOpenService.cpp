@@ -7,9 +7,12 @@
 #include <filesystem>
 #include <ranges>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 
 namespace Horo::Editor {
+    static_assert(std::is_nothrow_move_assignable_v<DocumentIdentityRegistry>);
+
     namespace {
         const ErrorDomainId SourceOpenDomain{"horo.editor.source_open"};
 
@@ -78,13 +81,14 @@ namespace Horo::Editor {
 
         [[nodiscard]] Result<std::filesystem::path> ResolveCanonicalProjectPath(const std::filesystem::path &projectRoot,
                                                                                 const std::filesystem::path &lexicalPath,
-                                                                                const bool allowSymlinkedFiles) {
+                                                                                const bool allowSymlinkedFiles,
+                                                                                const bool allowMissing = false) {
             if (!Horo::Foundation::Paths::HasPathPrefix(projectRoot, lexicalPath))
                 return Result<std::filesystem::path>::Failure(MakePathError(SourceOpenErrors::Unsafe, lexicalPath));
 
             std::error_code error;
             const std::filesystem::file_status lexicalStatus = std::filesystem::symlink_status(lexicalPath, error);
-            if (error)
+            if (error && !(allowMissing && IsNoSuchFile(error)))
                 return Result<std::filesystem::path>::Failure(
                     MakePathError(IsNoSuchFile(error) ? SourceOpenErrors::Missing : SourceOpenErrors::Unsafe, lexicalPath));
             if (std::filesystem::is_symlink(lexicalStatus) && !allowSymlinkedFiles)
@@ -281,6 +285,8 @@ namespace Horo::Editor {
     }
 
     Result<SourceOpenResult> SourceFileOpenService::Open(const SourceOpenRequest &request) {
+        if (publishing_)
+            return Result<SourceOpenResult>::Failure(MakeError(SourceDocumentErrors::Busy));
         if (request.path.empty())
             return Result<SourceOpenResult>::Failure(MakeError(SourceOpenErrors::InvalidRequest));
 
@@ -341,8 +347,84 @@ namespace Horo::Editor {
         });
     }
 
+    /** @copydoc SourceFileOpenService::SaveAs */
+    Result<SourceSaveResult> SourceFileOpenService::SaveAs(const SourceSaveRequest &request, const std::filesystem::path &destination,
+                                                           DurableFileSystem &files, const CancellationToken cancellation) {
+        try {
+            if (publishing_)
+                return Result<SourceSaveResult>::Failure(MakeError(SourceDocumentErrors::Busy));
+            const auto classification = Classify(destination);
+            if (classification.kind != SourceFileKind::NativeSource && classification.kind != SourceFileKind::HoroScript &&
+                classification.kind != SourceFileKind::ProjectText)
+                return Result<SourceSaveResult>::Failure(MakeError(SourceOpenErrors::Unsupported));
+            const auto current = sourceDocuments_.Snapshot(request.instance);
+            if (current.HasError())
+                return Result<SourceSaveResult>::Failure(current.ErrorValue());
+            const auto resolved =
+                ResolveCanonicalProjectPath(projectRoot_, NormalizeInputPath(destination), policy_.allowSymlinkedFiles, true);
+            if (resolved.HasError())
+                return Result<SourceSaveResult>::Failure(resolved.ErrorValue());
+            const auto &path = resolved.Value();
+            auto source = SourceDocumentId::Parse(path.lexically_relative(projectRoot_).generic_string());
+            if (source.HasError())
+                return Result<SourceSaveResult>::Failure(source.ErrorValue());
+            const auto identity = documentRegistry_->Find(request.instance);
+            if (!identity || *identity != current.Value().Identity())
+                return Result<SourceSaveResult>::Failure(MakeError(SourceDocumentErrors::Stale));
+            auto registry = *documentRegistry_;
+            DocumentIdentity replacement{{DocumentKind::Source, std::move(source).Value()}, request.instance};
+            if (auto retargeted = registry.RetargetSource(request.instance, replacement.key); retargeted.HasError())
+                return Result<SourceSaveResult>::Failure(retargeted.ErrorValue());
+
+            struct Guard final {
+                bool &value;
+
+                explicit Guard(bool &busy) noexcept : value(busy) {
+                    value = true;
+                }
+
+                ~Guard() noexcept {
+                    value = false;
+                }
+            } guard{publishing_};
+
+            auto saved = sourceDocuments_.SaveTo(request, files, std::move(replacement), path, cancellation);
+            if (saved.HasValue())
+                *documentRegistry_ = std::move(registry);
+            return saved;
+        } catch (const std::bad_alloc &) {
+            return Result<SourceSaveResult>::Failure(MakeError(SourceDocumentErrors::TooLarge));
+        }
+    }
+
+    /** @copydoc SourceFileOpenService::ResolveClose */
+    Result<bool> SourceFileOpenService::ResolveClose(const SourceSaveRequest &request, const SourceCloseDecision decision,
+                                                     DurableFileSystem &files) {
+        const auto current = sourceDocuments_.Snapshot(request.instance);
+        if (current.HasError())
+            return Result<bool>::Failure(current.ErrorValue());
+        if (request.expectedRevision != current.Value().Revision())
+            return Result<bool>::Failure(MakeError(SourceDocumentErrors::Stale));
+        if (decision == SourceCloseDecision::Cancel)
+            return Result<bool>::Success(false);
+        if (decision == SourceCloseDecision::Save && current.Value().Dirty()) {
+            auto saved = sourceDocuments_.Save(request, files);
+            if (saved.HasError())
+                return Result<bool>::Failure(saved.ErrorValue());
+            if (saved.Value().disposition != SourceSaveDisposition::Durable)
+                return Result<bool>::Failure(*saved.Value().diagnostic);
+        } else if (decision != SourceCloseDecision::Save && decision != SourceCloseDecision::Discard) {
+            return Result<bool>::Failure(MakeError(SourceDocumentErrors::Invalid));
+        }
+        if (auto closed = CloseDocument(request.instance, decision == SourceCloseDecision::Discard); closed.HasError())
+            return Result<bool>::Failure(closed.ErrorValue());
+        return Result<bool>::Success(true);
+    }
+
     /** @copydoc SourceFileOpenService::CloseDocument */
     Result<void> SourceFileOpenService::CloseDocument(const DocumentInstanceId instance, const bool discardDirty) {
+        if (publishing_)
+            return Result<void>::Failure(MakeError(SourceDocumentErrors::Busy));
         const auto identity = documentRegistry_->Find(instance);
         if (!identity)
             return Result<void>::Failure(MakeError(SourceDocumentErrors::Stale));
