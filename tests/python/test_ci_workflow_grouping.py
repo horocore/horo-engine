@@ -46,6 +46,7 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
         "HoroEditorActivityBoundaryTests", "HoroExtensionsPublicHeaderConsumer",
         "HoroMcpSessionPublicHeaderConsumer", "HoroRuntimeSaveRootResolverTests",
         "HoroRuntimeSaveFilesystemLockTests", "HoroRuntimeSaveSlotCommitTransactionTests",
+        "HoroRuntimeSaveSlotLifecycleTests", "HoroSaveSlotLifecyclePublicHeaderConsumer",
         "HoroRuntimePublicHeaderConsumer", "HoroMixerDocumentTests",
         "HoroRuntimeUiTextLayoutTests", "HoroRuntimeUiTextShapingTests", "HoroRuntimeUiTextUnicodeTests",
         "HoroRuntimeUiUnicodeStartupTests", "HoroRuntimeUiUnicodeLifecycleTests", "HoroRuntimeUiPublicHeaderConsumer",
