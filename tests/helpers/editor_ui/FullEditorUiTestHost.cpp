@@ -148,7 +148,8 @@ namespace Horo::Tests {
     struct FullEditorUiTestHost::State {
         State(IEditorUiTestSurface &testSurface, const std::string &locale, std::optional<std::string> recentProjectName)
             : root(MakeIsolatedRoot()), home(root / "home"), projectsRoot(root / "projects"), scopedHome(home),
-              jobs(JobSystemConfig{2, 256}), creation(jobs, engineEvents), localization(Editor::LocaleTag{"en-US"}),
+              jobs(JobSystemConfig{.workerCount = 2, .maxQueuedJobs = 256, .ioWorkerCount = 1, .reservedInteractiveJobs = 8}),
+              creation(jobs, engineEvents), localization(Editor::LocaleTag{"en-US"}),
               configuration(Editor::CreateEditorConfigurationService(Editor::DefaultEditorSettings())),
               settings(Editor::DefaultEditorSettings(), configuration, editorEvents, localization), modals(editorEvents, input),
               mutations(files), transactions(files, wallClock, mutations, jobs),
@@ -207,6 +208,7 @@ namespace Horo::Tests {
         }
 
         ~State() {
+            jobs.StopAccepting();
             if (screenHost)
                 screenHost->Shutdown();
             runtimeScene.Shutdown();

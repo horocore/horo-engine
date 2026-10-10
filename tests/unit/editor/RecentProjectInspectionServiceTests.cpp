@@ -68,7 +68,7 @@ TEST_CASE("Recent Project Inspection Service Tests", "[unit][editor]") {
     std::filesystem::create_directories(corruptRoot / ".horo");
     std::ofstream(corruptRoot / ".horo/project.json") << "{broken";
 
-    JobSystem jobs{{.workerCount = 4, .maxQueuedJobs = 16}};
+    JobSystem jobs{{.workerCount = 4, .maxQueuedJobs = 16, .ioWorkerCount = 1}};
     NativeDurableFileSystem files;
     SystemWallClock clock;
     ProjectMutationCoordinator mutations{files};
