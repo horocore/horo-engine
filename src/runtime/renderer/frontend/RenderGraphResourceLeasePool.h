@@ -8,6 +8,7 @@
 
 namespace Horo::Render::Detail {
     struct RenderGraphTransientResourceSet;
+
     /** @brief Typed imported resident identity shared by graph resolution and submission pinning. */
     struct RenderGraphResidentIdentity {
         RenderResourceClass resourceClass;

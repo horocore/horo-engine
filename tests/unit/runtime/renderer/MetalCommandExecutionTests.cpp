@@ -198,19 +198,18 @@ namespace {
         }
     }
 
-    TEST_CASE("Metal rejects overlapping actual transient instances even with a claimed frontend admission", "[renderer][metal][transient]") {
+    TEST_CASE("Metal rejects overlapping actual transient instances even with a claimed frontend admission",
+              "[renderer][metal][transient]") {
         auto sources = TransientTest::CopyGraph({{41}, 1, 1}, {{41}, 2, 1}, TransientTest::CopyShape::Overlapping);
         const auto resources = sources.execution.Resources();
         REQUIRE(resources.size() == 4);
-        const std::array instances{RenderGraphResourceInstance{resources[0].id, 100},
-                                   RenderGraphResourceInstance{resources[1].id, 200},
-                                   RenderGraphResourceInstance{resources[2].id, 41},
-                                   RenderGraphResourceInstance{resources[3].id, 41}};
+        const std::array instances{RenderGraphResourceInstance{resources[0].id, 100}, RenderGraphResourceInstance{resources[1].id, 200},
+                                   RenderGraphResourceInstance{resources[2].id, 41}, RenderGraphResourceInstance{resources[3].id, 41}};
         PortState state;
         FakePresentationPort port{state};
         GraphRuntime runtime{port, state};
-        Test::RequireError(Detail::ExecuteMetalRenderGraph(runtime,
-                               {{1}, sources.execution, sources.workloads, instances, nullptr, true}), "render.backend.invalid_execution_plan");
+        Test::RequireError(Detail::ExecuteMetalRenderGraph(runtime, {{1}, sources.execution, sources.workloads, instances, nullptr, true}),
+                           "render.backend.invalid_execution_plan");
         CHECK(runtime.validationCount == 0);
         CHECK(runtime.encodingCount == 0);
     }

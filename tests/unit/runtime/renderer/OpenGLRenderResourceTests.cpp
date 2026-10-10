@@ -2,8 +2,8 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "OpenGLBackendInternal.h"
 #include "OpenGLRenderTestSupport.h"
-#include "RenderMemoryTestSupport.h"
 #include "OpenGLResourceGraphTestSupport.h"
+#include "RenderMemoryTestSupport.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -16,9 +16,7 @@ namespace Horo::Render::OpenGLResourceTests {
         REQUIRE((condition));
     }
 
-
     ResourceCommandState resourceCommandState;
-
 
     GraphCommandState graphCommandState;
 
