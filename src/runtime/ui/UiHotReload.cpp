@@ -141,6 +141,14 @@ namespace Horo::Runtime::Ui {
         return storage_ && !storage_->stopped && storage_->current == lease.generation_;
     }
 
+    /** @copydoc UiHotReload::Retains */
+    bool UiHotReload::Retains(const UiReloadLease &lease) const noexcept {
+        return storage_ && lease.generation_ &&
+               (storage_->current == lease.generation_ || std::ranges::any_of(storage_->retired, [&lease](const auto &generation) {
+            return generation == lease.generation_;
+        }));
+    }
+
     /** @copydoc UiHotReload::CollectRetired */
     Result<std::size_t> UiHotReload::CollectRetired() {
         if (!storage_ || storage_->collecting)

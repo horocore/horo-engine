@@ -194,6 +194,11 @@ namespace Horo::Runtime::Ui {
          * @return Whether this publisher still owns that exact active generation.
          */
         [[nodiscard]] bool IsCurrent(const UiReloadLease &lease) const noexcept;
+        /** @brief Checks exact current/retired publisher provenance without granting new work.
+         * @param lease Nonempty whole generation pin. @return Whether this publisher retains that exact generation.
+         * @details Bounded immutable query; historical ownership never implies current render/input admission.
+         */
+        [[nodiscard]] bool Retains(const UiReloadLease &lease) const noexcept;
         /** @brief Drains deferred authority abandonment and reclaims unpinned retired generations outside frame work.
          * @return Number reclaimed or a typed owner/lifecycle failure.
          * @pre Owner-thread load-time operation, including after shutdown. Callback reentry cannot acquire or publish generations.

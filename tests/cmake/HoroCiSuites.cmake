@@ -56,6 +56,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroRuntimeUiTextLayoutTests
     HoroRuntimeUiPublicHeaderConsumer
     HoroRuntimeUiOverlayLifecycleTests
+    HoroRuntimeUiHudAssociationTests
+    HoroRuntimeUiHudPublicHeaderConsumer
     HoroInputPublicHeaderConsumer
     HoroExtensionManagerTests
     HoroEditorActivityBoundaryTests
@@ -152,6 +154,7 @@ function(horo_finalize_ci_suites)
 
     set_property(TEST
         HoroPlayTopologyPublicHeaderConsumer
+        HoroRuntimeUiHudPublicHeaderConsumer
         HoroNetworkDebuggerPublicHeaderConsumer
         HoroAudioCallbackLockPolicyTest
         HoroPrefabSceneExpansionContractConsumer
