@@ -1941,6 +1941,9 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderSurfaceLifecycleErrors.cpp
         runtime/renderer/api/RenderGraph.cpp
         runtime/renderer/api/RenderGraphExecution.cpp
+        runtime/renderer/api/RenderGraphInspection.cpp
+        runtime/renderer/api/RenderGraphInspectionErrors.cpp
+        runtime/renderer/api/RenderGraphInspectionExport.cpp
         runtime/renderer/api/RenderGraphExecutionErrors.cpp
         runtime/renderer/api/RenderGraphErrors.cpp
         runtime/renderer/api/RenderGraphSynchronization.cpp
@@ -2019,6 +2022,7 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderParallelWorkInternal.cpp
         runtime/renderer/frontend/RenderParallelWorkErrors.cpp
         runtime/renderer/frontend/RenderFrontend.cpp
+        runtime/renderer/frontend/RenderFrontendInspection.cpp
         runtime/renderer/frontend/RenderFrontendResourceAccess.cpp
         runtime/renderer/frontend/RenderFrontendResourceValidation.cpp
         runtime/renderer/frontend/RenderFrontendResources.cpp

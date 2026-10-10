@@ -220,6 +220,18 @@ def test_installed_manifest_source_keeps_sonar_coverage() -> None:
     assert "HoroConfiguredEditorUpdateBackendTests" in targets("HORO_SONAR_EDITOR_TARGETS")
 
 
+def test_instrumented_render_graph_pane_keeps_sonar_coverage() -> None:
+    collector = (ROOT / ".github/scripts/collect_sonar_coverage.sh").read_text(encoding="utf-8")
+    assert '"$workspace/apps/HoroEditor/app/RenderGraphInspectionPane.cpp"' in collector
+    assert '"$workspace/apps/HoroEditor/app/"' not in collector
+    test_targets = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    assert "target_sources(HoroGlobalDockPanelRenderTests PRIVATE unit/editor/RenderGraphInspectionPaneTests.cpp" in test_targets
+    assert "../apps/HoroEditor/app/RenderGraphInspectionPane.cpp)" in test_targets
+    assert preset("configurePresets", "sonar")["inherits"] == "ci-linux-debug"
+    assert preset("configurePresets", "ci-linux-debug")["inherits"] == "ci-native-debug"
+    assert preset("configurePresets", "ci-native-debug")["cacheVariables"]["HORO_BUILD_EDITOR_GUI"] == "ON"
+
+
 def test_windows_restore_allocation_sweep_has_mandatory_release_coverage() -> None:
     build = re.search(r"      - name: Build Windows Release MCP and restore allocation qualification\n(.*?)(?=\n      - name:|\Z)", WORKFLOW, re.S)
     assert build
