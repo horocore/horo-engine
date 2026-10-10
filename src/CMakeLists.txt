@@ -415,6 +415,11 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveTelemetrySummary.cpp
         runtime/save/SaveRootResolver.cpp
         runtime/save/SaveFilesystemStorage.cpp
+        runtime/save/SaveSlotLifecycle.cpp
+        runtime/save/SaveSlotLifecycleExecution.cpp
+        runtime/save/SaveSlotLifecycleRecovery.cpp
+        runtime/save/SaveSlotLifecycleArchive.cpp
+        runtime/save/SaveSlotLifecycleCatalog.cpp
         runtime/save/SaveNamespace.cpp
         runtime/save/SaveParticipation.cpp
         runtime/save/SaveCaptureSnapshot.cpp

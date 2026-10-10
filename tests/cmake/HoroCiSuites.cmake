@@ -61,6 +61,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroRuntimeSaveRootResolverTests
     HoroRuntimeSaveFilesystemLockTests
     HoroRuntimeSaveSlotCommitTransactionTests
+    HoroRuntimeSaveSlotLifecycleTests
+    HoroSaveSlotLifecyclePublicHeaderConsumer
     HoroRuntimeSaveRestoreTransactionTests
     HoroSaveGameplayCheckpointPublicHeaderConsumer
     HoroRuntimeSaveEventTriggersTests

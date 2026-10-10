@@ -3195,6 +3195,17 @@ add_executable(HoroRuntimeSaveSlotCommitTransactionTests
 )
 target_compile_features(HoroRuntimeSaveSlotCommitTransactionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveSlotCommitTransactionTests PRIVATE HoroEngine::Runtime)
+add_executable(HoroRuntimeSaveSlotLifecycleTests
+        unit/runtime/save/SaveSlotLifecycleTests.cpp
+        unit/runtime/save/SaveSlotLifecycleFailureTests.cpp
+)
+target_compile_features(HoroRuntimeSaveSlotLifecycleTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeSaveSlotLifecycleTests PRIVATE HoroEngine::Runtime)
+add_executable(HoroSaveSlotLifecyclePublicHeaderConsumer support/SaveSlotLifecyclePublicHeaderConsumer.cpp)
+target_compile_features(HoroSaveSlotLifecyclePublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroSaveSlotLifecyclePublicHeaderConsumer PRIVATE HoroEngine::Runtime)
+add_test(NAME HoroSaveSlotLifecyclePublicHeaderConsumer COMMAND HoroSaveSlotLifecyclePublicHeaderConsumer)
+set_tests_properties(HoroSaveSlotLifecyclePublicHeaderConsumer PROPERTIES LABELS "unit;runtime;save")
 add_executable(HoroRuntimeSaveSlotRecoveryTests
         unit/runtime/save/SaveSlotRecoveryTests.cpp
 )
@@ -4112,6 +4123,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeSaveAutosaveSchedulerTests
         HoroRuntimeSaveEventTriggersTests
         HoroRuntimeSaveSlotCommitTransactionTests
+        HoroRuntimeSaveSlotLifecycleTests
         HoroRuntimeSaveSlotRecoveryTests
         HoroRuntimeSaveSafePointCoordinatorTests
         HoroRuntimeSaveProjectPolicyTests

@@ -56,10 +56,9 @@ namespace Horo::Runtime::SaveFilesystemReadDetails {
     };
 
     /** @brief Selects and validates a file while the caller holds namespace operation ownership. */
-    [[nodiscard]] inline Result<PinnedArchiveRead> PinArchiveRead(const ArchiveFile &directory, SaveGameSlotId slot,
-                                                                  std::size_t maximumBytes) {
+    [[nodiscard]] inline Result<PinnedArchiveRead> PinNamedArchiveRead(const ArchiveFile &directory, const std::string &narrow,
+                                                                       std::size_t maximumBytes) {
 #ifdef _WIN32
-        const std::string narrow = SlotName(slot);
         const std::wstring name(narrow.begin(), narrow.end());
         auto opened = SaveFilesystemNative::RelativeOpen(directory, name, GENERIC_READ, SaveFilesystemNative::kOpen,
                                                          SaveFilesystemNative::kNonDirectoryFile, FILE_ATTRIBUTE_NORMAL);
@@ -70,8 +69,7 @@ namespace Horo::Runtime::SaveFilesystemReadDetails {
             return Result<PinnedArchiveRead>::Failure(Failure(SaveErrors::StorageOperationInvalid, "Windows slot size"));
         return Result<PinnedArchiveRead>::Success(PinnedArchiveRead{std::move(opened).Value(), static_cast<std::size_t>(size.QuadPart)});
 #else
-        const std::string name = SlotName(slot);
-        const int fd = ::openat(directory.Fd(), name.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+        const int fd = ::openat(directory.Fd(), narrow.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
         if (fd < 0)
             return Result<PinnedArchiveRead>::Failure(Failure(SaveErrors::StoragePermanentIo, "slot open", errno));
         ArchiveFile file{fd};
@@ -84,5 +82,11 @@ namespace Horo::Runtime::SaveFilesystemReadDetails {
             return Result<PinnedArchiveRead>::Failure(Failure(SaveErrors::StorageOperationInvalid, "slot size"));
         return Result<PinnedArchiveRead>::Success(PinnedArchiveRead{std::move(file), static_cast<std::size_t>(entry.st_size)});
 #endif
+    }
+
+    /** @brief Selects an opaque slot without accepting a caller-controlled filename. */
+    [[nodiscard]] inline Result<PinnedArchiveRead> PinArchiveRead(const ArchiveFile &directory, SaveGameSlotId slot,
+                                                                  std::size_t maximumBytes) {
+        return PinNamedArchiveRead(directory, SlotName(slot), maximumBytes);
     }
 }  // namespace Horo::Runtime::SaveFilesystemReadDetails
