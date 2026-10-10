@@ -1278,6 +1278,15 @@ Required tests cover:
 
 ## Typed asset generation reload
 
+`UiScreenTransition` owns asynchronous whole-screen preparation over the existing
+Assets-backed loader and complete `UiReloadGeneration` composition. It retains
+the current last-good publisher through cancellation, timeout and failure, then
+swaps complete publishers at an ADR-073 structural safe point. Frame polling
+reads stage/deadline facts without pumping assets; composition and deferred
+reclamation are explicit load-time operations. Old whole-generation leases remain
+pinned, while fresh presentation evidence gates the replacement screen's input.
+See [the asynchronous screen transition contract](../../guides/runtime-ui-screen-transition-migration.md).
+
 `UiHotReload` is owned by `HoroEngine::RuntimeUi`. It prepares complete real
 Assets closures and actual canvas owners privately, reconciles compatible stable
 IDs, then publishes one whole generation at the ADR-073 owner safe point. Actual

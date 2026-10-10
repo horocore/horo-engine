@@ -323,6 +323,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiAsyncActions.h
     Horo/Runtime/Ui/UiFeedback.h
     Horo/Runtime/Ui/UiScreenStack.h
+    Horo/Runtime/Ui/UiScreenTransition.h
     Horo/Runtime/Ui/UiRouteStack.h
     Horo/Runtime/Ui/UiFocusGraph.h
     Horo/Runtime/Ui/UiControls.h
