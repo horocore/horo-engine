@@ -42,6 +42,11 @@ DT_NEEDED closure before Gradle runs. Assets reject traversal, links and oversiz
 inputs. Final inspection verifies native and asset hashes, manifest identity/API,
 permissions and required hardware features against admitted inputs.
 
+Release profiles also declare the two AGP-generated `dexopt/baseline.prof` and
+`baseline.profm` assets. Their actual output hashes are incorporated into the
+embedded provenance before final canonical alignment and signing. Unknown or
+missing generated assets fail inspection; debug admits no such generated assets.
+
 Outputs are `signed.apk` or `unsigned.apk`, `provenance.json`, `inspection.json`
 and separate command logs. Provenance records source revision, profile, exact
 tool versions, ABI/native dependency closure and content hashes; inspection lists

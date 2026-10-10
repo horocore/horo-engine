@@ -19,7 +19,7 @@ import android_package
 import android_preflight
 from android_contract import AndroidError, bounded_bytes, canonical_json, input_path, load_contract, relative_name
 from android_elf import inspect_elf, native_closure
-from android_package import canonical_apk, inspect_package, stage_native, verify_manifest
+from android_package import canonical_apk, inspect_package, stage_native, verify_manifest, include_generated_assets
 from android_preflight import require_revision, extract_game_activity
 
 
@@ -148,6 +148,33 @@ class AndroidPackageTests(unittest.TestCase):
         self.assertEqual(first.read_bytes(), second.read_bytes())
         with zipfile.ZipFile(first) as archive:
             self.assertEqual(archive.getinfo("lib/arm64-v8a/libentry.so").compress_type, zipfile.ZIP_STORED)
+
+    def test_declared_release_generated_assets_are_bound_to_provenance(self):
+        evidence, native = self.evidence()
+        evidence["profile"] = {"generatedAssets":["dexopt/baseline.prof","dexopt/baseline.profm"]}
+        source = self.root / "source.apk"
+        self.package(source,evidence,native)
+        with zipfile.ZipFile(source,"a") as archive:
+            for name in evidence["profile"]["generatedAssets"]:
+                archive.writestr("assets/"+name,b"generated baseline profile")
+        include_generated_assets(source,evidence)
+        self.assertEqual(len(evidence["assets"]),2)
+        self.assertEqual(evidence["assets"][0]["origin"],"androidGradlePlugin")
+        canonical = self.root / "bound.apk"
+        canonical_apk(source,canonical,canonical_json(evidence))
+        self.assertEqual(len(inspect_package(canonical,evidence)["contents"]),6)
+        with zipfile.ZipFile(canonical,"a") as archive:
+            archive.writestr("assets/undeclared.json",b"extra")
+        with self.assertRaisesRegex(AndroidError,"runtime assets differ"):
+            inspect_package(canonical,evidence)
+
+    def test_missing_declared_generated_assets_rejected(self):
+        evidence, native = self.evidence()
+        evidence["profile"] = {"generatedAssets":["dexopt/baseline.prof","dexopt/baseline.profm"]}
+        source = self.root / "source.apk"
+        self.package(source,evidence,native)
+        with self.assertRaisesRegex(AndroidError,"undeclared generated"):
+            include_generated_assets(source,evidence)
 
     def test_manifest_rejects_permission_feature_and_api_drift(self):
         text = ("package: name='org.horocore.packagequalification' versionCode='1' versionName='0.2.0'\n"

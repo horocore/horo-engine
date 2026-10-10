@@ -77,9 +77,20 @@ def validate_profile(profile: dict, tools: dict, abis: list[str]) -> None:
     if not tools["minimumApi"] <= profile["minimumApi"] <= profile["targetApi"] <= tools["sdkApi"]:
         raise AndroidError("Incompatible min/target/compile API levels; select the declared API 29/36 tuple.")
     validate_profile_identity(profile)
+    validate_asset_names(profile)
     for target, source in profile["assets"].items():
         relative_name(target)
         bounded_bytes(input_path(ROOT, source))
+
+
+def validate_asset_names(profile: dict) -> None:
+    generated = profile["generatedAssets"]
+    expected = ["dexopt/baseline.prof", "dexopt/baseline.profm"] if profile["configuration"] == "Release" else []
+    if generated != expected:
+        raise AndroidError("Generated assets must match the declared Gradle baseline-profile producer contract.")
+    reserved = set(generated) | {"horo-package-provenance.json", "horo-java-dependencies.json"}
+    if set(profile["assets"]) & reserved:
+        raise AndroidError("Source assets cannot overwrite owned provenance or generated package metadata.")
 
 
 def validate_profile_identity(profile: dict) -> None:

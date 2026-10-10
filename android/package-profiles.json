@@ -26,7 +26,8 @@
       "nativeLibraries": [
         "libhoro-package-qualification.so",
         "libc++_shared.so"
-      ]
+      ],
+      "generatedAssets": []
     },
     "qualification-release": {
       "applicationId": "org.horocore.packagequalification",
@@ -52,6 +53,10 @@
       "nativeLibraries": [
         "libhoro-package-qualification.so",
         "libc++_shared.so"
+      ],
+      "generatedAssets": [
+        "dexopt/baseline.prof",
+        "dexopt/baseline.profm"
       ]
     }
   }

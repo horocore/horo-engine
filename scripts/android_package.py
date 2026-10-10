@@ -120,7 +120,7 @@ def archive_limits(archive: zipfile.ZipFile) -> None:
             raise AndroidError("APK content links are forbidden.")
 
 
-def canonical_apk(source: Path, destination: Path) -> None:
+def canonical_apk(source: Path, destination: Path, provenance_bytes: bytes | None = None) -> None:
     with zipfile.ZipFile(source) as original, zipfile.ZipFile(destination, "w") as result:
         archive_limits(original)
         names = original.namelist()
@@ -128,7 +128,8 @@ def canonical_apk(source: Path, destination: Path) -> None:
             info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_STORED if name.endswith(".so") else zipfile.ZIP_DEFLATED
             info.external_attr = 0o100644 << 16
-            result.writestr(info, original.read(name))
+            payload = provenance_bytes if name == "assets/horo-package-provenance.json" and provenance_bytes is not None else original.read(name)
+            result.writestr(info, payload)
 
 
 def sign_package(package: Path, signed: Path, tools: dict, capability: dict, workspace: Path) -> None:
@@ -204,12 +205,31 @@ def assemble(arguments: argparse.Namespace) -> None:
     complete_package(stage, workspace, profile, tools, capability, evidence, arguments.unsigned)
 
 
+def include_generated_assets(package: Path, evidence: dict) -> None:
+    """Bind explicitly declared Gradle-produced runtime assets before canonical alignment/signing."""
+    with zipfile.ZipFile(package) as archive:
+        archive_limits(archive)
+        if archive.read("assets/horo-package-provenance.json") != canonical_json(evidence):
+            raise AndroidError("Gradle changed the admitted source provenance before final assembly.")
+        generated = evidence["profile"]["generatedAssets"]
+        ordinary = {"assets/" + record["name"] for record in evidence["assets"]}
+        expected = ordinary | {"assets/" + name for name in generated} | {"assets/horo-package-provenance.json"}
+        actual = {name for name in archive.namelist() if name.startswith("assets/")}
+        if actual != expected:
+            raise AndroidError("Gradle output has absent or undeclared generated runtime assets.")
+        for name in generated:
+            payload = archive.read("assets/" + name)
+            evidence["assets"].append({"name":name, "sha256":hashlib.sha256(payload).hexdigest(),
+                                       "size":len(payload), "origin":"androidGradlePlugin"})
+
+
 def complete_package(stage: Path, workspace: Path, profile: dict, tools: dict, capability: dict, evidence: dict, unsigned: bool) -> None:
     candidates = list((stage / "build/outputs/apk" / profile["configuration"].lower()).glob("*.apk"))
     if len(candidates) != 1:
         raise AndroidError("Gradle must produce exactly one APK for the admitted ABI set.")
     canonical = workspace / "canonical-unaligned.apk"
-    canonical_apk(candidates[0], canonical)
+    include_generated_assets(candidates[0], evidence)
+    canonical_apk(candidates[0], canonical, canonical_json(evidence))
     aligned = workspace / "unsigned.apk"
     run([capability["commands"]["zipalign"], "-P", "16", "-f", "4", str(canonical), str(aligned)], workspace, workspace / "align.log")
     package = aligned
