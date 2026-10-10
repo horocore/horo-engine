@@ -74,6 +74,8 @@ namespace Horo::PCG::PCGErrors {
     extern const ErrorCodeDescriptor GraphTopologyInvalid;
     /** @brief A node type is unavailable under the selected unknown-node policy. */
     extern const ErrorCodeDescriptor GraphNodeTypeUnknown;
+    /** @brief An exact built-in schema or runtime version is unavailable. */
+    extern const ErrorCodeDescriptor GraphNodeVersionUnsupported;
     /** @brief A graph source migration was required but unavailable or invalid. */
     extern const ErrorCodeDescriptor GraphMigrationFailed;
     /** @brief A replacement changes graph identity or fails to advance its durable revision. */

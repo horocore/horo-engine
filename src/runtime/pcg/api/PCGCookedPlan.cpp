@@ -1,6 +1,7 @@
 #include "Horo/PCG/PCGCookedPlan.h"
 
 #include "Horo/PCG/PCGErrors.h"
+#include "PCGCookedPlanWriter.h"
 
 #include <algorithm>
 #include <array>
@@ -25,10 +26,11 @@ namespace Horo::PCG {
         }
 
         [[nodiscard]] Result<PCGCapabilitySet> RequiredCapabilities(const PCGGraphDescriptor &graph, const PCGCapabilitySet caller,
-                                                                    const std::span<const PCGNodeRuntimeDescriptor> runtimes) {
+                                                                    const std::span<const PCGNodeRuntimeDescriptor> runtimes,
+                                                                    const std::optional<PCGCapability> mode) {
             std::vector<PCGCapability> required;
             for (const PCGCapability capability : AllCapabilities) {
-                bool present = graph.requiredCapabilities.Contains(capability) || caller.Contains(capability);
+                bool present = graph.requiredCapabilities.Contains(capability) || caller.Contains(capability) || mode == capability;
                 for (const PCGNodeRuntimeDescriptor &runtime : runtimes)
                     present = present || runtime.requiredCapabilities.Contains(capability);
                 if (present)
@@ -55,62 +57,7 @@ namespace Horo::PCG {
             return descriptor;
         }
 
-        class BoundedWriter final {
-        public:
-            explicit BoundedWriter(const std::size_t maximum) : maximum_(maximum) {}
-
-            [[nodiscard]] bool Integer(const std::uint64_t value, const std::size_t width) {
-                if (width > maximum_ - bytes_.size())
-                    return false;
-                for (std::size_t offset = width; offset > 0; --offset)
-                    bytes_.push_back(static_cast<std::uint8_t>(value >> ((offset - 1) * 8U)));
-                return true;
-            }
-
-            [[nodiscard]] bool Bytes(const std::span<const std::uint8_t> value) {
-                if (value.size() > maximum_ - bytes_.size())
-                    return false;
-                bytes_.insert(bytes_.end(), value.begin(), value.end());
-                return true;
-            }
-
-            [[nodiscard]] bool Value(const PCGGraphValue &value) {
-                if (value.index() == 0 || !Integer(value.index(), 1))
-                    return false;
-                return std::visit([this]<typename T>(const T &typed) {
-                    return WriteValuePayload(typed);
-                }, value);
-            }
-
-            [[nodiscard]] std::vector<std::uint8_t> Take() && {
-                return std::move(bytes_);
-            }
-
-        private:
-            template <typename T> [[nodiscard]] bool WriteValuePayload(const T &typed) {
-                if constexpr (std::is_same_v<T, bool>)
-                    return Integer(typed ? 1 : 0, 1);
-                else if constexpr (std::is_same_v<T, std::int64_t>)
-                    return Integer(static_cast<std::uint64_t>(typed), 8);
-                else if constexpr (std::is_same_v<T, std::uint64_t>)
-                    return Integer(typed, 8);
-                else if constexpr (std::is_same_v<T, double>)
-                    return Integer(std::bit_cast<std::uint64_t>(typed), 8);
-                else if constexpr (std::is_same_v<T, Math::Vec2>)
-                    return Integer(std::bit_cast<std::uint32_t>(typed.x), 4) && Integer(std::bit_cast<std::uint32_t>(typed.y), 4);
-                else if constexpr (std::is_same_v<T, Math::Vec3>)
-                    return Integer(std::bit_cast<std::uint32_t>(typed.x), 4) && Integer(std::bit_cast<std::uint32_t>(typed.y), 4) &&
-                           Integer(std::bit_cast<std::uint32_t>(typed.z), 4);
-                else if constexpr (std::is_same_v<T, Math::Vec4>)
-                    return Integer(std::bit_cast<std::uint32_t>(typed.x), 4) && Integer(std::bit_cast<std::uint32_t>(typed.y), 4) &&
-                           Integer(std::bit_cast<std::uint32_t>(typed.z), 4) && Integer(std::bit_cast<std::uint32_t>(typed.w), 4);
-                else
-                    return false;
-            }
-
-            std::size_t maximum_{};
-            std::vector<std::uint8_t> bytes_;
-        };
+        using detail::BoundedPlanWriter;
 
         struct PlanSections final {
             std::span<const PCGCookedNode> nodes;
@@ -119,7 +66,7 @@ namespace Horo::PCG {
             std::span<const PCGCookedExposedInput> exposed;
         };
 
-        [[nodiscard]] bool WriteHeader(BoundedWriter &writer, const PCGGraphSourceData &source, const Sha256Digest &sourceDigest,
+        [[nodiscard]] bool WriteHeader(BoundedPlanWriter &writer, const PCGGraphSourceData &source, const Sha256Digest &sourceDigest,
                                        const PCGCapabilitySet capabilities, const PlanSections &sections) {
             constexpr std::array<std::uint8_t, 4> magic{'H', 'P', 'C', 'P'};
             bool valid = writer.Bytes(magic) && writer.Integer(CurrentPCGCookedPlanVersion.major, 2) &&
@@ -135,7 +82,7 @@ namespace Horo::PCG {
                    writer.Integer(sections.constants.size(), 4) && writer.Integer(sections.exposed.size(), 4);
         }
 
-        [[nodiscard]] bool WriteNode(BoundedWriter &writer, const PCGCookedNode &node) {
+        [[nodiscard]] bool WriteNode(BoundedPlanWriter &writer, const PCGCookedNode &node) {
             bool valid = writer.Integer(node.id.Value(), 8) && writer.Integer(node.type.Value(), 8) &&
                          writer.Integer(node.version.major, 2) && writer.Integer(node.version.minor, 2) &&
                          writer.Integer(node.runtimeContractVersion, 4) && writer.Integer(static_cast<std::uint8_t>(node.determinism), 1) &&
@@ -149,18 +96,18 @@ namespace Horo::PCG {
             return valid && writer.Bytes(node.payload);
         }
 
-        [[nodiscard]] bool WriteRoute(BoundedWriter &writer, const PCGCookedRoute &route) {
+        [[nodiscard]] bool WriteRoute(BoundedPlanWriter &writer, const PCGCookedRoute &route) {
             return writer.Integer(route.id.Value(), 8) && writer.Integer(route.sourceNode, 4) &&
                    writer.Integer(route.sourcePin.Value(), 8) && writer.Integer(route.targetNode, 4) &&
                    writer.Integer(route.targetPin.Value(), 8);
         }
 
-        [[nodiscard]] bool WriteConstant(BoundedWriter &writer, const PCGCookedConstant &constant) {
+        [[nodiscard]] bool WriteConstant(BoundedPlanWriter &writer, const PCGCookedConstant &constant) {
             return writer.Integer(constant.node, 4) && writer.Integer(constant.pin.Value(), 8) &&
                    writer.Integer(static_cast<std::uint8_t>(constant.type), 1) && writer.Value(constant.value);
         }
 
-        [[nodiscard]] bool WriteExposedInput(BoundedWriter &writer, const PCGCookedExposedInput &input) {
+        [[nodiscard]] bool WriteExposedInput(BoundedPlanWriter &writer, const PCGCookedExposedInput &input) {
             const auto keyBytes = std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t *>(input.key.data()), input.key.size());
             return writer.Integer(input.id.Value(), 8) && writer.Integer(input.key.size(), 2) && writer.Bytes(keyBytes) &&
                    writer.Integer(input.node, 4) && writer.Integer(input.pin.Value(), 8) &&
@@ -170,7 +117,7 @@ namespace Horo::PCG {
         [[nodiscard]] Result<std::vector<std::uint8_t>> Encode(const PCGGraphSourceData &source, const Sha256Digest &sourceDigest,
                                                                const PCGCapabilitySet capabilities, const PlanSections &sections,
                                                                const std::size_t maximumBytes) {
-            BoundedWriter writer(maximumBytes);
+            BoundedPlanWriter writer(maximumBytes);
             if (!WriteHeader(writer, source, sourceDigest, capabilities, sections))
                 return Reject<std::vector<std::uint8_t>>(PCGErrors::CookedPlanCapacityExceeded);
             for (const PCGCookedNode &node : sections.nodes) {
@@ -289,6 +236,47 @@ namespace Horo::PCG {
             }
             return Result<std::vector<PCGCookedExposedInput>>::Success(std::move(exposed));
         }
+
+        /** @brief Lowers validated executable sections in admission order, retaining ownership through encoding. */
+        struct OwnedPlanSections final {
+            std::vector<PCGCookedNode> nodes;
+            std::vector<PCGCookedRoute> routes;
+            std::vector<PCGCookedConstant> constants;
+            std::vector<PCGCookedExposedInput> exposed;
+            PCGCapabilitySet capabilities;
+        };
+
+        /** @brief Resolves exact runtime contracts before route, schema, and capability publication. */
+        [[nodiscard]] Result<OwnedPlanSections> BuildExecutableSections(
+            const PCGGraphSourceData &source, const PCGValidatedGraph &validated, const PCGRegistrySnapshot &registry,
+            const PCGNodeCatalogSnapshot &catalog, const PCGGraphDescriptor &descriptor, const PCGCapabilitySet requiredCapabilities) {
+            auto resolved = ResolveNodes(source, validated, registry);
+            if (resolved.HasError())
+                return Result<OwnedPlanSections>::Failure(resolved.ErrorValue());
+            const auto mode = source.mode == PCGGenerationMode::Offline   ? PCGCapability::OfflineBake
+                              : source.mode == PCGGenerationMode::Runtime ? PCGCapability::RuntimeEvaluation
+                                                                          : PCGCapability::HybridEvaluation;
+            if ((catalog.Capabilities().profile != registry.Capabilities().profile ||
+                 catalog.Capabilities().granted != registry.Capabilities().granted) ||
+                !catalog.Capabilities().granted.Contains(mode))
+                return Reject<OwnedPlanSections>(PCGErrors::UnsupportedCapability);
+            auto routes = BuildRoutes(source, resolved.Value().indexes);
+            if (routes.HasError())
+                return Result<OwnedPlanSections>::Failure(routes.ErrorValue());
+            auto exposed = BuildExposedInputs(source, resolved.Value().indexes);
+            if (exposed.HasError())
+                return Result<OwnedPlanSections>::Failure(exposed.ErrorValue());
+            for (const auto &node : resolved.Value().nodes)
+                if (auto valid = catalog.Validate(node); valid.HasError())
+                    return Result<OwnedPlanSections>::Failure(valid.ErrorValue());
+            auto constants = BuildConstants(source, resolved.Value().indexes);
+            auto capabilities = RequiredCapabilities(descriptor, requiredCapabilities, resolved.Value().runtimes, std::optional{mode});
+            if (capabilities.HasError() || !registry.Capabilities().granted.ContainsAll(capabilities.Value()))
+                return Reject<OwnedPlanSections>(PCGErrors::UnsupportedCapability);
+            return Result<OwnedPlanSections>::Success({std::move(resolved).Value().nodes, std::move(routes).Value(), std::move(constants),
+                                                       std::move(exposed).Value(), capabilities.Value()});
+        }
+
     }  // namespace
 
     PCGCookedPlan::PCGCookedPlan(Data data) noexcept : data_(std::move(data)) {}
@@ -360,8 +348,10 @@ namespace Horo::PCG {
 
     /** @copydoc CompilePCGGraph */
     Result<PCGCookedPlan> CompilePCGGraph(const PCGGraphAsset &graph, const PCGValidatedGraph &validated,
-                                          const PCGRegistrySnapshot &registry, const PCGCapabilitySet requiredCapabilities,
-                                          const std::size_t maximumPlanBytes) {
+                                          const PCGRegistrySnapshot &registry, PCGNodeCatalogSnapshot catalog,
+                                          const PCGCapabilitySet requiredCapabilities, const std::size_t maximumPlanBytes) {
+        if (!catalog.IsValid())
+            return Reject<PCGCookedPlan>(PCGErrors::RuntimeUnavailable);
         const PCGGraphSourceData &source = graph.Data();
         auto tierLimits = LimitsForTier(source.tier);
         if (tierLimits.HasError() || maximumPlanBytes == 0 || maximumPlanBytes > PCGGraphSourceHardLimits::SourceBytes)
@@ -377,21 +367,12 @@ namespace Horo::PCG {
         if (sourceDigest != validated.SourceDigest())
             return Reject<PCGCookedPlan>(PCGErrors::CookedPlanStale);
 
-        auto resolved = ResolveNodes(source, validated, registry);
-        if (resolved.HasError())
-            return Result<PCGCookedPlan>::Failure(resolved.ErrorValue());
-        auto routes = BuildRoutes(source, resolved.Value().indexes);
-        if (routes.HasError())
-            return Result<PCGCookedPlan>::Failure(routes.ErrorValue());
-        auto exposed = BuildExposedInputs(source, resolved.Value().indexes);
-        if (exposed.HasError())
-            return Result<PCGCookedPlan>::Failure(exposed.ErrorValue());
-        auto constants = BuildConstants(source, resolved.Value().indexes);
-        auto capabilities = RequiredCapabilities(*graphDescriptor.Value(), requiredCapabilities, resolved.Value().runtimes);
-        if (capabilities.HasError() || !registry.Capabilities().granted.ContainsAll(capabilities.Value()))
-            return Reject<PCGCookedPlan>(PCGErrors::UnsupportedCapability);
-        const PlanSections sections{resolved.Value().nodes, routes.Value(), constants, exposed.Value()};
-        auto bytes = Encode(source, sourceDigest, capabilities.Value(), sections, effectiveMaximum);
+        auto lowered = BuildExecutableSections(source, validated, registry, catalog, *graphDescriptor.Value(), requiredCapabilities);
+        if (lowered.HasError())
+            return Result<PCGCookedPlan>::Failure(lowered.ErrorValue());
+        auto &owned = lowered.Value();
+        const PlanSections sections{owned.nodes, owned.routes, owned.constants, owned.exposed};
+        auto bytes = Encode(source, sourceDigest, owned.capabilities, sections, effectiveMaximum);
         if (bytes.HasError())
             return Result<PCGCookedPlan>::Failure(bytes.ErrorValue());
         PCGCookedPlan::Data data{source.generation,
@@ -399,12 +380,13 @@ namespace Horo::PCG {
                                  source.deterministicSeed,
                                  source.version,
                                  sourceDigest,
-                                 capabilities.Value(),
-                                 std::move(resolved).Value().nodes,
-                                 std::move(routes).Value(),
-                                 std::move(constants),
-                                 std::move(exposed).Value(),
-                                 std::move(bytes).Value()};
+                                 owned.capabilities,
+                                 std::move(owned.nodes),
+                                 std::move(owned.routes),
+                                 std::move(owned.constants),
+                                 std::move(owned.exposed),
+                                 std::move(bytes).Value(),
+                                 std::move(catalog)};
         return Result<PCGCookedPlan>::Success(PCGCookedPlan{std::move(data)});
     }
 }  // namespace Horo::PCG

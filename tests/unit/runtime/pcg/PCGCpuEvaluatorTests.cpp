@@ -96,40 +96,42 @@ namespace Horo::PCG {
             }
         }
 
-        PCGCookedPlan Plan(const bool merge = false, const bool malformedPayload = false, const std::uint32_t runtimeVersion = 1,
-                           const bool reordered = false, const std::uint32_t inputCount = 1,
+        PCGCookedPlan Plan(const bool merge = false, const bool reordered = false, const std::uint32_t inputCount = 1,
                            const PCGOperationalTier tier = PCGOperationalTier::Baseline) {
             auto source = Source(1, merge);
             source.tier = tier;
             if (inputCount > 1)
                 ReplaceWithFilterChain(source, inputCount);
-            if (malformedPayload)
-                source.nodes[0].payload.clear();
             if (reordered) {
                 std::ranges::reverse(source.nodes);
                 std::ranges::reverse(source.edges);
                 for (auto &node : source.nodes)
                     std::ranges::reverse(node.pins);
             }
-            const std::array<PCGNodeTypeSupport, 4> types{
-                PCGNodeTypeSupport{PCGCpuNodeType(PCGCpuNodeKind::SnapshotGrid).Value(), {1, 0}, {1, 0}},
-                PCGNodeTypeSupport{PCGCpuNodeType(PCGCpuNodeKind::DensityFilter).Value(), {1, 0}, {1, 0}},
-                PCGNodeTypeSupport{PCGCpuNodeType(PCGCpuNodeKind::Merge).Value(), {1, 0}, {1, 0}},
-                PCGNodeTypeSupport{PCGCpuNodeType(PCGCpuNodeKind::Forward).Value(), {1, 0}, {1, 0}},
-            };
-            auto graph = PCGGraphAsset::Create(source, {.tier = tier, .supportedNodeTypes = types});
-            INFO("graph capture error: " << (graph.HasError() ? graph.ErrorValue().code.Value() : std::string{"none"}));
-            REQUIRE(graph.HasValue());
-            auto projection = ProjectPCGCapabilities(PCGHostProfile::Interactive, ValidationCapability());
+            const std::array grants{PCGCapability::Validation, PCGCapability::OfflineBake};
+            const auto granted = PCGCapabilitySet::Create(grants).Value();
+            auto projection = ProjectPCGCapabilities(PCGHostProfile::Interactive, granted);
             REQUIRE(projection.HasValue());
+            auto catalogResult = PCGNodeCatalog::Create(projection.Value());
+            REQUIRE(catalogResult.HasValue());
+            auto catalog = std::move(catalogResult).Value();
+            for (const auto kind :
+                 {PCGCpuNodeKind::SnapshotGrid, PCGCpuNodeKind::DensityFilter, PCGCpuNodeKind::Merge, PCGCpuNodeKind::Forward})
+                REQUIRE(catalog.Register(kind).HasValue());
+            const auto catalogRoot = catalog.Snapshot();
+            REQUIRE(catalogRoot.HasValue());
+            std::vector<PCGNodeTypeSupport> types;
+            for (const auto &entry : catalogRoot.Value().Nodes())
+                types.push_back({entry.type, entry.version, entry.version});
+            auto graph = PCGGraphAsset::Create(source, {.tier = tier, .supportedNodeTypes = types});
+            REQUIRE(graph.HasValue());
             auto created = PCGRegistry::Create(Id<PCGRegistryInstanceId>(1), projection.Value());
             REQUIRE(created.HasValue());
             auto registry = std::move(created).Value();
-            for (const auto &type : types) {
-                const auto determinism =
-                    type.type == types[0].type ? PCGNodeDeterminism::ProfileDeterministic : PCGNodeDeterminism::PortableDeterministic;
-                REQUIRE(registry.RegisterNodeRuntime({type.type, runtimeVersion, determinism, {}}).HasValue());
-            }
+            for (const auto &entry : catalogRoot.Value().Nodes())
+                REQUIRE(
+                    registry.RegisterNodeRuntime({entry.type, entry.runtimeContractVersion, entry.determinism, entry.requiredCapabilities})
+                        .HasValue());
             std::vector<PCGGraphNodeDescriptor> registered;
             for (const auto &node : source.nodes)
                 registered.push_back({node.id, node.type});
@@ -138,7 +140,9 @@ namespace Horo::PCG {
             REQUIRE(snapshot.HasValue());
             auto validated = ValidatePCGGraph(graph.Value(), snapshot.Value(), ValidationCapability());
             REQUIRE(validated.HasValue());
-            auto plan = CompilePCGGraph(graph.Value(), validated.Value(), snapshot.Value(), ValidationCapability());
+            auto plan =
+                CompilePCGGraph(graph.Value(), validated.Value(), snapshot.Value(), catalogRoot.Value(), ValidationCapability(),
+                                std::min(LimitsForTier(tier).Value().maximumResidentPlanBytes, PCGGraphSourceHardLimits::SourceBytes));
             REQUIRE(plan.HasValue());
             return std::move(plan).Value();
         }
@@ -276,13 +280,13 @@ namespace Horo::PCG {
         const auto plan = Plan();
         auto missingOutput = plan.Nodes()[0];
         missingOutput.pins.clear();
-        CheckError(detail::ValidateNode(missingOutput), PCGErrors::CpuEvaluationInvalid);
+        CheckError(plan.Catalog().Validate(missingOutput), PCGErrors::RegistryDescriptorInvalid);
         auto missingPointInput = plan.Nodes()[1];
         missingPointInput.pins.erase(missingPointInput.pins.begin());
-        CheckError(detail::ValidateNode(missingPointInput), PCGErrors::CpuEvaluationInvalid);
+        CheckError(plan.Catalog().Validate(missingPointInput), PCGErrors::RegistryDescriptorInvalid);
         auto excessivePins = plan.Nodes()[0];
         excessivePins.pins.insert(excessivePins.pins.end(), 3, excessivePins.pins.front());
-        CheckError(detail::ValidateNode(excessivePins), PCGErrors::CpuEvaluationInvalid);
+        CheckError(plan.Catalog().Validate(excessivePins), PCGErrors::RegistryDescriptorInvalid);
         auto limits = Limits(plan);
         limits.numericProfile = {};
         CheckError(EvaluatePCGCpu(plan, spatial, bounds, {}, limits), PCGErrors::CpuEvaluationUnsupported);
@@ -302,10 +306,12 @@ namespace Horo::PCG {
         closedJobs.Shutdown(ShutdownPolicy::Cancel);
         CHECK(EvaluatePCGCpu(plan, spatial, bounds, {}, Limits(plan, 2, &closedJobs)).HasError());
 
-        const auto malformed = Plan(false, true);
-        CheckError(EvaluatePCGCpu(malformed, spatial, bounds, {}, Limits(malformed)), PCGErrors::CpuEvaluationInvalid);
-        const auto unsupported = Plan(false, false, 2);
-        CheckError(EvaluatePCGCpu(unsupported, spatial, bounds, {}, Limits(unsupported)), PCGErrors::CpuEvaluationUnsupported);
+        auto malformed = plan.Nodes()[0];
+        malformed.payload.clear();
+        CheckError(plan.Catalog().Validate(malformed), PCGErrors::RegistryDescriptorInvalid);
+        auto unsupported = plan.Nodes()[0];
+        unsupported.runtimeContractVersion = 2;
+        CheckError(plan.Catalog().Validate(unsupported), PCGErrors::GraphNodeVersionUnsupported);
         const auto differentGrid = Spatial(2, 0.0F, 9);
         CheckError(EvaluatePCGCpu(plan, differentGrid, bounds, {}, Limits(plan)), PCGErrors::CpuEvaluationInvalid);
     }
@@ -327,7 +333,7 @@ namespace Horo::PCG {
 
     TEST_CASE("PCG CPU uneven partitions and reordered authoring preserve every output column", "[unit][pcg][cpu]") {
         const auto plan = Plan(true);
-        const auto reordered = Plan(true, false, 1, true);
+        const auto reordered = Plan(true, true);
         const auto spatial = Spatial(1, 0.0F, 8, 3);
         const auto bounds = Bounds(true, 27, 27);
         const auto reference = EvaluatePCGCpu(plan, spatial, bounds, {}, Limits(plan));
@@ -359,7 +365,7 @@ namespace Horo::PCG {
         for (const auto tier : {PCGOperationalTier::Standard, PCGOperationalTier::High}) {
             const auto count = static_cast<std::uint32_t>(LimitsForTier(tier).Value().maximumExposedInputs);
             CAPTURE(count);
-            const auto plan = Plan(false, false, 1, false, count, tier);
+            const auto plan = Plan(false, false, count, tier);
             const auto schema = Schema();
             // The schema tier must match the request's actual supported operational tier.
             auto matching = PCGPointSchema::Capture({tier, schema->Attributes()});

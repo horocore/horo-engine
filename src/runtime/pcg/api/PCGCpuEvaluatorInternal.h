@@ -16,7 +16,6 @@ namespace Horo::PCG::detail {
         std::span<const PCGProvenance> provenance;
     };
 
-    [[nodiscard]] Result<void> ValidateNode(const PCGCookedNode &node);
     [[nodiscard]] Result<std::size_t> AdmitCandidate(const PCGCookedPlan &plan, std::span<const PCGPointOutputBound> bounds,
                                                      const PCGCpuEvaluationLimits &limits);
     [[nodiscard]] Result<void> ExecuteNode(const NodeExecutionContext &context, std::uint32_t node);
