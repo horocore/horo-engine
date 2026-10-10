@@ -2,6 +2,7 @@
 #include "Horo/PCG/PCGCpuEvaluator.h"
 #include "Horo/PCG/PCGErrors.h"
 #include "PCGCpuEvaluatorInternal.h"
+#include "PCGNodeCatalogInternal.h"
 
 #include <algorithm>
 #include <array>
@@ -15,18 +16,8 @@
 
 namespace Horo::PCG {
     namespace {
-        constexpr std::array<std::uint64_t, 4> NodeTypeValues{0x5043470206000001ULL, 0x5043470206000002ULL, 0x5043470206000003ULL,
-                                                              0x5043470206000004ULL};
-
         template <typename T> [[nodiscard]] Result<T> Reject(const ErrorCodeDescriptor &error) {
             return Result<T>::Failure(MakeError(error));
-        }
-
-        [[nodiscard]] Result<PCGCpuNodeKind> KindOf(const NodeTypeId type) {
-            for (std::size_t index = 0; index < NodeTypeValues.size(); ++index)
-                if (type.Value() == NodeTypeValues[index])
-                    return Result<PCGCpuNodeKind>::Success(static_cast<PCGCpuNodeKind>(index));
-            return Reject<PCGCpuNodeKind>(PCGErrors::CpuEvaluationUnsupported);
         }
 
         struct PinList final {
@@ -60,47 +51,6 @@ namespace Horo::PCG {
                 }
             std::ranges::sort(std::span(pins.values.data(), pins.count), {}, &PCGCookedPin::id);
             return pins;
-        }
-
-        [[nodiscard]] Result<void> ValidateNodeImpl(const PCGCookedNode &node) {
-            const auto kind = KindOf(node.type);
-            if (kind.HasError())
-                return Result<void>::Failure(kind.ErrorValue());
-            if (node.version != PCGNodeTypeVersion{1, 0} || node.runtimeContractVersion != 1)
-                return Reject<void>(PCGErrors::CpuEvaluationUnsupported);
-            if (node.determinism == PCGNodeDeterminism::BestEffortPreview)
-                return Reject<void>(PCGErrors::CpuEvaluationUnsupported);
-            if (node.pins.size() > 3)
-                return Reject<void>(PCGErrors::CpuEvaluationInvalid);
-            const auto inputs = PinsOf(node, PCGPinDirection::Input);
-            if (const auto outputs = PinsOf(node, PCGPinDirection::Output);
-                outputs.size() != 1 || outputs.values[0].type != PCGPinType::PointSet)
-                return Reject<void>(PCGErrors::CpuEvaluationInvalid);
-            const auto pointCount = std::ranges::count_if(inputs, [](const auto &pin) {
-                return pin.type == PCGPinType::PointSet;
-            });
-            const auto scalarCount = std::ranges::count_if(inputs, [](const auto &pin) {
-                return pin.type == PCGPinType::Scalar;
-            });
-            switch (kind.Value()) {
-                case PCGCpuNodeKind::SnapshotGrid:
-                    if (inputs.empty() && node.payload.size() == 8 && node.determinism == PCGNodeDeterminism::ProfileDeterministic)
-                        return Result<void>::Success();
-                    break;
-                case PCGCpuNodeKind::DensityFilter:
-                    if (inputs.size() == 2 && pointCount == 1 && scalarCount == 1 && node.payload.empty())
-                        return Result<void>::Success();
-                    break;
-                case PCGCpuNodeKind::Merge:
-                    if (inputs.size() == 2 && pointCount == 2 && node.payload.empty())
-                        return Result<void>::Success();
-                    break;
-                case PCGCpuNodeKind::Forward:
-                    if (inputs.size() == 1 && pointCount == 1 && node.payload.empty())
-                        return Result<void>::Success();
-                    break;
-            }
-            return Reject<void>(PCGErrors::CpuEvaluationInvalid);
         }
 
         [[nodiscard]] const PCGPointOutputBound *BoundFor(const std::span<const PCGPointOutputBound> bounds, const std::uint32_t node,
@@ -479,19 +429,17 @@ namespace Horo::PCG {
             return ExecuteMerge(context, node, output, pointPins.values[1].id, first.Value(), *outputBound);
         }
 
-        [[nodiscard]] Result<void> ExecuteNodeImpl(const detail::NodeExecutionContext &context, const std::uint32_t node) {
+        [[nodiscard]] Result<void> ExecuteNodeImpl(const detail::NodeExecutionContext &context, const std::uint32_t node,
+                                                   const PCGCpuNodeKind kind) {
             const auto &description = context.plan.Nodes()[node];
-            const auto kind = KindOf(description.type);
-            if (kind.HasError())
-                return Result<void>::Failure(kind.ErrorValue());
             const auto outputs = PinsOf(description, PCGPinDirection::Output);
             if (outputs.size() != 1)
                 return Reject<void>(PCGErrors::CpuEvaluationInvalid);
             Result<void> evaluated = Reject<void>(PCGErrors::CpuEvaluationInvalid);
-            if (kind.Value() == PCGCpuNodeKind::SnapshotGrid)
+            if (kind == PCGCpuNodeKind::SnapshotGrid)
                 evaluated = WriteGrid(context, node, description, outputs.values[0].id);
             else
-                evaluated = ExecuteRouted(context, node, kind.Value(), PinsOf(description, PCGPinDirection::Input), outputs.values[0].id);
+                evaluated = ExecuteRouted(context, node, kind, PinsOf(description, PCGPinDirection::Input), outputs.values[0].id);
             if (evaluated.HasError())
                 return evaluated;
             return context.workspace.FinishNode(node);
@@ -500,26 +448,36 @@ namespace Horo::PCG {
     }  // namespace
 
     namespace detail {
-        Result<void> ValidateNode(const PCGCookedNode &node) {
-            return ValidateNodeImpl(node);
-        }
-
         Result<std::size_t> AdmitCandidate(const PCGCookedPlan &plan, const std::span<const PCGPointOutputBound> bounds,
                                            const PCGCpuEvaluationLimits &limits) {
             return AdmitCandidateImpl(plan, bounds, limits);
         }
 
-        Result<void> ExecuteNode(const NodeExecutionContext &context, const std::uint32_t node) {
-            return ExecuteNodeImpl(context, node);
+        template <PCGCpuNodeKind Kind> Result<void> InvokeBuiltIn(const NodeExecutionContext &context, std::uint32_t node) {
+            return ExecuteNodeImpl(context, node, Kind);
+        }
+
+        BuiltInExecution BuiltInFunction(PCGCpuNodeKind kind) noexcept {
+            switch (kind) {
+                case PCGCpuNodeKind::SnapshotGrid:
+                    return &InvokeBuiltIn<PCGCpuNodeKind::SnapshotGrid>;
+                case PCGCpuNodeKind::DensityFilter:
+                    return &InvokeBuiltIn<PCGCpuNodeKind::DensityFilter>;
+                case PCGCpuNodeKind::Merge:
+                    return &InvokeBuiltIn<PCGCpuNodeKind::Merge>;
+                case PCGCpuNodeKind::Forward:
+                    return &InvokeBuiltIn<PCGCpuNodeKind::Forward>;
+            }
+            return nullptr;
+        }
+
+        Result<void> ExecuteNode(const NodeExecutionContext &context, std::uint32_t node) {
+            const auto &catalog = context.plan.Catalog();
+            auto descriptor = catalog.Find(context.plan.Nodes()[node].type);
+            if (descriptor.HasError())
+                return Result<void>::Failure(descriptor.ErrorValue());
+            const auto index = static_cast<std::size_t>(descriptor.Value() - catalog.state_->descriptors.data());
+            return catalog.state_->functions[index](context, node);
         }
     }  // namespace detail
-
-    /** @copydoc PCGCpuNodeType */
-    Result<NodeTypeId> PCGCpuNodeType(const PCGCpuNodeKind kind) {
-        const auto index = static_cast<std::size_t>(kind);
-        if (index >= NodeTypeValues.size())
-            return Reject<NodeTypeId>(PCGErrors::CpuEvaluationUnsupported);
-        return NodeTypeId::Create(NodeTypeValues[index]);
-    }
-
 }  // namespace Horo::PCG
