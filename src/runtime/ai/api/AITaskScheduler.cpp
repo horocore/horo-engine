@@ -295,8 +295,7 @@ namespace Horo::AI {
 
     /** @copydoc AiTaskScheduler::EvaluateAtDecision */
     Result<AiSchedulingReport> AiTaskScheduler::EvaluateAtDecision(const std::uint64_t tick) {
-        const auto validated = ValidateDecisionTick(tick);
-        if (validated.HasError())
+        if (const auto validated = ValidateDecisionTick(tick); validated.HasError())
             return Result<AiSchedulingReport>::Failure(validated.ErrorValue());
         if (tick != report_.tick) {
             report_ = {.tick = tick};
