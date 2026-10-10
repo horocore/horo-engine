@@ -93,6 +93,11 @@ namespace Horo::AI {
         [[nodiscard]] Result<void> Cancel(TaskHandle task, AiTaskCancellationReason reason);
         /** @brief Processes at most capacity records once; contention retains candidates for the next owner phase. */
         void Pump();
+        /** @brief Cancels all exact-agent records; running records retain capacity until terminal.
+         * @param agent Exact agent generation. @param reason Valid cancellation origin. */
+        void CancelAgent(AgentHandle agent, AiTaskCancellationReason reason) noexcept;
+        /** @brief Counts retained work for one exact agent. @param agent Exact generation. @return Bounded retained count. */
+        [[nodiscard]] std::size_t PendingCount(AgentHandle agent) const noexcept;
         /** @brief Closes admission and requests cancellation once; workers retain their own leases. */
         void Shutdown() noexcept;
         /** @brief Returns retained running or pending-publication count. @return Count bounded by admitted capacity. */

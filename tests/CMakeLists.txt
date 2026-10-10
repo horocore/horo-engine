@@ -779,6 +779,18 @@ target_link_libraries(HoroAITests PRIVATE HoroEngine::AI HoroEngine::AISceneInte
 horo_register_catch_test(HoroAITests LABELS "unit;ai;headless")
 target_include_directories(HoroAITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 
+add_executable(HoroAITaskSchedulerTests unit/runtime/ai/AITaskSchedulerTests.cpp)
+target_compile_features(HoroAITaskSchedulerTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAITaskSchedulerTests PRIVATE HoroEngine::AISceneIntegration)
+target_include_directories(HoroAITaskSchedulerTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+horo_register_catch_test(HoroAITaskSchedulerTests LABELS "unit;ai;headless")
+
+add_executable(HoroAITaskSchedulerPublicConsumer support/AITaskSchedulerPublicConsumer.cpp)
+target_compile_features(HoroAITaskSchedulerPublicConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroAITaskSchedulerPublicConsumer PRIVATE HoroEngine::AISceneIntegration)
+add_test(NAME HoroAITaskSchedulerPublicConsumer COMMAND HoroAITaskSchedulerPublicConsumer)
+set_tests_properties(HoroAITaskSchedulerPublicConsumer PROPERTIES LABELS "unit;ai;headless;ci-windows")
+
 add_executable(HoroAISightTests
         support/AllocationProbe.cpp
         unit/runtime/ai/PerceptionSightTests.cpp
