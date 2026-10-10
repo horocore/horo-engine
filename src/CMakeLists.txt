@@ -99,6 +99,54 @@ add_library(HoroEngine::McpController ALIAS HoroMcpController)
 target_compile_features(HoroMcpController PUBLIC cxx_std_20)
 target_link_libraries(HoroMcpController PUBLIC HoroEngine::McpRegistry)
 
+add_library(HoroProjectReadFilesApi STATIC platform/code_query/ProjectReadFiles.cpp)
+add_library(HoroEngine::ProjectReadFilesApi ALIAS HoroProjectReadFilesApi)
+target_compile_features(HoroProjectReadFilesApi PUBLIC cxx_std_20)
+target_link_libraries(HoroProjectReadFilesApi PUBLIC HoroEngine::Foundation)
+
+add_library(HoroPlatformProjectReadFiles STATIC
+    platform/code_query/NativeProjectReadFiles.cpp
+    platform/code_query/ProjectReadNativeHandle.cpp)
+add_library(HoroEngine::PlatformProjectReadFiles ALIAS HoroPlatformProjectReadFiles)
+target_compile_features(HoroPlatformProjectReadFiles PUBLIC cxx_std_20)
+target_link_libraries(HoroPlatformProjectReadFiles PUBLIC HoroEngine::ProjectReadFilesApi)
+if (WIN32)
+    target_sources(HoroPlatformProjectReadFiles PRIVATE platform/code_query/ProjectReadNativeWindows.cpp)
+    target_compile_definitions(HoroPlatformProjectReadFiles PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
+else ()
+    target_sources(HoroPlatformProjectReadFiles PRIVATE platform/code_query/ProjectReadNativePosix.cpp)
+endif ()
+
+add_library(HoroProjectCodeQuery STATIC
+    application/code_query/ProjectCodeQuery.cpp
+    application/code_query/ProjectCodeQueryValidation.cpp
+    application/code_query/ProjectCodeQueryPages.cpp
+    application/code_query/CodeQueryStoreProviders.cpp)
+add_library(HoroEngine::ProjectCodeQuery ALIAS HoroProjectCodeQuery)
+target_compile_features(HoroProjectCodeQuery PUBLIC cxx_std_20)
+target_link_libraries(HoroProjectCodeQuery PUBLIC HoroEngine::ProjectReadFilesApi)
+
+add_library(HoroMcpProjectCodeQuery STATIC mcp/ProjectCodeQueryTools.cpp)
+add_library(HoroEngine::McpProjectCodeQuery ALIAS HoroMcpProjectCodeQuery)
+target_compile_features(HoroMcpProjectCodeQuery PUBLIC cxx_std_20)
+target_link_libraries(HoroMcpProjectCodeQuery PUBLIC HoroEngine::McpRegistry HoroEngine::ProjectCodeQuery)
+
+add_library(HoroSourceDocumentCodeQuery STATIC editor/services/SourceDocumentCodeQuery.cpp)
+add_library(HoroEngine::SourceDocumentCodeQuery ALIAS HoroSourceDocumentCodeQuery)
+target_compile_features(HoroSourceDocumentCodeQuery PUBLIC cxx_std_20)
+target_link_libraries(HoroSourceDocumentCodeQuery PUBLIC HoroEngine::EditorServices HoroEngine::ProjectCodeQuery)
+
+# Non-installed, deliberately narrow native race-test contract. No repository-wide src visibility.
+if (BUILD_TESTING)
+    add_library(HoroProjectReadFilesTestingInternal INTERFACE)
+    set(_horo_read_test_headers "${CMAKE_CURRENT_BINARY_DIR}/project_read_testing")
+    file(MAKE_DIRECTORY "${_horo_read_test_headers}")
+    configure_file(platform/code_query/ProjectCodeFilesTesting.h
+        "${_horo_read_test_headers}/ProjectCodeFilesTesting.h" COPYONLY)
+    target_include_directories(HoroProjectReadFilesTestingInternal INTERFACE "${_horo_read_test_headers}")
+    target_link_libraries(HoroProjectReadFilesTestingInternal INTERFACE HoroEngine::PlatformProjectReadFiles)
+endif ()
+
 add_library(HoroModelProvider STATIC editor/agent/ModelProvider.cpp)
 add_library(HoroEngine::ModelProvider ALIAS HoroModelProvider)
 target_compile_features(HoroModelProvider PUBLIC cxx_std_20)
