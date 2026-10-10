@@ -40,6 +40,17 @@ namespace Horo::Platform::ProjectReadNative {
         [[nodiscard]] bool operator==(const FileInfo &) const noexcept = default;
     };
 
+    /** @brief Allocation-free synchronous callback view; the caller owns the state until Visit returns. */
+    struct EntryVisitor final {
+        void *state;
+        Result<void> (*invoke)(void *, std::string_view);
+
+        /** @brief Invokes the borrowed caller's bounded entry admission without retaining its state. */
+        [[nodiscard]] Result<void> operator()(const std::string_view name) const {
+            return invoke(state, name);
+        }
+    };
+
     /** @brief Normalizes the concrete invalid value without exposing native handle types. */
     [[nodiscard]] HandleValue NormalizeHandle(HandleValue value) noexcept;
     /** @brief Closes one valid unique native handle; called only by its RAII owner. */
@@ -78,6 +89,5 @@ namespace Horo::Platform::ProjectReadNative {
      * @param visitor Bounded caller-owned admission/recursion callback; no callback is retained.
      * @return Success after complete enumeration or exact visitor/native failure.
      */
-    [[nodiscard]] Result<void> Visit(const Handle &handle, const ProjectReadContext &context,
-                                     const std::function<Result<void>(std::string_view)> &visitor);
+    [[nodiscard]] Result<void> Visit(const Handle &handle, const ProjectReadContext &context, const EntryVisitor &visitor);
 }  // namespace Horo::Platform::ProjectReadNative

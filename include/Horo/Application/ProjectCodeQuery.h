@@ -139,7 +139,7 @@ namespace Horo::Application {
         [[nodiscard]] static Result<std::shared_ptr<ProjectCodeQuery>> Create(std::shared_ptr<const Platform::IProjectReadFiles> files,
                                                                               std::string projectIdentity, std::uint64_t projectGeneration,
                                                                               CodeQueryProviders providers = {},
-                                                                              CodeQueryLimits limits = {});
+                                                                              const CodeQueryLimits &limits = {});
         /** @brief Reads one bounded page, preserving project/provider/content revision fences.
          * @param request Typed query with optional exact continuation revision.
          * @param context Current project, cancellation, deadline and live authority observer.
@@ -152,7 +152,7 @@ namespace Horo::Application {
     private:
         /** @brief Retains only explicitly supplied read capabilities and owned finite configuration. */
         ProjectCodeQuery(std::shared_ptr<const Platform::IProjectReadFiles> files, std::string identity, std::uint64_t generation,
-                         CodeQueryProviders providers, CodeQueryLimits limits);
+                         CodeQueryProviders providers, const CodeQueryLimits &limits);
         std::shared_ptr<const Platform::IProjectReadFiles> files_;
         std::string identity_;
         std::uint64_t generation_;

@@ -3,6 +3,7 @@
 #include "Horo/Foundation/Utf8.h"
 #include "ProjectCodeQueryInternal.h"
 
+#include <format>
 #include <limits>
 
 namespace Horo::Application {
@@ -25,8 +26,8 @@ namespace Horo::Application {
 
         /** @brief Reserves bounded projected strings before constructing an owned result row. */
         bool ReserveRow(const std::size_t pathBytes, const std::size_t labelBytes, std::size_t &bytes) {
-            constexpr std::size_t maximumBytes = 1U << 20U;
-            if (labelBytes > 4096 || pathBytes > maximumBytes - bytes || labelBytes > maximumBytes - bytes - pathBytes)
+            if (constexpr std::size_t maximumBytes = 1U << 20U;
+                labelBytes > 4096 || pathBytes > maximumBytes - bytes || labelBytes > maximumBytes - bytes - pathBytes)
                 return false;
             bytes += pathBytes + labelBytes;
             return true;
@@ -68,7 +69,7 @@ namespace Horo::Application {
                 return Result<CodeQueryObservation>::Failure(MakeError(CodeQueryErrors::Capacity));
             CodeQueryObservation observation{identity,
                                              generation,
-                                             "build-output:" + std::to_string(snapshot->revision),
+                                             std::format("build-output:{}", snapshot->revision),
                                              {},
                                              snapshot->droppedRecordCount};
             std::size_t bytes{};
@@ -100,7 +101,7 @@ namespace Horo::Application {
                 return Result<CodeQueryObservation>::Failure(MakeError(CodeQueryErrors::Capacity));
             CodeQueryObservation observation{identity,
                                              generation,
-                                             "operations:" + std::to_string(snapshot->revision),
+                                             std::format("operations:{}", snapshot->revision),
                                              {},
                                              snapshot->droppedTerminalCount};
             for (const auto &record : snapshot->operations) {
@@ -124,15 +125,13 @@ namespace Horo::Application {
         CodeQueryProviders providers;
         if (diagnostics) {
             providers.diagnostics = [root = std::move(root), identity, generation,
-                                     query = std::move(diagnostics)](const CodeQueryRequest &request,
-                                                                     const CodeQueryContext &context) -> Result<CodeQueryObservation> {
+                                     query = std::move(diagnostics)](const CodeQueryRequest &request, const CodeQueryContext &context) {
                 return CaptureDiagnostics(*query, root, identity, generation, request, context);
             };
         }
         if (operations) {
             providers.buildStatus = [identity = std::move(identity), generation,
-                                     query = std::move(operations)](const CodeQueryRequest &,
-                                                                    const CodeQueryContext &context) -> Result<CodeQueryObservation> {
+                                     query = std::move(operations)](const CodeQueryRequest &, const CodeQueryContext &context) {
                 return CaptureBuildStatus(*query, identity, generation, context);
             };
         }

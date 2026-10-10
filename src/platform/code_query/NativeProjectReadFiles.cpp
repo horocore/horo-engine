@@ -88,6 +88,23 @@ namespace Horo::Platform {
             }
 
         private:
+            /** @brief Shares one finite enumeration budget across synchronous handle-relative recursion. */
+            struct CaptureState final {
+                const ProjectReadContext &context;
+                const ProjectReadLimits &limits;
+                std::size_t &entries;
+                std::size_t &bytes;
+                std::vector<ProjectReadEntry> &records;
+            };
+
+            /** @brief Borrows one opened directory and its caller-owned state only for the current Visit call. */
+            struct CaptureVisit final {
+                const NativeFiles &files;
+                const Native::Handle &directory;
+                std::string_view prefix;
+                CaptureState &state;
+            };
+
             /** @brief Rejects invalid authority or budgets before any native descendant access. */
             Result<void> Admit(const std::string_view path, const bool allowRoot, const ProjectReadContext &context,
                                const ProjectReadLimits &limits) const {
@@ -169,31 +186,40 @@ namespace Horo::Platform {
             Result<void> Capture(const Native::Handle &directory, const std::string_view prefix, const ProjectReadContext &context,
                                  const ProjectReadLimits &limits, std::size_t &entries, std::size_t &bytes,
                                  std::vector<ProjectReadEntry> &records) const {
-                return Native::Visit(directory, context, [&](const std::string_view name) -> Result<void> {
-                    if (++entries > limits.maximumEntries)
-                        return Result<void>::Failure(MakeError(ProjectReadErrors::Capacity));
-                    const std::string path = prefix.empty() ? std::string{name} : std::string{prefix} + '/' + std::string{name};
-                    if (!IsSafeProjectReadPath(path))
-                        return Result<void>::Failure(MakeError(ProjectReadErrors::UnsafePath));
-                    Observe(Boundary::BeforeDirectoryEntryOpen, path);
-                    if (auto stop = CheckProjectReadContext(context); stop.HasError())
-                        return stop;
-                    auto child = Native::OpenChild(directory, name, false);
-                    if (child.HasError())
-                        return Result<void>::Failure(child.ErrorValue());
-                    auto info = Native::Info(child.Value());
-                    if (info.HasError())
-                        return Result<void>::Failure(info.ErrorValue());
-                    if (info.Value().directory)
-                        return Capture(child.Value(), path, context, limits, entries, bytes, records);
-                    if (!info.Value().regular || info.Value().links != 1)
-                        return Result<void>::Failure(MakeError(ProjectReadErrors::UnsafePath));
-                    if (path.size() + 1 > limits.maximumManifestBytes - bytes)
-                        return Result<void>::Failure(MakeError(ProjectReadErrors::Capacity));
-                    bytes += path.size() + 1;
-                    records.push_back({path});
-                    return Result<void>::Success();
-                });
+                CaptureState state{context, limits, entries, bytes, records};
+                CaptureVisit capture{*this, directory, prefix, state};
+                return Native::Visit(directory, context, {&capture, [](void *opaque, const std::string_view name) {
+                    const auto &visit = *static_cast<const CaptureVisit *>(opaque);
+                    return visit.files.CaptureEntry(visit.directory, visit.prefix, name, visit.state);
+                }});
+            }
+
+            /** @brief Admits one entry before recursion or publication, preserving the shared byte and entry ceilings. */
+            Result<void> CaptureEntry(const Native::Handle &directory, const std::string_view prefix, const std::string_view name,
+                                      CaptureState &state) const {
+                if (++state.entries > state.limits.maximumEntries)
+                    return Result<void>::Failure(MakeError(ProjectReadErrors::Capacity));
+                const std::string path = prefix.empty() ? std::string{name} : std::string{prefix} + '/' + std::string{name};
+                if (!IsSafeProjectReadPath(path))
+                    return Result<void>::Failure(MakeError(ProjectReadErrors::UnsafePath));
+                Observe(Boundary::BeforeDirectoryEntryOpen, path);
+                if (auto stop = CheckProjectReadContext(state.context); stop.HasError())
+                    return stop;
+                auto child = Native::OpenChild(directory, name, false);
+                if (child.HasError())
+                    return Result<void>::Failure(child.ErrorValue());
+                auto info = Native::Info(child.Value());
+                if (info.HasError())
+                    return Result<void>::Failure(info.ErrorValue());
+                if (info.Value().directory)
+                    return Capture(child.Value(), path, state.context, state.limits, state.entries, state.bytes, state.records);
+                if (!info.Value().regular || info.Value().links != 1)
+                    return Result<void>::Failure(MakeError(ProjectReadErrors::UnsafePath));
+                if (path.size() + 1 > state.limits.maximumManifestBytes - state.bytes)
+                    return Result<void>::Failure(MakeError(ProjectReadErrors::Capacity));
+                state.bytes += path.size() + 1;
+                state.records.emplace_back(path);
+                return Result<void>::Success();
             }
 
             Native::Handle root_;

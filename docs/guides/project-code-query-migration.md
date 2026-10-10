@@ -62,6 +62,15 @@ SourceDocumentCodeQuery owns the editor projection. Domain targets have no MCP
 dependency and Platform has no Application dependency. Consumers link the
 specific owning target; no repository-wide include/source path is required.
 
+`ProjectCodeQuery::Create` borrows `const CodeQueryLimits &` during admission and
+copies the policy into the returned capability. Normal calls, default arguments
+and temporary policies keep the same behavior. Function-pointer declarations
+must use the const-reference parameter and consumers must rebuild for the changed
+signature. This avoids copying the complete policy before admission; it does not
+retain caller-owned configuration. The constructor remains private and the
+factory moves a fully admitted value into one shared allocation. Public consumer
+coverage and the caller-policy lifetime regression protect this boundary.
+
 Focused regression targets are `HoroProjectCodeQueryTests`,
 `HoroProjectReadFilesTests`, `HoroMcpProjectCodeQueryTests`, and
 `HoroSourceDocumentCodeQueryTests`. `HoroProjectCodeQueryPublicHeaderConsumer`

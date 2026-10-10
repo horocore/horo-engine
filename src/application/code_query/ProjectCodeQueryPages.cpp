@@ -3,6 +3,8 @@
 #include "ProjectCodeQueryInternal.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <format>
 #include <span>
 #include <tuple>
 
@@ -10,38 +12,51 @@ namespace Horo::Application::CodeQueryDetail {
     namespace {
         /** @brief Identifies UTF-8 continuation bytes only after complete scalar validation. */
         bool Continuation(const char byte) {
-            return (static_cast<unsigned char>(byte) & 0xc0U) == 0x80U;
+            return (static_cast<std::byte>(byte) & std::byte{0xc0}) == std::byte{0x80};
         }
 
         /** @brief Fences a provider revision to this exact query, avoiding cross-query cursor reuse. */
         std::string QueryRevision(const CodeQueryRequest &request, const CodeQueryObservation &observation) {
-            const std::string prefix = std::to_string(static_cast<unsigned>(request.kind)) + ":" + std::to_string(request.path.size()) +
-                                       ":" + request.path + std::to_string(request.pattern.size()) + ":" + request.pattern +
-                                       std::to_string(observation.projectIdentity.size()) + ":" + observation.projectIdentity + ":" +
-                                       std::to_string(observation.projectGeneration) + ":" + std::to_string(observation.revision.size()) +
-                                       ":" + observation.revision;
+            const std::string prefix =
+                std::format("{}:{}:{}{}:{}{}:{}:{}:{}:{}", static_cast<unsigned>(request.kind), request.path.size(), request.path,
+                            request.pattern.size(), request.pattern, observation.projectIdentity.size(), observation.projectIdentity,
+                            observation.projectGeneration, observation.revision.size(), observation.revision);
             return FormatSha256(ComputeSha256(std::as_bytes(std::span{prefix.data(), prefix.size()})));
         }
 
         /** @brief Closed projection vocabulary prevents a status provider from advertising query-unrelated rows. */
         CodeQueryRecordKind ExpectedKind(const CodeQueryKind kind) {
             using enum CodeQueryKind;
+            using enum CodeQueryRecordKind;
             switch (kind) {
                 case Files:
-                    return CodeQueryRecordKind::File;
+                    return File;
                 case Search:
-                    return CodeQueryRecordKind::Match;
+                    return Match;
                 case Symbols:
-                    return CodeQueryRecordKind::Symbol;
+                    return Symbol;
                 case Diagnostics:
-                    return CodeQueryRecordKind::Diagnostic;
+                    return Diagnostic;
                 case BuildStatus:
-                    return CodeQueryRecordKind::Build;
+                    return Build;
                 case TestStatus:
-                    return CodeQueryRecordKind::Test;
+                    return Test;
                 default:
-                    return CodeQueryRecordKind::File;
+                    return File;
             }
+        }
+
+        /** @brief Keeps each provider row inside the admitted query domain and portable path scope. */
+        bool ValidRow(const CodeQueryRequest &request, const CodeQueryRecord &row) {
+            using enum CodeQueryKind;
+            if (row.kind != ExpectedKind(request.kind) || (!row.path.empty() && !ValidPath(row.path)) || row.label.size() > 4096 ||
+                !IsValidUtf8ScalarSequence(row.label))
+                return false;
+            if ((request.kind == Files || request.kind == Symbols || request.kind == Search) && row.path.empty())
+                return false;
+            if (!request.path.empty() && (request.kind == Symbols || request.kind == Diagnostics) && row.path != request.path)
+                return false;
+            return request.kind != Files || request.path.empty() || row.path.starts_with(request.path + '/');
         }
     }  // namespace
 
@@ -113,16 +128,7 @@ namespace Horo::Application::CodeQueryDetail {
         for (const auto &row : observation.records) {
             if (auto stop = scope.Check(); stop.HasError())
                 return Result<CodeQueryPage>::Failure(stop.ErrorValue());
-            if (row.kind != ExpectedKind(request.kind) || (!row.path.empty() && !ValidPath(row.path)) || row.label.size() > 4096 ||
-                !IsValidUtf8ScalarSequence(row.label))
-                return Result<CodeQueryPage>::Failure(MakeError(CodeQueryErrors::Invalid));
-            if ((request.kind == CodeQueryKind::Files || request.kind == CodeQueryKind::Symbols || request.kind == CodeQueryKind::Search) &&
-                row.path.empty())
-                return Result<CodeQueryPage>::Failure(MakeError(CodeQueryErrors::Invalid));
-            if (!request.path.empty() && (request.kind == CodeQueryKind::Symbols || request.kind == CodeQueryKind::Diagnostics) &&
-                row.path != request.path)
-                return Result<CodeQueryPage>::Failure(MakeError(CodeQueryErrors::Invalid));
-            if (request.kind == CodeQueryKind::Files && !request.path.empty() && !row.path.starts_with(request.path + '/'))
+            if (!ValidRow(request, row))
                 return Result<CodeQueryPage>::Failure(MakeError(CodeQueryErrors::Invalid));
             if (row.path.size() + row.label.size() > limits.maximumObservationBytes - bytes)
                 return Result<CodeQueryPage>::Failure(MakeError(CodeQueryErrors::Capacity));

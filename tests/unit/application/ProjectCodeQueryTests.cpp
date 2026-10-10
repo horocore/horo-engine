@@ -13,6 +13,7 @@ TEST_CASE("Code query UTF-8 paging retains bytes and rejects cross-query continu
     const auto first = service->Query(request, QueryTest::Context());
     REQUIRE(first.HasValue());
     CHECK(first.Value().text == "a");
+    CHECK(first.Value().revision == "sha256:bd02562838b16bf75ff87b232a2e22ed579e7ecab7dd88dfd9066aa862531ca1");
     REQUIRE(first.Value().nextOffset == 1);
     request.offset = 1;
     REQUIRE(service->Query(request, QueryTest::Context()).HasError());
@@ -33,6 +34,16 @@ TEST_CASE("Code query UTF-8 paging retains bytes and rejects cross-query continu
     CHECK(QueryTest::Matches(service->Query(request, context).ErrorValue(), CodeQueryErrors::Stale));
     const auto changed = QueryTest::Service(QueryTest::Text(std::make_shared<const std::string>("a\xc3\xa9z"), "text:2"));
     CHECK(QueryTest::Matches(changed->Query(request, QueryTest::Context()).ErrorValue(), CodeQueryErrors::Stale));
+}
+
+TEST_CASE("Code query creation retains its policy independently of the caller's borrowed limits", "[unit][code-query]") {
+    CodeQueryLimits limits;
+    auto created = ProjectCodeQuery::Create({}, "project-one", 3, QueryTest::Text(std::make_shared<const std::string>("abc")), limits);
+    REQUIRE(created.HasValue());
+    limits.maximumTextPageBytes = 1;
+    const auto page = created.Value()->Query({.kind = CodeQueryKind::Text, .path = "a.cpp", .limit = 2}, QueryTest::Context());
+    REQUIRE(page.HasValue());
+    CHECK(page.Value().text == "ab");
 }
 
 TEST_CASE("Code queries reject binary malformed and oversized existing snapshots", "[unit][code-query]") {

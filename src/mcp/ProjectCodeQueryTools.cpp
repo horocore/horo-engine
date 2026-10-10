@@ -14,15 +14,15 @@ namespace Horo::Mcp {
 
         /** @brief Closed schemas admit only bounded UTF-8 portable names and numeric continuation offsets. */
         nlohmann::json InputSchema(const CodeQueryKind kind) {
+            using enum CodeQueryKind;
             nlohmann::json properties{{"path", {{"type", "string"}, {"maxLength", 1024}}},
                                       {"offset", {{"type", "integer"}, {"minimum", 0}, {"maximum", 1U << 20U}}},
-                                      {"limit",
-                                       {{"type", "integer"}, {"minimum", 1}, {"maximum", kind == CodeQueryKind::Text ? 4096 : 128}}},
+                                      {"limit", {{"type", "integer"}, {"minimum", 1}, {"maximum", kind == Text ? 4096 : 128}}},
                                       {"revision", {{"type", "string"}, {"minLength", 1}, {"maxLength", 256}}}};
             nlohmann::json required = nlohmann::json::array();
-            if (kind == CodeQueryKind::Text || kind == CodeQueryKind::Search || kind == CodeQueryKind::Symbols)
+            if (kind == Text || kind == Search || kind == Symbols)
                 required.push_back("path");
-            if (kind == CodeQueryKind::Search) {
+            if (kind == Search) {
                 properties["pattern"] = {{"type", "string"}, {"minLength", 1}, {"maxLength", 128}};
                 required.push_back("pattern");
             }

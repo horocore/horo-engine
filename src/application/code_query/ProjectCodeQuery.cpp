@@ -13,24 +13,41 @@ namespace Horo::Application {
 
         /** @brief Validates portable typed input before any provider or disk read. */
         Result<void> Admit(const CodeQueryRequest &request, const CodeQueryLimits &limits) {
-            if (static_cast<unsigned>(request.kind) > static_cast<unsigned>(CodeQueryKind::TestStatus) || request.limit == 0 ||
-                request.limit > (request.kind == CodeQueryKind::Text ? limits.maximumTextPageBytes : limits.maximumPageItems) ||
+            using enum CodeQueryKind;
+            if (static_cast<unsigned>(request.kind) > static_cast<unsigned>(TestStatus) || request.limit == 0 ||
+                request.limit > (request.kind == Text ? limits.maximumTextPageBytes : limits.maximumPageItems) ||
                 (request.expectedRevision && (request.expectedRevision->empty() || request.expectedRevision->size() > 256 ||
                                               !IsValidUtf8ScalarSequence(*request.expectedRevision))))
                 return Result<void>::Failure(MakeError(CodeQueryErrors::Invalid));
-            const bool allowRoot = request.kind == CodeQueryKind::Files || request.kind == CodeQueryKind::Diagnostics ||
-                                   request.kind == CodeQueryKind::BuildStatus || request.kind == CodeQueryKind::TestStatus;
-            if (!CodeQueryDetail::ValidPath(request.path, allowRoot))
+            if (const bool allowRoot =
+                    request.kind == Files || request.kind == Diagnostics || request.kind == BuildStatus || request.kind == TestStatus;
+                !CodeQueryDetail::ValidPath(request.path, allowRoot))
                 return Result<void>::Failure(MakeError(CodeQueryErrors::UnsafePath));
-            if (request.kind == CodeQueryKind::Search &&
-                (request.pattern.empty() || request.pattern.size() > limits.maximumPatternBytes ||
-                 !IsValidUtf8ScalarSequence(request.pattern) || request.pattern.find('\0') != std::string::npos))
+            if (request.kind == Search && (request.pattern.empty() || request.pattern.size() > limits.maximumPatternBytes ||
+                                           !IsValidUtf8ScalarSequence(request.pattern) || request.pattern.find('\0') != std::string::npos))
                 return Result<void>::Failure(MakeError(CodeQueryErrors::Invalid));
-            if (request.kind != CodeQueryKind::Search && !request.pattern.empty())
+            if (request.kind != Search && !request.pattern.empty())
                 return Result<void>::Failure(MakeError(CodeQueryErrors::Invalid));
-            if ((request.kind == CodeQueryKind::BuildStatus || request.kind == CodeQueryKind::TestStatus) && !request.path.empty())
+            if ((request.kind == BuildStatus || request.kind == TestStatus) && !request.path.empty())
                 return Result<void>::Failure(MakeError(CodeQueryErrors::Invalid));
             return Result<void>::Success();
+        }
+
+        /** @brief Admits an existing owner snapshot without changing provider error precedence or falling back to disk. */
+        Result<CodeQueryTextSnapshot> ExistingText(CodeQueryTextSnapshot snapshot, const CodeQueryRequest &request,
+                                                   const CodeQueryContext &context, const CodeQueryLimits &limits,
+                                                   const CodeQueryDetail::Scope &scope) {
+            if (snapshot.projectIdentity != context.projectIdentity || snapshot.projectGeneration != context.projectGeneration ||
+                snapshot.path != request.path)
+                return Result<CodeQueryTextSnapshot>::Failure(MakeError(CodeQueryErrors::Stale));
+            if (!snapshot.text || snapshot.revision.empty() || snapshot.revision.size() > 256 ||
+                !IsValidUtf8ScalarSequence(snapshot.revision))
+                return Result<CodeQueryTextSnapshot>::Failure(MakeError(CodeQueryErrors::Invalid));
+            if (snapshot.text->size() > limits.maximumFileBytes)
+                return Result<CodeQueryTextSnapshot>::Failure(MakeError(CodeQueryErrors::Capacity));
+            if (auto valid = CodeQueryDetail::ValidateText(*snapshot.text, scope); valid.HasError())
+                return Result<CodeQueryTextSnapshot>::Failure(valid.ErrorValue());
+            return Result<CodeQueryTextSnapshot>::Success(std::move(snapshot));
         }
 
         /** @brief Captures an existing document observation or bounded disk bytes; never opens a document session. */
@@ -42,20 +59,8 @@ namespace Horo::Application {
                                                                       context.cancellation, scope.deadline, context.authorityStopped});
                 if (existing.HasError())
                     return Result<CodeQueryTextSnapshot>::Failure(existing.ErrorValue());
-                if (existing.Value()) {
-                    auto snapshot = *existing.Value();
-                    if (snapshot.projectIdentity != context.projectIdentity || snapshot.projectGeneration != context.projectGeneration ||
-                        snapshot.path != request.path)
-                        return Result<CodeQueryTextSnapshot>::Failure(MakeError(CodeQueryErrors::Stale));
-                    if (!snapshot.text || snapshot.revision.empty() || snapshot.revision.size() > 256 ||
-                        !IsValidUtf8ScalarSequence(snapshot.revision))
-                        return Result<CodeQueryTextSnapshot>::Failure(MakeError(CodeQueryErrors::Invalid));
-                    if (snapshot.text->size() > limits.maximumFileBytes)
-                        return Result<CodeQueryTextSnapshot>::Failure(MakeError(CodeQueryErrors::Capacity));
-                    if (auto valid = CodeQueryDetail::ValidateText(*snapshot.text, scope); valid.HasError())
-                        return Result<CodeQueryTextSnapshot>::Failure(valid.ErrorValue());
-                    return Result<CodeQueryTextSnapshot>::Success(std::move(snapshot));
-                }
+                if (existing.Value())
+                    return ExistingText(*existing.Value(), request, context, limits, scope);
             }
             if (!files)
                 return Result<CodeQueryTextSnapshot>::Failure(MakeError(CodeQueryErrors::Unavailable));
@@ -81,12 +86,13 @@ namespace Horo::Application {
         /** @brief Resolves the exact injected query capability; absence never becomes empty success. */
         const std::function<Result<CodeQueryObservation>(const CodeQueryRequest &, const CodeQueryContext &)> &Provider(
             const CodeQueryKind kind, const CodeQueryProviders &providers) {
+            using enum CodeQueryKind;
             switch (kind) {
-                case CodeQueryKind::Symbols:
+                case Symbols:
                     return providers.symbols;
-                case CodeQueryKind::Diagnostics:
+                case Diagnostics:
                     return providers.diagnostics;
-                case CodeQueryKind::BuildStatus:
+                case BuildStatus:
                     return providers.buildStatus;
                 default:
                     return providers.testStatus;
@@ -154,9 +160,10 @@ namespace Horo::Application {
         Result<CodeQueryPage> CapturePage(const std::shared_ptr<const Platform::IProjectReadFiles> &files, const CodeQueryRequest &request,
                                           const CodeQueryContext &context, const CodeQueryLimits &limits,
                                           const CodeQueryDetail::Scope &scope, const CodeQueryProviders &providers) {
-            if (request.kind == CodeQueryKind::Files)
+            using enum CodeQueryKind;
+            if (request.kind == Files)
                 return FilePage(files, request, context, limits, scope);
-            if (request.kind == CodeQueryKind::Text || request.kind == CodeQueryKind::Search)
+            if (request.kind == Text || request.kind == Search)
                 return SourcePage(files, request, context, limits, scope, providers);
             return ProviderPage(request, context, limits, scope, providers);
         }
@@ -164,20 +171,20 @@ namespace Horo::Application {
 
     /** @copydoc ProjectCodeQuery::ProjectCodeQuery */
     ProjectCodeQuery::ProjectCodeQuery(std::shared_ptr<const Platform::IProjectReadFiles> files, std::string identity,
-                                       const std::uint64_t generation, CodeQueryProviders providers, const CodeQueryLimits limits)
+                                       const std::uint64_t generation, CodeQueryProviders providers, const CodeQueryLimits &limits)
         : files_(std::move(files)), identity_(std::move(identity)), generation_(generation), providers_(std::move(providers)),
           limits_(limits) {}
 
     /** @copydoc ProjectCodeQuery::Create */
     Result<std::shared_ptr<ProjectCodeQuery>> ProjectCodeQuery::Create(std::shared_ptr<const Platform::IProjectReadFiles> files,
                                                                        std::string identity, const std::uint64_t generation,
-                                                                       CodeQueryProviders providers, const CodeQueryLimits limits) {
+                                                                       CodeQueryProviders providers, const CodeQueryLimits &limits) {
         if (identity.empty() || identity.size() > 256 || !IsValidUtf8ScalarSequence(identity) || generation == 0 ||
             !CodeQueryDetail::ValidLimits(limits))
             return Result<std::shared_ptr<ProjectCodeQuery>>::Failure(MakeError(CodeQueryErrors::Invalid));
         try {
-            return Result<std::shared_ptr<ProjectCodeQuery>>::Success(std::shared_ptr<ProjectCodeQuery>{
-                new ProjectCodeQuery{std::move(files), std::move(identity), generation, std::move(providers), limits}});
+            return Result<std::shared_ptr<ProjectCodeQuery>>::Success(std::make_shared<ProjectCodeQuery>(
+                ProjectCodeQuery{std::move(files), std::move(identity), generation, std::move(providers), limits}));
         } catch (const std::bad_alloc &) {
             return Result<std::shared_ptr<ProjectCodeQuery>>::Failure(MakeError(CodeQueryErrors::Capacity));
         }

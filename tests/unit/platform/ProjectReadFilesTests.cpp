@@ -10,6 +10,33 @@ using namespace Horo;
 using namespace Horo::Platform;
 namespace QueryTest = Horo::Test::CodeQuery;
 
+TEST_CASE("Portable project paths reject complete device names and retain ordinary similar spellings", "[unit][platform][code-query]") {
+    for (const auto name : {"con", "PrN.txt", "AUX", "nul.cpp", "CLOCK$", "conin$", "ConOut$.txt", "COM1", "lpt9.txt", "CoM\xc2\xb9.cpp",
+                            "LPT\xc2\xb2", "com\xc2\xb3.log", "nested/LpT1.cpp"})
+        CHECK_FALSE(IsSafeProjectReadPath(name));
+    for (const auto name : {"COM", "LPT", "com0", "lpt10.cpp", "com\xc2\xb9x.cpp", "company.cpp", "nested/lpt9x.cpp", "ışık.cpp"})
+        CHECK(IsSafeProjectReadPath(name));
+}
+
+TEST_CASE("Native recursive enumeration shares exact entry ceilings across nested directories", "[unit][platform][code-query]") {
+    QueryTest::Directory directory;
+    directory.Write("nested/a.cpp", "a");
+    directory.Write("nested/deep/b.cpp", "b");
+    directory.Write("nested/deep/c.cpp", "c");
+    const auto files = directory.Files();
+    ProjectReadLimits limits;
+    limits.maximumEntries = 5;
+    const auto complete = files->Files({}, QueryTest::Context(), limits);
+    REQUIRE(complete.HasValue());
+    REQUIRE(complete.Value().entries.size() == 3);
+    CHECK(complete.Value().entries.front().path == "nested/a.cpp");
+    CHECK(complete.Value().entries.back().path == "nested/deep/c.cpp");
+    limits.maximumEntries = 4;
+    const auto exhausted = files->Files({}, QueryTest::Context(), limits);
+    REQUIRE(exhausted.HasError());
+    CHECK(QueryTest::Matches(exhausted.ErrorValue(), ProjectReadErrors::Capacity));
+}
+
 TEST_CASE("Native project reads retain contained bytes and independent enumeration cursors", "[unit][platform][code-query]") {
     QueryTest::Directory directory;
     directory.Write("nested/a file.cpp", "abc");

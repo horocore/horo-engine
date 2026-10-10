@@ -94,8 +94,7 @@ namespace Horo::Platform::ProjectReadNative {
     }
 
     /** @copydoc Visit */
-    Result<void> Visit(const Handle &handle, const ProjectReadContext &context,
-                       const std::function<Result<void>(std::string_view)> &visitor) {
+    Result<void> Visit(const Handle &handle, const ProjectReadContext &context, const EntryVisitor &visitor) {
         auto independent = OpenDirectory(handle);
         if (independent.HasError())
             return Result<void>::Failure(independent.ErrorValue());
