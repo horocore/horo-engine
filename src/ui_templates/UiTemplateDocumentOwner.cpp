@@ -231,6 +231,25 @@ namespace Horo::UiTemplates {
             return std::move(builder).Build();
         }
 
+        /** @brief Owns a private mutable candidate with paired instance/catalog authority until complete admission. */
+        struct AuthorityDraft final {
+            UiTemplateAuthoredDocument source;
+            std::vector<std::shared_ptr<const UiTemplateCatalog>> catalogs;
+        };
+
+        /** @brief Copies a complete accepted authority under one new revision after the caller's prospective budget check. */
+        Result<AuthorityDraft> CopyNextAuthority(const State &state, const std::span<const UiTemplateExpansion> additions = {}) {
+            const auto revision = state.source.ordinary.Revision().Next();
+            if (revision.HasError())
+                return Result<AuthorityDraft>::Failure(revision.ErrorValue());
+            auto ordinary = RevisionCopy(state.source.ordinary, revision.Value(), additions);
+            if (ordinary.HasError())
+                return Result<AuthorityDraft>::Failure(ordinary.ErrorValue());
+            return Result<AuthorityDraft>::Success(AuthorityDraft{{std::move(ordinary).Value(), state.source.instances, state.source.styles,
+                                                                   state.source.localizedTexts, state.source.bindings},
+                                                                  state.catalogs});
+        }
+
         /** @brief Admits complete owned expansions without publishing or replacing durable authority. */
         Result<std::shared_ptr<const State>> PrepareState(UiTemplateAuthoredDocument source,
                                                           std::vector<std::shared_ptr<const UiTemplateCatalog>> catalogs,
@@ -277,6 +296,13 @@ namespace Horo::UiTemplates {
             }
             return Result<std::shared_ptr<const State>>::Success(std::make_shared<const State>(
                 State{std::move(source), std::move(catalogs), std::move(expansions), limits, std::move(authoringSchemas)}));
+        }
+
+        /** @brief Admits a private candidate with the accepted owner's original aggregate policy and authoring schema lease. */
+        Result<std::shared_ptr<const State>> AdmitAuthority(AuthorityDraft draft, const State &accepted,
+                                                            const CancellationToken &cancellation) {
+            return PrepareState(std::move(draft.source), std::move(draft.catalogs), accepted.limits, cancellation,
+                                accepted.authoringSchemas);
         }
 
         /** @brief Retains exact authored values; missing declarations never implicitly drop populated customization. */
@@ -604,18 +630,13 @@ namespace Horo::UiTemplates {
             prospective.replacementCatalog = catalog.get();
             if (const auto valid = Detail::ValidateTemplateDocumentBudget(prospective, cancellation); valid.HasError())
                 return Result<UiTemplatePreparedTransaction>::Failure(valid.ErrorValue());
-            const auto revision = state_->source.ordinary.Revision().Next();
-            if (revision.HasError())
-                return Result<UiTemplatePreparedTransaction>::Failure(revision.ErrorValue());
-            auto ordinary = RevisionCopy(state_->source.ordinary, revision.Value());
-            if (ordinary.HasError())
-                return Result<UiTemplatePreparedTransaction>::Failure(ordinary.ErrorValue());
-            UiTemplateAuthoredDocument source{std::move(ordinary).Value(), state_->source.instances, state_->source.styles,
-                                              state_->source.localizedTexts, state_->source.bindings};
-            auto catalogs = state_->catalogs;
-            source.instances[index].accepted = target;
-            catalogs[index] = std::move(catalog);
-            auto next = PrepareState(std::move(source), std::move(catalogs), state_->limits, cancellation, state_->authoringSchemas);
+            auto copied = CopyNextAuthority(*state_);
+            if (copied.HasError())
+                return Result<UiTemplatePreparedTransaction>::Failure(copied.ErrorValue());
+            auto draft = std::move(copied).Value();
+            draft.source.instances[index].accepted = target;
+            draft.catalogs[index] = std::move(catalog);
+            auto next = AdmitAuthority(std::move(draft), *state_, cancellation);
             if (next.HasError())
                 return Result<UiTemplatePreparedTransaction>::Failure(next.ErrorValue());
             return Result<UiTemplatePreparedTransaction>::Success(
@@ -643,18 +664,13 @@ namespace Horo::UiTemplates {
             prospective.insertionCatalog = catalog.get();
             if (const auto valid = Detail::ValidateTemplateDocumentBudget(prospective, cancellation); valid.HasError())
                 return Output::Failure(valid.ErrorValue());
-            auto revision = state_->source.ordinary.Revision().Next();
-            if (revision.HasError())
-                return Output::Failure(revision.ErrorValue());
-            auto ordinary = RevisionCopy(state_->source.ordinary, revision.Value());
-            if (ordinary.HasError())
-                return Output::Failure(ordinary.ErrorValue());
-            UiTemplateAuthoredDocument source{std::move(ordinary).Value(), state_->source.instances, state_->source.styles,
-                                              state_->source.localizedTexts, state_->source.bindings};
-            source.instances.push_back(std::move(instance));
-            auto catalogs = state_->catalogs;
-            catalogs.push_back(std::move(catalog));
-            auto next = PrepareState(std::move(source), std::move(catalogs), state_->limits, cancellation, state_->authoringSchemas);
+            auto copied = CopyNextAuthority(*state_);
+            if (copied.HasError())
+                return Output::Failure(copied.ErrorValue());
+            auto draft = std::move(copied).Value();
+            draft.source.instances.push_back(std::move(instance));
+            draft.catalogs.push_back(std::move(catalog));
+            auto next = AdmitAuthority(std::move(draft), *state_, cancellation);
             if (next.HasError())
                 return Output::Failure(next.ErrorValue());
             return Output::Success(UiTemplatePreparedTransaction{state_, std::move(next).Value(), identity_, cancellation});
@@ -704,23 +720,20 @@ namespace Horo::UiTemplates {
             auto materialized = Materialize(projection, identities);
             if (materialized.HasError())
                 return Output::Failure(materialized.ErrorValue());
-            auto revision = state_->source.ordinary.Revision().Next();
-            if (revision.HasError())
-                return Output::Failure(revision.ErrorValue());
             const std::array additions{std::move(materialized).Value()};
-            auto ordinary = RevisionCopy(state_->source.ordinary, revision.Value(), additions);
-            if (ordinary.HasError())
-                return Output::Failure(ordinary.ErrorValue());
-            UiTemplateAuthoredDocument source{std::move(ordinary).Value(), state_->source.instances, state_->source.styles,
-                                              state_->source.localizedTexts, state_->source.bindings};
+            auto copied = CopyNextAuthority(*state_, additions);
+            if (copied.HasError())
+                return Output::Failure(copied.ErrorValue());
+            auto draft = std::move(copied).Value();
+            auto &source = draft.source;
             source.instances.erase(source.instances.begin() + static_cast<std::ptrdiff_t>(index));
-            auto catalogs = state_->catalogs;
+            auto &catalogs = draft.catalogs;
             catalogs.erase(catalogs.begin() + static_cast<std::ptrdiff_t>(index));
             source.styles.insert(source.styles.end(), additions[0].styles.begin(), additions[0].styles.end());
             source.localizedTexts.insert(source.localizedTexts.end(), additions[0].localizedTexts.begin(),
                                          additions[0].localizedTexts.end());
             source.bindings.insert(source.bindings.end(), additions[0].bindings.begin(), additions[0].bindings.end());
-            auto next = PrepareState(std::move(source), std::move(catalogs), state_->limits, cancellation, state_->authoringSchemas);
+            auto next = AdmitAuthority(std::move(draft), *state_, cancellation);
             if (next.HasError())
                 return Output::Failure(next.ErrorValue());
             return Output::Success(UiTemplatePreparedTransaction{state_, std::move(next).Value(), identity_, cancellation});
