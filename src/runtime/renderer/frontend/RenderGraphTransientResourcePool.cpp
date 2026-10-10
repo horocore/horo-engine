@@ -181,8 +181,7 @@ namespace Horo::Render::Detail {
                 return claim.slot == requirement.slot;
             });
             if (existing == slots.end()) {
-                auto reserved = ReserveSlot(*backend_, *registry_, *budget_, slots, scope, requirement);
-                if (reserved.HasError())
+                if (const auto reserved = ReserveSlot(*backend_, *registry_, *budget_, slots, scope, requirement); reserved.HasError())
                     return PrepareResult::Failure(reserved.ErrorValue());
                 existing = std::prev(slots.end());
             }
@@ -216,7 +215,7 @@ namespace Horo::Render::Detail {
 
     /** @copydoc RenderGraphTransientResourcePool::Resolve */
     Result<RenderGraphTransientResourceSet *> RenderGraphTransientResourcePool::Resolve(const RenderGraphTransientResourcesHandle handle,
-                                                                                        const CompiledRenderGraphExecution &graph) {
+                                                                                        const CompiledRenderGraphExecution &graph) const {
         using ResolveResult = Result<RenderGraphTransientResourceSet *>;
         const auto found = Find(handle);
         if (found.HasError())

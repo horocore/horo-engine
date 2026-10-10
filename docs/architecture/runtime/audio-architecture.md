@@ -2049,6 +2049,20 @@ HoroEditor provides audio authoring tools:
 Editor preview uses the same audio frontend contracts as runtime playback. It
 does not bypass real-time thread rules.
 
+`AudioFrontend` in `HoroEngine::AudioFrontend` composes one prepared playback lane
+through existing voice execution, mixer and command staging with one explicitly
+selected output adapter. Its non-installed host composition interface consumes
+detached resources; features see only the backend-neutral control/transport API.
+`AudioEditorDocument` in EditorServices owns Asset document identity, authoring/
+preview revision fences, interaction focus and an isolated frontend. It cannot
+persist preview state or access native output. Close retains ownership through
+matching Quiesced/Stopped/device-close and stream-worker retirement; silence or
+queue consumption never authorizes destruction. The host pumps tab/project
+teardown to Closed before releasing its dependencies. This additive foundation
+does not replace concrete source/history owners or imply multi-voice runtime
+composition, device recovery, middleware authoring or the later audio inspector
+surfaces. See [Audio editor preview](../../guides/audio-editor-preview.md).
+
 ## Device Lifecycle
 
 [AUD-007](https://github.com/HoroCore/horo-engine/issues/594) delivers the

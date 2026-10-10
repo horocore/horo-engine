@@ -5,6 +5,42 @@ namespace Horo::AI::AIErrors {
         const ErrorDomainId AiDomain{"horo.ai"};
     }
 
+    const ErrorCodeDescriptor SchedulerBudgetExhausted{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.scheduler.budget_exhausted"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "An AI cooperative slice exhausted its admitted work allowance.",
+        .remediationHint = "Resume bounded work at a later admitted tick or use the declared fallback.",
+        .retryable = true,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor SchedulerPolicyInvalid{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.scheduler.policy_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "AI fixed-tick scheduling limits or registration are invalid.",
+        .remediationHint = "Use admitted finite policies and the active simulation owner phase.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor SchedulerPhaseInvalid{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.scheduler.phase_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "AI scheduling phase, clock or lifetime is invalid.",
+        .remediationHint = "Use admitted finite policies and the active simulation owner phase.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor SchedulerWorkerUnsupported{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.scheduler.worker_unsupported"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "Deterministic AI admission does not accept asynchronous worker evaluation.",
+        .remediationHint = "Use admitted finite policies and the active simulation owner phase.",
+        .retryable = false,
+        .userActionable = false,
+    };
     const ErrorCodeDescriptor IdentityInvalid{
         .domain = AiDomain,
         .code = ErrorCode{"ai.identity.invalid"},
