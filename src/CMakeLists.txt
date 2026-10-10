@@ -627,6 +627,7 @@ add_library(HoroRuntimeUi STATIC
     runtime/ui/UiControlStateMachineReload.cpp
         runtime/ui/UiHotReload.cpp
         runtime/ui/UiOverlayLifecycle.cpp
+        runtime/ui/UiHudAssociation.cpp
         runtime/ui/UiSceneReconciliation.cpp
         runtime/ui/UiSceneReconciliationPreparation.cpp
         runtime/ui/UiSceneReconciliationPublication.cpp

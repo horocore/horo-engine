@@ -317,6 +317,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiSceneReconciliation.h
     Horo/Runtime/Ui/UiHotReload.h
     Horo/Runtime/Ui/UiOverlayLifecycle.h
+    Horo/Runtime/Ui/UiHudAssociation.h
     Horo/Runtime/Ui/UiDocumentSerialization.h
     Horo/Runtime/Ui/UiDiagnostics.h
     Horo/Runtime/Ui/UiElementTree.h

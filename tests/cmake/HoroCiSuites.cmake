@@ -62,6 +62,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroRuntimeUiTextLayoutTests
     HoroRuntimeUiPublicHeaderConsumer
     HoroRuntimeUiOverlayLifecycleTests
+    HoroRuntimeUiHudAssociationTests
+    HoroRuntimeUiHudPublicHeaderConsumer
     HoroRuntimeUiSceneReconciliationTests
     HoroRuntimeUiSceneReconciliationPublicHeaderConsumer
     HoroRuntimeUiHotReloadTests
@@ -172,6 +174,7 @@ function(horo_finalize_ci_suites)
         HoroRuntimeUiHotReloadPublicHeaderConsumer
         HoroSceneIdentityContractConsumer
         HoroPlayTopologyPublicHeaderConsumer
+        HoroRuntimeUiHudPublicHeaderConsumer
         HoroNetworkDebuggerPublicHeaderConsumer
         HoroAudioCallbackLockPolicyTest
         HoroPrefabSceneExpansionContractConsumer

@@ -314,6 +314,11 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<std::size_t> DrainDirty(std::span<UiBindingTargetDirty> output);
         /** @brief Returns current publication/content evidence without polling providers. @return Latest committed summary. */
         [[nodiscard]] UiBindingApplyResult Current() const noexcept;
+        /** @brief Checks an exact live provider registration without invoking gameplay code.
+         * @param instance Host-resolved provider incarnation. @param scope Required explicit registration scope.
+         * @return False for unknown, revoked, cross-owner providers or a retired/stopped store.
+         */
+        [[nodiscard]] bool HasProvider(UiBindingProviderInstanceId instance, UiBindingProviderScopeKind scope) const noexcept;
         /** @brief Validates the retained store's actual tree/source lineage without invoking a provider.
          * @param tree Exact active owning tree. @return Success or typed stale/lifecycle failure.
          */
