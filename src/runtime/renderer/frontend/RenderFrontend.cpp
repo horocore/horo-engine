@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 
+#include "Horo/Runtime/Render/FramePacingErrors.h"
 #include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "RenderFrameGraphResources.h"
@@ -104,8 +105,9 @@ namespace Horo::Render {
     /** @copydoc RenderFrameScope::RenderFrameScope(RenderFrameScope&&) */
     RenderFrameScope::RenderFrameScope(RenderFrameScope &&other) noexcept
         : owner_(std::exchange(other.owner_, nullptr)), backend_(std::exchange(other.backend_, nullptr)),
-          frame_(std::exchange(other.frame_, {})), executed_(std::exchange(other.executed_, false)),
-          parallelWork_(std::move(other.parallelWork_)), parallelGraphWork_(std::move(other.parallelGraphWork_)) {
+          frame_(std::exchange(other.frame_, {})), hostFrame_(std::exchange(other.hostFrame_, 0)),
+          executed_(std::exchange(other.executed_, false)), parallelWork_(std::move(other.parallelWork_)),
+          parallelGraphWork_(std::move(other.parallelGraphWork_)) {
         if (owner_ != nullptr) {
             owner_->activeFrameScope_ = this;
         }
@@ -118,6 +120,7 @@ namespace Horo::Render {
             owner_ = std::exchange(other.owner_, nullptr);
             backend_ = std::exchange(other.backend_, nullptr);
             frame_ = std::exchange(other.frame_, {});
+            hostFrame_ = std::exchange(other.hostFrame_, 0);
             executed_ = std::exchange(other.executed_, false);
             parallelWork_ = std::move(other.parallelWork_);
             parallelGraphWork_ = std::move(other.parallelGraphWork_);
@@ -244,8 +247,17 @@ namespace Horo::Render {
         return ExecuteGraphInternal(graph, workloads, &ui, transientResources);
     }
 
+    /** @copydoc RenderFrontend::PollNativePresentTiming */
+    Result<std::optional<NativePresentTiming>> RenderFrontend::PollNativePresentTiming() {
+        try {
+            return backend_->PollNativePresentTiming();
+        } catch (...) {  // NOSONAR(cpp:S2738) Backend exceptions must not cross the host boundary.
+            return Result<std::optional<NativePresentTiming>>::Failure(MakeError(FrontendErrors::FrameException));
+        }
+    }
+
     /** @copydoc RenderFrameScope::Present */
-    Result<void> RenderFrameScope::Present() {
+    Result<void> RenderFrameScope::Present(const PresentationTimingRequest *timing) {
         if (backend_ == nullptr) {
             return Result<void>::Failure(MakeFrontendError(FrontendErrors::FrameNotActive, "Renderer frame scope no longer owns a frame."));
         }
@@ -254,8 +266,11 @@ namespace Horo::Render {
                 MakeFrontendError(FrontendErrors::FrameNotExecuted, "Renderer frame scope must execute before presentation."));
         }
 
+        if (timing != nullptr && (!timing->surface.IsAttachedGeneration() || timing->frameNumber != hostFrame_))
+            return Result<void>::Failure(MakeError(FramePacingErrors::InvalidSurface));
         try {
-            if (const Result<void> presented = backend_->Present(frame_); presented.HasError()) {
+            if (const Result<void> presented = timing != nullptr ? backend_->PresentWithTiming(frame_, *timing) : backend_->Present(frame_);
+                presented.HasError()) {
                 Abort();
                 return Result<void>::Failure(presented.ErrorValue());
             }
@@ -272,8 +287,9 @@ namespace Horo::Render {
         Abort();
     }
 
-    RenderFrameScope::RenderFrameScope(RenderFrontend &owner, IRenderBackend &backend, const FrameToken frame) noexcept
-        : owner_(&owner), backend_(&backend), frame_(frame) {
+    RenderFrameScope::RenderFrameScope(RenderFrontend &owner, IRenderBackend &backend, const FrameToken frame,
+                                       const std::uint64_t hostFrame) noexcept
+        : owner_(&owner), backend_(&backend), frame_(frame), hostFrame_(hostFrame) {
         owner.activeFrameScope_ = this;
     }
 
@@ -447,7 +463,7 @@ namespace Horo::Render {
                 return Result<RenderFrameScope>::Failure(
                     MakeFrontendError(FrontendErrors::InvalidFrameToken, "Renderer backend returned an invalid frame token."));
             }
-            return Result<RenderFrameScope>::Success(RenderFrameScope{*this, *backend_, frame});
+            return Result<RenderFrameScope>::Success(RenderFrameScope{*this, *backend_, frame, descriptor.frameNumber});
         } catch (...) {  // NOSONAR(cpp:S2738)
             backend_->AbortActiveFrame();
             return Result<RenderFrameScope>::Failure(

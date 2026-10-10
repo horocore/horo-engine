@@ -610,6 +610,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiFeedback.cpp
         runtime/ui/UiFeedbackErrors.cpp
         runtime/ui/UiScreenStack.cpp
+        runtime/ui/UiScreenTransition.cpp
         runtime/ui/UiRouteOperations.cpp
         runtime/ui/UiFocusGraph.cpp
         runtime/ui/UiFocusRestoration.cpp
@@ -1568,6 +1569,8 @@ add_library(HoroNavigationRuntime STATIC
         runtime/navigation/runtime/NavigationObstacleOverlay.cpp
         runtime/navigation/runtime/NavigationAgentRegistry.cpp
         runtime/navigation/runtime/NavigationPathPolicy.cpp
+        runtime/navigation/runtime/NavigationCoordinator.cpp
+        runtime/navigation/runtime/NavigationCoordinatorState.cpp
         runtime/navigation/runtime/NavigationRuntimeQueues.cpp
         runtime/navigation/runtime/NavigationWorldLifecycle.cpp
 )
@@ -1971,6 +1974,8 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderAdapterErrors.cpp
         runtime/renderer/api/RenderDisplay.cpp
         runtime/renderer/api/RenderDisplayErrors.cpp
+        runtime/renderer/api/FramePacing.cpp
+        runtime/renderer/api/FramePacingErrors.cpp
         runtime/renderer/api/PresentMode.cpp
         runtime/renderer/api/PresentModeErrors.cpp
         runtime/renderer/api/RenderSurfaceLifecycle.cpp
@@ -2018,6 +2023,7 @@ target_link_libraries(HoroRenderApi PUBLIC HoroEngine::Foundation)
 add_library(HoroShaderCompilerToolchain STATIC
         runtime/renderer/toolchain/ShaderCompilerToolchainCatalog.cpp
         runtime/renderer/toolchain/ShaderCompilerToolchain.cpp
+        runtime/renderer/toolchain/ShaderCompilerRoute.cpp
         runtime/renderer/toolchain/ShaderCompilerToolchainSupport.cpp
 )
 add_library(HoroEngine::ShaderCompilerToolchain ALIAS HoroShaderCompilerToolchain)
@@ -2030,6 +2036,11 @@ target_link_libraries(HoroShaderCompilerToolchain
         PUBLIC HoroEngine::RenderApi
         PRIVATE HoroEngine::Platform
 )
+
+add_library(HoroShaderBuild STATIC application/render/ShaderBuildService.cpp)
+add_library(HoroEngine::ShaderBuild ALIAS HoroShaderBuild)
+target_compile_features(HoroShaderBuild PUBLIC cxx_std_20)
+target_link_libraries(HoroShaderBuild PUBLIC HoroEngine::Foundation HoroEngine::RenderApi)
 
 add_library(HoroRenderBackendRegistry STATIC
         runtime/renderer/backend_registry/RenderBackendRegistry.cpp
