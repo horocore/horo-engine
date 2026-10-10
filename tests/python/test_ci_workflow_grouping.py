@@ -272,3 +272,40 @@ def test_windows_material_binding_has_tests_and_owned_consumer() -> None:
     for header in ("MaterialBinding.h", "MaterialBindingBackend.h", "MaterialBindingErrors.h"):
         assert registry.count(f"Horo/Runtime/Render/{header}") == 1
     assert "        HoroMaterialBindingTests\n" in cmake
+
+
+def test_windows_save_timeout_diagnostics_preserve_the_original_gate_and_artifacts() -> None:
+    def step(name: str) -> str:
+        match = re.search(rf"      - name: {re.escape(name)}\n(.*?)(?=\n      - name:|\Z)", WORKFLOW, re.S)
+        assert match is not None, f"Missing workflow step: {name}"
+        return match.group(1)
+
+    provenance_name = "Record Windows Save allocation diagnostic provenance"
+    artifact_name = "Upload Windows Save allocation diagnostics"
+    provenance, artifact, debug = step(provenance_name), step(artifact_name), step("Test Debug")
+    assert WORKFLOW.index(provenance_name) < WORKFLOW.index("- name: Test Debug")
+    assert WORKFLOW.index(artifact_name) > WORKFLOW.index("- name: Test Debug")
+    for content in (provenance, artifact):
+        assert "runner.os == 'Windows'" in content
+        assert "steps.debug_build.outcome == 'success'" in content
+    assert "always()" in artifact
+    assert "source = (git rev-parse HEAD)" in provenance
+    assert "$env:GITHUB_RUN_ID" in provenance
+    assert "$env:GITHUB_RUN_ATTEMPT" in provenance
+    assert "missing = $true" in provenance
+    assert "symbolMatch = 'unverified;" in provenance
+    assert "stackCapture = 'not performed;" in provenance
+    assert 'run: ctest --preset "${{ matrix.preset }}"' in debug
+    assert not any(option in debug for option in ("--timeout", "--repeat", "continue-on-error"))
+    windows = preset("testPresets", "ci-windows-debug")
+    assert preset("configurePresets", windows["configurePreset"])["binaryDir"] == "${sourceDir}/build/ci"
+    assert windows["execution"] == {"jobs": 1, "timeout": 90}
+    assert windows["output"]["outputJUnitFile"] == "${sourceDir}/build/ci/ctest.xml"
+    assert "build/ci/ctest.xml" in artifact
+    assert "build/ci/Testing/Temporary/LastTest.log" in artifact
+    for extension in ("exe", "pdb"):
+        assert f"build/ci/tests/HoroRuntimeSaveSlotLifecycleTests.{extension}" in provenance
+        assert f"build/ci/tests/HoroRuntimeSaveSlotLifecycleTests.{extension}" in artifact
+    assert "${{ runner.temp }}/save-allocation-diagnostics/provenance.json" in artifact
+    assert "save-allocation-Windows-${{ github.sha }}-${{ github.run_attempt }}" in artifact
+    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in artifact
