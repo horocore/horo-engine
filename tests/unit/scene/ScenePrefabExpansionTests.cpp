@@ -10,6 +10,7 @@
 #include <optional>
 #include <semaphore>
 #include <thread>
+#include <type_traits>
 
 using namespace Horo;
 using namespace Horo::Prefab;
@@ -341,11 +342,26 @@ using SortedWireValue = Horo::JsonEncoding::Detail::CanonicalJsonValue<true>;
 TEMPLATE_TEST_CASE("Recursive canonical copies preserve source and destination at every allocation failure",
                    "[native][prefab][wire][allocation]", OrderedWireValue, SortedWireValue) {
     using Wire = TestType;
+    STATIC_REQUIRE(std::is_nothrow_destructible_v<Wire>);
+    STATIC_REQUIRE(std::is_nothrow_move_constructible_v<Wire>);
+    STATIC_REQUIRE(std::is_nothrow_move_assignable_v<Wire>);
     const bool arrayRoot = GENERATE(false, true);
     const bool assignment = GENERATE(false, true);
     const Wire child{{"values", Wire::array({std::string(128, 'x'), Wire{{"nested", Wire::array({1, 2, 3})}}})}};
     const Wire source = arrayRoot ? Wire::array({child, child}) : Wire{{"first", child}, {"second", child}};
     const std::string sourceBytes = source.dump(2);
+    std::optional<Wire> retiring{source};
+    const std::size_t freedBefore = Tests::AllocationProbe::FreeCount();
+    std::size_t destructionAllocations{};
+    {
+        Tests::AllocationProbe::ScopedMeasurement measurement;
+        Tests::AllocationProbe::ScopedFailure failure{0};
+        retiring.reset();
+        destructionAllocations = measurement.Snapshot().requests;
+    }
+    CHECK(destructionAllocations == 0);
+    CHECK(Tests::AllocationProbe::FreeCount() > freedBefore);
+    CHECK(source.dump(2) == sourceBytes);
     const Wire previous{{"preserved", std::string(128, 'p')}};
     const std::string previousBytes = previous.dump(2);
     std::size_t allocations{};
