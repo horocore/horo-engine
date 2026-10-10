@@ -346,6 +346,10 @@ horo_configure_target_header_boundary(HoroUiTemplateGraph PUBLIC_HEADERS
     Horo/UiTemplates/UiTemplateDependencyGraph.h
     Horo/UiTemplates/UiTemplateErrors.h
 )
+horo_configure_target_header_boundary(HoroPlayTopologyApplication PUBLIC_HEADERS
+    Horo/Application/PlayTopology.h
+)
+
 horo_configure_target_header_boundary(HoroNetworkDebuggerApplication PUBLIC_HEADERS
     Horo/Application/NetworkDebugger.h
 )
@@ -955,6 +959,9 @@ horo_configure_target_header_boundary(HoroPrefabCookHost PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
+    Horo/Runtime/Render/MaterialBindingBackend.h
+    Horo/Runtime/Render/MaterialBinding.h
+    Horo/Runtime/Render/MaterialBindingErrors.h
     Horo/Runtime/Render/MotionHistory.h
     Horo/Runtime/Render/MotionHistoryErrors.h
     Horo/Runtime/Render/PipelinePreparation.h
@@ -1082,6 +1089,7 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/RecentProjectInspectionService.h
     Horo/Editor/SourceFileOpenService.h
     Horo/Editor/SourceDocumentService.h
+    Horo/Editor/SequenceDocument.h
     Horo/Editor/UiCanvasDocument.h
     Horo/Editor/WelcomeController.h
     Horo/Editor/WorkspaceDockArea.h

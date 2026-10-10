@@ -1,3 +1,4 @@
+#include "../../../support/AllocationProbe.h"
 #include "SaveSlotRetentionTestSupport.h"
 
 #include <algorithm>
@@ -101,6 +102,51 @@ namespace Horo::Runtime {
         CHECK(fixture.native.host.leases == 0);
         CHECK(fixture.Snapshot().catalogRevision == before.catalogRevision);
         CHECK(fixture.Snapshot().retained.empty());
+    }
+
+    TEST_CASE("Retention allocation failure after selection preserves publication and binding ownership",
+              "[runtime][save][retention][failure]") {
+        const bool syncFailure = GENERATE(false, true);
+        RetentionFixture fixture;
+        const auto oldest = fixture.Commit(1, 10).entry.value();
+        fixture.Commit(2, 20);
+        fixture.Commit(3, 30);
+        const auto target = fixture.native.Target(4);
+        auto candidate = fixture.Candidate(4);
+        const auto cloud = fixture.Cloud();
+        Error syncError = MakeError(SaveErrors::StoragePermanentIo);
+        bool replaced{};
+        std::optional<Horo::Tests::AllocationProbe::ScopedFailure> allocation;
+        fixture.native.fault.failure = [&](const auto stage, const auto kind) {
+            if (stage == SaveSlotLifecycleIoStage::Replace && kind == SaveSlotLifecycleFileKind::Catalog)
+                replaced = true;
+            if (replaced && !allocation && stage == SaveSlotLifecycleIoStage::DirectorySync && kind == SaveSlotLifecycleFileKind::Catalog) {
+                allocation.emplace();
+                if (syncFailure)
+                    return Result<void>::Failure(std::move(syncError));
+            }
+            return Result<void>::Success();
+        };
+        const auto result = fixture.native.owner->CommitSave(target, std::move(candidate), 40, false, {}, &cloud);
+        allocation.reset();
+        REQUIRE(replaced);
+        REQUIRE(result.HasError() == syncFailure);
+        if (syncFailure)
+            CHECK(result.ErrorValue().code.Value() == SaveErrors::SlotCommitOutcomeUnknown.code.Value());
+        else
+            CHECK(result.Value().cleanupDeferred);
+        CHECK(fixture.native.host.leases == 0);
+        CHECK(std::filesystem::exists(fixture.native.Generation(oldest.publication.generation)));
+        fixture.native.fault.failure = {};
+        fixture.native.Reopen();
+        REQUIRE(fixture.native.owner->Reconcile(fixture.native.Access()).HasValue());
+        const auto snapshot = fixture.Snapshot();
+        CHECK(snapshot.lastCommitMilliseconds == 40);
+        CHECK(snapshot.selected.size() == 3);
+        REQUIRE(snapshot.retained.size() == 1);
+        CHECK(snapshot.retained[0].entry == oldest);
+        CHECK(snapshot.retained[0].backup);
+        CHECK(fixture.native.host.leases == 0);
     }
 
     TEST_CASE("Retention reads reject corrupted backups without modifying valid current publication",

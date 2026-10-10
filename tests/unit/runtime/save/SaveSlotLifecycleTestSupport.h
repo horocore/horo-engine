@@ -103,14 +103,18 @@ namespace Horo::Runtime::SaveSlotLifecycleTest {
             return recycleSupported;
         }
 
-        Result<void> Recycle(const SaveSlotCatalogEntry &entry, ImmutableSaveArchive archive) override {
-            ++recycleCalls;
-            if (onRecycle)
-                onRecycle();
-            if (recycleFailure)
-                return Result<void>::Failure(MakeError(SaveErrors::StoragePermanentIo));
-            recycled.insert_or_assign(entry.publication.generation, *archive.bytes);
-            return Result<void>::Success();
+        Result<void> Recycle(const SaveSlotCatalogEntry &entry, ImmutableSaveArchive archive) noexcept override {
+            try {
+                ++recycleCalls;
+                if (onRecycle)
+                    return onRecycle();
+                if (recycleFailure)
+                    return Result<void>::Failure(MakeError(SaveErrors::StoragePermanentIo));
+                recycled.insert_or_assign(entry.publication.generation, *archive.bytes);
+                return Result<void>::Success();
+            } catch (const std::bad_alloc &) {
+                return Result<void>::Failure(std::move(allocationError_));
+            }
         }
 
         SaveNamespaceBindingSnapshot binding{Namespace(), SaveNamespaceBindingState::Available, 7};
@@ -125,22 +129,33 @@ namespace Horo::Runtime::SaveSlotLifecycleTest {
         std::size_t recycleCalls{};
         SaveArchiveSignatureProvider *verifier{};
         std::function<void()> onSemantics;
-        std::function<void()> onRecycle;
+        std::function<Result<void>()> onRecycle;
         std::function<Result<std::vector<std::byte>>(std::vector<std::byte>)> signer;
         std::map<SlotGenerationId, std::vector<std::byte>> recycled;
+
+    private:
+        Error allocationError_{MakeError(SaveErrors::StorageAllocationFailed)};
     };
 
     /** @brief Exact native stage hook; injected failures still exercise real temporary/file/selection operations. */
     class Fault final : public ISaveSlotLifecycleIoObserver {
     public:
-        Result<void> Before(const SaveSlotLifecycleIoStage stage, const SaveSlotLifecycleFileKind kind) override {
-            if (action)
-                action(stage, kind);
-            if (enabled && stage == failStage && kind == failKind) {
-                enabled = false;
-                return Result<void>::Failure(MakeError(*error));
+        Result<void> Before(const SaveSlotLifecycleIoStage stage, const SaveSlotLifecycleFileKind kind) noexcept override {
+            try {
+                if (action)
+                    action(stage, kind);
+                if (failure)
+                    return failure(stage, kind);
+                if (enabled && stage == failStage && kind == failKind) {
+                    enabled = false;
+                    return Result<void>::Failure(MakeError(*error));
+                }
+                return Result<void>::Success();
+            } catch (const std::bad_alloc &) {
+                return Result<void>::Failure(std::move(allocationError_));
+            } catch (const std::filesystem::filesystem_error &) {
+                return Result<void>::Failure(std::move(filesystemError_));
             }
-            return Result<void>::Success();
         }
 
         bool enabled{};
@@ -148,6 +163,11 @@ namespace Horo::Runtime::SaveSlotLifecycleTest {
         SaveSlotLifecycleFileKind failKind{SaveSlotLifecycleFileKind::Generation};
         const ErrorCodeDescriptor *error{&SaveErrors::StorageDiskFull};
         std::function<void(SaveSlotLifecycleIoStage, SaveSlotLifecycleFileKind)> action;
+        std::function<Result<void>(SaveSlotLifecycleIoStage, SaveSlotLifecycleFileKind)> failure;
+
+    private:
+        Error allocationError_{MakeError(SaveErrors::StorageAllocationFailed)};
+        Error filesystemError_{MakeError(SaveErrors::StoragePermanentIo)};
     };
 
     inline SaveSlotLifecyclePolicy Policy() {

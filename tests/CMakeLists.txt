@@ -323,6 +323,15 @@ if(HORO_BUILD_NETWORK_GNS)
     target_link_libraries(HoroNetworkTransportGnsTests PRIVATE HoroEngine::NetworkTransportGNS)
     horo_register_catch_test(HoroNetworkTransportGnsTests LABELS "unit;network;gns;socket")
 endif()
+add_executable(HoroPlayTopologyTests unit/application/PlayTopologyTests.cpp)
+target_compile_features(HoroPlayTopologyTests PRIVATE cxx_std_20)
+target_link_libraries(HoroPlayTopologyTests PRIVATE HoroEngine::PlayTopologyApplication HoroEngine::Platform nlohmann_json::nlohmann_json)
+horo_register_catch_test(HoroPlayTopologyTests LABELS "unit;network;play_topology;headless")
+add_executable(HoroPlayTopologyPublicHeaderConsumer support/PlayTopologyPublicHeaderConsumer.cpp)
+target_compile_features(HoroPlayTopologyPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPlayTopologyPublicHeaderConsumer PRIVATE HoroEngine::PlayTopologyApplication)
+add_test(NAME HoroPlayTopologyPublicHeaderConsumer COMMAND HoroPlayTopologyPublicHeaderConsumer)
+
 add_executable(HoroNetworkDebuggerTests
     support/AllocationProbe.cpp
     unit/runtime/networking/NetworkDebuggerTests.cpp
@@ -2012,6 +2021,7 @@ target_link_libraries(HoroEditorSurfaceIdentityTests PRIVATE HoroEngine::EditorS
 add_executable(HoroSourceFileOpenServiceTests
         unit/editor/SourceFileOpenServiceTests.cpp
         unit/editor/SourceDocumentServiceTests.cpp
+        unit/editor/SequenceDocumentTests.cpp
         support/AllocationProbe.cpp
 )
 target_compile_features(HoroSourceFileOpenServiceTests PRIVATE cxx_std_20)
@@ -2053,6 +2063,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerAssetMutationTests.cpp
             unit/editor/EditorWorkspaceControllerAssetTransferTests.cpp
             unit/editor/EditorWorkspaceControllerSourceNavigationTests.cpp
+            unit/editor/EditorWorkspaceControllerSequenceTests.cpp
             unit/editor/EditorWorkspaceControllerFilesystemTestSupport.h
             unit/editor/EditorWorkspaceControllerPolicyTests.cpp
             unit/editor/EditorWorkspaceControllerPolicyTestSupport.h
@@ -2180,8 +2191,10 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/GlobalDockBuildOutputToolbarRenderTests.cpp
             unit/editor/GlobalDockPanelRenderTests.cpp
             unit/editor/GlobalDockNetworkPaneTests.cpp
+            unit/editor/PlayTopologyModalTests.cpp
     )
 
+    target_link_libraries(HoroGlobalDockPanelRenderTests PRIVATE HoroEngine::PlayTopologyApplication HoroEngine::Platform)
     target_compile_features(HoroGlobalDockPanelRenderTests PRIVATE cxx_std_20)
     target_include_directories(HoroGlobalDockPanelRenderTests PRIVATE
             ${PROJECT_SOURCE_DIR}/tests/support
@@ -2212,6 +2225,7 @@ if (HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditorUiComponentsRenderTests
             unit/editor/EditorUiComponentsRenderTests.cpp
             unit/editor/ActivityButtonIdentityTests.cpp
+            unit/editor/SequenceTimelineRenderTests.cpp
     )
 
     target_compile_features(HoroEditorUiComponentsRenderTests PRIVATE cxx_std_20)
@@ -2644,6 +2658,18 @@ add_executable(HoroShaderReflectionTests
 target_compile_features(HoroShaderReflectionTests PRIVATE cxx_std_20)
 target_include_directories(HoroShaderReflectionTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroShaderReflectionTests PRIVATE HoroEngine::RenderApi)
+add_executable(HoroMaterialBindingTests
+        unit/runtime/renderer/MaterialBindingTests.cpp
+)
+target_compile_features(HoroMaterialBindingTests PRIVATE cxx_std_20)
+target_include_directories(HoroMaterialBindingTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+target_link_libraries(HoroMaterialBindingTests PRIVATE HoroEngine::RenderApi Threads::Threads)
+add_executable(HoroMaterialBindingPublicHeaderConsumer support/MaterialBindingPublicHeaderConsumer.cpp)
+target_compile_features(HoroMaterialBindingPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroMaterialBindingPublicHeaderConsumer PRIVATE HoroEngine::RenderApi)
+add_test(NAME HoroMaterialBindingPublicHeaderConsumer COMMAND HoroMaterialBindingPublicHeaderConsumer)
+set_tests_properties(HoroMaterialBindingPublicHeaderConsumer PROPERTIES LABELS "unit;renderer;headless;ci-windows")
+
 add_executable(HoroStandardPbrMaterialTests
         unit/runtime/renderer/StandardPbrMaterialTests.cpp
 )
@@ -3217,6 +3243,8 @@ add_executable(HoroRuntimeSaveSlotCommitTransactionTests
 target_compile_features(HoroRuntimeSaveSlotCommitTransactionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveSlotCommitTransactionTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveSlotLifecycleTests
+        support/AllocationProbe.cpp
+        unit/runtime/save/SaveSlotLifecycleAllocationTests.cpp
         unit/runtime/save/SaveSlotLifecycleTests.cpp
         unit/runtime/save/SaveSlotLifecycleFailureTests.cpp
         unit/runtime/save/SaveSlotRetentionTests.cpp
@@ -4081,6 +4109,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroShaderManifestTests
         HoroShaderPermutationTests
         HoroShaderReflectionTests
+        HoroMaterialBindingTests
         HoroStandardPbrMaterialTests
         HoroStandardPbrPassPlanTests
         HoroShaderCompilerPipelineTests

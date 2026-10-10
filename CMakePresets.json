@@ -194,6 +194,32 @@
         "HORO_BUILD_NETWORK_GNS": "ON",
         "HORO_BUILD_XR_OPENXR": "ON"
       }
+    },
+    {
+      "name": "android-package-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/android-$env{HORO_ANDROID_ABI}-${presetName}",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/android-ndk.cmake",
+      "cacheVariables": {
+        "BUILD_TESTING": "OFF",
+        "HORO_ANDROID_PACKAGE_QUALIFICATION": "ON",
+        "CMAKE_POSITION_INDEPENDENT_CODE": "ON"
+      }
+    },
+    {
+      "name": "android-debug",
+      "inherits": "android-package-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "android-release",
+      "inherits": "android-package-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     }
   ],
   "buildPresets": [
@@ -255,6 +281,22 @@
     {
       "name": "sonar",
       "configurePreset": "sonar"
+    },
+    {
+      "name": "android-debug",
+      "configurePreset": "android-debug",
+      "targets": [
+        "HoroAndroidPackageQualification"
+      ],
+      "jobs": 2
+    },
+    {
+      "name": "android-release",
+      "configurePreset": "android-release",
+      "targets": [
+        "HoroAndroidPackageQualification"
+      ],
+      "jobs": 2
     }
   ],
   "testPresets": [

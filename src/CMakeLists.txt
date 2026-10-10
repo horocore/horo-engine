@@ -829,6 +829,15 @@ add_library(HoroEngine::NetworkRuntime ALIAS HoroNetworkRuntime)
 target_compile_features(HoroNetworkRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkRuntime PUBLIC HoroEngine::NetworkApi HoroEngine::RuntimeScene HoroEngine::Runtime)
 
+add_library(HoroPlayTopologyApplication STATIC
+        application/network/PlayTopology.cpp
+        application/network/PlayTopologyCodec.cpp
+        application/network/PlayTopologyStore.cpp)
+add_library(HoroEngine::PlayTopologyApplication ALIAS HoroPlayTopologyApplication)
+target_compile_features(HoroPlayTopologyApplication PUBLIC cxx_std_20)
+target_link_libraries(HoroPlayTopologyApplication PUBLIC HoroEngine::Foundation HoroEngine::NetworkApi
+        PRIVATE HoroEngine::Platform nlohmann_json::nlohmann_json)
+
 add_library(HoroNetworkDebuggerApplication STATIC application/network/NetworkDebugger.cpp)
 add_library(HoroEngine::NetworkDebuggerApplication ALIAS HoroNetworkDebuggerApplication)
 target_compile_features(HoroNetworkDebuggerApplication PUBLIC cxx_std_20)
@@ -1928,6 +1937,9 @@ target_link_libraries(HoroRuntimeUiInput PUBLIC HoroEngine::Input HoroEngine::Ru
 add_library(HoroRenderApi STATIC
         runtime/renderer/api/MotionHistory.cpp
         runtime/renderer/api/MotionHistoryErrors.cpp
+        runtime/renderer/api/MaterialBinding.cpp
+        runtime/renderer/api/MaterialBindingValidation.cpp
+        runtime/renderer/api/MaterialBindingErrors.cpp
         runtime/renderer/api/PipelinePreparation.cpp
         runtime/renderer/api/PipelinePreparationErrors.cpp
         runtime/renderer/api/PipelineCache.cpp
@@ -2370,6 +2382,7 @@ add_library(HoroEditorServices STATIC
         editor/SourceDocumentChanges.cpp
         editor/SourceDocumentSnapshot.cpp
         editor/SourceDocumentText.cpp
+        editor/SequenceDocument.cpp
         editor/UiCanvasDocument.cpp
         editor/UiCanvasDocumentSerialization.cpp
         editor/document/SceneDocumentComparison.cpp
@@ -2494,6 +2507,7 @@ endif ()
 if (HORO_BUILD_EDITOR_GUI)
     add_library(HoroGui STATIC
             editor/design_system/components/EditorUiComponents.cpp
+            editor/design_system/components/SequenceTimelineControl.cpp
             editor/design_system/icons/EditorIcons.cpp
             editor/design_system/components/EditorSnackbarHost.cpp
             editor/app/EditorTheme.cpp
@@ -2515,6 +2529,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/asset_import/AssetImportSourcePreview.cpp
             editor/modals/asset_import/AssetImportModalPresentation.cpp
             editor/modals/asset_import/AssetImportModalPresentationDetails.cpp
+            editor/modals/play_topology/PlayTopologyModal.cpp
             editor/modals/scene_compare/SceneConflictCompareModal.cpp
             editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.cpp
             editor/screens/welcome/WelcomeView.cpp
@@ -2578,6 +2593,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserGameplay.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserAssetOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
+            editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
+            editor/screens/workspace/EditorWorkspaceViewSequence.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
             editor/screens/workspace/ExtensionActivityView.cpp
             editor/screens/workspace/EditorWorkspaceScreen.cpp
@@ -2602,6 +2619,7 @@ if (HORO_BUILD_EDITOR_GUI)
             GL_SILENCE_DEPRECATION
             HORO_ENGINE_VERSION_STRING="${PROJECT_VERSION}"
     )
+    target_link_libraries(HoroGui PRIVATE HoroEngine::PlayTopologyApplication)
     target_link_libraries(HoroGui
             PUBLIC
             HoroEngine::EditorServices

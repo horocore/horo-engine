@@ -8,14 +8,12 @@ namespace Horo::Runtime {
 
     /** @copydoc SaveSlotLifecycle::CleanupAfterPublication */
     bool SaveSlotLifecycle::CleanupAfterPublication(Operation &operation) const noexcept {
-        // The selection is already durable. Any unexpected host/observer exception must leave
-        // the original publication successful, with recovery evidence for later worker cleanup.
+        // Selection is durable; typed cleanup failures and local allocation failure defer
+        // recovery without relabeling publication. Provider callbacks obey their no-throw contract.
         try {
             auto cleaned = Cleanup(operation);
             return cleaned.HasError() || cleaned.Value();
         } catch (const std::bad_alloc &) {
-            return true;
-        } catch (...) {
             return true;
         }
     }

@@ -1698,6 +1698,17 @@ delete authority until a synchronized tombstone contract exists.
 
 ## Failure, Cancellation And Shutdown Summary
 
+Slot lifecycle qualification observers (`ISaveSlotLifecycleIoObserver::Before`)
+and recycle providers (`ISaveSlotLifecycleHost::Recycle`) use non-throwing typed
+`Result<void>` boundaries. Providers translate their failures before returning,
+including allocation failures using previously prepared error evidence. Escaping
+exceptions violate the callback contract and are not recoverable lifecycle outcomes.
+After selection visibility, a typed synchronization failure is outcome-unknown;
+after acknowledged publication, typed recycle/cleanup failure preserves retired
+bytes and reports committed/deferred cleanup. Engine allocation failures at these
+stages preserve the same publication knowledge. External provider migrations are
+documented in the [slot lifecycle guide](../../guides/save-slot-lifecycle-migration.md).
+
 All failures follow ADR-008 Result/Error, retaining operation, `SaveAddress`, source
 `SlotGenerationId`/`ArchiveContentHash` when available and nested asset/provider/
 filesystem cause. Admission errors are distinct from later operation outcomes.
