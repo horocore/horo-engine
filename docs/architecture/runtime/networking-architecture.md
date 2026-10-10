@@ -1107,3 +1107,36 @@ The networking subsystem requires targeted automated verification:
 - [Concurrency And Job System](../foundation/concurrency-and-jobs.md)
 - [Network Debugger UI Reference](../../../mock-studio/designs.md#architecture-runtime-network-debugger)
 - [Application Security Architecture](../security/application-security.md)
+
+## Multiplayer play topology profiles (NET-008.3)
+
+`HoroEngine::PlayTopologyApplication` owns inert editor preview profiles, not
+runtime or release network configuration. A project catalog contains at most
+16 profiles. Standalone requires no server, clients, provider, port or simulator;
+listen requires one server and at most seven additional clients (its local client
+is already part of the host); dedicated requires one server and at most eight
+clients. Scene identities are bounded project-relative `.horo` paths. Provider
+and simulation identities are references, never backend factories or credentials.
+
+The workspace opens a transient localized authoring modal through a typed
+command. Its application store publishes `config/play_topologies.json` under an
+exclusive writer lock and atomic durable replacement. Machine port overrides use
+an independent revision and `.horo/local/play_topology_overrides.json`; they never
+rewrite project defaults. Closed version-one codecs reject unknown/duplicate
+fields, oversized documents, invalid counts, traversal and future versions, and
+sort identities for deterministic serialization. Reload failure retains the last
+committed projections; stale writers cannot overwrite another publication.
+
+Launch callers must supply current owner-issued preview capability evidence to
+`PreflightPlayTopology` before constructing any participant. It checks the entire
+catalog and override document, all required roles, exact map/provider/preset, and
+active preview lifecycle. The resulting value plan carries project/user revisions
+and the owner generation; `ValidatePlayTopologyPlan` rechecks these and the complete
+participant intent at the launch safe point. No backend discovery, release override,
+process creation or hidden fallback occurs. Multiprocess orchestration (NET-008.4)
+and simulator preset providers (NET-008.6) consume this contract separately.
+
+The modal/store run on the editor owner thread. The host retains its durable
+filesystem and shared GUI context until modal shutdown; the modal owns the store
+and draft and copies committed projections. Cancellation discards only the draft.
+Existing single-session Play behavior remains its own lifecycle authority.

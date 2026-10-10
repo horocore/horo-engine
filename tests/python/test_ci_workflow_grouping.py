@@ -31,6 +31,7 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
     assert targets("HORO_CI_WINDOWS_TARGETS") == targets("HORO_CI_AUDIO_TARGETS") | {
         "HoroD3D12InitializationTests",
         "HoroNetworkDebuggerTests", "HoroNetworkDebuggerPublicHeaderConsumer",
+        "HoroPlayTopologyTests", "HoroPlayTopologyPublicHeaderConsumer",
         "HoroTerrainAuthoringTests", "HoroTerrainAuthoringPublicHeaderConsumer",
         "HoroCliCommandRegistryTests", "HoroPlatformTests", "HoroUpdateZipPackageProducerTests",
         "HoroCliOutputPublicHeaderConsumer", "HoroCliProductionOutputContract",
@@ -217,6 +218,18 @@ def test_installed_manifest_source_keeps_sonar_coverage() -> None:
     collector = (ROOT / ".github/scripts/collect_sonar_coverage.sh").read_text(encoding="utf-8")
     assert '"$workspace/apps/HoroEditor/app/ConfiguredEditorUpdateManifestSource.cpp"' in collector
     assert "HoroConfiguredEditorUpdateBackendTests" in targets("HORO_SONAR_EDITOR_TARGETS")
+
+
+def test_instrumented_render_graph_pane_keeps_sonar_coverage() -> None:
+    collector = (ROOT / ".github/scripts/collect_sonar_coverage.sh").read_text(encoding="utf-8")
+    assert '"$workspace/apps/HoroEditor/app/RenderGraphInspectionPane.cpp"' in collector
+    assert '"$workspace/apps/HoroEditor/app/"' not in collector
+    test_targets = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    assert "target_sources(HoroGlobalDockPanelRenderTests PRIVATE unit/editor/RenderGraphInspectionPaneTests.cpp" in test_targets
+    assert "../apps/HoroEditor/app/RenderGraphInspectionPane.cpp)" in test_targets
+    assert preset("configurePresets", "sonar")["inherits"] == "ci-linux-debug"
+    assert preset("configurePresets", "ci-linux-debug")["inherits"] == "ci-native-debug"
+    assert preset("configurePresets", "ci-native-debug")["cacheVariables"]["HORO_BUILD_EDITOR_GUI"] == "ON"
 
 
 def test_windows_restore_allocation_sweep_has_mandatory_release_coverage() -> None:

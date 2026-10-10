@@ -1003,8 +1003,9 @@ SHAs.
 
 ## Cross-Compilation
 
-Cross-compilation is currently **experimental**. The following toolchain
-presets are planned for mobile and console targets:
+Cross-compilation is currently **experimental**. Android presets now implement
+the bounded package qualification composition described below. Full engine
+cross-compilation and the iOS/WebAssembly presets remain planned:
 
 | Target | Toolchain | Preset |
 |---|---|---|
@@ -1012,7 +1013,8 @@ presets are planned for mobile and console targets:
 | iOS | Xcode toolchain | `ios-debug`, `ios-release` |
 | WebAssembly | Emscripten | `wasm-debug`, `wasm-release` |
 
-Toolchain files live in `cmake/toolchains/`:
+The implemented Android toolchain lives in `cmake/toolchains/`; the remaining
+files below describe the planned layout:
 
 ```text
 cmake/toolchains/
@@ -1021,20 +1023,26 @@ cmake/toolchains/
     wasm-emscripten.cmake
 ```
 
-The Android toolchain file expects `ANDROID_NDK_ROOT` to be set:
+Direct qualification configure requires the pinned NDK, one declared ABI, and
+the verified GameActivity extraction. The assembly script verifies these inputs
+before invoking CMake:
 
 ```bash
-export ANDROID_NDK_ROOT=/opt/android-ndk
+export ANDROID_NDK_ROOT=/opt/android-ndk-28.2.13676358
+export HORO_ANDROID_ABI=arm64-v8a
+export HORO_GAME_ACTIVITY_ROOT=/opt/verified-game-activity
 cmake --preset android-debug
 ```
 
-Cross-compilation presets reuse the same target hierarchy and build profiles as
-host presets. The active `CookTarget` in the asset pipeline is derived from the
-preset name so that the correct cooked assets are produced automatically.
+Full engine cross-compilation will reuse the target hierarchy and build profiles
+of host presets. The implemented packaging qualification instead selects a
+private GameActivity composition and explicit runtime assets; it does not select
+a CookTarget or silently instantiate engine backends.
 
 ### Cross-Platform Dependency Selection
 
-Each toolchain preset declares target capabilities as CMake cache variables.
+For the planned full engine cross-compilation graph, each toolchain preset must
+declare target capabilities as CMake cache variables.
 Dependencies are selected from capabilities rather than scattered checks for
 `ANDROID`, `EMSCRIPTEN`, or a preset name. The initial capability set includes:
 
@@ -1044,8 +1052,7 @@ Dependencies are selected from capabilities rather than scattered checks for
 - `HORO_TARGET_HAS_THREADS`
 - `HORO_TARGET_BUILDS_HOST_TOOLS`
 
-`cmake/Dependencies.cmake` guards declaration and population with those
-capabilities:
+The planned `cmake/Dependencies.cmake` capability guards take this form:
 
 ```cmake
 if(HORO_TARGET_HAS_PLATFORM_MEDIA)
@@ -1064,7 +1071,8 @@ if(HORO_TARGET_HAS_PLATFORM_MEDIA)
 endif()
 ```
 
-Android and WebAssembly presets do not fetch or configure desktop-only
+The implemented Android qualification composition bypasses the desktop dependency
+graph. Future full-engine Android and WebAssembly presets must not fetch desktop-only
 dependencies merely because a host machine could build them. A target backend
 must either select a dependency through a capability or provide its own
 platform implementation. Unsupported capability combinations fail during
@@ -1099,3 +1107,15 @@ pipeline documented in [Asset Pipeline](../runtime/asset-pipeline.md).
   configuration.
 - [Testing Architecture](./testing-architecture.md): how tests are organized.
 - [Quality And CI](./quality-and-ci.md): CI gates and quality expectations.
+
+### Implemented Android package qualification
+
+The opt-in `android-debug` / `android-release` presets and
+`HORO_ANDROID_PACKAGE_QUALIFICATION` provide the PLT-001.6 assembly qualification
+composition. `android/toolchain-lock.json` owns the pinned API/tool tuple;
+`android/package-profiles.json` owns admitted ABIs, native libraries, assets and
+manifest capabilities. `scripts/android_package.py` performs preflight, explicit
+composition, native closure validation, signing/alignment and portable package
+inspection. This does not qualify an interactive runtime or renderer. See
+[Android package qualification](../../guides/android-packages.md) for the actual
+commands, migration boundary and hosted repeat-build evidence.

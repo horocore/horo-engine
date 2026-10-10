@@ -16,6 +16,16 @@ namespace Horo::Render::Test {
         CompiledRenderGraphExecution execution;
     };
 
+    /** @brief Finishes real synchronization/execution compilation while preserving owned source provenance. */
+    inline Sources FinishSources(RenderGraph graph, RenderGraphSchedule schedule, RenderGraphLifetimePlan lifetime,
+                                 const std::span<const RenderGraphImportedState> initialStates = {}) {
+        auto synchronization = SynthesizeRenderGraphSynchronization(graph, schedule, Queues, initialStates);
+        REQUIRE(synchronization.HasValue());
+        auto execution = CompileRenderGraphExecution(graph, schedule, synchronization.Value(), Queues);
+        REQUIRE(execution.HasValue());
+        return {std::move(graph), std::move(schedule), std::move(lifetime), std::move(execution).Value()};
+    }
+
     inline Sources CompileSources() {
         auto builder = RequireBuilder();
         const auto write = RequirePass(builder, RenderPassKind::Graphics, RenderQueueRole::Graphics);
@@ -36,11 +46,7 @@ namespace Horo::Render::Test {
                                       RenderGraphTransientRequirement{unused, descriptor}};
         auto lifetime = CompileRenderGraphLifetimePlan(graph, schedule, requirements);
         REQUIRE(lifetime.HasValue());
-        auto synchronization = SynthesizeRenderGraphSynchronization(graph, schedule, Queues, {});
-        REQUIRE(synchronization.HasValue());
-        auto execution = CompileRenderGraphExecution(graph, schedule, synchronization.Value(), Queues);
-        REQUIRE(execution.HasValue());
-        return {std::move(graph), std::move(schedule), std::move(lifetime).Value(), std::move(execution).Value()};
+        return FinishSources(std::move(graph), std::move(schedule), std::move(lifetime).Value());
     }
 
 }  // namespace Horo::Render::Test

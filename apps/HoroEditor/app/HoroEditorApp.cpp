@@ -1126,7 +1126,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Composes cached graph inspection at the application host boundary. */
-        void RegisterInspectionWorkspacePanels(WorkspacePanelRegistry &registry, Render::RenderFrontend &frontend) {
+        void RegisterInspectionWorkspacePanels(WorkspacePanelRegistry &registry, const Render::RenderFrontend &frontend) {
             const std::array<GlobalDockPaneFactory, 1> graphInspectionPanes{[&frontend] {
                 return MakeRenderGraphInspectionPane([&frontend] {
                     return frontend.GraphInspectionSnapshot();

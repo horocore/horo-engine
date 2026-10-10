@@ -37,8 +37,8 @@ namespace Horo::Render {
         /** @brief Checks immutable compiler provenance and exact scheduled execution order. */
         bool SourcesMatch(const RenderGraph &graph, const RenderGraphSchedule &schedule, const RenderGraphLifetimePlan &lifetime,
                           const CompiledRenderGraphExecution &execution) {
-            const RenderGraphOwnerId owner = graph.Owner();
-            if (!owner.IsValid() || schedule.Owner() != owner || lifetime.Owner() != owner || execution.Owner() != owner)
+            if (const RenderGraphOwnerId owner = graph.Owner();
+                !owner.IsValid() || schedule.Owner() != owner || lifetime.Owner() != owner || execution.Owner() != owner)
                 return false;
             return std::ranges::equal(schedule.OrderedPasses(), execution.Passes(), {}, std::identity{}, &RenderGraphExecutionPass::pass);
         }
@@ -98,20 +98,20 @@ namespace Horo::Render {
                                                 const RenderGraphLifetimePlan &lifetime, const CompiledRenderGraphExecution &execution,
                                                 const RenderGraphInspectionContext context, const RenderGraphInspectionLimits limits,
                                                 const std::stop_token cancellation) {
-        const auto admitted = ValidateCaptureSources(graph, schedule, lifetime, execution, context, limits, cancellation);
-        if (admitted.HasError())
+        if (const auto admitted = ValidateCaptureSources(graph, schedule, lifetime, execution, context, limits, cancellation);
+            admitted.HasError())
             return SnapshotResult::Failure(admitted.ErrorValue());
         if (!ChargeSources(graph, schedule, lifetime, execution, limits))
             return SnapshotResult::Failure(MakeError(RenderGraphInspectionErrors::CapacityExceeded));
         try {
-            auto snapshot = std::shared_ptr<RenderGraphInspectionSnapshot>{new RenderGraphInspectionSnapshot};
+            auto snapshot = std::make_shared<RenderGraphInspectionSnapshot>(RenderGraphInspectionSnapshot::MakeConstructionKey());
             snapshot->context_ = context;
             snapshot->owner_ = graph.Owner();
             snapshot->execution_.reserve(execution.Passes().size());
             for (const auto &pass : execution.Passes()) {
                 if (cancellation.stop_requested())
                     return SnapshotResult::Failure(MakeError(RenderGraphInspectionErrors::Cancelled));
-                snapshot->execution_.push_back({pass.pass, pass.kind, pass.queue});
+                snapshot->execution_.emplace_back(pass.pass, pass.kind, pass.queue);
             }
             const auto copy = [&]<typename T>(std::vector<T> &destination, const std::span<const T> source) {
                 if (cancellation.stop_requested())
@@ -119,18 +119,15 @@ namespace Horo::Render {
                 destination.assign(source.begin(), source.end());
                 return true;
             };
-            const std::array copied{copy(snapshot->passes_, graph.Passes()),
-                                    copy(snapshot->dispositions_, schedule.PassDispositions()),
-                                    copy(snapshot->resources_, graph.Resources()),
-                                    copy(snapshot->exports_, graph.Exports()),
-                                    copy(snapshot->usages_, graph.Usages()),
-                                    copy(snapshot->dependencies_, graph.Dependencies()),
-                                    copy(snapshot->lifetimes_, lifetime.Lifetimes()),
-                                    copy(snapshot->aliases_, lifetime.AliasOpportunities()),
-                                    copy(snapshot->allocations_, lifetime.AllocationRequirements()),
-                                    copy(snapshot->transitions_, execution.Transitions()),
-                                    copy(snapshot->transfers_, execution.AcquireTransfers())};
-            if (!std::ranges::all_of(copied, std::identity{}) || cancellation.stop_requested())
+            if (const std::array copied{copy(snapshot->passes_, graph.Passes()), copy(snapshot->dispositions_, schedule.PassDispositions()),
+                                        copy(snapshot->resources_, graph.Resources()), copy(snapshot->exports_, graph.Exports()),
+                                        copy(snapshot->usages_, graph.Usages()), copy(snapshot->dependencies_, graph.Dependencies()),
+                                        copy(snapshot->lifetimes_, lifetime.Lifetimes()),
+                                        copy(snapshot->aliases_, lifetime.AliasOpportunities()),
+                                        copy(snapshot->allocations_, lifetime.AllocationRequirements()),
+                                        copy(snapshot->transitions_, execution.Transitions()),
+                                        copy(snapshot->transfers_, execution.AcquireTransfers())};
+                !std::ranges::all_of(copied, std::identity{}) || cancellation.stop_requested())
                 return SnapshotResult::Failure(MakeError(RenderGraphInspectionErrors::Cancelled));
             return SnapshotResult::Success(std::move(snapshot));
         } catch (const std::bad_alloc &) {
@@ -143,8 +140,7 @@ namespace Horo::Render {
 
     /** @copydoc RenderGraphInspectionFeed::Publish */
     Result<void> RenderGraphInspectionFeed::Publish(std::shared_ptr<const RenderGraphInspectionSnapshot> snapshot) {
-        const auto admitted = CheckFeedAdmission(thread_, closed_);
-        if (admitted.HasError())
+        if (const auto admitted = CheckFeedAdmission(thread_, closed_); admitted.HasError())
             return admitted;
         if (!snapshot)
             return Result<void>::Failure(MakeError(RenderGraphInspectionErrors::InvalidSource));
@@ -157,16 +153,14 @@ namespace Horo::Render {
 
     /** @copydoc RenderGraphInspectionFeed::Read */
     Result<std::shared_ptr<const RenderGraphInspectionSnapshot>> RenderGraphInspectionFeed::Read() const {
-        const auto admitted = CheckFeedAdmission(thread_, closed_);
-        if (admitted.HasError())
+        if (const auto admitted = CheckFeedAdmission(thread_, closed_); admitted.HasError())
             return SnapshotResult::Failure(admitted.ErrorValue());
         return SnapshotResult::Success(snapshot_);
     }
 
     /** @copydoc RenderGraphInspectionFeed::ReplaceRenderer */
     Result<void> RenderGraphInspectionFeed::ReplaceRenderer(const RenderResourceOwnerId renderer) {
-        const auto admitted = CheckFeedAdmission(thread_, closed_);
-        if (admitted.HasError())
+        if (const auto admitted = CheckFeedAdmission(thread_, closed_); admitted.HasError())
             return admitted;
         if (!renderer.IsValid() || renderer == renderer_)
             return Result<void>::Failure(MakeError(RenderGraphInspectionErrors::InvalidSource));

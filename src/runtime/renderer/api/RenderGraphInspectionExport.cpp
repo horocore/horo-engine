@@ -88,9 +88,11 @@ namespace Horo::Render {
 
         /** @brief Emits exact generation-safe resource binding identity; no resource contents are read. */
         void Resource(GraphJsonWriter &writer, const RenderGraphResource &resource) {
-            std::uint64_t owner{}, slot{}, generation{};
-            std::visit([&](const auto &binding) {
-                if constexpr (!std::is_same_v<std::decay_t<decltype(binding)>, std::monostate>) {
+            std::uint64_t owner{};
+            std::uint64_t slot{};
+            std::uint64_t generation{};
+            std::visit([&]<typename Binding>(const Binding &binding) {
+                if constexpr (!std::is_same_v<Binding, std::monostate>) {
                     owner = binding.owner.value;
                     slot = binding.slot;
                     generation = binding.generation;
@@ -165,10 +167,10 @@ namespace Horo::Render {
             return Result<std::string>::Failure(MakeError(RenderGraphInspectionErrors::InvalidLimits));
         try {
             GraphJsonWriter writer{maxBytes, cancellation};
-            writer.Text("{\"schema\":\"horo.render.graph.inspection\",\"version\":1,\"context\":");
+            writer.Text(R"({"schema":"horo.render.graph.inspection","version":1,"context":)");
             writer.Tuple(
                 {snapshot.Context().renderer.value, snapshot.Context().frame.value, snapshot.Context().revision, snapshot.Owner().value});
-            writer.Text(",\"coverage\":\"complete_logical_whole_resource\",\"timing\":\"unavailable\"");
+            writer.Text(R"(,"coverage":"complete_logical_whole_resource","timing":"unavailable")");
             Topology(writer, snapshot);
             Planning(writer, snapshot);
             return Result<std::string>::Success(writer.Finish());
