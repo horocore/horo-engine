@@ -95,7 +95,8 @@ def test_navigation_transport_and_coordinator_consumer_have_build_and_execution_
     assert f'horo_register_catch_test({transport} LABELS "unit;navigation;headless;concurrency;ci-windows")' in tests_cmake
     assert f"add_test(NAME {consumer} COMMAND {consumer})" in tests_cmake
     windows_labels = re.search(r"set_property\(TEST\s+(.*?)\s+APPEND PROPERTY LABELS ci-windows\)", SUITES, re.S)
-    assert windows_labels and consumer in windows_labels.group(1).split()
+    assert windows_labels is not None
+    assert consumer in windows_labels.group(1).split()
     assert consumer in targets("HORO_CI_NAVIGATION_TARGETS")
     assert f"set_property(TEST HoroNavigationBakeDiagnosticsPublicConsumer {consumer}\n        APPEND PROPERTY LABELS ci-navigation)" in SUITES
 

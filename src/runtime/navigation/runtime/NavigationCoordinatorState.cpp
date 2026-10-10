@@ -267,8 +267,8 @@ namespace Horo::Navigation {
                 if (result.HasValue() && !ValidResult(work.query.request, result.Value()))
                     result = Result<NavigationPath>::Failure(MakeError(NavigationErrors::ProviderFailed));
             }
-            auto completion = Complete(work, 0, std::move(result));
-            if (state->completions.TryPush(completion) != NavigationQueueEnqueueResult::Enqueued)
+            if (auto completion = Complete(work, 0, std::move(result));
+                state->completions.TryPush(completion) != NavigationQueueEnqueueResult::Enqueued)
                 batch.fallback[workIndex].emplace(std::move(completion));
             ++batch.produced;
         }
