@@ -49,6 +49,7 @@ namespace Horo::Vfx {
     /** @brief Bounded preparation ceilings for one CPU simulation instance. */
     struct CpuParticleSimulationHardLimits final {
         static constexpr std::uint32_t ForceModules = 64;          /**< Maximum compiled force modules. */
+        static constexpr std::uint32_t DepthSamples = 1'048'576;   /**< Maximum copied scene-depth pixels. */
         static constexpr std::uint32_t Planes = 64;                /**< Maximum analytic collision planes. */
         static constexpr std::uint32_t CurveKeys = 32;             /**< Maximum keys in one over-life curve. */
         static constexpr std::uint32_t PayloadChannels = 32;       /**< Maximum typed custom channels. */
@@ -98,13 +99,6 @@ namespace Horo::Vfx {
         constexpr auto operator<=>(const CpuParticleColorKey &) const noexcept = default;
     };
 
-    /** @brief Collision response applied after an immutable query reports a hit. */
-    enum class CpuParticleCollisionResponse : std::uint8_t {
-        Bounce,
-        Die,
-        Count,
-    };
-
     /** @brief Backend-neutral analytic collision plane. Planes are tested in declared order. */
     struct CpuParticlePlane final {
         Math::Vec3 point{};
@@ -112,7 +106,34 @@ namespace Horo::Vfx {
         float restitution{1.0F};
     };
 
-    /** @brief Typed immutable request handed to a scene-depth or Physics adapter. */
+    /** @brief One canonical depth pixel; uncovered pixels do not collide. */
+    struct CpuParticleDepthSample final {
+        bool covered{};
+        float depth{};                        /**< Canonical clip depth in [0,1], increasing away from the camera. */
+        Math::Vec3 normal{0.0F, 0.0F, -1.0F}; /**< World-space outward normal. */
+    };
+
+    /**
+     * @brief Frozen cosmetic collision view copied during Create, independent of a renderer or Physics.
+     *
+     * worldToClip uses canonical x/y in [-1,1], depth in [0,1], increasing away from
+     * the camera. Samples are row-major with row zero at NDC y=-1. The CPU kernel
+     * tests the integrated endpoint's pixel and its local surface plane; it is a
+     * sampled cosmetic approximation, not a swept Physics query. Out-of-view,
+     * uncovered, or absent optional depth produces no collision. The host must
+     * select one immutable view in the same world/origin space as particles.
+     * This snapshot remains frozen for the simulator lifetime; recreate for a new view.
+     */
+    struct CpuParticleSceneDepthSnapshot final {
+        Math::Mat4 worldToClip{Math::Mat4::Identity()};
+        std::uint32_t width{};
+        std::uint32_t height{};
+        std::span<const CpuParticleDepthSample> samples{}; /**< Borrowed only for Create; copied before return. */
+        float restitution{1.0F};
+        bool required{}; /**< Missing depth rejects admission when true. */
+    };
+
+    /** @brief Typed immutable request handed to a Physics adapter. */
     struct CpuParticleCollisionQueryRequest final {
         ParticleSimulationId particle;
         Math::Vec3 previousPosition{};
@@ -124,7 +145,7 @@ namespace Horo::Vfx {
         std::uint64_t snapshotGeneration{};
     };
 
-    /** @brief Reduced collision evidence returned by a typed scene or Physics adapter. */
+    /** @brief Reduced collision evidence returned by a typed Physics adapter. */
     struct CpuParticleCollisionHit final {
         bool hit{};
         Math::Vec3 position{};
@@ -136,10 +157,10 @@ namespace Horo::Vfx {
     };
 
     /**
-     * @brief Non-owning typed seam between VFX and an immutable scene/Physics snapshot.
+     * @brief Non-owning typed seam between VFX and an immutable Physics snapshot.
      *
      * Native worlds, bodies, shapes, collectors, and solver handles never cross the VFX target
-     * boundary. The adapter owns `context` and must remain valid for the complete step.
+     * boundary. The adapter owns `context` and must remain valid for the simulator lifetime and every complete step.
      */
     using CpuParticleCollisionProbe = Result<CpuParticleCollisionHit> (*)(void *context,
                                                                           const CpuParticleCollisionQueryRequest &request) noexcept;
@@ -214,9 +235,8 @@ namespace Horo::Vfx {
         bool requiredGameplay{};
         std::span<const CpuParticleForceModule> forces{};
         std::span<const CpuParticlePlane> planes{};
-        CpuParticleCollisionQuerySeam sceneDepth{};
+        CpuParticleSceneDepthSnapshot sceneDepth{};
         CpuParticleCollisionQuerySeam physicsWorld{};
-        CpuParticleCollisionResponse collisionResponse{CpuParticleCollisionResponse::Bounce};
         std::span<const CpuParticleCurveKey> sizeOverLife{};
         std::span<const CpuParticleCurveKey> opacityOverLife{};
         std::span<const CpuParticleColorKey> colorOverLife{};

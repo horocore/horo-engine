@@ -95,8 +95,7 @@ namespace Horo::Vfx::Tests {
                                                                               : std::span<const CpuParticleForceModule>{forces.data(), 1},
                                                                 .planes = workload.scene == CpuQualificationScene::BouncingPlane
                                                                               ? std::span<const CpuParticlePlane>{plane}
-                                                                              : std::span<const CpuParticlePlane>{},
-                                                                .collisionResponse = CpuParticleCollisionResponse::Bounce});
+                                                                              : std::span<const CpuParticlePlane>{}});
         if (result.HasError())
             throw std::runtime_error("CPU qualification simulator preparation failed");
         return std::move(result).Value();

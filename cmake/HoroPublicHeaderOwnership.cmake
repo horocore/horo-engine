@@ -102,6 +102,7 @@ horo_configure_target_header_boundary(HoroOpenTelemetry PUBLIC_HEADERS
 
 horo_configure_target_header_boundary(HoroPlatform PUBLIC_HEADERS
     Horo/Platform/AndroidLifecycle.h
+    Horo/Platform/AndroidStorage.h
     Horo/Platform/ConfigurationFileStore.h
     Horo/Platform/DynamicLibrary.h
     Horo/Platform/ExternalProcess.h
@@ -263,6 +264,7 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/Save/SaveParticipation.h
     Horo/Runtime/Save/SaveCaptureSnapshot.h
     Horo/Runtime/Save/SaveRestoreTransaction.h
+    Horo/Runtime/Save/SaveGameplayCheckpoint.h
     Horo/Runtime/Save/SaveArchiveMetadata.h
     Horo/Runtime/Save/SaveArchiveFraming.h
     Horo/Runtime/Save/SaveArchiveFinalization.h
@@ -274,6 +276,8 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/Save/SaveMigration.h
     Horo/Runtime/Save/SaveCanonicalCodec.h
     Horo/Runtime/Save/SaveReference.h
+    Horo/Runtime/Save/SaveThumbnailArchive.h
+    Horo/Runtime/Save/SaveThumbnailCapture.h
     Horo/Runtime/Save/SaveSlotMetadata.h
     Horo/Runtime/Save/SaveSlotIndex.h
     Horo/Runtime/Save/SaveCloudRevisionMetadata.h
