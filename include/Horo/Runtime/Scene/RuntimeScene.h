@@ -9,6 +9,7 @@
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Runtime/RuntimeLifecycle.h"
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
+#include "Horo/Runtime/Scene/SceneIdentity.h"
 
 #include <limits>
 #include <memory>
@@ -143,17 +144,6 @@ namespace Horo::Runtime {
          */
         [[nodiscard]] virtual Result<std::unique_ptr<SceneActivationCandidate>> Prepare(const RuntimeSceneDefinition &definition,
                                                                                         RuntimeSceneView scene) = 0;
-    };
-
-    /** @brief Unique identity of one activated runtime-scene instance. */
-    struct SceneRuntimeId {
-        std::uint64_t value{};
-
-        [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return value != 0;
-        }
-
-        [[nodiscard]] constexpr auto operator<=>(const SceneRuntimeId &) const noexcept = default;
     };
 
     namespace ScenePublicationDetail {

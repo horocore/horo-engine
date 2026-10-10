@@ -2968,6 +2968,24 @@ add_executable(HoroRuntimeUiHotReloadTests
 target_compile_features(HoroRuntimeUiHotReloadTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeUiHotReloadTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroRuntimeUiHotReloadTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiSceneReconciliationTests
+        unit/runtime/ui/UiSceneReconciliationTests.cpp
+        unit/runtime/ui/UiHotReloadTestFixture.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeUiSceneReconciliationTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiSceneReconciliationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRuntimeUiSceneReconciliationTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiSceneReconciliationPublicHeaderConsumer support/RuntimeUiSceneReconciliationPublicHeaderConsumer.cpp)
+target_compile_features(HoroRuntimeUiSceneReconciliationPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiSceneReconciliationPublicHeaderConsumer PRIVATE HoroEngine::RuntimeUi)
+add_test(NAME HoroRuntimeUiSceneReconciliationPublicHeaderConsumer COMMAND HoroRuntimeUiSceneReconciliationPublicHeaderConsumer)
+set_tests_properties(HoroRuntimeUiSceneReconciliationPublicHeaderConsumer PROPERTIES LABELS "unit;runtime_ui;headless")
+add_executable(HoroSceneIdentityContractConsumer support/SceneIdentityContractConsumer.cpp)
+target_compile_features(HoroSceneIdentityContractConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroSceneIdentityContractConsumer PRIVATE HoroEngine::SceneIdentity)
+add_test(NAME HoroSceneIdentityContractConsumer COMMAND HoroSceneIdentityContractConsumer)
+set_tests_properties(HoroSceneIdentityContractConsumer PROPERTIES LABELS "unit;runtime;headless")
 add_executable(HoroRuntimeUiOverlayLifecycleTests
         unit/runtime/ui/UiOverlayLifecycleTests.cpp
         unit/runtime/ui/UiHotReloadTestFixture.cpp
@@ -4240,6 +4258,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiBindingWriteTests
         HoroRuntimeUiDocumentTests
         HoroRuntimeUiHotReloadTests
+        HoroRuntimeUiSceneReconciliationTests
         HoroRuntimeUiScreenTransitionTests
         HoroRuntimeUiOverlayLifecycleTests
         HoroRuntimeUiLocalizationTests

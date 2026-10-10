@@ -1,5 +1,9 @@
 include_guard(GLOBAL)
 
+horo_configure_target_header_boundary(HoroSceneIdentity PUBLIC_HEADERS
+    Horo/Runtime/Scene/SceneIdentity.h
+)
+
 horo_configure_target_header_boundary(HoroSceneSourceModel PUBLIC_HEADERS
     Horo/Scene/SceneSourceModel.h
 )
@@ -255,7 +259,6 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/RuntimeSimulationTiming.h
     Horo/Runtime/RuntimeHost.h
     Horo/Runtime/RuntimeLifecycle.h
-    Horo/Runtime/Scene/SceneIdentity.h
     Horo/Runtime/Save/SaveDiagnostics.h
     Horo/Runtime/Save/SaveTelemetry.h
     Horo/Runtime/Save/SaveRootResolver.h
@@ -311,6 +314,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiLocalization.h
     Horo/Runtime/Ui/UiDocument.h
     Horo/Runtime/Ui/UiAssetLoading.h
+    Horo/Runtime/Ui/UiSceneReconciliation.h
     Horo/Runtime/Ui/UiHotReload.h
     Horo/Runtime/Ui/UiOverlayLifecycle.h
     Horo/Runtime/Ui/UiDocumentSerialization.h
