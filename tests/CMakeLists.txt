@@ -578,6 +578,17 @@ target_include_directories(HoroAudioVoiceRenderTests PRIVATE ${PROJECT_SOURCE_DI
 target_compile_features(HoroAudioVoiceRenderTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioVoiceRenderTests PRIVATE HoroEngine::AudioVoiceRender HoroEngine::AudioNull)
 horo_register_catch_test(HoroAudioVoiceRenderTests LABELS "unit;audio;headless;realtime-safety")
+
+add_executable(HoroAudioEditorPreviewTests
+    support/AllocationProbe.cpp
+    unit/runtime/audio/AudioFrontendTests.cpp)
+target_include_directories(HoroAudioEditorPreviewTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_compile_features(HoroAudioEditorPreviewTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAudioEditorPreviewTests PRIVATE
+    HoroEngine::EditorServices HoroAudioFrontendComposition HoroEngine::AudioNull)
+horo_register_catch_test(HoroAudioEditorPreviewTests LABELS "unit;audio;editor;headless;lifecycle")
+target_sources(HoroAudioFrontendPublicHeaderConsumer PRIVATE support/AudioFrontendPublicContract.cpp)
+target_sources(HoroEditorServicesPublicHeaderConsumer PRIVATE support/AudioEditorDocumentPublicContract.cpp)
 target_sources(HoroAudioDspPublicHeaderConsumer PRIVATE support/CoreStereoSpatialPublicContract.cpp)
 add_executable(HoroCoreAudioDspTests
     support/AllocationProbe.cpp

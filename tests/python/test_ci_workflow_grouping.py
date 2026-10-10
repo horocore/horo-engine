@@ -184,6 +184,7 @@ def test_audio_keeps_both_modes_and_all_platforms() -> None:
     assert targets("HORO_CI_AUDIO_TARGETS") == {
         "HoroAudioRealtimeSafetyHarnessTests", "HoroAudioWatchdogTests", "HoroAudioNullTests",
         "HoroAudioDspTests", "HoroCoreAudioDspTests", "HoroAudioCommandTests", "HoroAudioMixerTests",
+        "HoroAudioEditorPreviewTests", "HoroAudioFrontendPublicHeaderConsumer",
     }
     assert preset("configurePresets", "ci-native-debug")["cacheVariables"]["CMAKE_BUILD_TYPE"] == "Debug"
     assert preset("configurePresets", "ci-audio-release")["cacheVariables"]["CMAKE_BUILD_TYPE"] == "Release"

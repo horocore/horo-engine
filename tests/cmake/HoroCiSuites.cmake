@@ -9,6 +9,8 @@ set(HORO_CI_AUDIO_TARGETS
     HoroCoreAudioDspTests
     HoroAudioCommandTests
     HoroAudioMixerTests
+    HoroAudioEditorPreviewTests
+    HoroAudioFrontendPublicHeaderConsumer
 )
 
 # The full Windows suite remains disabled. Preserve all existing focused checks
