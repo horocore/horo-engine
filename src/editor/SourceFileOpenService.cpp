@@ -310,9 +310,11 @@ namespace Horo::Editor {
     Result<SourceOpenResult> SourceFileOpenService::OpenEmbedded(const SourceOpenRequest &request,
                                                                  const SourceFileClassification &classification,
                                                                  const SourceOpenLocation &location) {
-        const DocumentKind documentKind = classification.kind == SourceFileKind::Sequence   ? DocumentKind::Sequence
-                                          : classification.kind == SourceFileKind::UiCanvas ? DocumentKind::UiCanvas
-                                                                                            : DocumentKind::Source;
+        DocumentKind documentKind = DocumentKind::Source;
+        if (classification.kind == SourceFileKind::Sequence)
+            documentKind = DocumentKind::Sequence;
+        else if (classification.kind == SourceFileKind::UiCanvas)
+            documentKind = DocumentKind::UiCanvas;
         const DocumentOpenKey key{.kind = documentKind, .source = location.document};
         const Result<DocumentOpenResult> document = documentRegistry_->Open(key);
         if (document.HasError())

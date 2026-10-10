@@ -40,7 +40,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc SequenceDocument::Open */
-    Result<SequenceDocument> SequenceDocument::Open(const DocumentIdentity identity, const std::filesystem::path &absolutePath) {
+    Result<SequenceDocument> SequenceDocument::Open(const DocumentIdentity &identity, const std::filesystem::path &absolutePath) {
         if (identity.key.kind != DocumentKind::Sequence || !identity.IsValid())
             return Result<SequenceDocument>::Failure(MakeError(EditorSurfaceErrors::InvalidDocumentKind));
         auto source = Detail::LoadSourceText(absolutePath, Cinematic::SequenceSchemaHardLimits::SourceBytes, {});

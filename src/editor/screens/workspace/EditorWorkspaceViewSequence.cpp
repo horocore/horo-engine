@@ -26,14 +26,14 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceView::DrawSequenceDocumentTabs */
     void EditorWorkspaceView::DrawSequenceDocumentTabs(const EditorWorkspaceViewModel &viewModel,
-                                                       EditorWorkspaceViewCommandData &outCommand) {
+                                                       EditorWorkspaceViewCommandData &outCommand) const {
         for (const auto &session : viewModel.sequenceDocuments) {
             ImGui::SameLine();
             const auto instance = session.source->identity.instance;
             const std::string id = std::to_string(instance.Value());
             ImGui::PushID(id.c_str());
-            const std::string title = session.source->asset.Data().name + "###sequence";
-            if (Ui::Button({.label = title.c_str(),
+            if (const std::string title = session.source->asset.Data().name + "###sequence";
+                Ui::Button({.label = title.c_str(),
                             .variant = viewModel.workspacePanelHost.ActiveDocument() == instance ? Ui::ButtonVariant::Primary
                                                                                                  : Ui::ButtonVariant::Secondary,
                             .font = m_context.theme.fonts.sans})) {
@@ -41,8 +41,8 @@ namespace Horo::Editor {
                 outCommand.documentInstance = instance;
             }
             ImGui::SameLine();
-            const std::string close = m_context.localization.Get("editor", "workspace.sequence.close") + "###close";
-            if (Ui::Button({.label = close.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = m_context.theme.fonts.sans})) {
+            if (const std::string close = m_context.localization.Get("editor", "workspace.sequence.close") + "###close";
+                Ui::Button({.label = close.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = m_context.theme.fonts.sans})) {
                 outCommand.command = EditorWorkspaceViewCommand::CloseSequenceDocument;
                 outCommand.documentInstance = instance;
             }
@@ -51,7 +51,8 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorWorkspaceView::DrawSequenceDocument */
-    bool EditorWorkspaceView::DrawSequenceDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) {
+    bool EditorWorkspaceView::DrawSequenceDocument(const EditorWorkspaceViewModel &viewModel,
+                                                   EditorWorkspaceViewCommandData &outCommand) const {
         const auto found = std::ranges::find_if(viewModel.sequenceDocuments, [&](const auto &session) {
             return session.source->identity.instance == viewModel.workspacePanelHost.ActiveDocument();
         });
@@ -73,8 +74,8 @@ namespace Horo::Editor {
                                   "workspace.sequence.event",     "workspace.sequence.audio",    "workspace.sequence.sub_sequence"};
         for (std::size_t index = 0; index < keys.size(); ++index)
             labels.trackTypes[index] = text(keys[index]);
-        SequenceTimelineState state = found->timeline;
-        if (Ui::SequenceTimeline(found->source->asset, state, labels, m_context.theme.fonts)) {
+        if (SequenceTimelineState state = found->timeline;
+            Ui::SequenceTimeline(found->source->asset, state, labels, m_context.theme.fonts)) {
             outCommand.command = EditorWorkspaceViewCommand::UpdateSequenceTimeline;
             outCommand.documentInstance = found->source->identity.instance;
             outCommand.sequenceTimeline = state;

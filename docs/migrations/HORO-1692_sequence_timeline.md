@@ -9,6 +9,8 @@ the policy's `sequenceExtensions` without changing asset identity or schema.
 `sequence`. `SequenceDocument.h` belongs to `HoroEditorServices`; the shared
 timeline control belongs to `HoroGui` and consumes that declared dependency.
 The public-header consumer includes the document contract.
+`SequenceDocument::Open` borrows its identity by const reference for admission,
+then copies it into the returned owned document; existing callers need no changes.
 
 Asset activation admits the canonical project-contained source through
 `SourceFileOpenService`, validates its bounded schema, and opens a persistent

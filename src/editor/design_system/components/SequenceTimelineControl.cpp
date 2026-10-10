@@ -1,6 +1,7 @@
 #include "Horo/Editor/EditorUiComponents.h"
 
 #include <algorithm>
+#include <format>
 #include <string>
 
 namespace Horo::Editor::Ui {
@@ -18,9 +19,10 @@ namespace Horo::Editor::Ui {
                 const float x = origin.x + width * static_cast<float>(tick) / divisions;
                 draw->AddLine({x, origin.y}, {x, origin.y + height}, Theme::U32(Theme::Border()));
             }
-            const auto span = state.VisibleFrames(duration);
-            if (state.playhead >= state.firstFrame && state.playhead - state.firstFrame < span) {
-                const double fraction = span <= 1 ? 0.0 : static_cast<double>(state.playhead - state.firstFrame) / (span - 1);
+            if (const auto span = state.VisibleFrames(duration);
+                state.playhead >= state.firstFrame && state.playhead - state.firstFrame < span) {
+                const double fraction =
+                    span <= 1 ? 0.0 : static_cast<double>(state.playhead - state.firstFrame) / static_cast<double>(span - 1);
                 const float x = origin.x + static_cast<float>(fraction) * width;
                 draw->AddLine({x, origin.y}, {x, origin.y + height}, Theme::U32(Theme::Accent()), Theme::GetActiveTokens().sizes.uiScale);
             }
@@ -34,15 +36,15 @@ namespace Horo::Editor::Ui {
         /** @brief Draws only delivered track types with vertically scrollable, width-constrained labels. */
         bool DrawTracks(const Cinematic::SequenceAssetData &data, SequenceTimelineState &state, const SequenceTimelineLabels &labels) {
             bool changed = false;
-            const float height = DesignSystem::MetricsFor(Theme::GetActiveTokens(), ComponentSize::Medium).minimumHeight;
-            if (ImGui::BeginTable("##tracks", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY | ImGuiTableFlags_BordersInnerV,
+            if (const float height = DesignSystem::MetricsFor(Theme::GetActiveTokens(), ComponentSize::Medium).minimumHeight;
+                ImGui::BeginTable("##tracks", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY | ImGuiTableFlags_BordersInnerV,
                                   {0.0F, std::max(height, ImGui::GetContentRegionAvail().y)})) {
                 ImGui::TableSetupColumn("##track", ImGuiTableColumnFlags_WidthStretch, 1.0F);
                 ImGui::TableSetupColumn("##timeline", ImGuiTableColumnFlags_WidthStretch, 2.0F);
                 for (const auto &track : data.tracks) {
                     if (!IsTimelineTrackAvailable(track.type))
                         continue;
-                    const std::string identity = std::to_string(track.id.stableValue) + ":" + std::to_string(track.id.generation);
+                    const std::string identity = std::format("{}:{}", track.id.stableValue, track.id.generation);
                     ImGui::PushID(identity.c_str());
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0);
@@ -64,8 +66,8 @@ namespace Horo::Editor::Ui {
         const auto &data = asset.Data();
         state.Clamp(data.durationFrames);
         Theme::ScopedTextStyle typography(fonts.sans, Theme::TextPx::Label(), Theme::FontPx::Sans);
-        const std::string range = std::to_string(state.firstFrame) + " – " + std::to_string(state.FrameAt(data.durationFrames, 1.0)) +
-                                  " / " + std::to_string(data.durationFrames);
+        const std::string range =
+            std::format("{} – {} / {}", state.firstFrame, state.FrameAt(data.durationFrames, 1.0), data.durationFrames);
         ImGui::TextWrapped("%s", range.c_str());
         ImGui::TextWrapped("%s", data.name.c_str());
         ImGui::TextWrapped("%s", labels.noContext.c_str());
@@ -81,10 +83,11 @@ namespace Horo::Editor::Ui {
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
         changed = ImGui::InputScalar("##playhead", ImGuiDataType_U64, &state.playhead) || changed;
         state.Clamp(data.durationFrames);
-        const bool unavailable = std::ranges::any_of(data.tracks, [](const auto &track) {
+        if (const bool unavailable = std::ranges::any_of(data.tracks,
+                                                         [](const auto &track) {
             return !IsTimelineTrackAvailable(track.type);
         });
-        if (unavailable)
+            unavailable)
             ImGui::TextWrapped("%s", labels.unavailable.c_str());
         if (data.tracks.empty())
             ImGui::TextWrapped("%s", labels.empty.c_str());

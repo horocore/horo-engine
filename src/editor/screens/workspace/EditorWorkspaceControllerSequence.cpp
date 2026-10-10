@@ -23,11 +23,12 @@ namespace Horo::Editor {
             m_viewModel.contentBrowserOperationError = "workspace.sequence.invalid";
             return;
         }
-        const auto sameAsset = std::ranges::find_if(sessions, [&](const SequenceWorkspaceDocument &session) {
+        if (const auto sameAsset = std::ranges::find_if(sessions,
+                                                        [&](const SequenceWorkspaceDocument &session) {
             return session.source->identity.instance == opened.identity.instance ||
                    session.source->asset.Data().asset == loaded.Value().asset.Data().asset;
         });
-        if (sameAsset != sessions.end()) {
+            sameAsset != sessions.end()) {
             if (sameAsset->source->identity.instance != opened.identity.instance)
                 static_cast<void>(m_documentRegistry.Close(opened.identity.instance));
             if (sameAsset->source->revision != loaded.Value().revision) {
@@ -38,14 +39,12 @@ namespace Horo::Editor {
             return;
         }
         // Source leases are load-time state; bound aggregate residency independently of per-file parser limits.
-        constexpr std::size_t maximumOpenSequences = 32;
-        if (sessions.size() >= maximumOpenSequences) {
+        if (constexpr std::size_t maximumOpenSequences = 32; sessions.size() >= maximumOpenSequences) {
             static_cast<void>(m_documentRegistry.Close(opened.identity.instance));
             m_viewModel.contentBrowserOperationError = "workspace.sequence.limit";
             return;
         }
-        const auto tab = m_viewModel.workspacePanelHost.OpenDocument(opened.identity.key);
-        if (tab.HasError()) {
+        if (const auto tab = m_viewModel.workspacePanelHost.OpenDocument(opened.identity.key); tab.HasError()) {
             static_cast<void>(m_documentRegistry.Close(opened.identity.instance));
             m_viewModel.contentBrowserOperationError = "workspace.source_open.unavailable";
             return;

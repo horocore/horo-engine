@@ -39,7 +39,7 @@ namespace Horo::Editor {
         /** @brief Opens a bounded validated sequence document at an admitted project path.
          * @param identity Sequence document identity. @param absolutePath Canonical regular source file.
          * @return Immutable document or the original typed source/schema error. */
-        [[nodiscard]] static Result<SequenceDocument> Open(DocumentIdentity identity, const std::filesystem::path &absolutePath);
+        [[nodiscard]] static Result<SequenceDocument> Open(const DocumentIdentity &identity, const std::filesystem::path &absolutePath);
     };
 
     /** @brief Reports delivered track types available in the foundation view.
