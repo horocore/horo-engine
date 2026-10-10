@@ -5,6 +5,12 @@ namespace Horo::PCG::PCGErrors {
         const ErrorDomainId PcgDomain{"horo.pcg"};
     }
 
+    const ErrorCodeDescriptor GraphNodeVersionUnsupported{.domain = PcgDomain,
+                                                          .code = ErrorCode{"pcg.node.version_unsupported"},
+                                                          .defaultSeverity = ErrorSeverity::Error,
+                                                          .summary = "The built-in node schema or runtime version is incompatible.",
+                                                          .remediationHint =
+                                                              "Migrate the graph explicitly or compose its exact supported catalog."};
     const ErrorCodeDescriptor IdentityInvalid{.domain = PcgDomain,
                                               .code = ErrorCode{"pcg.identity.invalid"},
                                               .defaultSeverity = ErrorSeverity::Error,

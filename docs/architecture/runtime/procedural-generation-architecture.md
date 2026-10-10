@@ -67,6 +67,39 @@ profile determinism and an exact nonzero numeric-profile fingerprint. The host m
 grant at least one execution capability (offline bake, preview, runtime or hybrid),
 as well as every graph requirement; validation-only grants cannot produce candidates.
 
+`PCGNodeCatalog` is the explicit composition owner for these four built-ins.
+Creating it produces an empty catalog; the host registers each selected
+`PCGCpuNodeKind` before capturing a `PCGNodeCatalogSnapshot`. Descriptors contain
+stable type IDs, exact source/runtime/migration versions, semantic pin slots,
+typed settings schemas, determinism, required capabilities and finite point-visit
+costs. Their pure execution functions stay private to HoroPCG and are never
+serialized. Registration performs no evaluation, provider query or ambient
+activation. These built-ins have no catalog-contribution dependencies; authored
+node dependencies remain the validated graph's explicit edges.
+
+Cooking an executable plan takes the exact catalog snapshot alongside the existing
+registry snapshot. Both must carry the same validated product projection. Cooking
+rejects unavailable entries, incompatible versions, malformed pins/settings, and
+graph modes unsupported by that projection. The graph mode's capability becomes
+part of the cooked requirement union. Evaluation admits that union against both
+the captured product grant and the current request before allocating point columns
+or submitting jobs. Cooking without a valid explicit catalog fails with a typed unavailable diagnostic.
+
+Catalog replacement or withdrawal publishes a new immutable generation. Existing
+plans and candidates retain their original declarations and functions, including
+after catalog-owner shutdown; an active root is never patched. Owner mutation is
+confined to its composition thread, while immutable snapshots may cross threads.
+The evaluator charges retained catalog storage once in its complete candidate and
+aggregate envelope. Checked declared point visits include all admitted output and
+routed input bounds, including filter count/copy phases, and are limited by
+`maximumPointVisits` before workspace creation. Grid identity lookup separately
+charges the exact admitted grid count for every grid node against
+`maximumSnapshotElementVisits`; query work is never inferred as zero. The bounded linear cost proof's
+metadata is included in scratch admission.
+
+See [the catalog migration guide](../../guides/pcg-node-catalog-migration.md) for
+explicit host composition and the required-catalog migration.
+
 The evaluator derives contiguous logical partitions from the caller's supported
 worker count. A Foundation `TaskGroup` computes density-filter selection counts over
 disjoint immutable input spans, joins every child, then the operation owner writes
