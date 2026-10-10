@@ -213,10 +213,11 @@ namespace Horo::Render {
 
         /**
          * @brief Presents and consumes a successfully executed frame.
+         * @param timing Optional synchronous host clock/identity for native feedback registration.
          * @return Success, a typed invalid-stage error, the original backend failure,
          * or a translated backend exception.
          */
-        [[nodiscard]] Result<void> Present();
+        [[nodiscard]] Result<void> Present(const PresentationTimingRequest *timing = nullptr);
 
         /** @brief Explicitly aborts the owned frame; safe to call repeatedly. */
         void Cancel() noexcept;
@@ -224,7 +225,7 @@ namespace Horo::Render {
     private:
         friend class RenderFrontend;
 
-        RenderFrameScope(RenderFrontend &owner, IRenderBackend &backend, FrameToken frame) noexcept;
+        RenderFrameScope(RenderFrontend &owner, IRenderBackend &backend, FrameToken frame, std::uint64_t hostFrame) noexcept;
         /** @brief Common graph admission preserving one authoritative native completion lease. */
         [[nodiscard]] Result<void> ExecuteGraphInternal(const CompiledRenderGraphExecution &graph,
                                                         std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission *ui);
@@ -247,6 +248,7 @@ namespace Horo::Render {
         RenderFrontend *owner_{nullptr};
         IRenderBackend *backend_{nullptr};
         FrameToken frame_{};
+        std::uint64_t hostFrame_{};
         bool executed_{false};
         std::unique_ptr<Detail::RenderParallelWorkState> parallelWork_;
         std::unique_ptr<Detail::RenderParallelGraphWorkState> parallelGraphWork_;
@@ -278,6 +280,11 @@ namespace Horo::Render {
                                                                             const RenderResourceUploadLimits &uploadLimits = {},
                                                                             const RenderFrontendMemoryConfig &memoryConfig = {},
                                                                             const RenderResourceRetirementLimits &retirementLimits = {});
+
+        /** @brief Polls the selected backend for qualified native display time without waiting.
+         * @return New observation, pending empty value, or typed unsupported/failure.
+         */
+        [[nodiscard]] Result<std::optional<NativePresentTiming>> PollNativePresentTiming();
 
         /** @brief Shuts down and releases the owned backend. */
         ~RenderFrontend();

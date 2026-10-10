@@ -2666,6 +2666,11 @@ add_executable(HoroRenderDisplayTests
 )
 target_compile_features(HoroRenderDisplayTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRenderDisplayTests PRIVATE HoroEngine::RenderApi)
+add_executable(HoroFramePacingTests
+        unit/runtime/renderer/FramePacingTests.cpp
+)
+target_compile_features(HoroFramePacingTests PRIVATE cxx_std_20)
+target_link_libraries(HoroFramePacingTests PRIVATE HoroEngine::RenderApi)
 add_executable(HoroPresentModeTests
         unit/runtime/renderer/PresentModeTests.cpp
 )
@@ -3930,6 +3935,7 @@ endif ()
 
 if (NOT HORO_BUILD_RENDER_METAL)
     add_executable(HoroMetalDeviceCapabilityTests
+            unit/runtime/renderer/MetalPresentationFeedbackTests.cpp
             unit/runtime/renderer/MetalParallelWorkTests.cpp
             unit/runtime/renderer/MetalParallelLeaseTests.cpp
             unit/runtime/renderer/MetalRecordingActivityTests.cpp
@@ -3969,6 +3975,7 @@ if (HORO_BUILD_RENDER_METAL)
         set_tests_properties(HoroMetalGraphExecutionSmoke PROPERTIES LABELS "gpu;metal;renderer")
     endif ()
     add_executable(HoroRenderMetalTests
+            unit/runtime/renderer/MetalPresentationFeedbackTests.cpp
             unit/runtime/renderer/MetalParallelWorkTests.cpp
             unit/runtime/renderer/MetalParallelLeaseTests.cpp
             unit/runtime/renderer/MetalRecordingActivityTests.cpp
@@ -4165,6 +4172,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRenderBackendRegistryTests
         HoroRenderAdapterTests
         HoroRenderDisplayTests
+        HoroFramePacingTests
         HoroPresentModeTests
         HoroRenderSurfaceLifecycleTests
         HoroRenderGraphTests
