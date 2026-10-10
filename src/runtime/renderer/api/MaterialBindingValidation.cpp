@@ -99,7 +99,7 @@ namespace Horo::Render {
             if (!ValidShape(parameter))
                 return std::nullopt;
             const auto matrix = MatrixSize(parameter, limit);
-            if (!matrix)
+            if (!matrix.has_value())
                 return std::nullopt;
             std::size_t size = *matrix;
             if (parameter.arrayCount > 1) {
@@ -115,15 +115,13 @@ namespace Horo::Render {
         /** @brief Verifies the required packed extent for every resource array element. */
         [[nodiscard]] bool CoversBinding(const std::span<const MaterialResourceBinding> bindings, const ShaderBindingId id,
                                          const std::size_t end) {
-            for (const auto &binding : bindings) {
+            return std::ranges::all_of(bindings, [id, end](const MaterialResourceBinding &binding) {
                 if (binding.binding != id)
-                    continue;
+                    return true;
                 const auto *packed = std::get_if<MaterialParameterBinding>(&binding.value);
                 const auto *buffer = std::get_if<MaterialBufferBinding>(&binding.value);
-                if ((packed != nullptr && packed->bytes.size() < end) || (buffer != nullptr && buffer->byteCount < end))
-                    return false;
-            }
-            return true;
+                return (packed == nullptr || packed->bytes.size() >= end) && (buffer == nullptr || buffer->byteCount >= end);
+            });
         }
 
         /** @brief Verifies that every packed reflected parameter is covered by each bound array element. */
@@ -206,8 +204,8 @@ namespace Horo::Render {
             std::size_t bytes = 0;
             for (std::size_t index = 0; index < descriptor.resources.size(); ++index) {
                 const auto &binding = descriptor.resources[index];
-                const auto resource = std::ranges::find(descriptor.layout.resources, binding.binding, &ShaderReflectedBinding::id);
-                if (resource == descriptor.layout.resources.end() || binding.arrayElement >= resource->arrayCount ||
+                if (const auto resource = std::ranges::find(descriptor.layout.resources, binding.binding, &ShaderReflectedBinding::id);
+                    resource == descriptor.layout.resources.end() || binding.arrayElement >= resource->arrayCount ||
                     !ValidValue(binding.value, *resource, owner, limits) ||
                     Duplicate(std::span{descriptor.resources}.first(index), binding))
                     return Result<std::size_t>::Failure(Invalid());

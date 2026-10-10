@@ -71,7 +71,7 @@ namespace Horo::Render {
     class MaterialBindingTable::Impl {
     public:
         Impl(const RenderResourceOwnerId id, IMaterialBindingBackend &port, const MaterialBindingLimits &bounds)
-            : owner(id), backend(&port), limits(bounds), budget(std::make_shared<BindingBudget>()) {
+            : owner(id), backend(&port), limits(bounds) {
             entries.resize(limits.maximumGenerations);
         }
 
@@ -114,7 +114,7 @@ namespace Horo::Render {
         RenderResourceOwnerId owner;
         IMaterialBindingBackend *backend;
         MaterialBindingLimits limits;
-        std::shared_ptr<BindingBudget> budget;
+        std::shared_ptr<BindingBudget> budget{std::make_shared<BindingBudget>()};
         std::vector<std::shared_ptr<const ResidentMaterialBinding>> entries;
         std::uint64_t next{1};
         bool accepting{true};
@@ -140,11 +140,15 @@ namespace Horo::Render {
         return *storage_->backend;
     }
 
-    ResidentMaterialBinding::ResidentMaterialBinding(std::unique_ptr<Storage> storage) : storage_(std::move(storage)) {}
+    /** @copydoc ResidentMaterialBinding::ResidentMaterialBinding */
+    ResidentMaterialBinding::ResidentMaterialBinding(std::unique_ptr<Storage> storage, ConstructionKey) noexcept
+        : storage_(std::move(storage)) {}
 
     ResidentMaterialBinding::~ResidentMaterialBinding() = default;
 
-    MaterialBindingTable::MaterialBindingTable(std::unique_ptr<Impl> implementation) : implementation_(std::move(implementation)) {}
+    /** @copydoc MaterialBindingTable::MaterialBindingTable */
+    MaterialBindingTable::MaterialBindingTable(std::unique_ptr<Impl> implementation, ConstructionKey) noexcept
+        : implementation_(std::move(implementation)) {}
 
     MaterialBindingTable::~MaterialBindingTable() {
         HORO_INVARIANT(std::this_thread::get_id() == implementation_->budget->thread);
@@ -158,7 +162,7 @@ namespace Horo::Render {
             return Result<std::unique_ptr<MaterialBindingTable>>::Failure(MakeError(MaterialBindingErrors::InvalidDescriptor));
         try {
             return Result<std::unique_ptr<MaterialBindingTable>>::Success(
-                std::unique_ptr<MaterialBindingTable>(new MaterialBindingTable(std::make_unique<Impl>(owner, backend, limits))));
+                std::make_unique<MaterialBindingTable>(std::make_unique<Impl>(owner, backend, limits), ConstructionKey{}));
         } catch (...) {  // NOSONAR(cpp:S2738)
             return Result<std::unique_ptr<MaterialBindingTable>>::Failure(MakeError(MaterialBindingErrors::AllocationFailed));
         }
@@ -201,7 +205,7 @@ namespace Horo::Render {
             storage->descriptor = std::move(descriptor);
             storage->backend = std::move(native);
             storage->parameterBytes = parameterBytes;
-            auto resident = std::shared_ptr<const ResidentMaterialBinding>(new ResidentMaterialBinding(std::move(storage)));
+            auto resident = std::make_shared<const ResidentMaterialBinding>(std::move(storage), ResidentMaterialBinding::ConstructionKey{});
             auto empty = std::ranges::find(implementation_->entries, std::shared_ptr<const ResidentMaterialBinding>{});
             HORO_INVARIANT(empty != implementation_->entries.end());
             resident->storage_->charged = true;

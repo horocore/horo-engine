@@ -79,7 +79,17 @@ namespace Horo::Render {
 
     /** @brief Immutable consumer lease retaining both descriptor storage and native resource pins. */
     class ResidentMaterialBinding final {
+        struct Storage;
+
+        class ConstructionKey {
+            ConstructionKey() = default;
+            friend class MaterialBindingTable;
+        };
+
     public:
+        /** @brief Constructs table-prepared storage; only the owning table can issue the key.
+         * @param storage Owned prevalidated generation storage. @param key Table-only construction authority. */
+        ResidentMaterialBinding(std::unique_ptr<Storage> storage, ConstructionKey key) noexcept;
         /** @brief Returns the exact generation. @return Stable identity for this lease lifetime. */
         [[nodiscard]] MaterialBindingGenerationId Id() const noexcept;
         /** @brief Returns owned logical bindings. @return Borrowed immutable descriptor valid for the lease lifetime. */
@@ -90,8 +100,6 @@ namespace Horo::Render {
 
     private:
         friend class MaterialBindingTable;
-        struct Storage;
-        explicit ResidentMaterialBinding(std::unique_ptr<Storage> storage);
         std::unique_ptr<Storage> storage_;
     };
 
@@ -117,7 +125,17 @@ namespace Horo::Render {
      * consumers retain their exact data and native pins. Backend/registry lifetime must exceed all acquired leases.
      */
     class MaterialBindingTable final {
+        class Impl;
+
+        class ConstructionKey {
+            ConstructionKey() = default;
+            friend class MaterialBindingTable;
+        };
+
     public:
+        /** @brief Constructs factory-prepared state; only Create can issue the key.
+         * @param implementation Owned validated table state. @param key Factory-only construction authority. */
+        MaterialBindingTable(std::unique_ptr<Impl> implementation, ConstructionKey key) noexcept;
         /** @brief Creates a finite table. @param owner Frontend incarnation. @param backend Borrowed selected adapter.
          * @param limits Shared live/retained storage bounds. @return Owned table or typed configuration/allocation failure. */
         [[nodiscard]] static Result<std::unique_ptr<MaterialBindingTable>> Create(RenderResourceOwnerId owner,
@@ -144,8 +162,6 @@ namespace Horo::Render {
         /** @brief Publishes prevalidated prepared storage after adapter realization succeeds. */
         [[nodiscard]] Result<MaterialBindingSelection> Commit(MaterialBindingDescriptor descriptor,
                                                               std::unique_ptr<IResidentMaterialBinding> native, std::size_t parameterBytes);
-        class Impl;
-        explicit MaterialBindingTable(std::unique_ptr<Impl> implementation);
         std::unique_ptr<Impl> implementation_;
     };
 
