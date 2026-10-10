@@ -50,9 +50,13 @@ namespace Horo::Render {
             if (!update.budget.requireCompleteCoverage || update.budget.referencesPerCluster >= update.lights.size())
                 continue;
             std::size_t count{};
-            for (const auto &light : update.lights)
-                if (LightIntersectsCluster(Decode(light), cluster) && ++count > update.budget.referencesPerCluster)
+            for (const auto &light : update.lights) {
+                if (!LightIntersectsCluster(Decode(light), cluster))
+                    continue;
+                ++count;
+                if (count > update.budget.referencesPerCluster)
                     return Result<void>::Failure(MakeError(LightCullingErrors::Coverage));
+            }
         }
         return Result<void>::Success();
     }

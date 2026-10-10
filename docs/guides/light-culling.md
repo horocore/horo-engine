@@ -13,6 +13,11 @@ contracts. `RenderFrontend` owns the finite buffer pool. The public-header
 ownership registry assigns every added header to exactly one target; consumers
 must declare the owning target instead of adding repository-wide include roots.
 The existing `RenderSceneView` forward-light limit remains sixteen.
+`LightFrameBufferPool::Create` remains the only construction entry point. Its
+constructor accepts a factory-only private construction key, following the
+existing runtime contract pattern so `std::make_unique` can own the allocation
+without exposing unprepared pools. No consumer migration is required; direct
+construction without factory authority remains unavailable.
 `PrepareForwardLights` produces that bounded span using the same conservative
 membership rule. Required complete coverage fails when capacity is insufficient;
 explicitly optional coverage reports omitted lights in stable identity order.
@@ -48,7 +53,7 @@ For an explicitly admitted native path:
    Release preparation kernel leases on the render owner thread.
 
 `HoroLightCullingTests` covers deterministic CPU membership, extraction, packed
-ABI, cooked-envelope admission and graph contracts. `HoroRenderFrontendTests`
+ABI, cooked-envelope admission and graph contracts. `HoroLightFramePoolTests`
 covers reusable-slot readiness, revision/backpressure and teardown. These tests
 do not prove GPU execution. The opt-in `HoroMetalGraphExecutionSmoke` includes
 actual native-completion upload checks and a cooked-kernel parity check.

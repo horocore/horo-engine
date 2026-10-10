@@ -21,9 +21,9 @@ namespace Horo::Render {
     /** @copydoc LightCullingNativePayload */
     Result<std::span<const std::uint8_t>> LightCullingNativePayload(const CompiledShaderArtifact &artifact) {
         using Payload = Result<std::span<const std::uint8_t>>;
-        const std::span bytes{artifact.payload};
-        constexpr std::array<std::uint8_t, 8> magic{'H', 'O', 'R', 'O', 'S', 'H', 'D', 'R'};
-        if (bytes.size() < 18 || bytes.size() > 16U * 1024U * 1024U || !std::ranges::equal(bytes.first(8), magic))
+        const std::span<const std::uint8_t> bytes{artifact.payload.data(), artifact.payload.size()};
+        if (constexpr std::array<std::uint8_t, 8> magic{'H', 'O', 'R', 'O', 'S', 'H', 'D', 'R'};
+            bytes.size() < 18 || bytes.size() > 16U * 1024U * 1024U || !std::ranges::equal(bytes.first(8), magic))
             return Payload::Failure(MakeError(LightCullingErrors::InvalidInput));
         std::size_t cursor = 8;
         const auto version = ReadInteger<std::uint32_t>(bytes, cursor);
@@ -31,8 +31,8 @@ namespace Horo::Render {
         const auto format = ReadInteger<std::uint8_t>(bytes, cursor);
         const auto count = ReadInteger<std::uint32_t>(bytes, cursor);
         const auto stage = ReadInteger<std::uint8_t>(bytes, cursor);
-        const auto nameBytes = ReadInteger<std::uint32_t>(bytes, cursor);
-        if (version != 1 || backend != static_cast<std::uint8_t>(artifact.backend) ||
+        if (const auto nameBytes = ReadInteger<std::uint32_t>(bytes, cursor);
+            version != 1 || backend != static_cast<std::uint8_t>(artifact.backend) ||
             format != static_cast<std::uint8_t>(artifact.payloadFormat) || count != 1 ||
             stage != static_cast<std::uint8_t>(ShaderStage::Compute) || nameBytes != 10 || cursor > bytes.size() ||
             10 > bytes.size() - cursor)
@@ -41,8 +41,8 @@ namespace Horo::Render {
         if (!std::ranges::equal(bytes.subspan(cursor, entry.size()), entry))
             return Payload::Failure(MakeError(LightCullingErrors::InvalidInput));
         cursor += entry.size();
-        const auto size = ReadInteger<std::uint64_t>(bytes, cursor);
-        if (!size || *size == 0 || cursor > bytes.size() || *size != bytes.size() - cursor)
+        if (const auto size = ReadInteger<std::uint64_t>(bytes, cursor);
+            !size || *size == 0 || cursor > bytes.size() || *size != bytes.size() - cursor)
             return Payload::Failure(MakeError(LightCullingErrors::InvalidInput));
         return Payload::Success(bytes.subspan(cursor));
     }

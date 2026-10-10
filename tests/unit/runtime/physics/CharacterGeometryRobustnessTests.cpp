@@ -25,6 +25,7 @@ namespace Horo::Character {
             bool cancelled{};
             std::uint32_t calls{};
             std::uint32_t failCall{};
+            std::uint32_t malformedCall{};
             CharacterWorld *shutdownWorld{};
 
             /** @brief Produces only exact continuous intersections; lifecycle failure injection stays outside the geometry oracle. */
@@ -59,6 +60,8 @@ namespace Horo::Character {
                     return Result<CharacterSweepProbeResult>::Failure(
                         MakeError(probe.cancelled ? Physics::PhysicsErrors::QueryCancelled : Physics::PhysicsErrors::InvalidState));
                 auto result = probe.CastPlanes(request);
+                if (probe.calls == probe.malformedCall && result.hitCount != 0)
+                    result.hits[0].normal = {};
                 if (probe.truncated && result.hitCount != 0) {
                     std::fill(result.hits.begin() + result.hitCount, result.hits.end(), result.hits[0]);
                     result.hitCount = MaximumCharacterSweepHits;
@@ -106,15 +109,18 @@ namespace Horo::Character {
         };
 
         SpawnedActiveWorld GeometryWorld(const std::uint32_t iterations = 8, const Math::Vec3 gravity = {},
-                                         const std::uint32_t contacts = 16) {
+                                         const std::uint32_t contacts = 16, const Math::Vec3 position = {}, const float stepHeight = 0,
+                                         const std::uint32_t queries = 32'768) {
             CharacterWorldSettingsDescriptor settings;
             settings.capacities.maximumControllers = 1;
             settings.work.maximumMovementIterations = iterations;
+            settings.work.maximumQueriesPerTick = queries;
             auto world = CharacterWorld::Prepare(WorldDescriptor(), CharacterWorldSettings::Capture(settings).Value()).Value();
             auto descriptor = ControllerDescriptor(world->Descriptor());
             descriptor.capsule = {0.25F, 0.5F};
             descriptor.gravity = gravity;
-            descriptor.maximumStepHeightMeters = 0;
+            descriptor.maximumStepHeightMeters = stepHeight;
+            descriptor.collisionRootPosition = position;
             descriptor.maximumContacts = contacts;
             const auto controller = world->CreateController(descriptor).Value();
             const auto captured = world->ControllerDescriptor(controller);
@@ -142,13 +148,72 @@ namespace Horo::Character {
             command.desiredVelocityMetersPerSecond = velocity;
             REQUIRE(host.world->QueueMovementCommand(command).HasValue());
             auto input = GeometryTick(host, probe, tick);
+            CharacterMetricCapture capture;
+            input.metrics = &capture;
+            const auto callsBefore = probe.calls;
             const auto result = host.world->AdvanceFixedTick(input);
+            REQUIRE(capture.snapshot.queries == probe.calls - callsBefore);
+            RequireMovementBudget(*host.world, capture);
             if (result.HasError())
                 UNSCOPED_INFO(result.ErrorValue().message);
             REQUIRE(result.HasValue());
             const auto snapshot = host.world->ControllerLocomotionSnapshot(host.controller).Value();
             REQUIRE(ValidateCharacterLocomotionSnapshot(snapshot, host.world->ControllerDescriptor(host.controller).Value()).HasValue());
             return snapshot;
+        }
+
+        TEST_CASE("Continuous capsule-plane ramp ascent is independent of the authored stair height limit",
+                  "[physics][character][geometry][slope][movement-qualification]") {
+            const float stepHeight = GENERATE(0.0F, 0.3F);
+            const Math::Vec3 normal{-0.5F, std::sqrt(0.75F), 0};
+            const float support = 0.25F + 0.5F * normal.y;
+            const Math::Vec3 start{0, support / normal.y + 0.02F, 0};
+            auto host = GeometryWorld(8, {}, 16, start, stepHeight);
+            GeometryProbe probe;
+            probe.planes[0] = {normal, 0};
+            probe.planeCount = 1;
+            const auto snapshot = MoveGeometry(host, probe, {6, 0, 0});
+            const float expectedRise = 0.6F / std::sqrt(3.0F);
+            REQUIRE(expectedRise > stepHeight);
+            REQUIRE(snapshot.transform.position.x == Catch::Approx(0.6F).margin(1.0e-5F));
+            REQUIRE(snapshot.transform.position.y == Catch::Approx(start.y + expectedRise).margin(1.0e-5F));
+            REQUIRE(snapshot.movement.grounded);
+            REQUIRE(snapshot.movement.groundNormal == normal);
+            REQUIRE(snapshot.movement.termination == CharacterMovementTermination::Complete);
+            REQUIRE((static_cast<std::uint16_t>(snapshot.movement.collisions) &
+                     static_cast<std::uint16_t>(CharacterCollisionFlags::Step)) == 0);
+        }
+
+        TEST_CASE("Continuous support query failure rolls back the capsule-plane movement candidate",
+                  "[physics][character][geometry][slope][movement-qualification][rollback]") {
+            const Math::Vec3 normal{-0.5F, std::sqrt(0.75F), 0};
+            const Math::Vec3 start{0, (0.25F + 0.5F * normal.y) / normal.y + 0.02F, 0};
+            const int failure = GENERATE(0, 1, 2, 3);
+            auto host = GeometryWorld(8, {}, 16, start, 0.3F, failure == 3 ? 1 : 64);
+            GeometryProbe probe;
+            probe.planes[0] = {normal, 0};
+            probe.planeCount = 1;
+            probe.failCall = failure < 2 ? 2 : 0;
+            probe.cancelled = failure == 1;
+            probe.malformedCall = failure == 2 ? 2 : 0;
+            const auto before = host.world->ControllerTransform(host.controller).Value();
+            auto command = Movement(host.controller, 1, 1);
+            command.desiredVelocityMetersPerSecond = Math::Vec3{6, 0, 0};
+            REQUIRE(host.world->QueueMovementCommand(command).HasValue());
+            auto input = GeometryTick(host, probe, 1);
+            CharacterMetricCapture capture;
+            input.metrics = &capture;
+            const auto &expected = failure == 0   ? Physics::PhysicsErrors::InvalidState
+                                   : failure == 1 ? Physics::PhysicsErrors::QueryCancelled
+                                   : failure == 2 ? CharacterErrors::DescriptorInvalid
+                                                  : CharacterErrors::CapacityExceeded;
+            RequireError(host.world->AdvanceFixedTick(input), expected);
+            REQUIRE(probe.calls == (failure == 3 ? 1 : 2));
+            REQUIRE(capture.snapshot.queries == probe.calls);
+            REQUIRE(capture.snapshot.failed);
+            REQUIRE(capture.snapshot.publicationRevision == 0);
+            REQUIRE(host.world->PublishedTick().completedTick == 0);
+            REQUIRE(host.world->ControllerTransform(host.controller).Value().position == before.position);
         }
 
         TEST_CASE("Fixed-tick capsule keeps a corner crease through successive canonical constraints",

@@ -115,7 +115,7 @@ namespace Horo::Runtime::AutosaveTestSupport {
         }
 
         Result<std::optional<SaveAutosaveCapture>> Poll(const OperationId id = 91) {
-            return scheduler->CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, generation, Operation(id), Address(),
+            return scheduler->CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, generation, {Operation(id), Address(), {}},
                                                 provenance, participants);
         }
 

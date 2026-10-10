@@ -45,13 +45,11 @@ namespace Horo::Render {
             return true;
         if (light.range == 0.0F)
             return false;
-        for (const auto &plane : cluster.planes) {
+        return std::ranges::all_of(cluster.planes, [&light](const LightClusterPlane &plane) {
             // Range is authored in world units, independent of object scale.
             const float distance = Math::Dot(plane.normal, light.position) + plane.offset;
-            if (distance < -light.range * Math::Length(plane.normal))
-                return false;
-        }
-        return true;
+            return !(distance < -light.range * Math::Length(plane.normal));
+        });
     }
 
     /** @copydoc CullLightsCpu */

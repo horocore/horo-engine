@@ -5,7 +5,8 @@
 
 namespace Horo::Render {
     /** @copydoc LightFrameBufferPool::LightFrameBufferPool */
-    LightFrameBufferPool::LightFrameBufferPool(RenderFrontend &frontend, const LightCullingBudget &budget, const std::uint32_t slots)
+    LightFrameBufferPool::LightFrameBufferPool(RenderFrontend &frontend, const LightCullingBudget &budget, const std::uint32_t slots,
+                                               ConstructionKey)
         : frontend_(&frontend), budget_(budget), count_(slots), owner_(std::this_thread::get_id()) {}
 
     LightFrameBufferPool::~LightFrameBufferPool() {
@@ -21,7 +22,7 @@ namespace Horo::Render {
         if (!frontend.Capabilities().support.features.Supports(RenderCapability::LightCulling))
             return Creation::Failure(MakeError(LightCullingErrors::Unsupported));
         try {
-            auto pool = std::unique_ptr<LightFrameBufferPool>(new LightFrameBufferPool(frontend, budget, slots));
+            auto pool = std::make_unique<LightFrameBufferPool>(frontend, budget, slots, ConstructionKey{});
             const std::array<std::size_t, 4> bytes{std::size_t{budget.maximumLights} * sizeof(PackedRenderLight),
                                                    std::size_t{budget.maximumClusters} * sizeof(PackedLightCluster),
                                                    std::size_t{budget.maximumClusters} * sizeof(PackedLightMembership),
@@ -80,13 +81,13 @@ namespace Horo::Render {
             return Result<void>::Failure(MakeError(LightCullingErrors::InvalidInput));
         closed_ = true;
         for (auto &buffers : slots_)
-            for (auto *handle : {&buffers.lights, &buffers.clusters, &buffers.membership, &buffers.references})
-                if (handle->IsValid()) {
-                    const auto released = frontend_->ReleaseBuffer(*handle);
-                    if (released.HasError())
-                        return released;
-                    *handle = {};
-                }
+            for (auto *handle : {&buffers.lights, &buffers.clusters, &buffers.membership, &buffers.references}) {
+                if (!handle->IsValid())
+                    continue;
+                if (const auto released = frontend_->ReleaseBuffer(*handle); released.HasError())
+                    return released;
+                *handle = {};
+            }
         return Result<void>::Success();
     }
 }  // namespace Horo::Render

@@ -25,7 +25,19 @@ namespace Horo::Render {
      * independently by native command completion. No jobs or callbacks borrow the pool.
      */
     class LightFrameBufferPool final {
+        /** @brief Factory-only key preserves preparation admission when allocating through make_unique. */
+        class ConstructionKey {
+            ConstructionKey() noexcept {}
+            friend class LightFrameBufferPool;
+        };
+
     public:
+        /** @brief Initialize finite owner metadata only; Create alone can issue the construction key.
+         * @param frontend Renderer that outlives the pool.
+         * @param budget Factory-validated fixed light budget.
+         * @param slots Factory-validated finite slot count.
+         * @param key Factory-only authority; native allocation remains in Create. */
+        LightFrameBufferPool(RenderFrontend &frontend, const LightCullingBudget &budget, std::uint32_t slots, ConstructionKey key);
         /**
          * @brief Queues finite reusable host-visible storage buffers once at a preparation safe point.
          * @param frontend Selected initialized renderer that outlives the returned pool.
@@ -57,8 +69,6 @@ namespace Horo::Render {
         [[nodiscard]] Result<void> Shutdown();
 
     private:
-        /** @brief Initialize only finite owner metadata; native allocation remains in Create. */
-        LightFrameBufferPool(RenderFrontend &frontend, const LightCullingBudget &budget, std::uint32_t slots);
         RenderFrontend *frontend_;
         LightCullingBudget budget_;
         std::uint32_t count_;

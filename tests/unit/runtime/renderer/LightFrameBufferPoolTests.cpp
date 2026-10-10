@@ -4,11 +4,20 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_range_equals.hpp>
 #include <thread>
+#include <type_traits>
 
 namespace {
     using namespace Horo;
     using namespace Horo::Render;
+
+    /** @brief External callers cannot forge factory authority with an empty braced key. */
+    template <typename Pool>
+    concept AllowsUnpreparedConstruction =
+        requires(RenderFrontend &frontend, const LightCullingBudget &budget) { Pool{frontend, budget, 1U, {}}; };
+    static_assert(!AllowsUnpreparedConstruction<LightFrameBufferPool>);
+    static_assert(!std::is_constructible_v<LightFrameBufferPool, RenderFrontend &, const LightCullingBudget &, std::uint32_t>);
 
     /** @brief Records admission only; this double is not native completion or GPU parity evidence. */
     struct UploadAudit {
@@ -149,7 +158,8 @@ namespace {
         std::shared_ptr<UploadAudit> audit_;
     };
 
-    std::unique_ptr<RenderFrontend> MakeUploadFrontend(const std::shared_ptr<UploadAudit> &audit) {
+    std::unique_ptr<RenderFrontend> MakeUploadFrontend(const std::shared_ptr<UploadAudit> &audit,
+                                                       const RenderResourceUploadLimits &uploadLimits = {}) {
         RenderBackendRegistry registry;
         REQUIRE(registry
                     .Register({.id = RenderBackendId{"light-upload-probe"},
@@ -157,7 +167,7 @@ namespace {
                                .provider = std::make_unique<UploadProvider>(audit)})
                     .HasValue());
         REQUIRE(registry.Seal().HasValue());
-        auto created = RenderFrontend::Create(registry, RenderBackendId{"light-upload-probe"}, {});
+        auto created = RenderFrontend::Create(registry, RenderBackendId{"light-upload-probe"}, {}, uploadLimits);
         REQUIRE(created.HasValue());
         return std::move(created).Value();
     }
@@ -195,10 +205,10 @@ TEST_CASE("Light pool pending readiness and native backpressure preserve the nex
     auto second = pool->Update(0, {}, clusters);
     REQUIRE(second.HasValue());
     CHECK(second.Value().revision == 2);
-    CHECK(audit->instances == instances);
+    CHECK_THAT(audit->instances, Catch::Matchers::RangeEquals(instances));
     REQUIRE(pool->Update(1, {}, clusters).HasValue());
     CHECK(audit->revision == 1);
-    CHECK(audit->instances != instances);
+    CHECK_THAT(audit->instances, !Catch::Matchers::RangeEquals(instances));
     REQUIRE(pool->Shutdown().HasValue());
     REQUIRE(pool->Shutdown().HasValue());
     CHECK(audit->destroys == 8);
@@ -221,6 +231,24 @@ TEST_CASE("Light pool failed frame close retains handles for owner-thread retry"
     CHECK(pool->Update(0, {}, Clusters()).HasError());
     REQUIRE(pool->Shutdown().HasValue());
     CHECK(audit->destroys == 4);
+}
+
+TEST_CASE("Light pool partial preparation restores queued reservations before retry", "[renderer][light-pool]") {
+    auto audit = std::make_shared<UploadAudit>();
+    auto frontend = MakeUploadFrontend(audit, {.maximumRequestsPerDrain = 3, .maximumPendingRequests = 3});
+    for (std::size_t attempt = 0; attempt < 2; ++attempt) {
+        const auto created = LightFrameBufferPool::Create(*frontend, Budget, 1);
+        REQUIRE(created.HasError());
+        CHECK(frontend->UploadSnapshot().pendingRequests == 0);
+        CHECK(frontend->MemorySnapshot().reservationCount == 0);
+        CHECK(frontend->MemorySnapshot().reservedUnallocatedBytes == 0);
+        CHECK(audit->destroys == 0);
+    }
+    const auto retried = frontend->CreateBuffer({.byteSize = 64, .usage = RenderBufferUsage::Storage}, {});
+    REQUIRE(retried.HasValue());
+    REQUIRE(frontend->ProcessResourceRequests().HasValue());
+    REQUIRE(frontend->ReleaseBuffer(retried.Value().handle).HasValue());
+    CHECK(audit->destroys == 1);
 }
 
 TEST_CASE("Light pool rejects foreign threads and excessive slots without closing", "[renderer][light-pool]") {

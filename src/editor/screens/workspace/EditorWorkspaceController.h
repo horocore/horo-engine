@@ -427,6 +427,14 @@ namespace Horo::Editor {
         void DegradeNativeGameplayReload(NativeGameplayReloadTransaction &transaction, Error error);
         void ReimportContentBrowserAsset(const std::filesystem::path &absolutePath);
         void RevealContentBrowserEntry(const std::filesystem::path &absolutePath);
+        /** @brief Admits a sequence source into the persistent workspace document host. */
+        void OpenEmbeddedSequenceSource(const SourceOpenResult &result);
+        /** @brief Dispatches one command to the explicit owning workspace subsystem. */
+        void DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &cmd);
+        /** @brief Routes admitted authored documents directly to their persistent host. */
+        bool OpenEmbeddedAuthoredDocument(const SourceOpenResult &result);
+        /** @brief Handles transient sequence presentation and explicit document lifecycle commands. */
+        bool ProcessSequenceDocumentCommand(const EditorWorkspaceViewCommandData &cmd);
         /** @brief Loads and focuses one validated embedded UI Canvas source result. */
         void OpenEmbeddedUiCanvasSource(const SourceOpenResult &result);
         void OpenSourceFile(const SourceOpenRequest &request);
