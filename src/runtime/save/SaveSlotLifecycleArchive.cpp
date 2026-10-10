@@ -42,8 +42,8 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
 
     /** @copydoc ValidatePolicy */
     Result<void> ValidatePolicy(const SaveSlotLifecyclePolicy &policy) {
-        constexpr auto count = static_cast<std::uint8_t>(SaveSlotLifecycleKind::Count);
-        if (!ValidScope(policy.destination) || policy.profile > SaveSlotLifecycleProfile::Server ||
+        if (constexpr auto count = static_cast<std::uint8_t>(SaveSlotLifecycleKind::Count);
+            !ValidScope(policy.destination) || policy.profile > SaveSlotLifecycleProfile::Server ||
             policy.signature > SaveSignaturePolicy::Required || (policy.capabilities >> count) != 0 || policy.maximumSlots == 0 ||
             policy.maximumSlots > 4096 || policy.maximumCatalogBytes < 1024 || policy.maximumCatalogBytes > (64ULL << 20U) ||
             policy.archiveLimits.maximumArchiveBytes == 0 || policy.importSources.size() > 32 ||
@@ -76,9 +76,9 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
         if (!InScope(admitted.Value().Header(), scope))
             return Result<ValidatedSaveArchive>::Failure(MakeError(SaveErrors::StoragePermissionDenied));
         const auto &archive = admitted.Value();
-        const auto compatibility =
-            EvaluateSaveCompatibility(archive.Preamble().archiveFormatVersion, archive.Header(), archive.Manifest(), policy.compatibility);
-        if (compatibility.disposition != SaveCompatibilityDisposition::DirectRead)
+        if (const auto compatibility = EvaluateSaveCompatibility(archive.Preamble().archiveFormatVersion, archive.Header(),
+                                                                 archive.Manifest(), policy.compatibility);
+            compatibility.disposition != SaveCompatibilityDisposition::DirectRead)
             return Result<ValidatedSaveArchive>::Failure(MakeError(SaveErrors::VersionUnsupportedNewer));
         if (auto unknown = archive.InspectUnknownData(policy.compatibility, policy.archiveLimits.maximumArchiveBytes); unknown.HasError())
             return Result<ValidatedSaveArchive>::Failure(unknown.ErrorValue());

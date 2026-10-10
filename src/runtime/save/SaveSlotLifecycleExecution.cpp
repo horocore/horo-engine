@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <new>
 
 namespace Horo::Runtime::SaveSlotLifecycleDetail {
     /** @copydoc CheckCancellation */
@@ -16,11 +17,11 @@ namespace Horo::Runtime {
     using namespace SaveSlotLifecycleDetail;
 
     /** @copydoc SaveSlotLifecycle::ExecuteLocked */
-    Result<SaveSlotLifecycleResult> SaveSlotLifecycle::ExecuteLocked(const SaveSlotLifecycleRequest &request,
+    Result<SaveSlotLifecycleResult> SaveSlotLifecycle::ExecuteLocked(Operation &operation, const SaveSlotLifecycleRequest &request,
                                                                      const CancellationToken &cancellation) {
-        auto &catalog = state_->catalog;
+        auto &catalog = operation.catalog;
         std::vector<std::byte> bytes;
-        auto admitted = AcquireArchive(request, bytes);
+        auto admitted = AcquireArchive(operation, request, bytes);
         if (admitted.HasError())
             return Result<SaveSlotLifecycleResult>::Failure(admitted.ErrorValue());
         if (request.kind == SaveSlotLifecycleKind::Export) {
@@ -37,7 +38,7 @@ namespace Horo::Runtime {
         if (catalog.revision == std::numeric_limits<std::uint64_t>::max())
             return Result<SaveSlotLifecycleResult>::Failure(MakeError(SaveErrors::SlotCommitInvalid));
         SaveSlotLifecycleResult result{.catalogRevision = catalog.revision + 1};
-        auto prepared = PrepareMutation(request, admitted.Value(), result);
+        auto prepared = PrepareMutation(operation, request, admitted.Value(), result);
         if (prepared.HasError())
             return Result<SaveSlotLifecycleResult>::Failure(prepared.ErrorValue());
         catalog.revision = result.catalogRevision;
@@ -54,8 +55,10 @@ namespace Horo::Runtime {
             return Result<SaveSlotLifecycleResult>::Failure(std::move(published).ErrorValue());
         // Publication is acknowledged; fallible cleanup cannot relabel it as unchanged-state failure.
         try {
-            auto cleaned = Cleanup();
+            auto cleaned = Cleanup(operation);
             result.cleanupDeferred = cleaned.HasError() || cleaned.Value();
+        } catch (const std::bad_alloc &) {
+            result.cleanupDeferred = true;
         } catch (...) {
             result.cleanupDeferred = true;
         }
@@ -63,16 +66,16 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc SaveSlotLifecycle::AcquireArchive */
-    Result<ValidatedSaveArchive> SaveSlotLifecycle::AcquireArchive(const SaveSlotLifecycleRequest &request,
+    Result<ValidatedSaveArchive> SaveSlotLifecycle::AcquireArchive(const Operation &operation, const SaveSlotLifecycleRequest &request,
                                                                    std::vector<std::byte> &bytes) const {
-        auto &catalog = state_->catalog;
+        auto &catalog = operation.catalog;
         const auto source = std::ranges::find(catalog.records, request.source.address.slot, [](const Record &record) {
             return record.entry.publication.slot;
         });
         const bool importing = request.kind == SaveSlotLifecycleKind::Import;
         const bool restore = request.kind == SaveSlotLifecycleKind::RestoreDeleted;
-        const bool purging = request.kind == SaveSlotLifecycleKind::Delete && request.deleteMode != SaveSlotDeleteMode::Soft;
-        if (!importing && (source == catalog.records.end() || (restore && !source->deleted) || (!restore && !purging && source->deleted)))
+        if (const bool purging = request.kind == SaveSlotLifecycleKind::Delete && request.deleteMode != SaveSlotDeleteMode::Soft;
+            !importing && (source == catalog.records.end() || (restore && !source->deleted) || (!restore && !purging && source->deleted)))
             return Result<ValidatedSaveArchive>::Failure(MakeError(SaveErrors::SlotCommitGenerationStale));
 
         const auto &scope = importing ? state_->policy.importSources[*request.importSource] : state_->policy.destination;
@@ -98,10 +101,11 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc SaveSlotLifecycle::PrepareMutation */
-    Result<std::optional<SaveStorageWrite>> SaveSlotLifecycle::PrepareMutation(const SaveSlotLifecycleRequest &request,
+    Result<std::optional<SaveStorageWrite>> SaveSlotLifecycle::PrepareMutation(Operation &operation,
+                                                                               const SaveSlotLifecycleRequest &request,
                                                                                const ValidatedSaveArchive &archive,
                                                                                SaveSlotLifecycleResult &result) {
-        auto &catalog = state_->catalog;
+        auto &catalog = operation.catalog;
         const auto source = std::ranges::find(catalog.records, request.source.address.slot, [](const Record &record) {
             return record.entry.publication.slot;
         });
@@ -109,7 +113,7 @@ namespace Horo::Runtime {
         std::optional<SaveStorageWrite> prepared;
         if (importing || request.kind == SaveSlotLifecycleKind::Copy) {
             const auto &target = importing ? request.source : *request.destination;
-            auto write = PrepareCopy(target, archive, request.display);
+            auto write = PrepareCopy(operation, target, archive, request.display);
             if (write.HasError())
                 return Result<std::optional<SaveStorageWrite>>::Failure(write.ErrorValue());
             prepared = std::move(write).Value();
@@ -124,16 +128,16 @@ namespace Horo::Runtime {
             source->deleted = true;
             result.entry = source->entry;
         } else {
-            catalog.retired.push_back({source->entry, request.deleteMode == SaveSlotDeleteMode::PlatformRecycle});
+            catalog.retired.emplace_back(source->entry, request.deleteMode == SaveSlotDeleteMode::PlatformRecycle);
             catalog.records.erase(source);
         }
         return Result<std::optional<SaveStorageWrite>>::Success(std::move(prepared));
     }
 
     /** @copydoc SaveSlotLifecycle::PrepareCopy */
-    Result<SaveStorageWrite> SaveSlotLifecycle::PrepareCopy(const SaveSlotLifecycleTarget &target, const ValidatedSaveArchive &archive,
-                                                            const SaveSlotDisplayMetadata &display) {
-        auto &catalog = state_->catalog;
+    Result<SaveStorageWrite> SaveSlotLifecycle::PrepareCopy(Operation &operation, const SaveSlotLifecycleTarget &target,
+                                                            const ValidatedSaveArchive &archive, const SaveSlotDisplayMetadata &display) {
+        auto &catalog = operation.catalog;
         const auto destination = std::ranges::find(catalog.records, target.address.slot, [](const Record &record) {
             return record.entry.publication.slot;
         });
@@ -147,10 +151,10 @@ namespace Horo::Runtime {
         auto prepared = std::move(write).Value();
         if (destination != catalog.records.end()) {
             prepared.metadata.publication.kind = destination->entry.publication.kind;
-            catalog.retired.push_back({destination->entry, false});
+            catalog.retired.emplace_back(destination->entry, false);
             destination->entry = prepared.metadata;
         } else {
-            catalog.records.push_back({prepared.metadata, false});
+            catalog.records.emplace_back(prepared.metadata, false);
         }
         return Result<SaveStorageWrite>::Success(std::move(prepared));
     }

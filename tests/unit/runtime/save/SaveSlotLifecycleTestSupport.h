@@ -5,9 +5,11 @@
 #include "SaveFilesystemTestSupport.h"
 
 #include <catch2/generators/catch_generators.hpp>
+#include <cerrno>
 #include <fstream>
 #include <functional>
 #include <map>
+#include <new>
 
 namespace Horo::Runtime::SaveSlotLifecycleTest {
     using namespace Horo;
@@ -103,6 +105,8 @@ namespace Horo::Runtime::SaveSlotLifecycleTest {
 
         Result<void> Recycle(const SaveSlotCatalogEntry &entry, ImmutableSaveArchive archive) override {
             ++recycleCalls;
+            if (onRecycle)
+                onRecycle();
             if (recycleFailure)
                 return Result<void>::Failure(MakeError(SaveErrors::StoragePermanentIo));
             recycled.insert_or_assign(entry.publication.generation, *archive.bytes);
@@ -121,6 +125,7 @@ namespace Horo::Runtime::SaveSlotLifecycleTest {
         std::size_t recycleCalls{};
         SaveArchiveSignatureProvider *verifier{};
         std::function<void()> onSemantics;
+        std::function<void()> onRecycle;
         std::function<Result<std::vector<std::byte>>(std::vector<std::byte>)> signer;
         std::map<SlotGenerationId, std::vector<std::byte>> recycled;
     };
@@ -161,8 +166,29 @@ namespace Horo::Runtime::SaveSlotLifecycleTest {
                 .compatibility = std::move(policy)};
     }
 
+    /** @brief Gives physical probes the same long-path reach as native relative storage handles. */
+    inline std::filesystem::path NativeProbePath(const std::filesystem::path &path) {
+#ifdef _WIN32
+        // Native storage opens relative handles; physical test probes must address the same
+        // long namespace path without the ordinary Win32 MAX_PATH limit.
+        const auto &native = path.native();
+        if (native.starts_with(L"\\\\?\\"))
+            return path;
+        if (native.starts_with(L"\\\\"))
+            return std::filesystem::path{L"\\\\?\\UNC\\" + native.substr(2)};
+        return std::filesystem::path{L"\\\\?\\" + native};
+#else
+        return path;
+#endif
+    }
+
     inline std::vector<std::byte> DiskBytes(const std::filesystem::path &path) {
-        std::ifstream file(path, std::ios::binary);
+        std::ifstream file(NativeProbePath(path), std::ios::binary);
+        const int openError = errno;
+        std::error_code inspection;
+        const bool exists = std::filesystem::exists(NativeProbePath(path), inspection);
+        INFO("Physical read path units=" << path.native().size() << ", exists=" << exists << ", inspection=" << inspection.value()
+                                         << ", errno=" << openError);
         REQUIRE(file.good());
         const std::vector<char> chars{std::istreambuf_iterator<char>{file}, {}};
         std::vector<std::byte> bytes;
@@ -172,7 +198,8 @@ namespace Horo::Runtime::SaveSlotLifecycleTest {
     }
 
     inline void WriteBytes(const std::filesystem::path &path, const std::span<const std::byte> bytes) {
-        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        std::ofstream file(NativeProbePath(path), std::ios::binary | std::ios::trunc);
+        INFO("Physical corruption path units=" << path.native().size() << ", errno=" << errno);
         REQUIRE(file.good());
         file.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
         REQUIRE(file.good());
@@ -215,8 +242,9 @@ namespace Horo::Runtime::SaveSlotLifecycleTest {
         }
 
         std::filesystem::path Slots() const {
-            return root.CanonicalPath() / Namespace().environment.ToString() / "profile" /
-                   (Id<LocalUserStorageId>(5).ToString() + "_" + Id<GameProfileId>(6).ToString()) / "slots";
+            const auto path = root.CanonicalPath() / Namespace().environment.ToString() / "profile" /
+                              (Id<LocalUserStorageId>(5).ToString() + "_" + Id<GameProfileId>(6).ToString()) / "slots";
+            return NativeProbePath(path);
         }
 
         std::filesystem::path Generation(const SlotGenerationId generation) const {

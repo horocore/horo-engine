@@ -411,8 +411,8 @@ TEST_CASE("Failed external export preserves source and existing destination byte
     const auto slot = Id<SaveGameSlotId>(60);
     const std::vector old{std::byte{99}};
     REQUIRE(destination.Replace(slot, old).HasValue());
-    const auto directory = fixture.root.CanonicalPath() / external.environment.ToString() / "profile" /
-                           (Id<LocalUserStorageId>(5).ToString() + "_" + Id<GameProfileId>(6).ToString()) / "slots";
+    const auto directory = NativeProbePath(fixture.root.CanonicalPath() / external.environment.ToString() / "profile" /
+                                           (Id<LocalUserStorageId>(5).ToString() + "_" + Id<GameProfileId>(6).ToString()) / "slots");
     const auto saved = directory / (slot.ToString() + ".horosave");
     const auto outside = fixture.temporary.Path() / "export-target";
     WriteBytes(outside, old);
@@ -425,4 +425,61 @@ TEST_CASE("Failed external export preserves source and existing destination byte
     CHECK(DiskBytes(saved) == old);
     CHECK(DiskBytes(outside) == old);
     CHECK(fixture.ExportBytes(10) == source);
+}
+
+TEST_CASE("Postvisibility observer exceptions remain Unknown and preserve the prior generation", "[save][lifecycle]") {
+    const bool allocation = GENERATE(false, true);
+    Fixture fixture;
+    fixture.Import(10);
+    const auto previous = fixture.Import(11);
+    const auto oldBytes = DiskBytes(fixture.Generation(previous.entry->publication.generation));
+    fixture.fault.action = [allocation](const SaveSlotLifecycleIoStage stage, const SaveSlotLifecycleFileKind kind) {
+        if (stage == SaveSlotLifecycleIoStage::DirectorySync && kind == SaveSlotLifecycleFileKind::Catalog) {
+            if (allocation)
+                throw std::bad_alloc{};
+            throw 17;
+        }
+    };
+    const auto result =
+        fixture.owner->Execute({.kind = SaveSlotLifecycleKind::Copy, .source = fixture.Target(10), .destination = fixture.Target(11)});
+    REQUIRE(result.HasError());
+    CHECK(result.ErrorValue().code.Value() == SaveErrors::SlotCommitOutcomeUnknown.code.Value());
+    CHECK(fixture.host.leases == 0);
+    CHECK(DiskBytes(fixture.Generation(previous.entry->publication.generation)) == oldBytes);
+    fixture.fault.action = {};
+    fixture.Reopen();
+    CHECK(fixture.Target(11).generation != previous.entry->publication.generation);
+    CHECK_FALSE(fixture.ExportBytes(11).empty());
+    CHECK(DiskBytes(fixture.Generation(previous.entry->publication.generation)) == oldBytes);
+    const auto reconciled = fixture.owner->Reconcile(fixture.Access());
+    REQUIRE(reconciled.HasValue());
+    CHECK_FALSE(reconciled.Value());
+    CHECK_FALSE(std::filesystem::exists(fixture.Generation(previous.entry->publication.generation)));
+}
+
+TEST_CASE("Recycle provider exceptions remain committed with recoverable retained bytes", "[save][lifecycle]") {
+    const bool allocation = GENERATE(false, true);
+    Fixture fixture;
+    fixture.host.recycleSupported = true;
+    const auto previous = fixture.Import(10);
+    const auto oldBytes = DiskBytes(fixture.Generation(previous.entry->publication.generation));
+    fixture.host.onRecycle = [allocation] {
+        if (allocation)
+            throw std::bad_alloc{};
+        throw 17;
+    };
+    const auto result = fixture.owner->Execute(
+        {.kind = SaveSlotLifecycleKind::Delete, .source = fixture.Target(10), .deleteMode = SaveSlotDeleteMode::PlatformRecycle});
+    REQUIRE(result.HasValue());
+    CHECK(result.Value().cleanupDeferred);
+    CHECK(fixture.Index().entries.empty());
+    CHECK(fixture.host.leases == 0);
+    CHECK(DiskBytes(fixture.Generation(previous.entry->publication.generation)) == oldBytes);
+    fixture.host.onRecycle = {};
+    fixture.Reopen();
+    const auto reconciled = fixture.owner->Reconcile(fixture.Access());
+    REQUIRE(reconciled.HasValue());
+    CHECK_FALSE(reconciled.Value());
+    CHECK(fixture.host.recycled.at(previous.entry->publication.generation) == oldBytes);
+    CHECK_FALSE(std::filesystem::exists(fixture.Generation(previous.entry->publication.generation)));
 }

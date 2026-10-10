@@ -34,6 +34,11 @@ namespace Horo::Runtime {
     namespace {
         /** @brief Retires the exclusive staging name on every failure and exception path. */
         struct PosixTemporaryRetirement final {
+            PosixTemporaryRetirement(const int openedDirectory, const std::string &temporaryName) noexcept
+                : directory(openedDirectory), name(temporaryName) {}
+
+            PosixTemporaryRetirement(const PosixTemporaryRetirement &) = delete;
+            PosixTemporaryRetirement &operator=(const PosixTemporaryRetirement &) = delete;
             int directory;
             const std::string &name;
             bool published{};
@@ -49,9 +54,9 @@ namespace Horo::Runtime {
                                                    const bool replaceExisting) {
             // linkat is an atomic create-if-absent gate on Linux/macOS. Unlike renameat it cannot
             // overwrite a generation inserted after the initial absence check.
-            const int selected = replaceExisting ? ::renameat(directory.Fd(), temporary.c_str(), directory.Fd(), destination.c_str())
-                                                 : ::linkat(directory.Fd(), temporary.c_str(), directory.Fd(), destination.c_str(), 0);
-            if (selected != 0)
+            if (const int selected = replaceExisting ? ::renameat(directory.Fd(), temporary.c_str(), directory.Fd(), destination.c_str())
+                                                     : ::linkat(directory.Fd(), temporary.c_str(), directory.Fd(), destination.c_str(), 0);
+                selected != 0)
                 return Result<void>::Failure(Failure(SaveErrors::StoragePermanentIo, "atomic replacement", errno));
             if (!replaceExisting && ::unlinkat(directory.Fd(), temporary.c_str(), 0) != 0) {
                 const int error = errno;
@@ -173,10 +178,10 @@ namespace Horo::Runtime {
         if (auto admitted = Before(SaveSlotLifecycleIoStage::Write, narrow); admitted.HasError())
             return admitted;
         if (auto written = SaveFilesystemDetails::WriteWindowsBytes(file.Get(), bytes,
-                                                                    [&] {
+                                                                    [this, &narrow] {
             return Before(SaveSlotLifecycleIoStage::WriteProgress, narrow);
         },
-                                                                    [&] {
+                                                                    [this, &narrow] {
             return Before(SaveSlotLifecycleIoStage::FileSync, narrow);
         });
             written.HasError())
@@ -214,10 +219,10 @@ namespace Horo::Runtime {
             return admitted;
         }
         if (auto written = WritePosixBytes(fd, bytes,
-                                           [&] {
+                                           [this, &destination] {
             return Before(SaveSlotLifecycleIoStage::WriteProgress, destination);
         },
-                                           [&] {
+                                           [this, &destination] {
             return Before(SaveSlotLifecycleIoStage::FileSync, destination);
         });
             written.HasError()) {
