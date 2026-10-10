@@ -70,8 +70,11 @@ namespace Horo::AI::Detail {
 
             Result<void> AfterPublication() override {
                 // Cancellation/blackboard observer teardown is deferred until every owner and Scene is visible.
-                for (auto &agent : retired)
+                for (auto &agent : retired) {
+                    if (state->scheduler)
+                        static_cast<void>(state->scheduler->Unregister(agent.record.handle));
                     CancelOwnedWork(agent);
+                }
                 retired.clear();
                 return Result<void>::Success();
             }

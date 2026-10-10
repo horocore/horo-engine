@@ -325,6 +325,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiAsyncActions.h
     Horo/Runtime/Ui/UiFeedback.h
     Horo/Runtime/Ui/UiScreenStack.h
+    Horo/Runtime/Ui/UiScreenTransition.h
     Horo/Runtime/Ui/UiRouteStack.h
     Horo/Runtime/Ui/UiFocusGraph.h
     Horo/Runtime/Ui/UiControls.h
@@ -463,6 +464,9 @@ horo_configure_target_header_boundary(HoroGameplayBuild PUBLIC_HEADERS
     Horo/Application/CompilerDiagnosticParser.h
     Horo/Application/GameplayBuildService.h
 )
+horo_configure_target_header_boundary(HoroShaderBuild PUBLIC_HEADERS
+    Horo/Application/ShaderBuildService.h
+)
 horo_configure_target_header_boundary(HoroGameplayLua PUBLIC_HEADERS
     Horo/Gameplay/LuaBehavior.h
 )
@@ -540,6 +544,10 @@ horo_configure_target_header_boundary(HoroAudioPlayback PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroAudioVoiceRender PUBLIC_HEADERS
     Horo/Audio/AudioVoiceRenderRuntime.h
+)
+
+horo_configure_target_header_boundary(HoroAudioFrontend PUBLIC_HEADERS
+    Horo/Audio/AudioFrontend.h
 )
 horo_configure_target_header_boundary(HoroAudioMemory PUBLIC_HEADERS
     Horo/Audio/AudioMemory.h
@@ -628,6 +636,7 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/AITaskLifecycle.h
     Horo/AI/AITaskContinuation.h
     Horo/AI/AITaskJobService.h
+    Horo/AI/AITaskScheduler.h
     Horo/AI/BehaviorTree.h
     Horo/AI/BehaviorTreeRuntime.h
     Horo/AI/DecisionWakePolicy.h
@@ -785,6 +794,7 @@ horo_configure_target_header_boundary(HoroNavigationRuntime PUBLIC_HEADERS
     Horo/Navigation/NavigationObstacleOverlay.h
     Horo/Navigation/NavigationAgentRegistry.h
     Horo/Navigation/NavigationPathPolicy.h
+    Horo/Navigation/NavigationCoordinator.h
     Horo/Navigation/NavigationRuntimeQueues.h
     Horo/Navigation/NavigationWorldLifecycle.h
 )
@@ -984,6 +994,8 @@ horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
     Horo/Runtime/Render/RenderCapabilities.h
     Horo/Runtime/Render/RenderDisplay.h
     Horo/Runtime/Render/RenderDisplayErrors.h
+    Horo/Runtime/Render/FramePacing.h
+    Horo/Runtime/Render/FramePacingErrors.h
     Horo/Runtime/Render/PresentMode.h
     Horo/Runtime/Render/PresentModeErrors.h
     Horo/Runtime/Render/RenderSurfaceLifecycle.h
@@ -1072,6 +1084,7 @@ horo_configure_target_header_boundary(HoroModelProviderAdapters PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
+    Horo/Editor/AudioEditorDocument.h
     Horo/Editor/MixerAssetDocument.h
     Horo/Editor/CinematicPropertyBindings.h
     Horo/Editor/ActivityBarLayout.h

@@ -89,6 +89,22 @@ namespace Horo::Render::Detail {
             return texture != resources.textures.end() && !texture->second.destroyRequested && texture->second.graphFramebuffer != 0;
         }
 
+        /** @brief Validates one workload against resolved native resources before submission. */
+        template <typename Workload>
+        [[nodiscard]] Result<void> ValidateWorkload(const RenderGraphExecutionRequest &request, const OpenGLGraphResources &resources,
+                                                    const Workload &workload) {
+            if constexpr (std::is_same_v<Workload, RenderGraphLightCulling>) {
+                return Result<void>::Failure(MakeError(LightCullingErrors::Unsupported));
+            } else if constexpr (std::is_same_v<Workload, RenderGraphBufferCopy>) {
+                if (!ValidCopy(workload, request, resources))
+                    return Result<void>::Failure(MakeError(OpenGLBackendErrors::InvalidExecutionPlan));
+            } else if constexpr (std::is_same_v<Workload, RenderGraphColorAttachment>) {
+                if (!ValidColor(workload, request, resources))
+                    return Result<void>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Encodes a previously admitted whole-color attachment with complete scoped state isolation. */
         [[nodiscard]] bool EncodeColor(const PrimaryOutputAttachment &operations, const FramebufferExtent extent,
                                        const std::uint32_t framebuffer, const OpenGLCommandFunctions &functions) {
@@ -152,16 +168,7 @@ namespace Horo::Render::Detail {
         }
         for (const auto &binding : request.workloads) {
             const auto valid = std::visit([&request, &resources]<typename Workload>(const Workload &workload) {
-                if constexpr (std::is_same_v<Workload, RenderGraphLightCulling>) {
-                    return Result<void>::Failure(MakeError(LightCullingErrors::Unsupported));
-                } else if constexpr (std::is_same_v<Workload, RenderGraphBufferCopy>) {
-                    if (!ValidCopy(workload, request, resources))
-                        return Result<void>::Failure(MakeError(OpenGLBackendErrors::InvalidExecutionPlan));
-                } else if constexpr (std::is_same_v<Workload, RenderGraphColorAttachment>) {
-                    if (!ValidColor(workload, request, resources))
-                        return Result<void>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));
-                }
-                return Result<void>::Success();
+                return ValidateWorkload(request, resources, workload);
             }, binding.workload);
             if (valid.HasError())
                 return valid;

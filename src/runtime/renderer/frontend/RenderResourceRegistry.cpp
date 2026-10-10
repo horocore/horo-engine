@@ -245,9 +245,9 @@ namespace Horo::Render::Detail {
 
     /** @copydoc RenderResourceRegistry::RollbackPending */
     void RenderResourceRegistry::RollbackPending(const RenderResourceClass resourceClass, const ResourceReservation reservation) noexcept {
-        const Entry *found = FindExact(reservation.identity);
-        if (found == nullptr || found->state != RenderResourceState::Pending || found->resourceClass != resourceClass ||
-            found->operation != reservation.operation)
+        if (const Entry *found = FindExact(reservation.identity); found == nullptr || found->state != RenderResourceState::Pending ||
+                                                                  found->resourceClass != resourceClass ||
+                                                                  found->operation != reservation.operation)
             return;
         const auto operation = std::ranges::find(operations_, reservation.operation, &OperationRecord::id);
         assert(operation != operations_.end() && operation->rollbackError.has_value());

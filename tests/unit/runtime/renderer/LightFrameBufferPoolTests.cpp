@@ -239,12 +239,16 @@ TEST_CASE("Light pool partial preparation restores queued reservations before re
     for (std::size_t attempt = 0; attempt < 2; ++attempt) {
         const auto created = LightFrameBufferPool::Create(*frontend, Budget, 1);
         REQUIRE(created.HasError());
+        CHECK(created.ErrorValue().code.Value() == "render.frontend.resource.upload_capacity_exceeded");
         CHECK(frontend->UploadSnapshot().pendingRequests == 0);
         CHECK(frontend->MemorySnapshot().reservationCount == 0);
         CHECK(frontend->MemorySnapshot().reservedUnallocatedBytes == 0);
         CHECK(audit->destroys == 0);
     }
-    const auto retried = frontend->CreateBuffer({.byteSize = 64, .usage = RenderBufferUsage::Storage}, {});
+    const auto retried = frontend->CreateBuffer({.byteSize = 64,
+                                                 .usage = RenderBufferUsage::Storage | RenderBufferUsage::CopySource,
+                                                 .access = RenderBufferAccess::HostVisible},
+                                                {});
     REQUIRE(retried.HasValue());
     REQUIRE(frontend->ProcessResourceRequests().HasValue());
     REQUIRE(frontend->ReleaseBuffer(retried.Value().handle).HasValue());

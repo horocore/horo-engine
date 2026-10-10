@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Runtime/Render/FramePacing.h"
 #include "Horo/Runtime/Render/LightCullingKernel.h"
 #include "Horo/Runtime/Render/LightFrameUpload.h"
 #include "Horo/Runtime/Render/MaterialBindingBackend.h"
@@ -457,6 +458,23 @@ namespace Horo::Render {
 
         /** @brief Completes the active frame and presents when the backend supports presentation. */
         [[nodiscard]] virtual Result<void> Present(FrameToken frame) = 0;
+
+        /** @brief Presents with exact host identity and synchronous clock calibration.
+         * @param frame Active backend token.
+         * @param request Borrowed host identity and monotonic clock; never retained by callbacks.
+         * @return Present result; feedback arrives separately through PollNativePresentTiming.
+         * @details Default invokes Present; native timing remains explicitly unsupported.
+         */
+        [[nodiscard]] virtual Result<void> PresentWithTiming(FrameToken frame, const PresentationTimingRequest &request);
+
+        /** @brief Polls one new native display observation without waiting or allocating.
+         * @return New qualified observation, empty when pending, or typed unsupported/failure.
+         * @details Owner-thread only. The provider must translate actual display time to the
+         * host monotonic clock and exact surface/host-frame identity. Present return or GPU
+         * completion cannot stand in for display time. Unsupported is the default for peers
+         * without a qualified native provider. No implicit backend or timing fallback occurs.
+         */
+        [[nodiscard]] virtual Result<std::optional<NativePresentTiming>> PollNativePresentTiming();
 
         /** @brief Discards matching active-frame work after a failed execution or presentation step. */
         virtual void AbortFrame(FrameToken frame) noexcept = 0;

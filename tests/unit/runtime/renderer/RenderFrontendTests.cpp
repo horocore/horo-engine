@@ -1069,6 +1069,33 @@ namespace {  // NOSONAR(cpp:S1000) File-local test doubles and shared fixture st
         Check(inactive.ErrorValue().code.Value() == "render.frontend.frame_not_active");
     }
 
+    TEST_CASE("Frontend native timing is explicit and timed present validates exact host identity", "[renderer][pacing][frontend]") {
+        lifecycleState = {};
+        auto frontend = CreateTrackingFrontend();
+        const auto unsupported = frontend->PollNativePresentTiming();
+        REQUIRE(unsupported.HasError());
+        CHECK(unsupported.ErrorValue().code.Value() == "render.frame_pacing.native_timing_unsupported");
+        auto begun = frontend->BeginFrame({.frameNumber = 1, .outputExtent = {1280, 720}});
+        REQUIRE(begun.HasValue());
+        auto frame = std::move(begun).Value();
+        const std::array passes{
+            RenderPassDescriptor{.id = RenderPassId{1}, .kind = RenderPassKind::Graphics, .primaryOutput = PrimaryOutputAttachment{}}};
+        REQUIRE(frame.Execute(passes).HasValue());
+
+        class PresentationClock final : public Clock {
+        public:
+            Duration MonotonicNow() const override {
+                return {};
+            }
+        } clock;
+
+        const PresentationTimingRequest stale{{1, 1}, 2, clock};
+        CHECK(frame.Present(&stale).HasError());
+        const PresentationTimingRequest exact{{1, 1}, 1, clock};
+        auto moved = std::move(frame);
+        REQUIRE(moved.Present(&exact).HasValue());
+    }
+
     TEST_CASE("Frontend Shutdown Leaves Resident Native Resource Cleanup To The Backend",
               "[unit][runtime][renderer][resource][retirement]") {
         lifecycleState = {};

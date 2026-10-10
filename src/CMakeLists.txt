@@ -610,6 +610,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiFeedback.cpp
         runtime/ui/UiFeedbackErrors.cpp
         runtime/ui/UiScreenStack.cpp
+        runtime/ui/UiScreenTransition.cpp
         runtime/ui/UiRouteOperations.cpp
         runtime/ui/UiFocusGraph.cpp
         runtime/ui/UiFocusRestoration.cpp
@@ -1124,6 +1125,23 @@ add_library(HoroEngine::AudioVoiceRender ALIAS HoroAudioVoiceRender)
 target_compile_features(HoroAudioVoiceRender PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioVoiceRender PUBLIC HoroEngine::AudioPlayback HoroEngine::AudioMixer)
 
+add_library(HoroAudioFrontend STATIC
+        audio/frontend/AudioFrontend.cpp
+        audio/frontend/AudioFrontendLifecycle.cpp)
+add_library(HoroEngine::AudioFrontend ALIAS HoroAudioFrontend)
+target_compile_features(HoroAudioFrontend PUBLIC cxx_std_20)
+target_include_directories(HoroAudioFrontend PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/audio/frontend/include")
+target_link_libraries(HoroAudioFrontend
+        PUBLIC HoroEngine::AudioCommands
+        PRIVATE HoroEngine::AudioVoiceRender HoroAudioBackendContract)
+
+# Deliberate non-installed host-only composition; features see only AudioFrontend's public control API.
+add_library(HoroAudioFrontendComposition INTERFACE)
+target_include_directories(HoroAudioFrontendComposition INTERFACE
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/frontend/include>")
+target_link_libraries(HoroAudioFrontendComposition INTERFACE
+        HoroEngine::AudioFrontend HoroEngine::AudioVoiceRender HoroAudioBackendContract)
+
 add_library(HoroAudioMetrics STATIC
         audio/metrics/AudioMetricExtraction.cpp
         audio/metrics/AudioMetrics.cpp
@@ -1275,6 +1293,7 @@ add_library(HoroAI STATIC
         runtime/ai/api/AITaskLifecycle.cpp
         runtime/ai/api/AITaskContinuation.cpp
         runtime/ai/api/AITaskJobService.cpp
+        runtime/ai/api/AITaskScheduler.cpp
         runtime/ai/api/BehaviorTree.cpp
         runtime/ai/api/BehaviorTreeExecutionPlan.cpp
         runtime/ai/api/BehaviorTreeInstance.cpp
@@ -1550,6 +1569,8 @@ add_library(HoroNavigationRuntime STATIC
         runtime/navigation/runtime/NavigationObstacleOverlay.cpp
         runtime/navigation/runtime/NavigationAgentRegistry.cpp
         runtime/navigation/runtime/NavigationPathPolicy.cpp
+        runtime/navigation/runtime/NavigationCoordinator.cpp
+        runtime/navigation/runtime/NavigationCoordinatorState.cpp
         runtime/navigation/runtime/NavigationRuntimeQueues.cpp
         runtime/navigation/runtime/NavigationWorldLifecycle.cpp
 )
@@ -1953,6 +1974,8 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderAdapterErrors.cpp
         runtime/renderer/api/RenderDisplay.cpp
         runtime/renderer/api/RenderDisplayErrors.cpp
+        runtime/renderer/api/FramePacing.cpp
+        runtime/renderer/api/FramePacingErrors.cpp
         runtime/renderer/api/PresentMode.cpp
         runtime/renderer/api/PresentModeErrors.cpp
         runtime/renderer/api/RenderSurfaceLifecycle.cpp
@@ -2004,6 +2027,7 @@ target_link_libraries(HoroRenderApi PUBLIC HoroEngine::Foundation)
 add_library(HoroShaderCompilerToolchain STATIC
         runtime/renderer/toolchain/ShaderCompilerToolchainCatalog.cpp
         runtime/renderer/toolchain/ShaderCompilerToolchain.cpp
+        runtime/renderer/toolchain/ShaderCompilerRoute.cpp
         runtime/renderer/toolchain/ShaderCompilerToolchainSupport.cpp
 )
 add_library(HoroEngine::ShaderCompilerToolchain ALIAS HoroShaderCompilerToolchain)
@@ -2016,6 +2040,11 @@ target_link_libraries(HoroShaderCompilerToolchain
         PUBLIC HoroEngine::RenderApi
         PRIVATE HoroEngine::Platform
 )
+
+add_library(HoroShaderBuild STATIC application/render/ShaderBuildService.cpp)
+add_library(HoroEngine::ShaderBuild ALIAS HoroShaderBuild)
+target_compile_features(HoroShaderBuild PUBLIC cxx_std_20)
+target_link_libraries(HoroShaderBuild PUBLIC HoroEngine::Foundation HoroEngine::RenderApi)
 
 add_library(HoroRenderBackendRegistry STATIC
         runtime/renderer/backend_registry/RenderBackendRegistry.cpp
@@ -2398,6 +2427,7 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_METAL)
 endif ()
 
 add_library(HoroEditorServices STATIC
+        editor/audio/AudioEditorDocument.cpp
         editor/audio/MixerAssetDocument.cpp
         editor/audio/MixerDocumentCommands.cpp
         editor/CinematicPropertyBindings.cpp
@@ -2465,6 +2495,7 @@ target_include_directories(HoroEditorServices
 
 target_link_libraries(HoroEditorServices
         PUBLIC
+        HoroEngine::AudioFrontend
         HoroEngine::AudioApi
         HoroEngine::Foundation
         HoroEngine::HostErrors

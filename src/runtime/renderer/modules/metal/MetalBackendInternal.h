@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/Runtime/Render/FramePacingErrors.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "MetalBackendModule.h"
 #include "MetalDeviceCapabilities.h"
@@ -71,6 +72,17 @@ namespace Horo::Render::Detail {
         }
 
         [[nodiscard]] virtual Result<void> Present() = 0;
+
+        /** @brief Adds native feedback when implemented; otherwise retains ordinary presentation. */
+        [[nodiscard]] virtual Result<void> PresentWithTiming(const PresentationTimingRequest &) {
+            return Present();
+        }
+
+        /** @brief Polls without waiting; absent native providers fail explicitly. */
+        [[nodiscard]] virtual Result<std::optional<NativePresentTiming>> PollNativePresentTiming() {
+            return Result<std::optional<NativePresentTiming>>::Failure(MakeError(FramePacingErrors::NativeTimingUnsupported));
+        }
+
         virtual void AbortFrame() noexcept = 0;
         [[nodiscard]] virtual Result<void> Resize(FramebufferExtent extent) = 0;
         virtual void Shutdown() noexcept = 0;

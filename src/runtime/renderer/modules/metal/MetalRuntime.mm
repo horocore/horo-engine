@@ -4,11 +4,13 @@
 #include "MetalCommandCompletion.h"
 #include "MetalNativeDeviceFacts.h"
 #include "MetalParallelRecording.h"
+#include "MetalPresentationFeedback.h"
 #include "MetalRenderBackendErrors.h"
 #include "MetalResourceRuntime.h"
 #include "MetalSubmittedGraphQueue.h"
 
 #import <Metal/Metal.h>
+#import <QuartzCore/CAAnimation.h>
 #import <QuartzCore/CAMetalLayer.h>
 #include <algorithm>
 #include <array>
@@ -99,6 +101,7 @@ namespace Horo::Render::Detail {
 
                 ConfigurePresentationLayer(descriptor.maxFramesInFlight);
                 maxFramesInFlight_ = descriptor.maxFramesInFlight;
+                feedback_ = std::make_shared<MetalPresentationFeedback>();
                 ownerThread_ = std::this_thread::get_id();
                 submitted_.Initialize(maxFramesInFlight_);
                 layer_.displaySyncEnabled = descriptor.presentMode == PresentMode::Fifo;
@@ -326,6 +329,40 @@ namespace Horo::Render::Detail {
                 return Result<void>::Success();
             }
 
+            /** @copydoc IMetalRuntime::PresentWithTiming */
+            Result<void> PresentWithTiming(const PresentationTimingRequest &request) override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return WrongThread();
+                if (!request.surface.IsAttachedGeneration() || request.frameNumber == 0 || drawable_ == nil || commandBuffer_ == nil)
+                    return Result<void>::Failure(MakeError(FramePacingErrors::InvalidSurface));
+                const Duration before = request.clock.MonotonicNow();
+                const double nativeNow = CACurrentMediaTime();
+                const Duration after = request.clock.MonotonicNow();
+                const MetalPresentationCalibration calibration{nativeNow, before, after};
+                const auto feedback = feedback_;
+                const auto surface = request.surface;
+                const auto frame = request.frameNumber;
+                if (feedback->SelectSurface(surface)) {
+                    [drawable_ addPresentedHandler:^(id<MTLDrawable> displayed) {
+                      if (const auto timing = calibration.Translate(surface, frame, displayed.presentedTime))
+                          feedback->Publish(*timing);
+                      else
+                          feedback->Discard();
+                    }];
+                }
+                return Present();
+            }
+
+            /** @copydoc IMetalRuntime::PollNativePresentTiming */
+            Result<std::optional<NativePresentTiming>> PollNativePresentTiming() override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return Result<std::optional<NativePresentTiming>>::Failure(MakeError(MetalBackendErrors::WrongThread));
+                auto timing = feedback_->Poll();
+                if (timing)
+                    timing->discardedObservations = feedback_->DroppedCount();
+                return Result<std::optional<NativePresentTiming>>::Success(timing);
+            }
+
             Result<void> Present() override {
                 if (std::this_thread::get_id() != ownerThread_) {
                     return WrongThread();
@@ -387,6 +424,7 @@ namespace Horo::Render::Detail {
             }
 
             void Shutdown() noexcept override {
+                feedback_->Close();
                 AbortFrame();
                 WaitUntilIdle();
                 // Closing the domain prevents submission/reuse. Outstanding CPU capsules own
@@ -555,6 +593,7 @@ namespace Horo::Render::Detail {
             __strong MTLRenderPassDescriptor *renderPassDescriptor_{nil};
             __strong id<MTLCommandBuffer> lastSubmittedCommandBuffer_{nil};
             MetalSubmittedGraphQueue submitted_;
+            std::shared_ptr<MetalPresentationFeedback> feedback_{std::make_shared<MetalPresentationFeedback>()};
             IRenderGraphResourceLease *activeGraphLease_{nullptr};
 
             struct CancelledRecording {
