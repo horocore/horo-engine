@@ -108,7 +108,8 @@ def build_native(arguments: argparse.Namespace, profile: dict, activity_root: Pa
 def provenance(tools: dict, profile: dict, abis: dict, assets: list[dict]) -> dict:
     revision = version_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).strip()
     return {"schema": 1, "sourceRevision": revision, "toolchain": tools, "profile": profile,
-            "abis": abis, "assets": assets, "sourceDateEpoch": 315532800}
+            "abis": abis, "assets": assets, "sourceDateEpoch": 315532800,
+            "javaDependencyLockSha256": digest(ROOT / "android/gradle/gradle.lockfile")}
 
 
 def archive_limits(archive: zipfile.ZipFile) -> None:

@@ -82,8 +82,14 @@ class AndroidPackageTests(unittest.TestCase):
         self.assertIn("lockMode = LockMode.STRICT", build)
         lock = (template / "gradle.lockfile").read_text()
         for module in ("androidx.appcompat:appcompat:1.7.0", "org.jetbrains.kotlin:kotlin-bom:1.8.22",
-                       "org.jetbrains.kotlin:kotlin-stdlib:1.8.22"):
+                       "org.jetbrains.kotlin:kotlin-stdlib:1.8.22", "org.jetbrains.kotlinx:kotlinx-coroutines-bom:1.6.4"):
             self.assertIn(module + "=debugRuntimeClasspath,releaseRuntimeClasspath", lock)
+
+    def test_provenance_binds_exact_runtime_dependency_lock(self):
+        with patch.object(android_package, "version_output", return_value="abc123"):
+            evidence = android_package.provenance(self.tools, self.profile, {}, [])
+        lock = android_package.ROOT / "android/gradle/gradle.lockfile"
+        self.assertEqual(evidence["javaDependencyLockSha256"], hashlib.sha256(lock.read_bytes()).hexdigest())
 
     def test_real_elf_admits_declared_abi_api_and_alignment(self):
         record = inspect_elf(self.library(), 183)
