@@ -464,6 +464,9 @@ horo_configure_target_header_boundary(HoroGameplayBuild PUBLIC_HEADERS
     Horo/Application/CompilerDiagnosticParser.h
     Horo/Application/GameplayBuildService.h
 )
+horo_configure_target_header_boundary(HoroShaderBuild PUBLIC_HEADERS
+    Horo/Application/ShaderBuildService.h
+)
 horo_configure_target_header_boundary(HoroGameplayLua PUBLIC_HEADERS
     Horo/Gameplay/LuaBehavior.h
 )
