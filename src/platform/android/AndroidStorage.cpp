@@ -178,8 +178,7 @@ namespace Horo::Platform {
             const auto canonical = std::filesystem::canonical(path, error);
             if (error)
                 return Result<std::filesystem::path>::Failure(Android::AndroidStorageAdapter::AccessFailure(false, true));
-            const bool directory = std::filesystem::is_directory(canonical, error);
-            if (!directory || error)
+            if (const bool directory = std::filesystem::is_directory(canonical, error); !directory || error)
                 return Result<std::filesystem::path>::Failure(Android::AndroidStorageAdapter::AccessFailure(false, true));
             if (!SafePath(canonical))
                 return Result<std::filesystem::path>::Failure(InvalidName());
