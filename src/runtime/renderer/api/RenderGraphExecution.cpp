@@ -9,6 +9,21 @@
 #include <utility>
 
 namespace Horo::Render {
+    /** @copydoc IRenderBackend::ParallelRecordingCapabilities */
+    RenderParallelRecordingCapabilities IRenderBackend::ParallelRecordingCapabilities() const noexcept {
+        return {};
+    }
+
+    /** @copydoc IRenderBackend::PrepareParallelGraph */
+    Result<std::shared_ptr<IRenderParallelGraphRecording>> IRenderBackend::PrepareParallelGraph(const RenderGraphExecutionRequest &) {
+        return Result<std::shared_ptr<IRenderParallelGraphRecording>>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+    }
+
+    /** @copydoc IRenderBackend::AcceptParallelGraph */
+    Result<void> IRenderBackend::AcceptParallelGraph(const std::shared_ptr<IRenderParallelGraphRecording> &) {
+        return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+    }
+
     /** @copydoc IRenderBackend::ExecuteGraph */
     Result<void> IRenderBackend::ExecuteGraph(const RenderGraphExecutionRequest &) {
         return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));

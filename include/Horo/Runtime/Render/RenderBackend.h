@@ -10,6 +10,7 @@
 #include "Horo/Runtime/Render/RenderAdapter.h"
 #include "Horo/Runtime/Render/RenderCapabilities.h"
 #include "Horo/Runtime/Render/RenderMemoryTypes.h"
+#include "Horo/Runtime/Render/RenderParallelWork.h"
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "Horo/Runtime/Render/Texture.h"
 
@@ -392,6 +393,25 @@ namespace Horo::Render {
          * @return Success or a typed unsupported/admission/encoding failure, without fallback.
          */
         [[nodiscard]] virtual Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request);
+
+        /** @brief Returns explicit worker-native support; unsupported backends return zero bounds. */
+        [[nodiscard]] virtual RenderParallelRecordingCapabilities ParallelRecordingCapabilities() const noexcept;
+        /**
+         * @brief Freezes and validates native graph payload on the render owner before scheduling.
+         * @param request Synchronously borrowed exact graph, workloads, resolved generations and owner lease.
+         * @return Owning worker-safe recording, or typed unsupported/admission failure without fallback.
+         * @details Success transfers resource-lease release responsibility to this backend. Failure
+         * leaves it with the caller. Cancelled live callbacks count against the finite capability bound.
+         */
+        [[nodiscard]] virtual Result<std::shared_ptr<IRenderParallelGraphRecording>> PrepareParallelGraph(
+            const RenderGraphExecutionRequest &request);
+        /**
+         * @brief Accepts fully recorded commands on the render owner in canonical graph order.
+         * @param recording Exact session returned for the still-active frame by this backend.
+         * @return Success or typed stale, cancelled, incomplete or native failure; never waits.
+         * @details Success prepares ordered submission at Present; CPU readiness is not GPU completion.
+         */
+        [[nodiscard]] virtual Result<void> AcceptParallelGraph(const std::shared_ptr<IRenderParallelGraphRecording> &recording);
 
         /** @brief Completes the active frame and presents when the backend supports presentation. */
         [[nodiscard]] virtual Result<void> Present(FrameToken frame) = 0;

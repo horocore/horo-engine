@@ -76,6 +76,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroTerrainPayloadManifestPublicHeaderConsumer
     HoroTerrainProducerSnapshotTests
     HoroTerrainProducerSnapshotPublicHeaderConsumer
+    HoroNavigationRuntimeTests
+    HoroNavigationBakeServiceTests
 )
 
 set(HORO_CI_NAVIGATION_TARGETS

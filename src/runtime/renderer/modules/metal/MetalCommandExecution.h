@@ -5,6 +5,8 @@
 #include "MetalBackendInternal.h"
 
 namespace Horo::Render::Detail {
+    /** @brief Validates every graph binding without encoding; shared by serial and worker-native admission. */
+    [[nodiscard]] Result<void> ValidateMetalRenderGraph(const IMetalRuntime &runtime, const RenderGraphExecutionRequest &request);
     /**
      * @brief Validates the entire graph before encoding its ordered single-queue workloads.
      * @param runtime Active owner-thread Metal runtime borrowed synchronously.

@@ -60,10 +60,14 @@ namespace Horo::Runtime {
         State(SaveFilesystemStorage files, SaveSlotLifecyclePolicy admission, ISaveSlotLifecycleHost &authority)
             : storage(std::move(files)), policy(std::move(admission)), host(&authority) {}
 
+    private:
+        friend class SaveSlotLifecycle;
+
         SaveFilesystemStorage storage;
         const SaveSlotLifecyclePolicy policy;
         ISaveSlotLifecycleHost *host;
 
+    public:
         /** @brief Pins this owner's worker operation until its detached catalog is released. */
         [[nodiscard]] std::unique_lock<std::mutex> AcquireOperation() {
             return std::unique_lock{mutex_};
@@ -86,6 +90,9 @@ namespace Horo::Runtime {
 
         Operation(const Operation &) = delete;
         Operation &operator=(const Operation &) = delete;
+
+    private:
+        friend class SaveSlotLifecycle;
 
         SaveSlotLifecycleDetail::Catalog catalog;
     };
