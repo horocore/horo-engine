@@ -1,8 +1,8 @@
 #include "Horo/Scene/ScenePrefabExpansionOwner.h"
 
 #include <algorithm>
-#include <exception>
 #include <new>
+#include <nlohmann/json.hpp>
 
 namespace Horo::SceneSource {
     namespace {
@@ -117,13 +117,13 @@ namespace Horo::SceneSource {
             if (!AdmitDocument(document))
                 return Result<void>::Failure(MakeError(Prefab::PrefabErrors::PayloadTooLarge));
             try {
-                const auto bytes = EncodeSceneSource({document.objects, document.prefabInstances});
-                if (bytes.size() > MaximumSceneSourceBytes)
+                if (const auto bytes = EncodeSceneSource({document.objects, document.prefabInstances});
+                    bytes.size() > MaximumSceneSourceBytes)
                     return Result<void>::Failure(MakeError(Prefab::PrefabErrors::PayloadTooLarge));
                 return Result<void>::Success();
             } catch (const std::bad_alloc &) {
                 throw;  // The public admission/completion boundary returns the allocation-specific typed failure.
-            } catch (const std::exception &error) {
+            } catch (const nlohmann::json::exception &error) {
                 return Result<void>::Failure(MakeError(Prefab::PrefabErrors::AdmissionRejected, error.what()));
             }
         }
@@ -142,7 +142,8 @@ namespace Horo::SceneSource {
 
         /** @brief Recognizes terminal scheduler state; its snapshot lock synchronizes the completed owned envelope. */
         bool Terminal(const JobState state) noexcept {
-            return state == JobState::Succeeded || state == JobState::Failed || state == JobState::Cancelled;
+            using enum JobState;
+            return state == Succeeded || state == Failed || state == Cancelled;
         }
     }  // namespace
 
@@ -181,6 +182,15 @@ namespace Horo::SceneSource {
             return Result<void>::Success();
         }
 
+        /** @brief Converts worker allocation pressure into the same typed failure as owner admission. */
+        Result<void> ExecuteSafely(const CancellationToken &token) {
+            try {
+                return Execute(token);
+            } catch (const std::bad_alloc &) {
+                return Result<void>::Failure(MakeError(Prefab::PrefabErrors::ExpansionCacheAllocationFailed));
+            }
+        }
+
         /** @brief Resolves missing exact keys and invokes the ordinary transactional Scene conversion without live owner access. */
         Result<void> Execute(const CancellationToken &token) {
             ScenePrefabProjection projection;
@@ -196,11 +206,9 @@ namespace Horo::SceneSource {
                     entry.expanded = *hits[index];
                 else {
                     auto candidate = request.resolver.Resolve(placement.sourcePrefab.Asset(), placement.instanceId, request.limits, token);
-                    if (candidate.HasError()) {
-                        if (token.IsCancellationRequested())
-                            return JobCancelled(candidate.ErrorValue());
-                        return Result<void>::Failure(candidate.ErrorValue());
-                    }
+                    if (candidate.HasError())
+                        return token.IsCancellationRequested() ? JobCancelled(candidate.ErrorValue())
+                                                               : Result<void>::Failure(candidate.ErrorValue());
                     candidates[index] = std::move(candidate).Value();
                     entry.expanded = *candidates[index];
                 }
@@ -252,7 +260,7 @@ namespace Horo::SceneSource {
 
     /** @copydoc ScenePrefabExpansionOwner::CaptureWork */
     Result<std::shared_ptr<ScenePrefabExpansionOwner::Work>> ScenePrefabExpansionOwner::CaptureWork(
-        const ScenePrefabExpansionRequest &request, const CancellationToken &cancellation) {
+        const ScenePrefabExpansionRequest &request, const CancellationToken &cancellation) const {
         using Output = std::shared_ptr<Work>;
         if (const auto admitted = AdmitResolver(request.resolver, cancellation); admitted.HasError())
             return Result<Output>::Failure(admitted.ErrorValue());
@@ -285,11 +293,7 @@ namespace Horo::SceneSource {
             // Restrict, never widen, host permissions: owner admission cannot block on queue space.
             const JobProducerScope admission{JobProducerRole::ExternalUnknown};
             auto submitted = jobs_.SubmitResult({.parentCancellation = cancellation}, [work](const CancellationToken &token) {
-                try {
-                    return work->Execute(token);
-                } catch (const std::bad_alloc &) {
-                    return Result<void>::Failure(MakeError(Prefab::PrefabErrors::ExpansionCacheAllocationFailed));
-                }
+                return work->ExecuteSafely(token);
             });
             if (submitted.HasError())
                 return Result<JobId>::Failure(submitted.ErrorValue());
@@ -301,20 +305,28 @@ namespace Horo::SceneSource {
         }
     }
 
+    /** @copydoc ScenePrefabExpansionOwner::MemoizeCandidate */
+    Result<void> ScenePrefabExpansionOwner::MemoizeCandidate(Work &completed, const std::size_t index) {
+        try {
+            const auto stored = cache_.Store(std::move(completed.keys[index]), std::move(*completed.candidates[index]));
+            if (stored.HasError() &&
+                stored.ErrorValue().code.Value() != Prefab::PrefabErrors::ExpansionCacheCapacityExceeded.code.Value() &&
+                stored.ErrorValue().code.Value() != Prefab::PrefabErrors::ExpansionCacheAllocationFailed.code.Value())
+                return Result<void>::Failure(stored.ErrorValue());
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            // Optional retention may fail even while constructing its error; validated output remains publishable.
+            return Result<void>::Success();
+        }
+    }
+
     /** @copydoc ScenePrefabExpansionOwner::Memoize */
     Result<void> ScenePrefabExpansionOwner::Memoize(Work &completed) {
         for (std::size_t index = 0; index < completed.candidates.size(); ++index) {
             if (!completed.candidates[index])
                 continue;
-            try {
-                const auto stored = cache_.Store(std::move(completed.keys[index]), std::move(*completed.candidates[index]));
-                if (stored.HasError() &&
-                    stored.ErrorValue().code.Value() != Prefab::PrefabErrors::ExpansionCacheCapacityExceeded.code.Value() &&
-                    stored.ErrorValue().code.Value() != Prefab::PrefabErrors::ExpansionCacheAllocationFailed.code.Value())
-                    return Result<void>::Failure(stored.ErrorValue());
-            } catch (const std::bad_alloc &) {
-                // Error construction itself may allocate; optional retention cannot discard validated output.
-            }
+            if (const auto stored = MemoizeCandidate(completed, index); stored.HasError())
+                return stored;
         }
         return Result<void>::Success();
     }
@@ -362,8 +374,7 @@ namespace Horo::SceneSource {
         if (work_) {
             static_cast<void>(handle_.RequestCancel());
             auto joined = handle_.Wait(options);
-            const auto snapshot = handle_.Snapshot();
-            if (!snapshot || !Terminal(snapshot->state))
+            if (const auto snapshot = handle_.Snapshot(); !snapshot || !Terminal(snapshot->state))
                 return joined;
             // Terminal job failure/cancellation has still drained ownership; it is not a teardown failure.
             work_.reset();

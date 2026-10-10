@@ -69,7 +69,11 @@ cross-thread telemetry accessor, and excludes allocator bookkeeping.
 Canonical source encoding uses a non-installed structural wire helper shared by
 the Prefab and Scene source targets. Ordinary bounded-schema containers clean up
 without allocation; only scalar escaping/number spelling uses the pinned JSON
-codec. Prefab insertion ordering and Scene sorted-map ordering, indentation and
+codec. String scalars and field names first establish valid empty string storage,
+then assign content: the pinned compatible-type constructor sets the string tag
+before allocation and cannot safely unwind an allocation failure. Typed storage
+construction preserves codec escaping while avoiding that incomplete state.
+Prefab insertion ordering and Scene sorted-map ordering, indentation and
 final newlines are preserved. Prefab serialization and resolver admission return
 typed allocation failures. Scene owner admission translates encoding allocation
 failure at its existing Result boundary without accepting a partial attempt.

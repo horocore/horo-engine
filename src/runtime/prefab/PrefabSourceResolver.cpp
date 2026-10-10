@@ -24,8 +24,8 @@ namespace Horo::Prefab {
                     return Result<Output>::Failure(bytes.ErrorValue());
                 if (bytes.Value().size() > PrefabHardLimits::SourceDocumentBytes)
                     return Result<Output>::Failure(MakeError(PrefabErrors::PayloadTooLarge));
-                commitments.push_back(
-                    {source.document.Data().assetId, ComputeSha256(std::as_bytes(std::span{bytes.Value()})), bytes.Value().size()});
+                commitments.emplace_back(source.document.Data().assetId, ComputeSha256(std::as_bytes(std::span{bytes.Value()})),
+                                         bytes.Value().size());
             }
             return Result<Output>::Success(std::move(commitments));
         }

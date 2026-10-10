@@ -200,7 +200,7 @@ namespace Horo::Application::PrefabCookDetail {
                     return Result<Runtime::RuntimeSceneDefinition>::Failure(completed.ErrorValue());
                 if (!completed.Value())
                     return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(PrefabSceneCookErrors::Stale));
-                return Result<Runtime::RuntimeSceneDefinition>::Success(std::move(*completed.Value()));
+                return Result<Runtime::RuntimeSceneDefinition>::Success(*std::move(completed).Value());
             } catch (const std::bad_alloc &) {
                 return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(Prefab::PrefabErrors::ExpansionCacheAllocationFailed));
             }
@@ -304,17 +304,15 @@ namespace Horo::Application::PrefabCookDetail {
                                                          const Assets::AssetCookInputSnapshot &inputs,
                                                          const Prefab::PrefabSourceResolverSnapshot &resolver,
                                                          const Prefab::PrefabDependencyGraphSnapshot &graph,
-                                                         const Prefab::PrefabLimitProfile &limits, const Sha256Digest &settings,
-                                                         const CancellationToken &cancellation,
-                                                         SceneSource::ScenePrefabExpansionOwner &expansion) {
+                                                         const Prefab::PrefabLimitProfile &limits, const ScenePreparationContext &context) {
             std::vector<PreparedScene> scenes;
             std::uint64_t totalPayloadBytes{};
             for (const auto &input : inputs.Sources()) {
-                if (cancellation.IsCancellationRequested())
+                if (context.cancellation.IsCancellationRequested())
                     return Result<std::vector<PreparedScene>>::Failure(MakeError(PrefabSceneCookErrors::Cancelled));
                 if (input.record.type.Value() != "core.scene")
                     continue;
-                auto scene = PrepareScene(input, inputs.Registry(), resolver, graph, limits, {request, settings, cancellation, expansion});
+                auto scene = PrepareScene(input, inputs.Registry(), resolver, graph, limits, context);
                 if (scene.HasError())
                     return Result<std::vector<PreparedScene>>::Failure(scene.ErrorValue());
                 if (scene.Value().payload.size() > request.maximumCapturedBytes - totalPayloadBytes ||
@@ -376,7 +374,7 @@ namespace Horo::Application::PrefabCookDetail {
         if (resources.HasError())
             return Result<PreparedCatalog>::Failure(resources.ErrorValue());
         const auto settings = resources.Value().settings;
-        auto scenes = PrepareScenes(request, inputs, resolver.Value(), graph.Value(), limits, settings, cancellation, expansion);
+        auto scenes = PrepareScenes(request, inputs, resolver.Value(), graph.Value(), limits, {request, settings, cancellation, expansion});
         if (scenes.HasError())
             return Result<PreparedCatalog>::Failure(scenes.ErrorValue());
         auto published = PublishContributions(std::move(resources).Value(), std::move(scenes).Value(), request);

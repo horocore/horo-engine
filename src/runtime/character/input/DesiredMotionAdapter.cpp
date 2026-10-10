@@ -122,10 +122,10 @@ namespace Horo::CharacterInput {
         Result<void> ValidateRouting(const Input::InputRouter &router, const Input::InputContextToken &context) {
             if (captureOwner != &router)
                 return Result<void>::Failure(MakeError(Character::CharacterErrors::CapabilityStale));
-            const auto current = router.RoutingState(context);
-            if (!routingValid || current.contextIdentity != routing.contextIdentity ||
-                current.configurationRevision != routing.configurationRevision ||
-                current.assignmentRevision != routing.assignmentRevision || !current.WithinLimits(64, 16)) {
+            if (const auto current = router.RoutingState(context); !routingValid || current.contextIdentity != routing.contextIdentity ||
+                                                                   current.configurationRevision != routing.configurationRevision ||
+                                                                   current.assignmentRevision != routing.assignmentRevision ||
+                                                                   !current.WithinLimits(64, 16)) {
                 ClearInput();
                 routingValid = false;
                 capability.Revoke();
@@ -180,14 +180,13 @@ namespace Horo::CharacterInput {
     Result<DesiredMotionAdapter> DesiredMotionAdapter::Create(const DesiredMotionPrincipal principal,
                                                               Character::CharacterCapability capability,
                                                               const Character::CharacterControllerHandle controller,
-                                                              DesiredMotionInputBinding binding, Input::InputRouter *router,
+                                                              DesiredMotionInputBinding binding, const Input::InputRouter *router,
                                                               const Input::InputContextToken *context) {
         if (!principal.permissionGranted || principal.identity == 0)
             return Result<DesiredMotionAdapter>::Failure(MakeError(Character::CharacterErrors::CapabilityUnavailable));
         if (principal.source != DesiredMotionSource::GameplayInput && principal.source != DesiredMotionSource::ExternalIntent)
             return Result<DesiredMotionAdapter>::Failure(MakeError(Character::CharacterErrors::DescriptorInvalid));
-        const auto descriptor = capability.ControllerDescriptor(controller);
-        if (descriptor.HasError())
+        if (const auto descriptor = capability.ControllerDescriptor(controller); descriptor.HasError())
             return Result<DesiredMotionAdapter>::Failure(descriptor.ErrorValue());
         if (!ValidSourceBinding(principal.source, binding, router, context))
             return Result<DesiredMotionAdapter>::Failure(MakeError(Character::CharacterErrors::DescriptorInvalid));
@@ -234,8 +233,7 @@ namespace Horo::CharacterInput {
             return Result<DesiredMotionFrame>::Failure(MakeError(Character::CharacterErrors::CommandOrderInvalid));
         if (!ValidIntent(intent))
             return Result<DesiredMotionFrame>::Failure(MakeError(Character::CharacterErrors::RequestInvalid));
-        const auto live = state_->capability.ControllerDescriptor(state_->controller);
-        if (live.HasError())
+        if (const auto live = state_->capability.ControllerDescriptor(state_->controller); live.HasError())
             return Result<DesiredMotionFrame>::Failure(live.ErrorValue());
         DesiredMotionFrame frame;
         frame.tick_ = tick;

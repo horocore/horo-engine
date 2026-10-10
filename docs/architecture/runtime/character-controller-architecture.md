@@ -171,6 +171,15 @@ no existing Input/Physics public signature; callers opt in through the new ownin
 target and its staged-header consumer. This is not a cinematic lease arbiter or a
 Navigation runtime implementation.
 
+`Create` admits the router through a read-only load-time borrow; later input capture
+still requires the mutable router owned by the host. The `const InputRouter *`
+parameter replaces the previous mutable-pointer declaration because creation only
+reads routing evidence. Existing mutable-router call sites remain source-compatible;
+callers taking the function address must update its parameter type and consumers
+must rebuild for the changed symbol. Gameplay regression fixtures create through a
+const view and then capture through the original mutable router, preserving the
+same owner identity. The action binding remains a by-value load-time parameter.
+
 The public lifecycle surfaces are `Horo/Physics/CharacterWorld.h` and the
 `HoroPhysicsSceneIntegration` adapter owning the
 `Horo/Physics/PhysicsSceneActivation.h` participant. The adapter is the explicit
