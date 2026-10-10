@@ -54,6 +54,7 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
         "HoroTerrainPayloadManifestTests", "HoroTerrainPayloadManifestPublicHeaderConsumer",
         "HoroTerrainProducerSnapshotTests", "HoroTerrainProducerSnapshotPublicHeaderConsumer",
         "HoroRuntimeSaveEventTriggersTests", "HoroSaveEventTriggersPublicHeaderConsumer",
+        "HoroRuntimeSaveRestoreTransactionTests", "HoroSaveGameplayCheckpointPublicHeaderConsumer",
     }
     for workflow in ("prefab-foundation-windows", "extension-abi-windows", "mcp-session-windows", "save-path-windows"):
         assert not (ROOT / f".github/workflows/{workflow}.yml").exists()
@@ -198,3 +199,17 @@ def test_installed_manifest_source_keeps_sonar_coverage() -> None:
     collector = (ROOT / ".github/scripts/collect_sonar_coverage.sh").read_text(encoding="utf-8")
     assert '"$workspace/apps/HoroEditor/app/ConfiguredEditorUpdateManifestSource.cpp"' in collector
     assert "HoroConfiguredEditorUpdateBackendTests" in targets("HORO_SONAR_EDITOR_TARGETS")
+
+
+def test_windows_restore_allocation_sweep_has_mandatory_release_coverage() -> None:
+    build = re.search(r"      - name: Build Windows Release MCP and restore allocation qualification\n(.*?)(?=\n      - name:|\Z)", WORKFLOW, re.S)
+    assert build
+    assert "--target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests" in build.group(1)
+    test = re.search(r"      - name: Test Windows Release restore allocation qualification\n(.*?)(?=\n      - name:|\Z)", WORKFLOW, re.S)
+    assert test
+    assert "!cancelled()" in test.group(1)
+    assert "steps.mcp_release_build.outcome == 'success'" in test.group(1)
+    assert "--no-tests=error --timeout 90 -R '^HoroRuntimeSaveRestoreTransactionTests::'" in test.group(1)
+    assert "continue-on-error" not in test.group(1)
+    assert "--output-junit build/ci-audio-release/restore-ctest.xml" in test.group(1)
+    assert "            build/ci-audio-release/restore-ctest.xml" in WORKFLOW

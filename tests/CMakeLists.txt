@@ -2772,6 +2772,7 @@ target_link_libraries(HoroRuntimeSaveCaptureSnapshotTests PRIVATE HoroEngine::Ru
 add_executable(HoroRuntimeSaveRestoreTransactionTests
         support/AllocationProbe.cpp
         unit/runtime/save/SaveRestoreTransactionTests.cpp
+        unit/runtime/save/SaveGameplayCheckpointTests.cpp
 )
 target_compile_features(HoroRuntimeSaveRestoreTransactionTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSaveRestoreTransactionTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
@@ -3201,6 +3202,12 @@ add_executable(HoroRuntimeSaveSafePointCoordinatorTests
 target_compile_features(HoroRuntimeSaveSafePointCoordinatorTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSaveSafePointCoordinatorTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_link_libraries(HoroRuntimeSaveSafePointCoordinatorTests PRIVATE HoroEngine::Runtime)
+
+add_executable(HoroSaveGameplayCheckpointPublicHeaderConsumer support/SaveGameplayCheckpointPublicHeaderConsumer.cpp)
+target_compile_features(HoroSaveGameplayCheckpointPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroSaveGameplayCheckpointPublicHeaderConsumer PRIVATE HoroEngine::Runtime)
+add_test(NAME HoroSaveGameplayCheckpointPublicHeaderConsumer COMMAND HoroSaveGameplayCheckpointPublicHeaderConsumer)
+set_tests_properties(HoroSaveGameplayCheckpointPublicHeaderConsumer PROPERTIES LABELS "unit;save;headless;ci-windows")
 
 add_executable(HoroSaveThumbnailCapturePublicHeaderConsumer support/SaveThumbnailCapturePublicHeaderConsumer.cpp)
 target_compile_features(HoroSaveThumbnailCapturePublicHeaderConsumer PRIVATE cxx_std_20)
