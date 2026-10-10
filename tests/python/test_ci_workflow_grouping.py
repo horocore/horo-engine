@@ -31,6 +31,7 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
     assert targets("HORO_CI_WINDOWS_TARGETS") == targets("HORO_CI_AUDIO_TARGETS") | {
         "HoroLightCullingTests", "HoroLightFramePoolTests",
         "HoroAITaskSchedulerTests", "HoroAITaskSchedulerPublicConsumer",
+        "HoroAnimationApiTests", "HoroAnimationGraphPublicHeaderConsumer",
         "HoroD3D12InitializationTests",
         "HoroMaterialBindingTests", "HoroMaterialBindingPublicHeaderConsumer",
         "HoroNetworkDebuggerTests", "HoroNetworkDebuggerPublicHeaderConsumer",
@@ -333,6 +334,14 @@ def test_windows_material_binding_has_tests_and_owned_consumer() -> None:
         assert registry.count(f"Horo/Runtime/Render/{header}") == 1
     assert "        HoroMaterialBindingTests\n" in cmake
 
+def test_animation_graph_has_windows_execution_and_sonar_consumer_closure() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    for target in ("HoroAnimationApiTests", "HoroAnimationGraphPublicHeaderConsumer"):
+        assert target in targets("HORO_CI_WINDOWS_TARGETS")
+        assert tests_cmake.index(f"add_executable({target}") < tests_cmake.index("horo_finalize_ci_suites()")
+    assert 'LABELS "unit;animation;headless;public_headers;ci-windows"' in tests_cmake
+    for source in ("AnimationGraphTests.cpp", "AnimationGraphBindingTests.cpp", "AnimationGraphSourceTests.cpp"):
+        assert f"unit/runtime/animation/{source}" in tests_cmake
 
 def test_windows_save_timeout_diagnostics_preserve_the_original_gate_and_artifacts() -> None:
     def step(name: str) -> str:

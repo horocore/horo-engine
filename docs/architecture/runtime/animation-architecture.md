@@ -372,11 +372,131 @@ AnimationGraph
           +-- Aim Offset
 ```
 
-Graph assets compile to a runtime `AnimationGraphInstance`. The graph owns its
+Graph assets compile to immutable `AnimationGraphProgram` tables consumed by a
+runtime `AnimationGraphInstance`. The instance owns its
 parameter block, pose working memory, player cursors, and the exact fractional
 remainders produced by playback-rate multiplication and cursor accumulation.
 Candidate cursors and remainders publish together only when their fixed tick
 commits.
+
+### Authoring Schema And Compiler (ANI-002.1)
+
+`Horo/Animation/AnimationGraph.h` belongs solely to `HoroAnimationApi`, with
+Foundation and Assets as its only public dependencies. `AnimationGraphData` is a
+detached domain candidate, not a registry, file reader, or runtime instance.
+Assets retains persistent `AssetId` authority; `AnimationGraphId` and `SkeletonId`
+wrap those identities. Definitions, nodes, pins, parameters, and definition inputs
+have distinct non-zero 64-bit stable IDs. Definition IDs are asset-local, node IDs
+are definition-local, pin IDs are node-local, parameter IDs are asset-local, and
+interface input IDs are definition-local. Vector positions and names are never
+persisted identity. Names are bounded ASCII binding identifiers, not localized
+editor labels.
+
+The initial compiler supports typed Clip, Blend, Parameter, Output, Input and Call
+nodes. Each node has exactly the compiler-owned pin-role shape. Clip and Call
+produce a pose; Blend takes two poses and one float weight; Parameter reads its
+exact declared scalar type; Input reads its definition's typed interface; Output
+consumes one pose. The compiler does not sample clips, blend poses, consume
+triggers, resolve skeleton publications, select a backend, or discover external
+subgraphs. Blend trees, state machines, IK and other nodes require their own
+versioned semantic contract before admission; illustrative node lists below do
+not imply that those runtime implementations exist.
+
+Connections store stable source/destination endpoints and an explicit transport
+type: pose, float, boolean, integer or trigger. Every input has exactly one source;
+fan-out is allowed. Implicit coercion, duplicate destinations, missing endpoints,
+unknown enum representations, contradictory roles, and non-finite or incorrectly
+typed defaults fail. Trigger defaults are false; runtime consumption remains
+ANI-002.3's responsibility. Each definition has exactly one pose sink, every node
+contributes to that sink, and each declared interface has exactly one input node.
+The entry definition has no external inputs. Calls reference definitions within
+the same candidate and exactly match their stable input interfaces.
+
+Compilation validates both the node DAG and the subgraph call DAG, including
+unused definitions. Both self-recursion and indirect recursion fail. Stable-ID
+ordering governs canonical parameters/definitions/pins and the lexicographically
+least ready-node topological schedule. Compiled operands reference earlier local
+instruction indexes and preserve their stable source definition, node and pin.
+Instructions preserve destination pins, typed payloads, and dense parameter/call
+indexes; the graph's sorted unique clip dependencies remain persistent IDs. Host
+asset admission must report those dependencies plus the skeleton through Assets,
+and the future runtime instance must resolve exact immutable generations before
+evaluation. The entry occurrence plan includes a stable root-to-leaf call-node path, so two
+calls to the same definition have distinct source and player identities. Each
+occurrence contains typed working-slot accesses to the actual Clip/Blend/Parameter
+writer. Input/Output/Call aliases preserve `outputProducer` across nested interfaces;
+Call occurrences follow completion of every callee occurrence. The plan also carries
+an optional clip player/binding index and an optional parameter-read index. Input/Output/Call nodes alias their exact interface/result pose; Clip and
+Blend own separate pose slots. Parameter nodes allocate scalar slots of their
+exact declared type and read the single canonical parameter block; no graph node
+writes that block. This is a compiled access/allocation plan, not a runtime
+parameter store or evaluator. Source mapping is independent of authoring vector
+order. Failures use
+stable `animation.graph.*` codes; graph-local diagnostic paths contain stable IDs,
+never project paths or authoring content.
+
+Compilation requires caller-pinned validated `SkeletonAsset` and `AnimationClipAsset`
+snapshots plus the exact skeleton publication generation. The compiler rejects
+missing, extra or duplicate clips, wrong skeleton IDs, stale skeleton generations,
+and incompatible contract versions. The program copies the exact skeleton layout
+and complete clip descriptors; it retains no borrowed dependency pointer/span.
+Publication must recheck that the captured snapshot remains authoritative, and the
+future runtime owner must pin those exact generations through use.
+
+The compiled program owns immutable tables exposed through const spans. Instances
+own all mutable parameter, player and pose state. Definition `callDepth` and
+`evaluationInstructions` include repeated calls and let the future instance owner
+preallocate a finite call stack and evaluation storage. The implementation ceiling
+is 64 definitions, 4096 nodes, 16384 pins, 8192 connections, 256 parameters and 32
+call levels; captured policy may reduce these values. Expanded work is capped at
+65536 instructions for every definition, even when stored programs are small.
+Stable call-path entries are additionally capped at 131072 across expanded maps;
+instance plans admit at most 4096 pose slots, 4096 scalar slots, 4096 clip players
+and 1048576 pose transforms. Policy can lower each ceiling, including to zero for
+unused storage categories. `Memory()` reports exact typed-slot, pose-transform,
+player, parameter and call-depth requirements before instance allocation.
+Compile/migration work allocates only at load/tool boundaries, never reads files,
+and checks a Foundation cancellation token during bounded loops and before
+returning. Program accessors allocate nothing. This contract does not claim an
+allocation-free evaluator has been implemented; ANI-002.2 owns that proof.
+
+#### Versioning And Migration
+
+Version 2 requires explicit connection transport types. The bounded version-1
+migration input uses the same typed nodes and stable identities, with every
+connection type set to `Unspecified`. `MigrateAnimationGraph` derives each edge's
+type from its source pin, then runs complete version-2 validation, including the
+destination type. It never guesses coercions or repairs missing IDs. Version 2
+migration is an idempotent validated canonical copy; any other version fails.
+`Compile` admits only version 2, making migration an explicit host boundary.
+The durable UTF-8 JSON codec lives in the dedicated
+`HoroEngine::AnimationGraphSourceCodec` target; its JSON dependency stays private,
+and `AnimationApi` continues to expose only Foundation/Assets usage requirements.
+The [Graph Source Contract](./animation-graph-source-contract.md) defines canonical
+field order, dependency projection, hostile-input ceilings and version-1 migration.
+No pre-existing graph format is grandfathered or claimed. AST graph cook/load
+contributions remain subject to the dependency-content cache-key prerequisite;
+authoring bytes and detached compiled tables do not claim packaged cook support.
+
+The public change is additive: existing animation source/components and headers
+retain their contracts and target dependencies. Consumers include the new owning
+header through `HoroEngine::AnimationApi`; the ownership registry and dedicated
+public consumer enforce those boundaries. The animation tests and public consumer
+are included in Windows build/execution grouping; the consumer is registered
+before CI suite finalization so Sonar coverage includes its executable. Future
+graph instances consume the program
+instead of building another string-based node model.
+
+#### Replacement And Shutdown
+
+The compiler is synchronous and publishes nothing. A replacement context requires
+an exact stable graph identity, and detached candidates are returned only after
+complete validation. A failed, cancelled or shutdown invocation cannot mutate a
+previous program. The host retains the last good program and atomically commits a
+successful candidate only when its dependency snapshot remains current. Admission
+closure rejects new compiler calls; cancellation produces no callbacks or retained
+worker task. Runtime generation retirement, instance reconciliation, and clip
+publication binding belong to ANI-004.4/ANI-002.2 rather than this schema slice.
 
 ### Graph Parameters
 
