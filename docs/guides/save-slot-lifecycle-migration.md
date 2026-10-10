@@ -6,6 +6,13 @@ namespace with an approved `ProductSaveRoot`, immutable product policy and a hos
 authority that outlives accepted work. It retains the existing filesystem kernel
 namespace lock; a second owner cannot open the same physical namespace.
 
+Each operation owns a detached catalog snapshot and a private RAII owner lock.
+Loading, optimistic consent, staging, publication and bounded recovery use that
+same operation. The lock remains held until its catalog is destroyed; helpers do
+not reacquire it. Opening validates the initial manifest before publishing the
+owner, and releases that initial operation before moving the owner to its caller.
+There is no ambient mutable catalog cache or second source of selection truth.
+
 The host grants each operation independently. Shipping is the default profile,
 all capabilities default to denied, and signatures default to Required. Server
 composition requires Required signatures. Explicit unsigned local policy retains

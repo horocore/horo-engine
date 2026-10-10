@@ -50,7 +50,7 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
     /** @brief Validates every publication field against the admitted archive. */
     [[nodiscard]] Result<void> Matches(const SaveSlotCatalogEntry &entry, const ValidatedSaveArchive &archive);
     /** @brief Produces scope-bound unpublished-generation journal bytes before hidden-file creation. */
-    [[nodiscard]] std::vector<std::byte> EncodeJournal(Journal journal, const SaveNamespaceId &name);
+    [[nodiscard]] std::vector<std::byte> EncodeJournal(const Journal &journal, const SaveNamespaceId &name);
     /** @brief Rejects altered, wrong-scope or malformed recovery ownership records. */
     [[nodiscard]] Result<Journal> DecodeJournal(std::span<const std::byte> bytes, const SaveNamespaceId &name);
 }  // namespace Horo::Runtime::SaveSlotLifecycleDetail
@@ -63,9 +63,30 @@ namespace Horo::Runtime {
         SaveFilesystemStorage storage;
         const SaveSlotLifecyclePolicy policy;
         ISaveSlotLifecycleHost *host;
-        // Worker-only ownership of catalog selection, preparation and cleanup. The kernel namespace
-        // lock excludes other instances/processes. Host binding leases exclude profile switches.
-        mutable std::mutex mutex;
-        mutable SaveSlotLifecycleDetail::Catalog catalog;
+
+        /** @brief Pins this owner's worker operation until its detached catalog is released. */
+        [[nodiscard]] std::unique_lock<std::mutex> AcquireOperation() {
+            return std::unique_lock{mutex_};
+        }
+
+    private:
+        // The kernel namespace lock excludes other instances/processes; the host binding lease
+        // excludes profile switches. This mutex orders entire operations within this owner.
+        std::mutex mutex_;
+    };
+
+    /** @brief One worker operation owns its detached catalog and the owner's complete-operation lock. */
+    struct SaveSlotLifecycle::Operation final {
+    private:
+        // Declared first so the lock also outlives destruction of the detached catalog.
+        std::unique_lock<std::mutex> lock_;
+
+    public:
+        explicit Operation(State &state) : lock_(state.AcquireOperation()) {}
+
+        Operation(const Operation &) = delete;
+        Operation &operator=(const Operation &) = delete;
+
+        SaveSlotLifecycleDetail::Catalog catalog;
     };
 }  // namespace Horo::Runtime

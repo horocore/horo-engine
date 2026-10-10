@@ -151,7 +151,10 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
             return Result<Catalog>::Failure(MakeError(SaveErrors::SlotCommitInvalid));
         try {
             const auto body = bytes.subspan(kDigestBytes);
-            const std::string text(reinterpret_cast<const char *>(body.data()), body.size());
+            std::string text(body.size(), '\0');
+            std::ranges::transform(body, text.begin(), [](const std::byte value) {
+                return std::to_integer<char>(value);
+            });
             auto value = Json::parse(text, [](const int depth, Json::parse_event_t, Json &) {
                 if (depth > 6)
                     throw std::invalid_argument("Lifecycle catalog nesting bound exceeded");
@@ -172,7 +175,7 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
                 catalog.records.push_back(decode(item));
             for (const auto &item : value.at(4)) {
                 auto record = decode(item);
-                catalog.retired.push_back({std::move(record.entry), record.deleted});
+                catalog.retired.emplace_back(std::move(record.entry), record.deleted);
             }
             if (!ValidCatalog(catalog, policy))
                 return Result<Catalog>::Failure(MakeError(SaveErrors::SlotCommitInvalid));
@@ -185,7 +188,7 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
     }
 
     /** @copydoc EncodeJournal */
-    std::vector<std::byte> EncodeJournal(const Journal journal, const SaveNamespaceId &name) {
+    std::vector<std::byte> EncodeJournal(const Journal &journal, const SaveNamespaceId &name) {
         const auto key = EncodeSaveNamespaceKey(name).Value();
         std::vector<std::byte> body(key.Bytes().begin(), key.Bytes().end());
         for (const auto byte : journal.generation.Bytes())
@@ -197,8 +200,8 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
 
     /** @copydoc DecodeJournal */
     Result<Journal> DecodeJournal(const std::span<const std::byte> bytes, const SaveNamespaceId &name) {
-        const auto key = EncodeSaveNamespaceKey(name).Value();
-        if (bytes.size() != kDigestBytes + CanonicalSaveNamespaceKeyBytes + 16 + kDigestBytes || !Sealed(bytes) ||
+        if (const auto key = EncodeSaveNamespaceKey(name).Value();
+            bytes.size() != kDigestBytes + CanonicalSaveNamespaceKeyBytes + 16 + kDigestBytes || !Sealed(bytes) ||
             !std::ranges::equal(bytes.subspan(kDigestBytes, CanonicalSaveNamespaceKeyBytes), key.Bytes()))
             return Result<Journal>::Failure(MakeError(SaveErrors::SlotCommitInvalid));
         SaveIdentityDetail::Bytes generation{};
