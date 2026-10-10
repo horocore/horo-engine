@@ -84,6 +84,9 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroExtensionManagerTests
     HoroEditorActivityBoundaryTests
     HoroExtensionsPublicHeaderConsumer
+
+    HoroPackageLifecycleTests
+    HoroPackageLifecyclePublicHeaderConsumer
     HoroMcpSessionTests
     HoroMcpSessionPublicHeaderConsumer
     HoroRuntimeSaveRootResolverTests

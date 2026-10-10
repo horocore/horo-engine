@@ -246,6 +246,10 @@ horo_configure_target_header_boundary(HoroPackageSecurity PUBLIC_HEADERS
     Horo/Packages/PackagePublisherVerification.h
     Horo/Packages/PackagePublisherVerificationErrors.h
 )
+horo_configure_target_header_boundary(HoroPackageLifecycle PUBLIC_HEADERS
+    Horo/Packages/PackageLifecycle.h
+    Horo/Packages/PackageLifecycleErrors.h
+)
 horo_configure_target_header_boundary(HoroProjectMigrations)
 horo_configure_target_header_boundary(HoroSaveApi PUBLIC_HEADERS
     Horo/Runtime/Save/SaveErrors.h

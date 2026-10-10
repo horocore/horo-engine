@@ -98,6 +98,15 @@ namespace Horo::Extensions {
         [[nodiscard]] std::shared_ptr<ExtensionRetirement> Retirement(const std::string &extensionId) const;
 
         /**
+         * @brief Borrows retirement owners retained after rejected native activation.
+         * @return Owner-lane view valid until the next load or finalization call.
+         * @details Failed unload requires process restart and retains its owner against the
+         * manager activation bound. Hosts must preserve package resources while any owner
+         * remains undrained; an activation error does not prove native teardown completed.
+         */
+        [[nodiscard]] std::span<const std::shared_ptr<ExtensionRetirement>> FailedActivationRetirements() const noexcept;
+
+        /**
          * @brief Finalizes drained modules on the same host owner lane used for load and retirement.
          * @details Worker-thread last-lease release never invokes native unload. Releasing the manager with
          * outstanding work retains native records for process lifetime and requires restart. The activation
@@ -126,6 +135,7 @@ namespace Horo::Extensions {
         std::shared_ptr<EditorActivityHost> m_editorActivityHost;
         TransparentStringMap<std::unique_ptr<LoadedExtension>> m_loadedExtensions;
         std::vector<std::string> m_activationOrder;
+        std::vector<std::shared_ptr<ExtensionRetirement>> m_failedActivations;
         /** @brief Reports owner-lane activation capacity; retained records count against the same per-manager bound. */
         [[nodiscard]] bool HasActivationCapacity(std::size_t providerCount) const noexcept;
         [[nodiscard]] Result<void> AcquireProviderDependencies(std::span<const std::string> providers, std::string_view extensionId,
