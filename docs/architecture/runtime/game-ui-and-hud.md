@@ -555,6 +555,70 @@ leases before the next generation can admit delivery; `CancelContext`,
 boundaries. Reconciliation rejects foreign or stale owner evidence and prevents
 capture from crossing contexts or viewports.
 
+### Bounded Pointer, Touch And Gesture Composition
+
+`UiPointerInteraction` owns transient recognition only: sixteen simultaneous
+contacts, sixty-four admitted samples per pump and 256 copied target policies.
+It borrows the actual presented tree, hit-test snapshot, capture store and routed
+dispatcher for the synchronous call. It never owns a tree publisher, focus graph,
+renderer or gameplay callback. Creation/rebinding is explicit preparation;
+successful recognition uses fixed storage and cannot block or allocate.
+
+`UiPointerInput` owns the matching Input token binding and maps committed mouse
+and touch snapshots into that recognizer. Its explicit source viewport maps
+collector units into resolved canvas pixels exactly once. Native SDL coordinates
+use window logical units, not an inferred GPU extent. Mouse hover has typed
+enter/move/leave routes without capture; touch never manufactures hover. Native
+touch-generated mouse events cannot duplicate a touch activation. Sixteen SDL
+contact slots burn a fresh incarnation on reuse, retain terminal edges through
+the collection frame, reject backwards timestamps/nonfinite coordinates and
+cancel the whole affected batch on overflow rather than losing a release.
+
+The application binds the adapter to `UiPointerInteractionHost`, implemented by
+the actual `UiAnimationOwner` and its privately owning runtime participant. This
+is a synchronous admission boundary, not another canvas/publication authority;
+no mutable owner escapes the participant. The host delivers input against the
+last successful presentation before the canvas prepares its next frame. Pending
+preparation, foreign generation or stale receipts reject; the adapter cannot
+publish or schedule a replacement. Inactive Input contexts, modal changes,
+configuration/device generations, missed physical contacts and aggregate reload
+neutralize held state before another default can run. Explicit rebind never
+replays an already held source as a new press.
+
+Pointer admission checks the recognizer's complete instance/canvas/document/tree/
+interaction/view lineage against the actual currently presented aggregate before
+collecting physical edges or consuming semantic actions. A retained old hit snapshot
+cannot make old authority eligible merely because the replacement view is presented.
+Generation loss cancels old transient state and returns `NeedsRebind`; cleanup never
+addresses replacement controls with old identity. Aggregate dispatch independently
+retains its typed stale-source rejection.
+
+Press, tap/double-tap, long press, pan, pinch/rotation, thresholded drag and drop
+use the same capture/target/bubble/default boundary. Prevented drag/pan begin does
+not advance active gesture state; later qualifying moves may retry but cannot
+emit updates/drop. Physical slop independently disarms tap/hold recognition, even
+if that begin was prevented or the pointer returns to its origin. Drop targeting
+uses the current successfully presented hit and its copied drop policy. Release
+and cancellation are distinct terminal evidence. Successful text-field taps keep
+editing; prevented/interrupted gestures clear pending control activation.
+
+Canonical remappable activate, context-action, pick/drop and cancel actions give
+focused keyboard/accessibility alternatives. Cancel wins simultaneous activation;
+pick/drop does not require fabricated physical contacts. Actual aggregate
+controls apply defaults only after route admission; callback capture revocation,
+Input frame replacement, reconfiguration, shutdown or tree invalidation cannot
+revive a contact or authorize a later control write. Applied defaults before a
+later error remain an observable ordered prefix, not a claimed transaction rollback.
+
+Recognition and dispatch borrow stable addresses. The adapter/runtime participant
+cannot move, and moving or destroying a recognizer/canvas owner during a pumping
+callback violates its documented quiescence precondition and terminates before
+invalidating live borrows. Shutdown during a callback remains supported. A
+quiescent recognizer move transfers captures and leaves its source unavailable.
+
+Public ownership and migration are recorded in
+[`pointer-touch-gesture-migration.md`](../../guides/pointer-touch-gesture-migration.md).
+
 ## Typed Actions, Commands, And Default Navigation
 
 Interactive controls do not retain callbacks or gameplay references. They emit

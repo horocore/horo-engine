@@ -164,6 +164,27 @@ namespace Horo::Runtime {
         return storage_ && storage_->ownerThread == std::this_thread::get_id() && !storage_->stopped && storage_->owner.InputEligible(view);
     }
 
+    /** @copydoc UiAnimationRuntimeParticipant::PointerInputEligible */
+    bool UiAnimationRuntimeParticipant::PointerInputEligible(const Ui::UiPointerCaptureContext &source) const noexcept {
+        return storage_ && storage_->ownerThread == std::this_thread::get_id() && storage_->started && !storage_->stopped &&
+               storage_->owner.PointerInputEligible(source);
+    }
+
+    /** @copydoc UiAnimationRuntimeParticipant::PumpPointers */
+    Result<Ui::UiPointerInteractionResult> UiAnimationRuntimeParticipant::PumpPointers(const Ui::UiAnimationPointerInput &input,
+                                                                                       Ui::UiEventHandler &routeHandler) {
+        if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || !storage_->started || storage_->stopped)
+            return Result<Ui::UiPointerInteractionResult>::Failure(MakeError(Ui::UiErrors::AnimationLifecycleUnavailable));
+        return storage_->owner.PumpPointers(input, routeHandler);
+    }
+
+    /** @copydoc UiAnimationRuntimeParticipant::CancelPointers */
+    Result<void> UiAnimationRuntimeParticipant::CancelPointers(Ui::UiPointerInteraction &interaction, std::uint64_t &nextSequence) {
+        if (!storage_ || storage_->ownerThread != std::this_thread::get_id())
+            return Result<void>::Failure(MakeError(Ui::UiErrors::AnimationLifecycleUnavailable));
+        return storage_->owner.CancelPointers(interaction, nextSequence);
+    }
+
     /** @copydoc UiAnimationRuntimeParticipant::CapturePointer */
     Result<Ui::UiPointerCaptureToken> UiAnimationRuntimeParticipant::CapturePointer(const Ui::UiPointerCaptureRequest &request) {
         if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->stopped)

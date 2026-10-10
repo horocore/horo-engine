@@ -582,6 +582,8 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiElementTree.cpp
         runtime/ui/UiEventDispatch.cpp
         runtime/ui/UiPointerCapture.cpp
+        runtime/ui/UiPointerInteraction.cpp
+        runtime/ui/UiAnimationOwnerPointer.cpp
         runtime/ui/UiPointerCaptureErrors.cpp
         runtime/ui/UiActions.cpp
         runtime/ui/UiActionRouter.cpp
@@ -1897,6 +1899,7 @@ target_link_libraries(HoroInput PUBLIC HoroEngine::Foundation PRIVATE nlohmann_j
 add_library(HoroRuntimeUiInput STATIC
         runtime/ui/input/UiTextInputAdapter.cpp
         runtime/ui/input/UiNavigationInput.cpp
+        runtime/ui/input/UiPointerInput.cpp
 )
 add_library(HoroEngine::RuntimeUiInput ALIAS HoroRuntimeUiInput)
 target_compile_features(HoroRuntimeUiInput PUBLIC cxx_std_20)

@@ -312,6 +312,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiElementTree.h
     Horo/Runtime/Ui/UiEventDispatch.h
     Horo/Runtime/Ui/UiPointerCapture.h
+    Horo/Runtime/Ui/UiPointerInteraction.h
     Horo/Runtime/Ui/UiActions.h
     Horo/Runtime/Ui/UiAnimationClock.h
     Horo/Runtime/Ui/UiAnimationTimeline.h
@@ -1088,6 +1089,7 @@ horo_configure_target_header_boundary(HoroEditorViewportMetal)
 horo_configure_target_header_boundary(HoroInputSdl)
 horo_configure_target_header_boundary(HoroRuntimeUiInput PUBLIC_HEADERS
     Horo/Runtime/Ui/UiNavigationInput.h
+    Horo/Runtime/Ui/UiPointerInput.h
 )
 horo_configure_target_header_boundary(HoroGui PUBLIC_HEADERS
     Horo/Editor/AssetImportModal.h

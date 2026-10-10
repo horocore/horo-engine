@@ -303,6 +303,13 @@ namespace Horo::Input {
         next.pointer.deltaY = 0.0F;
         next.pointer.wheelX = 0.0F;
         next.pointer.wheelY = 0.0F;
+        next.touchOverflow = false;
+        for (auto &touch : next.touches) {
+            if (!touch.contact.down)
+                touch = {};
+            else
+                Advance(touch.contact);
+        }
         for (ButtonState &state : next.keyboard)
             Advance(state);
         for (ButtonState &state : next.pointer.buttons)
@@ -339,6 +346,70 @@ namespace Horo::Input {
         PointerState &pointer = impl_->snapshots[impl_->write].pointer;
         pointer.wheelX += x;
         pointer.wheelY += y;
+    }
+
+    /** @copydoc RawInputCollector::SetTouchContact */
+    TouchCollectionStatus RawInputCollector::SetTouchContact(const TouchContactId id, const float x, const float y,
+                                                             const bool down) noexcept {
+        if (!id.IsValid() || !std::isfinite(x) || !std::isfinite(y))
+            return TouchCollectionStatus::Invalid;
+        auto &snapshot = impl_->snapshots[impl_->write];
+        if (!snapshot.window.focused || !snapshot.window.pointerDeviceAvailable)
+            return TouchCollectionStatus::Unavailable;
+        if (snapshot.touchOverflow)
+            return TouchCollectionStatus::CapacityExceeded;
+        auto found = std::ranges::find(snapshot.touches, id, &TouchContactState::id);
+        if (found != snapshot.touches.end() && (!found->contact.down || found->cancelled))
+            return TouchCollectionStatus::Stale;
+        if (found == snapshot.touches.end()) {
+            if (!down)
+                return TouchCollectionStatus::Stale;
+            found = std::ranges::find_if(snapshot.touches, [](const TouchContactState &touch) {
+                return !touch.id.IsValid();
+            });
+            if (found == snapshot.touches.end()) {
+                snapshot.touchOverflow = true;
+                for (auto &touch : snapshot.touches) {
+                    touch.cancelled = true;
+                    Set(touch.contact, false);
+                }
+                return TouchCollectionStatus::CapacityExceeded;
+            }
+            found->id = id;
+        }
+        found->x = x;
+        found->y = y;
+        if (found->contact.down != down) {
+            found->contact.down = down;
+            found->contact.pressed |= down;
+            found->contact.released |= !down;
+        }
+        return TouchCollectionStatus::Accepted;
+    }
+
+    /** @copydoc RawInputCollector::CancelTouchContact */
+    TouchCollectionStatus RawInputCollector::CancelTouchContact(const TouchContactId id) noexcept {
+        if (!id.IsValid())
+            return TouchCollectionStatus::Invalid;
+        auto &touches = impl_->snapshots[impl_->write].touches;
+        const auto found = std::ranges::find(touches, id, &TouchContactState::id);
+        if (found == touches.end() || !found->contact.down)
+            return TouchCollectionStatus::Stale;
+        found->cancelled = true;
+        Set(found->contact, false);
+        return TouchCollectionStatus::Accepted;
+    }
+
+    /** @copydoc RawInputCollector::CancelTouchContacts */
+    void RawInputCollector::CancelTouchContacts(const TouchCancellationReason reason) noexcept {
+        auto &snapshot = impl_->snapshots[impl_->write];
+        snapshot.touchOverflow |= reason == TouchCancellationReason::CapacityExceeded;
+        for (auto &touch : snapshot.touches) {
+            if (!touch.id.IsValid())
+                continue;
+            touch.cancelled = true;
+            Set(touch.contact, false);
+        }
     }
 
     void RawInputCollector::AppendText(const std::string_view utf8) {
@@ -388,6 +459,12 @@ namespace Horo::Input {
             Set(state, false);
         for (ButtonState &state : snapshot.pointer.buttons)
             Set(state, false);
+        for (auto &touch : snapshot.touches) {
+            if (touch.id.IsValid()) {
+                touch.cancelled = true;
+                Set(touch.contact, false);
+            }
+        }
         snapshot.modifiers = {};
         for (GamepadState &gamepad : snapshot.gamepads) {
             for (ButtonState &state : gamepad.buttons)
@@ -876,6 +953,8 @@ namespace Horo::Input {
         InputBindingProfile profile;
         std::bitset<static_cast<std::size_t>(Key::Count)> consumedKeys;
         std::bitset<static_cast<std::size_t>(PointerButton::Count)> consumedPointerButtons;
+        std::bitset<MaximumTouchContacts> consumedTouchContacts;
+        bool consumedPointerMotion{};
         GamepadTransitions consumedGamepadTransitions;
         bool consumedWheelX{false};
         bool consumedWheelY{false};
@@ -927,6 +1006,8 @@ namespace Horo::Input {
         }
         impl_->consumedKeys.reset();
         impl_->consumedPointerButtons.reset();
+        impl_->consumedTouchContacts.reset();
+        impl_->consumedPointerMotion = false;
         impl_->consumedGamepadTransitions.clear();
         impl_->consumedWheelX = false;
         impl_->consumedWheelY = false;
@@ -1299,6 +1380,25 @@ namespace Horo::Input {
         if (!IsContextActive(context) || !Snapshot().State(button).pressed)
             return false;
         return ConsumeControl(impl_->consumedPointerButtons, Index(button));
+    }
+
+    /** @copydoc InputRouter::ConsumeTouchContact */
+    bool InputRouter::ConsumeTouchContact(const InputContextToken &context, const TouchContactId contact) {
+        if (!contact.IsValid() || !IsContextActive(context))
+            return false;
+        const auto &touches = Snapshot().touches;
+        const auto found = std::ranges::find(touches, contact, &TouchContactState::id);
+        if (found == touches.end() || !found->contact.pressed || found->cancelled || Snapshot().touchOverflow)
+            return false;
+        return ConsumeControl(impl_->consumedTouchContacts, static_cast<std::size_t>(found - touches.begin()));
+    }
+
+    /** @copydoc InputRouter::ConsumePointerMotion */
+    bool InputRouter::ConsumePointerMotion(const InputContextToken &context) {
+        if (!IsContextActive(context) || impl_->consumedPointerMotion)
+            return false;
+        impl_->consumedPointerMotion = true;
+        return true;
     }
 
     bool InputRouter::AssignGamepad(const PlayerId player, const GamepadDeviceId gamepad) {

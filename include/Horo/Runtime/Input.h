@@ -158,6 +158,46 @@ namespace Horo::Input {
         std::array<ButtonState, static_cast<std::size_t>(PointerButton::Count)> buttons{};
     };
 
+    inline constexpr std::size_t MaximumTouchContacts = 16;
+
+    /** @brief Host-issued contact incarnation; IDs cannot be reused until their release frame has drained. */
+    struct TouchContactId final {
+        std::uint64_t value{};
+        std::uint64_t generation{};
+
+        /** @brief Checks the non-zero source incarnation. @return Whether this contact is addressable. */
+        [[nodiscard]] constexpr bool IsValid() const noexcept {
+            return value != 0 && generation != 0;
+        }
+
+        [[nodiscard]] friend constexpr bool operator==(TouchContactId, TouchContactId) noexcept = default;
+    };
+
+    /** @brief One hoverless physical contact in the collector's window-local coordinate units, never a UI/player identity. */
+    struct TouchContactState final {
+        TouchContactId id;
+        float x{};
+        float y{};
+        ButtonState contact;
+        bool cancelled{}; /**< Loss/overflow differs from a release eligible to activate or drop. */
+    };
+
+    /** @brief Typed bounded collection outcome; failure never admits a partial new contact. */
+    enum class TouchCollectionStatus : std::uint8_t {
+        Accepted,
+        Invalid,
+        Stale,
+        CapacityExceeded,
+        Unavailable
+    };
+
+    /** @brief Physical-source interruption; never a release eligible to activate a control. */
+    enum class TouchCancellationReason : std::uint8_t {
+        SurfaceLost,
+        MalformedSource,
+        CapacityExceeded
+    };
+
     /** @brief Focus and pointer availability state for the collection surface. */
     struct WindowInputState {
         bool focused{true};
@@ -208,6 +248,8 @@ namespace Horo::Input {
         FrameNumber frame{0};
         std::array<ButtonState, static_cast<std::size_t>(Key::Count)> keyboard{};
         PointerState pointer{};
+        std::array<TouchContactState, MaximumTouchContacts> touches{}; /**< Fixed slots, including this frame's terminal contacts. */
+        bool touchOverflow{}; /**< Overflow cancels all held contacts; UI must not interpret their releases as activation. */
         std::vector<GamepadState> gamepads;
         std::string text;
         TextCompositionState composition{};
@@ -233,6 +275,23 @@ namespace Horo::Input {
         void SetPointerButton(PointerButton button, bool down);
         void SetPointerPosition(float x, float y);
         void AddPointerWheel(float x, float y);
+        /**
+         * @brief Collects one normalized hoverless contact without allocation.
+         * @param id Exact host-issued physical contact incarnation, unrelated to a UI pointer ID.
+         * @param x Finite window-local X, in the same units as PointerState. @param y Finite window-local Y.
+         * @param down Whether the contact is held; an unknown release is stale.
+         * @return Typed admission result. Capacity exhaustion cancels every admitted contact until the next collection frame.
+         * @pre BeginFrame was called; host serializes collection and burns IDs on device reconnect/reuse.
+         */
+        [[nodiscard]] TouchCollectionStatus SetTouchContact(TouchContactId id, float x, float y, bool down) noexcept;
+        /** @brief Cancels one exact physical incarnation, retaining terminal evidence until the next frame.
+         * @param id Current contact. @return Accepted, Invalid or Stale; no replacement contact is created.
+         */
+        [[nodiscard]] TouchCollectionStatus CancelTouchContact(TouchContactId id) noexcept;
+        /** @brief Cancels all touch contacts without changing keyboard/mouse state.
+         * @param reason Typed physical-source failure; CapacityExceeded closes collection for the current frame.
+         */
+        void CancelTouchContacts(TouchCancellationReason reason) noexcept;
         void AppendText(std::string_view utf8);
         void SetTextComposition(std::string_view utf8, std::int32_t selectionStart, std::int32_t selectionLength);
         void SetModifiers(ModifierState modifiers) noexcept;
@@ -664,6 +723,16 @@ namespace Horo::Input {
         [[nodiscard]] bool ConsumeKey(const InputContextToken &context, Key key);
         /** @brief Consumes a pointer-button press once at the eligible context. */
         [[nodiscard]] bool ConsumePointerButton(const InputContextToken &context, PointerButton button);
+        /** @brief Consumes an exact contact press once at the eligible context.
+         * @param context Exact live context. @param contact Physical source incarnation from this committed frame.
+         * @return Whether this context admitted the press; held/release delivery stays with the owner that admitted it.
+         */
+        [[nodiscard]] bool ConsumeTouchContact(const InputContextToken &context, TouchContactId contact);
+        /** @brief Claims one mouse-position/hover delivery for this frame's highest-priority context.
+         * @param context Exact live routing token. @return Whether this frame's position was admitted once.
+         * @note Surface-exit positions are admitted so the prior hover target can be neutralized.
+         */
+        [[nodiscard]] bool ConsumePointerMotion(const InputContextToken &context);
         /** @brief Assigns a currently connected generation-safe gamepad to one player. */
         [[nodiscard]] bool AssignGamepad(PlayerId player, GamepadDeviceId gamepad);
         /** @brief Removes an assignment for the exact generation-safe gamepad ID. */

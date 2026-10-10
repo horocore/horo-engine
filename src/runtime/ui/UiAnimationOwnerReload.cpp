@@ -126,6 +126,8 @@ namespace Horo::Runtime::Ui {
             return Result<UiAnimationReloadResult>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
         if (const auto admitted = AdmitCommand(*storage_); admitted.HasError())
             return Result<UiAnimationReloadResult>::Failure(admitted.ErrorValue());
+        if (storage_->pointerDispatching)
+            return Result<UiAnimationReloadResult>::Failure(MakeError(UiErrors::EventDispatchReentrant));
         if (storage_->route.gate)
             return Result<UiAnimationReloadResult>::Failure(MakeError(UiErrors::AnimationConflict));
         auto prepared = storage_->publisher.Prepare(std::move(replacement), cancellation);

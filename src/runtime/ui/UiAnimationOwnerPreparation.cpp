@@ -7,7 +7,7 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiAnimationOwner::Prepare */
     Result<UiAnimationOwner::Prepared> UiAnimationOwner::Prepare(const UiAnimationHostRead &read, const UiAnimationViewport &viewport) {
         if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->stopped || storage_->draining ||
-            storage_->candidate.admitted)
+            storage_->candidate.admitted || storage_->pointerDispatching)
             return Result<Prepared>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         const auto frame = std::ranges::find_if(storage_->frames, [&](const auto &slot) {
             const auto index = static_cast<std::uint32_t>(&slot - storage_->frames.data());

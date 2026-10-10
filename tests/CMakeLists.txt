@@ -261,9 +261,15 @@ target_compile_features(HoroRuntimeUiNavigationPublicHeaderConsumer PRIVATE cxx_
 target_link_libraries(HoroRuntimeUiNavigationPublicHeaderConsumer PRIVATE HoroEngine::RuntimeUiInput)
 add_test(NAME HoroRuntimeUiNavigationPublicHeaderConsumer COMMAND HoroRuntimeUiNavigationPublicHeaderConsumer)
 set_tests_properties(HoroRuntimeUiNavigationPublicHeaderConsumer PROPERTIES LABELS "unit;input;runtime_ui;headless")
+add_executable(HoroRuntimeUiPointerPublicHeaderConsumer support/RuntimeUiPointerPublicHeaderConsumer.cpp)
+target_compile_features(HoroRuntimeUiPointerPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiPointerPublicHeaderConsumer PRIVATE HoroEngine::RuntimeUiInput)
+add_test(NAME HoroRuntimeUiPointerPublicHeaderConsumer COMMAND HoroRuntimeUiPointerPublicHeaderConsumer)
+set_tests_properties(HoroRuntimeUiPointerPublicHeaderConsumer PROPERTIES LABELS "unit;runtime_ui;headless;public_headers;ci-windows")
 if (HORO_BUILD_INPUT_SDL3)
     add_executable(HoroInputSdlTests
             unit/runtime/input/SdlTextInputTests.cpp
+            unit/runtime/input/SdlTouchInputTests.cpp
     )
     target_compile_features(HoroInputSdlTests PRIVATE cxx_std_20)
     target_include_directories(HoroInputSdlTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/input/sdl)
@@ -2924,6 +2930,7 @@ target_include_directories(HoroRuntimeUiAnimationTests PRIVATE ${PROJECT_SOURCE_
 target_link_libraries(HoroRuntimeUiAnimationTests PRIVATE HoroEngine::RuntimeUi HoroRationalDurationInternal)
 add_executable(HoroRuntimeUiAnimationIntegrationTests
         unit/runtime/ui/UiAnimationOwnerIntegrationTests.cpp
+        unit/runtime/ui/UiPointerInputIntegrationTests.cpp
         unit/runtime/ui/UiAnimationOwnerIntegrationFixture.h
         unit/runtime/ui/UiAnimationRouteIntegrationTests.cpp
         unit/runtime/ui/UiAnimationReloadIntegrationTests.cpp
@@ -2933,13 +2940,13 @@ add_executable(HoroRuntimeUiAnimationIntegrationTests
         unit/runtime/ui/UiHotReloadTestFixture.cpp)
 target_compile_features(HoroRuntimeUiAnimationIntegrationTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeUiAnimationIntegrationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
-target_link_libraries(HoroRuntimeUiAnimationIntegrationTests PRIVATE HoroEngine::UiAnimationRuntimeIntegration HoroEngine::Platform)
+target_link_libraries(HoroRuntimeUiAnimationIntegrationTests PRIVATE HoroEngine::UiAnimationRuntimeIntegration HoroEngine::Platform HoroEngine::RuntimeUiInput)
 add_executable(HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer
         support/RuntimeUiAnimationIntegrationPublicHeaderConsumer.cpp)
 target_compile_features(HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer PRIVATE HoroEngine::UiAnimationRuntimeIntegration)
 add_test(NAME HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer COMMAND HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer)
-set_tests_properties(HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer PROPERTIES LABELS "unit;runtime;headless;public_headers")
+set_tests_properties(HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer PROPERTIES LABELS "unit;runtime;headless;public_headers;ci-windows")
 add_executable(HoroRuntimeUiStyleTests
         unit/runtime/ui/UiStyleTests.cpp
 )
@@ -2959,6 +2966,7 @@ add_test(NAME HoroRuntimeUiThemePublicHeaderConsumer COMMAND HoroRuntimeUiThemeP
 set_tests_properties(HoroRuntimeUiThemePublicHeaderConsumer PROPERTIES LABELS "unit;runtime_ui;headless;public_headers")
 add_executable(HoroRuntimeUiHitTestingTests
         unit/runtime/ui/UiHitTestingTests.cpp
+        unit/runtime/ui/UiPointerInteractionTests.cpp
         support/AllocationProbe.cpp
 )
 target_compile_features(HoroRuntimeUiHitTestingTests PRIVATE cxx_std_20)
