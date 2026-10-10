@@ -273,7 +273,9 @@ namespace Horo::Application {
             source.target.relativePath = "../escape.scene";
         }
         SECTION("absolute") {
-            source.target.relativePath = (directory.root / "asset.scene").string();
+            const auto absolute = (directory.root / "asset.scene").generic_u8string();
+            REQUIRE(std::filesystem::path{absolute}.is_absolute());
+            source.target.relativePath.assign(absolute.begin(), absolute.end());
         }
         SECTION("Windows traversal") {
             source.target.relativePath = "..\\escape.scene";

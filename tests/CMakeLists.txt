@@ -99,6 +99,8 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 horo_add_public_header_consumer_targets()
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderGraphWorkloadPublicHeaderConsumer.cpp)
 target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/RenderGraphFramePublicHeaderConsumer.cpp)
+target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderParallelWorkPublicHeaderConsumer.cpp)
+target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/RenderParallelFrontendPublicHeaderConsumer.cpp)
 target_sources(HoroRuntimeUiPublicHeaderConsumer PRIVATE support/RuntimeUiUnicodePublicContract.cpp)
 target_sources(HoroGameplayApiPublicHeaderConsumer PRIVATE support/PersistenceInstallationPublicHeaderConsumer.cpp)
 target_sources(HoroRuntimePublicHeaderConsumer PRIVATE support/SaveSceneCanonicalPublicHeaderConsumer.cpp)
@@ -1049,6 +1051,7 @@ add_test(NAME HoroNavigationBakeDiagnosticsPublicConsumer COMMAND HoroNavigation
 
 if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     add_executable(HoroNavigationBakeServiceTests unit/runtime/navigation/NavigationBakeServiceTests.cpp
+            unit/runtime/navigation/NavigationBakeQualificationTests.cpp
             unit/runtime/navigation/NavigationBakeDiagnosticsTests.cpp
             unit/runtime/navigation/NavigationBakeDiagnosticRecoveryTests.cpp
             unit/application/navigation/NavigationBakePublicationTests.cpp)
@@ -2365,6 +2368,7 @@ target_compile_features(HoroFoundationValidationResultTests PRIVATE cxx_std_20)
 target_link_libraries(HoroFoundationValidationResultTests PRIVATE HoroEngine::Foundation)
 add_executable(HoroFoundationJobSystemTests
         unit/foundation/JobSystemTests.cpp
+        unit/foundation/JobResourceSchedulingTests.cpp
         unit/foundation/JobAdmissionTests.cpp
         unit/foundation/JobAdmissionTelemetryTests.cpp
         support/AllocationProbe.cpp
@@ -2660,6 +2664,8 @@ target_compile_features(HoroShaderCompilerPipelineTests PRIVATE cxx_std_20)
 target_include_directories(HoroShaderCompilerPipelineTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroShaderCompilerPipelineTests PRIVATE HoroEngine::ShaderCompilerToolchain HoroEngine::Platform)
 add_executable(HoroRenderFrontendTests
+        unit/runtime/renderer/RenderParallelWorkTests.cpp
+        unit/runtime/renderer/RenderFrameInputTests.cpp
         unit/runtime/renderer/RenderGraphResourceLeaseTests.cpp
         unit/runtime/renderer/RenderFrontendTests.cpp
         unit/runtime/renderer/RenderReadbackTests.cpp
@@ -3826,6 +3832,9 @@ endif ()
 
 if (NOT HORO_BUILD_RENDER_METAL)
     add_executable(HoroMetalDeviceCapabilityTests
+            unit/runtime/renderer/MetalParallelWorkTests.cpp
+            unit/runtime/renderer/MetalParallelLeaseTests.cpp
+            unit/runtime/renderer/MetalRecordingActivityTests.cpp
             unit/runtime/renderer/MetalCommandExecutionTests.cpp
             unit/runtime/renderer/MetalDeviceCapabilityTests.cpp
             unit/runtime/renderer/MetalRenderBackendTests.cpp
@@ -3851,7 +3860,9 @@ endif ()
 
 if (HORO_BUILD_RENDER_METAL)
     add_executable(HoroMetalGraphExecutionSmoke integration/renderer/MetalGraphExecutionSmoke.mm)
+    target_sources(HoroMetalGraphExecutionSmoke PRIVATE integration/renderer/MetalParallelRecordingSmoke.mm)
     target_compile_features(HoroMetalGraphExecutionSmoke PRIVATE cxx_std_20)
+    target_compile_options(HoroMetalGraphExecutionSmoke PRIVATE -fobjc-arc)
     target_include_directories(HoroMetalGraphExecutionSmoke PRIVATE ${PROJECT_SOURCE_DIR}/src
             ${PROJECT_SOURCE_DIR}/tests/unit/runtime/renderer)
     target_link_libraries(HoroMetalGraphExecutionSmoke PRIVATE Catch2::Catch2WithMain HoroEngine::RenderMetal "-framework Metal")
@@ -3860,6 +3871,10 @@ if (HORO_BUILD_RENDER_METAL)
         set_tests_properties(HoroMetalGraphExecutionSmoke PROPERTIES LABELS "gpu;metal;renderer")
     endif ()
     add_executable(HoroRenderMetalTests
+            unit/runtime/renderer/MetalParallelWorkTests.cpp
+            unit/runtime/renderer/MetalParallelLeaseTests.cpp
+            unit/runtime/renderer/MetalRecordingActivityTests.cpp
+            unit/runtime/renderer/MetalParallelCompletionTests.mm
             unit/runtime/renderer/MetalCommandExecutionTests.cpp
             unit/runtime/renderer/MetalDeviceCapabilityTests.cpp
             unit/runtime/renderer/MetalRenderBackendTests.cpp
@@ -3869,6 +3884,7 @@ if (HORO_BUILD_RENDER_METAL)
     )
 
     target_compile_features(HoroRenderMetalTests PRIVATE cxx_std_20)
+    target_compile_options(HoroRenderMetalTests PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
     target_include_directories(HoroRenderMetalTests PRIVATE
             ${PROJECT_SOURCE_DIR}/src
             ${PROJECT_SOURCE_DIR}/tests/support
