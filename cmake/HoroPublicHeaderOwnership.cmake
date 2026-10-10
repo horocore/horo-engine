@@ -541,6 +541,10 @@ horo_configure_target_header_boundary(HoroAudioPlayback PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroAudioVoiceRender PUBLIC_HEADERS
     Horo/Audio/AudioVoiceRenderRuntime.h
 )
+
+horo_configure_target_header_boundary(HoroAudioFrontend PUBLIC_HEADERS
+    Horo/Audio/AudioFrontend.h
+)
 horo_configure_target_header_boundary(HoroAudioMemory PUBLIC_HEADERS
     Horo/Audio/AudioMemory.h
 )
@@ -1065,6 +1069,7 @@ horo_configure_target_header_boundary(HoroModelProviderAdapters PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
+    Horo/Editor/AudioEditorDocument.h
     Horo/Editor/MixerAssetDocument.h
     Horo/Editor/CinematicPropertyBindings.h
     Horo/Editor/ActivityBarLayout.h
