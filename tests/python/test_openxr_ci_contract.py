@@ -35,13 +35,14 @@ class OpenXRCIContractTests(unittest.TestCase):
         self.assertEqual(set(build["targets"]), {
             "HoroXROpenXRTests", "HoroXROpenXRHostInterfaceConsumer", "HoroXRApiTests",
             "HoroXRRuntimeTests", "HoroXRApiPublicHeaderConsumer", "HoroXRRuntimePublicHeaderConsumer",
+            "HoroXRActionBindingTests", "HoroXRInputBindingsPublicHeaderConsumer",
         })
         self.assertEqual(build["jobs"], 2)
 
     def test_case_inventory_is_selected_serially_without_empty_success(self):
         test = self.preset("testPresets", "ci-xr-openxr")
         selection = test["filter"]["include"]["name"]
-        for target in ("HoroXROpenXRTests", "HoroXRApiTests", "HoroXRRuntimeTests"):
+        for target in ("HoroXROpenXRTests", "HoroXRApiTests", "HoroXRRuntimeTests", "HoroXRActionBindingTests"):
             self.assertRegex(f"{target}::case", selection)
         self.assertEqual(test["execution"]["jobs"], 1)
         self.assertEqual(self.preset("testPresets", "ci-test-base")["execution"]["noTestsAction"], "error")

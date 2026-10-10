@@ -91,20 +91,20 @@ namespace Horo::SceneSource::Detail {
         return !error && IsContainedBy(resolvedRoot, resolvedCandidate);
     }
 
-    [[nodiscard]] Json Vec2Json(const Math::Vec2 value) {
-        return Json::array({value.x, value.y});
+    [[nodiscard]] WireJson Vec2Json(const Math::Vec2 value) {
+        return WireJson::array({value.x, value.y});
     }
 
-    [[nodiscard]] Json Vec3Json(const Math::Vec3 value) {
-        return Json::array({value.x, value.y, value.z});
+    [[nodiscard]] WireJson Vec3Json(const Math::Vec3 value) {
+        return WireJson::array({value.x, value.y, value.z});
     }
 
-    [[nodiscard]] Json QuaternionJson(const Math::Quaternion value) {
-        return Json::array({value.x, value.y, value.z, value.w});
+    [[nodiscard]] WireJson QuaternionJson(const Math::Quaternion value) {
+        return WireJson::array({value.x, value.y, value.z, value.w});
     }
 
-    [[nodiscard]] Json TransformJson(const Math::Transform &value) {
-        return Json{
+    [[nodiscard]] WireJson TransformJson(const Math::Transform &value) {
+        return WireJson{
             {"translation", Vec3Json(value.translation)},
             {"rotation", QuaternionJson(value.rotation)},
             {"scale", Vec3Json(value.scale)},
@@ -175,37 +175,37 @@ namespace Horo::SceneSource::Detail {
         return Result<Math::Transform>::Success({.translation = translation.Value(), .rotation = rotation.Value(), .scale = scale.Value()});
     }
 
-    template <typename Parameters> [[nodiscard]] Json SerializePrimitiveParameters(const Parameters &parameters) {
+    template <typename Parameters> [[nodiscard]] WireJson SerializePrimitiveParameters(const Parameters &parameters) {
         if constexpr (std::is_same_v<Parameters, Runtime::BoxMeshParameters>) {
-            return Json{{"size", Vec3Json(parameters.size)}};
+            return WireJson{{"size", Vec3Json(parameters.size)}};
         } else if constexpr (std::is_same_v<Parameters, Runtime::SphereMeshParameters>) {
-            return Json{{"radius", parameters.radius}, {"slices", parameters.slices}, {"stacks", parameters.stacks}};
+            return WireJson{{"radius", parameters.radius}, {"slices", parameters.slices}, {"stacks", parameters.stacks}};
         } else if constexpr (std::is_same_v<Parameters, Runtime::CapsuleMeshParameters>) {
-            return Json{{"radius", parameters.radius},
-                        {"totalHeight", parameters.totalHeight},
-                        {"radialSegments", parameters.radialSegments},
-                        {"hemisphereRings", parameters.hemisphereRings}};
+            return WireJson{{"radius", parameters.radius},
+                            {"totalHeight", parameters.totalHeight},
+                            {"radialSegments", parameters.radialSegments},
+                            {"hemisphereRings", parameters.hemisphereRings}};
         } else if constexpr (std::is_same_v<Parameters, Runtime::CylinderMeshParameters>) {
-            return Json{{"radius", parameters.radius}, {"height", parameters.height}, {"radialSegments", parameters.radialSegments}};
+            return WireJson{{"radius", parameters.radius}, {"height", parameters.height}, {"radialSegments", parameters.radialSegments}};
         } else if constexpr (std::is_same_v<Parameters, Runtime::ConeMeshParameters>) {
-            return Json{{"radius", parameters.radius}, {"height", parameters.height}, {"radialSegments", parameters.radialSegments}};
+            return WireJson{{"radius", parameters.radius}, {"height", parameters.height}, {"radialSegments", parameters.radialSegments}};
         } else if constexpr (std::is_same_v<Parameters, Runtime::PlaneMeshParameters> ||
                              std::is_same_v<Parameters, Runtime::QuadMeshParameters>) {
-            return Json{{"size", Vec2Json(parameters.size)}};
+            return WireJson{{"size", Vec2Json(parameters.size)}};
         } else {
-            return Json::object();
+            return WireJson::object();
         }
     }
 
-    [[nodiscard]] Json PrimitiveParametersJson(const PrimitiveMeshDescriptor &descriptor) {
+    [[nodiscard]] WireJson PrimitiveParametersJson(const PrimitiveMeshDescriptor &descriptor) {
         return std::visit([]<typename T>(const T &parameters) {
             return SerializePrimitiveParameters(parameters);
         }, descriptor.parameters);
     }
 
-    [[nodiscard]] Json PrimitiveJson(const PrimitiveMeshDescriptor &descriptor) {
+    [[nodiscard]] WireJson PrimitiveJson(const PrimitiveMeshDescriptor &descriptor) {
         const Runtime::PrimitiveDescriptor *catalog = Runtime::PrimitiveCatalog::Find(descriptor.type);
-        return Json{
+        return WireJson{
             {"id", catalog == nullptr ? "" : std::string{catalog->id.value}},
             {"version", descriptor.version.value},
             {"parameters", PrimitiveParametersJson(descriptor)},

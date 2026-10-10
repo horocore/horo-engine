@@ -6,7 +6,7 @@
 #include <utility>
 
 namespace Horo::Render::Detail {
-    RenderParallelGraphWorkState::RenderParallelGraphWorkState(std::shared_ptr<IRenderParallelGraphRecording> recording,
+    RenderParallelGraphWorkState::RenderParallelGraphWorkState(ConstructionKey, std::shared_ptr<IRenderParallelGraphRecording> recording,
                                                                const CancellationToken &cancellation)
         : recording_(std::move(recording)), cancellation_(cancellation) {
         jobs_.reserve(recording_->PassCount());
@@ -18,11 +18,10 @@ namespace Horo::Render::Detail {
     }
 
     Result<std::unique_ptr<RenderParallelGraphWorkState>> RenderParallelGraphWorkState::Start(
-        JobSystem &jobs, std::shared_ptr<IRenderParallelGraphRecording> recording, const CancellationToken &cancellation) {
+        const JobSystem &jobs, std::shared_ptr<IRenderParallelGraphRecording> recording, const CancellationToken &cancellation) {
         using StartResult = Result<std::unique_ptr<RenderParallelGraphWorkState>>;
         try {
-            auto state =
-                std::unique_ptr<RenderParallelGraphWorkState>(new RenderParallelGraphWorkState(std::move(recording), cancellation));
+            auto state = std::make_unique<RenderParallelGraphWorkState>(ConstructionKey{}, std::move(recording), cancellation);
             const JobDescriptor descriptor{.parentCancellation = state->cancellation_.Token()};
             for (std::size_t index = 0; index < state->recording_->PassCount(); ++index) {
                 if (descriptor.parentCancellation.IsCancellationRequested())
@@ -40,7 +39,7 @@ namespace Horo::Render::Detail {
         }
     }
 
-    Result<RenderWorkProgress> RenderParallelGraphWorkState::Poll() {
+    Result<RenderWorkProgress> RenderParallelGraphWorkState::Poll() const {
         using PollResult = Result<RenderWorkProgress>;
         if (cancellation_.Token().IsCancellationRequested())
             return PollResult::Failure(MakeError(ParallelWorkErrors::Cancelled));
@@ -60,7 +59,7 @@ namespace Horo::Render::Detail {
         return recording_;
     }
 
-    RenderParallelWorkState::RenderParallelWorkState(std::shared_ptr<const CapturedRenderFrame> inputs,
+    RenderParallelWorkState::RenderParallelWorkState(ConstructionKey, std::shared_ptr<const CapturedRenderFrame> inputs,
                                                      const CancellationToken &parentCancellation)
         : inputs_(std::move(inputs)), commands_(std::make_shared<std::vector<RenderPassDescriptor>>(inputs_->passes.size())),
           cancellation_(parentCancellation) {
@@ -73,7 +72,7 @@ namespace Horo::Render::Detail {
     }
 
     /** @copydoc RenderParallelWorkState::Start */
-    Result<std::unique_ptr<RenderParallelWorkState>> RenderParallelWorkState::Start(JobSystem &jobs, const FrameToken frame,
+    Result<std::unique_ptr<RenderParallelWorkState>> RenderParallelWorkState::Start(const JobSystem &jobs, const FrameToken frame,
                                                                                     const std::span<const RenderPassDescriptor> passes,
                                                                                     const RenderFrameInputLimits &limits,
                                                                                     const CancellationToken &parentCancellation) {
@@ -82,10 +81,8 @@ namespace Horo::Render::Detail {
         if (captured.HasError())
             return StartResult::Failure(captured.ErrorValue());
         try {
-            auto work =
-                std::unique_ptr<RenderParallelWorkState>(new RenderParallelWorkState(std::move(captured).Value(), parentCancellation));
-            const Result<void> admitted = work->Admit(jobs);
-            if (admitted.HasError())
+            auto work = std::make_unique<RenderParallelWorkState>(ConstructionKey{}, std::move(captured).Value(), parentCancellation);
+            if (const Result<void> admitted = work->Admit(jobs); admitted.HasError())
                 return StartResult::Failure(admitted.ErrorValue());
             return StartResult::Success(std::move(work));
         } catch (const std::bad_alloc &) {
@@ -93,15 +90,14 @@ namespace Horo::Render::Detail {
         }
     }
 
-    Result<void> RenderParallelWorkState::Admit(JobSystem &jobs) {
+    Result<void> RenderParallelWorkState::Admit(const JobSystem &jobs) {
         const JobDescriptor descriptor{.parentCancellation = cancellation_.Token()};
         for (std::size_t index = 0; index < inputs_->passes.size(); ++index) {
             if (descriptor.parentCancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(ParallelWorkErrors::Cancelled));
             auto admitted = jobs.SubmitResult(descriptor, [inputs = inputs_, commands = commands_, index](const CancellationToken &token) {
                 const CapturedRenderPass &pass = inputs->passes[index];
-                const Result<void> prepared = ValidateCapturedRenderPass(pass, token);
-                if (prepared.HasError()) {
+                if (const Result<void> prepared = ValidateCapturedRenderPass(pass, token); prepared.HasError()) {
                     if (token.IsCancellationRequested())
                         return JobCancelled(prepared.ErrorValue());
                     return prepared;

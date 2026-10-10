@@ -3,6 +3,10 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::Render::OpenGLBackendErrors {
+    extern const ErrorCodeDescriptor CommandFailed;
+    extern const ErrorCodeDescriptor SynchronizationFailed;
+    extern const ErrorCodeDescriptor FrameBackpressure;
+    extern const ErrorCodeDescriptor WorkLimit;
     extern const ErrorCodeDescriptor AlreadyInitialized;
     extern const ErrorCodeDescriptor FrameActive;
     extern const ErrorCodeDescriptor FrameAlreadyActive;

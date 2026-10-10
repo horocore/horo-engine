@@ -2,6 +2,7 @@
 #include "Horo/Runtime/Scene/RuntimeSceneCellLayers.h"
 #include "Horo/Runtime/Scene/RuntimeSceneCellPayload.h"
 #include "Horo/Runtime/Scene/SceneCellAttachments.h"
+#include "Horo/Runtime/Scene/WorldBuildValidation.h"
 
 #include <type_traits>
 static_assert(!std::is_copy_assignable_v<Horo::Runtime::RuntimeSceneCellPayload>);
@@ -32,3 +33,5 @@ namespace {
     static_assert(std::is_same_v<decltype(&Horo::Runtime::SceneCellAttachmentParticipant::Shutdown),
                                  void (Horo::Runtime::SceneCellAttachmentParticipant::*)() const noexcept>);
 }  // namespace
+
+static_assert(std::is_move_constructible_v<Horo::Runtime::WorldBuildValidationReport>);

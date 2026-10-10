@@ -12,10 +12,10 @@ namespace Horo::Character::Detail {
     /** @brief Rejects malformed or mismatched copied body evidence before local-frame arithmetic. */
     [[nodiscard]] Result<void> ValidatePlatformBodyEvidence(const CharacterPlatformBodyEvidence &evidence,
                                                             const CharacterMovementResult &movement) {
+        using enum Physics::PhysicsMotionType;
         if (movement.groundBody != evidence.body || movement.groundShape != evidence.shape)
             return Result<void>::Failure(MakeError(CharacterErrors::RequestInvalid));
-        if (evidence.motion != Physics::PhysicsMotionType::Static && evidence.motion != Physics::PhysicsMotionType::Kinematic &&
-            evidence.motion != Physics::PhysicsMotionType::Dynamic)
+        if (evidence.motion != Static && evidence.motion != Kinematic && evidence.motion != Dynamic)
             return Result<void>::Failure(MakeError(CharacterErrors::RequestInvalid));
         return Physics::ValidatePhysicsPose(evidence.pose);
     }
@@ -54,10 +54,10 @@ namespace Horo::Character::Detail {
     /** @brief Classifies one complete attachment identity independently of its sampled frame. */
     [[nodiscard]] CharacterPlatformAttachmentChange PlatformBindingChange(const std::optional<CharacterPlatformAttachment> &previous,
                                                                           const CharacterMovementResult &movement) noexcept {
+        using enum CharacterPlatformAttachmentChange;
         if (!previous)
-            return CharacterPlatformAttachmentChange::Attached;
-        return SamePlatformBase(*previous, movement) ? CharacterPlatformAttachmentChange::None
-                                                     : CharacterPlatformAttachmentChange::BaseChanged;
+            return Attached;
+        return SamePlatformBase(*previous, movement) ? None : BaseChanged;
     }
 
     /** @brief Validates eligible evidence and stages its owned local frame without publishing controller state. */
@@ -80,23 +80,21 @@ namespace Horo::Character::Detail {
                                                          const CharacterFixedTickInput &input,
                                                          const CharacterControllerDescriptor &descriptor,
                                                          const std::optional<CharacterPlatformAttachment> &previous) {
+        using enum CharacterPlatformAttachmentChange;
         movement.platformAttachment.reset();
         movement.platformAttached = false;
-        movement.platformAttachmentChange =
-            previous ? CharacterPlatformAttachmentChange::Detached : CharacterPlatformAttachmentChange::None;
+        movement.platformAttachmentChange = previous ? Detached : None;
         if (!movement.grounded || !movement.groundBody || movement.jumpApplied)
             return Result<void>::Success();
         if (!input.query.platformBody) {
-            movement.platformAttachmentChange = CharacterPlatformAttachmentChange::Unavailable;
+            movement.platformAttachmentChange = Unavailable;
             return Result<void>::Success();
         }
         const auto evidence = ReadPlatformBody(impl, movement, input);
         if (evidence.HasError())
             return Result<void>::Failure(evidence.ErrorValue());
         if (!evidence.Value()) {
-            movement.platformAttachmentChange = previous && SamePlatformBase(*previous, movement)
-                                                    ? CharacterPlatformAttachmentChange::Stale
-                                                    : CharacterPlatformAttachmentChange::Unavailable;
+            movement.platformAttachmentChange = previous && SamePlatformBase(*previous, movement) ? Stale : Unavailable;
             return Result<void>::Success();
         }
         return StagePlatformAttachment(movement, *evidence.Value(), input, descriptor, previous);

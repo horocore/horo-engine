@@ -1059,6 +1059,18 @@ Initialization exceptions are contained as
 Resize results also cross the frontend boundary unchanged; backend exceptions
 are translated to `render.frontend.resize_exception`.
 
+Parallel graph capture, ready-capsule acceptance, and captured-command execution
+are explicit non-throwing frontend containment boundaries. They retain catch-all
+recovery for foreign backend/executor exceptions, abort exactly the acquired frame,
+and return `render.frontend.frame_exception`; CPU completion does not release GPU
+retirement leases. `PrepareParallelGraphExecution` declares `noexcept`, so callers
+continue consuming the existing typed result rather than catching backend throws.
+This strengthens its exception specification without a second execution API;
+frontend public consumers and standard/non-standard throwing adapter regressions
+cover the migration. Catastrophic inability to allocate the error representation
+cannot propagate through these boundaries and follows the process `noexcept`
+contract, rather than permitting an unknown backend exception to escape.
+
 Backend interfaces use Horo value types. OpenGL names, Vulkan handles, GLAD,
 Volk, SDL3, and native surface types do not appear in public render API headers.
 Virtual dispatch occurs only at coarse frame, execution-plan, resource, and

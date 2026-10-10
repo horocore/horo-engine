@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <stdexcept>
 #include <thread>
 
 namespace Horo::Render::MetalBackendTests {
@@ -21,6 +22,13 @@ namespace Horo::Render::MetalBackendTests {
         std::size_t failIndex{2};
         bool nativeComplete{false};
         bool accepted{false};
+        bool throwCapture{false};
+        bool throwAccept{false};
+        bool foreignException{false};
+        std::size_t captureCalls{}; /**< Render-owner-only native boundary observations. */
+        std::size_t acceptanceCalls{};
+        std::size_t throwRecordIndex{2};
+        std::atomic<std::uint32_t> liveRecordings{};
     };
 
     /** @brief Owns copied operation payload; artificial encoder gate permits deterministic real-worker lifecycle checks. */
@@ -30,7 +38,20 @@ namespace Horo::Render::MetalBackendTests {
             : frame_(request.frame), observation_(std::move(observation)) {
             for (const auto &binding : request.workloads)
                 payload_.push_back(binding.workload);
+            lease_ = request.lease;
+            observation_->liveRecordings.fetch_add(1);
         }
+
+        ~TestNativeRecording() override {
+            if (lease_)
+                lease_->Release();
+            observation_->liveRecordings.fetch_sub(1);
+        }
+
+        TestNativeRecording(const TestNativeRecording &) = delete;
+        TestNativeRecording &operator=(const TestNativeRecording &) = delete;
+        TestNativeRecording(TestNativeRecording &&) = delete;
+        TestNativeRecording &operator=(TestNativeRecording &&) = delete;
 
         FrameToken Frame() const noexcept override {
             return frame_;
@@ -45,13 +66,13 @@ namespace Horo::Render::MetalBackendTests {
                 return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
             observation_->workerThreads[index] = std::this_thread::get_id();
             observation_->entered[index].store(true, std::memory_order_release);
-            while (index == 0 && !observation_->releaseFirst.load()) {
-                if (closed_.load() || cancellation.IsCancellationRequested())
-                    return JobCancelled();
-                std::this_thread::yield();
-            }
-            if (closed_.load() || cancellation.IsCancellationRequested())
+            if (!AwaitRecordingAdmission(index, cancellation))
                 return JobCancelled();
+            if (index == observation_->throwRecordIndex) {
+                if (observation_->foreignException)
+                    throw 354;
+                throw std::runtime_error{"injected worker recording failure"};
+            }
             if (index == observation_->failIndex)
                 return Result<void>::Failure(MakePortError("render.test.native_record_failed", "Injected worker encoding error."));
             observation_->finished[index].store(true, std::memory_order_release);
@@ -67,10 +88,21 @@ namespace Horo::Render::MetalBackendTests {
         }
 
     private:
+        /** @brief Keeps the deterministic first-worker gate independently cancellable, including terminal acknowledgement. */
+        bool AwaitRecordingAdmission(const std::size_t index, const CancellationToken &cancellation) const {
+            while (index == 0 && !observation_->releaseFirst.load()) {
+                if (closed_.load() || cancellation.IsCancellationRequested())
+                    return false;
+                std::this_thread::yield();
+            }
+            return !closed_.load() && !cancellation.IsCancellationRequested();
+        }
+
         FrameToken frame_;
         std::shared_ptr<ParallelObservation> observation_;
         std::vector<RenderGraphWorkload> payload_;
         std::atomic<bool> closed_{false};
+        IRenderGraphResourceLease *lease_{}; /**< Last CPU/GPU recording owner releases the transferred lease. */
     };
 
     /** @brief Test-native runtime driven through production Metal backend and frontend rather than a planner fixture. */
@@ -88,12 +120,24 @@ namespace Horo::Render::MetalBackendTests {
         }
 
         Result<std::shared_ptr<IRenderParallelGraphRecording>> PrepareParallelGraph(const RenderGraphExecutionRequest &request) override {
+            ++observation_->captureCalls;
+            if (observation_->throwCapture) {
+                if (observation_->foreignException)
+                    throw 354;
+                throw std::runtime_error{"injected native capture failure"};
+            }
             recording_ = std::make_shared<TestNativeRecording>(request, observation_);
-            lease_ = request.lease;
+            leaseRecording_ = recording_;
             return Result<std::shared_ptr<IRenderParallelGraphRecording>>::Success(recording_);
         }
 
         Result<void> AcceptParallelGraph(const std::shared_ptr<IRenderParallelGraphRecording> &recording) override {
+            ++observation_->acceptanceCalls;
+            if (observation_->throwAccept) {
+                if (observation_->foreignException)
+                    throw 354;
+                throw std::runtime_error{"injected native acceptance failure"};
+            }
             if (std::this_thread::get_id() != owner_ || recording != recording_)
                 return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
             for (std::size_t index = 0; index < recording_->PassCount(); ++index) {
@@ -138,16 +182,13 @@ namespace Horo::Render::MetalBackendTests {
 
     private:
         void ReleaseLease() noexcept {
-            if (lease_ != nullptr) {
-                lease_->Release();
-                lease_ = nullptr;
-            }
+            leaseRecording_.reset();  // Abandoned workers still retain the capsule; accepted capsules remain until native completion.
         }
 
         std::shared_ptr<ParallelObservation> observation_;
         std::thread::id owner_;
         std::shared_ptr<TestNativeRecording> recording_;
-        IRenderGraphResourceLease *lease_{nullptr};
+        std::shared_ptr<TestNativeRecording> leaseRecording_;
     };
 
     class ParallelMetalFactory final : public Detail::IMetalRuntimeFactory {

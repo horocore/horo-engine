@@ -1,9 +1,11 @@
+#include "CanonicalJsonWriter.h"
 #include "Horo/Prefab/PrefabDocument.h"
 #include "PrefabDocumentSerializationInternal.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <new>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <type_traits>
@@ -14,7 +16,7 @@
 
 namespace Horo::Prefab {
     namespace {
-        using OrderedJson = nlohmann::ordered_json;
+        using OrderedJson = JsonEncoding::Detail::CanonicalJsonValue<false>;
         using Detail::Failed;
         using Detail::IsCanonicalProjectVersion;
 
@@ -243,7 +245,11 @@ namespace Horo::Prefab {
 
     /** @copydoc PrefabDocument::SerializeCanonical */
     Result<std::string> PrefabDocument::SerializeCanonical() const {
-        return EncodeDocument(*this);
+        try {
+            return EncodeDocument(*this);
+        } catch (const std::bad_alloc &) {
+            return Result<std::string>::Failure(MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
+        }
     }
 
 }  // namespace Horo::Prefab

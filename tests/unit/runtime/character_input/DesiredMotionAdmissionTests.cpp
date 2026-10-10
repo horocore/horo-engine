@@ -87,17 +87,32 @@ namespace {
     TEST_CASE("Load-time allocation failure preserves caller grant and successful motion path does not allocate", "[character][input]") {
         BoundedWorld active;
         const auto grant = active.world->IssueCapability().Value();
-        bool allocationFailed = false;
+        // MSVC Debug constructs string container proxies even for empty action IDs.
+        // Prepare default construction before injection; never fail its noexcept string constructor.
+        const DesiredMotionInputBinding binding;
+        Tests::AllocationProbe::Measurement copyPreparation;
         {
-            Tests::AllocationProbe::ScopedFailure failure;
+            Tests::AllocationProbe::ScopedMeasurement measurement;
+            const DesiredMotionInputBinding copy(binding);
+            copyPreparation = measurement.Snapshot();
+        }
+        bool allocationFailed = false;
+        Tests::AllocationProbe::Measurement failedCreation;
+        {
+            // Copying this same lvalue into the by-value parameter has the measured prefix.
+            // Allow that prefix, then fail Create's first allocation: make_unique<State>.
+            Tests::AllocationProbe::ScopedFailure failure{copyPreparation.requests};
+            Tests::AllocationProbe::ScopedMeasurement measurement;
             try {
                 static_cast<void>(
-                    DesiredMotionAdapter::Create({1, 0, DesiredMotionSource::ExternalIntent, true}, grant, active.controller));
+                    DesiredMotionAdapter::Create({1, 0, DesiredMotionSource::ExternalIntent, true}, grant, active.controller, binding));
             } catch (const std::bad_alloc &) {
                 allocationFailed = true;
             }
+            failedCreation = measurement.Snapshot();
         }
         REQUIRE(allocationFailed);
+        REQUIRE(failedCreation.requests == copyPreparation.requests + 1);
         REQUIRE(grant.ControllerDescriptor(active.controller).HasValue());
         auto adapter = active.Adapter();
         bool captured = false;

@@ -137,6 +137,7 @@ add_library(HoroPlatform STATIC
         platform/ConfigurationFileStore.cpp
         platform/android/AndroidLifecycle.cpp
         platform/android/AndroidLifecycleAdapter.cpp
+        platform/android/AndroidStorage.cpp
 )
 
 if (WIN32)
@@ -154,6 +155,10 @@ else ()
     if (APPLE)
         target_link_libraries(HoroPlatform PRIVATE "-framework Security")
     endif ()
+endif ()
+
+if (ANDROID)
+    target_link_libraries(HoroPlatform PRIVATE android)
 endif ()
 
 add_library(HoroEngine::Platform ALIAS HoroPlatform)
@@ -414,6 +419,7 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveParticipation.cpp
         runtime/save/SaveCaptureSnapshot.cpp
         runtime/save/SaveRestoreTransaction.cpp
+        runtime/save/SaveGameplayCheckpoint.cpp
         runtime/save/SaveRestoreTransactionReferences.cpp
         runtime/save/SaveArchiveMetadata.cpp
         runtime/save/SaveCompatibility.cpp
@@ -439,6 +445,10 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveCanonicalCompositeWriter.cpp
         runtime/save/SaveCanonicalCompositeReader.cpp
         runtime/save/SaveReference.cpp
+        runtime/save/SaveThumbnailArchive.cpp
+        runtime/save/SaveThumbnailCodec.cpp
+        runtime/save/SaveThumbnailCapture.cpp
+        runtime/save/SaveThumbnailErrors.cpp
         runtime/save/SaveSlotMetadata.cpp
         runtime/save/SaveSlotIndex.cpp
         runtime/save/SaveCloudRevisionMetadata.cpp
@@ -800,6 +810,8 @@ add_library(HoroNetworkRuntime STATIC
         runtime/networking/ReplicationStateEncode.cpp
         runtime/networking/ReplicationStateDecode.cpp
         runtime/networking/SceneReplicationCommitSource.cpp
+        runtime/networking/ReplicationInboundApply.cpp
+        runtime/networking/SceneReplicationApplyOwner.cpp
         runtime/networking/RpcGameplayDispatch.cpp
         runtime/networking/RpcGameplayDispatchReceive.cpp
         runtime/networking/RpcGameplayDispatchGameplay.cpp
@@ -1599,6 +1611,12 @@ add_library(HoroEngine::XRRuntime ALIAS HoroXRRuntime)
 target_compile_features(HoroXRRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroXRRuntime PUBLIC HoroEngine::XRApi)
 
+# Explicit host-composed XR/Input adapter; neither core module depends back on it.
+add_library(HoroXRInputBindings STATIC runtime/xr/input/XRActionBindings.cpp)
+add_library(HoroEngine::XRInputBindings ALIAS HoroXRInputBindings)
+target_compile_features(HoroXRInputBindings PUBLIC cxx_std_20)
+target_link_libraries(HoroXRInputBindings PUBLIC HoroEngine::XRApi HoroEngine::Input)
+
 if(HORO_BUILD_XR_OPENXR)
     # Deliberate non-installed native composition boundary. Only explicit host
     # adapters see native types; XRApi/XRRuntime remain backend-neutral.
@@ -1606,10 +1624,10 @@ if(HORO_BUILD_XR_OPENXR)
     target_include_directories(HoroXROpenXRHostInterface INTERFACE
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/xr/openxr/host>")
     target_link_libraries(HoroXROpenXRHostInterface INTERFACE
-        HoroEngine::XRRuntime HoroEngine::Platform HoroOpenXRHeaders)
+        HoroEngine::XRRuntime HoroEngine::XRInputBindings HoroEngine::Platform HoroOpenXRHeaders)
     target_compile_features(HoroXROpenXRHostInterface INTERFACE cxx_std_20)
 
-    add_library(HoroXROpenXR STATIC runtime/xr/openxr/OpenXRNativeSession.cpp)
+    add_library(HoroXROpenXR STATIC runtime/xr/openxr/OpenXRNativeSession.cpp runtime/xr/openxr/OpenXRActionBindings.cpp)
     add_library(HoroEngine::XROpenXR ALIAS HoroXROpenXR)
     target_link_libraries(HoroXROpenXR PRIVATE HoroXROpenXRHostInterface)
     target_compile_features(HoroXROpenXR PRIVATE cxx_std_20)
@@ -1832,10 +1850,17 @@ add_library(HoroSceneCellPayload STATIC
         runtime/scene/RuntimeSceneCellLayers.cpp
         runtime/scene/RuntimeSceneCellPayloadErrors.cpp
         runtime/scene/IncrementalSceneCellCook.cpp
+        runtime/scene/WorldBuildValidation.cpp
 )
 add_library(HoroEngine::SceneCellPayload ALIAS HoroSceneCellPayload)
 target_compile_features(HoroSceneCellPayload PUBLIC cxx_std_20)
 target_link_libraries(HoroSceneCellPayload PUBLIC HoroEngine::RuntimeScene HoroEngine::WorldStreaming)
+
+# Narrow non-installed wire helper: neither a repository-wide include root nor a public API.
+add_library(HoroJsonEncodingInternal INTERFACE)
+target_include_directories(HoroJsonEncodingInternal INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/foundation/json>)
+target_link_libraries(HoroJsonEncodingInternal INTERFACE nlohmann_json::nlohmann_json)
 
 add_library(HoroPrefab STATIC
         runtime/prefab/CookedPrefab.cpp
@@ -1876,7 +1901,7 @@ add_library(HoroEngine::PrefabAuthoring ALIAS HoroPrefabAuthoring)
 target_compile_features(HoroPrefabAuthoring PUBLIC cxx_std_20)
 target_include_directories(HoroPrefabAuthoring PRIVATE ${PROJECT_SOURCE_DIR}/src/foundation/json)
 target_link_libraries(HoroPrefabAuthoring PUBLIC HoroEngine::Prefab HoroEngine::Application
-        PRIVATE nlohmann_json::nlohmann_json)
+        PRIVATE nlohmann_json::nlohmann_json HoroJsonEncodingInternal)
 
 # Load/cook bridge. RuntimeScene never depends on prefab source authoring or Editor.
 add_library(HoroPrefabSceneExpansion STATIC runtime/prefab/PrefabSceneExpansion.cpp)
@@ -2077,6 +2102,9 @@ if (HORO_BUILD_RENDER_OPENGL)
     add_library(HoroRenderOpenGL STATIC
             runtime/renderer/modules/opengl/OpenGLBackendModule.cpp
             runtime/renderer/modules/opengl/OpenGLCommandFunctions.cpp
+            runtime/renderer/modules/opengl/OpenGLContextAdmission.cpp
+            runtime/renderer/modules/opengl/OpenGLExecutionState.cpp
+            runtime/renderer/modules/opengl/OpenGLExecutionAdapter.cpp
             runtime/renderer/modules/opengl/OpenGLRenderBackend.cpp
             runtime/renderer/modules/opengl/OpenGLRenderBackendErrors.cpp
             runtime/renderer/modules/opengl/OpenGLRenderBackendResources.inl
@@ -2188,7 +2216,7 @@ add_library(HoroEngine::SceneSource ALIAS HoroSceneSource)
 target_compile_features(HoroSceneSource PUBLIC cxx_std_20)
 target_link_libraries(HoroSceneSource
         PUBLIC HoroEngine::SceneSourceModel
-        PRIVATE nlohmann_json::nlohmann_json
+        PRIVATE nlohmann_json::nlohmann_json HoroJsonEncodingInternal
 )
 
 # Non-installed, narrow codec bridge for existing Editor JSON adapters.
@@ -2198,7 +2226,7 @@ target_include_directories(HoroSceneSourceCodecInternal INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/scene/source>
 )
 target_link_libraries(HoroSceneSourceCodecInternal INTERFACE
-        HoroEngine::SceneSource nlohmann_json::nlohmann_json
+        HoroEngine::SceneSource nlohmann_json::nlohmann_json HoroJsonEncodingInternal
 )
 
 # Shared headless conversion owner. Editor is a downstream snapshot adapter, not a cook dependency.

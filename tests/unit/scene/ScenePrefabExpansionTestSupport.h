@@ -75,4 +75,19 @@ namespace Horo::SceneSource::ExpansionTestSupport {
     };
 
     constexpr JoinOptions TestJoin{WaitPolicy::MainThreadPumpAllowed, Duration::FromMilliseconds(5'000)};
+
+    /** @brief Proves a valid retry schedules, joins, publishes and retires the same actual owner. */
+    inline void RequireCompletedRetryAndShutdown(ScenePrefabExpansionOwner &owner, const ScenePrefabExpansionRequest &request) {
+        REQUIRE(owner.Submit(request).HasValue());
+        REQUIRE(owner.Join(TestJoin).HasValue());
+        REQUIRE(owner.TakeCompleted(request).Value());
+        REQUIRE(owner.Shutdown(TestJoin).HasValue());
+    }
+
+    /** @brief Checks typed allocation failure and immutable source bytes after the injection scope has ended. */
+    inline void RequireAllocationFailurePreservesSource(const Error &failure, const PrefabDocument &document,
+                                                        const std::string &canonical) {
+        CHECK(failure.code.Value() == PrefabErrors::ExpansionCacheAllocationFailed.code.Value());
+        CHECK(document.SerializeCanonical().Value() == canonical);
+    }
 }  // namespace Horo::SceneSource::ExpansionTestSupport

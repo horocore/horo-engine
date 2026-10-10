@@ -66,9 +66,10 @@ namespace Horo::Vfx::Detail {
         std::uint32_t forceCount{};
         std::array<CpuParticlePlane, CpuParticleSimulationHardLimits::Planes> planes{};
         std::uint32_t planeCount{};
-        CpuParticleCollisionQuerySeam sceneDepth{};
+        CpuParticleSceneDepthSnapshot sceneDepth{};
+        Math::Mat4 clipToWorld{Math::Mat4::Identity()};
+        std::vector<CpuParticleDepthSample> depthSamples;
         CpuParticleCollisionQuerySeam physicsWorld{};
-        CpuParticleCollisionResponse collisionResponse{CpuParticleCollisionResponse::Bounce};
         std::array<CpuParticleCurveKey, CpuParticleSimulationHardLimits::CurveKeys> sizeOverLife{};
         std::uint32_t sizeOverLifeCount{};
         std::array<CpuParticleCurveKey, CpuParticleSimulationHardLimits::CurveKeys> opacityOverLife{};
