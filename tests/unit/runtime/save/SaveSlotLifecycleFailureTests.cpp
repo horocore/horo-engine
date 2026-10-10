@@ -427,18 +427,16 @@ TEST_CASE("Failed external export preserves source and existing destination byte
     CHECK(fixture.ExportBytes(10) == source);
 }
 
-TEST_CASE("Postvisibility observer exceptions remain Unknown and preserve the prior generation", "[save][lifecycle]") {
+TEST_CASE("Postvisibility typed observer failures remain Unknown and preserve the prior generation", "[save][lifecycle]") {
     const bool allocation = GENERATE(false, true);
     Fixture fixture;
     fixture.Import(10);
     const auto previous = fixture.Import(11);
     const auto oldBytes = DiskBytes(fixture.Generation(previous.entry->publication.generation));
-    fixture.fault.action = [allocation](const SaveSlotLifecycleIoStage stage, const SaveSlotLifecycleFileKind kind) {
-        if (stage == SaveSlotLifecycleIoStage::DirectorySync && kind == SaveSlotLifecycleFileKind::Catalog) {
-            if (allocation)
-                throw std::bad_alloc{};
-            throw 17;
-        }
+    fixture.fault.failure = [allocation](const SaveSlotLifecycleIoStage stage, const SaveSlotLifecycleFileKind kind) {
+        if (stage == SaveSlotLifecycleIoStage::DirectorySync && kind == SaveSlotLifecycleFileKind::Catalog)
+            return Result<void>::Failure(MakeError(allocation ? SaveErrors::StorageAllocationFailed : SaveErrors::StoragePermanentIo));
+        return Result<void>::Success();
     };
     const auto result =
         fixture.owner->Execute({.kind = SaveSlotLifecycleKind::Copy, .source = fixture.Target(10), .destination = fixture.Target(11)});
@@ -446,7 +444,7 @@ TEST_CASE("Postvisibility observer exceptions remain Unknown and preserve the pr
     CHECK(result.ErrorValue().code.Value() == SaveErrors::SlotCommitOutcomeUnknown.code.Value());
     CHECK(fixture.host.leases == 0);
     CHECK(DiskBytes(fixture.Generation(previous.entry->publication.generation)) == oldBytes);
-    fixture.fault.action = {};
+    fixture.fault.failure = {};
     fixture.Reopen();
     CHECK(fixture.Target(11).generation != previous.entry->publication.generation);
     CHECK_FALSE(fixture.ExportBytes(11).empty());
@@ -457,16 +455,14 @@ TEST_CASE("Postvisibility observer exceptions remain Unknown and preserve the pr
     CHECK_FALSE(std::filesystem::exists(fixture.Generation(previous.entry->publication.generation)));
 }
 
-TEST_CASE("Recycle provider exceptions remain committed with recoverable retained bytes", "[save][lifecycle]") {
+TEST_CASE("Typed recycle provider failures remain committed with recoverable retained bytes", "[save][lifecycle]") {
     const bool allocation = GENERATE(false, true);
     Fixture fixture;
     fixture.host.recycleSupported = true;
     const auto previous = fixture.Import(10);
     const auto oldBytes = DiskBytes(fixture.Generation(previous.entry->publication.generation));
     fixture.host.onRecycle = [allocation] {
-        if (allocation)
-            throw std::bad_alloc{};
-        throw 17;
+        return Result<void>::Failure(MakeError(allocation ? SaveErrors::StorageAllocationFailed : SaveErrors::StoragePermanentIo));
     };
     const auto result = fixture.owner->Execute(
         {.kind = SaveSlotLifecycleKind::Delete, .source = fixture.Target(10), .deleteMode = SaveSlotDeleteMode::PlatformRecycle});

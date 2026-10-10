@@ -59,8 +59,6 @@ namespace Horo::Runtime {
             result.cleanupDeferred = cleaned.HasError() || cleaned.Value();
         } catch (const std::bad_alloc &) {
             result.cleanupDeferred = true;
-        } catch (...) {
-            result.cleanupDeferred = true;
         }
         return Result<SaveSlotLifecycleResult>::Success(std::move(result));
     }

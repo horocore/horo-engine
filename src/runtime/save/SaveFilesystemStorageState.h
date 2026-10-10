@@ -61,10 +61,6 @@ namespace Horo::Runtime {
                 return synced;
             } catch (const std::bad_alloc &) {
                 return Result<void>::Failure(std::move(fallback));
-            } catch (...) {
-                // Even diagnostic allocation/provider exceptions after visibility cannot turn an
-                // outcome-unknown publication into an unchanged-state failure.
-                return Result<void>::Failure(std::move(fallback));
             }
         }
 

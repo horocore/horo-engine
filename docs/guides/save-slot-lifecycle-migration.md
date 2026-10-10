@@ -116,3 +116,23 @@ progress, before file sync/replace, after visibility before directory sync, and
 before retired cleanup. Normal composition supplies no observer. Native Windows
 and macOS durability/reparse behavior must be qualified on their actual platforms;
 Linux tests alone do not provide that evidence.
+
+## Callback failure contract migration
+
+`ISaveSlotLifecycleIoObserver::Before` and `ISaveSlotLifecycleHost::Recycle`
+now require `noexcept` overrides returning typed `Result<void>` failures. This
+is an explicit public-contract change: all external implementors must update
+their override signatures and translate provider failures before returning.
+Adapters must prepare allocation-failure evidence before invoking fallible work,
+so translating allocation failure does not allocate again. An exception escaping
+a provider violates this contract; arbitrary thrown values are no longer claimed
+to be recoverable by the lifecycle. Do not merely mark a throwing adapter `noexcept`.
+
+The reason is publication ownership: an observer error after manifest visibility
+must become `SlotCommitOutcomeUnknown`, while a recycle error after acknowledged
+publication must retain the exact retired generation and report committed/deferred
+cleanup. Those outcomes now consume explicit provider results, not a catch-all
+exception boundary. Engine-owned allocation failures remain independently caught
+with preallocated outcome-unknown evidence or committed/deferred cleanup. Tests
+exercise typed provider failures, adapter allocation translation, actual allocation
+failure after visibility, lease release, reopen and idempotent reconciliation.

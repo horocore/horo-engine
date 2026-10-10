@@ -3202,6 +3202,8 @@ add_executable(HoroRuntimeSaveSlotCommitTransactionTests
 target_compile_features(HoroRuntimeSaveSlotCommitTransactionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveSlotCommitTransactionTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveSlotLifecycleTests
+        support/AllocationProbe.cpp
+        unit/runtime/save/SaveSlotLifecycleAllocationTests.cpp
         unit/runtime/save/SaveSlotLifecycleTests.cpp
         unit/runtime/save/SaveSlotLifecycleFailureTests.cpp
 )

@@ -58,8 +58,11 @@ namespace Horo::Runtime {
         /** @brief Observes/injects a failure immediately before a real filesystem stage.
          * @param stage Exact stage; DirectorySync occurs after atomic visibility.
          * @param kind Artifact role. @return Success to proceed, or typed failure with the same stage's outcome semantics.
-         * @details Observer must outlive the owner, must not reenter it, and cannot change host policy. */
-        [[nodiscard]] virtual Result<void> Before(SaveSlotLifecycleIoStage stage, SaveSlotLifecycleFileKind kind) = 0;
+         * @details Observer must outlive the owner, must not reenter it, and cannot change host policy.
+         * Providers translate failures to Result before returning; exceptions must not cross this boundary.
+         * Allocation-failure evidence must be prepared before the callback. A throwing provider violates
+         * this contract; the lifecycle does not promise recovery from that violation. */
+        [[nodiscard]] virtual Result<void> Before(SaveSlotLifecycleIoStage stage, SaveSlotLifecycleFileKind kind) noexcept = 0;
     };
 
     /** @brief Host-authorized archive identity scope; server scope is explicitly bound by the host. */
@@ -115,8 +118,11 @@ namespace Horo::Runtime {
         /** @brief Durably recycles an immutable retired archive without accepting an internal path.
          * @param entry Exact retired metadata. @param archive Owned verified bytes, never staging files.
          * @return Success after platform preservation, or failure; source remains retained for retry.
-         * @details Retries after interruption must be idempotent by exact namespace/slot/generation. */
-        [[nodiscard]] virtual Result<void> Recycle(const SaveSlotCatalogEntry &entry, ImmutableSaveArchive archive) = 0;
+         * @details Retries after interruption must be idempotent by exact namespace/slot/generation.
+         * Providers translate failures to Result before returning; exceptions must not cross this boundary.
+         * Allocation-failure evidence must be prepared before the callback. A throwing provider violates
+         * this contract; the lifecycle does not promise recovery from that violation. */
+        [[nodiscard]] virtual Result<void> Recycle(const SaveSlotCatalogEntry &entry, ImmutableSaveArchive archive) noexcept = 0;
     };
 
     /** @brief Slot selector binding optimistic consent to exact namespace, catalog revision and generation. */
