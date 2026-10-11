@@ -70,6 +70,34 @@ namespace Horo::Assets {
                 }
             }
         };
+
+        /** @brief Reconciles the irreversible native receipt using error storage reserved before replacement. */
+        Result<AssetSourcePublication> ReplacePreparedSource(const std::filesystem::path &path, std::span<const std::byte> bytes,
+                                                             PreparedSource &cleanup) {
+            AssetSourcePublication publication{AssetSourcePublicationStatus::Durable, Identity(bytes), {}};
+            auto fallback = MakeError(AssetSourceErrors::DurabilityUnconfirmed);
+            static_assert(std::is_nothrow_move_constructible_v<AssetSourcePublication>);
+            static_assert(std::is_nothrow_move_constructible_v<Error>);
+            AtomicFileReplacementReceipt receipt;
+            try {
+                auto replaced = cleanup.files.AtomicReplaceTracked(cleanup.path, path, receipt);
+                if (!receipt.WasCommitted())
+                    return Result<AssetSourcePublication>::Failure(replaced.HasError() ? std::move(replaced).ErrorValue()
+                                                                                       : MakeError(AssetSourceErrors::ReadFailed));
+                cleanup.created = false;
+                if (replaced.HasError()) {
+                    publication.status = AssetSourcePublicationStatus::ReconciliationRequired;
+                    publication.durabilityError.emplace(std::move(replaced).ErrorValue());
+                }
+            } catch (...) {  // NOSONAR(cpp:S1181, cpp:S2738): the Platform commit receipt preserves every postcommit exception.
+                if (!receipt.WasCommitted())
+                    throw;
+                cleanup.created = false;
+                publication.status = AssetSourcePublicationStatus::ReconciliationRequired;
+                publication.durabilityError.emplace(std::move(fallback));
+            }
+            return Result<AssetSourcePublication>::Success(std::move(publication));
+        }
     }  // namespace
 
     /** @copydoc CaptureAssetSource */
@@ -166,29 +194,7 @@ namespace Horo::Assets {
             }
             if (cancellation.IsCancellationRequested())
                 return Result<AssetSourcePublication>::Failure(MakeError(AssetSourceErrors::Cancelled));
-            AssetSourcePublication publication{AssetSourcePublicationStatus::Durable, Identity(bytes), {}};
-            auto fallback = MakeError(AssetSourceErrors::DurabilityUnconfirmed);
-            static_assert(std::is_nothrow_move_constructible_v<AssetSourcePublication>);
-            static_assert(std::is_nothrow_move_constructible_v<Error>);
-            AtomicFileReplacementReceipt receipt;
-            try {
-                auto replaced = files.AtomicReplaceTracked(prepared, path, receipt);
-                if (!receipt.WasCommitted())
-                    return Result<AssetSourcePublication>::Failure(replaced.HasError() ? std::move(replaced).ErrorValue()
-                                                                                       : MakeError(AssetSourceErrors::ReadFailed));
-                cleanup.created = false;
-                if (replaced.HasError()) {
-                    publication.status = AssetSourcePublicationStatus::ReconciliationRequired;
-                    publication.durabilityError.emplace(std::move(replaced).ErrorValue());
-                }
-            } catch (...) {  // NOSONAR(cpp:S1181, cpp:S2738): the Platform commit receipt preserves every postcommit exception.
-                if (!receipt.WasCommitted())
-                    throw;
-                cleanup.created = false;
-                publication.status = AssetSourcePublicationStatus::ReconciliationRequired;
-                publication.durabilityError.emplace(std::move(fallback));
-            }
-            return Result<AssetSourcePublication>::Success(std::move(publication));
+            return ReplacePreparedSource(path, bytes, cleanup);
         } catch (const std::bad_alloc &) {
             return Result<AssetSourcePublication>::Failure(MakeError(AssetSourceErrors::Limit));
         } catch (...) {  // NOSONAR(cpp:S1181, cpp:S2738): ADR-008 maps arbitrary precommit provider failures at the typed Assets boundary.

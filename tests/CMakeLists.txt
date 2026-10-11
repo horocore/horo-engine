@@ -2603,6 +2603,7 @@ target_compile_features(HoroSceneDocumentTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSceneDocumentTests PRIVATE HoroEngine::EditorRenderExtraction)
 add_executable(HoroSceneDocumentPersistenceTests
         unit/editor/SceneDocumentPersistenceTests.cpp
+        unit/editor/SceneDocumentRecoveryPathTests.cpp
         unit/editor/SceneDocumentAudioPersistenceTests.cpp
         unit/editor/SceneDocumentTriggerVolumePersistenceTests.cpp
         unit/editor/SceneDocumentGameplayPersistenceTests.cpp
@@ -4513,6 +4514,7 @@ add_test(NAME HoroAnimationGraphPublicHeaderConsumer COMMAND HoroAnimationGraphP
 set_tests_properties(HoroAnimationGraphPublicHeaderConsumer PROPERTIES LABELS "unit;animation;headless;public_headers;ci-windows")
 
 add_executable(HoroPCGDocumentTests
+        unit/editor/PCGGraphDocumentSaveTests.cpp
         unit/editor/PCGGraphDocumentTests.cpp
         unit/editor/PCGGraphDocumentServiceTests.cpp)
 target_compile_features(HoroPCGDocumentTests PRIVATE cxx_std_20)

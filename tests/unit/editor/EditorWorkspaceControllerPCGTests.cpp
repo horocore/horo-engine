@@ -4,13 +4,20 @@
 namespace Horo::Editor {
     using namespace PCGDocumentTestSupport;
 
+    namespace {
+        /** @brief Publishes the binary graph registry fixture before workspace composition. */
+        void PublishGraphAsset(Assets::AssetRegistry &registry) {
+            const auto source = ProjectPath::Parse(Identity().key.source.Value()).Value();
+            const auto metadata = ProjectPath::Parse(Identity().key.source.Value() + ".horo").Value();
+            REQUIRE(registry.Publish({{Asset(), Assets::AssetTypeId::Parse("core.pcg_graph").Value(), source, metadata}}).status ==
+                    Assets::AssetRegistryBuildStatus::Complete);
+        }
+    }  // namespace
+
     TEST_CASE("Workspace PCG activation owns binary sessions dirty tabs recovery save and close", "[unit][editor][pcg][workspace]") {
         Project project;
         Assets::AssetRegistry registry;
-        const auto source = ProjectPath::Parse(Identity().key.source.Value()).Value();
-        const auto metadata = ProjectPath::Parse(Identity().key.source.Value() + ".horo").Value();
-        REQUIRE(registry.Publish({{Asset(), Assets::AssetTypeId::Parse("core.pcg_graph").Value(), source, metadata}}).status ==
-                Assets::AssetRegistryBuildStatus::Complete);
+        PublishGraphAsset(registry);
         Runtime::RuntimeSceneService runtime;
         CancellationSource cancellation;
         REQUIRE(runtime.Startup(cancellation.Token()).HasValue());

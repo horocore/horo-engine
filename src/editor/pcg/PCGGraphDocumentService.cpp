@@ -68,6 +68,37 @@ namespace Horo::Editor {
         bool operationActive{};
         const PCG::IPCGGraphSourceMigrator *migrator{};
 
+        /** @brief Reconciles only current or explicitly accepted recovery while the shutdown operation guard is held. */
+        Result<void> ReconcileRecovery(bool preserveRecovery, bool discardDirty) {
+            if (mutations && files) {
+                DocumentRecoveryService recovery(root, *mutations, *files);
+                for (const auto &entry : documents) {
+                    const auto snapshot = entry.document.Snapshot().Value();
+                    auto record = recovery.Inspect(entry.asset, entry.identity.key);
+                    if (record.HasError())
+                        return Result<void>::Failure(record.ErrorValue());
+                    if (!record.Value()) {
+                        if (snapshot.dirty && preserveRecovery && !discardDirty)
+                            return Failure<void>(Reason::Stale);
+                        continue;
+                    }
+                    const auto &candidate = *record.Value();
+                    const bool currentSession =
+                        candidate.sessionOwner == snapshot.session.owner && candidate.sessionGeneration == snapshot.session.generation;
+                    if (snapshot.dirty && preserveRecovery && !discardDirty &&
+                        (!currentSession || candidate.state != snapshot.state || candidate.acceptedSource != snapshot.acceptedSource))
+                        return Failure<void>(Reason::Stale);
+                    const bool provenSaved = !snapshot.dirty && candidate.state == snapshot.state;
+                    const bool acceptedCandidate = entry.acceptedRecovery && candidate == *entry.acceptedRecovery;
+                    if (provenSaved || (discardDirty && (currentSession || acceptedCandidate))) {
+                        if (auto discarded = recovery.Discard(candidate); discarded.HasError())
+                            return discarded;
+                    }
+                }
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Resolves only a live exact route in this owner incarnation. */
         Entry *Find(DocumentInstanceId instance) {
             const auto found = std::ranges::find(documents, instance, [](const Entry &entry) {
@@ -419,32 +450,8 @@ namespace Horo::Editor {
             if (snapshot.Value().dirty && !preserveRecovery && !discardDirty)
                 return Failure<void>(Reason::Dirty);
         }
-        if (state_->mutations && state_->files) {
-            DocumentRecoveryService recovery(state_->root, *state_->mutations, *state_->files);
-            for (const auto &entry : state_->documents) {
-                const auto snapshot = entry.document.Snapshot().Value();
-                auto record = recovery.Inspect(entry.asset, entry.identity.key);
-                if (record.HasError())
-                    return Result<void>::Failure(record.ErrorValue());
-                if (!record.Value()) {
-                    if (snapshot.dirty && preserveRecovery && !discardDirty)
-                        return Failure<void>(Reason::Stale);
-                    continue;
-                }
-                const auto &candidate = *record.Value();
-                const bool currentSession =
-                    candidate.sessionOwner == snapshot.session.owner && candidate.sessionGeneration == snapshot.session.generation;
-                if (snapshot.dirty && preserveRecovery && !discardDirty &&
-                    (!currentSession || candidate.state != snapshot.state || candidate.acceptedSource != snapshot.acceptedSource))
-                    return Failure<void>(Reason::Stale);
-                const bool provenSaved = !snapshot.dirty && candidate.state == snapshot.state;
-                const bool acceptedCandidate = entry.acceptedRecovery && candidate == *entry.acceptedRecovery;
-                if (provenSaved || (discardDirty && (currentSession || acceptedCandidate))) {
-                    if (auto discarded = recovery.Discard(candidate); discarded.HasError())
-                        return discarded;
-                }
-            }
-        }
+        if (auto reconciled = state_->ReconcileRecovery(preserveRecovery, discardDirty); reconciled.HasError())
+            return reconciled;
         for (const auto &snapshot : captured.Value()) {
             const auto current = Snapshot(snapshot.identity.instance);
             if (current.HasError())

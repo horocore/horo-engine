@@ -1,9 +1,24 @@
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "PCGDocumentTestSupport.h"
 
+#include <cstddef>
+#include <filesystem>
+#include <vector>
+
 namespace Horo::Editor {
     using namespace PCGDocumentTestSupport;
     using Reason = PCGDocumentCommandFailureReason;
+
+    namespace {
+        /** @brief Observes the sole durable record created by this isolated fixture without private service access. */
+        std::filesystem::path OnlyRecoveryPath(const std::filesystem::path &root) {
+            std::vector<std::filesystem::path> paths;
+            for (const auto &entry : std::filesystem::directory_iterator(root / ".horo/local/recovery"))
+                paths.push_back(entry.path());
+            REQUIRE(paths.size() == 1);
+            return paths.front();
+        }
+    }  // namespace
 
     TEST_CASE("PCG workspace service focuses one writable asset without replacing unsaved intent", "[unit][editor][pcg][service]") {
         Project project;
@@ -89,8 +104,9 @@ namespace Horo::Editor {
             ErrorIs(service.AcceptRecovery(Identity().instance, Fence(before), *candidate.Value()), PCGDocumentError(Reason::Stale));
         }
         SECTION("candidate payload substitution") {
-            candidate.Value()->record.payload[10] ^= std::byte{1};
-            ErrorIs(service.AcceptRecovery(Identity().instance, Fence(before), *candidate.Value()), PCGDocumentError(Reason::Invalid));
+            auto substituted = *candidate.Value();
+            substituted.record.payload[10] ^= std::byte{1};
+            ErrorIs(service.AcceptRecovery(Identity().instance, Fence(before), substituted), PCGDocumentError(Reason::Invalid));
         }
         CHECK(service.Snapshot(Identity().instance).Value().dirty);
     }
@@ -119,8 +135,7 @@ namespace Horo::Editor {
         ErrorIs(recovery.Discard(first.Value()->record), Assets::AssetSourceErrors::Conflict);
     }
 
-    TEST_CASE("PCG recovery lifecycle preserves roots on failure and closes only after explicit policy",
-              "[unit][editor][pcg][recovery][lifecycle]") {
+    TEST_CASE("PCG recovery failure and reentrant staging preserve retry ownership", "[unit][editor][pcg][recovery][lifecycle]") {
         Project project;
         PCGGraphDocumentService service(project.root, Asset(9), Catalog(), &project.mutations, &project.files);
         REQUIRE(service.Open(Asset(), Identity(), project.path).HasValue());
@@ -147,15 +162,26 @@ namespace Horo::Editor {
             CHECK(service.InspectRecovery(Identity().instance).Value()->source->Data().deterministicSeed == 42);
             REQUIRE(service.Shutdown(true).HasValue());
         }
+        ErrorIs(service.Snapshot(Identity().instance), PCGDocumentError(Reason::Closed));
+        CHECK(reader.source->Data().deterministicSeed == 42);
+        CHECK(Assets::CaptureAssetSource(project.root, project.path, 1024 * 1024).Value().bytes == Capture().bytes);
+    }
+
+    TEST_CASE("PCG recovery discard and shutdown fence current roots and native leases", "[unit][editor][pcg][recovery][lifecycle]") {
+        Project project;
+        PCGGraphDocumentService service(project.root, Asset(9), Catalog(), &project.mutations, &project.files);
+        REQUIRE(service.Open(Asset(), Identity(), project.path).HasValue());
+        REQUIRE(service.Execute(Identity().instance, Edit(service.Snapshot(Identity().instance).Value(), 42)).HasValue());
+        const auto reader = service.Snapshot(Identity().instance).Value();
+        ErrorIs(service.Close(Identity().instance), PCGDocumentError(Reason::Dirty));
+        ErrorIs(service.Shutdown(false), PCGDocumentError(Reason::Dirty));
         SECTION("explicit discard removes only own recovery and preserves source") {
             REQUIRE(service.Autosave(Identity().instance, Fence(reader)).HasValue());
             DocumentRecoveryService recovery(project.root, project.mutations, project.files);
             const auto candidate = recovery.Inspect(Asset(), Identity().key);
             REQUIRE(candidate.HasValue());
             REQUIRE(candidate.Value());
-            const auto recoveryPath = recovery.Path(Asset(), Identity().key);
-            REQUIRE(recoveryPath.HasValue());
-            const auto lockPath = Assets::AssetSourcePublicationLockPath(project.root, recoveryPath.Value());
+            const auto lockPath = Assets::AssetSourcePublicationLockPath(project.root, OnlyRecoveryPath(project.root));
             REQUIRE(lockPath.HasValue());
             project.files.duringRemove = [&] {
                 CHECK(project.files.TryAcquireExclusive(lockPath.Value(), "competing-recovery-writer").HasError());

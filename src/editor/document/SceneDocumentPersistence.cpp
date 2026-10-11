@@ -148,12 +148,19 @@ namespace Horo::Editor {
 
         [[nodiscard]] Result<void> WriteRecoveryPayload(const std::filesystem::path &absoluteProjectRoot, const std::string &serialized,
                                                         DurableFileSystem &files) {
-            const std::filesystem::path destination = RecoveryPath(absoluteProjectRoot);
-            const auto previous = Assets::CaptureAssetSource(absoluteProjectRoot, destination, kMaximumRecoveryBytes);
+            // Scene callers may hold an absolute project alias; exact native writer leases require its canonical physical root.
+            std::error_code error;
+            const auto publicationRoot = std::filesystem::canonical(absoluteProjectRoot, error);
+            if (error)
+                return Result<void>::Failure(PersistenceError(ScenePathInvalid, "Unable to resolve the recovery project root: " +
+                                                                                    std::string{error.category().name()} + ":" +
+                                                                                    std::to_string(error.value()) + " " + error.message()));
+            const std::filesystem::path destination = RecoveryPath(publicationRoot);
+            const auto previous = Assets::CaptureAssetSource(publicationRoot, destination, kMaximumRecoveryBytes);
             if (previous.HasError())
                 return Result<void>::Failure(previous.ErrorValue());
             const auto bytes = Bytes(serialized);
-            auto publication = PublishDocumentRecovery(absoluteProjectRoot, destination, bytes, previous.Value().identity, files,
+            auto publication = PublishDocumentRecovery(publicationRoot, destination, bytes, previous.Value().identity, files,
                                                        {.maximumRecordBytes = kMaximumRecoveryBytes});
             if (publication.HasError())
                 return Result<void>::Failure(publication.ErrorValue());

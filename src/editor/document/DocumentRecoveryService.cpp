@@ -269,9 +269,9 @@ namespace Horo::Editor {
         if (lockPath.HasError())
             return Result<Assets::AssetSourcePublication>::Failure(lockPath.ErrorValue());
         std::error_code error;
-        std::size_t records{};
         std::size_t total{};
         if (std::filesystem::exists(recoveryRoot, error)) {
+            std::size_t records{};
             for (std::filesystem::directory_iterator iterator(recoveryRoot, error), end; !error && iterator != end;
                  iterator.increment(error)) {
                 const auto status = iterator->symlink_status(error);
