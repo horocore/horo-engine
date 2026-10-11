@@ -157,7 +157,7 @@ def changed_paths(root: Path, base: str | None) -> tuple[list[Path], str]:
         untracked = paths_from_nul_output(run_git(root, "ls-files", "--others", "--exclude-standard", "-z"))
         return list(dict.fromkeys([*tracked, *untracked])), f"base:{base}"
 
-    records = run_git(root, "status", "--porcelain=v1", "-z").split(b"\0")
+    records = run_git(root, "status", "--porcelain=v1", "--untracked-files=all", "-z").split(b"\0")
     paths: list[Path] = []
     index = 0
     while index < len(records):

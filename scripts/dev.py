@@ -565,7 +565,7 @@ def _cached_compiler_flags(build_directory: Path) -> dict[str, str]:
 def _cache_configure_arguments(command: Sequence[str], build_directory: Path, source: Path) -> list[str]:
     """Preserve user flags while normalizing debug paths for cross-worktree reuse."""
     result = list(command)
-    result.append("-DHORO_ENGINE_ENABLE_PCH=OFF")
+    result.append("-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON")
     if sys.platform == "win32":
         return result
     values: dict[str, str] = {}
@@ -593,6 +593,7 @@ def _uses_explicit_cache(command: Sequence[str], launcher: str | None, check_env
     return bool(launcher) or any(
         argument.startswith(("-DCMAKE_C_COMPILER_LAUNCHER", "-DCMAKE_CXX_COMPILER_LAUNCHER"))
         or (argument.startswith("-DHORO_ENGINE_ENABLE_PCH") and _cmake_enabled(argument.rsplit("=", 1)[-1]))
+        or (argument.startswith("-DCMAKE_DISABLE_PRECOMPILE_HEADERS") and not _cmake_enabled(argument.rsplit("=", 1)[-1]))
         for argument in command
     ) or (check_environment and any(key.startswith(("CCACHE_", "SCCACHE_")) for key in os.environ))
 
