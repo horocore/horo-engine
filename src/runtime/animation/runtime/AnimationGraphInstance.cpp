@@ -123,6 +123,9 @@ namespace Horo::Animation {
                 const auto &curve = assets.curves[index];
                 if (!curve)
                     return GraphInstanceFailure::BindingMismatch;
+                // Moving a prepared value can retain its binding while retiring its key storage.
+                if (curve->Keys().empty())
+                    return GraphInstanceFailure::Malformed;
                 const auto found = std::ranges::lower_bound(declarations, curve->Parameter(), {}, &GraphParameter::id);
                 if (found == declarations.end() || found->id != curve->Parameter())
                     return GraphInstanceFailure::BindingMismatch;

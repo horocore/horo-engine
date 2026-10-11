@@ -239,6 +239,45 @@ namespace Horo::Animation {
         CHECK(AnimationParameterCurve::Create(data).HasError());
     }
 
+    TEST_CASE("Animation moved-from curves fail admission without retiring publication or queued triggers",
+              "[animation][parameters][curve]") {
+        Prepared fixture(Test::Instance::AllScalarTypes());
+        auto instance = fixture.Create();
+        REQUIRE(instance.Evaluate({Id<AnimationTickId>(1), {1}}).HasValue());
+        const auto committed = instance.Commit(Id<AnimationTickId>(1));
+        REQUIRE(committed.HasValue());
+        REQUIRE(instance.QueueTrigger(Id<GraphParameterId>(4)).HasValue());
+
+        auto prepared =
+            AnimationParameterCurve::Create({1, Id<GraphParameterId>(1), GraphCurveInterpolation::Linear, {{{0}, 0.0F}, {{100}, 1.0F}}});
+        REQUIRE(prepared.HasValue());
+        auto curve = std::move(prepared).Value();
+        const auto retained = std::make_shared<const AnimationParameterCurve>(std::move(curve));
+        REQUIRE(retained->Sample({50}) == 0.5F);
+        REQUIRE(curve.Keys().empty());
+        REQUIRE(curve.Parameter() == Id<GraphParameterId>(1));
+        const std::array invalidCurves{std::make_shared<const AnimationParameterCurve>(std::move(curve))};
+        auto invalid = fixture.Assets();
+        invalid.curves = invalidCurves;
+        auto rejected = AnimationGraphInstance::Create(invalid, fixture.context);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == AnimationErrors::GraphMalformed.code.Value());
+        auto replacement = fixture.context;
+        replacement.instance.slot.generation = 2;
+        const auto failedReplacement = instance.Replace(invalid, replacement);
+        REQUIRE(failedReplacement.HasError());
+        CHECK(failedReplacement.ErrorValue().code.Value() == AnimationErrors::GraphMalformed.code.Value());
+        CHECK(instance.Publication().currentPose == committed.publication.currentPose);
+        std::array<GraphParameterInput, 4> output;
+        REQUIRE(instance.CopyParameters(committed.publication.currentPose, output).HasValue());
+        CHECK_FALSE(std::get<bool>(output[3].value));
+        REQUIRE(instance.Evaluate({Id<AnimationTickId>(2), {1}}).HasValue());
+        const auto next = instance.Commit(Id<AnimationTickId>(2));
+        REQUIRE(next.HasValue());
+        REQUIRE(instance.CopyParameters(next.publication.currentPose, output).HasValue());
+        CHECK(std::get<bool>(output[3].value));
+    }
+
     TEST_CASE("Animation curves admit exact unique float bindings and combined bounded work", "[animation][parameters][curve]") {
         Prepared fixture(Test::Instance::AllScalarTypes());
         auto assets = fixture.Assets();
