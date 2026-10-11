@@ -289,9 +289,10 @@ namespace Horo::Input {
         }
         found->timestamp = event.timestamp;
         // SDL normalized coordinates are deliberately not clamped: captured fingers may leave the window.
-        const auto collected = collector.SetTouchContact(found->id, event.x * static_cast<float>(pointerWidth),
-                                                         event.y * static_cast<float>(pointerHeight), event.type != SDL_EVENT_FINGER_UP);
-        if (collected != TouchCollectionStatus::Accepted) {
+        if (const auto collected =
+                collector.SetTouchContact(found->id, event.x * static_cast<float>(pointerWidth),
+                                          event.y * static_cast<float>(pointerHeight), event.type != SDL_EVENT_FINGER_UP);
+            collected != TouchCollectionStatus::Accepted) {
             CancelTouches(collected == TouchCollectionStatus::CapacityExceeded ? TouchCancellationReason::CapacityExceeded
                                                                                : TouchCancellationReason::MalformedSource);
             return;

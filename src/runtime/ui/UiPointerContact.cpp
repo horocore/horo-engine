@@ -25,7 +25,7 @@ namespace Horo::Runtime::Ui {
     }  // namespace
 
     /** @copydoc UiPointerInteraction::ObservePosition */
-    UiLogicalPoint UiPointerInteraction::ObservePosition(Contact &contact, const UiLogicalPoint position) noexcept {
+    UiLogicalPoint UiPointerInteraction::ObservePosition(Contact &contact, const UiLogicalPoint position) const noexcept {
         const auto previous = contact.position;
         contact.position = position;
         contact.exceededSlop |= Distance(contact.origin, position) >= descriptor_.dragThreshold;
@@ -40,21 +40,20 @@ namespace Horo::Runtime::Ui {
         const auto target = contact.capture.Request().route.target;
         auto slots = std::span{contacts_}.first(descriptor_.pointerCapacity);
         for (auto &partner : slots) {
-            if (&partner != &contact && partner.capture.IsActive() && partner.modality == UiPointerModality::Touch &&
-                partner.capture.Request().route.target == target) {
-                contact.multiTouch = true;
-                partner.multiTouch = true;
-                if (partner.dragging) {
-                    if (const auto ended =
-                            Emit(environment, target, {UiGestureKind::Cancel, partner.capture.Request().pointer.Value(), target},
-                                 partner.position, nextSequence, result);
-                        ended.HasError())
-                        return Result<void>::Failure(ended.ErrorValue());
-                    if (!partner.capture.IsActive() || !contact.capture.IsActive())
-                        return Result<void>::Failure(MakeError(UiErrors::PointerCaptureSourceStale));
-                    partner.dragging = false;
-                }
-            }
+            if (&partner == &contact || !partner.capture.IsActive() || partner.modality != UiPointerModality::Touch ||
+                partner.capture.Request().route.target != target)
+                continue;
+            contact.multiTouch = true;
+            partner.multiTouch = true;
+            if (!partner.dragging)
+                continue;
+            if (const auto ended = Emit(environment, target, {UiGestureKind::Cancel, partner.capture.Request().pointer.Value(), target},
+                                        partner.position, nextSequence, result);
+                ended.HasError())
+                return Result<void>::Failure(ended.ErrorValue());
+            if (!partner.capture.IsActive() || !contact.capture.IsActive())
+                return Result<void>::Failure(MakeError(UiErrors::PointerCaptureSourceStale));
+            partner.dragging = false;
         }
         return Result<void>::Success();
     }
@@ -114,11 +113,12 @@ namespace Horo::Runtime::Ui {
         const auto position = context.position;
         const auto target = contact.capture.Request().route.target;
         auto slots = std::span{contacts_}.first(descriptor_.pointerCapacity);
-        const auto partner = std::ranges::find_if(slots, [&contact, target](const Contact &entry) {
+        if (const auto partner = std::ranges::find_if(slots,
+                                                      [&contact, target](const Contact &entry) {
             return &entry != &contact && entry.capture.IsActive() && entry.modality == UiPointerModality::Touch &&
                    entry.capture.Request().route.target == target;
         });
-        if (partner != slots.end()) {
+            partner != slots.end()) {
             contact.multiTouch = true;
             partner->multiTouch = true;
             const double oldX = static_cast<double>(previous.x) - partner->position.x;
@@ -126,9 +126,8 @@ namespace Horo::Runtime::Ui {
             const double newX = static_cast<double>(position.x) - partner->position.x;
             const double newY = static_cast<double>(position.y) - partner->position.y;
             const double oldLength = std::hypot(oldX, oldY);
-            const double newLength = std::hypot(newX, newY);
             // Coincident contacts are valid but cannot establish a scale or angle baseline.
-            if (oldLength >= 1.0 && newLength >= 1.0) {
+            if (const double newLength = std::hypot(newX, newY); oldLength >= 1.0 && newLength >= 1.0) {
                 auto &nextSequence = context.nextSequence;
                 auto &result = context.result;
                 gesture.kind = UiGestureKind::PinchRotate;
@@ -147,6 +146,7 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiPointerInteraction::MoveContact */
     Result<void> UiPointerInteraction::MoveContact(Contact &contact, const UiLogicalPoint previous, UiGestureEvent &gesture,
                                                    const SampleContext &context) {
+        using enum UiGestureKind;
         const auto &environment = context.environment;
         const auto &sample = context.sample;
         auto &nextSequence = context.nextSequence;
@@ -163,16 +163,16 @@ namespace Horo::Runtime::Ui {
         }
         if (!contact.panning && Distance(contact.origin, position) >= descriptor_.dragThreshold) {
             const auto *policy = Policy(target);
-            gesture.kind = policy && policy->draggable ? UiGestureKind::DragBegin : UiGestureKind::PanBegin;
+            gesture.kind = policy && policy->draggable ? DragBegin : PanBegin;
             const auto emitted = Emit(environment, target, gesture, position, nextSequence, result);
             if (emitted.HasError())
                 return Result<void>::Failure(emitted.ErrorValue());
             if (!contact.capture.IsActive())
                 return Result<void>::Failure(MakeError(UiErrors::PointerCaptureSourceStale));
             contact.panning = emitted.Value();
-            contact.dragging = gesture.kind == UiGestureKind::DragBegin && emitted.Value();
+            contact.dragging = gesture.kind == DragBegin && emitted.Value();
         } else if (contact.panning) {
-            gesture.kind = contact.dragging ? UiGestureKind::DragUpdate : UiGestureKind::PanUpdate;
+            gesture.kind = contact.dragging ? DragUpdate : PanUpdate;
             if (const auto emitted = Emit(environment, target, gesture, position, nextSequence, result); emitted.HasError())
                 return Result<void>::Failure(emitted.ErrorValue());
             if (!contact.capture.IsActive())
@@ -182,7 +182,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiPointerInteraction::TapContact */
-    Result<void> UiPointerInteraction::TapContact(Contact &contact, UiGestureEvent &gesture, const SampleContext &context) {
+    Result<void> UiPointerInteraction::TapContact(const Contact &contact, UiGestureEvent &gesture, const SampleContext &context) {
         const auto &environment = context.environment;
         auto &nextSequence = context.nextSequence;
         auto &result = context.result;

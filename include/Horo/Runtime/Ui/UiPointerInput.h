@@ -134,8 +134,7 @@ namespace Horo::Runtime::Ui {
         bool stopped_{};
         bool pumping_{};
         /** @brief Maps one bounded physical sample to canvas pixels. */
-        void AddSample(const UiPointerInputSurface &surface, std::size_t &count, UiPointerId pointer, UiPointerEdge edge,
-                       UiPointerModality modality, UiPointerButton button, float x, float y);
+        void AddSample(const UiPointerInputSurface &surface, std::size_t &count, UiPointerSample sample);
         /** @brief Collects consumed mouse edges and maintains the router capture. */
         Result<void> CollectMouse(Input::InputRouter &router, const Input::InputContextToken &context, const UiPointerInputSurface &surface,
                                   std::size_t &count);
@@ -146,10 +145,10 @@ namespace Horo::Runtime::Ui {
         Result<void> CollectTouches(Input::InputRouter &router, const Input::InputContextToken &context,
                                     const UiPointerInputSurface &surface, std::size_t &count);
         /** @brief Validates a committed frame before consuming any input. */
-        Result<UiPointerInputStatus> ValidateFrame(Input::InputRouter &router, const Input::InputContextToken &context,
+        Result<UiPointerInputStatus> ValidateFrame(const Input::InputRouter &router, const Input::InputContextToken &context,
                                                    const UiPointerInputSurface &surface, std::uint64_t milliseconds) const;
         /** @brief Commits frame identity and revokes stale authority before collection. */
-        Result<UiPointerInputStatus> AdmitFrame(Input::InputRouter &router, const Input::InputContextToken &context,
+        Result<UiPointerInputStatus> AdmitFrame(const Input::InputRouter &router, const Input::InputContextToken &context,
                                                 const UiPointerInputSurface &surface, std::uint64_t milliseconds,
                                                 const Input::InputRoutingState &routing);
         /** @brief Selects the semantic alternative with cancellation taking precedence. */

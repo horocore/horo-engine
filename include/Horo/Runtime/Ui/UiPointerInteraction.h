@@ -180,7 +180,7 @@ namespace Horo::Runtime::Ui {
         };
 
         /** @brief Updates physical displacement and permanently disarms tap recognition after exceeding slop. */
-        UiLogicalPoint ObservePosition(Contact &contact, UiLogicalPoint position) noexcept;
+        UiLogicalPoint ObservePosition(Contact &contact, UiLogicalPoint position) const noexcept;
         /** @brief Marks paired touch participation and cancels an active drag before the new press. */
         Result<void> LinkTouch(Contact &contact, const SampleContext &context);
         /** @brief Acquires an empty capture slot and routes a new press. */
@@ -190,7 +190,7 @@ namespace Horo::Runtime::Ui {
         /** @brief Routes movement through pinch, pan-begin or pan-update in order. */
         Result<void> MoveContact(Contact &contact, UiLogicalPoint previous, UiGestureEvent &gesture, const SampleContext &context);
         /** @brief Routes a slop-qualified tap and updates admitted double-tap history. */
-        Result<void> TapContact(Contact &contact, UiGestureEvent &gesture, const SampleContext &context);
+        Result<void> TapContact(const Contact &contact, UiGestureEvent &gesture, const SampleContext &context);
         /** @brief Routes drop/tap and releases capture before the terminal gesture. */
         Result<void> ReleaseContact(Contact &contact, UiGestureEvent &gesture, const SampleContext &context);
 

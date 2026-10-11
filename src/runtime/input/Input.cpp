@@ -952,13 +952,19 @@ namespace Horo::Input {
         std::optional<Capture> capture;
         std::vector<ActionDescriptor> actions;
         InputBindingProfile profile;
-        std::bitset<static_cast<std::size_t>(Key::Count)> consumedKeys;
-        std::bitset<static_cast<std::size_t>(PointerButton::Count)> consumedPointerButtons;
-        std::bitset<MaximumTouchContacts> consumedTouchContacts;
-        bool consumedPointerMotion{};
-        GamepadTransitions consumedGamepadTransitions;
-        bool consumedWheelX{false};
-        bool consumedWheelY{false};
+
+        /** @brief Frame-local admission ledger shared by direct reads and action evaluation/rollback. */
+        struct ConsumptionState final {
+            std::bitset<static_cast<std::size_t>(Key::Count)> keys;
+            std::bitset<static_cast<std::size_t>(PointerButton::Count)> pointerButtons;
+            std::bitset<MaximumTouchContacts> touchContacts;
+            bool pointerMotion{};
+            GamepadTransitions gamepadTransitions;
+            bool wheelX{false};
+            bool wheelY{false};
+        };
+
+        ConsumptionState consumed;
         InputDeviceAssignments assignments;
         std::uint64_t configurationRevision{1};
         std::uint64_t assignmentRevision{1};
@@ -1005,13 +1011,13 @@ namespace Horo::Input {
             impl_->textFocus.minimumCompositionRevision = snapshot.compositionRevision + 1;
             impl_->textFocus.blockedFrame = true;
         }
-        impl_->consumedKeys.reset();
-        impl_->consumedPointerButtons.reset();
-        impl_->consumedTouchContacts.reset();
-        impl_->consumedPointerMotion = false;
-        impl_->consumedGamepadTransitions.clear();
-        impl_->consumedWheelX = false;
-        impl_->consumedWheelY = false;
+        impl_->consumed.keys.reset();
+        impl_->consumed.pointerButtons.reset();
+        impl_->consumed.touchContacts.reset();
+        impl_->consumed.pointerMotion = false;
+        impl_->consumed.gamepadTransitions.clear();
+        impl_->consumed.wheelX = false;
+        impl_->consumed.wheelY = false;
         impl_->assignments.RetainConnected(snapshot.gamepads);
         if (impl_->capture && !snapshot.window.focused)
             CancelCapture(CaptureCancellationReason::FocusLost);
@@ -1204,17 +1210,17 @@ namespace Horo::Input {
             using enum BindingControlKind;
             switch (binding.kind) {
                 case Key:
-                    return EvaluateDigital(snapshot.State(binding.key), impl.consumedKeys, Index(binding.key));
+                    return EvaluateDigital(snapshot.State(binding.key), impl.consumed.keys, Index(binding.key));
                 case PointerButton:
-                    return EvaluateDigital(snapshot.State(binding.pointerButton), impl.consumedPointerButtons,
+                    return EvaluateDigital(snapshot.State(binding.pointerButton), impl.consumed.pointerButtons,
                                            Index(binding.pointerButton));
                 case PointerWheelX:
-                    return EvaluateWheel(snapshot.pointer.wheelX, impl.consumedWheelX);
+                    return EvaluateWheel(snapshot.pointer.wheelX, impl.consumed.wheelX);
                 case PointerWheelY:
-                    return EvaluateWheel(snapshot.pointer.wheelY, impl.consumedWheelY);
+                    return EvaluateWheel(snapshot.pointer.wheelY, impl.consumed.wheelY);
                 default: {
                     return EvaluateGamepadBinding(binding, snapshot, impl.previousSnapshot, impl.assignments, player,
-                                                  impl.consumedGamepadTransitions);
+                                                  impl.consumed.gamepadTransitions);
                 }
             }
         }
@@ -1321,23 +1327,23 @@ namespace Horo::Input {
             overrideValue != impl_->profile.overrides.end())
             bindings = &overrideValue->bindings;
         const RawInputSnapshot &snapshot = Snapshot();
-        const auto keysBefore = impl_->consumedKeys;
-        const auto pointerBefore = impl_->consumedPointerButtons;
-        const auto gamepadCountBefore = impl_->consumedGamepadTransitions.count;
-        const bool wheelXBefore = impl_->consumedWheelX;
-        const bool wheelYBefore = impl_->consumedWheelY;
-        impl_->consumedGamepadTransitions.capacityExceeded = false;
+        const auto keysBefore = impl_->consumed.keys;
+        const auto pointerBefore = impl_->consumed.pointerButtons;
+        const auto gamepadCountBefore = impl_->consumed.gamepadTransitions.count;
+        const bool wheelXBefore = impl_->consumed.wheelX;
+        const bool wheelYBefore = impl_->consumed.wheelY;
+        impl_->consumed.gamepadTransitions.capacityExceeded = false;
         bool radial2D = false;
         float radialDeadzone = 0.0F;
         BindingAccumulationTarget target{value, radial2D, radialDeadzone, evidence};
         for (const InputBinding &binding : *bindings)
             AccumulateBinding(binding, *descriptor, snapshot, player, *impl_, target);
-        if (impl_->consumedGamepadTransitions.capacityExceeded) {
-            impl_->consumedKeys = keysBefore;
-            impl_->consumedPointerButtons = pointerBefore;
-            impl_->consumedGamepadTransitions.count = gamepadCountBefore;
-            impl_->consumedWheelX = wheelXBefore;
-            impl_->consumedWheelY = wheelYBefore;
+        if (impl_->consumed.gamepadTransitions.capacityExceeded) {
+            impl_->consumed.keys = keysBefore;
+            impl_->consumed.pointerButtons = pointerBefore;
+            impl_->consumed.gamepadTransitions.count = gamepadCountBefore;
+            impl_->consumed.wheelX = wheelXBefore;
+            impl_->consumed.wheelY = wheelYBefore;
             evidence = {};
             evidence.status = ActionReadStatus::CapacityExceeded;
             impl_->lastActionStatus = evidence.status;
@@ -1374,13 +1380,13 @@ namespace Horo::Input {
     bool InputRouter::ConsumeKey(const InputContextToken &context, const Key key) {
         if (!IsContextActive(context) || !Snapshot().State(key).pressed)
             return false;
-        return ConsumeControl(impl_->consumedKeys, Index(key));
+        return ConsumeControl(impl_->consumed.keys, Index(key));
     }
 
     bool InputRouter::ConsumePointerButton(const InputContextToken &context, const PointerButton button) {
         if (!IsContextActive(context) || !Snapshot().State(button).pressed)
             return false;
-        return ConsumeControl(impl_->consumedPointerButtons, Index(button));
+        return ConsumeControl(impl_->consumed.pointerButtons, Index(button));
     }
 
     /** @copydoc InputRouter::ConsumeTouchContact */
@@ -1391,14 +1397,14 @@ namespace Horo::Input {
         const auto found = std::ranges::find(touches, contact, &TouchContactState::id);
         if (found == touches.end() || !found->contact.pressed || found->cancelled || Snapshot().touchOverflow)
             return false;
-        return ConsumeControl(impl_->consumedTouchContacts, static_cast<std::size_t>(found - touches.begin()));
+        return ConsumeControl(impl_->consumed.touchContacts, static_cast<std::size_t>(found - touches.begin()));
     }
 
     /** @copydoc InputRouter::ConsumePointerMotion */
     bool InputRouter::ConsumePointerMotion(const InputContextToken &context) {
-        if (!IsContextActive(context) || impl_->consumedPointerMotion)
+        if (!IsContextActive(context) || impl_->consumed.pointerMotion)
             return false;
-        impl_->consumedPointerMotion = true;
+        impl_->consumed.pointerMotion = true;
         return true;
     }
 

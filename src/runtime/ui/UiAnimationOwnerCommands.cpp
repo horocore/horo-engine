@@ -22,7 +22,7 @@ namespace Horo::Runtime::Ui {
     Result<void> UiAnimationOwner::AdmitCommand(const Storage &storage) {
         if (storage.ownerThread != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
-        if (storage.stopped || storage.draining || storage.candidate.admitted || storage.pointerDispatching)
+        if (storage.lifecycle.stopped || storage.lifecycle.draining || storage.candidate.admitted || storage.lifecycle.pointerDispatching)
             return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         if (storage.pendingCommands == storage.limits.commands)
             return Result<void>::Failure(MakeError(UiErrors::AnimationBudgetExceeded));
@@ -85,7 +85,7 @@ namespace Horo::Runtime::Ui {
     Result<void> UiAnimationOwner::Cancel(const UiAnimationTimelineId timeline, const UiAnimationCancellation reason) {
         if (!storage_ || storage_->ownerThread != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
-        if (storage_->stopped || storage_->draining || storage_->candidate.admitted)
+        if (storage_->lifecycle.stopped || storage_->lifecycle.draining || storage_->candidate.admitted)
             return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         if (reason == UiAnimationCancellation::None || reason > UiAnimationCancellation::AccessibilityReplacement)
             return Result<void>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));

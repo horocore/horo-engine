@@ -6,8 +6,9 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiAnimationOwner::PresentedControl */
     Result<UiControlStateMachine *> UiAnimationOwner::PresentedControl(Storage &storage, const UiRenderViewId view,
                                                                        const UiActionSource &source) {
-        if (storage.ownerThread != std::this_thread::get_id() || storage.stopped || storage.draining || storage.candidate.admitted ||
-            storage.route.gate || !storage.currentFrame.has_value() || !storage.publisher.InputEligible(storage.definition.canvas, view))
+        if (storage.ownerThread != std::this_thread::get_id() || storage.lifecycle.stopped || storage.lifecycle.draining ||
+            storage.candidate.admitted || storage.route.gate || !storage.currentFrame.has_value() ||
+            !storage.publisher.InputEligible(storage.definition.canvas, view))
             return Result<UiControlStateMachine *>::Failure(MakeError(UiErrors::ControlSourceStale));
         const auto &frame = *storage.frames[*storage.currentFrame];
         const auto record = std::ranges::find(frame.controls, source, &UiAnimationControlRecord::source);
@@ -22,8 +23,8 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAnimationOwner::CapturePointer */
     Result<UiPointerCaptureToken> UiAnimationOwner::CapturePointer(const UiPointerCaptureRequest &request) {
-        if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->stopped || storage_->draining ||
-            storage_->candidate.admitted || !storage_->currentFrame.has_value())
+        if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->lifecycle.stopped ||
+            storage_->lifecycle.draining || storage_->candidate.admitted || !storage_->currentFrame.has_value())
             return Result<UiPointerCaptureToken>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         if (storage_->route.gate || !RouteTargetEligible(*storage_, request.route.target) ||
             !storage_->publisher.InputEligible(storage_->definition.canvas, request.view))

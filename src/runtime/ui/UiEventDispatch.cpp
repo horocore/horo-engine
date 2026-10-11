@@ -44,6 +44,12 @@ namespace Horo::Runtime::Ui {
                        : !event.gesture.has_value() && IsPointerEvent(event.kind) == event.hasLogicalPosition;
         }
 
+        /** @brief Validates the event payload and route handles before any callback or route mutation. */
+        bool ValidDispatchInput(const UiEventRoute &route, const UiRoutedEvent &event) noexcept {
+            return IsKnown(event.kind) && event.sequence != 0 && ValidPayload(event) && route.target.IsValid() &&
+                   (!route.modalRoot || route.modalRoot->IsValid());
+        }
+
         /** @brief Restores non-reentrant admission on every handler return or exception path. */
         class DispatchGuard final {
         public:
@@ -185,8 +191,7 @@ namespace Horo::Runtime::Ui {
             return Result<UiEventDispatchResult>::Failure(DispatchError(UiErrors::EventDispatchLifecycleUnavailable));
         if (storage_->dispatching)
             return Result<UiEventDispatchResult>::Failure(DispatchError(UiErrors::EventDispatchReentrant));
-        const bool eventValid = IsKnown(event.kind) && event.sequence != 0 && ValidPayload(event);
-        if (const bool routeValid = route.target.IsValid() && (!route.modalRoot || route.modalRoot->IsValid()); !eventValid || !routeValid)
+        if (!ValidDispatchInput(route, event))
             return Result<UiEventDispatchResult>::Failure(DispatchError(UiErrors::EventDispatchInvalid));
         if (!storage_->Matches(tree, route))
             return Result<UiEventDispatchResult>::Failure(DispatchError(UiErrors::EventDispatchSourceStale));

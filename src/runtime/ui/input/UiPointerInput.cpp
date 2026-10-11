@@ -218,18 +218,12 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiPointerInput::AddSample */
-    void UiPointerInput::AddSample(const UiPointerInputSurface &surface, std::size_t &count, const UiPointerId pointer,
-                                   const UiPointerEdge edge, const UiPointerModality modality, const UiPointerButton button, const float x,
-                                   const float y) {
-        samples_[count++] = {pointer,
-                             edge,
-                             modality,
-                             button,
-                             (x - static_cast<float>(surface.inputViewport.x)) * static_cast<float>(surface.canvasSpace.pixelExtent.width) /
-                                 static_cast<float>(surface.inputViewport.width),
-                             (y - static_cast<float>(surface.inputViewport.y)) *
-                                 static_cast<float>(surface.canvasSpace.pixelExtent.height) /
-                                 static_cast<float>(surface.inputViewport.height)};
+    void UiPointerInput::AddSample(const UiPointerInputSurface &surface, std::size_t &count, UiPointerSample sample) {
+        sample.pixelX = (sample.pixelX - static_cast<float>(surface.inputViewport.x)) *
+                        static_cast<float>(surface.canvasSpace.pixelExtent.width) / static_cast<float>(surface.inputViewport.width);
+        sample.pixelY = (sample.pixelY - static_cast<float>(surface.inputViewport.y)) *
+                        static_cast<float>(surface.canvasSpace.pixelExtent.height) / static_cast<float>(surface.inputViewport.height);
+        samples_[count++] = sample;
     }
 
     /** @copydoc UiPointerInput::CollectMouse */
@@ -247,8 +241,9 @@ namespace Horo::Runtime::Ui {
                     return Result<void>::Failure(captured.ErrorValue());
                 mouseCapture_ = std::move(captured).Value();
                 mouseButton_ = button;
-                AddSample(surface, count, mouse, UiPointerEdge::Press, UiPointerModality::Mouse, static_cast<UiPointerButton>(index),
-                          snapshot.pointer.x, snapshot.pointer.y);
+                AddSample(surface, count,
+                          {mouse, UiPointerEdge::Press, UiPointerModality::Mouse, static_cast<UiPointerButton>(index), snapshot.pointer.x,
+                           snapshot.pointer.y});
                 break;
             }
         }
@@ -256,16 +251,17 @@ namespace Horo::Runtime::Ui {
             const auto state = snapshot.State(*mouseButton_);
             const auto button = static_cast<UiPointerButton>(*mouseButton_);
             if (state.released || !state.down) {
-                AddSample(surface, count, mouse, UiPointerEdge::Release, UiPointerModality::Mouse, button, snapshot.pointer.x,
-                          snapshot.pointer.y);
+                AddSample(surface, count,
+                          {mouse, UiPointerEdge::Release, UiPointerModality::Mouse, button, snapshot.pointer.x, snapshot.pointer.y});
                 mouseCapture_.Release();
                 mouseButton_.reset();
             } else if (!state.pressed)
-                AddSample(surface, count, mouse, UiPointerEdge::Move, UiPointerModality::Mouse, button, snapshot.pointer.x,
-                          snapshot.pointer.y);
+                AddSample(surface, count,
+                          {mouse, UiPointerEdge::Move, UiPointerModality::Mouse, button, snapshot.pointer.x, snapshot.pointer.y});
         } else if (router.ConsumePointerMotion(context)) {
-            AddSample(surface, count, mouse, snapshot.window.pointerInside ? UiPointerEdge::Move : UiPointerEdge::Cancel,
-                      UiPointerModality::Mouse, UiPointerButton::Primary, snapshot.pointer.x, snapshot.pointer.y);
+            AddSample(surface, count,
+                      {mouse, snapshot.window.pointerInside ? UiPointerEdge::Move : UiPointerEdge::Cancel, UiPointerModality::Mouse,
+                       UiPointerButton::Primary, snapshot.pointer.x, snapshot.pointer.y});
         }
         return Result<void>::Success();
     }
@@ -284,20 +280,21 @@ namespace Horo::Runtime::Ui {
             if (owned == contacts_.end() || nextPointer_ == std::numeric_limits<std::uint32_t>::max())
                 return Result<void>::Failure(MakeError(UiErrors::PointerCaptureCapacityExceeded));
             *owned = {touch.id, UiPointerId::Create(nextPointer_++).Value(), touch.x, touch.y};
-            AddSample(surface, count, owned->pointer, UiPointerEdge::Press, UiPointerModality::Touch, UiPointerButton::Primary, touch.x,
-                      touch.y);
+            AddSample(surface, count,
+                      {owned->pointer, UiPointerEdge::Press, UiPointerModality::Touch, UiPointerButton::Primary, touch.x, touch.y});
         }
         if (owned == contacts_.end())
             return Result<void>::Success();
         owned->x = touch.x;
         owned->y = touch.y;
         if (touch.cancelled || touch.contact.released || !touch.contact.down) {
-            AddSample(surface, count, owned->pointer, touch.cancelled ? UiPointerEdge::Cancel : UiPointerEdge::Release,
-                      UiPointerModality::Touch, UiPointerButton::Primary, touch.x, touch.y);
+            AddSample(surface, count,
+                      {owned->pointer, touch.cancelled ? UiPointerEdge::Cancel : UiPointerEdge::Release, UiPointerModality::Touch,
+                       UiPointerButton::Primary, touch.x, touch.y});
             *owned = {};
         } else if (!touch.contact.pressed)
-            AddSample(surface, count, owned->pointer, UiPointerEdge::Move, UiPointerModality::Touch, UiPointerButton::Primary, touch.x,
-                      touch.y);
+            AddSample(surface, count,
+                      {owned->pointer, UiPointerEdge::Move, UiPointerModality::Touch, UiPointerButton::Primary, touch.x, touch.y});
         return Result<void>::Success();
     }
 
@@ -311,8 +308,8 @@ namespace Horo::Runtime::Ui {
         for (auto &owned : contacts_) {
             if (owned.source.IsValid() &&
                 std::ranges::find(snapshot.touches, owned.source, &Input::TouchContactState::id) == snapshot.touches.end()) {
-                AddSample(surface, count, owned.pointer, UiPointerEdge::Cancel, UiPointerModality::Touch, UiPointerButton::Primary, owned.x,
-                          owned.y);
+                AddSample(surface, count,
+                          {owned.pointer, UiPointerEdge::Cancel, UiPointerModality::Touch, UiPointerButton::Primary, owned.x, owned.y});
                 owned = {};
             }
         }
@@ -331,7 +328,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiPointerInput::ValidateFrame */
-    Result<UiPointerInputStatus> UiPointerInput::ValidateFrame(Input::InputRouter &router, const Input::InputContextToken &context,
+    Result<UiPointerInputStatus> UiPointerInput::ValidateFrame(const Input::InputRouter &router, const Input::InputContextToken &context,
                                                                const UiPointerInputSurface &surface,
                                                                const std::uint64_t milliseconds) const {
         const auto routing = router.RoutingState(context);
@@ -353,7 +350,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiPointerInput::AdmitFrame */
-    Result<UiPointerInputStatus> UiPointerInput::AdmitFrame(Input::InputRouter &router, const Input::InputContextToken &context,
+    Result<UiPointerInputStatus> UiPointerInput::AdmitFrame(const Input::InputRouter &router, const Input::InputContextToken &context,
                                                             const UiPointerInputSurface &surface, const std::uint64_t milliseconds,
                                                             const Input::InputRoutingState &routing) {
         const auto &snapshot = router.Snapshot();
@@ -388,6 +385,7 @@ namespace Horo::Runtime::Ui {
     Result<std::optional<UiAccessibleGesture>> UiPointerInput::ReadAlternative(Input::InputRouter &router,
                                                                                const Input::InputContextToken &context,
                                                                                const UiPointerInputSurface &surface) {
+        using enum UiAccessibleGesture;
         std::array<Input::ActionEvidence, UiPointerActionCount> actions{};
         for (std::size_t index = 0; index < actions.size(); ++index) {
             actions[index] = router.ReadActionEvidence(context, actions_[index]);
@@ -398,13 +396,13 @@ namespace Horo::Runtime::Ui {
         if (actions[3].value.pressed) {
             if (const auto cancelled = Suspend(surface.owner, surface.nextSequence); cancelled.HasError())
                 return Result<std::optional<UiAccessibleGesture>>::Failure(cancelled.ErrorValue());
-            alternative = UiAccessibleGesture::Cancel;
+            alternative = Cancel;
         } else if (actions[1].value.pressed)
-            alternative = UiAccessibleGesture::ContextAction;
+            alternative = ContextAction;
         else if (actions[2].value.pressed)
-            alternative = interaction_.HasAccessibleDrag() ? UiAccessibleGesture::Drop : UiAccessibleGesture::PickUp;
+            alternative = interaction_.HasAccessibleDrag() ? Drop : PickUp;
         else if (actions[0].value.pressed)
-            alternative = interaction_.HasAccessibleDrag() ? UiAccessibleGesture::Drop : UiAccessibleGesture::Activate;
+            alternative = interaction_.HasAccessibleDrag() ? Drop : Activate;
         return Result<std::optional<UiAccessibleGesture>>::Success(alternative);
     }
 

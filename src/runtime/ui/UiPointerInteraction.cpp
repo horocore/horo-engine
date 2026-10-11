@@ -183,8 +183,8 @@ namespace Horo::Runtime::Ui {
         if (pumping_)
             return Result<void>::Failure(MakeError(UiErrors::EventDispatchReentrant));
         const auto &owner = descriptor_.owner;
-        const auto &hit = environment.hitTesting.Descriptor();
-        if (environment.tree.State() != UiElementTreeState::Active || environment.tree.Instance() != owner.instance ||
+        if (const auto &hit = environment.hitTesting.Descriptor();
+            environment.tree.State() != UiElementTreeState::Active || environment.tree.Instance() != owner.instance ||
             environment.tree.Canvas() != owner.canvas || environment.tree.SourceDocument() != owner.document ||
             environment.tree.Revision() != owner.tree || hit.instance != owner.instance || hit.canvas != owner.canvas ||
             hit.document != owner.document || hit.tree != owner.tree || hit.interaction != owner.interaction ||
