@@ -142,11 +142,34 @@ namespace Horo::PCG {
         CheckError(CapturePCGProvenance(invalid), PCGErrors::ProvenanceDuplicate);
         invalid = Candidate();
         invalid.inputs.clear();
-        for (std::uint64_t id = 1; id <= 64; ++id)
+        for (std::uint64_t id = 1; id <= MaximumPCGProvenanceInputs; ++id)
             invalid.inputs.push_back({Id<PCGInputId>(id), 1, Digest(1), PCGInputDeterminism::Deterministic});
         CHECK(CapturePCGProvenance(invalid).HasValue());
-        invalid.inputs.push_back({Id<PCGInputId>(65), 1, Digest(1), PCGInputDeterminism::Deterministic});
+        invalid.inputs.push_back({Id<PCGInputId>(MaximumPCGProvenanceInputs + 1), 1, Digest(1), PCGInputDeterminism::Deterministic});
         CheckError(CapturePCGProvenance(invalid), PCGErrors::ProvenanceCapacityExceeded);
+    }
+
+    TEST_CASE("PCG provenance admits full Standard and High input boundaries without losing seed evidence", "[unit][pcg][provenance]") {
+        for (const std::size_t count : {128U, 512U}) {
+            CAPTURE(count);
+            auto candidate = Candidate();
+            candidate.inputs.clear();
+            for (std::uint64_t id = 1; id <= count; ++id)
+                candidate.inputs.push_back({Id<PCGInputId>(id), id, Digest(1), PCGInputDeterminism::Deterministic});
+            const auto first = CapturePCGProvenance(candidate);
+            REQUIRE(first.HasValue());
+            REQUIRE(first.Value().Data().inputs.size() == count);
+            std::ranges::reverse(candidate.inputs);
+            const auto reordered = CapturePCGProvenance(candidate);
+            REQUIRE(reordered.HasValue());
+            CHECK(first.Value().Key() == reordered.Value().Key());
+            candidate.inputs.front().content = Digest(2);
+            const auto changed = CapturePCGProvenance(candidate);
+            REQUIRE(changed.HasValue());
+            CHECK(changed.Value().Key() != first.Value().Key());
+            CHECK(changed.Value().Seed(Id<SourceSampleId>(40)).Value() != first.Value().Seed(Id<SourceSampleId>(40)).Value());
+            CHECK(ValidatePCGProvenanceReuse(first.Value(), changed.Value()).HasError());
+        }
     }
 
     TEST_CASE("PCG output hashes ignore execution attempt and input order", "[unit][pcg][provenance]") {

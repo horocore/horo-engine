@@ -6,6 +6,7 @@
  */
 
 #include "Horo/PCG/PCGGraphValidation.h"
+#include "Horo/PCG/PCGNodeCatalog.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -14,6 +15,10 @@
 #include <vector>
 
 namespace Horo::PCG {
+    namespace detail {
+        struct PCGCookedPlanFixture;
+    }
+
     /** @brief Version of the portable cooked-plan byte contract. */
     struct PCGCookedPlanVersion final {
         std::uint16_t major{1};
@@ -83,6 +88,8 @@ namespace Horo::PCG {
         [[nodiscard]] GraphGeneration Generation() const noexcept;
         /** @brief Returns the operational tier captured from the graph source. @return Exact tier. */
         [[nodiscard]] PCGOperationalTier Tier() const noexcept;
+        /** @brief Returns the authored deterministic seed captured at cook. @return Exact seed, including zero. */
+        [[nodiscard]] std::uint64_t Seed() const noexcept;
         /** @brief Returns source schema bound into this plan. @return Exact graph schema. */
         [[nodiscard]] PCGGraphSchemaVersion SourceSchema() const noexcept;
         /** @brief Returns digest of exact canonical source bytes. @return Source content digest. */
@@ -104,10 +111,19 @@ namespace Horo::PCG {
         /** @brief Returns bounded canonical network-order plan bytes. @return Plan-owned bytes. */
         [[nodiscard]] std::span<const std::uint8_t> CanonicalBytes() const noexcept;
 
+        /** @brief Returns the exact retained executable catalog, captured by cooking. @return Immutable catalog. */
+        [[nodiscard]] const PCGNodeCatalogSnapshot &Catalog() const noexcept {
+            return data_.catalog;
+        }
+
     private:
+        // Definition exists only in owning unit tests: synthetic workspace shape coverage must not bypass public cooking.
+        friend struct detail::PCGCookedPlanFixture;
+
         struct Data final {
             GraphGeneration generation{};
             PCGOperationalTier tier{};
+            std::uint64_t seed{};
             PCGGraphSchemaVersion sourceSchema{};
             Sha256Digest sourceDigest{};
             PCGCapabilitySet requiredCapabilities{};
@@ -116,6 +132,7 @@ namespace Horo::PCG {
             std::vector<PCGCookedConstant> constants;
             std::vector<PCGCookedExposedInput> exposedInputs;
             std::vector<std::uint8_t> bytes;
+            PCGNodeCatalogSnapshot catalog;
         };
 
         explicit PCGCookedPlan(Data data) noexcept;
@@ -123,7 +140,7 @@ namespace Horo::PCG {
         Data data_;
 
         friend Result<PCGCookedPlan> CompilePCGGraph(const PCGGraphAsset &, const PCGValidatedGraph &, const PCGRegistrySnapshot &,
-                                                     PCGCapabilitySet, std::size_t);
+                                                     PCGNodeCatalogSnapshot, PCGCapabilitySet, std::size_t);
     };
 
     /**
@@ -133,10 +150,11 @@ namespace Horo::PCG {
      * @param registry Exact retained snapshot used for validation; no reference is kept.
      * @param requiredCapabilities Caller/product requirements to bind into the plan.
      * @param maximumPlanBytes Finite caller-lowered canonical byte ceiling.
+     * @param catalog Exact explicitly composed executable catalog; an inert root is rejected before cooking.
      * @return Complete plan or typed stale, invalid, capability or capacity failure; no partial plan is published.
      */
     [[nodiscard]] Result<PCGCookedPlan> CompilePCGGraph(const PCGGraphAsset &graph, const PCGValidatedGraph &validated,
-                                                        const PCGRegistrySnapshot &registry,
+                                                        const PCGRegistrySnapshot &registry, PCGNodeCatalogSnapshot catalog,
                                                         PCGCapabilitySet requiredCapabilities = PCGCapabilitySet::Empty(),
                                                         std::size_t maximumPlanBytes = PCGGraphSourceHardLimits::SourceBytes);
 }  // namespace Horo::PCG

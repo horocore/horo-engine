@@ -115,7 +115,10 @@ TEST_CASE("Package install atomically retains the previous record on invalid evi
     CancellationSource running;
 
     REQUIRE(service.Install(first, running.Token()).HasValue());
-    REQUIRE(service.ActiveGraph() == first);
+    const auto committed = service.ActiveGraph();
+    REQUIRE(committed);
+    REQUIRE(committed != first);
+    REQUIRE(committed->requestHash == first->requestHash);
     const auto recordPath = project.Path() / ".horo/packages.installed.json";
     const auto originalRecord = ReadFile(recordPath);
     CHECK(originalRecord.find("com.horo.install-fixture") != std::string::npos);
@@ -125,7 +128,7 @@ TEST_CASE("Package install atomically retains the previous record on invalid evi
     auto rejected = service.Install(invalid, running.Token());
     REQUIRE(rejected.HasError());
     CHECK(rejected.ErrorValue().code.Value() == PackageInstallErrors::EvidenceMismatch.code.Value());
-    CHECK(service.ActiveGraph() == first);
+    CHECK(service.ActiveGraph() == committed);
     CHECK(ReadFile(recordPath) == originalRecord);
 
     CancellationSource cancelled;
@@ -134,7 +137,7 @@ TEST_CASE("Package install atomically retains the previous record on invalid evi
     auto stopped = service.Install(second, cancelled.Token());
     REQUIRE(stopped.HasError());
     CHECK(stopped.ErrorValue().code.Value() == PackageInstallErrors::Cancelled.code.Value());
-    CHECK(service.ActiveGraph() == first);
+    CHECK(service.ActiveGraph() == committed);
     CHECK(ReadFile(recordPath) == originalRecord);
 }
 
@@ -149,6 +152,7 @@ TEST_CASE("Package install leaves the previous record active when a durable comm
     files.verifyLease = true;
     REQUIRE(service.Install(first, running.Token()).HasValue());
     REQUIRE(files.leaseRetained);
+    const auto committed = service.ActiveGraph();
     const auto recordPath = project.Path() / ".horo/packages.installed.json";
     const auto originalRecord = ReadFile(recordPath);
 
@@ -160,7 +164,7 @@ TEST_CASE("Package install leaves the previous record active when a durable comm
     files.failLock = false;
     files.failReplace = true;
     CHECK(service.Install(Graph(), running.Token()).HasError());
-    CHECK(service.ActiveGraph() == first);
+    CHECK(service.ActiveGraph() == committed);
     CHECK(ReadFile(recordPath) == originalRecord);
     CHECK_FALSE(std::filesystem::exists(project.Path() / ".horo/packages.install.pending"));
 }

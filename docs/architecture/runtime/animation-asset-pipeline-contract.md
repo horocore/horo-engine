@@ -93,9 +93,12 @@ canonical sorting and duplicate removal. A missing, extra, mistyped, self, or
 role-conflicting dependency rejects the candidate. Assets owns graph admission;
 Animation owns the reason that a dependency is required.
 
-Animation graph, blend-tree, and retarget-profile assets require their own
-versioned contracts. They must not be encoded as an undocumented variant of one
-of the three types above.
+Animation graph source has its own [versioned graph contract](./animation-graph-source-contract.md)
+and dedicated `core.animation.graph` codec. Its authoring decoder/compiler do not
+claim graph AST cooking or packaged runtime publication; the dependency-content
+cache-key prerequisite below still applies. Blend-tree and retarget-profile assets
+require their own versioned contracts. None is an undocumented variant of the three
+types above.
 
 ## Authoring Payload Contract
 

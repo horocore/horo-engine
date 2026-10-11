@@ -97,6 +97,14 @@ horo_configure_target_header_boundary(HoroMcpRegistry PUBLIC_HEADERS
     Horo/Mcp/McpToolRegistry.h
 )
 
+horo_configure_target_header_boundary(HoroProjectReadFilesApi PUBLIC_HEADERS Horo/Platform/ProjectReadFiles.h)
+horo_configure_target_header_boundary(HoroPlatformProjectReadFiles PUBLIC_HEADERS Horo/Platform/NativeProjectReadFiles.h)
+horo_configure_target_header_boundary(HoroProjectCodeQuery PUBLIC_HEADERS
+    Horo/Application/ProjectCodeQuery.h
+    Horo/Application/CodeQueryStoreProviders.h)
+horo_configure_target_header_boundary(HoroMcpProjectCodeQuery PUBLIC_HEADERS Horo/Mcp/ProjectCodeQueryTools.h)
+horo_configure_target_header_boundary(HoroSourceDocumentCodeQuery PUBLIC_HEADERS Horo/Editor/SourceDocumentCodeQuery.h)
+
 horo_configure_target_header_boundary(HoroMcpController PUBLIC_HEADERS
     Horo/Mcp/McpController.h
 )
@@ -245,6 +253,10 @@ horo_configure_target_header_boundary(HoroPackageSecurity PUBLIC_HEADERS
     Horo/Packages/PackageRestoreErrors.h
     Horo/Packages/PackagePublisherVerification.h
     Horo/Packages/PackagePublisherVerificationErrors.h
+)
+horo_configure_target_header_boundary(HoroPackageLifecycle PUBLIC_HEADERS
+    Horo/Packages/PackageLifecycle.h
+    Horo/Packages/PackageLifecycleErrors.h
 )
 horo_configure_target_header_boundary(HoroProjectMigrations)
 horo_configure_target_header_boundary(HoroSaveApi PUBLIC_HEADERS
@@ -634,6 +646,9 @@ horo_configure_target_header_boundary(HoroPhysicsSceneIntegration PUBLIC_HEADERS
     Horo/Physics/PhysicsCellAttachments.h
     Horo/Physics/PhysicsSceneActivation.h
 )
+horo_configure_target_header_boundary(HoroCharacterInput PUBLIC_HEADERS
+    Horo/CharacterInput/DesiredMotionAdapter.h
+)
 horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/AICanonicalState.h
     Horo/AI/AIErrors.h
@@ -665,7 +680,11 @@ horo_configure_target_header_boundary(HoroAISceneIntegration PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroAISightIntegration PUBLIC_HEADERS
     Horo/AI/PerceptionSight.h
 )
+horo_configure_target_header_boundary(HoroAnimationGraphSourceCodec PUBLIC_HEADERS
+    Horo/Animation/AnimationGraphSource.h
+)
 horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
+    Horo/Animation/AnimationGraph.h
     Horo/Animation/AnimationCompression.h
     Horo/Animation/AnimationClip.h
     Horo/Animation/AnimationComponents.h
@@ -676,6 +695,8 @@ horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
     Horo/Animation/SkeletalMeshSkinning.h
 )
 horo_configure_target_header_boundary(HoroPCG PUBLIC_HEADERS
+    Horo/PCG/PCGNodeCatalog.h
+    Horo/PCG/PCGCpuEvaluator.h
     Horo/PCG/PCGCookedPlan.h
     Horo/PCG/PCGErrors.h
     Horo/PCG/PCGGenerationPlan.h
@@ -801,6 +822,7 @@ horo_configure_target_header_boundary(HoroNavigationRuntime PUBLIC_HEADERS
     Horo/Navigation/NavigationAgentRegistry.h
     Horo/Navigation/NavigationPathPolicy.h
     Horo/Navigation/NavigationCoordinator.h
+    Horo/Navigation/NavigationMovement.h
     Horo/Navigation/NavigationRuntimeQueues.h
     Horo/Navigation/NavigationWorldLifecycle.h
 )

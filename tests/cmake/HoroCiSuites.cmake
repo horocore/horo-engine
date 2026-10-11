@@ -16,6 +16,8 @@ set(HORO_CI_AUDIO_TARGETS
 # The full Windows suite remains disabled. Preserve all existing focused checks
 # in one headless Debug build, including their public-header compile consumers.
 set(HORO_CI_WINDOWS_TARGETS
+    HoroAnimationApiTests
+    HoroAnimationGraphPublicHeaderConsumer
     HoroLightCullingTests
     HoroLightFramePoolTests
     HoroAITaskSchedulerTests
@@ -29,6 +31,10 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroNetworkDebuggerPublicHeaderConsumer
     HoroTerrainAuthoringTests
     HoroTerrainAuthoringPublicHeaderConsumer
+    HoroPCGTests
+    HoroPCGTerrainAdapterTests
+    HoroPCGPublicHeaderConsumer
+    HoroPCGTerrainAdapterPublicHeaderConsumer
     HoroMixerDocumentTests
     ${HORO_CI_AUDIO_TARGETS}
     HoroCliCommandRegistryTests
@@ -55,6 +61,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroPrefabSceneExpansionContractConsumer
     HoroAssetRegistryTests
     HoroInputTests
+    HoroCharacterInputTests
+    HoroCharacterInputPublicHeaderConsumer
     HoroInputSdlTests
     HoroRuntimeUiInputTests
     HoroRuntimeUiTextUnicodeTests
@@ -78,8 +86,20 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroExtensionManagerTests
     HoroEditorActivityBoundaryTests
     HoroExtensionsPublicHeaderConsumer
+
+    HoroPackageLifecycleTests
+    HoroPackageLifecyclePublicHeaderConsumer
     HoroMcpSessionTests
     HoroMcpSessionPublicHeaderConsumer
+    HoroProjectCodeQueryTests
+    HoroProjectReadFilesTests
+    HoroMcpProjectCodeQueryTests
+    HoroSourceDocumentCodeQueryTests
+    HoroProjectReadFilesApiPublicHeaderConsumer
+    HoroPlatformProjectReadFilesPublicHeaderConsumer
+    HoroProjectCodeQueryPublicHeaderConsumer
+    HoroMcpProjectCodeQueryPublicHeaderConsumer
+    HoroSourceDocumentCodeQueryPublicHeaderConsumer
     HoroRuntimeSaveRootResolverTests
     HoroRuntimeSaveStorageQualificationTests
     HoroSaveStorageUserStateQualificationTests
@@ -130,6 +150,7 @@ set(HORO_SONAR_EDITOR_TARGETS
     HoroCameraCutEditorIntegrationTests
     HoroCinematicPropertyIntegrationTests
     HoroConfiguredEditorUpdateBackendTests
+    HoroSourceDocumentCodeQueryTests
 )
 
 function(horo_ci_catch_labels target)

@@ -125,6 +125,13 @@ namespace Horo::PCG {
                                                                                     std::size_t maximumBytes,
                                                                                     std::size_t retainedBytes = 0);
 
+        /** @brief Proves the exact reservation without allocating point columns.
+         * @param plan Immutable routing and ordering contract.
+         * @param bounds Complete output shapes.
+         * @return Charged bytes or typed shape, overflow, or capacity failure.
+         * @note Only bounded routing/slot metadata is allocated during the proof. */
+        [[nodiscard]] static Result<std::size_t> RequiredBytes(const PCGCookedPlan &plan, std::span<const PCGPointOutputBound> bounds);
+
         /** @brief Exact charged workspace allocation, including column and routing metadata. */
         [[nodiscard]] std::size_t ReservedBytes() const noexcept;
         /** @brief Worst-case simultaneously materialized records proven at admission. */
