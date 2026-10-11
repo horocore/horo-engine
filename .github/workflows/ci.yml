@@ -307,6 +307,24 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
+      - name: Diagnose Windows Save lifecycle allocation boundary
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture' && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
+        timeout-minutes: 3
+        shell: pwsh
+        run: >-
+          ./.github/scripts/diagnose_character_input_windows.ps1 -BuildDirectory build/ci
+          -BinaryName HoroRuntimeSaveSlotLifecycleTests.exe -EvidenceName save-lifecycle-stack
+          -TestCase 'HoroRuntimeSaveSlotLifecycleTests::Lifecycle allocation failure after visibility preserves publication knowledge' -CaptureSymbolEvidence
+
+      - name: Diagnose Windows Save retention allocation boundary
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture' && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
+        timeout-minutes: 3
+        shell: pwsh
+        run: >-
+          ./.github/scripts/diagnose_character_input_windows.ps1 -BuildDirectory build/ci
+          -BinaryName HoroRuntimeSaveSlotLifecycleTests.exe -EvidenceName save-retention-stack
+          -TestCase 'HoroRuntimeSaveSlotLifecycleTests::Retention allocation failure after selection preserves publication and binding ownership' -CaptureSymbolEvidence
+
       - name: Record Windows Save allocation diagnostic provenance
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
         shell: pwsh
@@ -370,6 +388,23 @@ jobs:
       - name: Test OpenXR rollback replacement and shutdown
         if: ${{ !cancelled() && steps.xr_build.outcome == 'success' }}
         run: ctest --preset ci-xr-openxr
+
+      - name: Upload Windows Save allocation stack evidence
+        if: ${{ always() && github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture' && runner.os == 'Windows' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: save-allocation-stack-Windows-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            build/ci/save-lifecycle-stack/status.txt
+            build/ci/save-lifecycle-stack/threads.txt
+            build/ci/save-lifecycle-stack/ctest.xml
+            build/ci/save-lifecycle-stack/provenance.json
+            build/ci/save-retention-stack/status.txt
+            build/ci/save-retention-stack/threads.txt
+            build/ci/save-retention-stack/ctest.xml
+            build/ci/save-retention-stack/provenance.json
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload Windows Save allocation diagnostics
         if: ${{ always() && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
