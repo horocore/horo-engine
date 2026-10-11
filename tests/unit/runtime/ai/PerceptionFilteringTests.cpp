@@ -200,7 +200,8 @@ namespace Horo::AI {
             }
         };
 
-        TEST_CASE("Denied memory cannot reach blackboard or debug; policy replacement publishes once", "[unit][ai][perception][filter]") {
+        TEST_CASE("Denied memory cannot reach blackboard or debug and policy replacement publishes once",
+                  "[unit][ai][perception][filter]") {
             PublicationFixture fixture;
             const auto first = fixture.Sync();
             REQUIRE(first.HasValue());

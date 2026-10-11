@@ -76,10 +76,15 @@ namespace Horo::Gameplay {
         void Close() noexcept;
 
     private:
+        /** @brief Captured host authority and its matching AI activation publication. */
+        struct CapturedAuthority final {
+            Network::NetworkModeRoleView role;
+            AI::AiSceneActivationBinding binding;
+        };
+
         PerceptionEventSource(const Runtime::RuntimeScene &scene, const AI::AiSceneRuntime &ai, const Network::NetworkModeComposition &host,
-                              const Network::NetworkModeRoleView &role, AI::AiSceneActivationBinding binding,
-                              const AI::PerceptionDescriptorRegistry &registry, const AI::PerceptionSpatialBroadphase &filtering,
-                              std::span<const CommittedPerceptionDelivery> deliveries);
+                              CapturedAuthority authority, const AI::PerceptionDescriptorRegistry &registry,
+                              const AI::PerceptionSpatialBroadphase &filtering, std::span<const CommittedPerceptionDelivery> deliveries);
         /** @brief Rejects retained windows after authority revocation, travel, AI replacement or source closure. */
         [[nodiscard]] Result<void> ValidateCurrent() const;
         /** @brief Binds a declared recipient to the current active AI owner and exact memory. */

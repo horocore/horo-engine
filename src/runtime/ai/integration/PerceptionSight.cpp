@@ -401,6 +401,7 @@ namespace Horo::AI {
     Result<void> StagePerceptionSightAtSensePoll(const Runtime::RuntimeSceneView &scene, const PerceptionSpatialSnapshot &filtering,
                                                  const PerceptionSightResult &result, const PerceptionListenerTypeId listenerType,
                                                  AIPerceptionMemory &memory) {
+        using enum PerceptionSightEvidence;
         if (!scene.IsCurrent() || !filtering.ReadAuthorization()->IsCurrent() || filtering.Scene() != scene.RuntimeId() ||
             result.spatialRevision != filtering.Revision() || result.listener.runtime != scene.RuntimeId() ||
             scene.Get(result.listener).HasError() || memory.SceneIncarnation() != scene.RuntimeId().value)
@@ -418,12 +419,11 @@ namespace Horo::AI {
             const auto &entry = result.observations[index];
             const PerceptionMemoryKey key{listenerType, SenseTypeIds::Sight, StimulusTypeIds::Visual,
                                           ProjectPerceptionSource(entry.source)};
-            if (entry.evidence == PerceptionSightEvidence::Clear && entry.visible) {
+            if (entry.evidence == Clear && entry.visible) {
                 if (const auto staged = memory.Observe({.key = key, .position = entry.sourcePosition}, result.simulationTick);
                     staged.HasError())
                     return staged;
-            } else if (!entry.visible &&
-                       (entry.evidence == PerceptionSightEvidence::Occluded || entry.evidence == PerceptionSightEvidence::OutsideCone)) {
+            } else if (!entry.visible && (entry.evidence == Occluded || entry.evidence == OutsideCone)) {
                 if (const auto staged = memory.MarkLost(key, result.simulationTick); staged.HasError())
                     return staged;
             }

@@ -3,6 +3,7 @@
 #include "Horo/AI/AIErrors.h"
 
 #include <algorithm>
+#include <cstddef>
 
 namespace Horo::AI {
     /** @copydoc ValidatePerceptionFiltering */
@@ -50,10 +51,11 @@ namespace Horo::AI {
             return false;
         if (filter.teams == PerceptionTeamFilter::Different && sameTeam)
             return false;
-        PerceptionAffiliationDescriptor affiliation{.kind = sameTeam ? PerceptionAffiliation::Friendly
-                                                                     : (listener.team.value == 0 || source.team.value == 0
-                                                                            ? PerceptionAffiliation::Neutral
-                                                                            : PerceptionAffiliation::Hostile)};
+        PerceptionAffiliationDescriptor affiliation{.kind = PerceptionAffiliation::Neutral};
+        if (sameTeam)
+            affiliation.kind = PerceptionAffiliation::Friendly;
+        else if (listener.team.value != 0 && source.team.value != 0)
+            affiliation.kind = PerceptionAffiliation::Hostile;
         for (std::size_t index = 0; index < policy.relationshipCount; ++index) {
             const auto &entry = policy.relationships[index];
             if (entry.listener == listener.team && entry.source == source.team) {
@@ -65,6 +67,6 @@ namespace Horo::AI {
             return affiliation.custom.value != 0 && std::find(filter.custom.begin(), filter.custom.begin() + filter.customCount,
                                                               affiliation.custom) != filter.custom.begin() + filter.customCount;
         return affiliation.kind < PerceptionAffiliation::Custom && affiliation.custom.value == 0 &&
-               (filter.affiliations & (std::uint8_t{1} << static_cast<std::uint8_t>(affiliation.kind))) != 0;
+               (static_cast<std::byte>(filter.affiliations) & (std::byte{1} << static_cast<unsigned int>(affiliation.kind))) != std::byte{};
     }
 }  // namespace Horo::AI

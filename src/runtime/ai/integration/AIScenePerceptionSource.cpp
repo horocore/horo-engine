@@ -33,10 +33,9 @@ namespace Horo::AI {
             ProjectionCandidate next{.snapshot = identity};
             for (std::size_t index = 0; index < memory.count; ++index) {
                 const auto &record = memory.entries[index];
-                const auto admits = [&](const PerceptionSourceRef source) {
+                if (const auto admits = [&](const PerceptionSourceRef source) {
                     return filtering.Allows(identity.listener, {scene.RuntimeId(), {source.slot, source.generation}}, record.key.sense);
-                };
-                if (!admits(record.key.source) || !admits(record.provenance))
+                }; !admits(record.key.source) || !admits(record.provenance))
                     continue;
                 if (next.snapshot.memory.count == MaximumBlackboardCollectionElements)
                     return Result<ProjectionCandidate>::Failure(MakeError(AIErrors::PerceptionDescriptorLimitExceeded));
@@ -120,8 +119,8 @@ namespace Horo::AI {
         if (!current_ || filtering.Current() != filtering_ || !scene.IsCurrent() || scene.RuntimeId() != current_->listener.runtime ||
             scene.Get(current_->listener).HasError() || !blackboard.IsActive() || blackboard.Binding() != binding_)
             return Result<PerceptionPublicationSnapshot>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
-        const auto board = blackboard.Snapshot();
-        if (board.HasError() || board.Value().Revision().HasError() || board.Value().Revision().Value() != current_->blackboardRevision)
+        if (const auto board = blackboard.Snapshot();
+            board.HasError() || board.Value().Revision().HasError() || board.Value().Revision().Value() != current_->blackboardRevision)
             return Result<PerceptionPublicationSnapshot>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
         for (std::size_t index = 0; index < current_->memory.count; ++index) {
             const auto &record = current_->memory.entries[index];
