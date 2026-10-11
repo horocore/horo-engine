@@ -408,6 +408,19 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc DocumentIdentityRegistry::RetargetSource */
+    Result<void> DocumentIdentityRegistry::RetargetSource(const DocumentInstanceId instance, DocumentOpenKey key) {
+        const auto current = FindInstanceIterator(instance);
+        if (current == openDocuments_.end())
+            return Result<void>::Failure(MakeError(EditorSurfaceErrors::InstanceUnknown));
+        if (current->key.kind != DocumentKind::Source || key.kind != DocumentKind::Source || !key.IsValid())
+            return Result<void>::Failure(MakeError(EditorSurfaceErrors::InvalidDocumentKey));
+        if (const auto existing = Find(key); existing && existing->instance != instance)
+            return Result<void>::Failure(MakeError(EditorSurfaceErrors::InvalidDocumentKey));
+        std::swap(current->key, key);
+        return Result<void>::Success();
+    }
+
     std::optional<DocumentIdentity> DocumentIdentityRegistry::Find(const DocumentOpenKey &key) const {
         if (!key.IsValid()) {
             return std::nullopt;

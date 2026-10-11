@@ -27,6 +27,17 @@ def targets(name: str) -> set[str]:
     return result
 
 
+def cmake_conditions_at(source: str, offset: int) -> list[str]:
+    conditions = []
+    for line in source[:offset].splitlines():
+        condition = re.match(r"\s*if\s*\((.*)", line)
+        if condition:
+            conditions.append(condition.group(1))
+        elif re.match(r"\s*endif\s*\(", line):
+            conditions.pop()
+    return conditions
+
+
 WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroLightCullingTests", "HoroLightFramePoolTests",
     "HoroAITaskSchedulerTests", "HoroAITaskSchedulerPublicConsumer",
@@ -45,6 +56,7 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroFractureDocumentTests", "HoroFractureDocumentPublicHeaderConsumer",
     "HoroCinematicPropertyIntegrationTests", "HoroCinematicModelPublicHeaderConsumer",
     "HoroCinematicRuntimePublicHeaderConsumer", "HoroEditorServicesPublicHeaderConsumer",
+    "HoroEditorSurfaceIdentityTests", "HoroSourceFileOpenServiceTests",
     "HoroCameraCutRuntimeTests", "HoroCameraCutPublicHeaderConsumer",
     "HoroPrefabTests", "HoroPrefabSceneExpansionTests", "HoroPrefabSceneExpansionContractConsumer",
     "HoroAssetRegistryTests", "HoroInputTests", "HoroInputSdlTests", "HoroRuntimeUiInputTests",
@@ -249,6 +261,30 @@ def test_windows_screen_transition_build_and_execution_are_selected() -> None:
     assert direct_selection
     assert consumer in direct_selection.group(1).split()
     assert f"add_test(NAME {consumer} COMMAND {consumer})" in tests_cmake
+
+
+def test_windows_source_document_qualification_has_headless_execution_and_consumer_closure() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    registration = re.search(r"set\(HORO_CATCH_TEST_TARGETS\s+(.*?)\n\)", tests_cmake, re.S)
+    assert registration, "Missing native Catch registration group"
+    source = "HoroSourceFileOpenServiceTests"
+    identity = "HoroEditorSurfaceIdentityTests"
+    for target in (source, identity):
+        assert target in targets("HORO_CI_WINDOWS_TARGETS")
+        assert target in registration.group(1).split()
+        declaration = tests_cmake.index(f"add_executable({target}")
+        assert all("HORO_BUILD_EDITOR_GUI" not in condition
+                   for condition in cmake_conditions_at(tests_cmake, declaration))
+        assert f"target_link_libraries({target} PRIVATE HoroEngine::EditorServices)" in tests_cmake
+    assert tests_cmake.count("unit/editor/SourceDocumentSaveTests.cpp") == 1
+    assert "add_library(HoroSourceDocumentPublicHeaderConsumer OBJECT support/SourceDocumentPublicContract.cpp)" in tests_cmake
+    assert "target_link_libraries(HoroSourceDocumentPublicHeaderConsumer PRIVATE HoroEngine::EditorServices)" in tests_cmake
+    assert f"target_sources({source} PRIVATE $<TARGET_OBJECTS:HoroSourceDocumentPublicHeaderConsumer>)" in tests_cmake
+    assert 'horo_register_catch_test(${target} LABELS "native")' in tests_cmake
+    assert 'if(target IN_LIST HORO_CI_WINDOWS_TARGETS)\n        list(APPEND ARG_LABELS ci-windows)' in SUITES
+    assert 'add_custom_target(HoroCiWindowsChecks DEPENDS ${HORO_CI_WINDOWS_TARGETS})' in SUITES
+    assert preset("configurePresets", "ci-windows-debug")["inherits"] == "ci-headless"
+    assert preset("configurePresets", "ci-headless")["cacheVariables"]["HORO_BUILD_EDITOR_GUI"] == "OFF"
 
 
 def test_windows_suites_run_independently_and_remain_blocking() -> None:

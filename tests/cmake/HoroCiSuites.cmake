@@ -54,6 +54,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroCinematicModelPublicHeaderConsumer
     HoroCinematicRuntimePublicHeaderConsumer
     HoroEditorServicesPublicHeaderConsumer
+    HoroEditorSurfaceIdentityTests
+    HoroSourceFileOpenServiceTests
     HoroPrefabTests
     HoroPrefabSceneExpansionTests
     HoroPrefabSceneExpansionContractConsumer
