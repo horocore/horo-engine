@@ -29,8 +29,13 @@ namespace Horo::Vfx {
 
         /** @brief Reserves maximum recipe depth/color/shadow multiplicity at extraction admission. */
         std::uint32_t DrawCost(const VfxEmitterPreparation &binding, std::uint32_t count) noexcept {
-            const bool solid = binding.blend == Render::VfxParticlePass::Opaque || binding.blend == Render::VfxParticlePass::Masked;
-            return (solid ? 2U : (binding.blend == Render::VfxParticlePass::Translucent ? count : 1U)) + (binding.shadowCaster ? 1U : 0U);
+            using enum Render::VfxParticlePass;
+            std::uint32_t draws = 1;
+            if (binding.blend == Opaque || binding.blend == Masked)
+                draws = 2;
+            else if (binding.blend == Translucent)
+                draws = count;
+            return draws + (binding.shadowCaster ? 1U : 0U);
         }
 
         /** @brief Captures scene/effect/emitter generations without a pointer to live storage. */
@@ -52,16 +57,16 @@ namespace Horo::Vfx {
     /** @copydoc VfxRenderExtractor::Prepare */
     Result<VfxRenderExtractor> VfxRenderExtractor::Prepare(const VfxExtractionBudget budget) {
         constexpr std::uint32_t MaxBatches = 4'096;
-        constexpr std::uint32_t MaxFrameSlots = 16;
-        if (budget.maximumBatches == 0 || budget.maximumBatches > MaxBatches || budget.maximumInstances == 0 ||
+        if (constexpr std::uint32_t MaxFrameSlots = 16;
+            budget.maximumBatches == 0 || budget.maximumBatches > MaxBatches || budget.maximumInstances == 0 ||
             budget.maximumInstances > CpuParticleBufferHardLimits::Particles || budget.maximumDrawCalls == 0 ||
             budget.maximumDrawCalls > MaxBatches * 3U || budget.frameSlots == 0 || budget.frameSlots > MaxFrameSlots)
             return Result<VfxRenderExtractor>::Failure(MakeError(VfxErrors::LimitExceeded));
-        const auto bytes = static_cast<std::uint64_t>(budget.frameSlots) *
-                           (static_cast<std::uint64_t>(budget.maximumBatches) * sizeof(Render::VfxRenderBatch) +
-                            static_cast<std::uint64_t>(budget.maximumInstances) * sizeof(Render::VfxRenderInstance) +
-                            sizeof(Render::RenderWorldFrameData));
-        if (bytes > budget.maximumBytes || budget.maximumBytes > CpuParticleBufferHardLimits::Bytes)
+        if (const auto bytes = static_cast<std::uint64_t>(budget.frameSlots) *
+                               (static_cast<std::uint64_t>(budget.maximumBatches) * sizeof(Render::VfxRenderBatch) +
+                                static_cast<std::uint64_t>(budget.maximumInstances) * sizeof(Render::VfxRenderInstance) +
+                                sizeof(Render::RenderWorldFrameData));
+            bytes > budget.maximumBytes || budget.maximumBytes > CpuParticleBufferHardLimits::Bytes)
             return Result<VfxRenderExtractor>::Failure(MakeError(VfxErrors::LimitExceeded));
         try {
             VfxRenderExtractor extractor;
@@ -109,13 +114,13 @@ namespace Horo::Vfx {
         if (extractor.HasError())
             return Result<std::unique_ptr<VfxWorld>>::Failure(extractor.ErrorValue());
         try {
-            auto world = std::unique_ptr<VfxWorld>{new VfxWorld{scene, std::move(extractor).Value()}};
+            auto world = std::make_unique<VfxWorld>(VfxWorld{scene, std::move(extractor).Value()});
             world->emitters_.reserve(bindings.size());
             for (const auto &binding : bindings) {
-                auto particles = CpuParticleBuffer::Create(binding.particles);
-                if (particles.HasError())
-                    return Result<std::unique_ptr<VfxWorld>>::Failure(particles.ErrorValue());
-                world->emitters_.push_back({binding, std::move(particles).Value(), false});
+                auto particleBuffer = CpuParticleBuffer::Create(binding.particles);
+                if (particleBuffer.HasError())
+                    return Result<std::unique_ptr<VfxWorld>>::Failure(particleBuffer.ErrorValue());
+                world->emitters_.emplace_back(binding, std::move(particleBuffer).Value(), false);
             }
             return Result<std::unique_ptr<VfxWorld>>::Success(std::move(world));
         } catch (const std::bad_alloc &) {
@@ -153,10 +158,11 @@ namespace Horo::Vfx {
             return Result<EffectSystemId>::Failure(MakeError(VfxErrors::ParticleBufferThreadViolation));
         if (shutDown_)
             return Result<EffectSystemId>::Failure(MakeError(VfxErrors::IdentityInvalid));
-        const bool found = std::ranges::any_of(emitters_, [effect](const Emitter &emitter) {
+        if (const bool found = std::ranges::any_of(emitters_,
+                                                   [effect](const Emitter &emitter) {
             return emitter.live && emitter.binding.effect == effect;
         });
-        if (!found)
+            !found)
             return Result<EffectSystemId>::Failure(MakeError(VfxErrors::IdentityInvalid));
         auto next = effect;
         const bool exhausted = effect.generation == std::numeric_limits<std::uint32_t>::max();
@@ -187,7 +193,7 @@ namespace Horo::Vfx {
     }
 
     /** @copydoc VfxWorld::Extract */
-    VfxExtractionOutcome VfxWorld::Extract(std::uint64_t frame, Math::WorldCoordinate64 origin, std::uint64_t revision) noexcept {
+    VfxExtractionOutcome VfxWorld::Extract(std::uint64_t frame, const Math::WorldCoordinate64 &origin, std::uint64_t revision) noexcept {
         return extractor_.Extract(*this, frame, origin, revision);
     }
 
@@ -207,7 +213,7 @@ namespace Horo::Vfx {
     /** @copydoc VfxRenderExtractor::CopyParticles */
     bool VfxRenderExtractor::CopyParticles(const VfxEmitterPreparation &binding, const CpuParticleBuffer &particles,
                                            const CpuParticleSoAConstView &source, Render::RenderWorldFrameData &data,
-                                           Math::WorldCoordinate64 origin) noexcept {
+                                           const Math::WorldCoordinate64 &origin) noexcept {
         const auto count = static_cast<std::uint32_t>(source.positionX.size());
         for (std::uint32_t particle = 0; particle < count; ++particle) {
             const Math::Vec3 position{source.positionX[particle], source.positionY[particle], source.positionZ[particle]};
@@ -223,18 +229,15 @@ namespace Horo::Vfx {
             if (particles.TryHandleAt(particle, identity) != CpuParticleReadStatus::Complete) {
                 return false;
             }
-            data.instances_.push_back({identity.particle.Value(),
-                                       relative,
-                                       {source.sizeX[particle], source.sizeY[particle]},
-                                       source.rotation[particle],
-                                       source.packedColor[particle]});
+            data.instances_.emplace_back(identity.particle.Value(), relative, Math::Vec2{source.sizeX[particle], source.sizeY[particle]},
+                                         source.rotation[particle], source.packedColor[particle]);
         }
         return true;
     }
 
     /** @copydoc VfxRenderExtractor::AppendEmitter */
     bool VfxRenderExtractor::AppendEmitter(const VfxEmitterPreparation &binding, const CpuParticleBuffer &particles,
-                                           Render::RenderWorldFrameData &data, Math::WorldCoordinate64 origin,
+                                           Render::RenderWorldFrameData &data, const Math::WorldCoordinate64 &origin,
                                            VfxExtractionReport &report) const noexcept {
         CpuParticleSoAConstView source;
         if (particles.TryReadView(source) != CpuParticleReadStatus::Complete) {
@@ -264,7 +267,7 @@ namespace Horo::Vfx {
     }
 
     /** @copydoc VfxRenderExtractor::Extract */
-    VfxExtractionOutcome VfxRenderExtractor::Extract(const VfxWorld &world, std::uint64_t frame, Math::WorldCoordinate64 origin,
+    VfxExtractionOutcome VfxRenderExtractor::Extract(const VfxWorld &world, std::uint64_t frame, const Math::WorldCoordinate64 &origin,
                                                      std::uint64_t revision) noexcept {
         VfxExtractionOutcome outcome;
         auto &report = outcome.report;

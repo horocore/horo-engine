@@ -107,11 +107,12 @@ namespace Horo::Vfx {
 
         /** @brief Validates lifecycle and read ownership without constructing a diagnostic. */
         [[nodiscard]] CpuParticleReadStatus ReadState(const Detail::CpuParticleBufferState *const state) noexcept {
+            using enum CpuParticleReadStatus;
             if (state == nullptr || state->shutDown)
-                return CpuParticleReadStatus::ShutDown;
+                return ShutDown;
             if (std::this_thread::get_id() != state->ownerThread)
-                return CpuParticleReadStatus::ThreadViolation;
-            return CpuParticleReadStatus::Complete;
+                return ThreadViolation;
+            return Complete;
         }
 
         /** @brief Projects a failed read at an owning diagnostic boundary. */
@@ -127,8 +128,7 @@ namespace Horo::Vfx {
         }
 
         [[nodiscard]] Result<void> ValidateOperationalState(const Detail::CpuParticleBufferState *const state) {
-            const auto status = ReadState(state);
-            if (status != CpuParticleReadStatus::Complete)
+            if (const auto status = ReadState(state); status != CpuParticleReadStatus::Complete)
                 return Failure<void>(ReadFailure(status));
             return Result<void>::Success();
         }
@@ -314,24 +314,23 @@ namespace Horo::Vfx {
     /** @copydoc CpuParticleBuffer::HandleAt */
     Result<CpuParticleHandle> CpuParticleBuffer::HandleAt(const std::uint32_t denseIndex) const {
         CpuParticleHandle handle;
-        const auto status = TryHandleAt(denseIndex, handle);
-        if (status != CpuParticleReadStatus::Complete)
+        if (const auto status = TryHandleAt(denseIndex, handle); status != CpuParticleReadStatus::Complete)
             return Failure<CpuParticleHandle>(ReadFailure(status));
         return Result<CpuParticleHandle>::Success(handle);
     }
 
     /** @copydoc CpuParticleBuffer::TryHandleAt */
     CpuParticleReadStatus CpuParticleBuffer::TryHandleAt(const std::uint32_t denseIndex, CpuParticleHandle &handle) const noexcept {
+        using enum CpuParticleReadStatus;
         handle = {};
-        const auto status = ReadState(state_.get());
-        if (status != CpuParticleReadStatus::Complete)
+        if (const auto status = ReadState(state_.get()); status != Complete)
             return status;
         if (denseIndex >= state_->active)
-            return CpuParticleReadStatus::InvalidIndex;
+            return InvalidIndex;
         const auto slot = state_->streams.denseToSlot[denseIndex];
         handle = {state_->buffer, ParticleSimulationId::Create(state_->streams.simulationBySlot[slot]).Value(), slot,
                   state_->streams.slotGeneration[slot]};
-        return CpuParticleReadStatus::Complete;
+        return Complete;
     }
 
     /** @copydoc CpuParticleBuffer::CopyFrom */
@@ -443,8 +442,7 @@ namespace Horo::Vfx {
     /** @copydoc CpuParticleBuffer::View */
     Result<CpuParticleSoAConstView> CpuParticleBuffer::View() const {
         CpuParticleSoAConstView view;
-        const auto status = TryReadView(view);
-        if (status != CpuParticleReadStatus::Complete)
+        if (const auto status = TryReadView(view); status != CpuParticleReadStatus::Complete)
             return Failure<CpuParticleSoAConstView>(ReadFailure(status));
         return Result<CpuParticleSoAConstView>::Success(view);
     }
@@ -452,8 +450,7 @@ namespace Horo::Vfx {
     /** @copydoc CpuParticleBuffer::TryReadView */
     CpuParticleReadStatus CpuParticleBuffer::TryReadView(CpuParticleSoAConstView &view) const noexcept {
         view = {};
-        const auto status = ReadState(state_.get());
-        if (status != CpuParticleReadStatus::Complete)
+        if (const auto status = ReadState(state_.get()); status != CpuParticleReadStatus::Complete)
             return status;
         const std::size_t count = state_->active;
         view = {

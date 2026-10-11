@@ -78,27 +78,28 @@ namespace Horo::Vfx {
         [[nodiscard]] static Result<VfxRenderExtractor> Prepare(VfxExtractionBudget budget);
         /** @brief Packs the current live prefix on the scene owner without allocation.
          * @param world Scene owner; borrowed only during copying. @param frame Increasing one-based frame ordinal.
-         * @param origin Captured render origin. @param originRevision Non-zero captured revision.
+         * @param origin Captured render origin, borrowed only for this synchronous copy. @param originRevision Non-zero captured revision.
          * @return Immutable lease and exact admission/overrun status. Retained frames are never overwritten.
          */
-        [[nodiscard]] VfxExtractionOutcome Extract(const VfxWorld &world, std::uint64_t frame, Math::WorldCoordinate64 origin,
+        [[nodiscard]] VfxExtractionOutcome Extract(const VfxWorld &world, std::uint64_t frame, const Math::WorldCoordinate64 &origin,
                                                    std::uint64_t originRevision) noexcept;
 
         /** @brief Copies validated particle values into admitted frame storage; never publishes a partial frame.
          * @param binding Prepared emitter coordinates. @param particles Exact live identity source.
-         * @param source Borrowed packed values. @param data Preallocated candidate frame. @param origin Captured render origin.
+         * @param source Borrowed packed values. @param data Preallocated candidate frame. @param origin Captured render origin, never
+         * retained.
          * @return Whether every particle value and identity was valid.
          */
         [[nodiscard]] static bool CopyParticles(const VfxEmitterPreparation &binding, const CpuParticleBuffer &particles,
                                                 const CpuParticleSoAConstView &source, Render::RenderWorldFrameData &data,
-                                                Math::WorldCoordinate64 origin) noexcept;
+                                                const Math::WorldCoordinate64 &origin) noexcept;
         /** @brief Admits and copies one complete emitter or records its bounded omission.
          * @param binding Prepared semantics. @param particles Borrowed simulation owner. @param data Candidate frame storage.
-         * @param origin Captured render origin. @param report Aggregate draw/instance admission and typed failure evidence.
+         * @param origin Captured render origin, never retained. @param report Aggregate draw/instance admission and typed failure evidence.
          * @return False only for invalid particle data; budget omission returns true to continue later emitters.
          */
         [[nodiscard]] bool AppendEmitter(const VfxEmitterPreparation &binding, const CpuParticleBuffer &particles,
-                                         Render::RenderWorldFrameData &data, Math::WorldCoordinate64 origin,
+                                         Render::RenderWorldFrameData &data, const Math::WorldCoordinate64 &origin,
                                          VfxExtractionReport &report) const noexcept;
 
     private:
@@ -144,7 +145,7 @@ namespace Horo::Vfx {
          * @param frame Increasing frame ordinal. @param origin Captured render origin. @param originRevision Captured revision.
          * @return Immutable values and typed bounds/backpressure evidence.
          */
-        [[nodiscard]] VfxExtractionOutcome Extract(std::uint64_t frame, Math::WorldCoordinate64 origin,
+        [[nodiscard]] VfxExtractionOutcome Extract(std::uint64_t frame, const Math::WorldCoordinate64 &origin,
                                                    std::uint64_t originRevision) noexcept;
 
         /** @brief Returns the exact scene incarnation. */

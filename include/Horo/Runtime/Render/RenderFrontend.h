@@ -608,7 +608,7 @@ namespace Horo::Render {
                                                                   const VfxGraphSchedule &schedule) const;
         /** @brief Appends an already admitted contribution; caller owns atomic rollback of append-only records. */
         [[nodiscard]] Result<void> AppendVfxSchedule(RenderGraphBuilder &builder, VfxGraphSchedule &schedule,
-                                                     const VfxGraphRequest &request);
+                                                     const VfxGraphRequest &request) const;
         [[nodiscard]] bool IsLiveTarget(RenderTargetHandle target, FramebufferExtent extent) const noexcept;
         [[nodiscard]] Result<std::uint64_t> BackendInstance(RenderBufferHandle buffer) const;
         [[nodiscard]] Result<std::uint64_t> BackendInstance(RenderMeshHandle mesh) const;

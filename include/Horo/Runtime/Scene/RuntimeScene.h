@@ -649,11 +649,11 @@ namespace Horo::Runtime {
         /** @brief Releases scene-owned VFX simulation; independent immutable snapshots remain alive. */
         ~RuntimeScene();
         /** @brief Attaches one fully prepared world before scene activation.
-         * @param world Exact scene-scoped prepared CPU effects. @param origin Captured render origin.
+         * @param world Exact scene-scoped prepared CPU effects. @param origin Captured render origin, copied into scene storage.
          * @param originRevision Non-zero origin generation. @return Success or typed invalid/repeated attachment failure.
          * @details Host composition owns preparation. This transfers simulation ownership; no service discovery occurs.
          */
-        [[nodiscard]] Result<void> AttachVfxWorld(std::unique_ptr<Vfx::VfxWorld> world, Math::WorldCoordinate64 origin,
+        [[nodiscard]] Result<void> AttachVfxWorld(std::unique_ptr<Vfx::VfxWorld> world, const Math::WorldCoordinate64 &origin,
                                                   std::uint64_t originRevision);
 
         /** @brief Borrows this scene's live VFX owner for typed gameplay/simulation commands. @return World or null. */

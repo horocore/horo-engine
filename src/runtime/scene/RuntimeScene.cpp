@@ -18,7 +18,7 @@ namespace Horo::Runtime {
     RuntimeScene::~RuntimeScene() = default;
 
     /** @copydoc RuntimeScene::AttachVfxWorld */
-    Result<void> RuntimeScene::AttachVfxWorld(std::unique_ptr<Vfx::VfxWorld> world, Math::WorldCoordinate64 origin,
+    Result<void> RuntimeScene::AttachVfxWorld(std::unique_ptr<Vfx::VfxWorld> world, const Math::WorldCoordinate64 &origin,
                                               std::uint64_t originRevision) {
         if (!world || vfxWorld_ || world->Scene().Value() != runtimeId_.value || originRevision == 0)
             return Result<void>::Failure(MakeError(Vfx::VfxErrors::IdentityInvalid));

@@ -1290,6 +1290,13 @@ frontend does not depend on VFX simulation. RuntimeScene explicitly owns the pre
 world. Existing static mesh, CPU particle and graph callers remain source-compatible.
 Public-header consumer coverage exercises these target boundaries.
 
+Render origins are borrowed by const reference only for synchronous attachment
+and extraction. Attachment copies the coordinate into scene-owned storage;
+extraction copies derived positions into its immutable frame. No origin reference
+is retained. Call sites remain source-compatible, including temporary coordinates,
+but consumers taking member-function pointers must adopt the const-reference
+signature and rebuild against the updated declarations.
+
 This implementation publishes CPU particle scheduling, not physical particle draws.
 `ExecuteGraph` rejects any VFX workload with `VfxExecutionUnavailable` before any
 pass is encoded. The shared execution validator also rejects it on every backend,

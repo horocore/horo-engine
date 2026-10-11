@@ -13,6 +13,7 @@
 #include "RenderResourceRegistry.h"
 #include "RenderResourceUploadQueue.h"
 
+#include <algorithm>
 #include <array>
 #include <new>
 #include <optional>
@@ -28,10 +29,9 @@ namespace Horo::Render {
 
         /** @brief Detects VFX workloads whose physical encoder has not been admitted. */
         [[nodiscard]] bool RequiresVfxEncoding(const std::span<const RenderGraphPassWorkload> workloads) noexcept {
-            for (const auto &workload : workloads)
-                if (std::holds_alternative<RenderGraphVfx>(workload.workload))
-                    return true;
-            return false;
+            return std::ranges::any_of(workloads, [](const auto &workload) {
+                return std::holds_alternative<RenderGraphVfx>(workload.workload);
+            });
         }
 
         [[nodiscard]] Result<void> ValidateFrontendConfiguration(const RenderResourceUploadLimits &uploadLimits,

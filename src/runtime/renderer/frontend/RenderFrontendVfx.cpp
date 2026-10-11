@@ -66,21 +66,23 @@ namespace Horo::Render {
 
         /** @brief Determines exact recipe membership from the cooked semantic class. */
         bool InStage(const VfxRenderBatch &batch, VfxGraphStage stage, const VfxGraphRequest &request) noexcept {
-            const bool solid = batch.blend == VfxParticlePass::Opaque || batch.blend == VfxParticlePass::Masked;
+            using enum VfxParticlePass;
+            using enum VfxGraphStage;
+            const bool solid = batch.blend == Opaque || batch.blend == Masked;
             const bool deferred = request.family == StandardPbrRasterFamily::Deferred && batch.deferredCompatible;
             switch (stage) {
-                case VfxGraphStage::Shadow:
+                case Shadow:
                     return solid && batch.shadowCaster;
-                case VfxGraphStage::Depth:
+                case Depth:
                     return solid && request.depthPrepass;
-                case VfxGraphStage::GBuffer:
+                case GBuffer:
                     return solid && deferred;
-                case VfxGraphStage::OpaqueForward:
+                case OpaqueForward:
                     return solid && !deferred;
-                case VfxGraphStage::TranslucentForward:
-                    return batch.blend == VfxParticlePass::Translucent;
-                case VfxGraphStage::AdditiveForward:
-                    return batch.blend == VfxParticlePass::Additive;
+                case TranslucentForward:
+                    return batch.blend == Translucent;
+                case AdditiveForward:
+                    return batch.blend == Additive;
             }
             return false;
         }
@@ -110,13 +112,14 @@ namespace Horo::Render {
 
         /** @brief Declares exact depth/color attachment access for one particle stage. */
         Result<void> AddUses(RenderGraphBuilder &builder, RenderGraphPassRef pass, const RenderGraphVfx &payload) {
-            const bool alpha = payload.stage == VfxGraphStage::TranslucentForward || payload.stage == VfxGraphStage::AdditiveForward;
-            if (auto used = builder.AddUsage({pass, payload.depth, alpha ? RenderGraphAccess::Read : RenderGraphAccess::ReadWrite,
-                                              RenderGraphUsageKind::DepthStencilAttachment});
+            using enum VfxGraphStage;
+            using enum RenderGraphAccess;
+            const bool alpha = payload.stage == TranslucentForward || payload.stage == AdditiveForward;
+            if (auto used = builder.AddUsage({pass, payload.depth, alpha ? Read : ReadWrite, RenderGraphUsageKind::DepthStencilAttachment});
                 used.HasError())
                 return used;
-            if (payload.stage != VfxGraphStage::Depth && payload.stage != VfxGraphStage::Shadow)
-                return builder.AddUsage({pass, payload.color, RenderGraphAccess::ReadWrite, RenderGraphUsageKind::ColorAttachment});
+            if (payload.stage != Depth && payload.stage != Shadow)
+                return builder.AddUsage({pass, payload.color, ReadWrite, RenderGraphUsageKind::ColorAttachment});
             return Result<void>::Success();
         }
 
@@ -182,14 +185,10 @@ namespace Horo::Render {
         /** @brief Admits all stage metadata before mutating the recipe graph. */
         VfxGraphSchedulingOutcome PrepareSchedule(const RenderWorldSnapshot &snapshot, const VfxGraphRequest &request,
                                                   const std::shared_ptr<Detail::VfxSchedulingSlot> &slot) {
+            using enum VfxGraphStage;
             VfxGraphSchedule schedule;
             schedule.instances = static_cast<std::uint32_t>(snapshot.Instances().size());
-            constexpr std::array stages{VfxGraphStage::Shadow,
-                                        VfxGraphStage::Depth,
-                                        VfxGraphStage::GBuffer,
-                                        VfxGraphStage::OpaqueForward,
-                                        VfxGraphStage::TranslucentForward,
-                                        VfxGraphStage::AdditiveForward};
+            constexpr std::array stages{Shadow, Depth, GBuffer, OpaqueForward, TranslucentForward, AdditiveForward};
             for (std::size_t index = 0; index < stages.size(); ++index) {
                 const auto stage = stages[index];
                 auto &order = slot->orders[index];
@@ -199,8 +198,8 @@ namespace Horo::Render {
                 if (order.instances.empty())
                     continue;
                 schedule.drawCalls += DrawRuns(order);
-                const auto color = stage == VfxGraphStage::GBuffer ? request.gBuffer : request.sceneColor;
-                const auto depth = stage == VfxGraphStage::Shadow ? request.shadowDepth : request.sceneDepth;
+                const auto color = stage == GBuffer ? request.gBuffer : request.sceneColor;
+                const auto depth = stage == Shadow ? request.shadowDepth : request.sceneDepth;
                 schedule.records[schedule.recordCount++] = {{}, RenderGraphVfx{stage, color, depth, {slot, &order}, snapshot}};
             }
             if (schedule.drawCalls > request.remainingDrawCalls)
@@ -217,8 +216,7 @@ namespace Horo::Render {
         const auto *handle = std::get_if<RenderTextureHandle>(&resource->binding);
         if (!handle || handle->slot >= textures_.size())
             return nullptr;
-        const auto state = ResourceState(*handle);
-        if (state.HasError() || state.Value() != RenderResourceState::Ready)
+        if (const auto state = ResourceState(*handle); state.HasError() || state.Value() != RenderResourceState::Ready)
             return nullptr;
         const auto &texture = textures_[handle->slot];
         const auto &descriptor = texture.descriptor;
@@ -233,13 +231,13 @@ namespace Horo::Render {
     VfxGraphSchedulingOutcome RenderFrontend::ValidateVfxAttachments(const RenderGraphBuilder &builder, const VfxGraphRequest &request,
                                                                      const VfxGraphSchedule &schedule) const {
         const auto attachment = [this, &builder](RenderGraphResourceId id, bool depth) {
+            using enum RenderTextureFormat;
             const auto *descriptor = VfxAttachment(builder, id);
             if (!descriptor)
                 return false;
             const auto format = descriptor->format;
-            return depth ? (format == RenderTextureFormat::Depth32Float || format == RenderTextureFormat::Depth24Stencil8 ||
-                            format == RenderTextureFormat::Depth32FloatStencil8)
-                         : (format == RenderTextureFormat::Rgba16Float || format == RenderTextureFormat::Rgba32Float);
+            return depth ? (format == Depth32Float || format == Depth24Stencil8 || format == Depth32FloatStencil8)
+                         : (format == Rgba16Float || format == Rgba32Float);
         };
         if (!attachment(request.sceneColor, false) || !attachment(request.sceneDepth, true))
             return VfxGraphSchedulingOutcome::
@@ -266,6 +264,7 @@ namespace Horo::Render {
     /** @copydoc RenderFrontend::ValidateVfxRecipe */
     VfxGraphSchedulingOutcome RenderFrontend::ValidateVfxRecipe(const RenderGraphBuilder &builder, const VfxGraphRequest &request,
                                                                 const VfxGraphSchedule &schedule) const {
+        using enum VfxGraphStage;
         if (builder.ownerThread_ != std::this_thread::get_id())
             return VfxGraphSchedulingOutcome::Failure(RenderGraphErrors::WrongThread);
         if (builder.state_ != RenderGraphBuilderState::Open)
@@ -281,16 +280,17 @@ namespace Horo::Render {
         if (auto attachments = ValidateVfxAttachments(builder, request, schedule); attachments.HasError())
             return attachments;
         std::size_t uses{};
-        bool solid{}, alpha{};
+        bool solid{};
+        bool alpha{};
         for (const auto &work : schedule.Workloads()) {
             const auto stage = std::get<RenderGraphVfx>(work.workload).stage;
-            uses += (stage == VfxGraphStage::Shadow || stage == VfxGraphStage::Depth) ? 1U : 2U;
-            const bool transparent = stage == VfxGraphStage::TranslucentForward || stage == VfxGraphStage::AdditiveForward;
+            uses += (stage == Shadow || stage == Depth) ? 1U : 2U;
+            const bool transparent = stage == TranslucentForward || stage == AdditiveForward;
             alpha |= transparent;
             solid |= !transparent;
         }
-        const auto dependencies = schedule.Workloads().size() + (solid ? 1U : 0U) + (alpha ? 1U : 0U);
-        if (schedule.Workloads().size() > builder.limits_.maxPasses - builder.passes_.size() ||
+        if (const auto dependencies = schedule.Workloads().size() + (solid ? 1U : 0U) + (alpha ? 1U : 0U);
+            schedule.Workloads().size() > builder.limits_.maxPasses - builder.passes_.size() ||
             uses > builder.limits_.maxUsages - builder.usages_.size() ||
             dependencies > builder.limits_.maxDependencies - builder.dependencies_.size())
             return VfxGraphSchedulingOutcome::Failure(RenderGraphExecutionErrors::VfxDrawBudgetExceeded);
@@ -299,14 +299,14 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::AppendVfxSchedule */
     Result<void> RenderFrontend::AppendVfxSchedule(RenderGraphBuilder &builder, VfxGraphSchedule &schedule,
-                                                   const VfxGraphRequest &request) {
+                                                   const VfxGraphRequest &request) const {
         auto solidPrevious = request.opaqueBegin;
         auto alphaPrevious = request.opaqueComplete;
         for (auto &work : schedule.Workloads()) {
             auto pass = builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics);
             if (pass.HasError())
                 return Result<void>::Failure(pass.ErrorValue());
-            auto &payload = std::get<RenderGraphVfx>(work.workload);
+            const auto &payload = std::get<RenderGraphVfx>(work.workload);
             if (auto used = AddUses(builder, pass.Value(), payload); used.HasError())
                 return used;
             const bool alpha = payload.stage == VfxGraphStage::TranslucentForward || payload.stage == VfxGraphStage::AdditiveForward;
@@ -371,15 +371,13 @@ namespace Horo::Render {
             return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::VfxSchedulingCapacity));
         const auto bytes = static_cast<std::uint64_t>(budget.retainedViewSlots) *
                            (sizeof(Detail::VfxSchedulingSlot) + 7ULL * budget.maximumInstances * sizeof(VfxDrawReference));
-        const auto previousBytes = vfxScheduling_ ? vfxScheduling_->chargedBytes : 0;
-        if (bytes + previousBytes > budget.maximumBytes || budget.maximumBytes > 512ULL * 1024 * 1024)
+        if (const auto previousBytes = vfxScheduling_ ? vfxScheduling_->chargedBytes : 0;
+            bytes + previousBytes > budget.maximumBytes || budget.maximumBytes > 512ULL * 1024 * 1024)
             return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::VfxSchedulingCapacity));
-        if (vfxScheduling_) {
-            if (std::ranges::any_of(vfxScheduling_->slots, [](const auto &slot) {
-                return slot.use_count() != 1;
-            }))
-                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::VfxViewsRetained));
-        }
+        if (vfxScheduling_ && std::ranges::any_of(vfxScheduling_->slots, [](const auto &slot) {
+            return slot.use_count() != 1;
+        }))
+            return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::VfxViewsRetained));
         try {
             auto storage = std::make_shared<Detail::VfxSchedulingStorage>();
             storage->budget = budget;
