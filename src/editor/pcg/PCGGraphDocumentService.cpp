@@ -75,7 +75,7 @@ namespace Horo::Editor {
         const PCG::IPCGGraphSourceMigrator *migrator{};
 
         /** @brief Reconciles one exact record without relaxing dirty-state or owner fences. */
-        Result<void> ReconcileEntry(DocumentRecoveryService &recovery, const Entry &entry, bool preserveRecovery, bool discardDirty) {
+        Result<void> ReconcileEntry(DocumentRecoveryService &recovery, const Entry &entry, bool preserveRecovery, bool discardDirty) const {
             const auto snapshot = entry.document.Snapshot().Value();
             auto record = recovery.Inspect(entry.asset, entry.identity.key);
             if (record.HasError())
@@ -90,8 +90,8 @@ namespace Horo::Editor {
                 (!currentSession || candidate.state != snapshot.state || candidate.acceptedSource != snapshot.acceptedSource))
                 return Failure<void>(Reason::Stale);
             const bool provenSaved = !snapshot.dirty && candidate.state == snapshot.state;
-            const bool acceptedCandidate = entry.acceptedRecovery && candidate == *entry.acceptedRecovery;
-            if (provenSaved || (discardDirty && (currentSession || acceptedCandidate)))
+            if (const bool acceptedCandidate = entry.acceptedRecovery && candidate == *entry.acceptedRecovery;
+                provenSaved || (discardDirty && (currentSession || acceptedCandidate)))
                 return recovery.Discard(candidate);
             return Result<void>::Success();
         }

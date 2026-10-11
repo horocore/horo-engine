@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <iterator>
 
 namespace Horo::Editor {
     namespace {
@@ -88,9 +89,9 @@ namespace Horo::Editor {
             }
 
             template <typename T> void Array(T &array) {
-                const auto field = Take(array.size());
+                const auto field = Take(std::size(array));
                 if (valid)
-                    std::ranges::transform(field, array.begin(), [](std::byte byte) {
+                    std::ranges::transform(field, std::begin(array), [](std::byte byte) {
                         return std::to_integer<std::uint8_t>(byte);
                     });
             }
