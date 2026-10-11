@@ -6,8 +6,8 @@
 namespace Horo::Runtime::Ui {
     /** @copydoc UiAnimationOwner::Prepare */
     Result<UiAnimationOwner::Prepared> UiAnimationOwner::Prepare(const UiAnimationHostRead &read, const UiAnimationViewport &viewport) {
-        if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->stopped || storage_->draining ||
-            storage_->candidate.admitted)
+        if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->lifecycle.stopped ||
+            storage_->lifecycle.draining || storage_->candidate.admitted || storage_->lifecycle.pointerDispatching)
             return Result<Prepared>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         const auto frame = std::ranges::find_if(storage_->frames, [&](const auto &slot) {
             const auto index = static_cast<std::uint32_t>(&slot - storage_->frames.data());
@@ -94,8 +94,9 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiAnimationOwner::CanPublish */
     Result<void> UiAnimationOwner::CanPublish(const Storage &storage) {
         const auto &candidate = storage.candidate;
-        if (storage.stopped || storage.draining || !candidate.admitted || candidate.commandRevision != storage.commandRevision ||
-            !storage.publisher.IsCurrent(candidate.source) || !candidate.styles || !candidate.layout)
+        if (storage.lifecycle.stopped || storage.lifecycle.draining || !candidate.admitted ||
+            candidate.commandRevision != storage.commandRevision || !storage.publisher.IsCurrent(candidate.source) || !candidate.styles ||
+            !candidate.layout)
             return Result<void>::Failure(MakeError(UiErrors::ClockSourceStale));
         const auto canvases = candidate.source.Get()->Canvases();
         const auto canvas = std::ranges::find(canvases, storage.definition.canvas, &UiReloadCanvas::id);

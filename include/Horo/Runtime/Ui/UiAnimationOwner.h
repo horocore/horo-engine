@@ -5,6 +5,7 @@
  */
 #include "Horo/Runtime/Ui/UiAnimationTracks.h"
 #include "Horo/Runtime/Ui/UiHotReload.h"
+#include "Horo/Runtime/Ui/UiPointerInteraction.h"
 
 namespace Horo::Runtime::Ui {
     /** @brief Inert authored style/layout input adopted only after exact retained-tree and registry admission. */
@@ -90,6 +91,48 @@ namespace Horo::Runtime::Ui {
 
     class UiAnimationOwner;
 
+    /** @brief Call-duration production pointer composition; actual tree, controls and capture owners never escape. */
+    struct UiAnimationPointerInput final {
+        UiRenderViewId view;
+        UiPointerInteraction &interaction;
+        UiEventDispatcher &dispatcher;
+        const UiHitTestSnapshot &hitTesting;
+        const UiResolvedScreenCanvas &canvasSpace;
+        std::span<const UiPointerSample> samples;
+        std::uint64_t milliseconds{};
+        std::uint64_t &nextSequence;
+        std::span<UiControlDefaultAction> defaults; /**< At least 65 output slots; caller retains an applied prefix on failure. */
+        std::uint32_t &writtenDefaults;             /**< Set before return, including an error after earlier admitted defaults. */
+        std::optional<UiAccessibleGesture> accessible;
+    };
+
+    /** @brief Synchronous pointer admission at the actual canvas owner or its privately owning runtime participant.
+     * @details This borrows no mutable tree/control storage and issues no publication capability. The application
+     *          selects its existing owner at composition. All calls occur on that owner's thread, outside frame preparation.
+     */
+    class UiPointerInteractionHost {
+    public:
+        virtual ~UiPointerInteractionHost() = default;
+        /** @brief Routes bounded input through the actual receipt-fenced aggregate.
+         * @param input Call-duration input and caller-owned output prefix. @param routeHandler Synchronous application observer.
+         * @return Applied prefix or typed lifecycle, lineage, capacity or route failure.
+         */
+        [[nodiscard]] virtual Result<UiPointerInteractionResult> PumpPointers(const UiAnimationPointerInput &input,
+                                                                              UiEventHandler &routeHandler) = 0;
+        /** @brief Neutralizes held gestures and their actual aggregate control state without dispatching callbacks.
+         * @param interaction Exact owned recognizer. @param nextSequence Shared increasing event sequence.
+         * @return Cleanup or typed admission failure; stopped aggregates still clear local contacts.
+         */
+        [[nodiscard]] virtual Result<void> CancelPointers(UiPointerInteraction &interaction, std::uint64_t &nextSequence) = 0;
+        /** @brief Observes actual receipt-fenced input eligibility. @param view Composed view. @return Eligibility. */
+        [[nodiscard]] virtual bool InputEligible(UiRenderViewId view) const noexcept = 0;
+        /** @brief Checks the complete pointer generation against the actual currently presented aggregate.
+         * @param source Exact recognizer owner and presented lineage, borrowed until return.
+         * @return Whether the current owner can admit this generation; no input is consumed or state changed.
+         */
+        [[nodiscard]] virtual bool PointerInputEligible(const UiPointerCaptureContext &source) const noexcept = 0;
+    };
+
     /**
      * @brief Immutable whole-frame pin; extraction and multiple views never advance a clock or emit another terminal outcome.
      * @details The actual owner retains every preallocated frame slot through explicit retirement/drain. Borrowed spans and
@@ -165,7 +208,11 @@ namespace Horo::Runtime::Ui {
      *          fallible work and never changes last-good state. Publication invokes no external callback or I/O, allocates and
      *          frees no frame storage, and advances source cursors only once. No mutable canvas or publisher escapes.
      */
-    class UiAnimationOwner final {
+    /** @note Pointer dispatch holds synchronous borrows of this object. Moving or destroying it inside a routed
+     *        callback violates the quiescent-lifetime precondition and terminates before invalidating those borrows.
+     *        Shutdown remains permitted during callbacks and closes all admission without destroying the borrowed owner.
+     */
+    class UiAnimationOwner final : public UiPointerInteractionHost {
         struct Storage;
 
     public:
@@ -282,6 +329,19 @@ namespace Horo::Runtime::Ui {
          * @note Geometry/eligibility publication cancels obsolete interaction captures atomically; paint-only publication preserves them.
          */
         [[nodiscard]] Result<UiPointerCaptureToken> CapturePointer(const UiPointerCaptureRequest &request);
+        /** @brief Routes real presented pointer gestures and resolves actual control defaults in the sole aggregate owner.
+         * @param input Exact presented hit-test pin, admitted input and preallocated output, borrowed until return.
+         * @param routeHandler Synchronous capture/target/bubble and semantic gesture-default observer; no mutable control escapes.
+         * @return Recognized/consumed counts and actual copied control-default count, or typed bounded owner/route failure.
+         * @note Cancel cleanup is not preventable. Ordinary activation is applied only after all routed prevention decisions.
+         */
+        [[nodiscard]] Result<UiPointerInteractionResult> PumpPointers(const UiAnimationPointerInput &input,
+                                                                      UiEventHandler &routeHandler) override;
+        /** @brief Cancels this interaction's actual transient controls and leases before suspension, reload or context loss.
+         * @param interaction Same-generation transient gesture owner. @param nextSequence Shared owner event counter.
+         * @return Cleanup or typed lifecycle/capacity failure; replaced generations are never mutated.
+         */
+        [[nodiscard]] Result<void> CancelPointers(UiPointerInteraction &interaction, std::uint64_t &nextSequence) override;
         /** @brief Resolves the default decision of an already admitted input without consuming another command slot.
          * @param view Presented view. @param source Exact admitted current control source.
          * @return Actual emitted default action or empty; pending decisions must resolve before frame source replacement.
@@ -301,7 +361,9 @@ namespace Horo::Runtime::Ui {
          * @param view Actual composed render view. @return Whether that view presented the current exact frame successfully.
          * @note Publication retains previous presentation evidence but closes current-input admission until its matching receipt.
          */
-        [[nodiscard]] bool InputEligible(UiRenderViewId view) const noexcept;
+        [[nodiscard]] bool InputEligible(UiRenderViewId view) const noexcept override;
+        /** @copydoc UiPointerInteractionHost::PointerInputEligible */
+        [[nodiscard]] bool PointerInputEligible(const UiPointerCaptureContext &source) const noexcept override;
         /** @brief Stops commands/source admission and cancels pending required gates without reclaiming retained frame storage. */
         void Shutdown() noexcept;
         /** @brief Drains actual deferred routers/binding reservations at owner quiescence.
@@ -315,6 +377,7 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool CanReclaim() const noexcept;
 
     private:
+        friend class UiPointerControlRoute;
         friend class Horo::Runtime::UiAnimationRuntimeParticipant;
         /** @brief Private real-adapter preparation; every clock fact is copied from an unforgeable stack-borrowed host read. */
         [[nodiscard]] Result<Prepared> Prepare(const UiAnimationHostRead &read, const UiAnimationViewport &viewport);
