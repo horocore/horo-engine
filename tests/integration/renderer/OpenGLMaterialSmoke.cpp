@@ -266,6 +266,10 @@ namespace Horo::Render::OpenGLMaterialSmoke {
         REQUIRE(registry.Seal().HasValue());
         auto created = RenderFrontend::Create(registry, RenderBackendId{"opengl"},
                                               {.enableValidation = false, .maxFramesInFlight = 1, .presentMode = PresentMode::Immediate});
+        if (created.HasError()) {
+            FAIL("Frontend creation: " << created.ErrorValue().domain.Value() << '/' << created.ErrorValue().code.Value() << ": "
+                                       << created.ErrorValue().message);
+        }
         REQUIRE(created.HasValue());
         auto frontend = std::move(created).Value();
         const auto device = frontend->QueryPipelineDeviceIdentity();
