@@ -258,6 +258,12 @@ namespace Horo::PCG {
         std::fflush(stderr);
 #endif
         REQUIRE(first.HasValue());
+        REQUIRE(first.Value().Provenance().size() == 1);
+        Sha256Digest expectedProfile;
+        expectedProfile.bytes[0] = 1;
+        CHECK(first.Value().NumericProfile() == expectedProfile);
+        CHECK(first.Value().Provenance()[0].Data().profile == expectedProfile);
+        CHECK(first.Value().Provenance()[0].Data().node == grid.id);
         CHECK(root.Cost(grid, 0, 2).Value().snapshotElementVisits == 4);
         CheckError(Evaluate(plan.Value(), 2, 3, true), PCGErrors::CpuEvaluationCapacityExceeded);
         REQUIRE(Evaluate(plan.Value(), 2, 4, true).HasValue());

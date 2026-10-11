@@ -468,9 +468,10 @@ namespace Horo::PCG {
                 return Result<PCGCpuCandidate>::Failure(outputs.ErrorValue());
             if (cancellation.IsCancellationRequested())
                 return Reject<PCGCpuCandidate>(PCGErrors::CpuEvaluationClosed);
-            return Result<PCGCpuCandidate>::Success(PCGCpuCandidate{plan, spatial.Id(), roots.Value().front().Data().profile,
-                                                                    std::move(outputs).Value(), admitted.Value().reservedBytes,
-                                                                    std::move(roots).Value()});
+            // Detach the profile before candidate construction transfers ownership of the roots.
+            const Sha256Digest numericProfile = roots.Value().front().Data().profile;
+            return Result<PCGCpuCandidate>::Success(PCGCpuCandidate{plan, spatial.Id(), numericProfile, std::move(outputs).Value(),
+                                                                    admitted.Value().reservedBytes, std::move(roots).Value()});
         } catch (const std::bad_alloc &) {
             workspace->Cancel();
             return Reject<PCGCpuCandidate>(PCGErrors::CpuEvaluationCapacityExceeded);
