@@ -3,6 +3,7 @@
 #include "Horo/PCG/PCGCookedPlan.h"
 #include "Horo/PCG/PCGErrors.h"
 #include "PCGNodeCatalogInternal.h"
+#include "PCGPointFilteringInternal.h"
 #include "PCGPointGenerationInternal.h"
 #include "PCGPointIdentityInternal.h"
 
@@ -26,11 +27,38 @@ namespace Horo::PCG {
             return Result<void>::Failure(std::move(cause));
         }
 
-        Result<PCGBuiltInNodeDescriptor> Describe(PCGCpuNodeKind kind) {
+        /** @brief Selects only the closed settings schema; descriptor construction remains inert. */
+        PCGNodeSettingsSchema SettingsSchema(PCGCpuNodeKind kind) {
             using enum PCGCpuNodeKind;
             using enum PCGNodeSettingsSchema;
+            switch (kind) {
+                case SnapshotGrid:
+                    return SpatialGridIdentity;
+                case GridJitter:
+                    return GridJitterV1;
+                case Stratified:
+                    return StratifiedV1;
+                case PoissonScatter:
+                    return PoissonScatterV1;
+                case DensityRangeFilter:
+                    return DensityRangeFilterV1;
+                case BoundsFilter:
+                    return BoundsFilterV1;
+                case SlopeFilter:
+                    return SlopeFilterV1;
+                case DistanceFilter:
+                    return DistanceFilterV1;
+                case AttributeFilter:
+                    return AttributeFilterV1;
+                default:
+                    return None;
+            }
+        }
+
+        Result<PCGBuiltInNodeDescriptor> Describe(PCGCpuNodeKind kind) {
+            using enum PCGCpuNodeKind;
             const auto index = static_cast<std::size_t>(kind);
-            if (index >= 7)
+            if (index >= 12)
                 return Reject<PCGBuiltInNodeDescriptor>(PCGErrors::CpuEvaluationUnsupported);
             const auto type = NodeTypeId::Create(0x5043470206000001ULL + index);
             if (type.HasError())
@@ -44,24 +72,10 @@ namespace Horo::PCG {
             descriptor.kind = kind;
             descriptor.requiredCapabilities = capabilities.Value();
             const bool generation = kind == SnapshotGrid || kind == GridJitter || kind == Stratified || kind == PoissonScatter;
-            descriptor.determinism = generation ? PCGNodeDeterminism::ProfileDeterministic : PCGNodeDeterminism::PortableDeterministic;
-            switch (kind) {
-                case SnapshotGrid:
-                    descriptor.settings = SpatialGridIdentity;
-                    break;
-                case GridJitter:
-                    descriptor.settings = GridJitterV1;
-                    break;
-                case Stratified:
-                    descriptor.settings = StratifiedV1;
-                    break;
-                case PoissonScatter:
-                    descriptor.settings = PoissonScatterV1;
-                    break;
-                default:
-                    descriptor.settings = None;
-                    break;
-            }
+            descriptor.determinism = generation || kind == SlopeFilter || kind == DistanceFilter
+                                         ? PCGNodeDeterminism::ProfileDeterministic
+                                         : PCGNodeDeterminism::PortableDeterministic;
+            descriptor.settings = SettingsSchema(kind);
             descriptor.workPerSnapshotElement = generation ? 2 : 0;
             descriptor.workPerPoint = kind == DensityFilter || kind == Merge ? 2 : 1;
             if (!generation)
@@ -79,7 +93,7 @@ namespace Horo::PCG {
     /** @copydoc PCGCpuNodeType */
     Result<NodeTypeId> PCGCpuNodeType(PCGCpuNodeKind kind) {
         const auto index = static_cast<std::size_t>(kind);
-        if (index >= 7)
+        if (index >= 12)
             return Reject<NodeTypeId>(PCGErrors::CpuEvaluationUnsupported);
         return NodeTypeId::Create(0x5043470206000001ULL + index);
     }
@@ -145,6 +159,9 @@ namespace Horo::PCG {
         if (descriptor.settings == PCGNodeSettingsSchema::None) {
             if (!node.payload.empty())
                 return NodeFailure(PCGErrors::RegistryDescriptorInvalid, node.id);
+        } else if (detail::IsPointFilter(descriptor.kind)) {
+            if (const auto decoded = detail::DecodePointFilter(node); decoded.HasError())
+                return NodeFailure(PCGErrors::RegistryDescriptorInvalid, node.id);
         } else if (const auto decoded = detail::DecodePointGeneration(node); decoded.HasError()) {
             return NodeFailure(PCGErrors::RegistryDescriptorInvalid, node.id);
         }
@@ -159,6 +176,15 @@ namespace Horo::PCG {
         const auto descriptor = Find(node.type);
         if (descriptor.HasError())
             return Result<PCGNodeCost>::Failure(descriptor.ErrorValue());
+        if (detail::IsPointFilter(descriptor.Value()->kind)) {
+            const auto charge = detail::ChargePointFilter(descriptor.Value()->kind, maximumPoints, maximumSnapshotElements);
+            if (charge.HasError())
+                return Result<PCGNodeCost>::Failure(charge.ErrorValue());
+            const auto total = CheckedPCGAdd(charge.Value().pointVisits, descriptor.Value()->fixedWork);
+            if (total.HasError())
+                return Result<PCGNodeCost>::Failure(total.ErrorValue());
+            return Result<PCGNodeCost>::Success({total.Value(), charge.Value().snapshotElementVisits, charge.Value().scratchBytes});
+        }
         if (descriptor.Value()->settings != PCGNodeSettingsSchema::None) {
             const auto settings = detail::DecodePointGeneration(node);
             if (settings.HasError())
@@ -201,7 +227,7 @@ namespace Horo::PCG {
         auto projection = ProjectPCGCapabilities(capabilities.profile, capabilities.granted);
         if (projection.HasError())
             return Result<PCGNodeCatalog>::Failure(projection.ErrorValue());
-        if (maximumNodes == 0 || maximumNodes > 7)
+        if (maximumNodes == 0 || maximumNodes > 12)
             return Reject<PCGNodeCatalog>(PCGErrors::RegistryCapacityExceeded);
         try {
             auto state = std::make_shared<PCGNodeCatalogSnapshot::State>();

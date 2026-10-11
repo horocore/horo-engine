@@ -3,6 +3,7 @@
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/PCG/PCGErrors.h"
 #include "PCGCpuEvaluatorInternal.h"
+#include "PCGPointFilteringInternal.h"
 #include "PCGPointGenerationInternal.h"
 #include "PCGPointIdentityInternal.h"
 
@@ -255,11 +256,16 @@ namespace Horo::PCG {
             std::size_t total{};
             std::size_t snapshotTotal{};
             std::size_t scratch{};
-            const auto spatialCount = CheckedPCGAdd(spatial.Grids().size(), spatial.Volumes().size());
-            if (spatialCount.HasError())
-                return spatialCount;
+            const auto generationElements = CheckedPCGAdd(spatial.Grids().size(), spatial.Volumes().size());
+            if (generationElements.HasError())
+                return generationElements;
             for (std::size_t node = 0; node < plan.Nodes().size(); ++node) {
-                const auto cost = plan.Catalog().Cost(plan.Nodes()[node], points[node], spatialCount.Value());
+                const auto descriptor = plan.Catalog().Find(plan.Nodes()[node].type);
+                if (descriptor.HasError())
+                    return Result<std::size_t>::Failure(descriptor.ErrorValue());
+                const std::size_t elements =
+                    descriptor.Value()->kind == PCGCpuNodeKind::SlopeFilter ? spatial.Surfaces().size() : generationElements.Value();
+                const auto cost = plan.Catalog().Cost(plan.Nodes()[node], points[node], elements);
                 if (cost.HasError())
                     return Result<std::size_t>::Failure(cost.ErrorValue());
                 scratch = std::max(scratch, cost.Value().scratchBytes);
@@ -299,7 +305,23 @@ namespace Horo::PCG {
                 const auto descriptor = plan.Catalog().Find(node.type);
                 if (descriptor.HasError())
                     return Result<void>::Failure(descriptor.ErrorValue());
-                if (descriptor.Value()->settings != PCGNodeSettingsSchema::None) {
+                if (detail::IsPointFilter(descriptor.Value()->kind)) {
+                    const auto settings = detail::DecodePointFilter(node);
+                    if (settings.HasError())
+                        return Result<void>::Failure(settings.ErrorValue());
+                    if (const auto valid = detail::ValidatePointFilter(settings.Value(), *bound.schema, spatial); valid.HasError())
+                        return valid;
+                    for (const auto &route : plan.Routes()) {
+                        if (route.targetNode != bound.node)
+                            continue;
+                        const auto source = std::ranges::find_if(bounds, [&](const auto &candidate) {
+                            return candidate.node == route.sourceNode && candidate.pin == route.sourcePin;
+                        });
+                        if (source == bounds.end() || source->schema->Tier() != bound.schema->Tier() ||
+                            !std::ranges::equal(source->schema->Attributes(), bound.schema->Attributes()))
+                            return Reject<void>(PCGErrors::CpuEvaluationInvalid);
+                    }
+                } else if (descriptor.Value()->settings != PCGNodeSettingsSchema::None) {
                     const auto settings = detail::DecodePointGeneration(node);
                     if (settings.HasError())
                         return Result<void>::Failure(settings.ErrorValue());

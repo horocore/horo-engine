@@ -106,3 +106,14 @@ behavioral migration oracle.
 SnapshotGrid v1 also preserves its established missing-grid `CpuEvaluationInvalid`
 diagnostic. New generation source lookups report `SpatialInputInvalid`; the paired
 admission regression asserts both exact codes rather than flattening either error.
+
+## Point filtering extension (HORO-2018)
+
+The default/maximum catalog capacity grows from seven to twelve while all existing
+kind values, type IDs, payloads, and explicitly lowered capacities remain valid.
+Register the five new settings-backed kinds explicitly and encode their payloads
+with `EncodePCGPointFilterSettings`; the legacy Scalar-input DensityFilter remains
+unchanged. `Horo/PCG/PCGPointFiltering.h` is owned by HoroPCG and its staged public
+consumer. The [point filtering contract](../architecture/runtime/pcg-point-filtering-contract.md)
+defines schema bytes, exact typed comparison, terrain sampling, stable separation,
+work/byte admission and lifecycle semantics. No new dependency or backend is added.

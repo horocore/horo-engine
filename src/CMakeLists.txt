@@ -1455,6 +1455,8 @@ add_library(HoroPCG STATIC
         runtime/pcg/api/PCGIdentity.cpp
         runtime/pcg/api/PCGPointSchema.cpp
         runtime/pcg/api/PCGPointCloudWorkspace.cpp
+        runtime/pcg/api/PCGPointFiltering.cpp
+        runtime/pcg/api/PCGPointFilteringKernels.cpp
         runtime/pcg/api/PCGPointGeneration.cpp
         runtime/pcg/api/PCGPointGenerationAdmission.cpp
         runtime/pcg/api/PCGPointGenerationKernels.cpp
