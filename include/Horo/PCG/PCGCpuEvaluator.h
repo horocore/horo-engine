@@ -41,7 +41,8 @@ namespace Horo::PCG {
     /** @brief Complete finite resource and scheduling envelope for background or tooling evaluation.
      * @note Evaluation allocates bounded owned storage and synchronously joins structured child work; it is not frame-hot. */
     struct PCGCpuEvaluationLimits final {
-        std::size_t maximumScratchBytes{};   /**< Complete scratch ceiling including workspace, jobs, and provenance. */
+        std::size_t
+            maximumScratchBytes{}; /**< Complete scratch ceiling including workspace, jobs, provenance and transient node storage. */
         std::size_t maximumCandidateBytes{}; /**< Complete immutable candidate ceiling including retained provenance. */
         std::size_t retainedBytes{};         /**< Complete prior operation charge during replacement. */
         std::uint32_t workers{1};            /**< Stable partitions, 1 through 8; multiworker filter work uses jobs. */

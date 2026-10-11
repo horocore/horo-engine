@@ -64,3 +64,32 @@ def test_diagnostic_runs_only_after_owned_windows_build_without_hiding_failure()
     assert 'continue-on-error' not in diagnostic
     assert WORKFLOW.index('Build Debug') < WORKFLOW.index('Diagnose Windows Character input allocation timeout')
     assert WORKFLOW.index('Diagnose Windows Character input allocation timeout') < WORKFLOW.index('      - name: Test Debug')
+
+
+def test_pcg_diagnostic_reuses_bounded_reader_for_original_single_point_case() -> None:
+    diagnostic = WORKFLOW.split('      - name: Diagnose Windows PCG evaluator completion timeout', 1)[1].split('      - name:', 1)[0]
+    assert "runner.os == 'Windows' && steps.debug_build.outcome == 'success'" in diagnostic
+    assert "github.event_name == 'pull_request' && github.event.pull_request.number == 3403" in diagnostic
+    assert 'timeout-minutes: 3' in diagnostic
+    assert '-BinaryName HoroPCGTests.exe -EvidenceName pcg-evaluator-diagnostics' in diagnostic
+    assert "-TestCase 'HoroPCGTests::PCG catalog work cost is checked before executable allocation admission'" in diagnostic
+    assert 'continue-on-error' not in diagnostic
+    assert WORKFLOW.index('Build Debug') < WORKFLOW.index('Diagnose Windows PCG evaluator completion timeout')
+    assert WORKFLOW.index('Diagnose Windows PCG evaluator completion timeout') < WORKFLOW.index('      - name: Test Debug')
+    upload = WORKFLOW.split('      - name: Upload Windows PCG evaluator stack text', 1)[1].split('      - name:', 1)[0]
+    assert 'github.event.pull_request.number == 3403' in upload
+    assert 'retention-days: 3' in upload
+    assert '*' not in upload
+    assert '.dmp' not in upload
+    for artifact in ('status.txt', 'threads.txt', 'ctest.xml'):
+        assert f'build/ci/pcg-evaluator-diagnostics/{artifact}' in upload
+
+
+def test_reader_defaults_preserve_character_case_and_reject_path_traversal() -> None:
+    assert "[ValidatePattern('^Horo[A-Za-z0-9]+Tests\\.exe$')]" in SCRIPT
+    assert "[ValidatePattern('^Horo[A-Za-z0-9]+Tests::[^\\r\\n]+$')]" in SCRIPT
+    assert "[ValidatePattern('^[a-z][a-z0-9-]*$')]" in SCRIPT
+    assert "$BinaryName = 'HoroCharacterInputTests.exe'" in SCRIPT
+    assert "$EvidenceName = 'character-input-diagnostics'" in SCRIPT
+    assert "$TestCase = 'HoroCharacterInputTests::Load-time allocation failure preserves caller grant and successful motion path does not allocate'" in SCRIPT
+    assert '$case = $TestCase' in SCRIPT

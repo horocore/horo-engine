@@ -371,4 +371,25 @@ namespace Horo::PCG::PCGErrors {
                                                        .defaultSeverity = ErrorSeverity::Critical,
                                                        .summary = "PCG async operation identity space is exhausted.",
                                                        .remediationHint = "Retire this coordinator without reusing an operation identity."};
+    const ErrorCodeDescriptor
+        GenerationDensityImpossible{.domain = PcgDomain,
+                                    .code = ErrorCode{"pcg.generation.density_impossible"},
+                                    .defaultSeverity = ErrorSeverity::Error,
+                                    .summary = "The requested point count cannot satisfy the minimum separation in the captured domain.",
+                                    .remediationHint = "Reduce the count or separation, or enlarge the source volume."};
+    const ErrorCodeDescriptor
+        GenerationAttemptsExhausted{.domain = PcgDomain,
+                                    .code = ErrorCode{"pcg.generation.attempts_exhausted"},
+                                    .defaultSeverity = ErrorSeverity::Error,
+                                    .summary = "The bounded scatter attempt budget ended before producing the exact point count.",
+                                    .remediationHint =
+                                        "Increase the admitted attempt budget or reduce count or separation; partial output is discarded."};
+    const ErrorCodeDescriptor
+        GenerationIdentityInvalid{.domain = PcgDomain,
+                                  .code = ErrorCode{"pcg.generation.identity_invalid"},
+                                  .defaultSeverity = ErrorSeverity::Error,
+                                  .summary =
+                                      "The generated semantic sample identity column is absent, incompatible or contains duplicates.",
+                                  .remediationHint =
+                                      "Use the unsigned pcg.source_sample_id schema and preserve distinct source identities."};
 }  // namespace Horo::PCG::PCGErrors

@@ -140,4 +140,10 @@ namespace Horo::PCG::PCGErrors {
     extern const ErrorCodeDescriptor AsyncPublicationFailed;
     /** @brief A never-reused async operation identity cannot advance without wraparound. */
     extern const ErrorCodeDescriptor AsyncGenerationExhausted;
+    /** @brief The requested minimum separation provably cannot fit the exact point count. */
+    extern const ErrorCodeDescriptor GenerationDensityImpossible;
+    /** @brief Bounded scatter attempts ended before the exact point count; no partial result is published. */
+    extern const ErrorCodeDescriptor GenerationAttemptsExhausted;
+    /** @brief A generated semantic sample identity is absent, mismatched or repeated. */
+    extern const ErrorCodeDescriptor GenerationIdentityInvalid;
 }  // namespace Horo::PCG::PCGErrors

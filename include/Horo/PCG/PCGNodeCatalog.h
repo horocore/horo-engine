@@ -21,7 +21,10 @@ namespace Horo::PCG {
         SnapshotGrid = 0,
         DensityFilter = 1,
         Merge = 2,
-        Forward = 3
+        Forward = 3,
+        GridJitter = 4,
+        Stratified = 5,
+        PoissonScatter = 6
     };
     /** @brief Returns a stable semantic type ID for one supported built-in node.
      * @param kind Exact closed built-in operation.
@@ -31,7 +34,10 @@ namespace Horo::PCG {
     /** @brief Exact schema of the opaque authored settings payload. */
     enum class PCGNodeSettingsSchema : std::uint8_t {
         None,
-        SpatialGridIdentity
+        SpatialGridIdentity,
+        GridJitterV1,
+        StratifiedV1,
+        PoissonScatterV1
     };
 
     /** @brief One semantic pin slot; authored pin identities remain graph-owned. */
@@ -63,6 +69,7 @@ namespace Horo::PCG {
     struct PCGNodeCost final {
         std::size_t pointVisits{};
         std::size_t snapshotElementVisits{};
+        std::size_t scratchBytes{}; /**< Complete bounded transient kernel storage, separate from point columns. */
     };
 
     /** @brief Immutable owning node catalog, safe through replacement and owner shutdown. */
@@ -86,10 +93,11 @@ namespace Horo::PCG {
         /** @brief Validates exact cooked schema, version and product requirements. @param node Detached node.
          * @return Success or a stable node-located diagnostic; never invokes executable code. */
         [[nodiscard]] Result<void> Validate(const PCGCookedNode &node) const;
-        /** @brief Computes checked declared work before execution. @param type Stable type.
+        /** @brief Computes checked declared work before execution. @param node Exact validated cooked settings and descriptor.
          * @param maximumPoints Admitted input/output point ceiling.
-         * @param maximumSnapshotElements Exact admitted spatial grid count for lookup. @return Bounded work or overflow failure. */
-        [[nodiscard]] Result<PCGNodeCost> Cost(NodeTypeId type, std::size_t maximumPoints, std::size_t maximumSnapshotElements) const;
+         * @param maximumSnapshotElements Complete admitted grid/volume lookup ceiling. @return Bounded work or overflow failure. */
+        [[nodiscard]] Result<PCGNodeCost> Cost(const PCGCookedNode &node, std::size_t maximumPoints,
+                                               std::size_t maximumSnapshotElements) const;
 
     private:
         friend class PCGNodeCatalog;
@@ -109,8 +117,8 @@ namespace Horo::PCG {
         PCGNodeCatalog(const PCGNodeCatalog &) = delete;
         PCGNodeCatalog &operator=(const PCGNodeCatalog &) = delete;
         /** @brief Creates an empty explicit product composition. @param capabilities Validated exact host grant.
-         * @param maximumNodes Lowered built-in capacity, 1 through 4. @return Owner or typed invalid failure. */
-        [[nodiscard]] static Result<PCGNodeCatalog> Create(PCGCapabilityProjection capabilities, std::size_t maximumNodes = 4);
+         * @param maximumNodes Lowered built-in capacity, 1 through 7. @return Owner or typed invalid failure. */
+        [[nodiscard]] static Result<PCGNodeCatalog> Create(PCGCapabilityProjection capabilities, std::size_t maximumNodes = 7);
         /** @brief Registers or explicitly replaces one built-in. @param kind Repository-built implementation.
          * @param replace True only when replacing an existing entry. @return New generation or typed duplicate/unavailable failure. */
         [[nodiscard]] Result<std::uint64_t> Register(PCGCpuNodeKind kind, bool replace = false);

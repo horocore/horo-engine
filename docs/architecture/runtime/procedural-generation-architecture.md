@@ -67,7 +67,8 @@ profile determinism and an exact nonzero numeric-profile fingerprint. The host m
 grant at least one execution capability (offline bake, preview, runtime or hybrid),
 as well as every graph requirement; validation-only grants cannot produce candidates.
 
-`PCGNodeCatalog` is the explicit composition owner for these four built-ins.
+`PCGNodeCatalog` is the explicit composition owner for the closed built-in operations. The point-generation extension admits seven
+operations with explicit host registration; existing semantic IDs remain unchanged.
 Creating it produces an empty catalog; the host registers each selected
 `PCGCpuNodeKind` before capturing a `PCGNodeCatalogSnapshot`. Descriptors contain
 stable type IDs, exact source/runtime/migration versions, semantic pin slots,
@@ -716,3 +717,6 @@ incoming edge to the same input is rejected as ambiguous routing.
 - [World Streaming Architecture](./world-streaming-architecture.md): PCG scope per streaming cell
 - [Navigation And AI Architecture](./navigation-and-ai-architecture.md): NavMesh re-baking after PCG
 - [Editor Document Model](../editor/editor-document-model.md): PCG graph asset editing
+
+The generation settings, semantic point identity and bounded scatter admission contract
+is owned by [Point Generation Contract](pcg-point-generation-contract.md).
