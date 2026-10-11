@@ -1427,6 +1427,7 @@ target_compile_features(HoroAnimationApi PUBLIC cxx_std_20)
 target_link_libraries(HoroAnimationApi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
 
 add_library(HoroAnimationRuntime STATIC
+        runtime/animation/runtime/AnimationParameterCurve.cpp
         runtime/animation/runtime/AnimationGraphInstance.cpp
         runtime/animation/runtime/AnimationGraphExecution.cpp)
 add_library(HoroEngine::AnimationRuntime ALIAS HoroAnimationRuntime)

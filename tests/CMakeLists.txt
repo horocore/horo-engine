@@ -836,6 +836,7 @@ add_executable(HoroAnimationApiTests
         unit/runtime/animation/AnimationGraphTests.cpp
         unit/runtime/animation/AnimationGraphBindingTests.cpp
         unit/runtime/animation/AnimationGraphInstanceTests.cpp
+        unit/runtime/animation/AnimationParameterTests.cpp
         unit/runtime/animation/AnimationGraphSourceTests.cpp
         unit/runtime/animation/AnimationCompressionTests.cpp
         unit/runtime/animation/AnimationClipTests.cpp

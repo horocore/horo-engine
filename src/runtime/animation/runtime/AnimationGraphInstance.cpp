@@ -79,6 +79,10 @@ namespace Horo::Animation {
         /** @brief Charges complete per-tick pose/key-search work after exact clip bindings have been admitted. */
         GraphInstanceFailure AdmitClipWork(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
             std::uint64_t operations = 0;
+            for (const auto &curve : assets.curves)
+                operations += 1 + std::bit_width(curve->Keys().size());
+            if (operations > context.maximumJointOperations)
+                return GraphInstanceFailure::LimitExceeded;
             for (const auto &occurrence : assets.program->Occurrences()) {
                 const auto &instruction =
                     assets.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex];
@@ -109,6 +113,29 @@ namespace Horo::Animation {
                    limits.maximumBoundaryCrossings <= AnimationClipHardLimits::BoundaryCrossings;
         }
 
+        /** @brief Admits unique float curve bindings and their bounded binary-search work before allocation. */
+        GraphInstanceFailure AdmitCurves(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
+            const auto declarations = assets.program->Parameters();
+            if (assets.curves.size() > declarations.size())
+                return GraphInstanceFailure::LimitExceeded;
+            std::uint64_t work = 0;
+            for (std::size_t index = 0; index < assets.curves.size(); ++index) {
+                const auto &curve = assets.curves[index];
+                if (!curve)
+                    return GraphInstanceFailure::BindingMismatch;
+                const auto found = std::ranges::lower_bound(declarations, curve->Parameter(), {}, &GraphParameter::id);
+                if (found == declarations.end() || found->id != curve->Parameter())
+                    return GraphInstanceFailure::BindingMismatch;
+                if (found->type != GraphValueType::Float)
+                    return GraphInstanceFailure::TypeMismatch;
+                for (std::size_t earlier = 0; earlier < index; ++earlier)
+                    if (assets.curves[earlier]->Parameter() == curve->Parameter())
+                        return GraphInstanceFailure::Malformed;
+                work += 1 + std::bit_width(curve->Keys().size());
+            }
+            return work > context.maximumJointOperations ? GraphInstanceFailure::LimitExceeded : GraphInstanceFailure::None;
+        }
+
         /** @brief Charges every retained workspace and both transaction/publication buffers without overflow. */
         GraphInstanceFailure AdmitStorage(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
             const auto &memory = assets.program->Memory();
@@ -121,8 +148,9 @@ namespace Horo::Animation {
             };
             if (!charge(memory.poseTransforms + 2ULL * assets.program->SkeletonBinding().joints, sizeof(Math::Transform)) ||
                 !charge(memory.clipPlayers, 2ULL * sizeof(Detail::GraphPlayerState)) ||
-                !charge(memory.parameters, 2ULL * sizeof(GraphParameterValue)) ||
-                !charge(assets.clips.size(), sizeof(std::shared_ptr<const AnimationClipAsset>)))
+                !charge(memory.parameters, 4ULL * sizeof(GraphParameterValue) + sizeof(std::uint8_t)) ||
+                !charge(assets.clips.size(), sizeof(std::shared_ptr<const AnimationClipAsset>)) ||
+                !charge(assets.curves.size(), sizeof(std::shared_ptr<const AnimationParameterCurve>) + sizeof(std::size_t)))
                 return GraphInstanceFailure::LimitExceeded;
             for (std::size_t type = 1; type < memory.workingSlots.size(); ++type)
                 if (!charge(memory.workingSlots[type], sizeof(GraphParameterValue)))
@@ -154,6 +182,8 @@ namespace Horo::Animation {
             if (const auto failure = AdmitStorage(assets, context); failure != None)
                 return failure;
             if (const auto failure = AdmitClipBindings(assets, context.clipLimits); failure != None)
+                return failure;
+            if (const auto failure = AdmitCurves(assets, context); failure != None)
                 return failure;
             return AdmitClipWork(assets, context);
         }
@@ -206,6 +236,16 @@ namespace Horo::Animation {
             state->candidate.players.resize(memory.clipPlayers);
             state->parameters.resize(memory.parameters);
             state->candidate.parameters.resize(memory.parameters);
+            state->queuedTriggers.resize(memory.parameters);
+            for (auto &parameters : state->publishedParameters)
+                parameters.resize(memory.parameters);
+            state->curves.assign(assets.curves.begin(), assets.curves.end());
+            state->curveParameters.reserve(assets.curves.size());
+            for (const auto &curve : assets.curves) {
+                const auto declarations = state->program->Parameters();
+                const auto found = std::ranges::lower_bound(declarations, curve->Parameter(), {}, &GraphParameter::id);
+                state->curveParameters.push_back(static_cast<std::size_t>(found - declarations.begin()));
+            }
             for (auto &pose : state->publishedPoses)
                 pose.resize(state->program->SkeletonBinding().joints);
             if (context.cancellation.IsCancellationRequested())
@@ -282,6 +322,8 @@ namespace Horo::Animation {
                                 {slot, static_cast<std::uint32_t>(generation)},
                                 PoseGeneration::Create(generation).Value()};
         std::ranges::copy(state_->Pose(state_->program->OutputSlot()), state_->publishedPoses[slot].begin());
+        std::ranges::copy(state_->candidate.parameters, state_->publishedParameters[slot].begin());
+        std::ranges::fill(state_->queuedTriggers, 0);
         state_->publishedHandles[slot] = handle;
         state_->players.swap(state_->candidate.players);
         state_->parameters.swap(state_->candidate.parameters);
@@ -298,6 +340,44 @@ namespace Horo::Animation {
             return owner;
         state_->candidate.tick = {};
         state_->candidate.cancellation = {};
+        return {};
+    }
+
+    /** @copydoc AnimationGraphInstance::QueueTrigger */
+    GraphInstanceOutcome AnimationGraphInstance::QueueTrigger(const GraphParameterId parameter) {
+        if (const auto owner = Owner(state_.get()); owner.HasError())
+            return owner;
+        if (state_->closed)
+            return {GraphInstanceFailure::AdmissionRejected};
+        if (state_->candidate.tick.IsValid())
+            return {GraphInstanceFailure::StateInvalid};
+        if (state_->ownerCancellation.IsCancellationRequested())
+            return {GraphInstanceFailure::Cancelled};
+        const auto declarations = state_->program->Parameters();
+        const auto found = std::ranges::lower_bound(declarations, parameter, {}, &GraphParameter::id);
+        if (!parameter.IsValid() || found == declarations.end() || found->id != parameter)
+            return {GraphInstanceFailure::BindingMismatch};
+        if (found->type != GraphValueType::Trigger)
+            return {GraphInstanceFailure::TypeMismatch};
+        state_->queuedTriggers[static_cast<std::size_t>(found - declarations.begin())] = 1;
+        return {};
+    }
+
+    /** @copydoc AnimationGraphInstance::CopyParameters */
+    GraphInstanceOutcome AnimationGraphInstance::CopyParameters(const PoseHandle &publication,
+                                                                const std::span<GraphParameterInput> output) const {
+        if (const auto owner = Owner(state_.get()); owner.HasError())
+            return owner;
+        if (!publication.IsValid())
+            return {GraphInstanceFailure::HandleMalformed};
+        if (publication.instance != state_->identity || publication.slot.index >= state_->publishedHandles.size() ||
+            publication != state_->publishedHandles[publication.slot.index])
+            return {GraphInstanceFailure::HandleStale};
+        const auto declarations = state_->program->Parameters();
+        if (output.size() != declarations.size())
+            return {GraphInstanceFailure::LimitExceeded};
+        for (std::size_t index = 0; index < output.size(); ++index)
+            output[index] = {declarations[index].id, state_->publishedParameters[publication.slot.index][index]};
         return {};
     }
 
@@ -328,6 +408,7 @@ namespace Horo::Animation {
         if (const auto owner = Owner(state_.get()); owner.HasError())
             return owner;
         state_->closed = true;
+        std::ranges::fill(state_->queuedTriggers, 0);
         state_->candidate.tick = {};
         state_->candidate.cancellation = {};
         return {};

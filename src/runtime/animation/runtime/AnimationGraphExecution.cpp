@@ -45,6 +45,11 @@ namespace Horo::Animation::Detail {
                 return {GraphInstanceFailure::LimitExceeded};
             for (std::size_t index = 0; index < declarations.size(); ++index)
                 state.candidate.parameters[index] = declarations[index].defaultValue;
+            for (std::size_t index = 0; index < state.curves.size(); ++index)
+                state.candidate.parameters[state.curveParameters[index]] = state.curves[index]->Sample(input.curveTime);
+            for (std::size_t index = 0; index < declarations.size(); ++index)
+                if (state.queuedTriggers[index] != 0)
+                    state.candidate.parameters[index] = true;
             for (std::size_t index = 0; index < input.parameters.size(); ++index) {
                 const auto &parameter = input.parameters[index];
                 const auto found = std::ranges::lower_bound(declarations, parameter.id, {}, &GraphParameter::id);
@@ -55,7 +60,10 @@ namespace Horo::Animation::Detail {
                 for (std::size_t earlier = 0; earlier < index; ++earlier)
                     if (input.parameters[earlier].id == parameter.id)
                         return {GraphInstanceFailure::Malformed};
-                state.candidate.parameters[static_cast<std::size_t>(found - declarations.begin())] = parameter.value;
+                const auto destination = static_cast<std::size_t>(found - declarations.begin());
+                // False invocation input cannot erase an already accepted queued trigger.
+                if (found->type != GraphValueType::Trigger || state.queuedTriggers[destination] == 0)
+                    state.candidate.parameters[destination] = parameter.value;
             }
             return {};
         }
