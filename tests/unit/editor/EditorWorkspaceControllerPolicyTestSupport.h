@@ -124,6 +124,18 @@ namespace HoroEditorWorkspaceControllerPolicyTests {
             return controller_.SourceDocuments();
         }
 
+        [[nodiscard]] const auto &SourceSaveOutcome() const noexcept {
+            return controller_.SourceSaveOutcome();
+        }
+
+        [[nodiscard]] const auto &SourceSaveAllOutcome() const noexcept {
+            return controller_.SourceSaveAllOutcome();
+        }
+
+        [[nodiscard]] const auto &SourceCloseOutcome() const noexcept {
+            return controller_.SourceCloseOutcome();
+        }
+
         [[nodiscard]] Horo::Editor::EditorDataBus &DataBus() noexcept {
             return controller_.DataBus();
         }

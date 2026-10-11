@@ -14,6 +14,8 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -219,12 +221,97 @@ namespace Horo::Animation {
         [[nodiscard]] constexpr auto operator<=>(const AnimationClipSample &) const noexcept = default;
     };
 
+    /** @brief Allocation-free clip failure vocabulary; diagnostic codes are projected outside the hot path. */
+    enum class AnimationClipFailure : std::uint8_t {
+        None,
+        Cancelled,
+        AdmissionRejected,
+        IdentityInvalid,
+        LimitExceeded,
+        Malformed,
+        Unsupported,
+        TimeOverflow,
+        SkeletonMismatch,
+        BindingStale,
+        ReferencePoseMismatch
+    };
+
+    /** @brief Immutable failure evidence; detail refers only to library-owned string literals. */
+    struct AnimationClipFailureInfo final {
+        AnimationClipFailure failure{AnimationClipFailure::None};
+        std::string_view detail{};
+    };
+
+    /** @brief Clip-specific bounded result that owns no diagnostic string or allocation. */
+    template <typename T> struct AnimationClipOutcome final {
+        static_assert(std::is_trivially_copyable_v<T>);
+        T value{};
+        AnimationClipFailureInfo failure{};
+
+        [[nodiscard]] static AnimationClipOutcome Success(T value) noexcept {
+            return {std::move(value), {}};
+        }
+
+        [[nodiscard]] static AnimationClipOutcome Failure(AnimationClipFailureInfo failure) noexcept {
+            return {{}, failure};
+        }
+
+        [[nodiscard]] bool HasValue() const noexcept {
+            return failure.failure == AnimationClipFailure::None;
+        }
+
+        [[nodiscard]] bool HasError() const noexcept {
+            return !HasValue();
+        }
+
+        [[nodiscard]] const T &Value() const noexcept {
+            return value;
+        }
+
+        [[nodiscard]] AnimationClipFailureInfo ErrorValue() const noexcept {
+            return failure;
+        }
+    };
+
+    /** @brief Allocation-free validation outcome used by the same prepared clip validators. */
+    template <> struct AnimationClipOutcome<void> final {
+        AnimationClipFailureInfo failure{};
+
+        [[nodiscard]] static AnimationClipOutcome Success() noexcept {
+            return {};
+        }
+
+        [[nodiscard]] static AnimationClipOutcome Failure(AnimationClipFailureInfo failure) noexcept {
+            return {failure};
+        }
+
+        [[nodiscard]] bool HasValue() const noexcept {
+            return failure.failure == AnimationClipFailure::None;
+        }
+
+        [[nodiscard]] bool HasError() const noexcept {
+            return !HasValue();
+        }
+
+        [[nodiscard]] AnimationClipFailureInfo ErrorValue() const noexcept {
+            return failure;
+        }
+    };
+
+    /** @brief Converts typed hot failure to the original owned diagnostic at a control boundary.
+     * @param failure Library-owned typed failure and literal context.
+     * @return Original stable code, domain, severity and diagnostic context; may allocate.
+     * @pre failure.failure is not None.
+     */
+    [[nodiscard]] Error DescribeAnimationClipFailure(AnimationClipFailureInfo failure);
+
     /**
      * @brief Immutable validated animation clip with canonical tracks and pre-resolved skeleton indices.
      *
-     * Create is a load/cook/control-boundary transaction and may allocate. Traverse and Sample are
-     * history-independent, thread-safe, bounded, allocation-free, and perform no blocking I/O while
-     * this object, its immutable skeleton publication, and caller-provided spans remain alive.
+     * Create is a load/cook/control-boundary transaction and may allocate. Prepared operations are
+     * history-independent, thread-safe, bounded, allocation-free on all outcomes, and perform no blocking I/O while
+     * this object, its immutable skeleton publication, and caller-provided spans remain alive. Legacy
+     * Result wrappers use the same kernels and may allocate only when projecting failure diagnostics.
      */
     class AnimationClipAsset final {
     public:
@@ -265,6 +352,25 @@ namespace Horo::Animation {
          * @post Success allocates nothing and writes every output joint; failure performs no output writes.
          */
         [[nodiscard]] Result<AnimationClipSample> Sample(AnimationTime time, const AnimationClipSampleContext &context) const;
+
+        /** @brief Executes the same exact traversal with allocation-free failure evidence.
+         * @param cursor Canonical current cursor.
+         * @param delta Exact signed player-local traversal amount.
+         * @param limits Captured finite crossing policy.
+         * @param admission Captured lifecycle state.
+         * @return Complete candidate traversal or typed failure; no state mutation or allocation.
+         */
+        [[nodiscard]] AnimationClipOutcome<AnimationClipTraversal> TraversePrepared(
+            AnimationClipCursor cursor, AnimationTimeDelta delta, const AnimationClipLimits &limits = {},
+            AnimationClipAdmissionState admission = AnimationClipAdmissionState::Accepting) const;
+
+        /** @brief Executes the same pose sample with allocation-free failure evidence.
+         * @param time Exact in-range clip time.
+         * @param context Exact immutable dependencies and caller-owned pose spans.
+         * @return Complete sample or typed failure before writes; allocates nothing.
+         */
+        [[nodiscard]] AnimationClipOutcome<AnimationClipSample> SamplePrepared(AnimationTime time,
+                                                                               const AnimationClipSampleContext &context) const;
 
     private:
         AnimationClipAsset(AnimationClipData data, std::vector<std::uint32_t> jointIndices,

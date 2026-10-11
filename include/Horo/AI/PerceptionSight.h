@@ -4,6 +4,7 @@
  * @brief Scene-owned bounded sight evaluation through canonical Physics query batches.
  */
 
+#include "Horo/AI/PerceptionMemory.h"
 #include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/Physics/PhysicsQueryEventCapability.h"
 
@@ -78,7 +79,19 @@ namespace Horo::AI {
         std::uint64_t spatialRevision{};
         bool pending{};
         bool candidatesTruncated{};
+        Runtime::EntityRef listener; /**< Exact listener that produced this result. */
     };
+
+    /** @brief Stages only current, Gameplay-admitted completed sight observations into memory at PerceptionSensePoll.
+     * @param scene Fresh current Scene view. @param filtering Current spatial/filter publication.
+     * @param result Completed sight result with its exact publication fence. @param listenerType Memory descriptor identity.
+     * @param memory Recipient memory. @return Success or typed stale, invalid or memory failure.
+     * @details Unknown evidence preserves memory; confirmed visible samples refresh last-known facts and confirmed loss marks lost.
+     */
+    [[nodiscard]] Result<void> StagePerceptionSightAtSensePoll(const Runtime::RuntimeSceneView &scene,
+                                                               const PerceptionSpatialSnapshot &filtering,
+                                                               const PerceptionSightResult &result, PerceptionListenerTypeId listenerType,
+                                                               AIPerceptionMemory &memory);
 
     /**
      * @brief Owner-thread sight kernel with bounded transient history and one owned in-flight batch.

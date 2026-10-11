@@ -1,12 +1,17 @@
-param([Parameter(Mandatory = $true)][string]$BuildDirectory)
+param(
+  [Parameter(Mandatory = $true)][string]$BuildDirectory,
+  [ValidatePattern('^Horo[A-Za-z0-9]+Tests\.exe$')][string]$BinaryName = 'HoroCharacterInputTests.exe',
+  [ValidatePattern('^Horo[A-Za-z0-9]+Tests::[^\r\n]+$')][string]$TestCase = 'HoroCharacterInputTests::Load-time allocation failure preserves caller grant and successful motion path does not allocate',
+  [ValidatePattern('^[a-z][a-z0-9-]*$')][string]$EvidenceName = 'character-input-diagnostics'
+)
 
 $ErrorActionPreference = 'Stop'
 $build = (Resolve-Path -LiteralPath $BuildDirectory).Path
-$binary = Join-Path $build 'tests\HoroCharacterInputTests.exe'
-$evidence = Join-Path $build 'character-input-diagnostics'
+$binary = Join-Path (Join-Path $build 'tests') $BinaryName
+$evidence = Join-Path $build $EvidenceName
 New-Item -ItemType Directory -Force -Path $evidence | Out-Null
 $status = Join-Path $evidence 'status.txt'
-$case = 'HoroCharacterInputTests::Load-time allocation failure preserves caller grant and successful motion path does not allocate'
+$case = $TestCase
 
 # Inspect only the installed x64 SDK debugger. Never fetch tools or modify PATH.
 $kits = "${env:ProgramFiles(x86)}\Windows Kits\10"

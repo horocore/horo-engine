@@ -109,6 +109,7 @@ namespace Horo::AI {
             return Result<void>::Failure(Failure(AIErrors::BlackboardBatchInvalid));
         if (const auto duplicate = std::ranges::find(writes_, write.key, &BlackboardWrite::key); duplicate != writes_.end()) {
             duplicate->value = std::move(write.value);
+            duplicate->authorization = std::move(write.authorization);
             return Result<void>::Success();
         }
         if (writes_.size() >= MaximumBlackboardWritesPerBatch)
@@ -135,6 +136,8 @@ namespace Horo::AI {
         const std::size_t index = FindKey(*schema_, key);
         if (index == schema_->Keys().size())
             return Result<std::optional<BlackboardValue>>::Failure(Failure(AIErrors::BlackboardUnknownValueRejected));
+        if (authorizations_[index] && !authorizations_[index]->IsCurrent())
+            return Result<std::optional<BlackboardValue>>::Failure(Failure(AIErrors::BlackboardInstanceStale));
         return Result<std::optional<BlackboardValue>>::Success(values_[index]);
     }
 
@@ -163,7 +166,8 @@ namespace Horo::AI {
         if (!active_)
             return Result<BlackboardSnapshot>::Failure(Failure(AIErrors::BlackboardInstanceStale));
         try {
-            return Result<BlackboardSnapshot>::Success(BlackboardSnapshot{binding_, schema_, values_, revision_, generationActive_});
+            return Result<BlackboardSnapshot>::Success(
+                BlackboardSnapshot{binding_, schema_, values_, revision_, generationActive_, authorizations_});
         } catch (const std::bad_alloc &) {
             return Result<BlackboardSnapshot>::Failure(Failure(AIErrors::BlackboardStorageUnavailable));
         }
@@ -251,17 +255,24 @@ namespace Horo::AI {
             return Result<BlackboardCommitResult>::Failure(Failure(AIErrors::BlackboardInstanceStale));
         std::ranges::sort(batch.writes_, {}, &BlackboardWrite::key);
         scratch_ = values_;
+        authorizationScratch_ = authorizations_;
         BlackboardCommitResult result{.revision = revision_};
         for (const auto &write : batch.Writes()) {
+            if (write.authorization && !write.authorization->IsCurrent())
+                return Result<BlackboardCommitResult>::Failure(Failure(AIErrors::BlackboardInstanceStale));
             auto applied = ApplyWrite(*schema_, scratch_, write);
             if (applied.HasError())
                 return Result<BlackboardCommitResult>::Failure(applied.ErrorValue());
-            if (applied.Value())
+            const auto index = FindKey(*schema_, write.key);
+            if (applied.Value() || authorizationScratch_[index] != write.authorization)
                 result.changedKeys[result.changedKeyCount++] = write.key;
+            authorizationScratch_[index] = write.authorization;
         }
         auto published = PublishChangedValues(values_, scratch_, std::move(result), revision_);
-        if (published.HasValue())
+        if (published.HasValue()) {
+            authorizations_.swap(authorizationScratch_);
             PublishNotification(published.Value());
+        }
         return published;
     }
 
@@ -280,8 +291,17 @@ namespace Horo::AI {
         try {
             auto replacementGeneration = std::make_shared<std::atomic_bool>(true);
             auto replacementScratch = replacement.Value();
+            std::vector<std::shared_ptr<const BlackboardValueAuthorization>> replacementAuthorizations(replacementSchema->Keys().size());
+            for (std::size_t index = 0; index < replacementSchema->Keys().size(); ++index) {
+                const auto oldIndex = FindKey(*schema_, replacementSchema->Keys()[index].key);
+                if (oldIndex < authorizations_.size())
+                    replacementAuthorizations[index] = authorizations_[oldIndex];
+            }
+            auto replacementAuthorizationScratch = replacementAuthorizations;
             values_ = std::move(replacement).Value();
             scratch_ = std::move(replacementScratch);
+            authorizations_ = std::move(replacementAuthorizations);
+            authorizationScratch_ = std::move(replacementAuthorizationScratch);
             schema_ = std::move(replacementSchema);
             InvalidateObservers();
             binding_ = replacementBinding;
@@ -305,13 +325,16 @@ namespace Horo::AI {
             return Result<BlackboardCommitResult>::Failure(defaults.ErrorValue());
         BlackboardCommitResult result{.revision = revision_};
         for (std::size_t index = 0; index < schema_->Keys().size(); ++index) {
-            if (values_[index] != defaults.Value()[index])
+            if (values_[index] != defaults.Value()[index] || authorizations_[index])
                 result.changedKeys[result.changedKeyCount++] = schema_->Keys()[index].key;
         }
         auto candidateValues = std::move(defaults).Value();
         auto published = PublishChangedValues(values_, candidateValues, std::move(result), revision_);
-        if (published.HasValue())
+        if (published.HasValue()) {
+            std::ranges::fill(authorizations_, nullptr);
+            std::ranges::fill(authorizationScratch_, nullptr);
             PublishNotification(published.Value());
+        }
         return published;
     }
 
@@ -327,6 +350,8 @@ namespace Horo::AI {
         schema_.reset();
         values_.clear();
         scratch_.clear();
+        authorizations_.clear();
+        authorizationScratch_.clear();
         return Result<void>::Success();
     }
 

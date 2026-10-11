@@ -3,6 +3,7 @@
 #include "Horo/AI/AIErrors.h"
 
 #include <cmath>
+#include <type_traits>
 
 namespace Horo::Gameplay {
     namespace {
@@ -47,15 +48,17 @@ namespace Horo::Gameplay {
     PerceptionEventSource::PerceptionEventSource(const Runtime::RuntimeScene &scene, const AI::AiSceneRuntime &ai,
                                                  const Network::NetworkModeComposition &host, const Network::NetworkModeRoleView &role,
                                                  AI::AiSceneActivationBinding binding, const AI::PerceptionDescriptorRegistry &registry,
+                                                 const AI::PerceptionSpatialBroadphase &filtering,
                                                  const std::span<const CommittedPerceptionDelivery> deliveries)
-        : scene_(&scene), ai_(&ai), host_(&host), role_(role), binding_(binding), registry_(&registry),
-          deliveries_(deliveries.begin(), deliveries.end()) {}
+        : scene_(&scene), ai_(&ai), host_(&host), role_(role), binding_(binding), registry_(&registry), filtering_(&filtering),
+          filterSnapshot_(filtering.Current()), deliveries_(deliveries.begin(), deliveries.end()) {}
 
     /** @copydoc PerceptionEventSource::Capture */
     Result<PerceptionEventSource> PerceptionEventSource::Capture(const Runtime::RuntimeScene &scene, const AI::AiSceneRuntime &ai,
                                                                  const Network::NetworkModeComposition &host,
                                                                  const Network::NetworkModeWorldKind world,
                                                                  const AI::PerceptionDescriptorRegistry &registry,
+                                                                 const AI::PerceptionSpatialBroadphase &filtering,
                                                                  const std::span<const CommittedPerceptionDelivery> deliveries) {
         if (deliveries.size() > MaximumDeliveries)
             return Result<PerceptionEventSource>::Failure(MakeError(AI::AIErrors::PerceptionEventInvalid));
@@ -65,14 +68,18 @@ namespace Horo::Gameplay {
         const auto binding = ai.ActiveBinding();
         if (binding.HasError() || binding.Value().scene != role.Value().scene)
             return Result<PerceptionEventSource>::Failure(MakeError(AI::AIErrors::PerceptionEventStale));
+        if (!filtering.Current() || filtering.Current()->Scene() != binding.Value().scene)
+            return Result<PerceptionEventSource>::Failure(MakeError(AI::AIErrors::PerceptionEventStale));
         return Result<PerceptionEventSource>::Success(
-            PerceptionEventSource{scene, ai, host, role.Value(), binding.Value(), registry, deliveries});
+            PerceptionEventSource{scene, ai, host, role.Value(), binding.Value(), registry, filtering, deliveries});
     }
 
     /** @copydoc PerceptionEventSource::ValidateCurrent */
     Result<void> PerceptionEventSource::ValidateCurrent() const {
         if (closed_ || host_->ValidateRole(role_).HasError())
             return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventUnauthorized));
+        if (filtering_->Current() != filterSnapshot_)
+            return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventStale));
         if (const auto binding = ai_->ActiveBinding();
             binding.HasError() || binding.Value() != binding_ || scene_->View().RuntimeId() != binding_.scene)
             return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventStale));
@@ -107,6 +114,21 @@ namespace Horo::Gameplay {
         if (const auto event = std::visit(EventValidation{scene_->View()}, record.delivery.event); event.HasError())
             return event;
         if (record.filter != PerceptionFilterDecision::Accept)
+            return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventFiltered));
+        const auto listener = ai_->Find(record.delivery.recipient).Value().owner;
+        const auto allowed = std::visit([&](const auto &event) {
+            using Event = std::decay_t<decltype(event)>;
+            const auto admits = [&](const AI::PerceptionSourceRef source, const AI::SenseTypeId sense) {
+                return filterSnapshot_->Allows(listener, {binding_.scene, {source.slot, source.generation}}, sense);
+            };
+            if constexpr (std::is_same_v<Event, AI::DamagePerceptionEvent>)
+                return admits(event.instigator, AI::SenseTypeIds::Damage);
+            else if constexpr (std::is_same_v<Event, AI::ProximityPerceptionEvent>)
+                return admits(event.other, AI::SenseTypeIds::Touch);
+            else
+                return admits(event.subject, AI::SenseTypeIds::Team) && admits(event.sender, AI::SenseTypeIds::Team);
+        }, record.delivery.event);
+        if (!allowed)
             return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventFiltered));
         const AI::PerceptionEventAdmission admission{record.delivery, memory};
         return AI::RouteGameplayPerceptionEvent(record.delivery, *registry_, admission, memory);

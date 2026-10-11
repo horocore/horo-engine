@@ -7,6 +7,7 @@
 
 #include "Horo/AI/AISceneActivation.h"
 #include "Horo/AI/PerceptionEventRouting.h"
+#include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/Network/NetworkModeComposition.h"
 
 #include <span>
@@ -46,6 +47,7 @@ namespace Horo::Gameplay {
          * @param host Active host network composition, the authority for world roles.
          * @param world Exact selected host world; client worlds are denied under ADR-022.
          * @param registry Frozen perception descriptor registry.
+         * @param filtering Current Scene-owned typed filter publication; owner outlives the window.
          * @param deliveries Already authorized recipient deliveries and producer-owned filter decisions.
          * @return Owned bounded batch or typed authority, identity or capacity failure.
          * @throws std::bad_alloc If bounded batch storage cannot be allocated.
@@ -54,6 +56,7 @@ namespace Horo::Gameplay {
                                                                    const Network::NetworkModeComposition &host,
                                                                    Network::NetworkModeWorldKind world,
                                                                    const AI::PerceptionDescriptorRegistry &registry,
+                                                                   const AI::PerceptionSpatialBroadphase &filtering,
                                                                    std::span<const CommittedPerceptionDelivery> deliveries);
 
         PerceptionEventSource(const PerceptionEventSource &) = delete;
@@ -75,7 +78,8 @@ namespace Horo::Gameplay {
     private:
         PerceptionEventSource(const Runtime::RuntimeScene &scene, const AI::AiSceneRuntime &ai, const Network::NetworkModeComposition &host,
                               const Network::NetworkModeRoleView &role, AI::AiSceneActivationBinding binding,
-                              const AI::PerceptionDescriptorRegistry &registry, std::span<const CommittedPerceptionDelivery> deliveries);
+                              const AI::PerceptionDescriptorRegistry &registry, const AI::PerceptionSpatialBroadphase &filtering,
+                              std::span<const CommittedPerceptionDelivery> deliveries);
         /** @brief Rejects retained windows after authority revocation, travel, AI replacement or source closure. */
         [[nodiscard]] Result<void> ValidateCurrent() const;
         /** @brief Binds a declared recipient to the current active AI owner and exact memory. */
@@ -88,6 +92,8 @@ namespace Horo::Gameplay {
         Network::NetworkModeRoleView role_;
         AI::AiSceneActivationBinding binding_;
         const AI::PerceptionDescriptorRegistry *registry_;
+        const AI::PerceptionSpatialBroadphase *filtering_;
+        std::shared_ptr<const AI::PerceptionSpatialSnapshot> filterSnapshot_;
         std::vector<CommittedPerceptionDelivery> deliveries_;
         bool closed_{};
     };

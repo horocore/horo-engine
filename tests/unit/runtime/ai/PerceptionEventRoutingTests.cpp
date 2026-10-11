@@ -2,6 +2,7 @@
 #include "Horo/AI/AIScenePerceptionSource.h"
 #include "Horo/Gameplay/PerceptionEventSource.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
@@ -151,6 +152,9 @@ namespace Horo::AI {
             Network::NetworkModeComposition host;
             PerceptionDescriptorRegistry registry{Registry()};
             std::unique_ptr<AiSceneActivationCandidate> activation;
+            PerceptionSpatialBroadphase filtering;
+            std::array<PerceptionSpatialSource, 4> sources{};
+            std::array<PerceptionSpatialListener, 2> listeners{};
             AgentHandle recipient;
             AgentHandle other;
 
@@ -183,6 +187,19 @@ namespace Horo::AI {
                 const auto snapshot = ai.Snapshot().Value();
                 recipient = snapshot.Agents()[0].handle;
                 other = snapshot.Agents()[1].handle;
+                const std::array senses{SenseTypeIds::Damage, SenseTypeIds::Touch, SenseTypeIds::Team};
+                for (std::size_t index = 0; index < sources.size(); ++index) {
+                    sources[index].entity = Entity(index + 1);
+                    sources[index].layers = 1;
+                    std::copy(senses.begin(), senses.end(), sources[index].senses.begin());
+                    sources[index].senseCount = senses.size();
+                }
+                for (std::size_t index = 0; index < listeners.size(); ++index) {
+                    listeners[index].entity = Entity(index == 0 ? 1 : 4);
+                    std::copy(senses.begin(), senses.end(), listeners[index].senses.begin());
+                    listeners[index].senseCount = senses.size();
+                }
+                REQUIRE(filtering.Publish(scene->View(), 1, listeners, sources).HasValue());
             }
 
             [[nodiscard]] Runtime::EntityRef Entity(const std::uint64_t object) const {
@@ -204,8 +221,8 @@ namespace Horo::AI {
             }
 
             [[nodiscard]] PerceptionEventSource Capture(const std::span<const CommittedPerceptionDelivery> records) const {
-                auto captured =
-                    PerceptionEventSource::Capture(*scene, ai, host, Network::NetworkModeWorldKind::Standalone, registry, records);
+                auto captured = PerceptionEventSource::Capture(*scene, ai, host, Network::NetworkModeWorldKind::Standalone, registry,
+                                                               filtering, records);
                 REQUIRE(captured.HasValue());
                 return std::move(captured).Value();
             }
@@ -274,10 +291,10 @@ namespace Horo::AI {
             Fixture client(Network::NetworkProjectRole::Client);
             const auto record = client.Team();
             ExpectError(PerceptionEventSource::Capture(*client.scene, client.ai, client.host, Network::NetworkModeWorldKind::Client,
-                                                       client.registry, std::span{&record, 1}),
+                                                       client.registry, client.filtering, std::span{&record, 1}),
                         AIErrors::PerceptionEventUnauthorized);
             ExpectError(PerceptionEventSource::Capture(*client.scene, client.ai, client.host,
-                                                       Network::NetworkModeWorldKind::AuthorityServer, client.registry,
+                                                       Network::NetworkModeWorldKind::AuthorityServer, client.registry, client.filtering,
                                                        std::span{&record, 1}),
                         AIErrors::PerceptionEventUnauthorized);
             Fixture server(Network::NetworkProjectRole::DedicatedServer);
@@ -285,12 +302,40 @@ namespace Horo::AI {
             const auto delivered = server.Team();
             auto captured =
                 PerceptionEventSource::Capture(*server.scene, server.ai, server.host, Network::NetworkModeWorldKind::AuthorityServer,
-                                               server.registry, std::span{&delivered, 1});
+                                               server.registry, server.filtering, std::span{&delivered, 1});
             REQUIRE(captured.HasValue());
             REQUIRE(captured.Value().Deliver(0, memory).HasValue());
             server.host.Shutdown();
             ExpectError(captured.Value().Deliver(0, memory), AIErrors::PerceptionEventUnauthorized);
             CHECK(memory.StoredCount() == 1);
+        }
+
+        TEST_CASE("Gameplay delivery cannot bypass captured visibility or retain a revoked policy window",
+                  "[unit][ai][perception][events][filter]") {
+            Fixture fixture;
+            auto memory = fixture.Memory(fixture.recipient);
+            const auto record = fixture.Team();
+            auto old = fixture.Capture(std::span{&record, 1});
+            SECTION("subject hidden") {
+                fixture.sources[1].visibility = PerceptionGameplayVisibility::Hidden;
+            }
+            SECTION("sender hidden") {
+                fixture.sources[2].visibility = PerceptionGameplayVisibility::Hidden;
+            }
+            SECTION("listener mask") {
+                fixture.listeners[0].filtering.mask = 2;
+            }
+            SECTION("source mask") {
+                fixture.sources[1].listenerMask = 2;
+            }
+            SECTION("affiliation denied") {
+                fixture.listeners[0].admission.affiliations = 1;
+            }
+            REQUIRE(fixture.filtering.Publish(fixture.scene->View(), 2, fixture.listeners, fixture.sources).HasValue());
+            ExpectError(old.Deliver(0, memory), AIErrors::PerceptionEventStale);
+            auto current = fixture.Capture(std::span{&record, 1});
+            ExpectError(current.Deliver(0, memory), AIErrors::PerceptionEventFiltered);
+            CHECK(memory.StoredCount() == 0);
         }
 
         TEST_CASE("current filters, payloads and agent grants gate publication", "[unit][ai][perception][events]") {
@@ -345,7 +390,7 @@ namespace Horo::AI {
             ExpectError(source.Deliver(1, memory), AIErrors::PerceptionEventInvalid);
             const std::vector oversized(PerceptionEventSource::MaximumDeliveries + 1, record);
             ExpectError(PerceptionEventSource::Capture(*fixture.scene, fixture.ai, fixture.host, Network::NetworkModeWorldKind::Standalone,
-                                                       fixture.registry, oversized),
+                                                       fixture.registry, fixture.filtering, oversized),
                         AIErrors::PerceptionEventInvalid);
             fixture.ai.BeginShutdown();
             ExpectError(source.Deliver(0, memory), AIErrors::PerceptionEventStale);

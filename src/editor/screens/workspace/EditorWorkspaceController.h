@@ -87,6 +87,21 @@ namespace Horo::Editor {
             return m_sourceOpenService.Documents();
         }
 
+        /** @brief Last typed single-source save/Save As outcome from the actual workspace command route. */
+        [[nodiscard]] const std::optional<Result<SourceSaveResult>> &SourceSaveOutcome() const noexcept {
+            return m_sourceSaveOutcome;
+        }
+
+        /** @brief Last bounded Save All batch, including every independently failed document. */
+        [[nodiscard]] const std::optional<Result<std::vector<SourceSaveAllItem>>> &SourceSaveAllOutcome() const noexcept {
+            return m_sourceSaveAllOutcome;
+        }
+
+        /** @brief Last explicit source close choice outcome; false retains the document after Cancel. */
+        [[nodiscard]] const std::optional<Result<bool>> &SourceCloseOutcome() const noexcept {
+            return m_sourceCloseOutcome;
+        }
+
         [[nodiscard]] EditorDataBus &DataBus() noexcept {
             return m_dataBus;
         }
@@ -169,6 +184,9 @@ namespace Horo::Editor {
         Runtime::RuntimeSceneService &m_runtimeScene;
         Assets::AssetRegistrySnapshot m_assetRegistry;
         DocumentIdentityRegistry m_documentRegistry;
+        std::optional<Result<SourceSaveResult>> m_sourceSaveOutcome;
+        std::optional<Result<std::vector<SourceSaveAllItem>>> m_sourceSaveAllOutcome;
+        std::optional<Result<bool>> m_sourceCloseOutcome;
         SourceFileOpenService m_sourceOpenService;
         Assets::AssetRegistry *m_mutableAssetRegistry{};
         ProjectMutationCoordinator *m_mutations{};
@@ -332,6 +350,8 @@ namespace Horo::Editor {
         void RefreshSceneProjections();
         /** @brief Atomically commits the current default-scene snapshot and updates dirty state on
          * success. */
+        /** @brief Routes typed source publication/close intent through workspace-owned document services. */
+        bool ProcessSourceDocumentCommand(const EditorWorkspaceViewCommandData &command);
         void SaveScene(bool overwriteConflict = false);
         /** @brief Writes to a selected destination, optionally preserving active document identity. */
         void SaveSceneToPath(const std::filesystem::path &absolutePath, bool copyOnly);
