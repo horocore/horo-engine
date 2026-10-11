@@ -66,12 +66,28 @@ namespace Horo::Editor::PersistenceTestSupport {
         return native_.WriteDurable(path, bytes);
     }
 
+    Result<void> NativeBackedFileSystem::WritePrivateDurable(const std::filesystem::path &path, std::span<const std::byte> bytes,
+                                                             bool &created, std::filesystem::perms permissions) {
+        return native_.WritePrivateDurable(path, bytes, created, permissions);
+    }
+
     Result<void> NativeBackedFileSystem::CopyDurable(const std::filesystem::path &source, const std::filesystem::path &destination) {
         return native_.CopyDurable(source, destination);
     }
 
     Result<void> NativeBackedFileSystem::AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) {
         return native_.AtomicReplace(prepared, destination);
+    }
+
+    Result<void> NativeBackedFileSystem::AtomicReplaceTracked(const std::filesystem::path &prepared,
+                                                              const std::filesystem::path &destination,
+                                                              AtomicFileReplacementReceipt &receipt) {
+        return native_.AtomicReplaceTracked(prepared, destination, receipt);
+    }
+
+    Result<void> ReplaceFailingFileSystem::AtomicReplaceTracked(const std::filesystem::path &prepared,
+                                                                const std::filesystem::path &destination, AtomicFileReplacementReceipt &) {
+        return AtomicReplace(prepared, destination);
     }
 
     Result<void> ReplaceFailingFileSystem::AtomicReplace(const std::filesystem::path &, const std::filesystem::path &) {

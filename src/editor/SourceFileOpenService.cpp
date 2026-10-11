@@ -176,6 +176,7 @@ namespace Horo::Editor {
             .embeddedEditorAvailable = true,
             .externalEditorAvailable = true,
             .uiCanvasExtensions = {".uicanvas"},
+            .pcgGraphExtensions = {".hpcg"},
             .sequenceExtensions = {".hsequence"},
         };
     }
@@ -195,6 +196,7 @@ namespace Horo::Editor {
         policy_.horoScriptExtensions = NormalizeValues(policy_.horoScriptExtensions, true);
         policy_.projectTextExtensions = NormalizeValues(policy_.projectTextExtensions, true);
         policy_.projectTextFileNames = NormalizeValues(policy_.projectTextFileNames, false);
+        policy_.pcgGraphExtensions = NormalizeValues(policy_.pcgGraphExtensions, true);
         policy_.sequenceExtensions = NormalizeValues(policy_.sequenceExtensions, true);
         policy_.uiCanvasExtensions = NormalizeValues(policy_.uiCanvasExtensions, true);
     }
@@ -229,6 +231,8 @@ namespace Horo::Editor {
             return SourceFileClassification{NativeSource, extension};
         if (Contains(policy_.horoScriptExtensions, extension))
             return SourceFileClassification{HoroScript, extension};
+        if (Contains(policy_.pcgGraphExtensions, extension))
+            return SourceFileClassification{PCGGraph, extension};
         if (Contains(policy_.sequenceExtensions, extension))
             return SourceFileClassification{Sequence, extension};
         if (Contains(policy_.uiCanvasExtensions, extension))
@@ -317,7 +321,9 @@ namespace Horo::Editor {
                                                                  const SourceFileClassification &classification,
                                                                  const SourceOpenLocation &location) {
         DocumentKind documentKind = DocumentKind::Source;
-        if (classification.kind == SourceFileKind::Sequence)
+        if (classification.kind == SourceFileKind::PCGGraph)
+            documentKind = DocumentKind::PCGGraph;
+        else if (classification.kind == SourceFileKind::Sequence)
             documentKind = DocumentKind::Sequence;
         else if (classification.kind == SourceFileKind::UiCanvas)
             documentKind = DocumentKind::UiCanvas;

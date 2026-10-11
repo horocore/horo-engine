@@ -988,6 +988,7 @@ add_library(HoroAssets STATIC
         runtime/assets/cooker/AssetCookInputSnapshot.cpp
         runtime/assets/cooker/AssetCookTransaction.cpp
         runtime/assets/importer/AssetImporterCatalog.cpp
+        runtime/assets/AssetSourcePublication.cpp
         runtime/assets/importer/AssetImportMetadata.cpp
         runtime/assets/importer/AssetImportOperation.cpp
         runtime/assets/importer/AssetImportFileFacts.cpp
@@ -2543,6 +2544,10 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_METAL)
 endif ()
 
 add_library(HoroEditorServices STATIC
+        editor/pcg/PCGDocumentErrors.cpp
+        editor/pcg/PCGGraphDocument.cpp
+        editor/pcg/PCGGraphDocumentService.cpp
+        editor/document/DocumentRecoveryService.cpp
         editor/audio/AudioEditorDocument.cpp
         editor/audio/MixerAssetDocument.cpp
         editor/audio/MixerDocumentCommands.cpp
@@ -2614,6 +2619,8 @@ target_link_libraries(HoroEditorServices
         PUBLIC
         HoroEngine::AudioFrontend
         HoroEngine::AudioApi
+        HoroEngine::PCG
+        HoroEngine::Assets
         HoroEngine::Foundation
         HoroEngine::HostErrors
         HoroEngine::CinematicRuntime
@@ -2629,7 +2636,6 @@ target_link_libraries(HoroEditorServices
         HoroEngine::Input
         HoroEngine::ProjectMigrations
         PRIVATE
-        HoroEngine::Assets
         HoroSceneSourceCodecInternal
         nlohmann_json::nlohmann_json
 )
@@ -2771,6 +2777,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserAssetOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
+            editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
             editor/screens/workspace/EditorWorkspaceViewSequence.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
             editor/screens/workspace/ExtensionActivityView.cpp

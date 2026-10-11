@@ -1,5 +1,9 @@
 # Editor Document Model Architecture
 
+The implemented PCG source-session adapter, shared history/recovery owners and
+public-header migration are documented in
+[PCG graph document sessions](../../guides/pcg-document-session-migration.md).
+
 ## Purpose
 
 This document defines editor document ownership, commands, history

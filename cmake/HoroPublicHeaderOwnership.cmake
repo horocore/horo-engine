@@ -503,6 +503,7 @@ horo_configure_target_header_boundary(HoroAssets PUBLIC_HEADERS
     Horo/Assets/AssetCookInputSnapshot.h
     Horo/Assets/AssetCookTransaction.h
     Horo/Assets/AssetId.h
+    Horo/Assets/AssetSourcePublication.h
     Horo/Assets/AssetImportMetadata.h
     Horo/Assets/AssetImportOperation.h
     Horo/Assets/AssetImporter.h
@@ -1157,6 +1158,10 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/RecentProjectInspectionService.h
     Horo/Editor/SourceFileOpenService.h
     Horo/Editor/SourceDocumentService.h
+    Horo/Editor/SemanticDocumentHistory.h
+    Horo/Editor/DocumentRecoveryService.h
+    Horo/Editor/PCGGraphDocument.h
+    Horo/Editor/PCGGraphDocumentService.h
     Horo/Editor/SequenceDocument.h
     Horo/Editor/UiCanvasDocument.h
     Horo/Editor/WelcomeController.h

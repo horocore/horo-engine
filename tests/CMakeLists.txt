@@ -2152,6 +2152,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerAssetTransferTests.cpp
             unit/editor/EditorWorkspaceControllerSourceNavigationTests.cpp
             unit/editor/EditorWorkspaceControllerSequenceTests.cpp
+            unit/editor/EditorWorkspaceControllerPCGTests.cpp
             unit/editor/EditorWorkspaceControllerFilesystemTestSupport.h
             unit/editor/EditorWorkspaceControllerPolicyTests.cpp
             unit/editor/EditorWorkspaceControllerPolicyTestSupport.h
@@ -2603,6 +2604,7 @@ target_compile_features(HoroSceneDocumentTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSceneDocumentTests PRIVATE HoroEngine::EditorRenderExtraction)
 add_executable(HoroSceneDocumentPersistenceTests
         unit/editor/SceneDocumentPersistenceTests.cpp
+        unit/editor/SceneDocumentRecoveryPathTests.cpp
         unit/editor/SceneDocumentAudioPersistenceTests.cpp
         unit/editor/SceneDocumentTriggerVolumePersistenceTests.cpp
         unit/editor/SceneDocumentGameplayPersistenceTests.cpp
@@ -4511,6 +4513,20 @@ target_compile_features(HoroAnimationGraphPublicHeaderConsumer PRIVATE cxx_std_2
 target_link_libraries(HoroAnimationGraphPublicHeaderConsumer PRIVATE HoroEngine::AnimationRuntime HoroEngine::AnimationApi HoroEngine::AnimationGraphSourceCodec)
 add_test(NAME HoroAnimationGraphPublicHeaderConsumer COMMAND HoroAnimationGraphPublicHeaderConsumer)
 set_tests_properties(HoroAnimationGraphPublicHeaderConsumer PROPERTIES LABELS "unit;animation;headless;public_headers;ci-windows")
+
+add_executable(HoroPCGDocumentTests
+        unit/editor/PCGGraphDocumentSaveTests.cpp
+        unit/editor/PCGGraphDocumentTests.cpp
+        unit/editor/PCGGraphDocumentServiceTests.cpp)
+target_compile_features(HoroPCGDocumentTests PRIVATE cxx_std_20)
+target_link_libraries(HoroPCGDocumentTests PRIVATE HoroEngine::EditorServices)
+horo_register_catch_test(HoroPCGDocumentTests LABELS "unit;editor;pcg;headless;sonar-coverage;ci-windows")
+
+add_executable(HoroPCGDocumentPublicHeaderConsumer support/PCGDocumentPublicHeaderConsumer.cpp)
+target_compile_features(HoroPCGDocumentPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPCGDocumentPublicHeaderConsumer PRIVATE HoroEngine::EditorServices)
+add_test(NAME HoroPCGDocumentPublicHeaderConsumer COMMAND HoroPCGDocumentPublicHeaderConsumer)
+set_tests_properties(HoroPCGDocumentPublicHeaderConsumer PROPERTIES LABELS "unit;editor;pcg;headless;public_headers;ci-windows")
 
 horo_finalize_ci_suites()
 
