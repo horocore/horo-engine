@@ -375,13 +375,13 @@ namespace Horo::PCG {
 
         [[nodiscard]] Result<void> ExecuteNodeImpl(const detail::NodeExecutionContext &context, const std::uint32_t node,
                                                    const PCGCpuNodeKind kind) {
+            using enum PCGCpuNodeKind;
             const auto &description = context.plan.Nodes()[node];
             const auto outputs = PinsOf(description, PCGPinDirection::Output);
             if (outputs.size() != 1)
                 return Reject<void>(PCGErrors::CpuEvaluationInvalid);
             Result<void> evaluated = Reject<void>(PCGErrors::CpuEvaluationInvalid);
-            if (kind == PCGCpuNodeKind::SnapshotGrid || kind == PCGCpuNodeKind::GridJitter || kind == PCGCpuNodeKind::Stratified ||
-                kind == PCGCpuNodeKind::PoissonScatter) {
+            if (kind == SnapshotGrid || kind == GridJitter || kind == Stratified || kind == PoissonScatter) {
                 const auto settings = detail::DecodePointGeneration(description);
                 if (settings.HasError())
                     return Result<void>::Failure(settings.ErrorValue());
