@@ -135,6 +135,21 @@ def test_failure_keeps_ready_generation_and_preserves_failed_producer(
     assert (failed[0] / "source").is_dir()
 
 
+def test_success_retains_producer_recipes_after_checkout_removal(repository: tuple[Path, Path, str]) -> None:
+    repo, root, _ = repository
+    recipe = '[{"file":"pinned source","command":"compiler flags"}]'
+
+    def build_with_recipe(source: Path, build: Path, binding: cache.CacheBinding) -> int:
+        successful_build(source, build, binding)
+        (build / "compile_commands.json").write_text(recipe, encoding="utf-8")
+        return 0
+
+    assert cache.prepare_cache(repo, build_with_recipe) == 0
+    generation = root / "generations" / cache.status(repo)["generation"]
+    assert not (generation / "source").exists()
+    assert (generation / "producer-compile-commands.json").read_text(encoding="utf-8") == recipe
+
+
 def test_success_switches_generations_and_seed_is_independent(
     repository: tuple[Path, Path, str],
 ) -> None:

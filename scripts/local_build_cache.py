@@ -406,9 +406,17 @@ def prepare_cache(repo: Path, build_callback: Callable[[Path, Path, CacheBinding
             marker["state"] = "failed"
             _atomic_json(directory / _GENERATION_MARKER, marker)
             raise CacheError("Cache producer modified pinned main; checkpoint was not published")
+        _preserve_producer_recipe(build, directory)
         _git(repo, "worktree", "remove", str(source))
         marker["state"] = "ready"
         _atomic_json(directory / _GENERATION_MARKER, marker)
         _atomic_json(root / "ready.json", {"schema": 1, "generation": name, "main_commit": commit})
         _retire(root, name)
         return 0
+
+
+def _preserve_producer_recipe(build: Path, generation: Path) -> None:
+    """Retain diagnostic compiler recipes without retaining the disposable producer."""
+    compile_commands = build / "compile_commands.json"
+    if compile_commands.is_file():
+        shutil.copy2(compile_commands, generation / "producer-compile-commands.json")

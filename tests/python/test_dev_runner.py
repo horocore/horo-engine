@@ -452,7 +452,7 @@ def test_main_cache_lease_covers_configure_and_build(monkeypatch: pytest.MonkeyP
         events.append("configure" if "-S" in command else "build")
         if "-S" in command:
             assert "-DCMAKE_CXX_COMPILER_LAUNCHER=/tools/ccache" in command
-            assert "-DHORO_ENGINE_ENABLE_PCH=OFF" in command
+            assert "-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON" in command
         return 0
 
     monkeypatch.setattr(dev.local_build_cache, "automatic_cache", lease)
@@ -488,6 +488,7 @@ def test_main_cache_releases_after_failed_configure(monkeypatch: pytest.MonkeyPa
     ["--cmake-arg=-DHORO_ENGINE_ENABLE_PCH=ON"],
     ["--cmake-arg=-DHORO_ENGINE_ENABLE_PCH=YES"],
     ["--cmake-arg=-DHORO_ENGINE_ENABLE_PCH=2"],
+    ["--cmake-arg=-DCMAKE_DISABLE_PRECOMPILE_HEADERS=OFF"],
 ])
 def test_explicit_cache_configuration_bypasses_discovery(
     arguments: list[str], monkeypatch: pytest.MonkeyPatch, subprocess_calls: list[list[str]], tmp_path: Path
