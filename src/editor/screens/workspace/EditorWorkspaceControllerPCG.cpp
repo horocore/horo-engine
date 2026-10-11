@@ -39,8 +39,7 @@ namespace Horo::Editor {
             static_cast<void>(m_viewModel.workspacePanelHost.FocusDocument(snapshot.identity.instance));
             return;
         }
-        auto tab = m_viewModel.workspacePanelHost.OpenDocument(snapshot.identity.key);
-        if (tab.HasError()) {
+        if (const auto tab = m_viewModel.workspacePanelHost.OpenDocument(snapshot.identity.key); tab.HasError()) {
             if (opened.disposition == DocumentOpenDisposition::Opened) {
                 static_cast<void>(m_pcgDocuments.Close(opened.identity.instance, true));
                 static_cast<void>(m_documentRegistry.Close(opened.identity.instance));
@@ -84,13 +83,12 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ClosePCGDocument */
     Result<void> EditorWorkspaceController::ClosePCGDocument(DocumentInstanceId instance, bool discardDirty) {
-        const auto tabs = m_viewModel.workspacePanelHost.DocumentTabs();
-        if (std::ranges::none_of(tabs, [instance](const WorkspaceDocumentTab &tab) {
+        if (const auto tabs = m_viewModel.workspacePanelHost.DocumentTabs();
+            std::ranges::none_of(tabs, [instance](const WorkspaceDocumentTab &tab) {
             return tab.identity.instance == instance;
         }))
             return Result<void>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Stale)));
-        auto closed = m_pcgDocuments.Close(instance, discardDirty);
-        if (closed.HasError())
+        if (const auto closed = m_pcgDocuments.Close(instance, discardDirty); closed.HasError())
             return closed;
         return m_viewModel.workspacePanelHost.CloseDocument(instance, WorkspaceDocumentClosePolicy::DiscardChanges);
     }
@@ -146,8 +144,7 @@ namespace Horo::Editor {
         m_pcgAutosaveElapsedSeconds += elapsedSeconds;
         if (m_pcgAutosaveElapsedSeconds < static_cast<float>(intervalMinutes) * 60.0F)
             return;
-        const auto recovered = m_pcgDocuments.FlushRecovery();
-        if (recovered.HasError()) {
+        if (const auto recovered = m_pcgDocuments.FlushRecovery(); recovered.HasError()) {
             m_pcgAutosaveRetrySeconds = 30;
             if (!m_pcgAutosaveErrorPresented)
                 LOG_ERROR("editor.pcg_recovery", "Graph autosave failed: %s", recovered.ErrorValue().message.c_str());

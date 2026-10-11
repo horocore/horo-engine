@@ -401,18 +401,8 @@ namespace Horo::Editor {
                     return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
                 }
                 if (controller_ && resolution.action != Stay) {
-                    const auto graphs = controller_->PCGDocuments().Snapshots();
-                    if (graphs.HasError())
-                        return Result<LeaveDecision>::Failure(graphs.ErrorValue());
-                    if (graphs.Value().size() != leavePCGDocuments_.size())
-                        return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
-                    for (std::size_t index = 0; index < graphs.Value().size(); ++index) {
-                        const auto &current = graphs.Value()[index];
-                        const auto &captured = leavePCGDocuments_[index];
-                        if (current.session != captured.session || current.revision != captured.revision ||
-                            current.catalogRevision != captured.catalogRevision)
-                            return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
-                    }
+                    if (const auto current = ValidateLeavePCGDocuments(); current.HasError())
+                        return Result<LeaveDecision>::Failure(current.ErrorValue());
                 }
                 if (resolution.action == Save) {
                     if (controller_) {
@@ -468,6 +458,23 @@ namespace Horo::Editor {
             }
 
         private:
+            /** @brief Requires the exact graph sessions and revisions captured by the dirty-leave prompt. */
+            Result<void> ValidateLeavePCGDocuments() const {
+                const auto graphs = controller_->PCGDocuments().Snapshots();
+                if (graphs.HasError())
+                    return Result<void>::Failure(graphs.ErrorValue());
+                if (graphs.Value().size() != leavePCGDocuments_.size())
+                    return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
+                for (std::size_t index = 0; index < graphs.Value().size(); ++index) {
+                    const auto &current = graphs.Value()[index];
+                    const auto &captured = leavePCGDocuments_[index];
+                    if (current.session != captured.session || current.revision != captured.revision ||
+                        current.catalogRevision != captured.catalogRevision)
+                        return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
+                }
+                return Result<void>::Success();
+            }
+
             /** @brief Creates the workspace controller while the caller retains the uncommitted project activation lease. */
             Result<void> InitializeController(const std::string &projectRoot) {
                 const Assets::AssetRegistrySnapshot assetSnapshot =
@@ -476,8 +483,7 @@ namespace Horo::Editor {
                     services_.TryGet<Application::GameplayBuildEnvironment>();
                 std::array<std::uint8_t, 16> sessionBytes{};
                 const auto entropy = Platform::CreateNativeSecureRandomSource();
-                const auto generated = entropy->Fill(std::as_writable_bytes(std::span(sessionBytes)));
-                if (generated.HasError())
+                if (const auto generated = entropy->Fill(std::as_writable_bytes(std::span(sessionBytes))); generated.HasError())
                     return Result<void>::Failure(generated.ErrorValue());
                 const auto sessionOwner = Assets::AssetId::FromBytes(sessionBytes);
                 if (!sessionOwner.IsValid())

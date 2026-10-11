@@ -3,6 +3,7 @@
 #include "Horo/Foundation/PathUtils.h"
 
 #include <algorithm>
+#include <bit>
 #include <fstream>
 #include <new>
 #include <type_traits>
@@ -130,7 +131,7 @@ namespace Horo::Assets {
             if (cancellation.IsCancellationRequested())
                 return Result<AssetSourceCapture>::Failure(MakeError(AssetSourceErrors::Cancelled));
             const auto count = std::min<std::size_t>(4096, capture.bytes.size() - offset);
-            if (!stream.read(reinterpret_cast<char *>(capture.bytes.data() + offset), static_cast<std::streamsize>(count)))
+            if (!stream.read(std::bit_cast<char *>(capture.bytes.data() + offset), static_cast<std::streamsize>(count)))
                 return Result<AssetSourceCapture>::Failure(MakeError(AssetSourceErrors::ReadFailed));
             offset += count;
         }
@@ -175,20 +176,19 @@ namespace Horo::Assets {
             if (!SafePath(root, prepared))
                 return Result<AssetSourcePublication>::Failure(MakeError(AssetSourceErrors::InvalidPath));
             std::error_code stageError;
-            const auto stageStatus = std::filesystem::symlink_status(prepared, stageError);
-            if ((!stageError && std::filesystem::exists(stageStatus)) || (stageError && stageError != std::errc::no_such_file_or_directory))
+            if (const auto stageStatus = std::filesystem::symlink_status(prepared, stageError);
+                (!stageError && std::filesystem::exists(stageStatus)) || (stageError && stageError != std::errc::no_such_file_or_directory))
                 return Result<AssetSourcePublication>::Failure(MakeError(AssetSourceErrors::Conflict));
             PreparedSource cleanup(files, prepared);
-            const auto written = files.WritePrivateDurable(prepared, bytes, cleanup.created);
-            if (written.HasError())
+            if (const auto written = files.WritePrivateDurable(prepared, bytes, cleanup.created); written.HasError())
                 return Result<AssetSourcePublication>::Failure(written.ErrorValue());
-            auto final = CaptureAssetSource(root, path, MaximumBytes, cancellation);
-            if (final.HasError() || final.Value().identity != expected) {
-                return Result<AssetSourcePublication>::Failure(final.HasError() ? final.ErrorValue()
-                                                                                : MakeError(AssetSourceErrors::Conflict));
+            if (const auto observed = CaptureAssetSource(root, path, MaximumBytes, cancellation);
+                observed.HasError() || observed.Value().identity != expected) {
+                return Result<AssetSourcePublication>::Failure(observed.HasError() ? observed.ErrorValue()
+                                                                                   : MakeError(AssetSourceErrors::Conflict));
             }
-            const auto staged = CaptureAssetSource(root, prepared, MaximumBytes, cancellation);
-            if (staged.HasError() || staged.Value().identity != Identity(bytes)) {
+            if (const auto staged = CaptureAssetSource(root, prepared, MaximumBytes, cancellation);
+                staged.HasError() || staged.Value().identity != Identity(bytes)) {
                 return Result<AssetSourcePublication>::Failure(staged.HasError() ? staged.ErrorValue()
                                                                                  : MakeError(AssetSourceErrors::Conflict));
             }

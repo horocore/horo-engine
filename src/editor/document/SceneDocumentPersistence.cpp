@@ -152,9 +152,9 @@ namespace Horo::Editor {
             std::error_code error;
             const auto publicationRoot = std::filesystem::canonical(absoluteProjectRoot, error);
             if (error)
-                return Result<void>::Failure(PersistenceError(ScenePathInvalid, "Unable to resolve the recovery project root: " +
-                                                                                    std::string{error.category().name()} + ":" +
-                                                                                    std::to_string(error.value()) + " " + error.message()));
+                return Result<void>::Failure(
+                    PersistenceError(ScenePathInvalid, std::format("Unable to resolve the recovery project root: {}:{} {}",
+                                                                   error.category().name(), error.value(), error.message())));
             const std::filesystem::path destination = RecoveryPath(publicationRoot);
             const auto previous = Assets::CaptureAssetSource(publicationRoot, destination, kMaximumRecoveryBytes);
             if (previous.HasError())
@@ -346,7 +346,7 @@ namespace Horo::Editor {
         if (!IsSafeProjectRelativePath(relativeScene))
             return Result<void>::Failure(PersistenceError(ScenePathInvalid, "Default scene path is not a safe project-relative path."));
 
-        if (const auto lease = mutations.TryAcquire(ProjectMutationRequest{
+        if (auto lease = mutations.TryAcquire(ProjectMutationRequest{
                 .projectRoot = projectRoot,
                 .owner = ProjectMutationOwner::Save,
                 .operationId = "set-project-default-scene",
@@ -403,6 +403,7 @@ namespace Horo::Editor {
         if (lease.HasError()) {
             return Result<void>::Failure(lease.ErrorValue());
         }
+        const auto heldLease = std::move(lease).Value();
 
         const std::string serialized = SerializeRecoveryRecord(absoluteScenePath, snapshot, savedRevision, savedState);
         if (serialized.size() > kMaximumRecoveryBytes) {
@@ -467,6 +468,7 @@ namespace Horo::Editor {
         if (lease.HasError()) {
             return Result<void>::Failure(lease.ErrorValue());
         }
+        const auto heldLease = std::move(lease).Value();
         return files.RemoveDurable(recoveryPath);
     }
 }  // namespace Horo::Editor

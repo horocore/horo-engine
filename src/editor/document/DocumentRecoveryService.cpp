@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 
 namespace Horo::Editor {
     namespace {
@@ -27,6 +28,13 @@ namespace Horo::Editor {
             return record.asset.IsValid() && record.document.IsValid() && record.sessionOwner.IsValid() && record.sessionGeneration &&
                    record.revision && record.capturedAtUnixSeconds && record.acceptedSource.exists &&
                    record.acceptedSource.bytes <= 64 * 1024 * 1024;
+        }
+
+        /** @brief Rejects older or conflicting recovery from a different owner or source revision. */
+        bool CanReplaceRecovery(const DocumentRecoveryRecord &old, const DocumentRecoveryRecord &record) {
+            return old.sessionOwner == record.sessionOwner && old.sessionGeneration == record.sessionGeneration &&
+                   old.revision <= record.revision &&
+                   (old.revision != record.revision || (old.state == record.state && old.payload == record.payload));
         }
 
         /** @brief Encodes the shared checksum-protected envelope over unchanged domain source bytes. */
@@ -82,8 +90,9 @@ namespace Horo::Editor {
             template <typename T> void Array(T &array) {
                 const auto field = Take(array.size());
                 if (valid)
-                    for (std::size_t index = 0; index < array.size(); ++index)
-                        array[index] = std::to_integer<std::uint8_t>(field[index]);
+                    std::ranges::transform(field, array.begin(), [](std::byte byte) {
+                        return std::to_integer<std::uint8_t>(byte);
+                    });
             }
         };
 
@@ -102,7 +111,8 @@ namespace Horo::Editor {
             Reader reader{bytes.first(bytes.size() - 32), 8};
             DocumentRecoveryRecord record;
             record.document.kind = static_cast<DocumentKind>(reader.Integer(1));
-            std::array<std::uint8_t, 16> asset{}, owner{};
+            std::array<std::uint8_t, 16> asset{};
+            std::array<std::uint8_t, 16> owner{};
             reader.Array(asset);
             reader.Array(owner);
             record.asset = Assets::AssetId::FromBytes(asset);
@@ -119,7 +129,7 @@ namespace Horo::Editor {
             const auto path = reader.Take(static_cast<std::size_t>(pathBytes));
             if (!reader.valid)
                 return failure();
-            auto source = SourceDocumentId::Parse({reinterpret_cast<const char *>(path.data()), path.size()});
+            auto source = SourceDocumentId::Parse({std::bit_cast<const char *>(path.data()), path.size()});
             if (source.HasError())
                 return failure();
             record.document.source = std::move(source).Value();
@@ -192,6 +202,7 @@ namespace Horo::Editor {
         auto lease = mutations_.TryAcquire({root_, ProjectMutationOwner::Autosave, "document-recovery"});
         if (lease.HasError())
             return Result<void>::Failure(lease.ErrorValue());
+        const auto heldLease = std::move(lease).Value();
         auto existing = Inspect(record.asset, record.document);
         if (existing.HasError())
             return Result<void>::Failure(existing.ErrorValue());
@@ -199,9 +210,7 @@ namespace Horo::Editor {
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
         if (existing.Value() && !accepted) {
             const auto &old = *existing.Value();
-            if (old.sessionOwner != record.sessionOwner || old.sessionGeneration != record.sessionGeneration ||
-                old.revision > record.revision ||
-                (old.revision == record.revision && (old.state != record.state || old.payload != record.payload)))
+            if (!CanReplaceRecovery(old, record))
                 return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
             if (old.state == record.state && old.acceptedSource == record.acceptedSource && old.payload == record.payload)
                 return Result<void>::Success();
@@ -238,12 +247,14 @@ namespace Horo::Editor {
         auto lease = mutations_.TryAcquire({root_, ProjectMutationOwner::Autosave, "discard-document-recovery"});
         if (lease.HasError())
             return Result<void>::Failure(lease.ErrorValue());
+        const auto heldLease = std::move(lease).Value();
         const auto lockPath = Assets::AssetSourcePublicationLockPath(root_, path.Value());
         if (lockPath.HasError())
             return Result<void>::Failure(lockPath.ErrorValue());
         auto sourceLease = files_.TryAcquireExclusive(lockPath.Value(), "discard-document-recovery");
         if (sourceLease.HasError())
             return Result<void>::Failure(sourceLease.ErrorValue());
+        const auto heldSourceLease = std::move(sourceLease).Value();
         auto actual = Assets::CaptureAssetSource(root_, path.Value(), limits_.maximumRecordBytes);
         if (actual.HasError())
             return Result<void>::Failure(actual.ErrorValue());
@@ -274,13 +285,13 @@ namespace Horo::Editor {
             std::size_t records{};
             for (std::filesystem::directory_iterator iterator(recoveryRoot, error), end; !error && iterator != end;
                  iterator.increment(error)) {
-                const auto status = iterator->symlink_status(error);
-                if (error || !std::filesystem::is_regular_file(status))
+                if (const auto status = iterator->symlink_status(error); error || !std::filesystem::is_regular_file(status))
                     return Result<Assets::AssetSourcePublication>::Failure(MakeError(Assets::AssetSourceErrors::InvalidPath));
                 if (iterator->path() == destination)
                     continue;
                 const auto size = iterator->file_size(error);
-                if (error || ++records >= limits.maximumRecords || size > limits.maximumTotalBytes - total)
+                ++records;
+                if (error || records >= limits.maximumRecords || size > limits.maximumTotalBytes - total)
                     return Result<Assets::AssetSourcePublication>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
                 total += static_cast<std::size_t>(size);
             }

@@ -187,7 +187,7 @@ namespace Horo::Editor {
         /** @brief Observes incoming source identity without replacing authored state/history.
          * @param identity Exact independently captured source identity. @return Success or lifecycle rejection.
          */
-        [[nodiscard]] Result<void> ObserveExternal(Assets::AssetSourceIdentity identity);
+        [[nodiscard]] Result<void> ObserveExternal(const Assets::AssetSourceIdentity &identity);
         /** @brief Explicitly replaces a clean or authorized-discard root and invalidates old save tickets/history.
          * @param fence Exact admission fence. @param capture Complete incoming source. @param discardDirty Explicit loss decision.
          * @param migrator Explicit migration hook. @return Success or zero-mutation failure.

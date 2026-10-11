@@ -76,3 +76,9 @@ Coverage: `HoroPCGDocumentTests`, GUI-enabled `HoroEditorWorkspaceControllerTest
 standalone `HoroPCGDocumentPublicHeaderConsumer`, and existing Mixer/Scene
 persistence suites. GPU/manual UI checks and hosted quality gates require separate
 evidence.
+
+`ObserveExternal` borrows its source identity by const reference for the duration
+of the synchronous owner-thread check. Call sites remain source compatible;
+consumers must rebuild with the updated declaration. No identity or lease is
+retained beyond the call. Successful publication and recovery leases remain owned
+by the operation scope until its last filesystem callback completes.

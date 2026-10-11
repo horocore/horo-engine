@@ -54,16 +54,17 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::OpenEmbeddedAuthoredDocument */
     bool EditorWorkspaceController::OpenEmbeddedAuthoredDocument(const SourceOpenResult &result) {
+        using enum SourceFileKind;
         if (!result.document || result.route != SourceOpenRoute::EmbeddedWorkspace)
             return false;
         switch (result.classification.kind) {
-            case SourceFileKind::PCGGraph:
+            case PCGGraph:
                 OpenEmbeddedPCGSource(result);
                 return true;
-            case SourceFileKind::Sequence:
+            case Sequence:
                 OpenEmbeddedSequenceSource(result);
                 return true;
-            case SourceFileKind::UiCanvas:
+            case UiCanvas:
                 OpenEmbeddedUiCanvasSource(result);
                 return true;
             default:

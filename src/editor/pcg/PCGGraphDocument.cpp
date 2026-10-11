@@ -1,6 +1,7 @@
 #include "Horo/Editor/PCGGraphDocument.h"
 
 #include <algorithm>
+#include <bit>
 #include <limits>
 #include <thread>
 
@@ -13,8 +14,13 @@ namespace Horo::Editor {
             bool &publishing;
 
             explicit PublicationGuard(bool &value) : publishing(value) {
-                publishing = true;
+                value = true;
             }
+
+            PublicationGuard(const PublicationGuard &) = delete;
+            PublicationGuard &operator=(const PublicationGuard &) = delete;
+            PublicationGuard(PublicationGuard &&) = delete;
+            PublicationGuard &operator=(PublicationGuard &&) = delete;
 
             ~PublicationGuard() {
                 publishing = false;
@@ -31,7 +37,7 @@ namespace Horo::Editor {
 
         /** @brief Reinterprets owned format bytes without allocating or changing their representation. */
         std::span<const std::uint8_t> SourceBytes(const Assets::AssetSourceCapture &capture) {
-            return {reinterpret_cast<const std::uint8_t *>(capture.bytes.data()), capture.bytes.size()};
+            return {std::bit_cast<const std::uint8_t *>(capture.bytes.data()), capture.bytes.size()};
         }
 
         /** @brief Hashes canonical authored semantics independently from durable publication revision. */
@@ -149,8 +155,7 @@ namespace Horo::Editor {
 
         /** @brief Dispatches the one closed semantic command vocabulary into private candidate storage. */
         Result<void> ApplyOperation(PCG::PCGGraphSourceData &data, const PCGDocumentOperation &operation) {
-            return std::visit([&](const auto &value) -> Result<void> {
-                using T = std::decay_t<decltype(value)>;
+            return std::visit([&]<typename T>(const T &value) {
                 bool valid = true;
                 if constexpr (std::is_same_v<T, SetPCGGraphPolicy>) {
                     data.mode = value.mode;
@@ -226,8 +231,8 @@ namespace Horo::Editor {
         state->acceptedSource = capture.identity;
         state->acceptedGeneration = state->source->Data().generation;
         state->currentState = digest.Value();
-        const auto version = PCG::InspectPCGGraphSchemaVersion(SourceBytes(capture));
-        if (version.HasValue() && version.Value() == PCG::CurrentPCGGraphSchemaVersion)
+        if (const auto version = PCG::InspectPCGGraphSchemaVersion(SourceBytes(capture));
+            version.HasValue() && version.Value() == PCG::CurrentPCGGraphSchemaVersion)
             state->savedState = state->currentState;
         return Result<PCGGraphDocument>::Success(PCGGraphDocument(std::move(state)));
     }
@@ -243,17 +248,18 @@ namespace Horo::Editor {
 
     /** @copydoc PCGGraphDocument::Admit */
     Result<void> PCGGraphDocument::Admit(const PCGDocumentCommand &command) const {
+        using enum PCGDocumentCommandFailureReason;
         if (auto access = CheckAccess(); access.HasError())
             return access;
         if (command.session != state_->session || command.expectedRevision != state_->revision ||
             command.catalogRevision != state_->catalog.revision)
-            return Result<void>::Failure(MakeError(PCGDocumentError(Reason::Stale)));
+            return Result<void>::Failure(MakeError(PCGDocumentError(Stale)));
         if (!command.canEdit)
-            return Result<void>::Failure(MakeError(PCGDocumentError(Reason::Unauthorized)));
+            return Result<void>::Failure(MakeError(PCGDocumentError(Unauthorized)));
         if (command.cancellation.IsCancellationRequested())
-            return Result<void>::Failure(MakeError(PCGDocumentError(Reason::Cancelled)));
+            return Result<void>::Failure(MakeError(PCGDocumentError(Cancelled)));
         if (state_->revision == std::numeric_limits<std::uint64_t>::max())
-            return Result<void>::Failure(MakeError(PCGDocumentError(Reason::Exhausted)));
+            return Result<void>::Failure(MakeError(PCGDocumentError(Exhausted)));
         return Result<void>::Success();
     }
 
@@ -402,9 +408,10 @@ namespace Horo::Editor {
                 save.snapshot_.catalogRevision != state_->catalog.revision || save.snapshot_.acceptedSource != state_->acceptedSource ||
                 path != root / state_->identity.key.source.Value() || save.snapshot_.revision > state_->revision)
                 return Result<Assets::AssetSourcePublication>::Failure(MakeError(PCGDocumentError(Reason::Stale)));
-            const auto projectLease = mutations.TryAcquire({root, ProjectMutationOwner::Asset, "pcg-source-save"});
+            auto projectLease = mutations.TryAcquire({root, ProjectMutationOwner::Asset, "pcg-source-save"});
             if (projectLease.HasError())
                 return Result<Assets::AssetSourcePublication>::Failure(projectLease.ErrorValue());
+            const auto heldProjectLease = std::move(projectLease).Value();
             const auto lockPath = Assets::AssetSourcePublicationLockPath(root, path);
             if (lockPath.HasError())
                 return Result<Assets::AssetSourcePublication>::Failure(lockPath.ErrorValue());
@@ -430,14 +437,14 @@ namespace Horo::Editor {
             return publication;
         } catch (const std::bad_alloc &) {
             return Result<Assets::AssetSourcePublication>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
-        } catch (
-            ...) {  // NOSONAR(cpp:S1181, cpp:S2738): ADR-008 maps arbitrary precommit lease-provider failures at the typed save boundary.
+        } catch (...) {  // NOSONAR(cpp:S1181, cpp:S2738)
+            // ADR-008 contains arbitrary precommit lease-provider failures at this typed save boundary.
             return Result<Assets::AssetSourcePublication>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
         }
     }
 
     /** @copydoc PCGGraphDocument::ObserveExternal */
-    Result<void> PCGGraphDocument::ObserveExternal(Assets::AssetSourceIdentity identity) {
+    Result<void> PCGGraphDocument::ObserveExternal(const Assets::AssetSourceIdentity &identity) {
         if (auto access = CheckAccess(); access.HasError())
             return access;
         state_->conflict = identity != state_->acceptedSource;
@@ -447,28 +454,29 @@ namespace Horo::Editor {
     /** @copydoc PCGGraphDocument::Reload */
     Result<void> PCGGraphDocument::Reload(const PCGDocumentCommand &fence, const Assets::AssetSourceCapture &capture, bool discardDirty,
                                           const PCG::IPCGGraphSourceMigrator *migrator) {
+        using enum PCGDocumentCommandFailureReason;
         if (auto admitted = Admit(fence); admitted.HasError())
             return admitted;
         if (state_->publishing)
-            return Result<void>::Failure(MakeError(PCGDocumentError(Reason::Busy)));
+            return Result<void>::Failure(MakeError(PCGDocumentError(Busy)));
         if (!fence.operations.empty())
-            return Result<void>::Failure(MakeError(PCGDocumentError(Reason::Invalid)));
+            return Result<void>::Failure(MakeError(PCGDocumentError(Invalid)));
         if (state_->currentState != state_->savedState && !discardDirty)
-            return Result<void>::Failure(MakeError(PCGDocumentError(Reason::Dirty)));
+            return Result<void>::Failure(MakeError(PCGDocumentError(Dirty)));
         if (!capture.identity.exists || capture.identity.bytes != capture.bytes.size() ||
             capture.identity.digest != ComputeSha256(capture.bytes))
-            return Result<void>::Failure(MakeError(PCGDocumentError(Reason::Invalid)));
+            return Result<void>::Failure(MakeError(PCGDocumentError(Invalid)));
         auto parsed = PCG::DeserializePCGGraphAsset(SourceBytes(capture), Context(state_->catalog), migrator);
         if (parsed.HasError())
             return Result<void>::Failure(parsed.ErrorValue());
         if (parsed.Value().Data().generation.graph != state_->acceptedGeneration.graph)
-            return Result<void>::Failure(MakeError(PCGDocumentError(Reason::Conflict)));
+            return Result<void>::Failure(MakeError(PCGDocumentError(Conflict)));
         auto digest = StateIdentity(parsed.Value(), state_->catalog);
         if (digest.HasError())
             return Result<void>::Failure(digest.ErrorValue());
         auto source = std::make_shared<const PCG::PCGGraphAsset>(std::move(parsed).Value());
         if (fence.cancellation.IsCancellationRequested())
-            return Result<void>::Failure(MakeError(PCGDocumentError(Reason::Cancelled)));
+            return Result<void>::Failure(MakeError(PCGDocumentError(Cancelled)));
         state_->source.swap(source);
         state_->acceptedSource = capture.identity;
         state_->acceptedGeneration = state_->source->Data().generation;
