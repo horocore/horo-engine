@@ -1409,6 +1409,7 @@ add_library(HoroAnimationApi STATIC
         runtime/animation/api/AnimationGraphBinding.cpp
         runtime/animation/api/AnimationCompression.cpp
         runtime/animation/api/AnimationClip.cpp
+        runtime/animation/api/AnimationClipDiagnostics.cpp
         runtime/animation/api/AnimationComponents.cpp
         runtime/animation/api/AnimationErrors.cpp
         runtime/animation/api/AnimationIdentity.cpp
@@ -1419,6 +1420,13 @@ add_library(HoroAnimationApi STATIC
 add_library(HoroEngine::AnimationApi ALIAS HoroAnimationApi)
 target_compile_features(HoroAnimationApi PUBLIC cxx_std_20)
 target_link_libraries(HoroAnimationApi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
+
+add_library(HoroAnimationRuntime STATIC
+        runtime/animation/runtime/AnimationGraphInstance.cpp
+        runtime/animation/runtime/AnimationGraphExecution.cpp)
+add_library(HoroEngine::AnimationRuntime ALIAS HoroAnimationRuntime)
+target_compile_features(HoroAnimationRuntime PUBLIC cxx_std_20)
+target_link_libraries(HoroAnimationRuntime PUBLIC HoroEngine::AnimationApi)
 
 add_library(HoroAnimationGraphSourceCodec STATIC
         runtime/animation/source/AnimationGraphSourceRead.cpp

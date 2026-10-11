@@ -828,6 +828,7 @@ horo_register_catch_test(HoroAISightTests LABELS "unit;ai;sight;headless")
 add_executable(HoroAnimationApiTests
         unit/runtime/animation/AnimationGraphTests.cpp
         unit/runtime/animation/AnimationGraphBindingTests.cpp
+        unit/runtime/animation/AnimationGraphInstanceTests.cpp
         unit/runtime/animation/AnimationGraphSourceTests.cpp
         unit/runtime/animation/AnimationCompressionTests.cpp
         unit/runtime/animation/AnimationClipTests.cpp
@@ -838,7 +839,7 @@ add_executable(HoroAnimationApiTests
         unit/runtime/animation/SkeletalMeshSkinningTests.cpp
 )
 target_compile_features(HoroAnimationApiTests PRIVATE cxx_std_20)
-target_link_libraries(HoroAnimationApiTests PRIVATE HoroEngine::AnimationApi HoroEngine::AnimationGraphSourceCodec nlohmann_json::nlohmann_json)
+target_link_libraries(HoroAnimationApiTests PRIVATE HoroEngine::AnimationRuntime HoroEngine::AnimationApi HoroEngine::AnimationGraphSourceCodec nlohmann_json::nlohmann_json)
 horo_register_catch_test(HoroAnimationApiTests LABELS "unit;animation;headless")
 
 add_executable(HoroPCGTests
@@ -4482,7 +4483,7 @@ horo_register_catch_test(HoroMixerDocumentTests LABELS "unit;editor;audio;headle
 
 add_executable(HoroAnimationGraphPublicHeaderConsumer support/AnimationGraphPublicHeaderConsumer.cpp)
 target_compile_features(HoroAnimationGraphPublicHeaderConsumer PRIVATE cxx_std_20)
-target_link_libraries(HoroAnimationGraphPublicHeaderConsumer PRIVATE HoroEngine::AnimationApi HoroEngine::AnimationGraphSourceCodec)
+target_link_libraries(HoroAnimationGraphPublicHeaderConsumer PRIVATE HoroEngine::AnimationRuntime HoroEngine::AnimationApi HoroEngine::AnimationGraphSourceCodec)
 add_test(NAME HoroAnimationGraphPublicHeaderConsumer COMMAND HoroAnimationGraphPublicHeaderConsumer)
 set_tests_properties(HoroAnimationGraphPublicHeaderConsumer PROPERTIES LABELS "unit;animation;headless;public_headers;ci-windows")
 
