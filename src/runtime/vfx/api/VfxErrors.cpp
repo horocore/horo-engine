@@ -25,6 +25,13 @@ namespace Horo::Vfx::VfxErrors {
                                                   .defaultSeverity = ErrorSeverity::Critical,
                                                   .summary = "The VFX slot generation cannot advance without wrapping.",
                                                   .remediationHint = "Retire the exhausted slot permanently; never wrap its generation."};
+    const ErrorCodeDescriptor
+        SceneCloneUnavailable{.domain = VfxDomain,
+                              .code = ErrorCode{"vfx.scene.clone_unavailable"},
+                              .defaultSeverity = ErrorSeverity::Error,
+                              .summary = "Live VFX cannot be omitted or shared when cloning a runtime scene.",
+                              .remediationHint =
+                                  "Prepare a new scene-owned VFX world under the clone's exact identity and admitted budget."};
     const ErrorCodeDescriptor SerializedIdentityInvalid{.domain = VfxDomain,
                                                         .code = ErrorCode{"vfx.identity.serialized_invalid"},
                                                         .defaultSeverity = ErrorSeverity::Error,

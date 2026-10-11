@@ -44,6 +44,11 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroPlatformTests
     HoroUpdateZipPackageProducerTests
     HoroVfxApiTests
+    HoroVfxRenderExtractionTests
+    HoroVfxApiPublicHeaderConsumer
+    HoroRenderApiPublicHeaderConsumer
+    HoroRenderFrontendPublicHeaderConsumer
+    HoroRuntimeScenePublicHeaderConsumer
     HoroCinematicModelTests
     HoroFractureDocumentTests
     HoroFractureDocumentPublicHeaderConsumer
@@ -54,6 +59,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroCinematicModelPublicHeaderConsumer
     HoroCinematicRuntimePublicHeaderConsumer
     HoroEditorServicesPublicHeaderConsumer
+    HoroEditorSurfaceIdentityTests
+    HoroSourceFileOpenServiceTests
     HoroPrefabTests
     HoroPrefabSceneExpansionTests
     HoroPrefabSceneExpansionContractConsumer
@@ -63,6 +70,11 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroCharacterInputPublicHeaderConsumer
     HoroInputSdlTests
     HoroRuntimeUiInputTests
+    HoroRuntimeUiAnimationIntegrationTests
+    HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer
+    HoroRuntimeUiHitTestingTests
+    HoroRuntimeUiEventDispatchTests
+    HoroRuntimeUiPointerPublicHeaderConsumer
     HoroRuntimeUiTextUnicodeTests
     HoroRuntimeUiUnicodeStartupTests
     HoroRuntimeUiUnicodeLifecycleTests
@@ -89,6 +101,15 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroPackageLifecyclePublicHeaderConsumer
     HoroMcpSessionTests
     HoroMcpSessionPublicHeaderConsumer
+    HoroProjectCodeQueryTests
+    HoroProjectReadFilesTests
+    HoroMcpProjectCodeQueryTests
+    HoroSourceDocumentCodeQueryTests
+    HoroProjectReadFilesApiPublicHeaderConsumer
+    HoroPlatformProjectReadFilesPublicHeaderConsumer
+    HoroProjectCodeQueryPublicHeaderConsumer
+    HoroMcpProjectCodeQueryPublicHeaderConsumer
+    HoroSourceDocumentCodeQueryPublicHeaderConsumer
     HoroRuntimeSaveRootResolverTests
     HoroRuntimeSaveStorageQualificationTests
     HoroSaveStorageUserStateQualificationTests
@@ -107,6 +128,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroTerrainPayloadManifestPublicHeaderConsumer
     HoroTerrainProducerSnapshotTests
     HoroTerrainProducerSnapshotPublicHeaderConsumer
+    HoroTerrainRenderIntegrationTests
+    HoroTerrainRenderIntegrationPublicHeaderConsumer
     HoroNavigationRuntimeTests
     HoroNavigationTransportReservationTests
     HoroNavigationCoordinatorPublicConsumer
@@ -139,6 +162,7 @@ set(HORO_SONAR_EDITOR_TARGETS
     HoroCameraCutEditorIntegrationTests
     HoroCinematicPropertyIntegrationTests
     HoroConfiguredEditorUpdateBackendTests
+    HoroSourceDocumentCodeQueryTests
 )
 
 function(horo_ci_catch_labels target)

@@ -82,6 +82,7 @@ consumer. Existing callers require no migration; new built-in node consumers lin
 | `HoroRuntimeUi` (`HoroEngine::RuntimeUi`) | Always | Owns backend-neutral identities, authored/cooked document contracts, canvas modes and deterministic logical-to-screen resolution, typed viewport evidence and safe-area/UI/font-scale/pixel-snap policy resolution, canvas references, mutable instance lifecycle, bounded retained element trees, deferred structural transactions, typed style assets/tokens/classes, deterministic element inheritance and visual-state resolution, incremental measure-arrange caching, immutable style/layout/render snapshots, per-view render extraction, dependency enumeration, and typed stale-value rejection under `Runtime/Ui/**`. Platform owns native evidence publication and Renderer owns native realization; Runtime UI does not query either. Owns transactional semantic UI scene reconciliation over actual generation publishers and explicit Scene provider lineage. | Foundation, Assets, SceneIdentity (public) |
 | `HoroAssets` (`HoroEngine::Assets`) | Always | Owns all current `Assets/**` headers. The target currently combines registry, provider, import, preview, reimport, cook, cache, and output responsibilities. | Foundation (public) |
 | `HoroAnimationApi` (`HoroEngine::AnimationApi`) | Always | Owns backend-neutral persistent animation asset identities, generation-safe runtime handles, stable validation errors, inert component contracts, immutable bounded skeleton, skinning, and clip assets, exact bounded clip traversal/sampling, plus preallocated frame pose storage with deterministic hierarchy evaluation and move-only immutable leases under `Animation/**`. Renderer resources, presentation palette publication, graph evaluation, and backend integration remain outside this target. | Foundation, Assets (public) |
+| `HoroAnimationRuntime` (`HoroEngine::AnimationRuntime`) | Always | Owns explicitly prepared graph instances consuming immutable compiled occurrence/access plans, preallocated typed execution, exact fixed-point cursor residuals, transactional tick commit/abort, copied previous/current local pose publication, replacement and shutdown. No scene activation or backend discovery. | AnimationApi (public) |
 | `HoroInput` (`HoroEngine::Input`) | Always | Owns the backend-neutral `Runtime/Input.h` contract and runtime implementation. | Foundation (public) |
 | `HoroRuntimeUiInput` (`HoroEngine::RuntimeUiInput`) | Always | Owns public `Runtime/Ui/UiNavigationInput.h` canonical navigation/modality/glyph composition plus the target-private focused-text adapter. Borrows the existing Input router, Runtime UI focus graph and action queue; creates no independent UI owner or device assignment. | Input, RuntimeUi (public) |
 | `HoroAudioMemory` (`HoroEngine::AudioMemory`) | Always | Owns `Audio/AudioMemory.h`, bounded scratch storage and generation-safe fixed pools with explicit deferred reuse. Aligned allocation details remain target-private. | AudioApi (public) |
@@ -242,7 +243,7 @@ conflicts are recorded rather than treated as additional implementations.
 | `HoroEngine::SceneModel` | Partial | Target exists but publicly depends on RenderApi, contrary to the documented Foundation-only level. |
 | `HoroEngine::RuntimeScene` | Implemented | `HoroRuntimeScene`; Build System still calls this `HoroEngine::SceneRuntime`. |
 | `HoroEngine::Physics` | Partial | Foundation/Assets target owns typed identities/descriptors, immutable settings and capability preflight. Optional private pinned Jolt composition owns explicit process registration and isolated empty-world lifecycle with rollback; Null/omitted builds retain the neutral API. Public SDK isolation, lifecycle and notice installation have regression tests. Full cook-target encoding/envelope verification, body/filter admission, registries, queues and native stepping remain planned. |
-| `HoroEngine::AnimationApi` | Partial | `HoroAnimationApi` owns typed persistent asset identities, stable component/runtime identities, bounded generation-safe handles, immutable skeleton/skinning/clip assets, exact wrap/reverse traversal, allocation-free clip sampling, and bounded frame pose storage with dirty propagation, partial hierarchy evaluation, lifecycle fencing, diagnostics, and immutable cross-thread leases. Graph evaluation, render-resource realization, presentation palette publication, and backend integration remain planned. |
+| `HoroEngine::AnimationApi` | Partial | `HoroAnimationApi` owns typed persistent asset identities, stable component/runtime identities, bounded generation-safe handles, immutable skeleton/skinning/clip assets, exact wrap/reverse traversal, allocation-free clip sampling, and bounded frame pose storage with dirty propagation, partial hierarchy evaluation, lifecycle fencing, diagnostics, and immutable cross-thread leases. Prepared graph evaluation is owned downstream by `AnimationRuntime`; render-resource realization, presentation palette publication, and backend integration remain planned. |
 | `HoroEngine::AI` | Partial | `HoroAI` owns Foundation-only persistent gameplay-AI identities, bounded duplicate validation, stable errors, and SceneRuntime-incarnation-safe runtime handles. Registries, activation, blackboard storage, decision execution, and scheduling remain planned. |
 | `HoroEngine::VfxApi` | Partial | `HoroVfxApi` owns Foundation-only generation-safe effect-system, emitter, particle-buffer and decal identities, canonical persistence encoding, typed stale access outcomes, and inert null/deterministic harness compositions. Simulation, asset compilation, pooling, rendering extraction and native resources remain planned. |
 | `HoroEngine::CinematicModel` | Partial | `HoroCinematicModel` owns Foundation-only stable generation-safe sequence, track, keyframe, and property-binding identities with canonical persistence encoding and inert test compositions. Assets, curves, schemas, parsers, and runtime playback remain planned. |
@@ -394,3 +395,27 @@ its qualified source-free flat convex loader. `HoroDestructionCollisionArtifacts
 links DestructionApi/Physics for one source-free packaged bundle, separate from offline
 projection. Generated individual public-header
 consumers validate each of these target boundaries.
+
+### Terrain render integration header migration (HORO-1907)
+
+`HoroEngine::TerrainRenderIntegration` owns the new
+`Horo/TerrainRenderIntegration/TerrainRenderSnapshot.h` and
+`Horo/TerrainRenderIntegration/TerrainTileResourceOwner.h` public contracts. Host
+composition links that target explicitly when visual extraction/resources are needed.
+The existing TerrainRender target retains its TerrainApi/RenderApi dependencies;
+TerrainApi, TerrainRuntime, and concrete renderer backends acquire no reverse edge.
+The integration depends on TerrainCook, TerrainRender, RenderFrontend, and WorldStreaming
+identity/origin values and publishes
+only their staged owning headers. `HoroTerrainRenderIntegrationPublicHeaderConsumer`
+compiles both declarations without repository-wide source include access. Existing
+callers need no migration because this is an additive opt-in host boundary.
+
+The renderer resource contract also adds `RenderResourceOperationState` under the
+existing RenderApi-owned `RenderResource.h` and an observation method under the
+existing RenderFrontend-owned `RenderFrontend.h`. The observed Terrain failure path
+needs to distinguish a known failed creation from an unknown/evicted operation record
+before relinquishing automatically retired metadata. Existing callers retain
+`ResourceOperationResult` and its original diagnostic behavior, including terminal
+results after shutdown; no migration is required. Ownership and dependency edges
+remain unchanged. RenderApi and RenderFrontend public-header consumers and the
+integration consumer validate this additive contract.

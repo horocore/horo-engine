@@ -26,6 +26,14 @@ namespace Horo::Render {
             return MakeError(descriptor, std::move(message));
         }
 
+        /** @brief Detects VFX workloads whose physical encoder has not been admitted. */
+        [[nodiscard]] bool RequiresVfxEncoding(const std::span<const RenderGraphPassWorkload> workloads) noexcept {
+            for (const auto &workload : workloads)
+                if (std::holds_alternative<RenderGraphVfx>(workload.workload))
+                    return true;
+            return false;
+        }
+
         [[nodiscard]] Result<void> ValidateFrontendConfiguration(const RenderResourceUploadLimits &uploadLimits,
                                                                  const RenderFrontendMemoryConfig &memoryConfig,
                                                                  const RenderResourceRetirementLimits &retirementLimits) {
@@ -182,6 +190,10 @@ namespace Horo::Render {
                                                         const RenderGraphTransientResourcesHandle transientResources) {
         if (const auto admitted = ValidateExecutionAdmission(); admitted.HasError())
             return admitted;
+        if (RequiresVfxEncoding(workloads)) {
+            Abort();
+            return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::VfxExecutionUnavailable));
+        }
         try {
             Detail::RenderGraphTransientResourceSet *transient = nullptr;
             if (transientResources.IsValid()) {

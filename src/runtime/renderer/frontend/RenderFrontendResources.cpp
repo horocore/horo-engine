@@ -38,7 +38,8 @@ namespace Horo::Render {
 
         [[nodiscard]] constexpr bool IsCurrentTextureFormatSupported(const RenderTextureFormat format) noexcept {
             using enum RenderTextureFormat;
-            return format == Rgba8Unorm || format == Depth24Stencil8 || format == Depth32Float;
+            return format == Rgba8Unorm || format == Rgba16Float || format == Rgba32Float || format == Depth24Stencil8 ||
+                   format == Depth32Float;
         }
 
         [[nodiscard]] constexpr ResourceDescriptorAdmission AdmitCurrentTextureDescriptor(

@@ -44,6 +44,13 @@ namespace Horo::Render {
         [[nodiscard]] constexpr auto operator<=>(const ResourceOperationId &) const noexcept = default;
     };
 
+    /** @brief Known asynchronous creation outcome; unknown or evicted operations are query errors. */
+    enum class RenderResourceOperationState : std::uint8_t {
+        Pending,
+        Succeeded,
+        Failed
+    };
+
     /** @brief Explicit lifecycle state of one resident resource generation. */
     enum class RenderResourceState : std::uint8_t {
         Pending,

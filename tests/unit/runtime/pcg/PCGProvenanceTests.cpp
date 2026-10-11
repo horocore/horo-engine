@@ -206,4 +206,19 @@ namespace Horo::PCG {
         CheckError(ValidatePCGProvenanceReuse(oldRoot, replacement), PCGErrors::ProvenanceStale);
         CHECK(oldRoot.Seed(Id<SourceSampleId>(40)).HasValue());
     }
+
+    TEST_CASE("PCG retained sample seed uses the unchanged schema-one domain and network words", "[unit][pcg][provenance]") {
+        Sha256Digest key;
+        for (std::size_t index = 0; index < key.bytes.size(); ++index)
+            key.bytes[index] = static_cast<std::uint8_t>(index);
+        // Independently fixed SHA-256 golden: HPCGSEED + version 1 + bytes 0..31 + network-order sample.
+        CHECK(DerivePCGSampleSeed(key, Id<SourceSampleId>(1)).Value() == 0x5aab42c0f82f8051ULL);
+        CHECK(DerivePCGSampleSeed(key, Id<SourceSampleId>(40)).Value() == 0xd7e828bb097e968cULL);
+        CHECK(DerivePCGSampleSeed(key, Id<SourceSampleId>(41)).Value() == 0x6efdf3e2ab35bc0eULL);
+        CheckError(DerivePCGSampleSeed(key, {}), PCGErrors::ProvenanceInvalid);
+        const auto captured = CapturePCGProvenance(Candidate());
+        REQUIRE(captured.HasValue());
+        const auto &root = captured.Value();
+        CHECK(DerivePCGSampleSeed(root.Key(), Id<SourceSampleId>(40)).Value() == root.Seed(Id<SourceSampleId>(40)).Value());
+    }
 }  // namespace Horo::PCG

@@ -83,8 +83,51 @@ replacement is validated and reserved before publication. Current bytes and last
 explicitly loaded disk-base bytes are immutable shared roots. Dirty compares their
 exact bytes, so restoring the base clears dirty despite a newer notification revision.
 Same-byte edits do not advance revision. Explicit reload establishes a new base revision;
-save publication, history, recovery and widget-specific integration remain owned by
-their separate source-editor tickets and cannot mark an unpersisted buffer saved.
+save publication is owned by the revision-fenced EDT-003.5 service below. History,
+recovery and widget-specific integration remain separate source-editor tickets; they
+cannot mark an unpersisted buffer saved.
+
+### Source Save Publication (EDT-003.5)
+
+`SourceDocumentService::Save` captures one exact current revision on the owner thread.
+It compares disk bytes with the immutable base; overwrite consent supplies the exact
+external bytes the user approved and is rejected if those bytes change again. Save
+is a bounded, explicit I/O operation outside draw/frame paths. A publication fence
+rejects reentrant edit, reload, save, close and shutdown callbacks, so callbacks cannot
+invalidate the captured record or clear a newer authored revision. Readers keep their
+immutable leases throughout publication.
+
+The host composes `DurableFileSystem`. Source saving exclusively creates the fixed
+sibling `.horo-source.temporary` in an existing authorized parent, flushes contents
+and captured destination mode before replacement, rechecks disk and cancellation,
+then consumes `AtomicFileReplacementReceipt`. An uncommitted error preserves the
+original destination, current revision and base. Only the temporary whose creation
+receipt belongs to this operation is removed on rollback. A pre-existing temporary,
+including an interruption artifact or symlink, is preserved and causes a closed
+failure; recovery/removal is an explicit host/user operation after ownership inspection.
+The sibling `.horo-source.lock` serializes cooperating writers. This protocol assumes
+the authorized parent and registry are quiescent under host ownership; it does not
+grant protection against arbitrary noncooperating processes replacing ancestors or
+writing between the final comparison and native rename.
+
+A native replacement followed by failed directory durability (or an exception after
+the native receipt) returns `VisibleDurabilityUnconfirmed` with the filesystem cause
+or a preallocated uncertainty diagnostic. The published snapshot keeps the previous
+base and remains dirty even when bytes happen to match. It cannot be closed through
+Save until the user explicitly reloads or saves with exact disk-byte consent. The
+receipt never claims that the previous file survived a visible replacement. A durable
+save advances the base/revision and clears dirty; BOM and newline bytes are unchanged.
+
+`SourceFileOpenService::SaveAs` permits editable source classifications inside the
+project. It stages registry retargeting before filesystem callbacks, rejects canonical
+key collisions with another open instance, and publishes the new location only after
+native visibility. Instance identity is preserved, including unconfirmed visible
+outcomes; precommit failure preserves the old location and original file. The workspace
+controller routes Save, Save As, Save All and explicit Save/Discard/Cancel close commands
+to this owner and exposes typed outcomes to its presentation composition. Save All
+captures dirty sessions in admission order, reserves every outcome before writing,
+and returns every independently successful or failed item. Dirty-close Save requires
+a durable receipt; Cancel retains ownership and Discard explicitly releases it.
 
 Snapshots retain validated UTF-8 bytes without normalization, including UTF-8 BOM and
 LF/CRLF/CR/mixed metadata. UTF-16/32, noncanonical UTF-8 and binary C0 controls other
@@ -369,7 +412,13 @@ Failed save preserves the original file and returns structured diagnostics.
 
 `Save As` validates project boundaries, extension, identity rules, reference
 updates, and destination conflicts. It commits the document's new location only
-after the destination is durable.
+after the destination is durable. Editable Source documents are the explicit exception:
+if the tracked native replacement becomes visible but durability confirmation fails,
+EDT-003.5 retargets the source instance to that visible destination and returns
+`VisibleDurabilityUnconfirmed`; it retains the old base and dirty state. Keeping the
+old location after native visibility would misrepresent the file this owner published.
+Exact-byte overwrite consent or explicit reload is required before recovery clears
+that state. Precommit failure never retargets the source instance.
 
 Changing location is coordinated by the workspace controller and project model;
 tabs do not update path state independently.

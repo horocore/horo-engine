@@ -1208,3 +1208,14 @@ src/editor/design_system/components/
 - [System Design](../foundation/system-design.md)
 - [Observability Architecture](../observability/observability.md)
 - [Extension System](../extensions/plugin-system.md)
+
+### Source persistence command ownership (EDT-003.5)
+
+The workspace command route owns `SaveSourceDocument`, `SaveSourceDocumentAs`,
+`SaveAllSourceDocuments` and `CloseSourceDocument`. Requests carry exact instance and
+revision, optional observed-byte overwrite consent and explicit close choice. Typed
+single/batch/close outcomes remain queryable on the controller; presentation decides
+how to ask the user and display each error without writing files itself. Save As
+retargets the workspace registry through `SourceFileOpenService`, preserving instance
+identity. No widget teardown, presentation detach or implicit watcher event authorizes
+save, overwrite, or dirty discard.

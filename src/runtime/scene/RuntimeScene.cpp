@@ -14,6 +14,25 @@
 #include <utility>
 
 namespace Horo::Runtime {
+    /** @copydoc RuntimeScene::~RuntimeScene */
+    RuntimeScene::~RuntimeScene() = default;
+
+    /** @copydoc RuntimeScene::AttachVfxWorld */
+    Result<void> RuntimeScene::AttachVfxWorld(std::unique_ptr<Vfx::VfxWorld> world, Math::WorldCoordinate64 origin,
+                                              std::uint64_t originRevision) {
+        if (!world || vfxWorld_ || world->Scene().Value() != runtimeId_.value || originRevision == 0)
+            return Result<void>::Failure(MakeError(Vfx::VfxErrors::IdentityInvalid));
+        vfxWorld_ = std::move(world);
+        vfxOrigin_ = origin;
+        vfxOriginRevision_ = originRevision;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc RuntimeScene::CaptureVfx */
+    Vfx::VfxExtractionOutcome RuntimeScene::CaptureVfx(std::uint64_t frame) noexcept {
+        return vfxWorld_ ? vfxWorld_->Extract(frame, vfxOrigin_, vfxOriginRevision_) : Vfx::VfxExtractionOutcome{};
+    }
+
     namespace {
         template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &code, std::string message) {
             return Result<T>::Failure(MakeError(code, std::move(message)));
@@ -200,6 +219,8 @@ namespace Horo::Runtime {
         if (!active_.scene || !runtimeId.IsValid() || runtimeId == active_.scene->runtimeId_)
             return Failure<std::unique_ptr<RuntimeScene>>(SceneErrors::InvalidCandidate,
                                                           "An active scene and a distinct runtime identity are required.");
+        if (active_.scene->vfxWorld_)
+            return Result<std::unique_ptr<RuntimeScene>>::Failure(MakeError(Vfx::VfxErrors::SceneCloneUnavailable));
         auto clone = std::make_unique<RuntimeScene>(runtimeId, active_.scene->definitionId_, active_.scene->definitionRevision_,
                                                     active_.scene->config_, active_.scene->assetRegistryRevision_, active_.scene->assets_);
         clone->storage_ = active_.scene->storage_;

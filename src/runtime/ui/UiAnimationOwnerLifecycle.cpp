@@ -2,6 +2,7 @@
 #include "UiAnimationOwnerInternal.h"
 
 #include <algorithm>
+#include <exception>
 #include <utility>
 
 namespace Horo::Runtime::Ui {
@@ -33,12 +34,20 @@ namespace Horo::Runtime::Ui {
     }
 
     UiAnimationOwner::~UiAnimationOwner() {
+        if (storage_ && storage_->lifecycle.pointerDispatching)
+            std::terminate();  // Synchronous routed callbacks still borrow this public owner object.
         Shutdown();
     }
 
-    UiAnimationOwner::UiAnimationOwner(UiAnimationOwner &&) noexcept = default;
+    UiAnimationOwner::UiAnimationOwner(UiAnimationOwner &&other) noexcept {
+        if (other.storage_ && other.storage_->lifecycle.pointerDispatching)
+            std::terminate();
+        storage_ = std::move(other.storage_);
+    }
 
     UiAnimationOwner &UiAnimationOwner::operator=(UiAnimationOwner &&other) noexcept {
+        if ((storage_ && storage_->lifecycle.pointerDispatching) || (other.storage_ && other.storage_->lifecycle.pointerDispatching))
+            std::terminate();
         if (this != &other) {
             Shutdown();
             storage_ = std::move(other.storage_);
@@ -48,22 +57,22 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAnimationOwner::Acquire */
     Result<UiAnimationFrameLease> UiAnimationOwner::Acquire() const {
-        if (!storage_ || storage_->stopped || storage_->draining || !storage_->currentFrame.has_value())
+        if (!storage_ || storage_->lifecycle.stopped || storage_->lifecycle.draining || !storage_->currentFrame.has_value())
             return Result<UiAnimationFrameLease>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         return Result<UiAnimationFrameLease>::Success(UiAnimationFrameLease{storage_->frames[*storage_->currentFrame]});
     }
 
     /** @copydoc UiAnimationOwner::IsCurrent */
     bool UiAnimationOwner::IsCurrent(const UiAnimationFrameLease &frame) const noexcept {
-        return storage_ && !storage_->stopped && !storage_->draining && storage_->currentFrame.has_value() &&
+        return storage_ && !storage_->lifecycle.stopped && !storage_->lifecycle.draining && storage_->currentFrame.has_value() &&
                frame.storage_ == storage_->frames[*storage_->currentFrame] && storage_->publisher.IsCurrent(frame.storage_->generation);
     }
 
     /** @copydoc UiAnimationOwner::Shutdown */
     void UiAnimationOwner::Shutdown() noexcept {
-        if (!storage_ || storage_->stopped)
+        if (!storage_ || storage_->lifecycle.stopped)
             return;
-        storage_->stopped = true;
+        storage_->lifecycle.stopped = true;
         storage_->candidate.admitted = false;
         AbandonControlSources(*storage_);
         storage_->candidate.styles.reset();
@@ -80,10 +89,10 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAnimationOwner::DrainRetired */
     Result<std::size_t> UiAnimationOwner::DrainRetired() {
-        if (!storage_ || storage_->draining || storage_->candidate.admitted)
+        if (!storage_ || storage_->lifecycle.draining || storage_->candidate.admitted || storage_->lifecycle.pointerDispatching)
             return Result<std::size_t>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         // The application calls this outside frame work; owned frame slots retain snapshots until external leases drain.
-        if (storage_->stopped) {
+        if (storage_->lifecycle.stopped) {
             for (const auto &frame : storage_->frames) {
                 if (frame.use_count() != 1)
                     continue;
@@ -109,7 +118,7 @@ namespace Horo::Runtime::Ui {
                 reclaimed += drained.Value();
             }
         }
-        const DrainAdmissionGuard admission{storage_->draining};
+        const DrainAdmissionGuard admission{storage_->lifecycle.draining};
         const auto collected = storage_->publisher.CollectRetired();
         if (collected.HasError())
             return Result<std::size_t>::Failure(collected.ErrorValue());
@@ -118,7 +127,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAnimationOwner::CanReclaim */
     bool UiAnimationOwner::CanReclaim() const noexcept {
-        return !storage_ || (storage_->stopped && storage_.UseCount() == 1 && !storage_->candidate.admitted &&
+        return !storage_ || (storage_->lifecycle.stopped && storage_.UseCount() == 1 && !storage_->candidate.admitted &&
                              storage_->resolver.IsDrained() && std::ranges::all_of(storage_->frames, [](const auto &frame) {
             return frame.use_count() == 1;
         }) && storage_->publisher.CanReclaim());

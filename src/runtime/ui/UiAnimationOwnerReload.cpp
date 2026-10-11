@@ -126,6 +126,8 @@ namespace Horo::Runtime::Ui {
             return Result<UiAnimationReloadResult>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
         if (const auto admitted = AdmitCommand(*storage_); admitted.HasError())
             return Result<UiAnimationReloadResult>::Failure(admitted.ErrorValue());
+        if (storage_->lifecycle.pointerDispatching)
+            return Result<UiAnimationReloadResult>::Failure(MakeError(UiErrors::EventDispatchReentrant));
         if (storage_->route.gate)
             return Result<UiAnimationReloadResult>::Failure(MakeError(UiErrors::AnimationConflict));
         auto prepared = storage_->publisher.Prepare(std::move(replacement), cancellation);
@@ -146,7 +148,7 @@ namespace Horo::Runtime::Ui {
         result.state = committed.Value();
         for (const auto &timeline : next.Value()->timelines)
             result.restartedTimelines += timeline.occupied ? 1U : 0U;
-        storage_->stopped = true;
+        storage_->lifecycle.stopped = true;
         if (storage_->resolver.State() == UiStyleResolverState::Active)
             (void)storage_->resolver.BeginRetirement();
         if (storage_->registry.State() == RuntimeStyleRegistryState::Active)

@@ -450,6 +450,7 @@ namespace Horo::Render {
         void Shutdown() noexcept;
 
     private:
+        friend class RenderFrontend;
         RenderGraphBuilder(RenderGraphOwnerId owner, const RenderGraphLimits &limits) noexcept;
 
         [[nodiscard]] Result<void> Reserve();

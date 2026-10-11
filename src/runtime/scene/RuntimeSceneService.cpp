@@ -361,7 +361,11 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc RuntimeSceneService::OnPhase */
-    Result<void> RuntimeSceneService::OnPhase(const RuntimePhase phase, const FrameContext &) {
+    Result<void> RuntimeSceneService::OnPhase(const RuntimePhase phase, const FrameContext &context) {
+        if (phase == RuntimePhase::RenderExtraction) {
+            vfxFrame_ = {};
+            vfxFrame_ = active_.scene ? active_.scene->CaptureVfx(context.frameNumber) : Vfx::VfxExtractionOutcome{};
+        }
         if (phase == RuntimePhase::CommitDeferredLifecycleChanges) {
             if (mutatingLifecycle_)
                 return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
@@ -409,6 +413,7 @@ namespace Horo::Runtime {
         publicationCheck_.reset();
         ShutdownCandidates(active_.candidates);
         active_.restore.reset();
+        vfxFrame_ = {};
         active_.scene.reset();
         transition_ = TransitionKind::None;
         started_ = false;
@@ -543,6 +548,9 @@ namespace Horo::Runtime {
         pending_.datasets = Absent;
         try {
             pending_.candidates.reserve(participants_.size());
+            for (const auto &participant : participants_)
+                if (auto owned = participant->PrepareOwnedScene(*pending_.scene); owned.HasError())
+                    return owned;
             for (const auto &participant : participants_) {
                 auto prepared = participant->Prepare(definition, pending_.scene->View());
                 if (prepared.HasError()) {

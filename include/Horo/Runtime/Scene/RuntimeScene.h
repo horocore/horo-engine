@@ -10,6 +10,7 @@
 #include "Horo/Runtime/RuntimeLifecycle.h"
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
 #include "Horo/Runtime/Scene/SceneIdentity.h"
+#include "Horo/Vfx/VfxWorld.h"
 
 #include <limits>
 #include <memory>
@@ -137,6 +138,18 @@ namespace Horo::Runtime {
     class SceneActivationParticipant {
     public:
         virtual ~SceneActivationParticipant() = default;
+
+        /** @brief Prepares scene-owned subsystem storage before immutable activation validation.
+         * @param scene Exact unpublished candidate whose identity the host uses for preparation.
+         * @return Success or typed preparation failure; the service destroys the entire candidate on failure.
+         * @details Host adapters may attach already admitted VFX state here. No active Scene, publication callback,
+         * service registration or backend selection is allowed. Existing participants require no mutable preparation.
+         */
+        [[nodiscard]] virtual Result<void> PrepareOwnedScene(RuntimeScene &scene) {
+            (void)scene;
+            return Result<void>::Success();
+        }
+
         /** @brief Prepares and fully finalizes detached subsystem state for an unpublished scene candidate.
          * @param definition Validated immutable scene definition.
          * @param scene Borrowed unpublished scene candidate.
@@ -633,6 +646,26 @@ namespace Horo::Runtime {
         [[nodiscard]] static Result<std::unique_ptr<RuntimeScene>> Create(const RuntimeSceneDefinition &definition,
                                                                           SceneRuntimeId runtimeId, RuntimeSceneConfig config = {});
 
+        /** @brief Releases scene-owned VFX simulation; independent immutable snapshots remain alive. */
+        ~RuntimeScene();
+        /** @brief Attaches one fully prepared world before scene activation.
+         * @param world Exact scene-scoped prepared CPU effects. @param origin Captured render origin.
+         * @param originRevision Non-zero origin generation. @return Success or typed invalid/repeated attachment failure.
+         * @details Host composition owns preparation. This transfers simulation ownership; no service discovery occurs.
+         */
+        [[nodiscard]] Result<void> AttachVfxWorld(std::unique_ptr<Vfx::VfxWorld> world, Math::WorldCoordinate64 origin,
+                                                  std::uint64_t originRevision);
+
+        /** @brief Borrows this scene's live VFX owner for typed gameplay/simulation commands. @return World or null. */
+        [[nodiscard]] Vfx::VfxWorld *VfxWorld() noexcept {
+            return vfxWorld_.get();
+        }
+
+        /** @brief Captures the sole live-effect render channel on the owning extraction phase.
+         * @param frame One-based host frame. @return Retained immutable values and complete overload report.
+         */
+        [[nodiscard]] Vfx::VfxExtractionOutcome CaptureVfx(std::uint64_t frame) noexcept;
+
         struct ResolvedAsset {
             SceneAssetDependency dependency;
             std::shared_ptr<const std::vector<std::uint8_t>> payload;
@@ -710,6 +743,9 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> DestroyEntity(RuntimeSceneStorage &storage, EntityRef entity) const;
         [[nodiscard]] bool IsValid(const RuntimeSceneStorage &storage, EntityRef entity) const noexcept;
 
+        std::unique_ptr<Vfx::VfxWorld> vfxWorld_;
+        Math::WorldCoordinate64 vfxOrigin_{};
+        std::uint64_t vfxOriginRevision_{};
         SceneRuntimeId runtimeId_;
         SceneDefinitionId definitionId_;
         SceneDefinitionRevision definitionRevision_;
@@ -784,7 +820,8 @@ namespace Horo::Runtime {
         /**
          * @brief Clones the active prepared scene into a separate runtime domain.
          * @param runtimeId Unique identity for the clone; must not match the active domain.
-         * @return Independent topology/component state sharing only immutable cooked asset payloads.
+         * @return Independent topology/component state, or VfxErrors::SceneCloneUnavailable for attached VFX.
+         * @details VFX clones require explicit host preparation/admission and cannot silently omit live effects.
          */
         [[nodiscard]] Result<std::unique_ptr<RuntimeScene>> CloneActive(SceneRuntimeId runtimeId) const;
         /** @brief Returns and clears the newest structural commit result. */
@@ -793,6 +830,15 @@ namespace Horo::Runtime {
         [[nodiscard]] std::optional<Error> TakeOperationError();
 
         [[nodiscard]] Result<void> Startup(const CancellationToken &cancellation) override;
+
+        /** @brief Returns the current extraction phase's retained VFX frame and typed overload evidence.
+         * @return Scene-owner-thread borrowed result; renderer consumers copy its immutable snapshot lease.
+         * @details A failed/blocked extraction publishes an empty snapshot, never a stale prior frame.
+         */
+        [[nodiscard]] const Vfx::VfxExtractionOutcome &VfxFrame() const noexcept {
+            return vfxFrame_;
+        }
+
         [[nodiscard]] Result<void> OnPhase(RuntimePhase phase, const FrameContext &context) override;
         [[nodiscard]] Result<void> OnFixedUpdate(const FixedStepContext &context) override;
         void Shutdown() noexcept override;
@@ -846,6 +892,7 @@ namespace Horo::Runtime {
         void RetirePublicationReceipt(ScenePublicationStatus status) noexcept;
 
         SceneAggregate active_;
+        Vfx::VfxExtractionOutcome vfxFrame_;
         SceneAggregate pending_;
         std::vector<std::unique_ptr<SceneActivationParticipant>> participants_;
         std::vector<std::unique_ptr<SceneStructuralParticipant>> structuralParticipants_;
