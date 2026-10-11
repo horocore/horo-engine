@@ -2,6 +2,7 @@
 #include "RenderResourceRegistry.h"
 
 #include <algorithm>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -24,12 +25,13 @@ namespace Horo::Render::Detail {
         if (record == operations_.end())
             return Lookup::Failure(
                 ObservationError(FrontendErrors::ResourceOperationUnknown, "The resource operation does not belong to this registry."));
-        return Lookup::Success(&*record);
+        return Lookup::Success(std::to_address(record));
     }
 
     /** @copydoc RenderResourceRegistry::OperationState */
     Result<RenderResourceOperationState> RenderResourceRegistry::OperationState(const ResourceOperationId operation) const {
         using Observation = Result<RenderResourceOperationState>;
+        using enum RenderResourceOperationState;
         if (!acceptingRequests_)
             return Observation::Failure(
                 ObservationError(FrontendErrors::ResourceRegistryStopped, "Resource observations are disabled during frontend shutdown."));
@@ -37,9 +39,9 @@ namespace Horo::Render::Detail {
         if (found.HasError())
             return Observation::Failure(found.ErrorValue());
         const auto &record = *found.Value();
-        return Observation::Success(
-            !record.complete ? RenderResourceOperationState::Pending
-                             : (record.error.has_value() ? RenderResourceOperationState::Failed : RenderResourceOperationState::Succeeded));
+        if (!record.complete)
+            return Observation::Success(Pending);
+        return Observation::Success(record.error.has_value() ? Failed : Succeeded);
     }
 
     Result<void> RenderResourceRegistry::OperationResult(const ResourceOperationId operation) const {

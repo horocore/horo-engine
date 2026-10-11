@@ -60,25 +60,26 @@ namespace Horo::TerrainRender {
 
         /** @brief Validates lifecycle, exact capability and placement before traversing source data. */
         Result<void> ValidateRequest(const TerrainRenderSnapshotRequest &r, const CancellationToken &cancellation) {
-            if (r.lifecycle == TerrainRuntimeLifecycle::Closed || r.lifecycle == TerrainRuntimeLifecycle::Closing)
+            using enum TerrainRuntimeLifecycle;
+            if (r.lifecycle == Closed || r.lifecycle == Closing)
                 return Result<void>::Failure(MakeError(TerrainErrors::LifecycleUnavailable));
-            if (r.lifecycle == TerrainRuntimeLifecycle::Cancelled || cancellation.IsCancellationRequested())
+            if (r.lifecycle == Cancelled || cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(TerrainErrors::CompositionCancelled));
             const auto &h = r.header;
-            if (r.lifecycle != TerrainRuntimeLifecycle::Active || h.schema != 1 || !h.terrain.IsValid() || !h.revisions.IsValid() ||
-                !h.world.IsValid() || !h.origin.IsValid() || (h.cell && (!h.cell->IsValid() || h.cell->partition != h.world)) ||
-                h.generation == 0 || !h.configuration.IsValid() || h.target == Sha256Digest{} || h.manifest == Sha256Digest{} ||
-                !h.capabilities.IsValid() || !h.datasetToWorld.TryToMatrix().HasValue() || h.datasetToWorld.scale.x <= 0 ||
-                h.datasetToWorld.scale.y <= 0 || h.datasetToWorld.scale.z <= 0 || !ValidLimits(r.limits))
+            if (r.lifecycle != Active || h.schema != 1 || !h.terrain.IsValid() || !h.revisions.IsValid() || !h.world.IsValid() ||
+                !h.origin.IsValid() || (h.cell && (!h.cell->IsValid() || h.cell->partition != h.world)) || h.generation == 0 ||
+                !h.configuration.IsValid() || h.target == Sha256Digest{} || h.manifest == Sha256Digest{} || !h.capabilities.IsValid() ||
+                !h.datasetToWorld.TryToMatrix().HasValue() || h.datasetToWorld.scale.x <= 0 || h.datasetToWorld.scale.y <= 0 ||
+                h.datasetToWorld.scale.z <= 0 || !ValidLimits(r.limits))
                 return Result<void>::Failure(MakeError(TerrainErrors::DescriptorInvalid));
             if (!h.capabilities.Contains(TerrainFoliageCapability::RenderExtraction) ||
                 !h.capabilities.Contains(TerrainFoliageCapability::TerrainRuntime))
                 return Result<void>::Failure(MakeError(TerrainErrors::CapabilityUnsupported));
             if (r.tiles.size() > r.limits.maximumTiles)
                 return Result<void>::Failure(MakeError(TerrainErrors::CapacityExceeded));
-            const auto &config = r.configuration.Data();
-            if (!MatchesRoot(r) || config.configuration != h.configuration || config.capability != h.revisions.capability ||
-                config.tier != r.source.Tiles().profile.tier)
+            if (const auto &config = r.configuration.Data(); !MatchesRoot(r) || config.configuration != h.configuration ||
+                                                             config.capability != h.revisions.capability ||
+                                                             config.tier != r.source.Tiles().profile.tier)
                 return Result<void>::Failure(MakeError(TerrainErrors::RevisionStale));
             return Result<void>::Success();
         }
@@ -154,8 +155,11 @@ namespace Horo::TerrainRender {
                     return i >= tile.mesh.vertices.size();
                 }))
                     return Result<void>::Failure(MakeError(TerrainErrors::DescriptorInvalid));
-                auto &a = tile.mesh.vertices[t.indices[0]], &b = tile.mesh.vertices[t.indices[1]], &c = tile.mesh.vertices[t.indices[2]];
-                const auto ab = b.position - a.position, ac = c.position - a.position;
+                auto &a = tile.mesh.vertices[t.indices[0]];
+                auto &b = tile.mesh.vertices[t.indices[1]];
+                auto &c = tile.mesh.vertices[t.indices[2]];
+                const auto ab = b.position - a.position;
+                const auto ac = c.position - a.position;
                 const Math::Vec3 n{ab.y * ac.z - ab.z * ac.y, ab.z * ac.x - ab.x * ac.z, ab.x * ac.y - ab.y * ac.x};
                 if (!Math::IsFinite(n) || n.y <= 0)
                     return Result<void>::Failure(MakeError(TerrainErrors::DescriptorInvalid));
@@ -177,7 +181,10 @@ namespace Horo::TerrainRender {
 
         /** @brief Tracks independent capture ceilings across all admitted tiles. */
         struct CaptureBudget {
-            std::uint64_t work{}, bytes{}, vertices{}, indices{};
+            std::uint64_t work{};
+            std::uint64_t bytes{};
+            std::uint64_t vertices{};
+            std::uint64_t indices{};
         };
 
         /** @brief Charges geometry, copied semantics and verification work before allocation. */

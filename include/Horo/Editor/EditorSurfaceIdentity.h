@@ -245,6 +245,12 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<void> Close(DocumentInstanceId instance);
 
+        /** @brief Rebinds one source session to an unoccupied validated source key, preserving its instance.
+         * @param instance Exact source session. @param key Prepared canonical destination identity.
+         * @return Success or typed invalid/occupied/unknown failure; no mutation on failure.
+         * @details Hosts prepare this in a detached registry before durable Save As, then move-publish that registry.
+         */
+        [[nodiscard]] Result<void> RetargetSource(DocumentInstanceId instance, DocumentOpenKey key);
         /** @brief Finds the current instance for a persistent key, if open. */
         [[nodiscard]] std::optional<DocumentIdentity> Find(const DocumentOpenKey &key) const;
         /** @brief Finds the current identity for an instance, if open. */

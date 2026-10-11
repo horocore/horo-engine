@@ -2,19 +2,21 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
 
 using namespace Horo;
 using Horo::Tests::IdentityValue;
 using namespace Horo::Tests::TerrainRendering;
 
 TEST_CASE("Terrain visual capture preserves large coordinates semantic layers legal LODs and independent leases", "[terrain][render]") {
-    SourceFixture f(false, 9);
-    auto r = f.Request();
-    std::reverse(f.selections.begin(), f.selections.end());
-    auto a = CaptureTerrainRenderSnapshot(r);
+    auto f = std::make_unique<SourceFixture>(false, 9);
+    const auto header = f->Request().header;
+    const auto limits = f->Request().limits;
+    std::reverse(f->selections.begin(), f->selections.end());
+    auto a = CaptureTerrainRenderSnapshot(f->Request());
     REQUIRE(a.HasValue());
     REQUIRE(a.Value().Tiles().size() == 4);
-    CHECK(a.Value().Tiles().front().tile == f.cooked.Tiles().tiles.front().id);
+    CHECK(a.Value().Tiles().front().tile == f->cooked.Tiles().tiles.front().id);
     CHECK(a.Value().Tiles().front().anchor[0] == 10'000'000'000.0);
     const auto &tile = a.Value().Tiles().front();
     CHECK(tile.mesh.vertices.front().position.x == 0);
@@ -24,10 +26,16 @@ TEST_CASE("Terrain visual capture preserves large coordinates semantic layers le
     CHECK_FALSE(tile.samplePayload.empty());
     auto secondView = a.Value();
     CHECK(secondView.Tiles().data() == a.Value().Tiles().data());
-    f.source.heightsMeters[0] = 999;
+    const auto originalPayload = tile.samplePayload;
+    f->source.heightsMeters[0] = 999;
+    CHECK(f->source.heightsMeters[0] == 999);
+    const auto replacementCook = Cook(f->source);
+    CHECK(replacementCook.ManifestDigest() != f->cooked.ManifestDigest());
+    f.reset();
     CHECK(secondView.Tiles().front().mesh.vertices.front().position.y == 0);
-    CHECK(a.Value().OwnedBytes() <= r.limits.maximumOwnedBytes);
-    CHECK(a.Value().ValidateCurrent(r.header).HasValue());
+    CHECK(secondView.Tiles().front().samplePayload == originalPayload);
+    CHECK(a.Value().OwnedBytes() <= limits.maximumOwnedBytes);
+    CHECK(a.Value().ValidateCurrent(header).HasValue());
 }
 
 TEST_CASE("Terrain visual capture keeps fully holed tiles as explicit empty topology", "[terrain][render]") {

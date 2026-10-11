@@ -457,8 +457,8 @@ unused storage categories. `Memory()` reports exact typed-slot, pose-transform,
 player, parameter and call-depth requirements before instance allocation.
 Compile/migration work allocates only at load/tool boundaries, never reads files,
 and checks a Foundation cancellation token during bounded loops and before
-returning. Program accessors allocate nothing. This contract does not claim an
-allocation-free evaluator has been implemented; ANI-002.2 owns that proof.
+returning. Program accessors allocate nothing. ANI-002.2 implements the separately
+prepared runtime owner described below.
 
 #### Versioning And Migration
 
@@ -497,6 +497,65 @@ successful candidate only when its dependency snapshot remains current. Admissio
 closure rejects new compiler calls; cancellation produces no callbacks or retained
 worker task. Runtime generation retirement, instance reconciliation, and clip
 publication binding belong to ANI-004.4/ANI-002.2 rather than this schema slice.
+
+### Prepared Graph Instance (ANI-002.2)
+
+`AnimationGraphInstance` belongs to `HoroEngine::AnimationRuntime`, downstream of
+`HoroEngine::AnimationApi`. The host/control
+owner prepares one instance using its generation-checked `AnimationInstanceHandle`
+and exact pinned program, skeleton publication generation and clip snapshots.
+There is no asset lookup, ambient registry activation, backend selection or scene
+activation in this API; ANI-004.5 owns scene component activation. The instance
+retains shared immutable dependencies rather than storing caller spans or raw
+pointers. Skeleton generations are issued by the asset publication owner and must
+be supplied with the actual pinned skeleton. The instance consumes the compiler's
+completion-ordered occurrence/access plan; Call, Input and Output alias their
+actual producer and do not introduce another interpreter schedule.
+
+`Create` admits complete logical runtime storage (state, typed working slots,
+parameter/player candidates and two committed pose buffers) and per-tick
+instruction/joint/key-search work before allocation. The storage budget covers
+instance-owned logical objects, excluding allocator overhead and independently
+prepared immutable assets. Clip track/key policy is checked against actual pinned
+assets; key-search work uses a conservative bit-width bound. Setup can allocate;
+all evaluation, cancellation, failed admission and copied pose queries cannot.
+
+The fixed-tick host calls `Evaluate` with an immutable typed parameter snapshot
+and the unchanged fixed quantum. Omitted parameters use compiled defaults; stable
+IDs determine overrides and duplicate, non-finite or mistyped values fail before
+execution. Player-local signed rates are fixed-point millionths in [-16x, 16x];
+zero holds and negative rates traverse clips in reverse. Simulation rate belongs
+to fixed scheduling and is not multiplied here. Exact signed sub-tick residuals
+are retained with each occurrence's independent clip cursor, including across
+rate changes. Intermediate arithmetic and complete traversal budgets are checked.
+
+`Evaluate` stages privately. The enclosing tick owner calls `Commit` only after
+all tick preflight succeeds, or `Abort` on failure. Pending cursors, residuals,
+parameters and the final local pose publish together. Failed attempts publish no
+new tick and leave both old poses readable. Cancellation is observed before work,
+between bounded instructions and at the commit fence. The commit fence is the
+linearization boundary: a later cancellation does not undo a committed tick.
+
+Pose consumers use `CopyPose` into their own complete storage. No borrowed pose
+pointer or consumer lease escapes. Exact previous/current handles identify the
+last two committed poses; a third commit retires the oldest storage generation.
+`Shutdown` closes execution and discards candidates while preserving committed
+copied-query access until owner destruction. Destruction and all mutable operations
+belong to the creating thread. Replacement is an explicit control transaction:
+`Replace` prepares exact dependencies for the same graph and next non-wrapping
+instance generation before retiring old state. Failed reload keeps the prior
+instance usable; success retires every old instance/pose handle. External copies
+of already copied pose values are unaffected.
+
+Frame-hot APIs return finite typed outcomes instead of `Horo::Error`, whose owned
+code/message strings allocate. `DescribeGraphInstanceFailure` projects the exact
+registered diagnostic at a control/presentation boundary. Clip `TraversePrepared`
+and `SamplePrepared` expose the same allocation-free status path; existing
+`Traverse`/`Sample` remain diagnostic wrappers over these shared validators and
+kernels. Their success behavior, codes and operation-specific messages are retained.
+No Foundation diagnostic representation changes. Blend uses the compiler-owned
+two-pose/float opcode, clamped finite weight and quaternion slerp; additive clips
+remain unavailable without a graph-authored reference/base contract (ANI-002.5).
 
 ### Graph Parameters
 

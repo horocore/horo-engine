@@ -28,52 +28,73 @@ def targets(name: str) -> set[str]:
     return result
 
 
+def cmake_conditions_at(source: str, offset: int) -> list[str]:
+    conditions = []
+    for line in source[:offset].splitlines():
+        condition = re.match(r"\s*if\s*\((.*)", line)
+        if condition:
+            conditions.append(condition.group(1))
+        elif re.match(r"\s*endif\s*\(", line):
+            conditions.pop()
+    return conditions
+
+
+WINDOWS_NON_AUDIO_TARGETS = frozenset({
+    "HoroLightCullingTests", "HoroLightFramePoolTests",
+    "HoroAITaskSchedulerTests", "HoroAITaskSchedulerPublicConsumer",
+    "HoroAnimationApiTests", "HoroAnimationGraphPublicHeaderConsumer",
+    "HoroD3D12InitializationTests",
+    "HoroMaterialBindingTests", "HoroMaterialBindingPublicHeaderConsumer",
+    "HoroNetworkDebuggerTests", "HoroNetworkDebuggerPublicHeaderConsumer",
+    "HoroPlayTopologyTests", "HoroPlayTopologyPublicHeaderConsumer",
+    "HoroTerrainAuthoringTests", "HoroTerrainAuthoringPublicHeaderConsumer",
+    "HoroPCGTests", "HoroPCGTerrainAdapterTests",
+    "HoroPCGPublicHeaderConsumer", "HoroPCGTerrainAdapterPublicHeaderConsumer",
+    "HoroCliCommandRegistryTests", "HoroPlatformTests", "HoroUpdateZipPackageProducerTests",
+    "HoroCliOutputPublicHeaderConsumer", "HoroCliProductionOutputContract",
+    "HoroCliMcpServeTests",
+    "HoroVfxApiTests", "HoroCinematicModelTests", "HoroCinematicRuntimeTests",
+    "HoroFractureDocumentTests", "HoroFractureDocumentPublicHeaderConsumer",
+    "HoroCinematicPropertyIntegrationTests", "HoroCinematicModelPublicHeaderConsumer",
+    "HoroCinematicRuntimePublicHeaderConsumer", "HoroEditorServicesPublicHeaderConsumer",
+    "HoroEditorSurfaceIdentityTests", "HoroSourceFileOpenServiceTests",
+    "HoroCameraCutRuntimeTests", "HoroCameraCutPublicHeaderConsumer",
+    "HoroPrefabTests", "HoroPrefabSceneExpansionTests", "HoroPrefabSceneExpansionContractConsumer",
+    "HoroAssetRegistryTests", "HoroInputTests", "HoroInputSdlTests", "HoroRuntimeUiInputTests",
+    "HoroCharacterInputTests", "HoroCharacterInputPublicHeaderConsumer",
+    "HoroInputPublicHeaderConsumer", "HoroExtensionManagerTests", "HoroMcpSessionTests",
+    "HoroEditorActivityBoundaryTests", "HoroExtensionsPublicHeaderConsumer",
+    "HoroProjectCodeQueryTests", "HoroProjectReadFilesTests",
+    "HoroMcpProjectCodeQueryTests", "HoroSourceDocumentCodeQueryTests",
+    "HoroProjectReadFilesApiPublicHeaderConsumer", "HoroPlatformProjectReadFilesPublicHeaderConsumer",
+    "HoroProjectCodeQueryPublicHeaderConsumer", "HoroMcpProjectCodeQueryPublicHeaderConsumer",
+    "HoroSourceDocumentCodeQueryPublicHeaderConsumer",
+    "HoroPackageLifecycleTests", "HoroPackageLifecyclePublicHeaderConsumer",
+    "HoroMcpSessionPublicHeaderConsumer", "HoroRuntimeSaveRootResolverTests",
+    "HoroRuntimeSaveStorageQualificationTests", "HoroSaveStorageUserStateQualificationTests",
+    "HoroRuntimeSaveFilesystemLockTests", "HoroRuntimeSaveSlotCommitTransactionTests",
+    "HoroRuntimeSaveSlotLifecycleTests", "HoroSaveSlotLifecyclePublicHeaderConsumer",
+    "HoroRuntimePublicHeaderConsumer", "HoroMixerDocumentTests",
+    "HoroRuntimeUiTextLayoutTests", "HoroRuntimeUiTextShapingTests", "HoroRuntimeUiTextUnicodeTests",
+    "HoroRuntimeUiUnicodeStartupTests", "HoroRuntimeUiUnicodeLifecycleTests", "HoroRuntimeUiPublicHeaderConsumer",
+    "HoroRuntimeUiOverlayLifecycleTests",
+    "HoroRuntimeUiHudAssociationTests", "HoroRuntimeUiHudPublicHeaderConsumer",
+    "HoroRuntimeUiSceneReconciliationTests", "HoroRuntimeUiSceneReconciliationPublicHeaderConsumer",
+    "HoroRuntimeUiHotReloadTests", "HoroRuntimeUiHotReloadPublicHeaderConsumer",
+    "HoroSceneIdentityPublicHeaderConsumer", "HoroSceneIdentityContractConsumer",
+    "HoroRuntimeUiScreenTransitionTests", "HoroRuntimeUiScreenTransitionPublicHeaderConsumer",
+    "HoroTerrainSourceArtifactTests", "HoroTerrainSourceArtifactPublicHeaderConsumer",
+    "HoroTerrainPayloadManifestTests", "HoroTerrainPayloadManifestPublicHeaderConsumer",
+    "HoroTerrainProducerSnapshotTests", "HoroTerrainProducerSnapshotPublicHeaderConsumer",
+    "HoroRuntimeSaveEventTriggersTests", "HoroSaveEventTriggersPublicHeaderConsumer",
+    "HoroRuntimeSaveRestoreTransactionTests", "HoroSaveGameplayCheckpointPublicHeaderConsumer",
+    "HoroNavigationRuntimeTests", "HoroNavigationBakeServiceTests",
+    "HoroNavigationTransportReservationTests", "HoroNavigationCoordinatorPublicConsumer",
+})
+
+
 def test_windows_group_preserves_every_previously_built_target() -> None:
-    assert targets("HORO_CI_WINDOWS_TARGETS") == targets("HORO_CI_AUDIO_TARGETS") | TERRAIN_RENDER_TARGETS | {
-        "HoroLightCullingTests", "HoroLightFramePoolTests",
-        "HoroAITaskSchedulerTests", "HoroAITaskSchedulerPublicConsumer",
-        "HoroAnimationApiTests", "HoroAnimationGraphPublicHeaderConsumer",
-        "HoroD3D12InitializationTests",
-        "HoroMaterialBindingTests", "HoroMaterialBindingPublicHeaderConsumer",
-        "HoroNetworkDebuggerTests", "HoroNetworkDebuggerPublicHeaderConsumer",
-        "HoroPlayTopologyTests", "HoroPlayTopologyPublicHeaderConsumer",
-        "HoroTerrainAuthoringTests", "HoroTerrainAuthoringPublicHeaderConsumer",
-        "HoroPCGTests", "HoroPCGTerrainAdapterTests",
-        "HoroPCGPublicHeaderConsumer", "HoroPCGTerrainAdapterPublicHeaderConsumer",
-        "HoroCliCommandRegistryTests", "HoroPlatformTests", "HoroUpdateZipPackageProducerTests",
-        "HoroCliOutputPublicHeaderConsumer", "HoroCliProductionOutputContract",
-        "HoroCliMcpServeTests",
-        "HoroVfxApiTests", "HoroCinematicModelTests", "HoroCinematicRuntimeTests",
-        "HoroFractureDocumentTests", "HoroFractureDocumentPublicHeaderConsumer",
-        "HoroCinematicPropertyIntegrationTests", "HoroCinematicModelPublicHeaderConsumer",
-        "HoroCinematicRuntimePublicHeaderConsumer", "HoroEditorServicesPublicHeaderConsumer",
-        "HoroCameraCutRuntimeTests", "HoroCameraCutPublicHeaderConsumer",
-        "HoroPrefabTests", "HoroPrefabSceneExpansionTests", "HoroPrefabSceneExpansionContractConsumer",
-        "HoroAssetRegistryTests", "HoroInputTests", "HoroInputSdlTests", "HoroRuntimeUiInputTests",
-        "HoroCharacterInputTests", "HoroCharacterInputPublicHeaderConsumer",
-        "HoroInputPublicHeaderConsumer", "HoroExtensionManagerTests", "HoroMcpSessionTests",
-        "HoroEditorActivityBoundaryTests", "HoroExtensionsPublicHeaderConsumer",
-        "HoroMcpSessionPublicHeaderConsumer", "HoroRuntimeSaveRootResolverTests",
-        "HoroRuntimeSaveStorageQualificationTests", "HoroSaveStorageUserStateQualificationTests",
-        "HoroRuntimeSaveFilesystemLockTests", "HoroRuntimeSaveSlotCommitTransactionTests",
-        "HoroRuntimeSaveSlotLifecycleTests", "HoroSaveSlotLifecyclePublicHeaderConsumer",
-        "HoroRuntimePublicHeaderConsumer", "HoroMixerDocumentTests",
-        "HoroRuntimeUiTextLayoutTests", "HoroRuntimeUiTextShapingTests", "HoroRuntimeUiTextUnicodeTests",
-        "HoroRuntimeUiUnicodeStartupTests", "HoroRuntimeUiUnicodeLifecycleTests", "HoroRuntimeUiPublicHeaderConsumer",
-        "HoroRuntimeUiOverlayLifecycleTests",
-        "HoroRuntimeUiHudAssociationTests", "HoroRuntimeUiHudPublicHeaderConsumer",
-        "HoroRuntimeUiSceneReconciliationTests", "HoroRuntimeUiSceneReconciliationPublicHeaderConsumer",
-        "HoroRuntimeUiHotReloadTests", "HoroRuntimeUiHotReloadPublicHeaderConsumer",
-        "HoroSceneIdentityPublicHeaderConsumer", "HoroSceneIdentityContractConsumer",
-        "HoroRuntimeUiScreenTransitionTests", "HoroRuntimeUiScreenTransitionPublicHeaderConsumer",
-        "HoroTerrainSourceArtifactTests", "HoroTerrainSourceArtifactPublicHeaderConsumer",
-        "HoroTerrainPayloadManifestTests", "HoroTerrainPayloadManifestPublicHeaderConsumer",
-        "HoroTerrainProducerSnapshotTests", "HoroTerrainProducerSnapshotPublicHeaderConsumer",
-        "HoroRuntimeSaveEventTriggersTests", "HoroSaveEventTriggersPublicHeaderConsumer",
-        "HoroRuntimeSaveRestoreTransactionTests", "HoroSaveGameplayCheckpointPublicHeaderConsumer",
-        "HoroNavigationRuntimeTests", "HoroNavigationBakeServiceTests",
-        "HoroNavigationTransportReservationTests", "HoroNavigationCoordinatorPublicConsumer",
-    }
+    assert targets("HORO_CI_WINDOWS_TARGETS") == targets("HORO_CI_AUDIO_TARGETS") | WINDOWS_NON_AUDIO_TARGETS | TERRAIN_RENDER_TARGETS
     for workflow in ("prefab-foundation-windows", "extension-abi-windows", "mcp-session-windows", "save-path-windows"):
         assert not (ROOT / f".github/workflows/{workflow}.yml").exists()
     assert preset("buildPresets", "ci-windows-debug")["targets"] == ["HoroCiWindowsChecks"]
@@ -241,6 +262,30 @@ def test_windows_screen_transition_build_and_execution_are_selected() -> None:
     assert direct_selection
     assert consumer in direct_selection.group(1).split()
     assert f"add_test(NAME {consumer} COMMAND {consumer})" in tests_cmake
+
+
+def test_windows_source_document_qualification_has_headless_execution_and_consumer_closure() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    registration = re.search(r"set\(HORO_CATCH_TEST_TARGETS\s+(.*?)\n\)", tests_cmake, re.S)
+    assert registration, "Missing native Catch registration group"
+    source = "HoroSourceFileOpenServiceTests"
+    identity = "HoroEditorSurfaceIdentityTests"
+    for target in (source, identity):
+        assert target in targets("HORO_CI_WINDOWS_TARGETS")
+        assert target in registration.group(1).split()
+        declaration = tests_cmake.index(f"add_executable({target}")
+        assert all("HORO_BUILD_EDITOR_GUI" not in condition
+                   for condition in cmake_conditions_at(tests_cmake, declaration))
+        assert f"target_link_libraries({target} PRIVATE HoroEngine::EditorServices)" in tests_cmake
+    assert tests_cmake.count("unit/editor/SourceDocumentSaveTests.cpp") == 1
+    assert "add_library(HoroSourceDocumentPublicHeaderConsumer OBJECT support/SourceDocumentPublicContract.cpp)" in tests_cmake
+    assert "target_link_libraries(HoroSourceDocumentPublicHeaderConsumer PRIVATE HoroEngine::EditorServices)" in tests_cmake
+    assert f"target_sources({source} PRIVATE $<TARGET_OBJECTS:HoroSourceDocumentPublicHeaderConsumer>)" in tests_cmake
+    assert 'horo_register_catch_test(${target} LABELS "native")' in tests_cmake
+    assert 'if(target IN_LIST HORO_CI_WINDOWS_TARGETS)\n        list(APPEND ARG_LABELS ci-windows)' in SUITES
+    assert 'add_custom_target(HoroCiWindowsChecks DEPENDS ${HORO_CI_WINDOWS_TARGETS})' in SUITES
+    assert preset("configurePresets", "ci-windows-debug")["inherits"] == "ci-headless"
+    assert preset("configurePresets", "ci-headless")["cacheVariables"]["HORO_BUILD_EDITOR_GUI"] == "OFF"
 
 
 def test_windows_suites_run_independently_and_remain_blocking() -> None:
@@ -430,5 +475,6 @@ def test_terrain_render_qualification_has_build_discovery_and_compile_consumer_c
     ownership = (ROOT / "cmake/HoroPublicHeaderOwnership.cmake").read_text(encoding="utf-8")
     assert "horo_configure_target_header_boundary(HoroTerrainRenderIntegration PUBLIC_HEADERS" in ownership
     direct_tests = re.search(r"set_property\(TEST\s+(.*?)\s+APPEND PROPERTY LABELS ci-windows\)", SUITES, re.S)
-    assert direct_tests and consumer not in direct_tests.group(1).split()
+    assert direct_tests is not None
+    assert consumer not in direct_tests.group(1).split()
     assert 'if(target IN_LIST HORO_CI_WINDOWS_TARGETS)\n        list(APPEND ARG_LABELS ci-windows)' in SUITES

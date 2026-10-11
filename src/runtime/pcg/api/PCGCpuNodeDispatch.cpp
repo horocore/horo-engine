@@ -2,6 +2,9 @@
 #include "Horo/PCG/PCGCpuEvaluator.h"
 #include "Horo/PCG/PCGErrors.h"
 #include "PCGCpuEvaluatorInternal.h"
+#include "PCGNodeCatalogInternal.h"
+#include "PCGPointGenerationInternal.h"
+#include "PCGPointIdentityInternal.h"
 
 #include <algorithm>
 #include <array>
@@ -15,18 +18,8 @@
 
 namespace Horo::PCG {
     namespace {
-        constexpr std::array<std::uint64_t, 4> NodeTypeValues{0x5043470206000001ULL, 0x5043470206000002ULL, 0x5043470206000003ULL,
-                                                              0x5043470206000004ULL};
-
         template <typename T> [[nodiscard]] Result<T> Reject(const ErrorCodeDescriptor &error) {
             return Result<T>::Failure(MakeError(error));
-        }
-
-        [[nodiscard]] Result<PCGCpuNodeKind> KindOf(const NodeTypeId type) {
-            for (std::size_t index = 0; index < NodeTypeValues.size(); ++index)
-                if (type.Value() == NodeTypeValues[index])
-                    return Result<PCGCpuNodeKind>::Success(static_cast<PCGCpuNodeKind>(index));
-            return Reject<PCGCpuNodeKind>(PCGErrors::CpuEvaluationUnsupported);
         }
 
         struct PinList final {
@@ -60,47 +53,6 @@ namespace Horo::PCG {
                 }
             std::ranges::sort(std::span(pins.values.data(), pins.count), {}, &PCGCookedPin::id);
             return pins;
-        }
-
-        [[nodiscard]] Result<void> ValidateNodeImpl(const PCGCookedNode &node) {
-            const auto kind = KindOf(node.type);
-            if (kind.HasError())
-                return Result<void>::Failure(kind.ErrorValue());
-            if (node.version != PCGNodeTypeVersion{1, 0} || node.runtimeContractVersion != 1)
-                return Reject<void>(PCGErrors::CpuEvaluationUnsupported);
-            if (node.determinism == PCGNodeDeterminism::BestEffortPreview)
-                return Reject<void>(PCGErrors::CpuEvaluationUnsupported);
-            if (node.pins.size() > 3)
-                return Reject<void>(PCGErrors::CpuEvaluationInvalid);
-            const auto inputs = PinsOf(node, PCGPinDirection::Input);
-            if (const auto outputs = PinsOf(node, PCGPinDirection::Output);
-                outputs.size() != 1 || outputs.values[0].type != PCGPinType::PointSet)
-                return Reject<void>(PCGErrors::CpuEvaluationInvalid);
-            const auto pointCount = std::ranges::count_if(inputs, [](const auto &pin) {
-                return pin.type == PCGPinType::PointSet;
-            });
-            const auto scalarCount = std::ranges::count_if(inputs, [](const auto &pin) {
-                return pin.type == PCGPinType::Scalar;
-            });
-            switch (kind.Value()) {
-                case PCGCpuNodeKind::SnapshotGrid:
-                    if (inputs.empty() && node.payload.size() == 8 && node.determinism == PCGNodeDeterminism::ProfileDeterministic)
-                        return Result<void>::Success();
-                    break;
-                case PCGCpuNodeKind::DensityFilter:
-                    if (inputs.size() == 2 && pointCount == 1 && scalarCount == 1 && node.payload.empty())
-                        return Result<void>::Success();
-                    break;
-                case PCGCpuNodeKind::Merge:
-                    if (inputs.size() == 2 && pointCount == 2 && node.payload.empty())
-                        return Result<void>::Success();
-                    break;
-                case PCGCpuNodeKind::Forward:
-                    if (inputs.size() == 1 && pointCount == 1 && node.payload.empty())
-                        return Result<void>::Success();
-                    break;
-            }
-            return Reject<void>(PCGErrors::CpuEvaluationInvalid);
         }
 
         [[nodiscard]] const PCGPointOutputBound *BoundFor(const std::span<const PCGPointOutputBound> bounds, const std::uint32_t node,
@@ -245,72 +197,6 @@ namespace Horo::PCG {
             return cancellation.IsCancellationRequested() ? Reject<void>(PCGErrors::CpuEvaluationClosed) : Result<void>::Success();
         }
 
-        /** @brief Writes one checked spatial sample with canonical node-local provenance. */
-        [[nodiscard]] Result<void> WriteGridSample(const detail::NodeExecutionContext &context, const std::uint32_t node,
-                                                   const PCGGrid &grid, const std::size_t xy, const std::size_t index,
-                                                   const PCGPointWriteView &writer) {
-            const std::size_t x = index % grid.dimensions[0];
-            const std::size_t y = (index / grid.dimensions[0]) % grid.dimensions[1];
-            const std::size_t z = index / xy;
-            const std::array<double, 3> coordinates{static_cast<double>(grid.origin.x) +
-                                                        static_cast<double>(grid.spacing.x) * static_cast<double>(x),
-                                                    static_cast<double>(grid.origin.y) +
-                                                        static_cast<double>(grid.spacing.y) * static_cast<double>(y),
-                                                    static_cast<double>(grid.origin.z) +
-                                                        static_cast<double>(grid.spacing.z) * static_cast<double>(z)};
-            if (std::ranges::any_of(coordinates, [](const double value) {
-                return !std::isfinite(value) || std::abs(value) > std::numeric_limits<float>::max();
-            }))
-                return Reject<void>(PCGErrors::CpuEvaluationInvalid);
-            const Math::Vec3 position{static_cast<float>(coordinates[0]), static_cast<float>(coordinates[1]),
-                                      static_cast<float>(coordinates[2])};
-            Math::Transform transform;
-            transform.translation = position;
-            const auto sample = SourceSampleId::Create(static_cast<std::uint64_t>(index) + 1);
-            if (sample.HasError())
-                return Result<void>::Failure(sample.ErrorValue());
-            const auto seed = context.provenance[node].Seed(sample.Value());
-            if (seed.HasError())
-                return Result<void>::Failure(seed.ErrorValue());
-            return writer.SetPoint(index, transform, {position, position}, 1.0F, seed.Value());
-        }
-
-        [[nodiscard]] Result<void> WriteGrid(const detail::NodeExecutionContext &context, const std::uint32_t node,
-                                             const PCGCookedNode &description, const PinId output) {
-            std::uint64_t gridValue{};
-            for (const auto byte : description.payload)
-                gridValue = (gridValue << 8U) | byte;
-            const auto grid = std::ranges::find_if(context.spatial.Grids(), [gridValue](const auto &item) {
-                return item.id.Value() == gridValue;
-            });
-            if (grid == context.spatial.Grids().end())
-                return Reject<void>(PCGErrors::CpuEvaluationInvalid);
-            const auto xy = CheckedPCGMultiply(grid->dimensions[0], grid->dimensions[1]);
-            if (xy.HasError())
-                return Result<void>::Failure(xy.ErrorValue());
-            const auto count = CheckedPCGMultiply(xy.Value(), grid->dimensions[2]);
-            if (count.HasError())
-                return Result<void>::Failure(count.ErrorValue());
-            auto opened = context.workspace.BeginOutput(node, output, count.Value());
-            if (opened.HasError())
-                return Result<void>::Failure(opened.ErrorValue());
-            const auto &writer = opened.Value();
-            std::size_t begin{};
-            for (std::uint32_t partition = 0; partition < context.workers; ++partition) {
-                if (const auto live = CheckCancellation(context.cancellation); live.HasError())
-                    return live;
-                const std::size_t end = PartitionEnd(count.Value(), context.workers, partition);
-                for (std::size_t index = begin; index < end; ++index) {
-                    if ((index - begin) % 256 == 0 && context.cancellation.IsCancellationRequested())
-                        return Reject<void>(PCGErrors::CpuEvaluationClosed);
-                    if (const auto written = WriteGridSample(context, node, *grid, xy.Value(), index, writer); written.HasError())
-                        return written;
-                }
-                begin = end;
-            }
-            return context.workspace.SealOutput(node, output);
-        }
-
         [[nodiscard]] Result<void> CopyRouted(const PCGPointReadView &source, const PCGPointSchema &schema, const PCGPointWriteView &writer,
                                               const std::size_t destinationOffset, const std::uint32_t workers,
                                               const CancellationToken &cancellation) {
@@ -438,6 +324,14 @@ namespace Horo::PCG {
             if (const auto *secondBound = SourceBound(context, node, secondPin);
                 secondBound == nullptr || !SameSchema(*secondBound->schema, *outputBound.schema))
                 return Reject<void>(PCGErrors::CpuEvaluationInvalid);
+            const auto identity = detail::HasPointIdentity(*outputBound.schema);
+            if (identity.HasError())
+                return Result<void>::Failure(identity.ErrorValue());
+            if (identity.Value()) {
+                const std::array inputs{first, second.Value()};
+                if (const auto valid = detail::ValidatePointIdentities(inputs, context.cancellation); valid.HasError())
+                    return valid;
+            }
             const auto count = CheckedPCGAdd(first.PointCount(), second.Value().PointCount());
             if (count.HasError())
                 return Result<void>::Failure(count.ErrorValue());
@@ -479,19 +373,22 @@ namespace Horo::PCG {
             return ExecuteMerge(context, node, output, pointPins.values[1].id, first.Value(), *outputBound);
         }
 
-        [[nodiscard]] Result<void> ExecuteNodeImpl(const detail::NodeExecutionContext &context, const std::uint32_t node) {
+        [[nodiscard]] Result<void> ExecuteNodeImpl(const detail::NodeExecutionContext &context, const std::uint32_t node,
+                                                   const PCGCpuNodeKind kind) {
+            using enum PCGCpuNodeKind;
             const auto &description = context.plan.Nodes()[node];
-            const auto kind = KindOf(description.type);
-            if (kind.HasError())
-                return Result<void>::Failure(kind.ErrorValue());
             const auto outputs = PinsOf(description, PCGPinDirection::Output);
             if (outputs.size() != 1)
                 return Reject<void>(PCGErrors::CpuEvaluationInvalid);
             Result<void> evaluated = Reject<void>(PCGErrors::CpuEvaluationInvalid);
-            if (kind.Value() == PCGCpuNodeKind::SnapshotGrid)
-                evaluated = WriteGrid(context, node, description, outputs.values[0].id);
-            else
-                evaluated = ExecuteRouted(context, node, kind.Value(), PinsOf(description, PCGPinDirection::Input), outputs.values[0].id);
+            if (kind == SnapshotGrid || kind == GridJitter || kind == Stratified || kind == PoissonScatter) {
+                const auto settings = detail::DecodePointGeneration(description);
+                if (settings.HasError())
+                    return Result<void>::Failure(settings.ErrorValue());
+                evaluated = detail::ExecutePointGeneration(context, node, settings.Value());
+            } else {
+                evaluated = ExecuteRouted(context, node, kind, PinsOf(description, PCGPinDirection::Input), outputs.values[0].id);
+            }
             if (evaluated.HasError())
                 return evaluated;
             return context.workspace.FinishNode(node);
@@ -500,26 +397,43 @@ namespace Horo::PCG {
     }  // namespace
 
     namespace detail {
-        Result<void> ValidateNode(const PCGCookedNode &node) {
-            return ValidateNodeImpl(node);
-        }
-
         Result<std::size_t> AdmitCandidate(const PCGCookedPlan &plan, const std::span<const PCGPointOutputBound> bounds,
                                            const PCGCpuEvaluationLimits &limits) {
             return AdmitCandidateImpl(plan, bounds, limits);
         }
 
-        Result<void> ExecuteNode(const NodeExecutionContext &context, const std::uint32_t node) {
-            return ExecuteNodeImpl(context, node);
+        template <PCGCpuNodeKind Kind> Result<void> InvokeBuiltIn(const NodeExecutionContext &context, std::uint32_t node) {
+            return ExecuteNodeImpl(context, node, Kind);
+        }
+
+        BuiltInExecution BuiltInFunction(PCGCpuNodeKind kind) noexcept {
+            using enum PCGCpuNodeKind;
+            switch (kind) {
+                case SnapshotGrid:
+                    return &InvokeBuiltIn<SnapshotGrid>;
+                case DensityFilter:
+                    return &InvokeBuiltIn<DensityFilter>;
+                case Merge:
+                    return &InvokeBuiltIn<Merge>;
+                case Forward:
+                    return &InvokeBuiltIn<Forward>;
+                case GridJitter:
+                    return &InvokeBuiltIn<GridJitter>;
+                case Stratified:
+                    return &InvokeBuiltIn<Stratified>;
+                case PoissonScatter:
+                    return &InvokeBuiltIn<PoissonScatter>;
+            }
+            return nullptr;
+        }
+
+        Result<void> ExecuteNode(const NodeExecutionContext &context, std::uint32_t node) {
+            const auto &catalog = context.plan.Catalog();
+            auto descriptor = catalog.Find(context.plan.Nodes()[node].type);
+            if (descriptor.HasError())
+                return Result<void>::Failure(descriptor.ErrorValue());
+            const auto index = static_cast<std::size_t>(descriptor.Value() - catalog.state_->descriptors.data());
+            return catalog.state_->functions[index](context, node);
         }
     }  // namespace detail
-
-    /** @copydoc PCGCpuNodeType */
-    Result<NodeTypeId> PCGCpuNodeType(const PCGCpuNodeKind kind) {
-        const auto index = static_cast<std::size_t>(kind);
-        if (index >= NodeTypeValues.size())
-            return Reject<NodeTypeId>(PCGErrors::CpuEvaluationUnsupported);
-        return NodeTypeId::Create(NodeTypeValues[index]);
-    }
-
 }  // namespace Horo::PCG

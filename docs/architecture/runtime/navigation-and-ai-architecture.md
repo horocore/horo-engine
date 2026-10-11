@@ -310,6 +310,45 @@ require no source migration, and providers retain the unchanged `NavigationApi`
 boundary. Coordinator result consumption must use this owner-phase check rather
 than create a second held-path currentness authority.
 
+`NavigationMovementController` is the bounded NAV-004.8 owner above the canonical
+coordinator, agent registry and held-path policy. A host creates one controller for
+an exact registered agent generation and supplies its unique caller incarnation.
+Every accepted request explicitly supersedes the previous operation and returns
+that terminal status. Invalid replacement policy or retirement pressure leaves
+the previous operation unchanged. Operation identities combine the exact agent
+handle and a non-recycled sequence; old cancellations and motion acknowledgements
+cannot target a replacement operation.
+
+The controller admits complete-path queries through `NavigationCoordinator`,
+consumes results only after host `NavIntentCommit`, and never invokes a provider
+or creates another job scheduler. Reachable results under `RequireComplete` use
+conservative complete-topology evidence; exact region proof is not synthesized.
+Source, topology, target and link changes stop held-path movement and cancel old
+queries before coalesced repath. Fixed debounce/cooldown and a finite total-query
+ceiling bound retries; exclusive operation deadlines bound admission pressure.
+Multi-waypoint results must begin with the exact admitted Start, end with a finite
+Destination inside the target acceptance radius, and retain matching world/topology
+provenance. Only then is the initial Start skipped for corridor following.
+
+Returned intents contain desired velocity, operation/path identities and a fixed
+tick. Character/Physics remains the only movement writer; the host's Character
+adapter is the NAV-004.9 boundary. Arrival requires a current complete corridor,
+the final corridor target, spatial acceptance and achieved speed below policy,
+acknowledging the exact previous intent's operation, path and tick. Follow holds
+near a live target and resumes on revisioned target movement; move-to terminates.
+Target destruction/reuse, agent removal, Scene/world replacement, timeout,
+cancellation and shutdown clear all movement authority. No runtime Scene pointer,
+callback, inline completion, provider handle or editor service is retained.
+
+Each controller retains at most eight accepted query handles including canceled
+retirements. Host retirement continues coordinator commit and controller update
+until those records transfer and `IsDrained` is true; physical provider leases can
+remain in coordinator partitions until workers quiesce. Final host teardown shuts
+down the coordinator/JobSystem before provider code unload. The additive public
+`NavigationMovement.h` belongs solely to `HoroNavigationRuntime`; existing consumers
+need no migration or dependency changes. Headless hosts compose the same lifecycle;
+Null navigation remains typed unavailable rather than fabricating movement.
+
 ADR-018 `OwnerThreadNextFrame` console handlers submit typed navigation commands for this
 phase; they do not introduce a second mutation phase in `PreUpdate` / `DebugPhase`. Heavy
 bake/export commands use asynchronous `OperationId` progress per ADR-010. The application

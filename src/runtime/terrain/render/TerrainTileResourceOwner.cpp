@@ -11,11 +11,11 @@ namespace Horo::TerrainRender {
         /** @brief Recognizes exact failed creations whose automatic retirement belongs to the canonical frontend. */
         template <typename Handle>
         bool FailedCreationRetired(Render::RenderFrontend &frontend, Render::ResourceCreation<Handle> &creation) {
-            const auto state = frontend.ResourceState(creation.handle);
-            if (state.HasValue() && state.Value() != Render::RenderResourceState::Failed)
+            if (const auto state = frontend.ResourceState(creation.handle);
+                state.HasValue() && state.Value() != Render::RenderResourceState::Failed)
                 return false;
-            const auto operation = frontend.ResourceOperationState(creation.operation);
-            if (operation.HasError() || operation.Value() != Render::RenderResourceOperationState::Failed)
+            if (const auto operation = frontend.ResourceOperationState(creation.operation);
+                operation.HasError() || operation.Value() != Render::RenderResourceOperationState::Failed)
                 return false;
             creation = {};
             return true;
@@ -33,6 +33,7 @@ namespace Horo::TerrainRender {
         /** @brief Queues a complete generation's owned uploads while retaining every accepted handle on failure. */
         Result<void> QueueBuffers(Render::RenderFrontend &frontend, TerrainTileResourceGeneration &generation,
                                   const CancellationToken &cancellation) {
+            using enum Render::RenderBufferUsage;
             for (std::size_t i = 0; i < generation.tiles.size(); ++i) {
                 const auto &candidate = generation.source.Tiles()[i];
                 auto &resources = generation.tiles[i];
@@ -42,16 +43,12 @@ namespace Horo::TerrainRender {
                 if (candidate.mesh.indices.empty())
                     continue;
                 const auto vertexBytes = std::as_bytes(std::span{candidate.mesh.vertices});
-                auto vertices = frontend.CreateBuffer({vertexBytes.size(),
-                                                       Render::RenderBufferUsage::Vertex | Render::RenderBufferUsage::CopyDestination},
-                                                      vertexBytes);
+                auto vertices = frontend.CreateBuffer({vertexBytes.size(), Vertex | CopyDestination}, vertexBytes);
                 if (vertices.HasError())
                     return Result<void>::Failure(vertices.ErrorValue());
                 resources.vertices = vertices.Value();
                 const auto indexBytes = std::as_bytes(std::span{candidate.mesh.indices});
-                auto indices = frontend.CreateBuffer({indexBytes.size(),
-                                                      Render::RenderBufferUsage::Index | Render::RenderBufferUsage::CopyDestination},
-                                                     indexBytes);
+                auto indices = frontend.CreateBuffer({indexBytes.size(), Index | CopyDestination}, indexBytes);
                 if (indices.HasError())
                     return Result<void>::Failure(indices.ErrorValue());
                 resources.indices = indices.Value();
@@ -64,8 +61,7 @@ namespace Horo::TerrainRender {
         Result<bool> ObserveCreation(Render::RenderFrontend &frontend, const Render::ResourceCreation<Handle> &creation) {
             const auto state = frontend.ResourceState(creation.handle);
             if (state.HasError() || state.Value() == Render::RenderResourceState::Failed) {
-                const auto operation = frontend.ResourceOperationResult(creation.operation);
-                if (operation.HasError())
+                if (const auto operation = frontend.ResourceOperationResult(creation.operation); operation.HasError())
                     return Result<bool>::Failure(operation.ErrorValue());
                 return Result<bool>::Failure(state.HasError() ? state.ErrorValue() : MakeError(Terrain::TerrainErrors::DescriptorInvalid));
             }
@@ -215,16 +211,14 @@ namespace Horo::TerrainRender {
     Result<void> TerrainTileResourceOwner::Release(TerrainTileResourceGeneration &generation) {
         for (auto &tile : generation.tiles) {
             if (tile.mesh.handle.IsValid() && !FailedCreationRetired(frontend_, tile.mesh)) {
-                const auto released = frontend_.ReleaseMesh(tile.mesh.handle);
-                if (released.HasError())
+                if (const auto released = frontend_.ReleaseMesh(tile.mesh.handle); released.HasError())
                     return released;
                 tile.mesh = {};
             }
             for (auto *buffer : {&tile.vertices, &tile.indices}) {
                 if (!buffer->handle.IsValid() || FailedCreationRetired(frontend_, *buffer))
                     continue;
-                const auto released = frontend_.ReleaseBuffer(buffer->handle);
-                if (released.HasError())
+                if (const auto released = frontend_.ReleaseBuffer(buffer->handle); released.HasError())
                     return released;
                 *buffer = {};
             }
