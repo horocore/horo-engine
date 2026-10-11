@@ -537,8 +537,16 @@ def execute_subprocess(command: Sequence[str], cwd: Path = REPOSITORY_ROOT, env:
     except OSError as error:
         print(f"error: failed to execute '{command[0]}': {error}", file=sys.stderr)
         return 126
-    except KeyboardInterrupt:
+    except KeyboardInterrupt as error:
+        if isinstance(error.__cause__, dev_process.CleanupError):
+            local_build_cache.record_cleanup_failure(REPOSITORY_ROOT)
+            print("error: interrupted cleanup was not confirmed; further builds are blocked", file=sys.stderr)
         return 130
+    except SystemExit as error:
+        if isinstance(error.__cause__, dev_process.CleanupError):
+            local_build_cache.record_cleanup_failure(REPOSITORY_ROOT)
+            print("error: exiting cleanup was not confirmed; further builds are blocked", file=sys.stderr)
+        raise
 
 
 def _cached_compiler_flags(build_directory: Path) -> dict[str, str]:

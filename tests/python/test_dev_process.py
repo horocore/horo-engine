@@ -99,6 +99,57 @@ def test_cleanup_failure_never_returns_clean_cancellation(
         process.run(["fixture"], tmp_path)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX cleanup cancellation fixture")
+@pytest.mark.parametrize("cancellation", [KeyboardInterrupt(), SystemExit(23)])
+@pytest.mark.parametrize("failure", [KeyboardInterrupt(), OSError("inventory failed")])
+def test_cancellation_during_cleanup_preserves_exception_and_unconfirmed_cause(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cancellation: BaseException, failure: BaseException,
+) -> None:
+    class Child:
+        pid = 123
+
+    monkeypatch.setattr(process, "validated_command", lambda command, *_: list(command))
+    monkeypatch.setattr(process.subprocess, "Popen", lambda *_, **__: Child())
+
+    def fail_inventory():
+        raise failure
+
+    def cancel_cleanup(*_):
+        raise cancellation
+
+    monkeypatch.setattr(process, "_snapshot", fail_inventory)
+    monkeypatch.setattr(process, "_cleanup", cancel_cleanup)
+    with pytest.raises(type(cancellation)) as caught:
+        process.run(["fixture"], tmp_path)
+    assert caught.value is cancellation
+    assert isinstance(caught.value.__cause__, process.CleanupError)
+
+
+@pytest.mark.parametrize("cancellation", [KeyboardInterrupt(), SystemExit(23)])
+def test_windows_cleanup_cancellation_preserves_exception_and_unconfirmed_cause(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cancellation: BaseException,
+) -> None:
+    class Child:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def wait(self):
+            raise KeyboardInterrupt
+
+        def terminate(self):
+            raise cancellation
+
+    monkeypatch.setattr(process.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, raising=False)
+    monkeypatch.setattr(process.subprocess, "Popen", lambda *_, **__: Child())
+    with pytest.raises(type(cancellation)) as caught:
+        process._windows_run(["fixture"], tmp_path, None)
+    assert caught.value is cancellation
+    assert isinstance(caught.value.__cause__, process.CleanupError)
+
+
 def test_discovery_excludes_unrelated_and_reused_parent_descendants() -> None:
     owned = process._Identity(100, 1, 100, "S", "owned root")
     child = process._Identity(200, 100, 100, "S", "owned child")

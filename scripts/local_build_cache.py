@@ -48,8 +48,9 @@ def _git(repo: Path, *arguments: str) -> str:
     if executable is None:
         raise CacheError("Git is required for local build cache ownership")
     command = [os.path.abspath(executable), "-c", "core.fsmonitor=false", "-C", str(repo), *arguments]
+    # The local operator owns PATH and the checkout; executable discovery preserves that tool choice.
     # Private callers supply fixed Git subcommands and pinned refs; paths remain separate argv entries.
-    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit, python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
     result = subprocess.run(command, check=False, capture_output=True, text=True, shell=False)  # nosec B603
     if result.returncode:
         raise CacheError(f"git {' '.join(arguments[:2])} failed: {result.stderr.strip()}")

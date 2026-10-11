@@ -154,8 +154,10 @@ def _cleanup(process: subprocess.Popen, known: dict[int, _Identity]) -> None:
 def _windows_run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None) -> int:
     """Preserve ordinary Windows execution; interrupted tree cleanup is unqualified."""
     # Caller-authorized executable and argv are validated by run; no command shell parses arguments.
+    # S8705: this local developer runner accepts operator-selected tool arguments, not agent-tool input.
+    # Sonar properties use single -DKEY=VALUE entries; extra scanner flags are explicit CLI options.
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-    with subprocess.Popen(command, cwd=cwd, env=env, shell=False,  # nosec B603
+    with subprocess.Popen(command, cwd=cwd, env=env, shell=False,  # NOSONAR  # nosec B603
                           creationflags=subprocess.CREATE_NEW_PROCESS_GROUP) as process:
         try:
             return process.wait()
@@ -167,7 +169,9 @@ def _windows_run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | Non
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=2)
-            except (Exception, KeyboardInterrupt, SystemExit) as cleanup_error:
+            except (KeyboardInterrupt, SystemExit) as cleanup_error:
+                raise cleanup_error from CleanupError("Windows interrupted process cleanup was not confirmed")
+            except Exception as cleanup_error:
                 raise CleanupError("Windows interrupted process cleanup was not confirmed") from cleanup_error
             raise CleanupError("Windows interruption cleanup cannot verify descendant termination") from error
 
@@ -178,8 +182,10 @@ def run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None)
     if os.name == "nt":
         return _windows_run(command, cwd, env)
     # Caller-authorized absolute executable and validated argv; a shell never interprets arguments.
+    # S8705: this local developer runner accepts operator-selected tool arguments, not agent-tool input.
+    # Sonar properties use single -DKEY=VALUE entries; extra scanner flags are explicit CLI options.
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-    process = subprocess.Popen(command, cwd=cwd, env=env, start_new_session=True, shell=False)  # nosec B603
+    process = subprocess.Popen(command, cwd=cwd, env=env, start_new_session=True, shell=False)  # NOSONAR  # nosec B603
     known: dict[int, _Identity] = {}
     try:
         while True:
@@ -194,7 +200,9 @@ def run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None)
     except KeyboardInterrupt:
         try:
             _cleanup(process, known)
-        except (Exception, KeyboardInterrupt, SystemExit) as error:
+        except (KeyboardInterrupt, SystemExit) as error:
+            raise error from CleanupError("Interrupted developer subprocess cleanup was not confirmed")
+        except Exception as error:
             raise CleanupError("Interrupted developer subprocess cleanup was not confirmed") from error
         return 130
     except CleanupError:
@@ -203,6 +211,8 @@ def run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None)
         # Inventory/launch errors also must not silently release an active owned root.
         try:
             _cleanup(process, known)
-        except (Exception, KeyboardInterrupt, SystemExit) as error:
+        except (KeyboardInterrupt, SystemExit) as error:
+            raise error from CleanupError("Developer subprocess cleanup after failure was not confirmed")
+        except Exception as error:
             raise CleanupError("Developer subprocess cleanup after failure was not confirmed") from error
         raise

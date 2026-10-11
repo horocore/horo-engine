@@ -351,9 +351,9 @@ def test_ccache_parses_generated_configuration(tmp_path: Path, readonly: bool) -
     executable = str(Path(launcher).resolve())
     for setting, expected in (("read_only", "true" if readonly else "false"),
                               ("compiler_check", "content"), ("sloppiness", ""), ("remote_storage", "")):
+        command = [executable, "--get-config", setting]
         # ccache comes from executable discovery; setting names are the fixed parser fixture table.
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-        command = [executable, "--get-config", setting]
         result = subprocess.run(command, env=env,  # nosec B603
                                 capture_output=True, text=True, check=False, shell=False)
         assert result.returncode == 0, result.stderr

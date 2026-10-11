@@ -25,6 +25,52 @@ SPEC.loader.exec_module(dev)
 LOCAL_ENV_FILENAME = ".env.local"
 
 
+@pytest.mark.parametrize("cancellation", [KeyboardInterrupt(), SystemExit(23)])
+def test_cleanup_cancellation_blocks_later_builds_and_preserves_exit(
+    monkeypatch: pytest.MonkeyPatch, cancellation: BaseException,
+) -> None:
+    recorded: list[Path] = []
+
+    def interrupted(*_, **__):
+        raise cancellation from dev.dev_process.CleanupError("cleanup unconfirmed")
+
+    monkeypatch.setattr(dev.dev_process, "run", interrupted)
+    monkeypatch.setattr(dev.local_build_cache, "record_cleanup_failure", recorded.append)
+    if isinstance(cancellation, SystemExit):
+        with pytest.raises(SystemExit) as caught:
+            dev.execute_subprocess([sys.executable])
+        assert caught.value is cancellation
+        assert caught.value.code == 23
+    else:
+        assert dev.execute_subprocess([sys.executable]) == 130
+    assert recorded == [dev.REPOSITORY_ROOT]
+
+
+def test_sonar_property_values_stay_single_arguments_and_extra_flags_are_explicit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    commands: list[list[str]] = []
+    compile_commands = tmp_path / "commands with spaces türkçe -Dother=value.json"
+    compile_commands.write_text("[]", encoding="utf-8")
+    scanner = tmp_path / "scanner"
+    property_value = "fixture value -Dother=value"
+    pr_key = "3410 -Dother=value"
+    extra = ["-X", "-Dsonar.verbose=true"]
+    monkeypatch.setattr(dev, "_resolve_sonar_token", lambda *_: property_value)
+    monkeypatch.setattr(dev, "_find_sonar_scanner", lambda: scanner)
+
+    def capture(command, **_):
+        commands.append(list(command))
+        return 0
+
+    monkeypatch.setattr(dev, "execute_subprocess", capture)
+    assert dev.run_sonar(token=property_value, pr_key=pr_key,
+                         compile_commands=compile_commands, extra_sonar_args=extra) == 0
+    assert commands == [[str(scanner), f"-Dsonar.token={property_value}",
+                         f"-Dsonar.cfamily.compile-commands={compile_commands}",
+                         f"-Dsonar.pullrequest.key={pr_key}", *extra]]
+
+
 @pytest.fixture(autouse=True)
 def isolated_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ordinary runner unit tests neither create host caches nor wait for real builds."""
