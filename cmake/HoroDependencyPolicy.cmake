@@ -139,6 +139,8 @@ if(HORO_VERIFY_XR_DISABLED)
 endif()
 horo_allow_target_dependencies(TARGET HoroTerrainApi DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroTerrainRender DEPENDENCIES HoroTerrainApi HoroRenderApi)
+horo_allow_target_dependencies(TARGET HoroTerrainRenderIntegration
+    DEPENDENCIES HoroTerrainCook HoroTerrainRender HoroRenderFrontend HoroWorldStreaming)
 horo_allow_target_dependencies(TARGET HoroTerrainImport DEPENDENCIES HoroTerrainApi HoroAssets)
 horo_allow_target_dependencies(TARGET HoroTerrainAuthoring DEPENDENCIES HoroTerrainImport)
 horo_allow_target_dependencies(TARGET HoroTerrainCook DEPENDENCIES HoroTerrainImport)

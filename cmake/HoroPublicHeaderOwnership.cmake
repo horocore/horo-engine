@@ -877,6 +877,11 @@ horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
     Horo/Terrain/TerrainIdentity.h
     Horo/Terrain/TerrainMaterial.h
 )
+horo_configure_target_header_boundary(HoroTerrainRenderIntegration PUBLIC_HEADERS
+Horo/TerrainRenderIntegration/TerrainRenderSnapshot.h
+Horo/TerrainRenderIntegration/TerrainTileResourceOwner.h
+)
+
 horo_configure_target_header_boundary(HoroTerrainRender PUBLIC_HEADERS
     Horo/TerrainRender/TerrainMaterialBinding.h
 )

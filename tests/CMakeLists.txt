@@ -1254,6 +1254,15 @@ target_link_libraries(HoroTerrainMaterialPublicHeaderConsumer PRIVATE HoroEngine
 add_test(NAME HoroTerrainMaterialPublicHeaderConsumer COMMAND HoroTerrainMaterialPublicHeaderConsumer)
 set_tests_properties(HoroTerrainMaterialPublicHeaderConsumer PROPERTIES LABELS "unit;terrain;renderer;headless")
 
+add_executable(HoroTerrainRenderIntegrationTests
+        unit/runtime/terrain/TerrainRenderSnapshotTests.cpp
+        unit/runtime/terrain/TerrainTileResourceOwnerTests.cpp)
+target_compile_features(HoroTerrainRenderIntegrationTests PRIVATE cxx_std_20)
+target_include_directories(HoroTerrainRenderIntegrationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroTerrainRenderIntegrationTests PRIVATE HoroEngine::TerrainRenderIntegration HoroEngine::RenderNull Threads::Threads)
+horo_register_catch_test(HoroTerrainRenderIntegrationTests LABELS "unit;terrain;renderer;headless;lifecycle")
+target_sources(HoroTerrainRenderIntegrationPublicHeaderConsumer PRIVATE support/TerrainRenderIntegrationPublicHeaderConsumer.cpp)
+
 add_executable(HoroTerrainImportTests
         unit/runtime/terrain/TerrainSourceImportTests.cpp
 )
@@ -2829,6 +2838,11 @@ add_executable(HoroRenderFrontendTests
         unit/runtime/renderer/RenderGraphTransientResourceTests.cpp
         unit/runtime/renderer/RenderGraphTransientReservationTests.cpp
         unit/runtime/renderer/RenderFrontendTests.cpp
+        unit/runtime/renderer/RenderFrontendTestSupport.cpp
+        unit/runtime/renderer/RenderFrontendAdmissionTests.cpp
+        unit/runtime/renderer/RenderFrontendLifecycleTests.cpp
+        unit/runtime/renderer/RenderFrontendRecoveryTests.cpp
+        unit/runtime/renderer/RenderFrontendTerrainGraphTests.cpp
         unit/runtime/renderer/RenderFrontendReservationTests.cpp
         unit/runtime/renderer/RenderMemoryCostQueryContractTests.cpp
         unit/runtime/renderer/RenderFrontendInspectionTests.cpp
@@ -2847,6 +2861,7 @@ target_include_directories(HoroRenderFrontendTests PRIVATE
 )
 target_link_libraries(HoroRenderFrontendTests
         PRIVATE
+        HoroEngine::TerrainRenderIntegration
         HoroEngine::RenderFrontend
         HoroEngine::RenderNull
 )

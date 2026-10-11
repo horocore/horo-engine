@@ -578,6 +578,58 @@ candidates into ADR-036 pass classifications. Opaque, Masked, TransparentSorted 
 TransparentAdditive come from authored/cooked material semantics; “trunk” or “leaf” does
 not imply a pass. The private backend only translates the validated plan.
 
+### Terrain Render Capture and Resource Integration
+
+`HoroEngine::TerrainRenderIntegration` is an explicit host-composition bridge downstream
+of TerrainCook, the TerrainRender value adapter, RenderFrontend, and WorldStreaming
+identity/origin values. TerrainApi and
+TerrainRuntime do not acquire a RenderFrontend dependency. The host admits resident
+visual tile selections against a cook-issued `TerrainPayloadManifest`, captures the
+runtime/content/residency/mutation/capability/configuration/request fence together with
+required world/origin identity and optional exact cell-attempt scope. Origin rebases,
+placement changes, and cell replacement invalidate logical currentness independently
+of retained CPU storage. The host invokes
+`CaptureTerrainRenderSnapshot` during bounded preparation. It does not invoke capture
+from the normal draw loop. The shared immutable result is reused by all compatible
+views; source asset and provider storage may retire after capture returns.
+
+Schema 1 preserves exact visual/sample digests, layer-set meaning, hole bytes, legal
+LOD/seam constraints, finite geometric error, and dataset-space double anchors. Generic
+mesh vertices are tile-local floats with explicit precision rejection, area-weighted
+normals, and dataset-grid UV coordinates. HTIL sample bytes remain the exact neutral
+weight/hole source for material preparation; generic vertex buffers do not grant a
+particular layer shader layout. The host retains exact TerrainMaterialBinding and
+texture/pipeline dependencies through its material consumer ownership. Visual pass,
+per-view selection, seam transitions, and raster qualification remain their existing
+renderer responsibilities. Fully holed tiles retain explicit empty topology and never
+allocate a dummy mesh or silently render a solid surface.
+
+`TerrainTileResourceOwner` runs on the creating render lane. It queues owned frontend
+vertex/index uploads, observes readiness across host safe points, stages meshes, and
+publishes only the complete exact candidate. The host processes canonical frontend
+upload batches separately. Failed creation operations retain their original backend error;
+the canonical frontend automatically retires their allocation records. The integration
+relinquishes those exact failed handles rather than attempting to release them again.
+`ResourceOperationState` distinguishes known Pending/Succeeded/Failed outcomes from
+unknown/evicted operation records and a stopped frontend. Only a known Failed outcome
+permits relinquishing auto-retired allocation metadata; query errors and successful
+operations preserve incomplete retirement. Both status and diagnostic queries read
+the same canonical bounded operation record.
+Successful creations still require explicit reader-safe release. Cancellation, changed
+source evidence, partial queue denial,
+and realization failure preserve the old publication and retain candidate cleanup.
+Request sequences strictly advance; semantic revisions never regress. Finite
+retiring-generation admission prevents unbounded overlap.
+
+A `TerrainTileResourceGeneration` reader pins all tile resources in that publication.
+Replacement and shutdown retain old publications until the last reader releases its
+lease. `DrainRetired` then releases meshes before buffers through the canonical frontend;
+existing graph/submission pins still defer native GPU destruction and memory accounting.
+`IsDrained` reports only the integration's logical drain. Native completion/retirement
+must also drain through RenderFrontend before host teardown; it is never inferred from
+CPU reader release. No renderer/backend is selected, activated, substituted or waited
+on by this bridge. Null tests prove contract/resource behavior, not GPU raster evidence.
+
 ### Decal Interaction
 
 Decals project onto terrain surfaces by sampling the GBuffer within the
@@ -1053,3 +1105,11 @@ and report pressure. Eviction destroys the owned buffer before acknowledging exa
 WST retirement, so old/new generations and unleased cache entries stay charged until
 actual release. This adapter owns no global scheduler, native lifecycle or cell
 commit, and performs no I/O or frame-hot allocations after construction.
+
+The resource-owner destructor follows the existing TerrainResidencyCache explicit-drain
+contract: hosts must retain it while retirement is incomplete. A lost-device or backend
+failure before publication cancels only detached resources, and failed resource records
+are released through the same frontend registry. The owner neither interprets loss as
+completion nor force-clears published native handles. Renderer reconstruction/terminal
+teardown remains the host's ADR-179 responsibility. This bridge does not add an alternate
+device-loss recovery authority.
