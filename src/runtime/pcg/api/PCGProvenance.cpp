@@ -139,7 +139,7 @@ namespace Horo::PCG {
     }
 
     /** @copydoc DerivePCGSampleSeed */
-    Result<std::uint64_t> DerivePCGSampleSeed(const Sha256Digest key, const SourceSampleId sample) {
+    Result<std::uint64_t> DerivePCGSampleSeed(const Sha256Digest &key, const SourceSampleId sample) {
         if (!sample.IsValid())
             return Failure<std::uint64_t>(PCGErrors::ProvenanceInvalid);
         std::array<std::uint8_t, 49> bytes{'H', 'P', 'C', 'G', 'S', 'E', 'E', 'D', 1};

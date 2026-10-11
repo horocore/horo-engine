@@ -293,8 +293,7 @@ namespace Horo::PCG {
         [[nodiscard]] Result<void> ValidateGenerationBounds(const PCGCookedPlan &plan, const PCGSpatialSnapshot &spatial,
                                                             const std::span<const PCGPointOutputBound> bounds) {
             for (const auto &bound : bounds) {
-                const auto identity = detail::HasPointIdentity(*bound.schema);
-                if (identity.HasError())
+                if (const auto identity = detail::HasPointIdentity(*bound.schema); identity.HasError())
                     return Result<void>::Failure(identity.ErrorValue());
                 const auto &node = plan.Nodes()[bound.node];
                 const auto descriptor = plan.Catalog().Find(node.type);

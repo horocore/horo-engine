@@ -79,14 +79,14 @@ namespace Horo::PCG {
 
     /** @copydoc EncodePCGPointGenerationSettings(const PCGGridGenerationSettings&) */
     Result<std::vector<std::uint8_t>> EncodePCGPointGenerationSettings(const PCGGridGenerationSettings &settings) {
-        return Encode(settings.grid.IsValid(), 8, [&](const std::span<std::uint8_t> bytes) {
+        return Encode(settings.grid.IsValid(), 8, [&settings](const std::span<std::uint8_t> bytes) {
             WriteWord(bytes, settings.grid.Value());
         });
     }
 
     /** @copydoc EncodePCGPointGenerationSettings(const PCGJitterGenerationSettings&) */
     Result<std::vector<std::uint8_t>> EncodePCGPointGenerationSettings(const PCGJitterGenerationSettings &settings) {
-        return Encode(Valid(settings), 20, [&](const std::span<std::uint8_t> bytes) {
+        return Encode(Valid(settings), 20, [&settings](const std::span<std::uint8_t> bytes) {
             WriteSource(bytes, settings.grid);
             WriteWord(bytes.subspan(12, 8), std::bit_cast<std::uint64_t>(settings.fraction == 0.0 ? 0.0 : settings.fraction));
         });
@@ -94,7 +94,7 @@ namespace Horo::PCG {
 
     /** @copydoc EncodePCGPointGenerationSettings(const PCGStratifiedGenerationSettings&) */
     Result<std::vector<std::uint8_t>> EncodePCGPointGenerationSettings(const PCGStratifiedGenerationSettings &settings) {
-        return Encode(Valid(settings), 24, [&](const std::span<std::uint8_t> bytes) {
+        return Encode(Valid(settings), 24, [&settings](const std::span<std::uint8_t> bytes) {
             WriteSource(bytes, settings.volume);
             for (std::size_t axis = 0; axis < settings.strata.size(); ++axis)
                 WriteWord(bytes.subspan(12 + axis * 4, 4), settings.strata[axis]);
@@ -103,7 +103,7 @@ namespace Horo::PCG {
 
     /** @copydoc EncodePCGPointGenerationSettings(const PCGPoissonGenerationSettings&) */
     Result<std::vector<std::uint8_t>> EncodePCGPointGenerationSettings(const PCGPoissonGenerationSettings &settings) {
-        return Encode(Valid(settings), 28, [&](const std::span<std::uint8_t> bytes) {
+        return Encode(Valid(settings), 28, [&settings](const std::span<std::uint8_t> bytes) {
             WriteSource(bytes, settings.volume);
             WriteWord(bytes.subspan(12, 4), settings.count);
             WriteWord(bytes.subspan(16, 4), settings.attempts);

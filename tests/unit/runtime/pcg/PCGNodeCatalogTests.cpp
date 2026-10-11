@@ -3,11 +3,37 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <cstdio>
 #include <limits>
 #include <thread>
+#if defined(_MSC_VER) && defined(_DEBUG)
+#include <crtdbg.h>
+#endif
 
 namespace Horo::PCG {
     namespace {
+#if defined(_MSC_VER) && defined(_DEBUG)
+        /** @brief Routes this owner-thread case's CRT assertion text to CTest without changing fail-fast behavior. */
+        class ScopedAssertionReport final {
+        public:
+            ScopedAssertionReport()
+                : previousMode_(_CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE)),
+                  previousFile_(_CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR)) {}
+
+            ScopedAssertionReport(const ScopedAssertionReport &) = delete;
+            ScopedAssertionReport &operator=(const ScopedAssertionReport &) = delete;
+
+            ~ScopedAssertionReport() {
+                _CrtSetReportFile(_CRT_ASSERT, previousFile_);
+                _CrtSetReportMode(_CRT_ASSERT, previousMode_);
+            }
+
+        private:
+            int previousMode_;
+            _HFILE previousFile_;
+        };
+#endif
+
         template <typename Identity> Identity Id(const std::uint64_t value) {
             const auto id = Identity::Create(value);
             REQUIRE(id.HasValue());
@@ -206,6 +232,9 @@ namespace Horo::PCG {
     }
 
     TEST_CASE("PCG catalog work cost is checked before executable allocation admission", "[unit][pcg][catalog]") {
+#if defined(_MSC_VER) && defined(_DEBUG)
+        const ScopedAssertionReport assertionReport;
+#endif
         auto catalog = Catalog();
         REQUIRE(catalog.Register(PCGCpuNodeKind::SnapshotGrid).HasValue());
         REQUIRE(catalog.Register(PCGCpuNodeKind::DensityFilter).HasValue());
@@ -219,7 +248,16 @@ namespace Horo::PCG {
         auto malformed = grid;
         malformed.payload.clear();
         CheckError(root.Cost(malformed, 1, 1), PCGErrors::RegistryDescriptorInvalid);
-        REQUIRE(Evaluate(plan.Value(), 2).HasValue());
+#if defined(_MSC_VER) && defined(_DEBUG)
+        std::fputs("PCG one-point evaluation: entering original successful evaluator path\n", stderr);
+        std::fflush(stderr);
+#endif
+        const auto first = Evaluate(plan.Value(), 2);
+#if defined(_MSC_VER) && defined(_DEBUG)
+        std::fputs("PCG one-point evaluation: returned from evaluator\n", stderr);
+        std::fflush(stderr);
+#endif
+        REQUIRE(first.HasValue());
         CHECK(root.Cost(grid, 0, 2).Value().snapshotElementVisits == 4);
         CheckError(Evaluate(plan.Value(), 2, 3, true), PCGErrors::CpuEvaluationCapacityExceeded);
         REQUIRE(Evaluate(plan.Value(), 2, 4, true).HasValue());

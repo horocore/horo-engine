@@ -286,6 +286,27 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
+      - name: Diagnose Windows PCG evaluator completion timeout
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.number == 3403 && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
+        timeout-minutes: 3
+        shell: pwsh
+        run: >-
+          ./.github/scripts/diagnose_character_input_windows.ps1 -BuildDirectory build/ci
+          -BinaryName HoroPCGTests.exe -EvidenceName pcg-evaluator-diagnostics
+          -TestCase 'HoroPCGTests::PCG catalog work cost is checked before executable allocation admission'
+
+      - name: Upload Windows PCG evaluator stack text
+        if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.number == 3403 && runner.os == 'Windows' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pcg-evaluator-stack-text-Windows
+          path: |
+            build/ci/pcg-evaluator-diagnostics/status.txt
+            build/ci/pcg-evaluator-diagnostics/threads.txt
+            build/ci/pcg-evaluator-diagnostics/ctest.xml
+          if-no-files-found: warn
+          retention-days: 3
+
       - name: Record Windows Save allocation diagnostic provenance
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
         shell: pwsh

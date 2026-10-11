@@ -28,6 +28,7 @@ namespace Horo::PCG {
 
         Result<PCGBuiltInNodeDescriptor> Describe(PCGCpuNodeKind kind) {
             using enum PCGCpuNodeKind;
+            using enum PCGNodeSettingsSchema;
             const auto index = static_cast<std::size_t>(kind);
             if (index >= 7)
                 return Reject<PCGBuiltInNodeDescriptor>(PCGErrors::CpuEvaluationUnsupported);
@@ -46,19 +47,19 @@ namespace Horo::PCG {
             descriptor.determinism = generation ? PCGNodeDeterminism::ProfileDeterministic : PCGNodeDeterminism::PortableDeterministic;
             switch (kind) {
                 case SnapshotGrid:
-                    descriptor.settings = PCGNodeSettingsSchema::SpatialGridIdentity;
+                    descriptor.settings = SpatialGridIdentity;
                     break;
                 case GridJitter:
-                    descriptor.settings = PCGNodeSettingsSchema::GridJitterV1;
+                    descriptor.settings = GridJitterV1;
                     break;
                 case Stratified:
-                    descriptor.settings = PCGNodeSettingsSchema::StratifiedV1;
+                    descriptor.settings = StratifiedV1;
                     break;
                 case PoissonScatter:
-                    descriptor.settings = PCGNodeSettingsSchema::PoissonScatterV1;
+                    descriptor.settings = PoissonScatterV1;
                     break;
                 default:
-                    descriptor.settings = PCGNodeSettingsSchema::None;
+                    descriptor.settings = None;
                     break;
             }
             descriptor.workPerSnapshotElement = generation ? 2 : 0;

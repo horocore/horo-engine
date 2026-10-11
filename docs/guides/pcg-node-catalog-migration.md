@@ -96,6 +96,13 @@ not newly reserved. Source sample identities do not replace the existing generat
 output execution/node/pin address contract. Any future output-intent conversion must
 retain the composite root rather than flattening it to the scalar sample column.
 
+`DerivePCGSampleSeed` borrows its digest as `const Sha256Digest &` for the synchronous
+call instead of copying 32 bytes. Ordinary calls from provenance, point identity,
+kernels and regression fixtures are unchanged; callers storing a function pointer
+must adopt the const-reference signature. No key reference is retained. The public
+consumer checks the signature and the existing canonical seed goldens remain the
+behavioral migration oracle.
+
 SnapshotGrid v1 also preserves its established missing-grid `CpuEvaluationInvalid`
 diagnostic. New generation source lookups report `SpatialInputInvalid`; the paired
 admission regression asserts both exact codes rather than flattening either error.

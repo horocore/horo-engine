@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <ranges>
 #include <type_traits>
 
@@ -34,16 +35,17 @@ namespace Horo::PCG::detail {
             const auto count = CellCount(found->dimensions);
             if (count.HasError())
                 return Result<PointGenerationDomain>::Failure(count.ErrorValue());
-            return Result<PointGenerationDomain>::Success({&*found, nullptr, count.Value()});
+            return Result<PointGenerationDomain>::Success({std::to_address(found), nullptr, count.Value()});
         }
 
         /** @brief Rejects unsupported geometry rather than approximating a sphere by its bounding box. */
         Result<const PCGBoxVolume *> ResolveBox(const SpatialElementId id, const PCGSpatialSnapshot &spatial) {
             for (const auto &volume : spatial.Volumes()) {
-                const bool matched = std::visit([id]<typename T>(const T &value) {
+                if (const bool matched = std::visit(
+                        [id]<typename T>(const T &value) {
                     return value.id == id;
                 }, volume);
-                if (!matched)
+                    !matched)
                     continue;
                 if (const auto *box = std::get_if<PCGBoxVolume>(&volume))
                     return Result<const PCGBoxVolume *>::Success(box);
