@@ -434,7 +434,6 @@ def configure_command(
     compiler_launcher: str | None = None,
     msvc_debug_information_format: str | None = None,
     extra_cmake_args: Sequence[str] | None = None,
-    source_directory: Path | None = None,
 ) -> list[str]:
     """Build the typed, parameterizable CMake configure command."""
     if render_metal is None:
@@ -445,7 +444,7 @@ def configure_command(
     command = [
         "cmake",
         "-S",
-        str(source_directory or REPOSITORY_ROOT),
+        str(REPOSITORY_ROOT),
         "-B",
         str(build_directory),
         "-G",
@@ -542,6 +541,19 @@ def execute_subprocess(command: Sequence[str], cwd: Path = REPOSITORY_ROOT, env:
         return 130
 
 
+def _cached_compiler_flags(build_directory: Path) -> dict[str, str]:
+    """Read previously configured language flags before adding path normalization."""
+    cache = build_directory / "CMakeCache.txt"
+    if not cache.is_file():
+        return {}
+    values = {}
+    for line in cache.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"(CMAKE_C(?:XX)?_FLAGS):[^=]+=(.*)", line)
+        if match:
+            values[match[1]] = match[2]
+    return values
+
+
 def _cache_configure_arguments(command: Sequence[str], build_directory: Path, source: Path) -> list[str]:
     """Preserve user flags while normalizing debug paths for cross-worktree reuse."""
     result = list(command)
@@ -549,12 +561,7 @@ def _cache_configure_arguments(command: Sequence[str], build_directory: Path, so
     if sys.platform == "win32":
         return result
     values: dict[str, str] = {}
-    cache = build_directory / "CMakeCache.txt"
-    if cache.is_file():
-        for line in cache.read_text(encoding="utf-8").splitlines():
-            match = re.match(r"(CMAKE_C(?:XX)?_FLAGS):[^=]+=(.*)", line)
-            if match:
-                values[match[1]] = match[2]
+    values.update(_cached_compiler_flags(build_directory))
     for argument in command:
         match = re.match(r"-D(CMAKE_C(?:XX)?_FLAGS)(?::[^=]+)?=(.*)", argument)
         if match:
@@ -692,6 +699,13 @@ def run_build(
     return _configure_and_build(cfg_cmd, build_directory, target, compiler_launcher, use_cache, jobs, clean)
 
 
+@dataclass(frozen=True)
+class TestBuildCacheOptions:
+    """Local checkpoint policy and compilation concurrency for test builds."""
+
+    use_cache: bool = True
+    jobs: int = 2
+
 def run_tests(
     regex: str | None = None,
     exclude: str | None = None,
@@ -704,8 +718,7 @@ def run_tests(
     extra_ctest_args: Sequence[str] | None = None,
     fetchcontent_base_dir: Path | None = None,
     skip_build: bool = False,
-    use_cache: bool = True,
-    jobs: int = 2,
+    cache_options: TestBuildCacheOptions = TestBuildCacheOptions(),
     extra_cmake_args: Sequence[str] | None = None,
 ) -> int:
     """Build unless explicitly skipped, then execute CTest with optional filters."""
@@ -723,8 +736,8 @@ def run_tests(
             compiler_launcher=compiler_launcher,
             msvc_debug_information_format=msvc_debug_information_format,
             fetchcontent_base_dir=fetchcontent_base_dir,
-            use_cache=use_cache,
-            jobs=jobs,
+            use_cache=cache_options.use_cache,
+            jobs=cache_options.jobs,
             extra_cmake_args=extra_cmake_args,
         )
         if build_code != 0:
@@ -773,8 +786,7 @@ def run_check(
         compiler_launcher=compiler_launcher,
         msvc_debug_information_format=msvc_debug_information_format,
         fetchcontent_base_dir=fetchcontent_base_dir,
-        use_cache=use_cache,
-        jobs=jobs,
+        cache_options=TestBuildCacheOptions(use_cache, jobs),
         extra_cmake_args=extra_cmake_args,
     )
 
@@ -1302,11 +1314,12 @@ def run_cache_prepare(parsed: argparse.Namespace) -> int:
 
     def build_main(source: Path, directory: Path, binding: local_build_cache.CacheBinding) -> int:
         arguments = configure_command(
-            source_directory=source, build_directory=directory, build_type=parsed.type,
+            build_directory=directory, build_type=parsed.type,
             testing=not parsed.no_testing, compiler_launcher=binding.launcher,
             telemetry=True, opentelemetry=True,
             extra_cmake_args=parsed.cmake_arg,
         )
+        arguments[2] = str(source)
         if parsed.fetchcontent_base_dir:
             arguments.append(f"-DFETCHCONTENT_BASE_DIR={parsed.fetchcontent_base_dir.resolve()}")
         arguments = _cache_configure_arguments(arguments, directory, source)
@@ -1602,8 +1615,7 @@ def _dispatch_command(parsed: argparse.Namespace, unparsed: Sequence[str], parse
             msvc_debug_information_format=parsed.msvc_debug_information_format,
             fetchcontent_base_dir=parsed.fetchcontent_base_dir,
             skip_build=parsed.skip_build,
-            use_cache=not parsed.no_cache,
-            jobs=parsed.jobs,
+            cache_options=TestBuildCacheOptions(not parsed.no_cache, parsed.jobs),
             extra_cmake_args=parsed.cmake_arg,
         )
 

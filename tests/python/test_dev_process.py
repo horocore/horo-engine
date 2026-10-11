@@ -12,7 +12,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("horo_dev_process", ROOT / "scripts" / "dev_process.py")
-assert SPEC and SPEC.loader
+assert SPEC is not None
+assert SPEC.loader is not None
 process = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = process
 SPEC.loader.exec_module(process)
@@ -87,6 +88,7 @@ def test_cleanup_failure_never_returns_clean_cancellation(
         def wait(self, **kwargs):
             raise KeyboardInterrupt
 
+    monkeypatch.setattr(process, "validated_command", lambda command, *_: list(command))
     monkeypatch.setattr(process.subprocess, "Popen", lambda *_, **__: Child())
     monkeypatch.setattr(process, "_snapshot", lambda: {})
 
@@ -145,6 +147,7 @@ def test_inventory_error_stays_ordinary_after_confirmed_cleanup(
 
     class Root:
         pid = 100
+    monkeypatch.setattr(process, "validated_command", lambda command, *_: list(command))
     monkeypatch.setattr(process.subprocess, "Popen", lambda *_, **__: Root())
 
     def failed():
@@ -154,3 +157,19 @@ def test_inventory_error_stays_ordinary_after_confirmed_cleanup(
     with pytest.raises(OSError, match="inventory unavailable") as error:
         process.run(["fixture"], tmp_path)
     assert not isinstance(error.value, process.CleanupError)
+
+
+@pytest.mark.parametrize("command", ["python -c pass", [], [""], [sys.executable, 3], [sys.executable, "bad\0value"]])
+def test_reject_invalid_argv_before_launch(command, tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        process.validated_command(command, tmp_path)
+
+
+def test_resolve_executable_from_relative_cwd(tmp_path: Path) -> None:
+    binary = tmp_path / "local python"
+    try:
+        binary.symlink_to(Path(sys.executable).resolve())
+    except OSError:
+        pytest.skip("Executable symlinks require host permission")
+    assert process.validated_command(["./local python", "-c", "pass"], tmp_path)[0] == str(binary)
+    assert process.validated_command(["local python", "-c", "pass"], tmp_path, {"PATH": "."})[0] == str(binary)

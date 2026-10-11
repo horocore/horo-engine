@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import errno
 import os
 from pathlib import Path
+import shutil
 import signal
-import subprocess
+# Required stdlib for explicit, shell-free owned process execution.
+import subprocess  # nosec B404
 import time
 from typing import Mapping, Sequence
 
@@ -25,10 +28,38 @@ class _Identity:
     birth: str
 
 
+def validated_command(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None) -> list[str]:
+    """Validate authorized argv and resolve its executable; this is not command authorization."""
+    if isinstance(command, (str, bytes)) or not command or any(not isinstance(item, str) or "\0" in item for item in command):
+        raise ValueError("A command must be a nonempty sequence of NUL-free strings")
+    executable = command[0]
+    if not executable:
+        raise ValueError("A command executable must not be empty")
+    resolved = _executable_path(executable, cwd.resolve(), env)
+    if resolved is None:
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), executable)
+    # Preserve the selected executable path: resolving a venv Python symlink changes its environment.
+    return [os.path.abspath(resolved), *command[1:]]
+
+
+def _executable_path(executable: str, directory: Path, env: Mapping[str, str] | None) -> str | None:
+    """Resolve executable lookup from the child's working directory and PATH."""
+    if Path(executable).is_absolute() or any(separator in executable for separator in ("/", "\\")):
+        candidate = Path(executable)
+        candidate = candidate if candidate.is_absolute() else directory / candidate
+        resolved = shutil.which(str(candidate))
+    else:
+        paths = [str(Path(item) if Path(item).is_absolute() else directory / item)
+                 for item in os.get_exec_path(env)]
+        resolved = shutil.which(executable, path=os.pathsep.join(paths))
+    return resolved
+
+
 def _snapshot() -> dict[int, _Identity]:
     """Capture PID birth and ancestry together; command names never establish ownership."""
-    result = subprocess.run(["ps", "-axo", "pid=,ppid=,pgid=,stat=,lstart="],
-                            capture_output=True, text=True, check=False)
+    # Fixed OS inventory binary and argv; process names cannot supply executable or options.
+    result = subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,pgid=,stat=,lstart="],  # nosec B603
+                            capture_output=True, text=True, check=False, shell=False)
     if result.returncode:
         raise OSError(f"Cannot verify developer process ownership: {result.stderr.strip()}")
     records = {}
@@ -122,7 +153,9 @@ def _cleanup(process: subprocess.Popen, known: dict[int, _Identity]) -> None:
 
 def _windows_run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None) -> int:
     """Preserve ordinary Windows execution; interrupted tree cleanup is unqualified."""
-    with subprocess.Popen(command, cwd=cwd, env=env,
+    # Caller-authorized executable and argv are validated by run; no command shell parses arguments.
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+    with subprocess.Popen(command, cwd=cwd, env=env, shell=False,  # nosec B603
                           creationflags=subprocess.CREATE_NEW_PROCESS_GROUP) as process:
         try:
             return process.wait()
@@ -134,16 +167,19 @@ def _windows_run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | Non
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=2)
-            except BaseException as cleanup_error:
+            except (Exception, KeyboardInterrupt, SystemExit) as cleanup_error:
                 raise CleanupError("Windows interrupted process cleanup was not confirmed") from cleanup_error
             raise CleanupError("Windows interruption cleanup cannot verify descendant termination") from error
 
 
 def run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None) -> int:
     """Run argv without a shell; return 130 only after verified POSIX tree cleanup."""
+    command = validated_command(command, cwd, env)
     if os.name == "nt":
         return _windows_run(command, cwd, env)
-    process = subprocess.Popen(command, cwd=cwd, env=env, start_new_session=True)
+    # Caller-authorized absolute executable and validated argv; a shell never interprets arguments.
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+    process = subprocess.Popen(command, cwd=cwd, env=env, start_new_session=True, shell=False)  # nosec B603
     known: dict[int, _Identity] = {}
     try:
         while True:
@@ -158,7 +194,7 @@ def run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None)
     except KeyboardInterrupt:
         try:
             _cleanup(process, known)
-        except BaseException as error:
+        except (Exception, KeyboardInterrupt, SystemExit) as error:
             raise CleanupError("Interrupted developer subprocess cleanup was not confirmed") from error
         return 130
     except CleanupError:
@@ -167,6 +203,6 @@ def run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None)
         # Inventory/launch errors also must not silently release an active owned root.
         try:
             _cleanup(process, known)
-        except BaseException as error:
+        except (Exception, KeyboardInterrupt, SystemExit) as error:
             raise CleanupError("Developer subprocess cleanup after failure was not confirmed") from error
         raise

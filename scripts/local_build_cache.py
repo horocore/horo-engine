@@ -11,7 +11,8 @@ from pathlib import Path
 import platform
 import re
 import shutil
-import subprocess
+# Git metadata/worktree operations use explicit argv without a shell.
+import subprocess  # nosec B404
 import sys
 import time
 from typing import Callable, Iterator, Mapping
@@ -20,7 +21,10 @@ import uuid
 _GENERATION = re.compile(r"gen-[0-9a-f]{32}")
 _COMMIT = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 _OWNER = "horo-local-build-cache-v1"
-_MAX_SIZE = re.compile(r"[1-9][0-9]*(?:[KMGT]i?B?|[kmgt])?")
+_CLEANUP_MARKER = "cleanup-unverified.json"
+_READONLY_CONFIG = "readonly.conf"
+_GENERATION_MARKER = "generation.json"
+_MAX_SIZE = re.compile(r"[1-9]\d*(?:[KMGT]i?B?|[kmgt])?", re.ASCII)
 
 
 class CacheError(RuntimeError):
@@ -40,8 +44,13 @@ class CacheBinding:
 
 
 def _git(repo: Path, *arguments: str) -> str:
-    result = subprocess.run(["git", "-c", "core.fsmonitor=false", "-C", str(repo), *arguments], check=False,
-                            capture_output=True, text=True)
+    executable = shutil.which("git")
+    if executable is None:
+        raise CacheError("Git is required for local build cache ownership")
+    command = [os.path.abspath(executable), "-c", "core.fsmonitor=false", "-C", str(repo), *arguments]
+    # Private callers supply fixed Git subcommands and pinned refs; paths remain separate argv entries.
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+    result = subprocess.run(command, check=False, capture_output=True, text=True, shell=False)  # nosec B603
     if result.returncode:
         raise CacheError(f"git {' '.join(arguments[:2])} failed: {result.stderr.strip()}")
     return result.stdout.strip()
@@ -194,8 +203,8 @@ def heavy_build_lock(repo: Path) -> Iterator[None]:
     root = cache_directory(repo)
     _initialize(root, repo)
     with _FileLock(root / "heavy-build.lock"):
-        if (root / "cleanup-unverified.json").exists():
-            raise CacheError(f"An earlier build has unverified descendants; inspect {root / 'cleanup-unverified.json'} before further builds")
+        if (root / _CLEANUP_MARKER).exists():
+            raise CacheError(f"An earlier build has unverified descendants; inspect {root / _CLEANUP_MARKER} before further builds")
         yield
 
 
@@ -203,7 +212,7 @@ def record_cleanup_failure(repo: Path) -> None:
     """Preserve generations and block new builds until orphan ownership is audited."""
     root = cache_directory(repo)
     _initialize(root, repo)
-    _atomic_json(root / "cleanup-unverified.json", {"schema": 1, "reason": "subprocess descendant termination was not confirmed"})
+    _atomic_json(root / _CLEANUP_MARKER, {"schema": 1, "reason": "subprocess descendant termination was not confirmed"})
 
 
 def _ready(root: Path) -> tuple[Path, dict[str, object]] | None:
@@ -217,24 +226,29 @@ def _ready(root: Path) -> tuple[Path, dict[str, object]] | None:
         return None
     directory = root / "generations" / name
     if any(path.is_symlink() for path in (root / "generations", directory, directory / "compiler",
-                                         directory / "readonly.conf")):
+                                         directory / _READONLY_CONFIG)):
         return None
-    marker = _read_json(directory / "generation.json")
+    marker = _read_json(directory / _GENERATION_MARKER)
     if not marker or marker.get("schema") != 1 or marker.get("owner") != _OWNER or marker.get("state") != "ready":
         return None
     if marker.get("main_commit") != commit or marker.get("generation") != name:
         return None
-    if not (directory / "compiler").is_dir() or not (directory / "readonly.conf").is_file():
+    if not (directory / "compiler").is_dir() or not (directory / _READONLY_CONFIG).is_file():
         return None
-    size = marker.get("max_size")
-    if not isinstance(size, str) or not _MAX_SIZE.fullmatch(size):
-        return None
-    try:
-        if (directory / "readonly.conf").read_text(encoding="utf-8") != _config(size, readonly=True):
-            return None
-    except (OSError, UnicodeError):
+    if not _valid_readonly_config(directory, marker):
         return None
     return directory, pointer
+
+
+def _valid_readonly_config(directory: Path, marker: dict[str, object]) -> bool:
+    """Admit only the exact manager-generated read-only compiler configuration."""
+    size = marker.get("max_size")
+    if not isinstance(size, str) or not _MAX_SIZE.fullmatch(size):
+        return False
+    try:
+        return (directory / _READONLY_CONFIG).read_text(encoding="utf-8") == _config(size, readonly=True)
+    except (OSError, UnicodeError):
+        return False
 
 
 def _binding(directory: Path, commit: str, source: Path, launcher: str,
@@ -242,7 +256,7 @@ def _binding(directory: Path, commit: str, source: Path, launcher: str,
     environment = {key: value for key, value in (os.environ if environ is None else environ).items()
                    if not key.upper().startswith("CCACHE_")}
     environment.update({"CCACHE_DIR": str(directory / "compiler"),
-                        "CCACHE_CONFIGPATH": str(directory / ("readonly.conf" if readonly else "writer.conf")),
+                        "CCACHE_CONFIGPATH": str(directory / (_READONLY_CONFIG if readonly else "writer.conf")),
                         "CCACHE_BASEDIR": str(source.resolve())})
     return CacheBinding(launcher, environment, directory.name, commit)
 
@@ -280,7 +294,7 @@ def status(repo: Path) -> dict[str, object]:
         ready = None
     result: dict[str, object] = {"root": str(root), "ready": ready is not None,
                                  "launcher_available": shutil.which("ccache") is not None,
-                                 "cleanup_blocked": (root / "cleanup-unverified.json").exists()}
+                                 "cleanup_blocked": (root / _CLEANUP_MARKER).exists()}
     if ready:
         result.update(ready[1])
     return result
@@ -293,7 +307,7 @@ def _config(max_size: str, *, readonly: bool) -> str:
 
 
 def _write_configs(directory: Path, max_size: str) -> None:
-    for name, readonly in (("writer.conf", False), ("readonly.conf", True)):
+    for name, readonly in (("writer.conf", False), (_READONLY_CONFIG, True)):
         (directory / name).write_text(_config(max_size, readonly=readonly), encoding="utf-8")
 
 
@@ -304,31 +318,35 @@ def _seed(source: Path, destination: Path) -> None:
     shutil.copytree(source, destination, dirs_exist_ok=True, copy_function=shutil.copy2)
 
 
+def _retirement_candidate(directory: Path) -> bool:
+    """Keep unknown generations and partial producer worktrees recoverable."""
+    marker = _read_json(directory / _GENERATION_MARKER)
+    if not marker or marker.get("schema") != 1 or marker.get("owner") != _OWNER or marker.get("state") != "ready":
+        return False
+    if marker.get("generation") != directory.name:
+        return False
+    return not (directory / "source").exists() and not (directory / "source").is_symlink()
+
+
 def _retire(root: Path, active: str) -> None:
     """Delete only ready manager-owned generations whose readers have all released."""
     if any(path.is_symlink() for path in (root, *root.parents, root / "generations", root / "leases")):
         raise CacheError("Refusing retirement through a symlinked cache directory")
-    if (root / "cleanup-unverified.json").exists():
+    if (root / _CLEANUP_MARKER).exists():
         return
     for directory in (root / "generations").iterdir():
         if directory.name == active or not _GENERATION.fullmatch(directory.name) or directory.is_symlink():
             continue
-        marker = _read_json(directory / "generation.json")
-        if not marker or marker.get("schema") != 1 or marker.get("owner") != _OWNER or marker.get("state") != "ready":
-            continue
-        if marker.get("generation") != directory.name:
-            continue
-        # Failed/partial worktrees must stay registered and recoverable.
-        if (directory / "source").exists() or (directory / "source").is_symlink():
+        if not _retirement_candidate(directory):
             continue
         try:
             with _FileLock(root / "leases" / f"{directory.name}.lock", blocking=False):
-                if (root / "cleanup-unverified.json").exists():
+                if (root / _CLEANUP_MARKER).exists():
                     return
                 if directory.resolve().parent != (root / "generations").resolve():
                     raise CacheError("Refusing generation retirement outside managed storage")
                 shutil.rmtree(directory)
-        except (BlockingIOError, OSError):
+        except OSError:
             continue
 
 
@@ -340,7 +358,7 @@ def _new_candidate(root: Path, commit: str, max_size: str) -> tuple[Path, dict[s
     (root / "leases" / f"{name}.lock").touch()
     marker: dict[str, object] = {"schema": 1, "owner": _OWNER, "generation": name,
                                  "main_commit": commit, "max_size": max_size, "state": "preparing"}
-    _atomic_json(directory / "generation.json", marker)
+    _atomic_json(directory / _GENERATION_MARKER, marker)
     (directory / "compiler").mkdir()
     return directory, marker
 
@@ -359,7 +377,7 @@ def prepare_cache(repo: Path, build_callback: Callable[[Path, Path, CacheBinding
     root = cache_directory(repo)
     _initialize(root, repo)
     with _FileLock(root / "writer.lock"):
-        if (root / "cleanup-unverified.json").exists():
+        if (root / _CLEANUP_MARKER).exists():
             raise CacheError("An earlier build has unverified descendants; checkpoint preparation is blocked")
         commit = _git(repo, "rev-parse", "--verify", f"{main_ref}^{{commit}}")
         if not _COMMIT.fullmatch(commit):
@@ -381,15 +399,15 @@ def prepare_cache(repo: Path, build_callback: Callable[[Path, Path, CacheBinding
         code = build_callback(source, build, binding)
         if code:
             marker["state"] = "failed"
-            _atomic_json(directory / "generation.json", marker)
+            _atomic_json(directory / _GENERATION_MARKER, marker)
             return code
         if _git(source, "rev-parse", "HEAD") != commit or _git(source, "status", "--porcelain"):
             marker["state"] = "failed"
-            _atomic_json(directory / "generation.json", marker)
+            _atomic_json(directory / _GENERATION_MARKER, marker)
             raise CacheError("Cache producer modified pinned main; checkpoint was not published")
         _git(repo, "worktree", "remove", str(source))
         marker["state"] = "ready"
-        _atomic_json(directory / "generation.json", marker)
+        _atomic_json(directory / _GENERATION_MARKER, marker)
         _atomic_json(root / "ready.json", {"schema": 1, "generation": name, "main_commit": commit})
         _retire(root, name)
         return 0

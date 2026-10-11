@@ -5,18 +5,23 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import shutil
-import subprocess
+# Disposable native fixture runs explicit, validated argv without a shell.
+import subprocess  # nosec B404
 import sys
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import dev
+import dev_process
 import local_build_cache as cache
 
 
 def run(*arguments: str, cwd: Path, env: dict[str, str] | None = None) -> str:
-    process = subprocess.run(arguments, cwd=cwd, env=env, capture_output=True, text=True, check=False)
+    command = dev_process.validated_command(arguments, cwd, env)
+    # Fixture callers supply Git/CMake argv or the executable built inside their disposable source tree.
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+    process = subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True, check=False, shell=False)  # nosec B603
     assert process.returncode == 0, process.stdout + process.stderr
     return process.stdout
 

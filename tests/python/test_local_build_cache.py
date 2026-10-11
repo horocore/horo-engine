@@ -8,22 +8,23 @@ import json
 import os
 from pathlib import Path
 import shutil
-import subprocess
+# Real ccache parser fixture uses validated argv with shell=False.
+import subprocess  # nosec B404
 import sys
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("horo_local_build_cache", ROOT / "scripts" / "local_build_cache.py")
-assert SPEC and SPEC.loader
+assert SPEC is not None
+assert SPEC.loader is not None
 cache = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = cache
 SPEC.loader.exec_module(cache)
 
 
 def git(repo: Path, *arguments: str) -> str:
-    return subprocess.run(["git", "-C", str(repo), *arguments], check=True,
-                          capture_output=True, text=True).stdout.strip()
+    return cache._git(repo, *arguments)
 
 
 @pytest.fixture
@@ -53,6 +54,18 @@ def successful_build(source: Path, build: Path, binding: cache.CacheBinding) -> 
     return 0
 
 
+def enter_blocked_context(context) -> None:
+    """Unexpected successful entry is an assertion failure, after releasing the context."""
+    with context:
+        pytest.fail("A blocked operation unexpectedly entered its protected context")
+
+
+def raise_in_context(context, error: Exception) -> None:
+    """Exercise context cleanup while propagating one known body exception."""
+    with context:
+        raise error
+
+
 def test_discovery_miss_does_not_create_storage(repository: tuple[Path, Path, str]) -> None:
     repo, root, _ = repository
     with cache.automatic_cache(repo) as binding:
@@ -67,9 +80,9 @@ def test_unverified_cleanup_blocks_new_builds_and_retirement(repository: tuple[P
     old = root / "generations" / cache.status(repo)["generation"]
     cache.record_cleanup_failure(repo)
     assert cache.status(repo)["cleanup_blocked"] is True
+    context = cache.heavy_build_lock(repo)
     with pytest.raises(cache.CacheError, match="unverified descendants"):
-        with cache.heavy_build_lock(repo):
-            pytest.fail("an unverified earlier build must block new compilation")
+        enter_blocked_context(context)
     with pytest.raises(cache.CacheError, match="unverified descendants"):
         cache.prepare_cache(repo, successful_build)
     cache._retire(root, "different-generation")
@@ -85,11 +98,11 @@ def test_prepare_uses_clean_pinned_main_without_touching_feature_checkout(
     before = git(repo, "status", "--porcelain")
 
     def inspect(source: Path, build: Path, binding: cache.CacheBinding) -> int:
-        assert source != repo and source.is_relative_to(root)
+        assert source != repo
+        assert source.is_relative_to(root)
         assert build == source / "build" / "dev-cache"
         assert git(source, "rev-parse", "HEAD") == commit
-        assert subprocess.run(["git", "-C", str(source), "symbolic-ref", "-q", "HEAD"],
-                              capture_output=True).returncode == 1
+        assert git(source, "rev-parse", "--abbrev-ref", "HEAD") == "HEAD"
         assert git(source, "status", "--porcelain") == ""
         assert (source / "input.txt").read_text() == "main input\n"
         assert binding.main_commit == commit
@@ -100,7 +113,8 @@ def test_prepare_uses_clean_pinned_main_without_touching_feature_checkout(
     assert git(repo, "status", "--porcelain") == before
     assert (repo / "input.txt").read_text() == "user changes\n"
     pointer = cache.status(repo)
-    assert pointer["ready"] is True and pointer["main_commit"] == commit
+    assert pointer["ready"] is True
+    assert pointer["main_commit"] == commit
     generation = root / "generations" / pointer["generation"]
     assert not (generation / "source").exists()
     assert not (generation / "source" / "build").exists()
@@ -117,7 +131,8 @@ def test_failure_keeps_ready_generation_and_preserves_failed_producer(
     assert (root / "ready.json").read_bytes() == before
     failed = [path for path in (root / "generations").iterdir()
               if json.loads((path / "generation.json").read_text())["state"] == "failed"]
-    assert len(failed) == 1 and (failed[0] / "source").is_dir()
+    assert len(failed) == 1
+    assert (failed[0] / "source").is_dir()
 
 
 def test_success_switches_generations_and_seed_is_independent(
@@ -221,9 +236,10 @@ def test_reject_feature_producer_before_storage_creation(repository: tuple[Path,
 def test_consumer_body_error_propagates_without_double_yield(repository: tuple[Path, Path, str]) -> None:
     repo, _, _ = repository
     assert cache.prepare_cache(repo, successful_build) == 0
+    context = cache.automatic_cache(repo)
+    error = OSError("build failure")
     with pytest.raises(OSError, match="build failure"):
-        with cache.automatic_cache(repo):
-            raise OSError("build failure")
+        raise_in_context(context, error)
 
 
 def test_unknown_generation_is_preserved(repository: tuple[Path, Path, str]) -> None:
@@ -263,36 +279,48 @@ def test_corrupted_configuration_is_safe_miss(repository: tuple[Path, Path, str]
 
 def test_heavy_lock_is_exclusive_and_releases_after_exception(repository: tuple[Path, Path, str]) -> None:
     repo, root, _ = repository
+    with cache.heavy_build_lock(repo):
+        competing = cache._FileLock(root / "heavy-build.lock", blocking=False)
+        with pytest.raises(BlockingIOError):
+            enter_blocked_context(competing)
+    context = cache.heavy_build_lock(repo)
+    error = RuntimeError("cancelled")
     with pytest.raises(RuntimeError, match="cancelled"):
-        with cache.heavy_build_lock(repo):
-            with pytest.raises(BlockingIOError):
-                with cache._FileLock(root / "heavy-build.lock", blocking=False):
-                    pytest.fail("Concurrent heavy build acquired lock")
-            raise RuntimeError("cancelled")
+        raise_in_context(context, error)
     with cache._FileLock(root / "heavy-build.lock", blocking=False):
         pass
+
 
 
 def test_reader_lock_releases_when_build_raises(repository: tuple[Path, Path, str]) -> None:
     repo, root, _ = repository
     assert cache.prepare_cache(repo, successful_build) == 0
     old = root / "generations" / cache.status(repo)["generation"]
+    context = cache.automatic_cache(repo)
+    error = RuntimeError("cancelled")
     with pytest.raises(RuntimeError, match="cancelled"):
-        with cache.automatic_cache(repo):
-            raise RuntimeError("cancelled")
+        raise_in_context(context, error)
     assert cache.prepare_cache(repo, successful_build) == 0
     assert not old.exists()
 
 
-def test_repository_identity_is_shared_by_linked_worktrees(
-    repository: tuple[Path, Path, str], monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@pytest.fixture
+def peer_worktree(repository: tuple[Path, Path, str]) -> tuple[Path, Path]:
+    """Register one disposable detached peer for linked-worktree contract checks."""
     repo, _, commit = repository
     peer = repo.parent / "peer checkout"
     git(repo, "worktree", "add", "--detach", str(peer), commit)
+    return repo, peer
+
+
+def test_repository_identity_is_shared_by_linked_worktrees(
+    peer_worktree: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo, peer = peer_worktree
     # Load a fresh module to recover the unpatched cache-directory implementation.
     spec = importlib.util.spec_from_file_location("horo_cache_identity", ROOT / "scripts" / "local_build_cache.py")
-    assert spec and spec.loader
+    assert spec is not None
+    assert spec.loader is not None
     independent = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, independent)
     spec.loader.exec_module(independent)
@@ -301,11 +329,9 @@ def test_repository_identity_is_shared_by_linked_worktrees(
 
 
 def test_cache_inside_peer_source_is_rejected(
-    repository: tuple[Path, Path, str], monkeypatch: pytest.MonkeyPatch,
+    peer_worktree: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    repo, _, commit = repository
-    peer = repo.parent / "peer checkout"
-    git(repo, "worktree", "add", "--detach", str(peer), commit)
+    repo, peer = peer_worktree
     root = peer / "user-cache"
     monkeypatch.setattr(cache, "cache_directory", lambda _: root)
     with pytest.raises(cache.CacheError, match="outside source"):
@@ -322,10 +348,14 @@ def test_ccache_parses_generated_configuration(tmp_path: Path, readonly: bool) -
     config.write_text(cache._config("4G", readonly=readonly), encoding="utf-8")
     env = {key: value for key, value in os.environ.items() if not key.upper().startswith("CCACHE_")}
     env.update({"CCACHE_CONFIGPATH": str(config), "CCACHE_DIR": str(tmp_path / "compiler")})
+    executable = str(Path(launcher).resolve())
     for setting, expected in (("read_only", "true" if readonly else "false"),
                               ("compiler_check", "content"), ("sloppiness", ""), ("remote_storage", "")):
-        result = subprocess.run([launcher, "--get-config", setting], env=env,
-                                capture_output=True, text=True, check=False)
+        # ccache comes from executable discovery; setting names are the fixed parser fixture table.
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+        command = [executable, "--get-config", setting]
+        result = subprocess.run(command, env=env,  # nosec B603
+                                capture_output=True, text=True, check=False, shell=False)
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == expected
 
