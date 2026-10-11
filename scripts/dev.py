@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 from enum import Enum
 import hashlib
 import json
@@ -11,6 +12,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -20,6 +22,12 @@ from typing import Mapping, Sequence
 from urllib.error import HTTPError
 from urllib.parse import ParseResult, urlparse
 from urllib.request import Request, urlopen
+
+try:
+    from . import dev_process, local_build_cache
+except ImportError:
+    import dev_process
+    import local_build_cache
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ENV_FILE_NAME = ".env.local"
@@ -426,6 +434,7 @@ def configure_command(
     compiler_launcher: str | None = None,
     msvc_debug_information_format: str | None = None,
     extra_cmake_args: Sequence[str] | None = None,
+    source_directory: Path | None = None,
 ) -> list[str]:
     """Build the typed, parameterizable CMake configure command."""
     if render_metal is None:
@@ -436,7 +445,7 @@ def configure_command(
     command = [
         "cmake",
         "-S",
-        str(REPOSITORY_ROOT),
+        str(source_directory or REPOSITORY_ROOT),
         "-B",
         str(build_directory),
         "-G",
@@ -460,6 +469,7 @@ def build_command(
     build_directory: Path = DEFAULT_BUILD_DIRECTORY,
     target: str | None = "HoroEditor",
     parallel: bool = True,
+    jobs: int | None = None,
 ) -> list[str]:
     """Build the project or a specific target incrementally."""
     command = ["cmake", "--build", str(build_directory)]
@@ -467,6 +477,8 @@ def build_command(
         command.extend(["--target", target])
     if parallel:
         command.append("--parallel")
+        if jobs is not None:
+            command.append(str(jobs))
     return command
 
 
@@ -515,16 +527,92 @@ def execute_subprocess(command: Sequence[str], cwd: Path = REPOSITORY_ROOT, env:
     """Run a subprocess with clear error reporting and interrupt handling."""
     try:
         # Arguments are passed directly as an argv sequence; no command shell parses caller-provided values.
-        result = subprocess.run(command, cwd=cwd, env=env, check=False)  # noqa: S603, S8705
-        return result.returncode
+        return dev_process.run(command, cwd=cwd, env=env)
     except FileNotFoundError as error:
         print(f"error: command not found: {error.filename or command[0]}", file=sys.stderr)
         return 127
+    except dev_process.CleanupError as error:
+        local_build_cache.record_cleanup_failure(REPOSITORY_ROOT)
+        print(f"error: subprocess cleanup was not confirmed; further builds are blocked: {error}", file=sys.stderr)
+        return 126
     except OSError as error:
         print(f"error: failed to execute '{command[0]}': {error}", file=sys.stderr)
         return 126
     except KeyboardInterrupt:
         return 130
+
+
+def _cache_configure_arguments(command: Sequence[str], build_directory: Path, source: Path) -> list[str]:
+    """Preserve user flags while normalizing debug paths for cross-worktree reuse."""
+    result = list(command)
+    result.append("-DHORO_ENGINE_ENABLE_PCH=OFF")
+    if sys.platform == "win32":
+        return result
+    values: dict[str, str] = {}
+    cache = build_directory / "CMakeCache.txt"
+    if cache.is_file():
+        for line in cache.read_text(encoding="utf-8").splitlines():
+            match = re.match(r"(CMAKE_C(?:XX)?_FLAGS):[^=]+=(.*)", line)
+            if match:
+                values[match[1]] = match[2]
+    for argument in command:
+        match = re.match(r"-D(CMAKE_C(?:XX)?_FLAGS)(?::[^=]+)?=(.*)", argument)
+        if match:
+            values[match[1]] = match[2]
+    for language, variable in (("C", "CFLAGS"), ("CXX", "CXXFLAGS")):
+        key = f"CMAKE_{language}_FLAGS"
+        flags = values.get(key, os.environ.get(variable, ""))
+        for directory in (source.resolve(), build_directory.resolve()):
+            mapping = f"-fdebug-prefix-map={directory}=."
+            if mapping not in shlex.split(flags):
+                # CMake forwards flag strings through its try-compile parser;
+                # double quotes preserve a path with spaces at both boundaries.
+                quoted = '"' + mapping.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`") + '"'
+                flags = f"{flags} {quoted}".strip()
+        result.append(f"-D{key}={flags}")
+    return result
+
+
+def _uses_explicit_cache(command: Sequence[str], launcher: str | None, check_environment: bool = True) -> bool:
+    """Keep explicit launcher, PCH and cache-environment choices authoritative."""
+    return bool(launcher) or any(
+        argument.startswith(("-DCMAKE_C_COMPILER_LAUNCHER", "-DCMAKE_CXX_COMPILER_LAUNCHER"))
+        or (argument.startswith("-DHORO_ENGINE_ENABLE_PCH") and _cmake_enabled(argument.rsplit("=", 1)[-1]))
+        for argument in command
+    ) or (check_environment and any(key.startswith(("CCACHE_", "SCCACHE_")) for key in os.environ))
+
+
+def _cmake_enabled(value: str) -> bool:
+    """Interpret explicit CMake false constants; other cache strings are true."""
+    normalized = value.upper()
+    return normalized not in ("", "0", "OFF", "NO", "FALSE", "N", "IGNORE", "NOTFOUND") and not normalized.endswith("-NOTFOUND")
+
+
+def _configure_and_build(command: Sequence[str], build_directory: Path, target: str | None,
+                         compiler_launcher: str | None = None, use_cache: bool = True,
+                         jobs: int = 2, clean: bool = False) -> int:
+    """Lease a completed main checkpoint for the complete configure/build lifecycle."""
+    try:
+        with local_build_cache.heavy_build_lock(REPOSITORY_ROOT):
+            if clean and build_directory.exists():
+                print(f"Cleaning build directory {build_directory}...", flush=True)
+                shutil.rmtree(build_directory)
+            automatic = use_cache and sys.platform != "win32" and not _uses_explicit_cache(command, compiler_launcher)
+            context = local_build_cache.automatic_cache(REPOSITORY_ROOT) if automatic else nullcontext(None)
+            with context as binding:
+                arguments, environment = list(command), None
+                if binding:
+                    print(f"Using main cache {binding.main_commit[:12]} ({binding.generation})", flush=True)
+                    arguments.extend(_compiler_cache_arguments(binding.launcher, None))
+                    arguments = _cache_configure_arguments(arguments, build_directory, REPOSITORY_ROOT)
+                    environment = binding.env
+                code = execute_subprocess(arguments, env=environment)
+                if code:
+                    return code
+                return execute_subprocess(build_command(build_directory, target, jobs=jobs), env=environment)
+    except (local_build_cache.CacheError, OSError, ValueError) as error:
+        print(f"error: local build setup failed: {error}", file=sys.stderr)
+        return 2
 
 
 def run_editor(settings: DeveloperSettings, editor_arguments: Sequence[str], build_directory: Path = DEFAULT_BUILD_DIRECTORY) -> int:
@@ -542,12 +630,9 @@ def run_editor(settings: DeveloperSettings, editor_arguments: Sequence[str], bui
         )
 
     print("Configuring HoroEditor...", flush=True)
-    configure_code = execute_subprocess(configure_command(settings, build_directory=build_directory))
-    if configure_code != 0:
-        return configure_code
-
-    print("Building HoroEditor...", flush=True)
-    build_code = execute_subprocess(build_command(build_directory=build_directory, target="HoroEditor"))
+    build_code = _configure_and_build(
+        configure_command(settings, build_directory=build_directory), build_directory, "HoroEditor"
+    )
     if build_code != 0:
         return build_code
 
@@ -581,12 +666,10 @@ def run_build(
     msvc_debug_information_format: str | None = None,
     extra_cmake_args: Sequence[str] | None = None,
     fetchcontent_base_dir: Path | None = None,
+    use_cache: bool = True,
+    jobs: int = 2,
 ) -> int:
     """Configure and build the repository or a specific target."""
-    if clean and build_directory.exists():
-        print(f"Cleaning build directory {build_directory}...", flush=True)
-        shutil.rmtree(build_directory, ignore_errors=True)
-
     print(f"Configuring project in {build_directory}...", flush=True)
     cmake_arguments = list(extra_cmake_args or ())
     if fetchcontent_base_dir is not None:
@@ -605,12 +688,8 @@ def run_build(
         msvc_debug_information_format=msvc_debug_information_format,
         extra_cmake_args=cmake_arguments,
     )
-    configure_code = execute_subprocess(cfg_cmd)
-    if configure_code != 0:
-        return configure_code
-
     print(f"Building {'target ' + target if target else 'all targets'}...", flush=True)
-    return execute_subprocess(build_command(build_directory=build_directory, target=target))
+    return _configure_and_build(cfg_cmd, build_directory, target, compiler_launcher, use_cache, jobs, clean)
 
 
 def run_tests(
@@ -625,6 +704,9 @@ def run_tests(
     extra_ctest_args: Sequence[str] | None = None,
     fetchcontent_base_dir: Path | None = None,
     skip_build: bool = False,
+    use_cache: bool = True,
+    jobs: int = 2,
+    extra_cmake_args: Sequence[str] | None = None,
 ) -> int:
     """Build unless explicitly skipped, then execute CTest with optional filters."""
     if skip_build:
@@ -641,6 +723,9 @@ def run_tests(
             compiler_launcher=compiler_launcher,
             msvc_debug_information_format=msvc_debug_information_format,
             fetchcontent_base_dir=fetchcontent_base_dir,
+            use_cache=use_cache,
+            jobs=jobs,
+            extra_cmake_args=extra_cmake_args,
         )
         if build_code != 0:
             return build_code
@@ -672,6 +757,9 @@ def run_check(
     compiler_launcher: str | None = None,
     msvc_debug_information_format: str | None = None,
     fetchcontent_base_dir: Path | None = None,
+    use_cache: bool = True,
+    jobs: int = 2,
+    extra_cmake_args: Sequence[str] | None = None,
 ) -> int:
     """Run full CI-parity check: configure all components, compile all targets, run test suite."""
     print("==================================================", flush=True)
@@ -685,6 +773,9 @@ def run_check(
         compiler_launcher=compiler_launcher,
         msvc_debug_information_format=msvc_debug_information_format,
         fetchcontent_base_dir=fetchcontent_base_dir,
+        use_cache=use_cache,
+        jobs=jobs,
+        extra_cmake_args=extra_cmake_args,
     )
 
 
@@ -1185,6 +1276,56 @@ _EPILOG_EXAMPLES = """examples:
 """
 
 
+def _positive_jobs(value: str) -> int:
+    """Reject an unbounded or invalid compile parallelism request."""
+    jobs = int(value)
+    if jobs < 1:
+        raise argparse.ArgumentTypeError("jobs must be at least 1")
+    return jobs
+
+
+def run_cache_prepare(parsed: argparse.Namespace) -> int:
+    """Populate a new checkpoint from an isolated, pinned origin/main checkout."""
+    if sys.platform == "win32":
+        print("error: managed main checkpoints currently require macOS or Linux; use an explicit Windows compiler launcher", file=sys.stderr)
+        return 2
+    if any(not argument.startswith("-D") for argument in parsed.cmake_arg):
+        print("error: cache prepare accepts only -DNAME=value overrides; source and build directories are managed", file=sys.stderr)
+        return 2
+    if _uses_explicit_cache(parsed.cmake_arg, None, check_environment=False):
+        print("error: cache prepare cannot override its managed launcher or enable PCH", file=sys.stderr)
+        return 2
+    if not parsed.offline:
+        code = execute_subprocess(["git", "-C", str(REPOSITORY_ROOT), "fetch", "origin", "main"])
+        if code:
+            return code
+
+    def build_main(source: Path, directory: Path, binding: local_build_cache.CacheBinding) -> int:
+        arguments = configure_command(
+            source_directory=source, build_directory=directory, build_type=parsed.type,
+            testing=not parsed.no_testing, compiler_launcher=binding.launcher,
+            telemetry=True, opentelemetry=True,
+            extra_cmake_args=parsed.cmake_arg,
+        )
+        if parsed.fetchcontent_base_dir:
+            arguments.append(f"-DFETCHCONTENT_BASE_DIR={parsed.fetchcontent_base_dir.resolve()}")
+        arguments = _cache_configure_arguments(arguments, directory, source)
+        with local_build_cache.heavy_build_lock(REPOSITORY_ROOT):
+            code = execute_subprocess(arguments, cwd=source, env=binding.env)
+            if code:
+                return code
+            return execute_subprocess(build_command(directory, parsed.target, jobs=parsed.jobs), cwd=source, env=binding.env)
+
+    try:
+        code = local_build_cache.prepare_cache(REPOSITORY_ROOT, build_main, max_size=parsed.max_size)
+        if code == 0:
+            print(json.dumps(local_build_cache.status(REPOSITORY_ROOT), indent=2))
+        return code
+    except (local_build_cache.CacheError, OSError, ValueError) as error:
+        print(f"error: cache preparation failed: {error}", file=sys.stderr)
+        return 2
+
+
 def _add_compiler_cache_arguments(parser: argparse.ArgumentParser) -> None:
     """Add dependency-directory and compiler-cache options shared by build commands."""
     parser.add_argument(
@@ -1204,6 +1345,9 @@ def _add_compiler_cache_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="select the MSVC debug information representation",
     )
+    parser.add_argument("-j", "--jobs", type=_positive_jobs, default=2, help="compiler jobs (default: 2)")
+    parser.add_argument("--no-cache", action="store_true", help="disable automatic main checkpoint discovery")
+    parser.add_argument("--cmake-arg", action="append", default=[], help="extra configure argument; use --cmake-arg=-DNAME=value")
 
 
 def create_argument_parser() -> argparse.ArgumentParser:
@@ -1214,6 +1358,19 @@ def create_argument_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     commands = parser.add_subparsers(dest="command", required=False)
+
+    cache = commands.add_parser("cache", help="prepare or inspect a main-derived compiler checkpoint")
+    cache_commands = cache.add_subparsers(dest="cache_command", required=True)
+    cache_commands.add_parser("status", help="show the current completed main checkpoint")
+    prepare = cache_commands.add_parser("prepare", help="build pinned origin/main and atomically publish a checkpoint")
+    prepare.add_argument("--target", default=None, help="optional target to warm (default: all targets)")
+    prepare.add_argument("--type", default="Debug", choices=("Debug", "Release", "RelWithDebInfo"))
+    prepare.add_argument("--max-size", default="4G", help="compiler-cache budget per generation (default: 4G)")
+    prepare.add_argument("--offline", action="store_true", help="use the existing origin/main ref without fetching")
+    prepare.add_argument("--no-testing", action="store_true")
+    prepare.add_argument("--fetchcontent-base-dir", type=Path, default=None)
+    prepare.add_argument("--cmake-arg", action="append", default=[], help="extra configure argument; use --cmake-arg=-DNAME=value")
+    prepare.add_argument("-j", "--jobs", type=_positive_jobs, default=2)
 
     # run command
     run = commands.add_parser("run", help="configure, build, and run a supported target")
@@ -1380,10 +1537,26 @@ def _require_no_unparsed(parser: argparse.ArgumentParser, unparsed: Sequence[str
         parser.error(f"unrecognized arguments: {' '.join(unparsed)}")
 
 
+def _handle_cache(parsed: argparse.Namespace) -> int:
+    """Prepare a checkpoint or report its current availability."""
+    if parsed.cache_command == "prepare":
+        return run_cache_prepare(parsed)
+    try:
+        print(json.dumps(local_build_cache.status(REPOSITORY_ROOT), indent=2))
+        return 0
+    except local_build_cache.CacheError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+
+
 def _dispatch_command(parsed: argparse.Namespace, unparsed: Sequence[str], parser: argparse.ArgumentParser) -> int:
     """Dispatch parsed subcommand to its respective handler."""
     if not parsed.command or parsed.command == "help":
         return _handle_help(parser, getattr(parsed, "topic", None))
+
+    if parsed.command == "cache":
+        _require_no_unparsed(parser, unparsed)
+        return _handle_cache(parsed)
 
     if parsed.command == "doctor":
         try:
@@ -1410,6 +1583,9 @@ def _dispatch_command(parsed: argparse.Namespace, unparsed: Sequence[str], parse
             compiler_launcher=parsed.compiler_launcher,
             msvc_debug_information_format=parsed.msvc_debug_information_format,
             fetchcontent_base_dir=parsed.fetchcontent_base_dir,
+            use_cache=not parsed.no_cache,
+            jobs=parsed.jobs,
+            extra_cmake_args=parsed.cmake_arg,
         )
 
     if parsed.command == "test":
@@ -1426,6 +1602,9 @@ def _dispatch_command(parsed: argparse.Namespace, unparsed: Sequence[str], parse
             msvc_debug_information_format=parsed.msvc_debug_information_format,
             fetchcontent_base_dir=parsed.fetchcontent_base_dir,
             skip_build=parsed.skip_build,
+            use_cache=not parsed.no_cache,
+            jobs=parsed.jobs,
+            extra_cmake_args=parsed.cmake_arg,
         )
 
     if parsed.command == "check":
@@ -1438,6 +1617,9 @@ def _dispatch_command(parsed: argparse.Namespace, unparsed: Sequence[str], parse
             compiler_launcher=parsed.compiler_launcher,
             msvc_debug_information_format=parsed.msvc_debug_information_format,
             fetchcontent_base_dir=parsed.fetchcontent_base_dir,
+            use_cache=not parsed.no_cache,
+            jobs=parsed.jobs,
+            extra_cmake_args=parsed.cmake_arg,
         )
 
     # run command

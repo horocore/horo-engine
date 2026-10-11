@@ -5,12 +5,15 @@ import json
 import subprocess
 import sys
 from collections.abc import Sequence
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from urllib.error import URLError
+from urllib.request import Request
 
 import pytest
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPOSITORY_ROOT / "scripts"))
 SPEC = importlib.util.spec_from_file_location("horo_dev_runner", REPOSITORY_ROOT / "scripts" / "dev.py")
 assert SPEC is not None
 assert SPEC.loader is not None
@@ -20,6 +23,13 @@ SPEC.loader.exec_module(dev)
 
 
 LOCAL_ENV_FILENAME = ".env.local"
+
+
+@pytest.fixture(autouse=True)
+def isolated_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ordinary runner unit tests neither create host caches nor wait for real builds."""
+    monkeypatch.setattr(dev.local_build_cache, "heavy_build_lock", lambda _: nullcontext())
+    monkeypatch.setattr(dev.local_build_cache, "automatic_cache", lambda _: nullcontext(None))
 
 
 def write_env(path: Path, text: str) -> Path:
@@ -184,14 +194,14 @@ def test_run_editor_configures_builds_and_forwards_arguments_without_a_shell(
     executable.touch()
     calls: list[tuple[list[str], dict[str, object]]] = []
 
-    def fake_run(arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    def fake_run(arguments: list[str], **kwargs: object) -> int:
         calls.append((arguments, kwargs))
         return_code = 7 if arguments[0] == str(executable) else 0
-        return subprocess.CompletedProcess(arguments, return_code)
+        return return_code
 
     monkeypatch.setattr(dev, "DEFAULT_BUILD_DIRECTORY", tmp_path)
     monkeypatch.setattr(dev, "editor_executable", lambda *args, **kwargs: executable)
-    monkeypatch.setattr(dev.subprocess, "run", fake_run)
+    monkeypatch.setattr(dev.dev_process, "run", fake_run)
     monkeypatch.setattr(dev, "collector_is_reachable", lambda endpoint: False)
     settings = dev.DeveloperSettings(True, dev.validate_endpoint("http://127.0.0.1:4318"))
 
@@ -210,11 +220,11 @@ def test_run_editor_configures_builds_and_forwards_arguments_without_a_shell(
 def test_configure_failure_prevents_build_and_launch(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
 
-    def fake_run(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+    def fake_run(arguments: list[str], **_: object) -> int:
         calls.append(arguments)
-        return subprocess.CompletedProcess(arguments, 9)
+        return 9
 
-    monkeypatch.setattr(dev.subprocess, "run", fake_run)
+    monkeypatch.setattr(dev.dev_process, "run", fake_run)
     settings = dev.DeveloperSettings(False, dev.validate_endpoint("http://127.0.0.1:4318"))
 
     assert dev.run_editor(settings, []) == 9
@@ -225,7 +235,7 @@ def test_missing_cmake_returns_command_not_found_exit_code(monkeypatch: pytest.M
     def missing_command(*_args: object, **_kwargs: object) -> None:
         raise FileNotFoundError("cmake")
 
-    monkeypatch.setattr(dev.subprocess, "run", missing_command)
+    monkeypatch.setattr(dev.dev_process, "run", missing_command)
     settings = dev.DeveloperSettings(False, dev.validate_endpoint("http://127.0.0.1:4318"))
 
     assert dev.run_editor(settings, []) == 127
@@ -236,16 +246,16 @@ def test_keyboard_interrupt_returns_conventional_exit_code(monkeypatch: pytest.M
     executable.touch()
     invocation = 0
 
-    def fake_run(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+    def fake_run(arguments: list[str], **_: object) -> int:
         nonlocal invocation
         invocation += 1
         if invocation == 3:
             raise KeyboardInterrupt
-        return subprocess.CompletedProcess(arguments, 0)
+        return 0
 
     monkeypatch.setattr(dev, "DEFAULT_BUILD_DIRECTORY", tmp_path)
     monkeypatch.setattr(dev, "editor_executable", lambda *args, **kwargs: executable)
-    monkeypatch.setattr(dev.subprocess, "run", fake_run)
+    monkeypatch.setattr(dev.dev_process, "run", fake_run)
     settings = dev.DeveloperSettings(False, dev.validate_endpoint("http://127.0.0.1:4318"))
 
     assert dev.run_editor(settings, []) == 130
@@ -377,6 +387,134 @@ def test_main_build_command_invokes_cmake_build(subprocess_calls: list[list[str]
     assert "-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded" in subprocess_calls[0]
     assert subprocess_calls[1][:4] == ["cmake", "--build", str(tmp_path), "--target"]
     assert subprocess_calls[1][4] == "HoroEditorUiComponentsRenderTests"
+
+
+def test_main_cache_lease_covers_configure_and_build(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    events: list[str] = []
+    environment = {"CCACHE_CONFIGPATH": "ready.conf"}
+    binding = dev.local_build_cache.CacheBinding("/tools/ccache", environment, "gen-ready", "a" * 40)
+
+    @contextmanager
+    def lease(_: Path):
+        events.append("acquire")
+        yield binding
+        events.append("release")
+
+    def execute(command: Sequence[str], **kwargs: object) -> int:
+        assert events[-1] != "release"
+        assert kwargs["env"] is environment
+        events.append("configure" if "-S" in command else "build")
+        if "-S" in command:
+            assert "-DCMAKE_CXX_COMPILER_LAUNCHER=/tools/ccache" in command
+            assert "-DHORO_ENGINE_ENABLE_PCH=OFF" in command
+        return 0
+
+    monkeypatch.setattr(dev.local_build_cache, "automatic_cache", lease)
+    monkeypatch.setattr(dev, "execute_subprocess", execute)
+    for key in list(dev.os.environ):
+        if key.startswith(("CCACHE_", "SCCACHE_")):
+            monkeypatch.delenv(key)
+    assert dev.run_build(build_directory=tmp_path) == 0
+    assert events == ["acquire", "configure", "build", "release"]
+
+
+def test_main_cache_releases_after_failed_configure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    events: list[str] = []
+
+    @contextmanager
+    def lease(_: Path):
+        try:
+            events.append("acquire")
+            yield dev.local_build_cache.CacheBinding("ccache", {}, "ready", "a" * 40)
+        finally:
+            events.append("release")
+
+    monkeypatch.setattr(dev.local_build_cache, "automatic_cache", lease)
+    monkeypatch.setattr(dev, "_uses_explicit_cache", lambda *_: False)
+    monkeypatch.setattr(dev, "execute_subprocess", lambda *_args, **_kwargs: 7)
+    assert dev.run_build(build_directory=tmp_path) == 7
+    assert events == ["acquire", "release"]
+
+
+@pytest.mark.parametrize("arguments", [
+    ["--compiler-launcher", "sccache"], ["--no-cache"],
+    ["--cmake-arg=-DCMAKE_CXX_COMPILER_LAUNCHER=custom"],
+    ["--cmake-arg=-DHORO_ENGINE_ENABLE_PCH=ON"],
+    ["--cmake-arg=-DHORO_ENGINE_ENABLE_PCH=YES"],
+    ["--cmake-arg=-DHORO_ENGINE_ENABLE_PCH=2"],
+])
+def test_explicit_cache_configuration_bypasses_discovery(
+    arguments: list[str], monkeypatch: pytest.MonkeyPatch, subprocess_calls: list[list[str]], tmp_path: Path
+) -> None:
+    def unexpected(_: Path):
+        pytest.fail("explicit cache configuration must not discover a managed cache")
+
+    monkeypatch.setattr(dev.local_build_cache, "automatic_cache", unexpected)
+    assert dev.main(["build", "-B", str(tmp_path), *arguments]) == 0
+    assert len(subprocess_calls) == 2
+
+
+def test_cache_prepare_compiles_isolated_main_with_matching_build_settings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source, build = tmp_path / "main source", tmp_path / "main source" / "build" / "dev-cache"
+    calls: list[tuple[list[str], object, object]] = []
+    binding = dev.local_build_cache.CacheBinding("ccache", {"CACHE": "main"}, "candidate", "b" * 40)
+
+    def prepare(repo: Path, callback, **kwargs: object) -> int:
+        assert repo == dev.REPOSITORY_ROOT
+        return callback(source, build, binding)
+
+    def execute(command: Sequence[str], **kwargs: object) -> int:
+        calls.append((list(command), kwargs.get("cwd"), kwargs.get("env")))
+        return 0
+
+    monkeypatch.setattr(dev.local_build_cache, "prepare_cache", prepare)
+    monkeypatch.setattr(dev.local_build_cache, "status", lambda _: {"ready": True})
+    monkeypatch.setattr(dev, "execute_subprocess", execute)
+    assert dev.main(["cache", "prepare", "--offline", "--target", "HoroCore", "-j", "1"]) == 0
+    assert len(calls) == 2
+    assert calls[0][0][2] == str(source)
+    assert "-DHORO_ENABLE_OPENTELEMETRY=ON" in calls[0][0]
+    assert calls[1][0][-2:] == ["--parallel", "1"]
+    assert all(cwd == source and env is binding.env for _, cwd, env in calls)
+
+
+def test_debug_cache_normalization_preserves_flags_and_handles_spaces(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(dev.sys, "platform", "linux")
+    build = tmp_path / "build with spaces"
+    build.mkdir()
+    (build / "CMakeCache.txt").write_text("CMAKE_CXX_FLAGS:STRING=-Wall -Wextra\n")
+    source = tmp_path / "source with spaces"
+    arguments = dev._cache_configure_arguments(["cmake", "-DCMAKE_C_FLAGS=-O1"], build, source)
+    cxx = next(arg.split("=", 1)[1] for arg in arguments if arg.startswith("-DCMAKE_CXX_FLAGS="))
+    assert dev.shlex.split(cxx) == ["-Wall", "-Wextra", f"-fdebug-prefix-map={source}=.", f"-fdebug-prefix-map={build}=."]
+    c_flags = [arg for arg in arguments if arg.startswith("-DCMAKE_C_FLAGS=")][-1]
+    assert "-O1" in c_flags
+    assert dev._cache_configure_arguments(arguments, build, source)[-1] == arguments[-1]
+
+
+def test_build_job_count_must_be_positive() -> None:
+    with pytest.raises(SystemExit):
+        dev.main(["build", "--jobs", "0"])
+
+
+@pytest.mark.parametrize("argument", ["-S/other-source", "-B/other-build", "--preset=other", "-C/other.cmake", "../other"])
+def test_cache_prepare_rejects_topology_overrides_before_fetch(argument: str, subprocess_calls: list[list[str]]) -> None:
+    assert dev.main(["cache", "prepare", f"--cmake-arg={argument}"]) == 2
+    assert subprocess_calls == []
+
+
+def test_unconfirmed_process_cleanup_records_build_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorded: list[Path] = []
+
+    def fail(*_args: object, **_kwargs: object) -> int:
+        raise dev.dev_process.CleanupError("unconfirmed descendants")
+
+    monkeypatch.setattr(dev.dev_process, "run", fail)
+    monkeypatch.setattr(dev.local_build_cache, "record_cleanup_failure", recorded.append)
+    assert dev.execute_subprocess(["fixture"]) == 126
+    assert recorded == [dev.REPOSITORY_ROOT]
 
 
 def test_main_test_command_filters_and_invokes_ctest(subprocess_calls: list[list[str]], tmp_path: Path) -> None:
