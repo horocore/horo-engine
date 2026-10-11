@@ -83,7 +83,7 @@ namespace Horo::Gameplay {
         };
 
         PerceptionEventSource(const Runtime::RuntimeScene &scene, const AI::AiSceneRuntime &ai, const Network::NetworkModeComposition &host,
-                              CapturedAuthority authority, const AI::PerceptionDescriptorRegistry &registry,
+                              const CapturedAuthority &authority, const AI::PerceptionDescriptorRegistry &registry,
                               const AI::PerceptionSpatialBroadphase &filtering, std::span<const CommittedPerceptionDelivery> deliveries);
         /** @brief Rejects retained windows after authority revocation, travel, AI replacement or source closure. */
         [[nodiscard]] Result<void> ValidateCurrent() const;

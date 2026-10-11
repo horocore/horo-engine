@@ -46,7 +46,7 @@ namespace Horo::Gameplay {
     }  // namespace
 
     PerceptionEventSource::PerceptionEventSource(const Runtime::RuntimeScene &scene, const AI::AiSceneRuntime &ai,
-                                                 const Network::NetworkModeComposition &host, const CapturedAuthority authority,
+                                                 const Network::NetworkModeComposition &host, const CapturedAuthority &authority,
                                                  const AI::PerceptionDescriptorRegistry &registry,
                                                  const AI::PerceptionSpatialBroadphase &filtering,
                                                  const std::span<const CommittedPerceptionDelivery> deliveries)
