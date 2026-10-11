@@ -24,19 +24,6 @@ namespace Horo {
 }
 
 namespace Horo::PCG {
-    /** @brief Closed built-in node semantics implemented by the CPU evaluator. */
-    enum class PCGCpuNodeKind : std::uint8_t {
-        SnapshotGrid,
-        DensityFilter,
-        Merge,
-        Forward
-    };
-
-    /** @brief Returns a stable semantic type ID for one supported built-in node.
-     * @param kind Exact closed built-in operation.
-     * @return Stable type identity or typed unsupported-kind failure. */
-    [[nodiscard]] Result<NodeTypeId> PCGCpuNodeType(PCGCpuNodeKind kind);
-
     /** @brief One exact externally supplied input; absent inputs use the cooked fallback. */
     struct PCGCpuInput final {
         ExposedInputId id{};       /**< Exact cooked binding identity. */
@@ -54,18 +41,21 @@ namespace Horo::PCG {
     /** @brief Complete finite resource and scheduling envelope for background or tooling evaluation.
      * @note Evaluation allocates bounded owned storage and synchronously joins structured child work; it is not frame-hot. */
     struct PCGCpuEvaluationLimits final {
-        std::size_t maximumScratchBytes{};   /**< Complete scratch ceiling including workspace, jobs, and provenance. */
+        std::size_t
+            maximumScratchBytes{}; /**< Complete scratch ceiling including workspace, jobs, provenance and transient node storage. */
         std::size_t maximumCandidateBytes{}; /**< Complete immutable candidate ceiling including retained provenance. */
         std::size_t retainedBytes{};         /**< Complete prior operation charge during replacement. */
         std::uint32_t workers{1};            /**< Stable partitions, 1 through 8; multiworker filter work uses jobs. */
         JobSystem *jobs{};                   /**< Borrowed structured scheduler required when workers exceed one. */
         PCGCapabilitySet
             grantedCapabilities{}; /**< Exact host-granted capabilities including an evaluation mode; Validation alone cannot evaluate. */
-        Sha256Digest numericProfile{};         /**< Required nonzero fingerprint for profile-deterministic nodes. */
-        PCGWorldId world{};                    /**< Stable host-owned world identity. */
-        std::array<std::int64_t, 3> cell{};    /**< Exact world-cell scope. */
-        std::uint64_t numericPolicyVersion{1}; /**< Nonzero seed/order/numeric policy revision. */
-        Sha256Digest providerContent{};        /**< Host digest of canonical immutable provider values; revision alone is insufficient. */
+        Sha256Digest numericProfile{};                                 /**< Required nonzero fingerprint for profile-deterministic nodes. */
+        PCGWorldId world{};                                            /**< Stable host-owned world identity. */
+        std::array<std::int64_t, 3> cell{};                            /**< Exact world-cell scope. */
+        std::uint64_t numericPolicyVersion{1};                         /**< Nonzero seed/order/numeric policy revision. */
+        std::size_t maximumPointVisits{32U * 1024U * 1024U};           /**< Complete finite declared node point-visit ceiling. */
+        std::size_t maximumSnapshotElementVisits{32U * 1024U * 1024U}; /**< Complete finite spatial lookup visit ceiling. */
+        Sha256Digest providerContent{}; /**< Host digest of canonical immutable provider values; revision alone is insufficient. */
     };
 
     /** @brief One unconnected final point output, detached from the mutable workspace. */
@@ -98,6 +88,12 @@ namespace Horo::PCG {
         /** @brief Returns node-ordered canonical provenance, including effective inputs and provider truth.
          * @return Immutable roots retained independently of the request and provider lifetime. */
         [[nodiscard]] std::span<const PCGProvenance> Provenance() const noexcept;
+
+        /** @brief Returns the executable catalog generation retained by this candidate. @return Immutable owning catalog. */
+        [[nodiscard]] const PCGNodeCatalogSnapshot &Catalog() const noexcept {
+            return catalog_;
+        }
+
         /** @brief Returns the conservative full operation charge for replacement overlap. */
         [[nodiscard]] std::size_t ReservedBytes() const noexcept;
 
@@ -106,11 +102,10 @@ namespace Horo::PCG {
                                                       std::span<const PCGPointOutputBound>, std::span<const PCGCpuInput>,
                                                       const PCGCpuEvaluationLimits &, PCGCpuAdmission, CancellationToken);
 
-        /** @brief Adopts only a completely evaluated, detached result.
-         * @param plan Immutable cooked source of exact generation, source digest and seed; values are copied.
-         * @param snapshot Immutable input identity.
-         * @param numericProfile Explicit numeric qualification evidence. @param outputs Owned final columns.
-         * @param reservedBytes Complete charged operation footprint excluding retained replacement.
+        /** @brief Adopts a completely evaluated result with identity and executable ownership from one cooked plan.
+         * @param plan Exact plan; its identity and owning catalog are copied before this borrow ends.
+         * @param snapshot Immutable input identity. @param numericProfile Explicit numeric qualification evidence.
+         * @param outputs Owned final columns. @param reservedBytes Complete charge excluding retained replacement.
          * @param provenance Owned canonical node roots with effective input/provider evidence. */
         PCGCpuCandidate(const PCGCookedPlan &plan, SpatialSnapshotId snapshot, const Sha256Digest &numericProfile,
                         std::vector<PCGCpuPointOutput> outputs, std::size_t reservedBytes, std::vector<PCGProvenance> provenance) noexcept;
@@ -123,6 +118,7 @@ namespace Horo::PCG {
         std::vector<PCGCpuPointOutput> outputs_;
         std::size_t reservedBytes_{};
         std::vector<PCGProvenance> provenance_;
+        PCGNodeCatalogSnapshot catalog_;
     };
 
     /**

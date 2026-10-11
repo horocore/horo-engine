@@ -74,6 +74,8 @@ namespace Horo::PCG::PCGErrors {
     extern const ErrorCodeDescriptor GraphTopologyInvalid;
     /** @brief A node type is unavailable under the selected unknown-node policy. */
     extern const ErrorCodeDescriptor GraphNodeTypeUnknown;
+    /** @brief An exact built-in schema or runtime version is unavailable. */
+    extern const ErrorCodeDescriptor GraphNodeVersionUnsupported;
     /** @brief A graph source migration was required but unavailable or invalid. */
     extern const ErrorCodeDescriptor GraphMigrationFailed;
     /** @brief A replacement changes graph identity or fails to advance its durable revision. */
@@ -138,4 +140,10 @@ namespace Horo::PCG::PCGErrors {
     extern const ErrorCodeDescriptor AsyncPublicationFailed;
     /** @brief A never-reused async operation identity cannot advance without wraparound. */
     extern const ErrorCodeDescriptor AsyncGenerationExhausted;
+    /** @brief The requested minimum separation provably cannot fit the exact point count. */
+    extern const ErrorCodeDescriptor GenerationDensityImpossible;
+    /** @brief Bounded scatter attempts ended before the exact point count; no partial result is published. */
+    extern const ErrorCodeDescriptor GenerationAttemptsExhausted;
+    /** @brief A generated semantic sample identity is absent, mismatched or repeated. */
+    extern const ErrorCodeDescriptor GenerationIdentityInvalid;
 }  // namespace Horo::PCG::PCGErrors

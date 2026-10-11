@@ -621,6 +621,47 @@ business operation. Differences are limited to:
 They must not implement separate business rules, scene mutation paths, asset
 import logic, build behavior, or release policy.
 
+## Project code query pack
+
+`HoroEngine::McpProjectCodeQuery` supplies seven inert Query registrations:
+`project.files`, `project.text`, `project.search`, `project.symbols`,
+`project.diagnostics`, `project.build_status`, and `project.test_status`.
+They require the explicit `horo.project.code.query` grant and call the same
+`Application::ProjectCodeQuery` capability available to other host adapters.
+Clients supply portable relative names, never a native root or provider choice.
+
+The host admits `Platform::IProjectReadFiles` separately. Its Foundation-only
+contract retains native root identity and resolves every descendant against
+opened directory identities; no validate-then-reopen absolute pathname is used.
+Concrete POSIX and Windows implementations remain private peers. Links, reparses,
+multiply linked files and special objects are rejected before reading content.
+Queries create no directories, caches, editable document sessions, jobs or processes.
+
+Existing source buffers take precedence through a retained read-only provider.
+The editor adapter calls only identity `Find` and source `Snapshot`, preserves
+dirty text, and schedules on the source owner's thread. Background filesystem
+queries use a separate host-declared scheduler context. Language, diagnostic,
+build and test projections are explicit producer leases. Absent capabilities
+return typed Unavailable; an empty authoritative result still has a revision.
+Build/test queries read status only. Operation titles cannot establish test
+identity; a typed test owner must provide that capability.
+
+Queries bound files/rows to 4096, captured text and projected strings to one MiB,
+literal patterns to 128 bytes, pages to 128 rows or 4096 UTF-8 bytes, search work
+to four MiB of comparisons and duration to 1000 milliseconds. Hosts may reduce
+these limits. Native system calls observe cooperative checkpoints and cannot
+be forcibly interrupted by this synchronous capability. Pattern matching is
+literal, without a regular-expression engine. Binary, malformed UTF-8,
+oversized, unsafe, stale and unavailable inputs return typed failures.
+
+Continuation revisions bind query kind, relative path, pattern, project identity,
+project generation and producer/content revision. Every page checks the live
+MCP authority and retained host generation; project replacement or closure
+prevents old registrations from publishing results. The host closes admission
+and drains calls before releasing source/provider owners. Responses own their
+bytes and rows after publication. See the
+[composition and migration guide](../../guides/project-code-query-migration.md).
+
 ## Related Documents
 
 - [MCP Panel](../../../mock-studio/designs.md#architecture-interfaces-mcp-panel): React mock design for MCP sessions,

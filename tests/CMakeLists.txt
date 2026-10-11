@@ -97,6 +97,7 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # One translation unit per registered public header verifies that consumers can
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
+target_sources(HoroPCGPublicHeaderConsumer PRIVATE support/PCGNodeCatalogPublicHeaderConsumer.cpp)
 target_sources(HoroShaderBuildPublicHeaderConsumer PRIVATE support/ShaderBuildPublicHeaderConsumer.cpp)
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderGraphWorkloadPublicHeaderConsumer.cpp)
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderGraphInspectionPublicHeaderConsumer.cpp)
@@ -847,8 +848,12 @@ target_link_libraries(HoroAnimationApiTests PRIVATE HoroEngine::AnimationApi Hor
 horo_register_catch_test(HoroAnimationApiTests LABELS "unit;animation;headless")
 
 add_executable(HoroPCGTests
+        unit/runtime/pcg/PCGNodeCatalogTests.cpp
+        unit/runtime/pcg/PCGPointGenerationSettingsTests.cpp
+        unit/runtime/pcg/PCGPointGenerationTests.cpp
         unit/runtime/pcg/PCGCpuEvaluatorTests.cpp
         unit/runtime/pcg/PCGCookedPlanTests.cpp
+        unit/runtime/pcg/PCGPointCloudWorkspaceTests.cpp
         unit/runtime/pcg/PCGGraphAssetTests.cpp
         unit/runtime/pcg/PCGGraphValidationTests.cpp
         unit/runtime/pcg/PCGGenerationPlanTests.cpp
@@ -1096,6 +1101,7 @@ add_executable(HoroNavigationRuntimeTests
         unit/runtime/navigation/NavigationDynamicRegistryTests.cpp
         unit/runtime/navigation/NavigationObstacleOverlayTests.cpp
         unit/runtime/navigation/NavigationAgentRegistryTests.cpp
+        unit/runtime/navigation/NavigationMovementTests.cpp
         unit/runtime/navigation/NavigationPathPolicyTests.cpp
         unit/runtime/navigation/NavigationFoundationQualificationTests.cpp
         unit/runtime/navigation/NavigationCoordinatorTests.cpp
@@ -2388,6 +2394,33 @@ add_executable(HoroMcpRegistryTests unit/mcp/McpToolRegistryTests.cpp)
 target_compile_features(HoroMcpRegistryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroMcpRegistryTests PRIVATE HoroEngine::McpRegistry Threads::Threads)
 horo_register_catch_test(HoroMcpRegistryTests LABELS "unit;mcp;headless")
+
+add_executable(HoroProjectCodeQueryTests unit/application/ProjectCodeQueryTests.cpp)
+target_compile_features(HoroProjectCodeQueryTests PRIVATE cxx_std_20)
+target_include_directories(HoroProjectCodeQueryTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroProjectCodeQueryTests PRIVATE HoroEngine::ProjectCodeQuery HoroEngine::PlatformProjectReadFiles)
+horo_register_catch_test(HoroProjectCodeQueryTests LABELS "unit;application;code-query;headless")
+
+add_executable(HoroProjectReadFilesTests unit/platform/ProjectReadFilesTests.cpp)
+target_compile_features(HoroProjectReadFilesTests PRIVATE cxx_std_20)
+target_include_directories(HoroProjectReadFilesTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroProjectReadFilesTests PRIVATE HoroProjectReadFilesTestingInternal HoroEngine::ProjectCodeQuery Threads::Threads)
+horo_register_catch_test(HoroProjectReadFilesTests LABELS "unit;platform;code-query;headless")
+
+add_executable(HoroMcpProjectCodeQueryTests unit/mcp/ProjectCodeQueryToolsTests.cpp)
+target_compile_features(HoroMcpProjectCodeQueryTests PRIVATE cxx_std_20)
+target_include_directories(HoroMcpProjectCodeQueryTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroMcpProjectCodeQueryTests PRIVATE HoroEngine::McpProjectCodeQuery HoroEngine::PlatformProjectReadFiles)
+horo_register_catch_test(HoroMcpProjectCodeQueryTests LABELS "unit;mcp;code-query;headless")
+
+add_executable(HoroSourceDocumentCodeQueryTests unit/editor/SourceDocumentCodeQueryTests.cpp)
+target_compile_features(HoroSourceDocumentCodeQueryTests PRIVATE cxx_std_20)
+target_include_directories(HoroSourceDocumentCodeQueryTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroSourceDocumentCodeQueryTests PRIVATE HoroEngine::SourceDocumentCodeQuery HoroEngine::PlatformProjectReadFiles)
+horo_register_catch_test(HoroSourceDocumentCodeQueryTests LABELS "unit;editor;code-query;headless")
+
+target_sources(HoroProjectCodeQueryPublicHeaderConsumer PRIVATE support/ProjectCodeQueryPublicContract.cpp)
+target_link_libraries(HoroProjectCodeQueryPublicHeaderConsumer PRIVATE HoroEngine::McpProjectCodeQuery HoroEngine::PlatformProjectReadFiles)
 
 add_executable(HoroMcpControllerTests
     unit/mcp/McpControllerTests.cpp
@@ -3798,6 +3831,16 @@ foreach(abi_fixture_mode RANGE 0 11)
     target_compile_definitions(HoroExtensionManagerTests PRIVATE
             HORO_ABI_FIXTURE_${abi_fixture_mode}="$<TARGET_FILE:${abi_fixture_target}>")
 endforeach()
+add_executable(HoroPackageLifecycleTests unit/packages/PackageLifecycleTests.cpp)
+target_link_libraries(HoroPackageLifecycleTests PRIVATE HoroEngine::PackageLifecycle HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
+target_include_directories(HoroPackageLifecycleTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+add_dependencies(HoroPackageLifecycleTests HoroExtensionAbiFixture0 HoroExtensionAbiFixture4 HoroExtensionAbiFixture6)
+target_compile_definitions(HoroPackageLifecycleTests PRIVATE
+    HORO_PACKAGE_NATIVE_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture4>"
+    HORO_PACKAGE_EMPTY_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture0>"
+    HORO_PACKAGE_FAILING_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture6>")
+horo_register_catch_test(HoroPackageLifecycleTests LABELS "packages;extensions;headless")
+
 add_library(HoroExtensionAbiMissingLoadFixture MODULE fixtures/extensions/AbiModuleMissingLoad.c)
 target_compile_features(HoroExtensionAbiMissingLoadFixture PRIVATE c_std_11)
 set_target_properties(HoroExtensionAbiMissingLoadFixture PROPERTIES C_EXTENSIONS OFF)
@@ -3826,6 +3869,9 @@ foreach(abi_hostile_fixture_mode RANGE 0 7)
     target_compile_definitions(HoroExtensionManagerTests PRIVATE
             HORO_ABI_HOSTILE_FIXTURE_${abi_hostile_fixture_mode}="$<TARGET_FILE:${abi_hostile_fixture_target}>")
 endforeach()
+add_dependencies(HoroPackageLifecycleTests HoroExtensionAbiHostileFixture6)
+target_compile_definitions(HoroPackageLifecycleTests PRIVATE
+    HORO_PACKAGE_TEARDOWN_FAILING_FIXTURE="$<TARGET_FILE:HoroExtensionAbiHostileFixture6>")
 add_test(NAME HoroExtensionAbiConformanceCliSupported
     COMMAND "$<TARGET_FILE:horo-extension-conformance>" --json "$<TARGET_FILE:HoroExtensionAbiFixture1>")
 set_tests_properties(HoroExtensionAbiConformanceCliSupported PROPERTIES
