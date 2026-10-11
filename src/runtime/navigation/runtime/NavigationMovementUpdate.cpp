@@ -27,19 +27,20 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationMovementController::CheckAuthority */
     bool NavigationMovementController::CheckAuthority(const NavigationMovementObservation &current) {
+        using enum NavigationMovementState;
         if (const auto binding = registry_.ActiveBinding(); binding.HasError() || binding.Value() != binding_ ||
                                                             current.binding != binding_ ||
                                                             current.path.provenance.world != binding_.world) {
-            Finish(NavigationMovementState::WorldLost);
+            Finish(WorldLost);
             return false;
         }
         if (const auto record = registry_.Find(agent_.handle); record.HasError() || record.Value() != agent_) {
-            Finish(NavigationMovementState::AgentLost);
+            Finish(AgentLost);
             return false;
         }
         if (const auto lease = world_.Acquire(binding_.world); lease.HasError() || lease.Value().Descriptor().scene != binding_.scene ||
                                                                lease.Value().Descriptor().sceneGeneration != binding_.sceneGeneration) {
-            Finish(NavigationMovementState::WorldLost);
+            Finish(WorldLost);
             return false;
         }
         return true;
