@@ -97,6 +97,14 @@ horo_configure_target_header_boundary(HoroMcpRegistry PUBLIC_HEADERS
     Horo/Mcp/McpToolRegistry.h
 )
 
+horo_configure_target_header_boundary(HoroProjectReadFilesApi PUBLIC_HEADERS Horo/Platform/ProjectReadFiles.h)
+horo_configure_target_header_boundary(HoroPlatformProjectReadFiles PUBLIC_HEADERS Horo/Platform/NativeProjectReadFiles.h)
+horo_configure_target_header_boundary(HoroProjectCodeQuery PUBLIC_HEADERS
+    Horo/Application/ProjectCodeQuery.h
+    Horo/Application/CodeQueryStoreProviders.h)
+horo_configure_target_header_boundary(HoroMcpProjectCodeQuery PUBLIC_HEADERS Horo/Mcp/ProjectCodeQueryTools.h)
+horo_configure_target_header_boundary(HoroSourceDocumentCodeQuery PUBLIC_HEADERS Horo/Editor/SourceDocumentCodeQuery.h)
+
 horo_configure_target_header_boundary(HoroMcpController PUBLIC_HEADERS
     Horo/Mcp/McpController.h
 )
