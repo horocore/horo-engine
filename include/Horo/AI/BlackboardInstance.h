@@ -38,10 +38,33 @@ namespace Horo::AI {
         [[nodiscard]] constexpr auto operator<=>(const BlackboardInstanceBinding &) const noexcept = default;
     };
 
+    /** @brief Revocable process-local read permission for derived values from one authoritative publication.
+     * @details The publication owner alone revokes at its safe point, before new policy becomes effective.
+     * Readers may check concurrently; the atomic protects only monotonic permission, never mutable value storage.
+     * Revocation is permanent and survives retained snapshots. Owners revoke before teardown; a shared lease
+     * keeps permission state alive without retaining the Scene or publisher. It is never canonical/save data.
+     */
+    class BlackboardValueAuthorization final {
+    public:
+        /** @brief Reads this publication's permission. @return False after owner revocation. */
+        [[nodiscard]] bool IsCurrent() const noexcept {
+            return current_.load(std::memory_order_acquire);
+        }
+
+        /** @brief Permanently revokes readers at the owner safe point before replacement or teardown. */
+        void Revoke() noexcept {
+            current_.store(false, std::memory_order_release);
+        }
+
+    private:
+        std::atomic_bool current_{true};
+    };
+
     /** @brief One detached schema-keyed write owned by a batch. */
     struct BlackboardWrite final {
-        BlackboardKeyId key;   /**< Stable typed schema key. */
-        BlackboardValue value; /**< Owned typed candidate value. */
+        BlackboardKeyId key;                                               /**< Stable typed schema key. */
+        BlackboardValue value;                                             /**< Owned typed candidate value. */
+        std::shared_ptr<const BlackboardValueAuthorization> authorization; /**< Optional derived-value read permission. */
     };
 
     /** @brief Immutable facts published by one safe-point commit. */
@@ -164,7 +187,7 @@ namespace Horo::AI {
         /**
          * @brief Reads a typed value without exposing mutable instance storage.
          * @param key Stable schema key.
-         * @return Owned optional value or a typed stale/unknown-key failure.
+         * @return Owned optional value or a typed stale/unknown-key failure, including revoked derived-value permission.
          */
         [[nodiscard]] Result<std::optional<BlackboardValue>> Read(BlackboardKeyId key) const;
 
@@ -178,13 +201,15 @@ namespace Horo::AI {
 
         BlackboardSnapshot(BlackboardInstanceBinding binding, std::shared_ptr<const BlackboardSchema> schema,
                            std::vector<std::optional<BlackboardValue>> values, std::uint64_t revision,
-                           std::shared_ptr<std::atomic_bool> generationActive)
-            : binding_(binding), schema_(std::move(schema)), values_(std::move(values)), revision_(revision),
-              generationActive_(std::move(generationActive)) {}
+                           std::shared_ptr<std::atomic_bool> generationActive,
+                           std::vector<std::shared_ptr<const BlackboardValueAuthorization>> authorizations)
+            : binding_(binding), schema_(std::move(schema)), values_(std::move(values)), authorizations_(std::move(authorizations)),
+              revision_(revision), generationActive_(std::move(generationActive)) {}
 
         BlackboardInstanceBinding binding_;
         std::shared_ptr<const BlackboardSchema> schema_;
         std::vector<std::optional<BlackboardValue>> values_;
+        std::vector<std::shared_ptr<const BlackboardValueAuthorization>> authorizations_;
         std::uint64_t revision_{};
         std::shared_ptr<std::atomic_bool> generationActive_;
     };
@@ -283,12 +308,13 @@ namespace Horo::AI {
          * @param values Default-populated active values.
          * @param scratch Equally sized transaction scratch storage.
          * @param generationActive Shared lease-validity flag for this generation.
+         * @details Also allocates schema-sized active/scratch read-authorization stores; ordinary commits never grow them.
          */
         BlackboardInstance(const ConstructionKey &key, const BlackboardInstanceBinding &binding,
                            std::shared_ptr<const BlackboardSchema> schema, std::vector<std::optional<BlackboardValue>> values,
                            std::vector<std::optional<BlackboardValue>> scratch, std::shared_ptr<std::atomic_bool> generationActive)
             : binding_(binding), schema_(std::move(schema)), values_(std::move(values)), scratch_(std::move(scratch)),
-              generationActive_(std::move(generationActive)) {
+              authorizations_(values_.size()), authorizationScratch_(values_.size()), generationActive_(std::move(generationActive)) {
             (void)key;
         }
 
@@ -311,6 +337,8 @@ namespace Horo::AI {
         std::shared_ptr<const BlackboardSchema> schema_;
         std::vector<std::optional<BlackboardValue>> values_;
         std::vector<std::optional<BlackboardValue>> scratch_;
+        std::vector<std::shared_ptr<const BlackboardValueAuthorization>> authorizations_;
+        std::vector<std::shared_ptr<const BlackboardValueAuthorization>> authorizationScratch_;
         std::uint64_t revision_{1};
         std::shared_ptr<std::atomic_bool> generationActive_;
         std::array<ObserverSlot, MaximumBlackboardObservers> observers_{};

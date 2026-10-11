@@ -1378,6 +1378,7 @@ add_library(HoroAI STATIC
         runtime/ai/api/PerceptionDescriptorRegistry.cpp
         runtime/ai/api/PerceptionEventRouting.cpp
         runtime/ai/api/PerceptionErrors.cpp
+        runtime/ai/api/PerceptionFiltering.cpp
         runtime/ai/api/PerceptionMemory.cpp
 )
 add_library(HoroEngine::AI ALIAS HoroAI)

@@ -136,7 +136,7 @@ namespace Horo::AI {
             REQUIRE(second.HasValue());
             CHECK(second.Value() == broadphase.Current());
             CHECK(second.Value()->Query(SightQuery(listener.entity)).Value().candidates[0].entity == replacement.entity);
-            CHECK(first.Value()->Query(SightQuery(listener.entity)).Value().candidates[0].entity == original.entity);
+            ExpectError(first.Value()->Query(SightQuery(listener.entity)), AIErrors::PerceptionSpatialStale);
         }
 
         TEST_CASE("Perception broadphase rejects malformed and duplicate publications without replacement",
@@ -153,6 +153,8 @@ namespace Horo::AI {
             auto malformed = source;
             malformed.layers = 0;
             ExpectError(broadphase.Publish(view, 2, std::span{&listener, 1}, std::span{&malformed, 1}), AIErrors::PerceptionSpatialInvalid);
+            CHECK(first.Value()->ReadAuthorization()->IsCurrent());
+            CHECK(first.Value()->Query(SightQuery(listener.entity)).Value().count == 1);
             malformed = source;
             malformed.entity.entity.generation += 1;
             ExpectError(broadphase.Publish(view, 2, std::span{&listener, 1}, std::span{&malformed, 1}), AIErrors::PerceptionSpatialStale);
@@ -214,7 +216,7 @@ namespace Horo::AI {
             REQUIRE(second.HasValue());
             firstScene.reset();
             CHECK(second.Value()->Scene() == secondView.RuntimeId());
-            CHECK(first.Value()->Query(SightQuery(firstListener.entity)).Value().count == 1);
+            ExpectError(first.Value()->Query(SightQuery(firstListener.entity)), AIErrors::PerceptionSpatialStale);
             CHECK(first.Value()->ListenerPosition(firstListener.entity).Value() == firstListener.position);
             ExpectError(second.Value()->ListenerPosition(firstListener.entity), AIErrors::PerceptionSpatialInvalid);
             ExpectError(second.Value()->Query(SightQuery(firstListener.entity)), AIErrors::PerceptionSpatialInvalid);

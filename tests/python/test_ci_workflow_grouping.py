@@ -42,6 +42,9 @@ def cmake_conditions_at(source: str, offset: int) -> list[str]:
 WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroLightCullingTests", "HoroLightFramePoolTests",
     "HoroAITaskSchedulerTests", "HoroAITaskSchedulerPublicConsumer",
+    "HoroAITests", "HoroAISightTests", "HoroAIPublicHeaderConsumer",
+    "HoroAISceneIntegrationPublicHeaderConsumer", "HoroAISightIntegrationPublicHeaderConsumer",
+    "HoroGameplayPerceptionIntegrationPublicHeaderConsumer",
     "HoroAnimationApiTests", "HoroAnimationGraphPublicHeaderConsumer",
     "HoroD3D12InitializationTests",
     "HoroMaterialBindingTests", "HoroMaterialBindingPublicHeaderConsumer",
@@ -151,6 +154,31 @@ def test_windows_pcg_qualification_has_build_and_execution_closure() -> None:
         assert consumer in targets("HORO_CI_WINDOWS_TARGETS")
         assert consumer not in direct_tests.group(1).split()
         owner = consumer.removesuffix("PublicHeaderConsumer")
+        assert f"horo_configure_target_header_boundary({owner} PUBLIC_HEADERS" in ownership
+    assert preset("buildPresets", "ci-windows-debug")["targets"] == ["HoroCiWindowsChecks"]
+    assert preset("testPresets", "ci-windows-debug")["filter"]["include"]["label"] == "^ci-windows$"
+
+
+def test_windows_perception_qualification_has_runtime_and_header_build_closure() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    ownership = (ROOT / "cmake/HoroPublicHeaderOwnership.cmake").read_text(encoding="utf-8")
+    boundaries = (ROOT / "cmake/HoroTargetBoundaries.cmake").read_text(encoding="utf-8")
+    closure = targets("HORO_CI_WINDOWS_TARGETS")
+    for target in ("HoroAITests", "HoroAISightTests"):
+        assert target in closure
+        declaration = tests_cmake.index(f"add_executable({target}")
+        assert all("HORO_BUILD_EDITOR_GUI" not in condition
+                   for condition in cmake_conditions_at(tests_cmake, declaration))
+        assert f"horo_register_catch_test({target} LABELS" in tests_cmake
+    assert 'if(target IN_LIST HORO_CI_WINDOWS_TARGETS)\n        list(APPEND ARG_LABELS ci-windows)' in SUITES
+    assert 'add_custom_target(HoroCiWindowsChecks DEPENDS ${HORO_CI_WINDOWS_TARGETS})' in SUITES
+    direct_tests = re.search(r"set_property\(TEST\s+(.*?)\s+APPEND PROPERTY LABELS ci-windows\)", SUITES, re.S)
+    assert direct_tests
+    assert 'add_library("${consumer_target}" OBJECT ${generated_sources})' in boundaries
+    for owner in ("HoroAI", "HoroAISceneIntegration", "HoroAISightIntegration", "HoroGameplayPerceptionIntegration"):
+        consumer = f"{owner}PublicHeaderConsumer"
+        assert consumer in closure
+        assert consumer not in direct_tests.group(1).split()
         assert f"horo_configure_target_header_boundary({owner} PUBLIC_HEADERS" in ownership
     assert preset("buildPresets", "ci-windows-debug")["targets"] == ["HoroCiWindowsChecks"]
     assert preset("testPresets", "ci-windows-debug")["filter"]["include"]["label"] == "^ci-windows$"

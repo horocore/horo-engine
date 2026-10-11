@@ -1,6 +1,7 @@
 #include "Horo/AI/PerceptionSight.h"
 
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/AIScenePerceptionSource.h"
 #include "Horo/Physics/PhysicsErrors.h"
 
 #include <algorithm>
@@ -177,6 +178,7 @@ namespace Horo::AI {
             return Result<PerceptionSightResult>::Failure(candidates.ErrorValue());
         const auto previous = history_;
         InitializeWindow(candidates.Value(), spatial.Revision(), physics.Identity(), frame, policy, budget.simulationTick);
+        result_.listener = frame.listener;
         for (std::size_t index = 0; index < result_.count; ++index) {
             if (const auto error = PrepareCandidate(scene, candidates.Value().candidates[index], listenerPosition.Value(), previous, index,
                                                     budget.remainingRaycasts);
@@ -371,6 +373,11 @@ namespace Horo::AI {
                                                         const PerceptionSightPhysicsPublication &physics) {
         const bool current = PublicationCurrent(spatialRevision, physics);
         Revalidate(scene, current);
+        if (!current) {
+            result_.observations = {};
+            result_.count = 0;
+            history_ = {};
+        }
         if (!current || !scene.IsCurrent() || scene.Get(frame_.listener).HasError()) {
             if (batch_)
                 (void)batch_->Cancel();
@@ -388,5 +395,39 @@ namespace Horo::AI {
         if (!completion.Value())
             return Result<PerceptionSightResult>::Success(result_);
         return Consume(*completion.Value());
+    }
+
+    /** @copydoc StagePerceptionSightAtSensePoll */
+    Result<void> StagePerceptionSightAtSensePoll(const Runtime::RuntimeSceneView &scene, const PerceptionSpatialSnapshot &filtering,
+                                                 const PerceptionSightResult &result, const PerceptionListenerTypeId listenerType,
+                                                 AIPerceptionMemory &memory) {
+        using enum PerceptionSightEvidence;
+        if (!scene.IsCurrent() || !filtering.ReadAuthorization()->IsCurrent() || filtering.Scene() != scene.RuntimeId() ||
+            result.spatialRevision != filtering.Revision() || result.listener.runtime != scene.RuntimeId() ||
+            scene.Get(result.listener).HasError() || memory.SceneIncarnation() != scene.RuntimeId().value)
+            return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+        if (result.pending || !listenerType.IsValid() || result.count > result.observations.size())
+            return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialInvalid));
+        for (std::size_t index = 0; index < result.count; ++index) {
+            const auto &entry = result.observations[index];
+            if (scene.Get(entry.source).HasError() || !filtering.Allows(result.listener, entry.source, SenseTypeIds::Sight))
+                return Result<void>::Failure(MakeError(AIErrors::PerceptionEventFiltered));
+        }
+        if (const auto advanced = memory.AdvanceTo(result.simulationTick); advanced.HasError())
+            return advanced;
+        for (std::size_t index = 0; index < result.count; ++index) {
+            const auto &entry = result.observations[index];
+            const PerceptionMemoryKey key{listenerType, SenseTypeIds::Sight, StimulusTypeIds::Visual,
+                                          ProjectPerceptionSource(entry.source)};
+            if (entry.evidence == Clear && entry.visible) {
+                if (const auto staged = memory.Observe({.key = key, .position = entry.sourcePosition}, result.simulationTick);
+                    staged.HasError())
+                    return staged;
+            } else if (!entry.visible && (entry.evidence == Occluded || entry.evidence == OutsideCone)) {
+                if (const auto staged = memory.MarkLost(key, result.simulationTick); staged.HasError())
+                    return staged;
+            }
+        }
+        return Result<void>::Success();
     }
 }  // namespace Horo::AI
