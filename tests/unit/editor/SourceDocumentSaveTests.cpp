@@ -7,6 +7,7 @@
 #include <chrono>
 #include <fstream>
 #include <functional>
+#include <stdexcept>
 
 namespace {
     using namespace Horo;
@@ -38,6 +39,26 @@ namespace {
         }
     };
 
+    enum class CallbackFailure {
+        Allocation,
+        Standard,
+        Foreign
+    };
+
+    struct ForeignCallbackFailure final {};
+
+    /** @brief Exercises standard and foreign failures at the provider exception boundary. */
+    void ThrowCallbackFailure(const CallbackFailure failure) {
+        switch (failure) {
+            case CallbackFailure::Allocation:
+                throw std::bad_alloc{};
+            case CallbackFailure::Standard:
+                throw std::runtime_error{"Filesystem callback failed."};
+            case CallbackFailure::Foreign:
+                throw ForeignCallbackFailure{};
+        }
+    }
+
     struct Files final : DurableFileSystem {
         NativeDurableFileSystem native;
         bool failWrite{};
@@ -45,8 +66,8 @@ namespace {
         std::optional<Error> writeError;
         bool failReplace{};
         bool failAfterCommit{};
-        bool throwAfterCommit{};
         std::function<void()> beforeReplace;
+        std::function<void()> afterCommit;
 
         Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path, std::string_view owner) override {
             return native.TryAcquireExclusive(path, owner);
@@ -90,8 +111,8 @@ namespace {
             if (failReplace)
                 return Result<void>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
             auto result = native.AtomicReplaceTracked(prepared, destination, receipt);
-            if (receipt.WasCommitted() && throwAfterCommit)
-                throw std::bad_alloc{};
+            if (receipt.WasCommitted() && afterCommit)
+                afterCommit();
             if (receipt.WasCommitted() && failAfterCommit)
                 return Result<void>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
             return result;
@@ -183,14 +204,18 @@ TEST_CASE("Source failures before replacement preserve dirty text base and origi
 }
 
 TEST_CASE("Source visible unconfirmed replacement never reports rollback or clean base", "[source][save][durability]") {
-    const bool throwing = GENERATE(false, true);
+    const auto failure = GENERATE(std::optional<CallbackFailure>{}, std::optional{CallbackFailure::Allocation},
+                                  std::optional{CallbackFailure::Standard}, std::optional{CallbackFailure::Foreign});
     Project project;
     project.Put("code.cpp", "base");
     SourceFileOpenService open(project.root);
     Files files;
     const auto edited = OpenEdit(open);
-    files.failAfterCommit = !throwing;
-    files.throwAfterCommit = throwing;
+    files.failAfterCommit = !failure;
+    if (failure)
+        files.afterCommit = [failure] {
+            ThrowCallbackFailure(*failure);
+        };
     auto result = open.Documents().Save(Request(edited), files);
     REQUIRE(result.HasValue());
     CHECK(result.Value().disposition == SourceSaveDisposition::VisibleDurabilityUnconfirmed);
@@ -421,6 +446,7 @@ TEST_CASE("Source allocation failure before publication preserves the disk and c
 }
 
 TEST_CASE("Source Save All preserves an earlier durable result when a later callback throws", "[source][save][batch]") {
+    const auto failure = GENERATE(CallbackFailure::Allocation, CallbackFailure::Standard, CallbackFailure::Foreign);
     Project project;
     project.Put("code.cpp", "base");
     project.Put("other.cpp", "base");
@@ -429,15 +455,18 @@ TEST_CASE("Source Save All preserves an earlier durable result when a later call
     const auto first = OpenEdit(open);
     const auto second = OpenEdit(open, "other.cpp");
     unsigned replacements{};
-    files.beforeReplace = [&] {
+    files.beforeReplace = [&replacements, failure] {
         if (++replacements == 2)
-            throw std::bad_alloc{};
+            ThrowCallbackFailure(failure);
     };
     const auto result = open.Documents().SaveAll(files);
     REQUIRE(result.HasValue());
     REQUIRE(result.Value().size() == 2);
     CHECK(result.Value()[0].result.HasValue());
-    CHECK(result.Value()[1].result.HasError());
+    REQUIRE(result.Value()[1].result.HasError());
+    const auto expected =
+        failure == CallbackFailure::Allocation ? SourceDocumentErrors::TooLarge.code : SourceDocumentErrors::ReadFailed.code;
+    CHECK(result.Value()[1].result.ErrorValue().code.Value() == expected.Value());
     CHECK(project.Read("code.cpp") == first.Text());
     CHECK(project.Read("other.cpp") == "base");
     CHECK_FALSE(std::filesystem::exists(project.root / "other.cpp.horo-source.temporary"));

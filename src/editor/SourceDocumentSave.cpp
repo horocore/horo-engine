@@ -1,7 +1,7 @@
 #include "Horo/Foundation/Platform.h"
 #include "SourceDocumentInternal.h"
 
-#include <exception>
+#include <new>
 #include <span>
 #include <type_traits>
 #include <utility>
@@ -41,9 +41,7 @@ namespace Horo::Editor {
         bool TryRemoveTemporary(DurableFileSystem &files, const std::filesystem::path &path) noexcept {
             try {
                 return files.RemoveDurable(path).HasValue();
-            } catch (const std::exception &) {
-                return false;
-            } catch (...) {
+            } catch (...) {  // NOSONAR(cpp:S1181, cpp:S2738): ADR-008 forbids callback exceptions escaping destructor cleanup.
                 return false;
             }
         }
@@ -108,7 +106,7 @@ namespace Horo::Editor {
 
         /** @brief Prepares exclusive bytes between two exact conflict checks, then fences cancellation. */
         Result<void> PrepareBytes(DurableFileSystem &files, const std::filesystem::path &path, TemporaryGuard &cleanup,
-                                  const SaveBytes contents, const bool absentAllowed, const std::size_t maximum,
+                                  const SaveBytes &contents, const bool absentAllowed, const std::size_t maximum,
                                   const CancellationToken cancellation) {
             auto observed = CheckDisk(path, contents.expected, absentAllowed, maximum, cancellation);
             if (observed.HasError())
@@ -160,10 +158,7 @@ namespace Horo::Editor {
                     prepared.external = SourceExternalState::InSync;
                     prepared.saveUnconfirmed = false;
                 }
-            } catch (const std::exception &) {
-                if (!PreserveVisibleFailure(receipt, cleanup, result, fallback))
-                    throw;
-            } catch (...) {
+            } catch (...) {  // NOSONAR(cpp:S1181, cpp:S2738): the Platform receipt must preserve any postcommit exception.
                 if (!PreserveVisibleFailure(receipt, cleanup, result, fallback))
                     throw;
             }
@@ -266,9 +261,7 @@ namespace Horo::Editor {
             }
         } catch (const std::bad_alloc &) {
             return Result<SourceSaveResult>::Failure(MakeError(SourceDocumentErrors::TooLarge));
-        } catch (const std::exception &) {
-            return Result<SourceSaveResult>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
-        } catch (...) {
+        } catch (...) {  // NOSONAR(cpp:S1181, cpp:S2738): ADR-008 requires every provider exception to become a typed error.
             return Result<SourceSaveResult>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
         }
     }
@@ -288,7 +281,7 @@ namespace Horo::Editor {
             // Reserve every result/error before any disk publication, so a later
             // allocation failure cannot erase evidence of earlier successful saves.
             for (const auto &request : requests)
-                results.push_back({request.instance, Result<SourceSaveResult>::Failure(MakeError(SourceDocumentErrors::TooLarge))});
+                results.emplace_back(request.instance, Result<SourceSaveResult>::Failure(MakeError(SourceDocumentErrors::TooLarge)));
             for (std::size_t index = 0; index < requests.size(); ++index)
                 CompleteSaveItem(*this, results[index], requests[index], files, cancellation);
             return Result<std::vector<SourceSaveAllItem>>::Success(std::move(results));
