@@ -97,6 +97,14 @@ horo_configure_target_header_boundary(HoroMcpRegistry PUBLIC_HEADERS
     Horo/Mcp/McpToolRegistry.h
 )
 
+horo_configure_target_header_boundary(HoroProjectReadFilesApi PUBLIC_HEADERS Horo/Platform/ProjectReadFiles.h)
+horo_configure_target_header_boundary(HoroPlatformProjectReadFiles PUBLIC_HEADERS Horo/Platform/NativeProjectReadFiles.h)
+horo_configure_target_header_boundary(HoroProjectCodeQuery PUBLIC_HEADERS
+    Horo/Application/ProjectCodeQuery.h
+    Horo/Application/CodeQueryStoreProviders.h)
+horo_configure_target_header_boundary(HoroMcpProjectCodeQuery PUBLIC_HEADERS Horo/Mcp/ProjectCodeQueryTools.h)
+horo_configure_target_header_boundary(HoroSourceDocumentCodeQuery PUBLIC_HEADERS Horo/Editor/SourceDocumentCodeQuery.h)
+
 horo_configure_target_header_boundary(HoroMcpController PUBLIC_HEADERS
     Horo/Mcp/McpController.h
 )
@@ -327,6 +335,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiElementTree.h
     Horo/Runtime/Ui/UiEventDispatch.h
     Horo/Runtime/Ui/UiPointerCapture.h
+    Horo/Runtime/Ui/UiPointerInteraction.h
     Horo/Runtime/Ui/UiActions.h
     Horo/Runtime/Ui/UiAnimationClock.h
     Horo/Runtime/Ui/UiAnimationTimeline.h
@@ -494,6 +503,7 @@ horo_configure_target_header_boundary(HoroAssets PUBLIC_HEADERS
     Horo/Assets/AssetCookInputSnapshot.h
     Horo/Assets/AssetCookTransaction.h
     Horo/Assets/AssetId.h
+    Horo/Assets/AssetSourcePublication.h
     Horo/Assets/AssetImportMetadata.h
     Horo/Assets/AssetImportOperation.h
     Horo/Assets/AssetImporter.h
@@ -675,6 +685,9 @@ horo_configure_target_header_boundary(HoroAISightIntegration PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroAnimationGraphSourceCodec PUBLIC_HEADERS
     Horo/Animation/AnimationGraphSource.h
 )
+horo_configure_target_header_boundary(HoroAnimationRuntime PUBLIC_HEADERS
+    Horo/Animation/AnimationGraphInstance.h
+)
 horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
     Horo/Animation/AnimationGraph.h
     Horo/Animation/AnimationCompression.h
@@ -687,6 +700,8 @@ horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
     Horo/Animation/SkeletalMeshSkinning.h
 )
 horo_configure_target_header_boundary(HoroPCG PUBLIC_HEADERS
+    Horo/PCG/PCGNodeCatalog.h
+    Horo/PCG/PCGPointGeneration.h
     Horo/PCG/PCGCpuEvaluator.h
     Horo/PCG/PCGCookedPlan.h
     Horo/PCG/PCGErrors.h
@@ -813,6 +828,7 @@ horo_configure_target_header_boundary(HoroNavigationRuntime PUBLIC_HEADERS
     Horo/Navigation/NavigationAgentRegistry.h
     Horo/Navigation/NavigationPathPolicy.h
     Horo/Navigation/NavigationCoordinator.h
+    Horo/Navigation/NavigationMovement.h
     Horo/Navigation/NavigationRuntimeQueues.h
     Horo/Navigation/NavigationWorldLifecycle.h
 )
@@ -862,6 +878,11 @@ horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
     Horo/Terrain/TerrainIdentity.h
     Horo/Terrain/TerrainMaterial.h
 )
+horo_configure_target_header_boundary(HoroTerrainRenderIntegration PUBLIC_HEADERS
+Horo/TerrainRenderIntegration/TerrainRenderSnapshot.h
+Horo/TerrainRenderIntegration/TerrainTileResourceOwner.h
+)
+
 horo_configure_target_header_boundary(HoroTerrainRender PUBLIC_HEADERS
     Horo/TerrainRender/TerrainMaterialBinding.h
 )
@@ -1136,6 +1157,10 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/RecentProjectInspectionService.h
     Horo/Editor/SourceFileOpenService.h
     Horo/Editor/SourceDocumentService.h
+    Horo/Editor/SemanticDocumentHistory.h
+    Horo/Editor/DocumentRecoveryService.h
+    Horo/Editor/PCGGraphDocument.h
+    Horo/Editor/PCGGraphDocumentService.h
     Horo/Editor/SequenceDocument.h
     Horo/Editor/UiCanvasDocument.h
     Horo/Editor/WelcomeController.h
@@ -1150,6 +1175,7 @@ horo_configure_target_header_boundary(HoroEditorViewportMetal)
 horo_configure_target_header_boundary(HoroInputSdl)
 horo_configure_target_header_boundary(HoroRuntimeUiInput PUBLIC_HEADERS
     Horo/Runtime/Ui/UiNavigationInput.h
+    Horo/Runtime/Ui/UiPointerInput.h
 )
 horo_configure_target_header_boundary(HoroGui PUBLIC_HEADERS
     Horo/Editor/AssetImportModal.h

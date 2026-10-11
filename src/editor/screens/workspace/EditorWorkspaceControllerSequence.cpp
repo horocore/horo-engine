@@ -57,6 +57,9 @@ namespace Horo::Editor {
         if (!result.document || result.route != SourceOpenRoute::EmbeddedWorkspace)
             return false;
         switch (result.classification.kind) {
+            case SourceFileKind::PCGGraph:
+                OpenEmbeddedPCGSource(result);
+                return true;
             case SourceFileKind::Sequence:
                 OpenEmbeddedSequenceSource(result);
                 return true;

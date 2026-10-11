@@ -1,3 +1,4 @@
+#include "Horo/Editor/DocumentRecoveryService.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Runtime/Scene/PrimitiveCatalog.h"
 #include "editor/document/SceneDocumentPersistenceInternal.h"
@@ -148,17 +149,16 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> WriteRecoveryPayload(const std::filesystem::path &absoluteProjectRoot, const std::string &serialized,
                                                         DurableFileSystem &files) {
             const std::filesystem::path destination = RecoveryPath(absoluteProjectRoot);
-            std::filesystem::path prepared = destination;
-            prepared += ".tmp";
-            const std::vector<std::byte> bytes = Bytes(serialized);
-            if (Result<void> write = files.WriteDurable(prepared, bytes); write.HasError()) {
-                static_cast<void>(files.RemoveDurable(prepared));
-                return write;
-            }
-            if (Result<void> replace = files.AtomicReplace(prepared, destination); replace.HasError()) {
-                static_cast<void>(files.RemoveDurable(prepared));
-                return replace;
-            }
+            const auto previous = Assets::CaptureAssetSource(absoluteProjectRoot, destination, kMaximumRecoveryBytes);
+            if (previous.HasError())
+                return Result<void>::Failure(previous.ErrorValue());
+            const auto bytes = Bytes(serialized);
+            auto publication = PublishDocumentRecovery(absoluteProjectRoot, destination, bytes, previous.Value().identity, files,
+                                                       {.maximumRecordBytes = kMaximumRecoveryBytes});
+            if (publication.HasError())
+                return Result<void>::Failure(publication.ErrorValue());
+            if (publication.Value().durabilityError)
+                return Result<void>::Failure(*publication.Value().durabilityError);
             return Result<void>::Success();
         }
     }  // namespace
@@ -388,12 +388,12 @@ namespace Horo::Editor {
                 PersistenceError(ScenePathInvalid, "Recovery destination must describe an absolute project scene."));
         }
 
-        if (auto lease = mutations.TryAcquire(ProjectMutationRequest{
-                .projectRoot = absoluteProjectRoot,
-                .owner = ProjectMutationOwner::Autosave,
-                .operationId = std::format("scene-autosave-{}", snapshot.revision.value),
-            });
-            lease.HasError()) {
+        auto lease = mutations.TryAcquire(ProjectMutationRequest{
+            .projectRoot = absoluteProjectRoot,
+            .owner = ProjectMutationOwner::Autosave,
+            .operationId = std::format("scene-autosave-{}", snapshot.revision.value),
+        });
+        if (lease.HasError()) {
             return Result<void>::Failure(lease.ErrorValue());
         }
 
@@ -452,12 +452,12 @@ namespace Horo::Editor {
             }
             return Result<void>::Success();
         }
-        if (auto lease = mutations.TryAcquire(ProjectMutationRequest{
-                .projectRoot = absoluteProjectRoot,
-                .owner = ProjectMutationOwner::Autosave,
-                .operationId = "scene-recovery-discard",
-            });
-            lease.HasError()) {
+        auto lease = mutations.TryAcquire(ProjectMutationRequest{
+            .projectRoot = absoluteProjectRoot,
+            .owner = ProjectMutationOwner::Autosave,
+            .operationId = "scene-recovery-discard",
+        });
+        if (lease.HasError()) {
             return Result<void>::Failure(lease.ErrorValue());
         }
         return files.RemoveDurable(recoveryPath);

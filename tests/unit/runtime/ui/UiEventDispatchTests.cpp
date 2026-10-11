@@ -4,6 +4,7 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <utility>
@@ -121,6 +122,52 @@ namespace Horo::Runtime::Ui {
             auto dispatcher = UiEventDispatcher::Create({descriptor.instance, descriptor.canvas, descriptor.document, depth});
             REQUIRE(dispatcher.HasValue());
             return std::move(dispatcher).Value();
+        }
+
+        TEST_CASE("Physical and accessible gestures share routed default prevention", "[runtime_ui][event_dispatch][gesture]") {
+            auto tree = Tree();
+            auto dispatcher = Dispatcher();
+            const auto target = Find(tree, 3);
+            UiRoutedEvent event{UiEventKind::Gesture, 1, {32, 64}, true, UiGestureEvent{UiGestureKind::Drop, 1, Find(tree, 4)}};
+            RecordingHandler handler;
+            handler.preventAt = Find(tree, 2);
+            const auto prevented = dispatcher.Dispatch(tree, Route(tree, target), event, handler);
+            REQUIRE(prevented.HasValue());
+            CHECK(prevented.Value().defaultPrevented);
+            CHECK_FALSE(prevented.Value().defaultApplied);
+            CHECK(handler.defaultCount == 0);
+
+            event.sequence = 2;
+            event.hasLogicalPosition = false;
+            event.logicalPosition = {};
+            event.gesture->pointer = 0;
+            event.gesture->accessible = true;
+            RecordingHandler accessibleHandler;
+            const auto applied = dispatcher.Dispatch(tree, Route(tree, target), event, accessibleHandler);
+            REQUIRE(applied.HasValue());
+            CHECK(applied.Value().defaultApplied);
+            CHECK(accessibleHandler.defaultTarget == target);
+            CHECK(accessibleHandler.defaultCount == 1);
+        }
+
+        TEST_CASE("Gesture malformed geometry and foreign source reject before any handler", "[runtime_ui][event_dispatch][gesture]") {
+            auto tree = Tree();
+            auto dispatcher = Dispatcher();
+            const auto target = Find(tree, 3);
+            UiRoutedEvent event{UiEventKind::Gesture, 1, {}, true, UiGestureEvent{UiGestureKind::PinchRotate, 1, target}};
+            RecordingHandler handler;
+            event.gesture->scale = std::numeric_limits<double>::quiet_NaN();
+            ExpectError(dispatcher.Dispatch(tree, Route(tree, target), event, handler), UiErrors::EventDispatchInvalid);
+            event.gesture->scale = 1.0;
+            event.gesture->rotation = std::numeric_limits<double>::infinity();
+            ExpectError(dispatcher.Dispatch(tree, Route(tree, target), event, handler), UiErrors::EventDispatchInvalid);
+            event.gesture->rotation = 0.0;
+            ++event.gesture->source.generation;
+            ExpectError(dispatcher.Dispatch(tree, Route(tree, target), event, handler), UiErrors::EventDispatchSourceStale);
+            event.gesture.reset();
+            ExpectError(dispatcher.Dispatch(tree, Route(tree, target), event, handler), UiErrors::EventDispatchInvalid);
+            CHECK(handler.callCount == 0);
+            CHECK(handler.defaultCount == 0);
         }
 
         TEST_CASE("UI events follow frozen capture target bubble order without dispatch allocation",

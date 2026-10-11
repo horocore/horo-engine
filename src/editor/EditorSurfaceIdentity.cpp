@@ -32,6 +32,7 @@ namespace Horo::Editor {
                 case Source:
                 case UiCanvas:
                 case Sequence:
+                case PCGGraph:
                 case Shader:
                 case Asset:
                 case Project:
@@ -241,6 +242,8 @@ namespace Horo::Editor {
                 return "ui_canvas";
             case Sequence:
                 return "sequence";
+            case PCGGraph:
+                return "pcg_graph";
             case Shader:
                 return "shader";
             case Asset:
@@ -255,7 +258,7 @@ namespace Horo::Editor {
 
     Result<DocumentKind> ParseDocumentKind(const std::string_view value) {
         using enum DocumentKind;
-        for (const DocumentKind kind : {Scene, Source, UiCanvas, Sequence, Shader, Asset, Project, Custom}) {
+        for (const DocumentKind kind : {Scene, Source, UiCanvas, Sequence, PCGGraph, Shader, Asset, Project, Custom}) {
             if (ToString(kind) == value) {
                 return Result<DocumentKind>::Success(kind);
             }
@@ -405,6 +408,19 @@ namespace Horo::Editor {
         }
 
         openDocuments_.erase(iterator);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc DocumentIdentityRegistry::RetargetSource */
+    Result<void> DocumentIdentityRegistry::RetargetSource(const DocumentInstanceId instance, DocumentOpenKey key) {
+        const auto current = FindInstanceIterator(instance);
+        if (current == openDocuments_.end())
+            return Result<void>::Failure(MakeError(EditorSurfaceErrors::InstanceUnknown));
+        if (current->key.kind != DocumentKind::Source || key.kind != DocumentKind::Source || !key.IsValid())
+            return Result<void>::Failure(MakeError(EditorSurfaceErrors::InvalidDocumentKey));
+        if (const auto existing = Find(key); existing && existing->instance != instance)
+            return Result<void>::Failure(MakeError(EditorSurfaceErrors::InvalidDocumentKey));
+        std::swap(current->key, key);
         return Result<void>::Success();
     }
 

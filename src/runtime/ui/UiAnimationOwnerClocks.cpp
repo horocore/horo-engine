@@ -75,7 +75,7 @@ namespace Horo::Runtime::Ui {
         using enum UiTimeDomain;
         if (!storage_ || storage_->ownerThread != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
-        if (storage_->stopped || storage_->draining || storage_->binding.bound || storage_->currentFrame.has_value() ||
+        if (storage_->lifecycle.stopped || storage_->lifecycle.draining || storage_->binding.bound || storage_->currentFrame.has_value() ||
             storage_->pendingCommands)
             return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         if (!enabled[static_cast<std::size_t>(Simulation)] || !enabled[static_cast<std::size_t>(PresentationUnscaled)] ||

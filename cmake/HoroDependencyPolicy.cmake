@@ -9,6 +9,14 @@ horo_allow_target_dependencies(TARGET HoroCliHost DEPENDENCIES HoroFoundation Ho
 horo_allow_target_dependencies(TARGET HoroMcpSession DEPENDENCIES HoroFoundation HoroSecurity)
 horo_allow_target_dependencies(TARGET HoroMcpRegistry DEPENDENCIES HoroMcpSession)
 horo_allow_target_dependencies(TARGET HoroMcpController DEPENDENCIES HoroMcpRegistry)
+horo_allow_target_dependencies(TARGET HoroProjectReadFilesApi DEPENDENCIES HoroFoundation)
+horo_allow_target_dependencies(TARGET HoroPlatformProjectReadFiles DEPENDENCIES HoroProjectReadFilesApi)
+horo_allow_target_dependencies(TARGET HoroProjectCodeQuery DEPENDENCIES HoroProjectReadFilesApi)
+horo_allow_target_dependencies(TARGET HoroMcpProjectCodeQuery DEPENDENCIES HoroMcpRegistry HoroProjectCodeQuery)
+horo_allow_target_dependencies(TARGET HoroSourceDocumentCodeQuery DEPENDENCIES HoroEditorServices HoroProjectCodeQuery)
+if (BUILD_TESTING)
+    horo_allow_target_dependencies(TARGET HoroProjectReadFilesTestingInternal DEPENDENCIES HoroPlatformProjectReadFiles)
+endif ()
 horo_allow_target_dependencies(TARGET HoroModelProvider)
 horo_allow_target_dependencies(TARGET HoroModelProviderAdapters DEPENDENCIES HoroModelProvider)
 horo_allow_target_dependencies(TARGET HoroOpenTelemetry DEPENDENCIES HoroFoundation)
@@ -82,6 +90,7 @@ horo_allow_target_dependencies(TARGET HoroAISightIntegration DEPENDENCIES HoroAI
 horo_allow_target_dependencies(TARGET HoroGameplayPerceptionIntegration DEPENDENCIES HoroAISceneIntegration HoroNetworkRuntime)
 horo_allow_target_dependencies(TARGET HoroAnimationGraphSourceCodec DEPENDENCIES HoroAnimationApi)
 horo_allow_target_dependencies(TARGET HoroAnimationApi DEPENDENCIES HoroFoundation HoroAssets)
+horo_allow_target_dependencies(TARGET HoroAnimationRuntime DEPENDENCIES HoroAnimationApi)
 horo_allow_target_dependencies(TARGET HoroPCG DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroPCGTerrainAdapter DEPENDENCIES HoroPCG HoroTerrainApi)
 horo_allow_target_dependencies(TARGET HoroVfxApi DEPENDENCIES HoroFoundation HoroAssets)
@@ -130,6 +139,8 @@ if(HORO_VERIFY_XR_DISABLED)
 endif()
 horo_allow_target_dependencies(TARGET HoroTerrainApi DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroTerrainRender DEPENDENCIES HoroTerrainApi HoroRenderApi)
+horo_allow_target_dependencies(TARGET HoroTerrainRenderIntegration
+    DEPENDENCIES HoroTerrainCook HoroTerrainRender HoroRenderFrontend HoroWorldStreaming)
 horo_allow_target_dependencies(TARGET HoroTerrainImport DEPENDENCIES HoroTerrainApi HoroAssets)
 horo_allow_target_dependencies(TARGET HoroTerrainAuthoring DEPENDENCIES HoroTerrainImport)
 horo_allow_target_dependencies(TARGET HoroTerrainCook DEPENDENCIES HoroTerrainImport)
@@ -190,7 +201,7 @@ horo_allow_target_dependencies(TARGET HoroEditorViewportResources
 horo_allow_target_dependencies(TARGET HoroEditorRenderExtraction
     DEPENDENCIES HoroEditorModel HoroEditorViewportScene)
 horo_allow_target_dependencies(TARGET HoroEditorServices
-    DEPENDENCIES HoroAudioApi HoroAudioFrontend
+    DEPENDENCIES HoroPCG HoroAudioApi HoroAudioFrontend
         HoroFoundation HoroHostErrors HoroCinematicRuntime
         HoroNetworkApi
         HoroNetworkDebuggerApplication

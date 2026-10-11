@@ -18,12 +18,37 @@ namespace Horo::Animation {
             return Result<Value>::Failure(MakeError(descriptor, std::string{detail}));
         }
 
-        [[nodiscard]] Result<void> ValidateAdmission(const AnimationClipAdmissionState admission) {
+        template <typename T>
+        [[nodiscard]] AnimationClipOutcome<T> HotReject(const ErrorCodeDescriptor &descriptor, const std::string_view detail) {
+            if (&descriptor == &AnimationErrors::ClipOperationCancelled)
+                return AnimationClipOutcome<T>::Failure({AnimationClipFailure::Cancelled, detail});
+            if (&descriptor == &AnimationErrors::ClipAdmissionRejected)
+                return AnimationClipOutcome<T>::Failure({AnimationClipFailure::AdmissionRejected, detail});
+            if (&descriptor == &AnimationErrors::IdentityInvalid)
+                return AnimationClipOutcome<T>::Failure({AnimationClipFailure::IdentityInvalid, detail});
+            if (&descriptor == &AnimationErrors::ClipLimitExceeded)
+                return AnimationClipOutcome<T>::Failure({AnimationClipFailure::LimitExceeded, detail});
+            if (&descriptor == &AnimationErrors::ClipMalformed)
+                return AnimationClipOutcome<T>::Failure({AnimationClipFailure::Malformed, detail});
+            if (&descriptor == &AnimationErrors::ClipUnsupported)
+                return AnimationClipOutcome<T>::Failure({AnimationClipFailure::Unsupported, detail});
+            if (&descriptor == &AnimationErrors::ClipTimeOverflow)
+                return AnimationClipOutcome<T>::Failure({AnimationClipFailure::TimeOverflow, detail});
+            if (&descriptor == &AnimationErrors::ClipSkeletonMismatch)
+                return AnimationClipOutcome<T>::Failure({AnimationClipFailure::SkeletonMismatch, detail});
+            if (&descriptor == &AnimationErrors::ClipBindingStale)
+                return AnimationClipOutcome<T>::Failure({AnimationClipFailure::BindingStale, detail});
+            if (&descriptor == &AnimationErrors::ClipReferencePoseMismatch)
+                return AnimationClipOutcome<T>::Failure({AnimationClipFailure::ReferencePoseMismatch, detail});
+            return AnimationClipOutcome<T>::Failure({AnimationClipFailure::Unsupported, detail});
+        }
+
+        [[nodiscard]] AnimationClipOutcome<void> ValidateAdmission(const AnimationClipAdmissionState admission) {
             if (admission == AnimationClipAdmissionState::CancellationRequested)
-                return Reject<void>(AnimationErrors::ClipOperationCancelled, "The clip operation was cancelled before it began.");
+                return HotReject<void>(AnimationErrors::ClipOperationCancelled, "The clip operation was cancelled before it began.");
             if (admission != AnimationClipAdmissionState::Accepting)
-                return Reject<void>(AnimationErrors::ClipAdmissionRejected, "The clip owner is not accepting work.");
-            return Result<void>::Success();
+                return HotReject<void>(AnimationErrors::ClipAdmissionRejected, "The clip owner is not accepting work.");
+            return AnimationClipOutcome<void>::Success();
         }
 
         [[nodiscard]] bool IsKnown(const AnimationWrapMode value) noexcept {
@@ -45,16 +70,19 @@ namespace Horo::Animation {
         [[nodiscard]] bool IsFiniteTransform(const Math::Transform &transform) noexcept {
             return Math::IsFinite(transform.translation) && Math::IsFinite(transform.rotation) && Math::IsFinite(transform.scale) &&
                    std::abs(transform.scale.x) > MinimumScaleMagnitude && std::abs(transform.scale.y) > MinimumScaleMagnitude &&
-                   std::abs(transform.scale.z) > MinimumScaleMagnitude && transform.rotation.TryNormalized().HasValue();
+                   std::abs(transform.scale.z) > MinimumScaleMagnitude &&
+                   std::hypot(std::hypot(static_cast<double>(transform.rotation.x), static_cast<double>(transform.rotation.y)),
+                              std::hypot(static_cast<double>(transform.rotation.z), static_cast<double>(transform.rotation.w))) >
+                       static_cast<double>(Math::DefaultEpsilon);
         }
 
-        [[nodiscard]] Result<void> ValidateLimits(const AnimationClipLimits &limits) {
+        [[nodiscard]] AnimationClipOutcome<void> ValidateLimits(const AnimationClipLimits &limits) {
             if (limits.maximumTracks == 0 || limits.maximumTracks > AnimationClipHardLimits::Tracks || limits.maximumKeysPerTrack == 0 ||
                 limits.maximumKeysPerTrack > AnimationClipHardLimits::KeysPerTrack || limits.maximumTotalKeys == 0 ||
                 limits.maximumTotalKeys > AnimationClipHardLimits::TotalKeys ||
                 limits.maximumBoundaryCrossings > AnimationClipHardLimits::BoundaryCrossings)
-                return Reject<void>(AnimationErrors::ClipLimitExceeded, "The requested clip limits exceed hard safety ceilings.");
-            return Result<void>::Success();
+                return HotReject<void>(AnimationErrors::ClipLimitExceeded, "The requested clip limits exceed hard safety ceilings.");
+            return AnimationClipOutcome<void>::Success();
         }
 
         [[nodiscard]] Result<void> ValidateDescriptorIdentity(const AnimationClipDescriptor &descriptor, const SkeletonAsset &skeleton) {
@@ -196,14 +224,15 @@ namespace Horo::Animation {
             return delta.ticks > 0 ? phase == duration : phase == 0;
         }
 
-        [[nodiscard]] Result<void> ValidateCursorRange(const AnimationClipCursor cursor, const std::int64_t upperExclusive,
-                                                       const bool mayBeTerminal, const std::string_view detail) {
+        [[nodiscard]] AnimationClipOutcome<void> ValidateCursorRange(const AnimationClipCursor cursor, const std::int64_t upperExclusive,
+                                                                     const bool mayBeTerminal, const std::string_view detail) {
             if ((!mayBeTerminal && cursor.terminal) || cursor.phase.ticks < 0 || cursor.phase.ticks >= upperExclusive)
-                return Reject<void>(AnimationErrors::ClipMalformed, detail);
-            return Result<void>::Success();
+                return HotReject<void>(AnimationErrors::ClipMalformed, detail);
+            return AnimationClipOutcome<void>::Success();
         }
 
-        [[nodiscard]] Result<void> ValidateCursor(const AnimationClipCursor cursor, const AnimationClipDescriptor &descriptor) {
+        [[nodiscard]] AnimationClipOutcome<void> ValidateCursor(const AnimationClipCursor cursor,
+                                                                const AnimationClipDescriptor &descriptor) {
             using enum AnimationWrapMode;
             switch (descriptor.wrapMode) {
                 case Once:
@@ -218,20 +247,21 @@ namespace Horo::Animation {
                     return ValidateCursorRange(cursor, 2 * descriptor.duration.ticks, false,
                                                "A ping-pong cursor is not in canonical phase range.");
                 case Count:
-                    return Reject<void>(AnimationErrors::ClipUnsupported, "The clip wrap mode is unknown.");
+                    return HotReject<void>(AnimationErrors::ClipUnsupported, "The clip wrap mode is unknown.");
             }
-            return Reject<void>(AnimationErrors::ClipUnsupported, "The clip wrap mode is unknown.");
+            return HotReject<void>(AnimationErrors::ClipUnsupported, "The clip wrap mode is unknown.");
         }
 
-        [[nodiscard]] Result<std::uint32_t> BoundedCrossings(const std::uint64_t crossings, const AnimationClipLimits &limits) {
+        [[nodiscard]] AnimationClipOutcome<std::uint32_t> BoundedCrossings(const std::uint64_t crossings,
+                                                                           const AnimationClipLimits &limits) {
             if (crossings > limits.maximumBoundaryCrossings || crossings > AnimationClipHardLimits::BoundaryCrossings)
-                return Reject<std::uint32_t>(AnimationErrors::ClipLimitExceeded,
-                                             "The directed interval exceeds its atomic boundary-crossing budget.");
-            return Result<std::uint32_t>::Success(static_cast<std::uint32_t>(crossings));
+                return HotReject<std::uint32_t>(AnimationErrors::ClipLimitExceeded,
+                                                "The directed interval exceeds its atomic boundary-crossing budget.");
+            return AnimationClipOutcome<std::uint32_t>::Success(static_cast<std::uint32_t>(crossings));
         }
 
-        [[nodiscard]] Result<std::uint32_t> CheckedCrossings(const AnimationClipCursor cursor, const std::int64_t unbounded,
-                                                             const std::int64_t duration, const AnimationClipLimits &limits) {
+        [[nodiscard]] AnimationClipOutcome<std::uint32_t> CheckedCrossings(const AnimationClipCursor cursor, const std::int64_t unbounded,
+                                                                           const std::int64_t duration, const AnimationClipLimits &limits) {
             return BoundedCrossings(CountCrossings(cursor.phase.ticks, unbounded, duration), limits);
         }
 
@@ -241,43 +271,47 @@ namespace Horo::Animation {
             return {.cursor = {{phase}, false}, .sampleTime = sampleTime, .direction = direction, .boundaryCrossings = boundaryCrossings};
         }
 
-        [[nodiscard]] Result<AnimationClipTraversal> TraverseClamped(const AnimationClipCursor cursor, const AnimationTimeDelta delta,
-                                                                     const std::int64_t unbounded, const std::int64_t duration,
-                                                                     const AnimationWrapMode wrapMode, const AnimationClipLimits &limits) {
+        [[nodiscard]] AnimationClipOutcome<AnimationClipTraversal> TraverseClamped(
+            const AnimationClipCursor cursor, const AnimationTimeDelta delta, const std::int64_t unbounded, const std::int64_t duration,
+            const AnimationWrapMode wrapMode, const AnimationClipLimits &limits) {
             const std::int64_t phase = std::clamp(unbounded, std::int64_t{0}, duration);
             const bool reachedBoundary = phase != unbounded || ReachedDirectedBoundary(delta, phase, duration);
             const auto crossings = BoundedCrossings(static_cast<std::uint64_t>(reachedBoundary && cursor.phase.ticks != phase), limits);
             if (crossings.HasError())
-                return Result<AnimationClipTraversal>::Failure(crossings.ErrorValue());
+                return AnimationClipOutcome<AnimationClipTraversal>::Failure(crossings.ErrorValue());
             const auto direction = DirectionBetween(cursor.phase.ticks, phase);
-            return Result<AnimationClipTraversal>::Success({.cursor = {{phase}, wrapMode == AnimationWrapMode::Once && reachedBoundary},
-                                                            .sampleTime = {phase},
-                                                            .direction = direction,
-                                                            .boundaryCrossings = crossings.Value()});
+            return AnimationClipOutcome<AnimationClipTraversal>::Success(
+                {.cursor = {{phase}, wrapMode == AnimationWrapMode::Once && reachedBoundary},
+                 .sampleTime = {phase},
+                 .direction = direction,
+                 .boundaryCrossings = crossings.Value()});
         }
 
-        [[nodiscard]] Result<AnimationClipTraversal> TraverseLoop(const AnimationClipCursor cursor, const AnimationTimeDelta delta,
-                                                                  const std::int64_t unbounded, const std::int64_t duration,
-                                                                  const AnimationClipLimits &limits) {
+        [[nodiscard]] AnimationClipOutcome<AnimationClipTraversal> TraverseLoop(const AnimationClipCursor cursor,
+                                                                                const AnimationTimeDelta delta,
+                                                                                const std::int64_t unbounded, const std::int64_t duration,
+                                                                                const AnimationClipLimits &limits) {
             using enum AnimationTraversalDirection;
             const auto crossings = CheckedCrossings(cursor, unbounded, duration, limits);
             if (crossings.HasError())
-                return Result<AnimationClipTraversal>::Failure(crossings.ErrorValue());
+                return AnimationClipOutcome<AnimationClipTraversal>::Failure(crossings.ErrorValue());
             const std::int64_t phase = FloorModulo(unbounded, duration);
             const auto direction = delta.ticks > 0 ? Forward : Reverse;
-            return Result<AnimationClipTraversal>::Success(CyclicTraversal(phase, {phase}, direction, crossings.Value()));
+            return AnimationClipOutcome<AnimationClipTraversal>::Success(CyclicTraversal(phase, {phase}, direction, crossings.Value()));
         }
 
-        [[nodiscard]] Result<AnimationClipTraversal> TraversePingPong(const AnimationClipCursor cursor, const AnimationTimeDelta delta,
-                                                                      const std::int64_t unbounded, const std::int64_t duration,
-                                                                      const AnimationClipLimits &limits) {
+        [[nodiscard]] AnimationClipOutcome<AnimationClipTraversal> TraversePingPong(const AnimationClipCursor cursor,
+                                                                                    const AnimationTimeDelta delta,
+                                                                                    const std::int64_t unbounded,
+                                                                                    const std::int64_t duration,
+                                                                                    const AnimationClipLimits &limits) {
             const auto crossings = CheckedCrossings(cursor, unbounded, duration, limits);
             if (crossings.HasError())
-                return Result<AnimationClipTraversal>::Failure(crossings.ErrorValue());
+                return AnimationClipOutcome<AnimationClipTraversal>::Failure(crossings.ErrorValue());
             const std::int64_t phase = FloorModulo(unbounded, 2 * duration);
-            return Result<AnimationClipTraversal>::Success(CyclicTraversal(phase, PingPongSampleTime(phase, duration),
-                                                                           PingPongDirection(phase, duration, delta.ticks),
-                                                                           crossings.Value()));
+            return AnimationClipOutcome<AnimationClipTraversal>::Success(CyclicTraversal(phase, PingPongSampleTime(phase, duration),
+                                                                                         PingPongDirection(phase, duration, delta.ticks),
+                                                                                         crossings.Value()));
         }
 
         [[nodiscard]] Math::Transform Interpolate(const AnimationJointTrack &track, const AnimationTime time) noexcept {
@@ -300,13 +334,13 @@ namespace Horo::Animation {
                     .scale = Math::Lerp(leftKey.transform.scale, right->transform.scale, alpha)};
         }
 
-        [[nodiscard]] Result<void> ValidatePoseSpan(const std::span<const Math::Transform> pose, const std::size_t jointCount,
-                                                    const std::string_view description) {
+        [[nodiscard]] AnimationClipOutcome<void> ValidatePoseSpan(const std::span<const Math::Transform> pose, const std::size_t jointCount,
+                                                                  const std::string_view description) {
             if (pose.size() != jointCount)
-                return Reject<void>(AnimationErrors::ClipLimitExceeded, description);
+                return HotReject<void>(AnimationErrors::ClipLimitExceeded, description);
             if (!std::ranges::all_of(pose, IsFiniteTransform))
-                return Reject<void>(AnimationErrors::ClipMalformed, "A sampling pose contains a malformed transform.");
-            return Result<void>::Success();
+                return HotReject<void>(AnimationErrors::ClipMalformed, "A sampling pose contains a malformed transform.");
+            return AnimationClipOutcome<void>::Success();
         }
 
         template <typename Left, typename Right>
@@ -360,9 +394,10 @@ namespace Horo::Animation {
             return referencePose;
         }
 
-        [[nodiscard]] Result<void> ValidateTraversal(const AnimationClipCursor cursor, const AnimationTimeDelta delta,
-                                                     const AnimationClipDescriptor &descriptor, const AnimationClipLimits &limits,
-                                                     const AnimationClipAdmissionState admission) {
+        [[nodiscard]] AnimationClipOutcome<void> ValidateTraversal(const AnimationClipCursor cursor, const AnimationTimeDelta delta,
+                                                                   const AnimationClipDescriptor &descriptor,
+                                                                   const AnimationClipLimits &limits,
+                                                                   const AnimationClipAdmissionState admission) {
             if (const auto admitted = ValidateAdmission(admission); admitted.HasError())
                 return admitted;
             if (const auto validLimits = ValidateLimits(limits); validLimits.HasError())
@@ -370,46 +405,48 @@ namespace Horo::Animation {
             if (const auto validCursor = ValidateCursor(cursor, descriptor); validCursor.HasError())
                 return validCursor;
             if (!cursor.terminal && delta.ticks != 0 && AddWouldOverflow(cursor.phase.ticks, delta.ticks))
-                return Reject<void>(AnimationErrors::ClipTimeOverflow, "The exact cursor and delta cannot be represented together.");
-            return Result<void>::Success();
+                return HotReject<void>(AnimationErrors::ClipTimeOverflow, "The exact cursor and delta cannot be represented together.");
+            return AnimationClipOutcome<void>::Success();
         }
 
-        [[nodiscard]] Result<void> ValidateSamplingIdentities(const AnimationClipSampleContext &context,
-                                                              const AnimationClipDescriptor &descriptor) {
+        [[nodiscard]] AnimationClipOutcome<void> ValidateSamplingIdentities(const AnimationClipSampleContext &context,
+                                                                            const AnimationClipDescriptor &descriptor) {
             if (!context.skeleton.IsValid() || !context.skeletonGeneration.IsValid() || !context.clipGeneration.IsValid())
-                return Reject<void>(AnimationErrors::IdentityInvalid, "Sampling bindings use a reserved identity.");
+                return HotReject<void>(AnimationErrors::IdentityInvalid, "Sampling bindings use a reserved identity.");
             if (context.skeleton != descriptor.skeleton)
-                return Reject<void>(AnimationErrors::ClipSkeletonMismatch, "Sampling targets another skeleton identity.");
+                return HotReject<void>(AnimationErrors::ClipSkeletonMismatch, "Sampling targets another skeleton identity.");
             if (context.skeletonGeneration != descriptor.skeletonGeneration || context.clipGeneration != descriptor.generation)
-                return Reject<void>(AnimationErrors::ClipBindingStale, "Sampling targets a retired clip or skeleton generation.");
-            return Result<void>::Success();
+                return HotReject<void>(AnimationErrors::ClipBindingStale, "Sampling targets a retired clip or skeleton generation.");
+            return AnimationClipOutcome<void>::Success();
         }
 
-        [[nodiscard]] Result<void> ValidateSampleBinding(const AnimationTime time, const AnimationClipSampleContext &context,
-                                                         const AnimationClipDescriptor &descriptor, const std::size_t jointCount) {
+        [[nodiscard]] AnimationClipOutcome<void> ValidateSampleBinding(const AnimationTime time, const AnimationClipSampleContext &context,
+                                                                       const AnimationClipDescriptor &descriptor,
+                                                                       const std::size_t jointCount) {
             if (const auto admission = ValidateAdmission(context.admission); admission.HasError())
                 return admission;
             if (const auto identities = ValidateSamplingIdentities(context, descriptor); identities.HasError())
                 return identities;
             if (time.ticks < 0 || time.ticks > descriptor.duration.ticks)
-                return Reject<void>(AnimationErrors::ClipMalformed, "Sampling time is outside the closed clip duration.");
+                return HotReject<void>(AnimationErrors::ClipMalformed, "Sampling time is outside the closed clip duration.");
             if (context.outputPose.size() != jointCount)
-                return Reject<void>(AnimationErrors::ClipLimitExceeded,
-                                    "The output pose does not match the clip's canonical skeleton joint count.");
-            return Result<void>::Success();
+                return HotReject<void>(AnimationErrors::ClipLimitExceeded,
+                                       "The output pose does not match the clip's canonical skeleton joint count.");
+            return AnimationClipOutcome<void>::Success();
         }
 
-        [[nodiscard]] Result<void> ValidateAbsoluteInputs(const AnimationClipSampleContext &context) {
+        [[nodiscard]] AnimationClipOutcome<void> ValidateAbsoluteInputs(const AnimationClipSampleContext &context) {
             if (!context.basePose.empty() || !context.referenceLocalPose.empty() || context.referencePose)
-                return Reject<void>(AnimationErrors::ClipMalformed, "Absolute sampling cannot consume additive pose inputs.");
-            return Result<void>::Success();
+                return HotReject<void>(AnimationErrors::ClipMalformed, "Absolute sampling cannot consume additive pose inputs.");
+            return AnimationClipOutcome<void>::Success();
         }
 
-        [[nodiscard]] Result<void> ValidateAdditiveInputs(const AnimationClipSampleContext &context,
-                                                          const AnimationClipDescriptor &descriptor, const std::size_t jointCount) {
+        [[nodiscard]] AnimationClipOutcome<void> ValidateAdditiveInputs(const AnimationClipSampleContext &context,
+                                                                        const AnimationClipDescriptor &descriptor,
+                                                                        const std::size_t jointCount) {
             if (!context.referencePose || context.referencePose != descriptor.referencePose)
-                return Reject<void>(AnimationErrors::ClipReferencePoseMismatch,
-                                    "The additive reference-pose identity or generation is stale.");
+                return HotReject<void>(AnimationErrors::ClipReferencePoseMismatch,
+                                       "The additive reference-pose identity or generation is stale.");
             if (const auto base = ValidatePoseSpan(context.basePose, jointCount, "The additive base pose has the wrong joint count.");
                 base.HasError())
                 return base;
@@ -420,9 +457,9 @@ namespace Horo::Animation {
             if (const bool outputAliasesBase = context.outputPose.data() == context.basePose.data();
                 (SpansOverlap(context.outputPose, context.basePose) && !outputAliasesBase) ||
                 SpansOverlap(context.outputPose, context.referenceLocalPose))
-                return Reject<void>(AnimationErrors::ClipMalformed,
-                                    "Additive output may alias its complete base pose but no other input storage.");
-            return Result<void>::Success();
+                return HotReject<void>(AnimationErrors::ClipMalformed,
+                                       "Additive output may alias its complete base pose but no other input storage.");
+            return AnimationClipOutcome<void>::Success();
         }
 
         [[nodiscard]] Math::Transform ApplyAdditive(const Math::Transform &base, const Math::Transform &sample,
@@ -439,9 +476,9 @@ namespace Horo::Animation {
     Result<AnimationClipAsset> AnimationClipAsset::Create(AnimationClipData candidate, const SkeletonAsset &skeleton,
                                                           const AnimationClipBuildContext &context) {
         if (const auto admission = ValidateAdmission(context.admission); admission.HasError())
-            return Result<AnimationClipAsset>::Failure(admission.ErrorValue());
+            return Result<AnimationClipAsset>::Failure(DescribeAnimationClipFailure(admission.ErrorValue()));
         if (const auto limits = ValidateLimits(context.limits); limits.HasError())
-            return Result<AnimationClipAsset>::Failure(limits.ErrorValue());
+            return Result<AnimationClipAsset>::Failure(DescribeAnimationClipFailure(limits.ErrorValue()));
         if (const auto descriptor = ValidateDescriptor(candidate.descriptor, skeleton); descriptor.HasError())
             return Result<AnimationClipAsset>::Failure(descriptor.ErrorValue());
         if (context.replacing && (!context.replacing->IsValid() || *context.replacing != candidate.descriptor.id))
@@ -461,15 +498,16 @@ namespace Horo::Animation {
         return data_;
     }
 
-    /** @copydoc AnimationClipAsset::Traverse */
-    Result<AnimationClipTraversal> AnimationClipAsset::Traverse(const AnimationClipCursor cursor, const AnimationTimeDelta delta,
-                                                                const AnimationClipLimits &limits,
-                                                                const AnimationClipAdmissionState admission) const {
+    /** @copydoc AnimationClipAsset::TraversePrepared */
+    AnimationClipOutcome<AnimationClipTraversal> AnimationClipAsset::TraversePrepared(const AnimationClipCursor cursor,
+                                                                                      const AnimationTimeDelta delta,
+                                                                                      const AnimationClipLimits &limits,
+                                                                                      const AnimationClipAdmissionState admission) const {
         if (const auto valid = ValidateTraversal(cursor, delta, data_.descriptor, limits, admission); valid.HasError())
-            return Result<AnimationClipTraversal>::Failure(valid.ErrorValue());
+            return AnimationClipOutcome<AnimationClipTraversal>::Failure(valid.ErrorValue());
         if (cursor.terminal || delta.ticks == 0) {
             using enum AnimationTraversalDirection;
-            return Result<AnimationClipTraversal>::Success({.cursor = cursor, .sampleTime = cursor.phase, .direction = Held});
+            return AnimationClipOutcome<AnimationClipTraversal>::Success({.cursor = cursor, .sampleTime = cursor.phase, .direction = Held});
         }
 
         const std::int64_t duration = data_.descriptor.duration.ticks;
@@ -484,21 +522,22 @@ namespace Horo::Animation {
             case PingPong:
                 return TraversePingPong(cursor, delta, unbounded, duration, limits);
             case Count:
-                return Reject<AnimationClipTraversal>(AnimationErrors::ClipUnsupported, "The clip wrap mode is unknown.");
+                return HotReject<AnimationClipTraversal>(AnimationErrors::ClipUnsupported, "The clip wrap mode is unknown.");
         }
-        return Reject<AnimationClipTraversal>(AnimationErrors::ClipUnsupported, "The clip wrap mode is unknown.");
+        return HotReject<AnimationClipTraversal>(AnimationErrors::ClipUnsupported, "The clip wrap mode is unknown.");
     }
 
-    /** @copydoc AnimationClipAsset::Sample */
-    Result<AnimationClipSample> AnimationClipAsset::Sample(const AnimationTime time, const AnimationClipSampleContext &context) const {
+    /** @copydoc AnimationClipAsset::SamplePrepared */
+    AnimationClipOutcome<AnimationClipSample> AnimationClipAsset::SamplePrepared(const AnimationTime time,
+                                                                                 const AnimationClipSampleContext &context) const {
         const auto &descriptor = data_.descriptor;
         const auto jointCount = skeletonReferencePose_.size();
         if (const auto binding = ValidateSampleBinding(time, context, descriptor, jointCount); binding.HasError())
-            return Result<AnimationClipSample>::Failure(binding.ErrorValue());
+            return AnimationClipOutcome<AnimationClipSample>::Failure(binding.ErrorValue());
         if (const auto inputs = descriptor.kind == AnimationClipKind::Absolute ? ValidateAbsoluteInputs(context)
                                                                                : ValidateAdditiveInputs(context, descriptor, jointCount);
             inputs.HasError())
-            return Result<AnimationClipSample>::Failure(inputs.ErrorValue());
+            return AnimationClipOutcome<AnimationClipSample>::Failure(inputs.ErrorValue());
         if (descriptor.kind == AnimationClipKind::Absolute) {
             std::ranges::copy(skeletonReferencePose_, context.outputPose.begin());
         } else if (context.outputPose.data() != context.basePose.data()) {
@@ -513,8 +552,8 @@ namespace Horo::Animation {
                     ? sampled
                     : ApplyAdditive(context.basePose[jointIndex], sampled, context.referenceLocalPose[jointIndex]);
         }
-        return Result<AnimationClipSample>::Success({.time = time,
-                                                     .sampledTracks = static_cast<std::uint32_t>(data_.tracks.size()),
-                                                     .additive = descriptor.kind == AnimationClipKind::Additive});
+        return AnimationClipOutcome<AnimationClipSample>::Success({.time = time,
+                                                                   .sampledTracks = static_cast<std::uint32_t>(data_.tracks.size()),
+                                                                   .additive = descriptor.kind == AnimationClipKind::Additive});
     }
 }  // namespace Horo::Animation

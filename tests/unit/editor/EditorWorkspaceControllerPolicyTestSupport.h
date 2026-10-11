@@ -70,6 +70,11 @@ namespace HoroEditorWorkspaceControllerPolicyTests {
             return native_.WriteDurable(path, bytes);
         }
 
+        [[nodiscard]] Result<void> WritePrivateDurable(const std::filesystem::path &path, std::span<const std::byte> bytes, bool &created,
+                                                       std::filesystem::perms permissions = std::filesystem::perms::unknown) override {
+            return native_.WritePrivateDurable(path, bytes, created, permissions);
+        }
+
         [[nodiscard]] Result<void> CopyDurable(const std::filesystem::path &source, const std::filesystem::path &destination) override {
             return native_.CopyDurable(source, destination);
         }
@@ -83,6 +88,17 @@ namespace HoroEditorWorkspaceControllerPolicyTests {
 
         [[nodiscard]] Result<void> RemoveDurable(const std::filesystem::path &path) override {
             return native_.RemoveDurable(path);
+        }
+
+        [[nodiscard]] Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
+                                                        AtomicFileReplacementReceipt &receipt) override {
+            ++atomicReplaceCalls;
+            if (failReplace)
+                return Result<void>::Failure(MakeError(InjectedFilesystemFailure));
+            auto result = native_.AtomicReplaceTracked(prepared, destination, receipt);
+            if (result.HasValue() && failSync)
+                return Result<void>::Failure(MakeError(InjectedFilesystemFailure));
+            return result;
         }
 
         [[nodiscard]] Result<void> SyncDirectory(const std::filesystem::path &path) override {
@@ -122,6 +138,18 @@ namespace HoroEditorWorkspaceControllerPolicyTests {
 
         [[nodiscard]] Horo::Editor::SourceDocumentService &SourceDocuments() noexcept {
             return controller_.SourceDocuments();
+        }
+
+        [[nodiscard]] const auto &SourceSaveOutcome() const noexcept {
+            return controller_.SourceSaveOutcome();
+        }
+
+        [[nodiscard]] const auto &SourceSaveAllOutcome() const noexcept {
+            return controller_.SourceSaveAllOutcome();
+        }
+
+        [[nodiscard]] const auto &SourceCloseOutcome() const noexcept {
+            return controller_.SourceCloseOutcome();
         }
 
         [[nodiscard]] Horo::Editor::EditorDataBus &DataBus() noexcept {
