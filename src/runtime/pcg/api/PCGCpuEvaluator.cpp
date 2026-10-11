@@ -5,6 +5,7 @@
 #include "PCGCpuEvaluatorInternal.h"
 #include "PCGPointGenerationInternal.h"
 #include "PCGPointIdentityInternal.h"
+#include "PCGPointTransformationInternal.h"
 
 #include <algorithm>
 #include <bit>
@@ -259,7 +260,12 @@ namespace Horo::PCG {
             if (spatialCount.HasError())
                 return spatialCount;
             for (std::size_t node = 0; node < plan.Nodes().size(); ++node) {
-                const auto cost = plan.Catalog().Cost(plan.Nodes()[node], points[node], spatialCount.Value());
+                const auto descriptor = plan.Catalog().Find(plan.Nodes()[node].type);
+                if (descriptor.HasError())
+                    return Result<std::size_t>::Failure(descriptor.ErrorValue());
+                const auto elements =
+                    descriptor.Value()->kind == PCGCpuNodeKind::SurfaceAlignment ? spatial.Surfaces().size() : spatialCount.Value();
+                const auto cost = plan.Catalog().Cost(plan.Nodes()[node], points[node], elements);
                 if (cost.HasError())
                     return Result<std::size_t>::Failure(cost.ErrorValue());
                 scratch = std::max(scratch, cost.Value().scratchBytes);
@@ -299,7 +305,23 @@ namespace Horo::PCG {
                 const auto descriptor = plan.Catalog().Find(node.type);
                 if (descriptor.HasError())
                     return Result<void>::Failure(descriptor.ErrorValue());
-                if (descriptor.Value()->settings != PCGNodeSettingsSchema::None) {
+                if (detail::IsPointTransformation(descriptor.Value()->kind)) {
+                    const auto settings = detail::DecodePointTransformation(node);
+                    if (settings.HasError())
+                        return Result<void>::Failure(settings.ErrorValue());
+                    const auto route = std::ranges::find_if(plan.Routes(), [&](const auto &r) {
+                        return r.targetNode == bound.node;
+                    });
+                    if (route == plan.Routes().end())
+                        return Reject<void>(PCGErrors::CpuEvaluationInvalid);
+                    const auto source = std::ranges::find_if(bounds, [&](const auto &b) {
+                        return b.node == route->sourceNode && b.pin == route->sourcePin;
+                    });
+                    if (source == bounds.end())
+                        return Reject<void>(PCGErrors::CpuEvaluationInvalid);
+                    if (const auto valid = detail::ValidatePointTransformation(settings.Value(), *source, bound); valid.HasError())
+                        return valid;
+                } else if (descriptor.Value()->settings != PCGNodeSettingsSchema::None) {
                     const auto settings = detail::DecodePointGeneration(node);
                     if (settings.HasError())
                         return Result<void>::Failure(settings.ErrorValue());

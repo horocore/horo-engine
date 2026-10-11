@@ -703,6 +703,7 @@ horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroPCG PUBLIC_HEADERS
     Horo/PCG/PCGNodeCatalog.h
     Horo/PCG/PCGPointGeneration.h
+    Horo/PCG/PCGPointTransformation.h
     Horo/PCG/PCGCpuEvaluator.h
     Horo/PCG/PCGCookedPlan.h
     Horo/PCG/PCGErrors.h

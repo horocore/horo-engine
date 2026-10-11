@@ -101,3 +101,5 @@ identity evidence, deterministic sample/root perturbation, distinct-root merge a
 same-root duplicate rejection, numeric boundary coordinates, density and attempt
 failures, cancellation, replacement and operation drain. Hosted platform qualification
 remains separate from local validation evidence.
+
+Point transformation and gradient-noise nodes preserve these identity columns; see [the transformation contract](pcg-point-transformation-contract.md).

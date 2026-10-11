@@ -5,6 +5,7 @@
 #include "PCGNodeCatalogInternal.h"
 #include "PCGPointGenerationInternal.h"
 #include "PCGPointIdentityInternal.h"
+#include "PCGPointTransformationInternal.h"
 
 #include <algorithm>
 #include <array>
@@ -349,6 +350,92 @@ namespace Horo::PCG {
             return context.workspace.SealOutput(node, output);
         }
 
+        /** @brief Immutable borrowed partition inputs; the owner keeps every referent alive through the structured join. */
+        struct TransformationInput {
+            const detail::NodeExecutionContext &context;
+            const detail::PointTransformationSettings &settings;
+            PCGCpuNodeKind kind;
+            PCGPointReadView source;
+            const PCGPointSchema &schema;
+            PCGPointWriteView writer;
+            std::uint64_t fieldSeed;
+        };
+
+        /** @brief Writes one disjoint admitted point range; all borrowed data outlives the synchronous parent join. */
+        [[nodiscard]] Result<void> TransformationPartition(const TransformationInput &input, std::size_t begin, std::size_t end,
+                                                           CancellationToken cancellation) {
+            const auto *noise = std::get_if<PCGPointNoiseSettings>(&input.settings);
+            for (std::size_t i = begin; i < end; ++i) {
+                if (cancellation.IsCancellationRequested())
+                    return Reject<void>(PCGErrors::CpuEvaluationClosed);
+                const auto transform = detail::TransformPoint(input.settings, input.context.spatial, input.source.Transforms()[i],
+                                                              input.source.Seeds()[i], cancellation);
+                if (transform.HasError())
+                    return Result<void>::Failure(transform.ErrorValue());
+                if (const auto copied = CopyPoint(input.source, input.schema, input.writer, i, i); copied.HasError())
+                    return copied;
+                if (const auto core = input.writer.SetPoint(i, transform.Value(), input.source.Bounds()[i], input.source.Densities()[i],
+                                                            input.source.Seeds()[i]);
+                    core.HasError())
+                    return core;
+                if (noise != nullptr) {
+                    const auto value =
+                        detail::PointNoise(*noise, input.kind, input.source.Transforms()[i].translation, input.fieldSeed, cancellation);
+                    if (value.HasError())
+                        return Result<void>::Failure(value.ErrorValue());
+                    if (const auto written = detail::WritePointNoise(*noise, input.writer, i, value.Value()); written.HasError())
+                        return written;
+                }
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Structured workers own disjoint rows; the owner never seals, cancels or resizes columns until every child joins. */
+        [[nodiscard]] Result<void> TransformPartitions(const detail::NodeExecutionContext &context,
+                                                       const detail::PointTransformationSettings &settings, PCGCpuNodeKind kind,
+                                                       const PCGPointReadView &source, const PCGPointSchema &schema,
+                                                       const PCGPointWriteView &writer, std::uint64_t fieldSeed) {
+            const TransformationInput input{context, settings, kind, source, schema, writer, fieldSeed};
+            if (context.workers == 1)
+                return TransformationPartition(input, 0, source.PointCount(), context.cancellation);
+            TaskGroup group(*context.jobs, TaskGroupFailurePolicy::FailFast, context.cancellation);
+            for (std::uint32_t partition = 0; partition < context.workers; ++partition) {
+                const auto begin = partition == 0 ? 0 : PartitionEnd(source.PointCount(), context.workers, partition - 1);
+                const auto end = PartitionEnd(source.PointCount(), context.workers, partition);
+                const auto submitted = group.Spawn({}, [&input, begin, end](const CancellationToken &child) {
+                    return TransformationPartition(input, begin, end, child);
+                });
+                if (submitted.HasError()) {
+                    group.RequestCancel();
+                    static_cast<void>(group.Join());
+                    return Result<void>::Failure(submitted.ErrorValue());
+                }
+            }
+            return group.Join();
+        }
+
+        /** @brief Opens one bounded output, joins all writes, then validates and seals the complete candidate. */
+        [[nodiscard]] Result<void> ExecuteTransformation(const detail::NodeExecutionContext &context, std::uint32_t node,
+                                                         PCGCpuNodeKind kind, PinId output, const PCGPointReadView &source,
+                                                         const PCGPointOutputBound &inputBound, const PCGPointOutputBound &outputBound) {
+            const auto settings = detail::DecodePointTransformation(context.plan.Nodes()[node]);
+            if (settings.HasError())
+                return Result<void>::Failure(settings.ErrorValue());
+            if (const auto valid = detail::ValidatePointTransformation(settings.Value(), inputBound, outputBound); valid.HasError())
+                return valid;
+            const auto opened = context.workspace.BeginOutput(node, output, source.PointCount());
+            if (opened.HasError())
+                return Result<void>::Failure(opened.ErrorValue());
+            const auto fieldSeed = context.provenance[node].Seed(SourceSampleId::Create(1).Value());
+            if (fieldSeed.HasError())
+                return Result<void>::Failure(fieldSeed.ErrorValue());
+            if (const auto written =
+                    TransformPartitions(context, settings.Value(), kind, source, *inputBound.schema, opened.Value(), fieldSeed.Value());
+                written.HasError())
+                return written;
+            return context.workspace.SealOutput(node, output);
+        }
+
         [[nodiscard]] Result<void> ExecuteRouted(const detail::NodeExecutionContext &context, const std::uint32_t node,
                                                  const PCGCpuNodeKind kind, const PinList &inputs, const PinId output) {
             const auto *outputBound = BoundFor(context.bounds, node, output);
@@ -363,8 +450,12 @@ namespace Horo::PCG {
             const auto first = RoutedInput(context.plan, context.workspace, node, pointPins.values[0].id);
             if (first.HasError())
                 return Result<void>::Failure(first.ErrorValue());
-            if (const auto *sourceBound = SourceBound(context, node, pointPins.values[0].id);
-                sourceBound == nullptr || !SameSchema(*sourceBound->schema, *outputBound->schema))
+            const auto *sourceBound = SourceBound(context, node, pointPins.values[0].id);
+            if (sourceBound == nullptr)
+                return Reject<void>(PCGErrors::CpuEvaluationInvalid);
+            if (detail::IsPointTransformation(kind))
+                return ExecuteTransformation(context, node, kind, output, first.Value(), *sourceBound, *outputBound);
+            if (!SameSchema(*sourceBound->schema, *outputBound->schema))
                 return Reject<void>(PCGErrors::CpuEvaluationInvalid);
             if (kind == PCGCpuNodeKind::DensityFilter)
                 return ExecuteFilter(context, node, output, inputs, first.Value(), *outputBound);
@@ -423,6 +514,16 @@ namespace Horo::PCG {
                     return &InvokeBuiltIn<Stratified>;
                 case PoissonScatter:
                     return &InvokeBuiltIn<PoissonScatter>;
+                case Transform:
+                    return &InvokeBuiltIn<Transform>;
+                case SurfaceAlignment:
+                    return &InvokeBuiltIn<SurfaceAlignment>;
+                case RandomOffset:
+                    return &InvokeBuiltIn<RandomOffset>;
+                case PerlinNoise:
+                    return &InvokeBuiltIn<PerlinNoise>;
+                case SimplexNoise:
+                    return &InvokeBuiltIn<SimplexNoise>;
             }
             return nullptr;
         }

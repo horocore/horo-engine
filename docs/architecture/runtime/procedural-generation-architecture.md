@@ -60,15 +60,17 @@ PCG-owned version-1 built-in IDs. Snapshot-grid nodes read one stable grid ident
 from an eight-byte network-order payload; density-filter nodes take one PointSet
 and one Scalar threshold; merge nodes take two PointSets in input-pin identity order;
 forward nodes take one PointSet. Each produces one PointSet output, and every routed
-point schema must match its output schema exactly. Unknown type/version/payload,
+point schema must match its output schema exactly. Typed noise nodes preserve every input field and admit exactly one declared floating output field or exact-type replacement, as specified in the [transformation contract](pcg-point-transformation-contract.md). Unknown type/version/payload,
 unbound scalar, absent grid, unsupported determinism or capability, closed lifecycle
 and over-budget output fail before any candidate is returned. Snapshot-grid requires
 profile determinism and an exact nonzero numeric-profile fingerprint. The host must
 grant at least one execution capability (offline bake, preview, runtime or hybrid),
 as well as every graph requirement; validation-only grants cannot produce candidates.
 
-`PCGNodeCatalog` is the explicit composition owner for the closed built-in operations. The point-generation extension admits seven
+`PCGNodeCatalog` is the explicit composition owner for the closed built-in operations. The point-generation and transformation extensions admit twelve
 operations with explicit host registration; existing semantic IDs remain unchanged.
+Transformation IDs 12–16 leave IDs 7–11 reserved for independently delivered filters;
+registered descriptor count, rather than enum maximum, bounds catalog storage.
 Creating it produces an empty catalog; the host registers each selected
 `PCGCpuNodeKind` before capturing a `PCGNodeCatalogSnapshot`. Descriptors contain
 stable type IDs, exact source/runtime/migration versions, semantic pin slots,

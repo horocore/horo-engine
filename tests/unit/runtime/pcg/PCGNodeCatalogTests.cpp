@@ -148,7 +148,7 @@ namespace Horo::PCG {
         CheckError(catalog.Register(PCGCpuNodeKind::Forward), PCGErrors::RegistryDuplicate);
         CheckError(catalog.Register(static_cast<PCGCpuNodeKind>(99)), PCGErrors::CpuEvaluationUnsupported);
         CheckError(PCGNodeCatalog::Create(root.Value().Capabilities(), 0), PCGErrors::RegistryCapacityExceeded);
-        CheckError(PCGNodeCatalog::Create(root.Value().Capabilities(), 8), PCGErrors::RegistryCapacityExceeded);
+        CheckError(PCGNodeCatalog::Create(root.Value().Capabilities(), 13), PCGErrors::RegistryCapacityExceeded);
         auto small = Catalog(1);
         REQUIRE(small.Register(PCGCpuNodeKind::Forward).HasValue());
         CheckError(small.Register(PCGCpuNodeKind::Merge), PCGErrors::RegistryCapacityExceeded);
