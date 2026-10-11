@@ -248,6 +248,13 @@ namespace Horo::Navigation {
             Finish(NavigationMovementState::Failed, observed.ErrorValue());
             return stopped();
         }
+        if (current.feedback && current.feedback->requestRepath && lastIntent_ && current.feedback->operation == status_.id &&
+            current.feedback->path == policy_.Id() && current.feedback->tick == *lastIntent_ && *lastIntent_ < path.tick) {
+            RetireQuery();
+            policy_.Clear();
+            lastIntent_.reset();
+            static_cast<void>(policy_.ForceRepath(path));
+        }
         if (query_ && (queryGoal_ != goalRevision_ || queryLink_ != path.linkRevision || !SameRoot(querySource_, path.provenance))) {
             RetireQuery();
             if (policy_.Decide(path.tick).action == NavigationRepathAction::None)
@@ -260,5 +267,50 @@ namespace Horo::Navigation {
         if (status_.state >= NavigationMovementState::Arrived)
             return stopped();
         return Return::Success(Follow(current, path));
+    }
+
+    /** @copydoc NavigationMovementController::ResetMotionAtSafePoint */
+    Result<void> NavigationMovementController::ResetMotionAtSafePoint(const NavigationMovementObservation &current) {
+        if (shutdown_ || !ValidObservation(current) || current.feedback || current.binding != binding_)
+            return Result<void>::Failure(MakeError(NavigationErrors::OutcomeDescriptorInvalid));
+        if (!CheckAuthority(current))
+            return Result<void>::Failure(MakeError(NavigationErrors::AgentRegistryStale));
+        auto path = current.path;
+        path.goalRevision = goalRevision_;
+        NavigationPathPolicy replacement{request_.repath};
+        if (const auto valid = replacement.ForceRepath(path); valid.HasError())
+            return Result<void>::Failure(valid.ErrorValue());
+        RetireQuery();
+        policy_ = std::move(replacement);
+        lastIntent_.reset();
+        waypoint_ = 0;
+        if (status_.state >= NavigationMovementState::Querying && status_.state < NavigationMovementState::Arrived)
+            status_.state = NavigationMovementState::Querying;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc NavigationMovementController::IsCurrentIntent */
+    bool NavigationMovementController::IsCurrentIntent(const NavigationMovementIntent &intent) const noexcept {
+        if (shutdown_ || !lastUpdate_ || intent.tick != *lastUpdate_ || intent.operation != status_.id || intent.state != status_.state)
+            return false;
+        return intent.path == (status_.state == NavigationMovementState::Following || status_.state == NavigationMovementState::Holding
+                                   ? policy_.Id()
+                                   : PathId{});
+    }
+
+    /** @copydoc NavigationMovementController::ValidateIntentAtSafePoint */
+    Result<void> NavigationMovementController::ValidateIntentAtSafePoint(const NavigationMovementIntent &intent,
+                                                                         const NavigationMovementObservation &current) {
+        if (current.feedback || !ValidObservation(current) || current.path.tick != intent.tick || !IsCurrentIntent(intent))
+            return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
+        if (!CheckAuthority(current))
+            return Result<void>::Failure(MakeError(NavigationErrors::AgentRegistryStale));
+        auto path = current.path;
+        path.goalRevision = goalRevision_;
+        if (const auto observed = policy_.Observe(path); observed.HasError())
+            return Result<void>::Failure(observed.ErrorValue());
+        if (intent.path.IsValid() && !policy_.CurrentPath(path))
+            return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
+        return Result<void>::Success();
     }
 }  // namespace Horo::Navigation

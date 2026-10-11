@@ -65,7 +65,8 @@ namespace Horo::Navigation {
             (lastUpdate_.has_value() && current.path.tick < *lastUpdate_))
             return false;
         if (current.feedback &&
-            (!std::isfinite(current.feedback->achievedSpeedMetersPerSecond) || current.feedback->achievedSpeedMetersPerSecond < 0.0F))
+            (!std::isfinite(current.feedback->achievedSpeedMetersPerSecond) || current.feedback->achievedSpeedMetersPerSecond < 0.0F ||
+             !Math::IsFinite(current.feedback->achievedDisplacement)))
             return false;
         return !current.target ||
                (current.target->owner.IsValid() && Math::IsFinite(current.target->position) && current.target->revision != 0);

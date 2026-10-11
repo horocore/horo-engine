@@ -1,5 +1,6 @@
 #include "Horo/Navigation/NavigationCoordinator.h"
 #include "Horo/Navigation/NavigationMovement.h"
+#include "Horo/Navigation/NavigationVelocityPipeline.h"
 
 #include <type_traits>
 
@@ -8,6 +9,8 @@ static_assert(std::is_nothrow_move_constructible_v<Horo::Navigation::NavigationC
 static_assert(std::is_same_v<decltype(Horo::Navigation::NavigationPathCompletion::result), Horo::Result<Horo::Navigation::NavigationPath>>);
 
 static_assert(!std::is_copy_constructible_v<Horo::Navigation::NavigationMovementController>);
+static_assert(!std::is_copy_constructible_v<Horo::Navigation::NavigationVelocityPipeline>);
+static_assert(std::is_same_v<decltype(Horo::Navigation::NavigationVelocityFeedback::achievedDisplacement), Horo::Math::Vec3>);
 static_assert(std::is_same_v<decltype(Horo::Navigation::NavigationMovementIntent::desiredVelocity), Horo::Math::Vec3>);
 
 template <typename T>

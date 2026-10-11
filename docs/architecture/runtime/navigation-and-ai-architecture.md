@@ -2542,6 +2542,58 @@ priority, deadline age and stable agent ID; camera visibility/render LOD and
 graphics backend are never inputs. Late/unselected work has bounded validated
 velocity reuse followed by the configured collision-safe fallback.
 
+### Preferred-to-Safe Velocity and Character Feedback (NAV-006.4)
+
+`NavigationVelocityPipeline` is the additive single-agent NavigationRuntime
+owner boundary above `NavigationMovementController`. The host composes it with
+the exact registered agent, Scene/world binding and a nonzero Character
+incarnation/reset revision. `Prepare` advances the real movement operation at
+the declared fixed tick and emits a typed preferred-velocity request over an
+exact pinned `NavigationCrowdSnapshot`. Workers execute the host-selected
+`INavigationCrowdBackend` through the existing JobSystem; they retain immutable
+work/capture values and never access the pipeline, controller or live Scene.
+
+At `NavIntentCommit`, `Commit` accepts only the latest pending work at the same
+capture tick, exact agent/binding/dynamic revision and pinned capture identity.
+The fresh world/path observation revalidates logical agent registration, live
+world authority and corridor currency. Cancellation, reset, operation
+replacement, topology changes and shutdown cannot authorize a late solver
+result. Malformed, non-finite, non-planar, over-speed or over-acceleration samples
+fail before publication; explicit solver stops publish zero desired velocity.
+Nonmoving operation states cannot be reactivated by a worker velocity. An
+absent/rejected publication requires the host to submit zero desired motion.
+The pipeline neither applies displacement nor writes a Transform;
+Character/Physics is the only collision and movement commit authority.
+
+Character returns finite achieved displacement and blockage for the exact
+published operation, path, tick and Character revision. Duplicate, stale and
+foreign feedback is rejected. Only the immediately following fixed tick may
+consume it. Consecutive blocked low-progress acknowledgements trigger one
+coalesced repath after a bounded threshold and fixed cooldown; progress or a
+missing acknowledgement resets the consecutive count. The movement operation
+retains its finite total-query ceiling and deadline. A stalled corridor is
+withdrawn while the replacement query is pending, so repath cannot keep
+publishing the old motion. Solver failure/cancellation uses `CancelPending` to
+retire its exact work without motion publication. There is one work/capture
+slot and one feedback slot; steady publication and feedback add no heap
+storage, waits or unbounded queues.
+
+Replacing the movement goal retires the prior operation's pending velocity work,
+publication and feedback history at the next owner Prepare, without fabricating
+a new Character incarnation. Late old-operation results and feedback remain stale.
+
+Teleport or Character replacement calls `Reset` with a fresh post-reset
+observation and strictly newer revision. It invalidates the movement corridor,
+arrival acknowledgement and pipeline work/feedback/blockage history while
+preserving the active goal and operation query/deadline bounds. `Retire`
+permanently closes only the velocity pipeline; the host separately drains the
+movement controller and coordinator through their existing lifecycle. No
+unpublished lifecycle API is required. Existing movement feedback aggregates
+keep their defaults; additive displacement/repath fields and the public-header
+consumer document the migration seam. Vertical corridor steering is explicitly
+unsupported by this planar avoidance pipeline, rather than silently dropping
+its vertical component.
+
 Formation, density and corridor-formation policy remain Horo Gameplay/AI
 orchestration above the provider. Traffic/road lane graphs are a separate future
 navigation domain, not a crowd flag. Products needing only grounded paths do not
