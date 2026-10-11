@@ -18,7 +18,7 @@ namespace Horo::PCG::detail {
         }
 
         /** @brief Selects one of twelve fixed diagonal gradients without a mutable permutation table. */
-        double Gradient(Cell cell, Coordinate offset, std::uint64_t seed) {
+        double Gradient(const Cell &cell, Coordinate offset, std::uint64_t seed) {
             constexpr std::array<std::array<int, 3>, 12> gradients{{{1, 1, 0},
                                                                     {-1, 1, 0},
                                                                     {1, -1, 0},
@@ -48,7 +48,7 @@ namespace Horo::PCG::detail {
         }
 
         /** @brief Three-dimensional Perlin interpolation over eight fixed lattice corners. */
-        double Perlin(Coordinate p, std::uint64_t seed) {
+        double Perlin(const Coordinate &p, std::uint64_t seed) {
             Cell base{};
             Coordinate fraction{}, fade{};
             for (std::size_t axis = 0; axis < 3; ++axis) {
@@ -73,7 +73,7 @@ namespace Horo::PCG::detail {
         }
 
         /** @brief Three-dimensional Simplex contribution, zero beyond the compact spherical support. */
-        double Contribution(Cell cell, Coordinate offset, std::uint64_t seed) {
+        double Contribution(const Cell &cell, Coordinate offset, std::uint64_t seed) {
             double attenuation = 0.6;
             for (auto value : offset)
                 attenuation -= value * value;
@@ -83,8 +83,24 @@ namespace Horo::PCG::detail {
             return attenuation * attenuation * Gradient(cell, offset, seed);
         }
 
+        /** @brief Selects only valid axes with deterministic x/y/z precedence at every coordinate tie. */
+        std::array<std::size_t, 3> SimplexOrder(const Coordinate &offset) {
+            if (offset[0] >= offset[1]) {
+                if (offset[1] >= offset[2])
+                    return {0, 1, 2};
+                if (offset[0] >= offset[2])
+                    return {0, 2, 1};
+                return {2, 0, 1};
+            }
+            if (offset[0] >= offset[2])
+                return {1, 0, 2};
+            if (offset[1] >= offset[2])
+                return {1, 2, 0};
+            return {2, 1, 0};
+        }
+
         /** @brief Four-corner Simplex skew/unskew with stable x/y/z ordering at coordinate ties. */
-        double Simplex(Coordinate p, std::uint64_t seed) {
+        double Simplex(const Coordinate &p, std::uint64_t seed) {
             const double skew = (p[0] + p[1] + p[2]) / 3;
             Cell base{};
             for (std::size_t axis = 0; axis < 3; ++axis)
@@ -93,10 +109,7 @@ namespace Horo::PCG::detail {
             Coordinate offset{};
             for (std::size_t axis = 0; axis < 3; ++axis)
                 offset[axis] = p[axis] - static_cast<double>(base[axis]) + unskew;
-            std::array<std::size_t, 3> order{0, 1, 2};
-            std::ranges::sort(order, [&](auto a, auto b) {
-                return offset[a] > offset[b] || (offset[a] == offset[b] && a < b);
-            });
+            const auto order = SimplexOrder(offset);
             Cell step{};
             double sum{};
             for (std::size_t corner = 0; corner < 4; ++corner) {
