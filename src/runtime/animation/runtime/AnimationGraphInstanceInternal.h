@@ -13,6 +13,14 @@ namespace Horo::Animation::Detail {
         std::int64_t remainder{};
     };
 
+    /** @brief Preallocated transaction buffers and the exact tick/cancellation fence for their publication. */
+    struct GraphCandidateState final {
+        std::vector<GraphParameterValue> parameters;
+        std::vector<GraphPlayerState> players;
+        AnimationTickId tick{};
+        CancellationToken cancellation{};
+    };
+
     /** @brief Owner-thread runtime storage; all arrays are fixed during preparation. */
     struct GraphInstanceState final {
         std::thread::id ownerThread{std::this_thread::get_id()};
@@ -25,14 +33,11 @@ namespace Horo::Animation::Detail {
         std::vector<GraphParameterValue> workingScalars;
         std::array<std::size_t, 5> scalarOffsets{};
         std::vector<GraphParameterValue> parameters;
-        std::vector<GraphParameterValue> candidateParameters;
         std::vector<GraphPlayerState> players;
-        std::vector<GraphPlayerState> candidatePlayers;
         std::array<std::vector<Math::Transform>, 2> publishedPoses;
         std::array<PoseHandle, 2> publishedHandles{};
         GraphInstancePublication publication{};
-        AnimationTickId pendingTick{};
-        CancellationToken pendingCancellation{};
+        GraphCandidateState candidate;
         CancellationToken ownerCancellation{};
         std::uint64_t nextPoseGeneration{1};
         bool closed{};

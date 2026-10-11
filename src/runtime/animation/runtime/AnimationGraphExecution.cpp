@@ -30,11 +30,12 @@ namespace Horo::Animation::Detail {
 
         /** @brief Validates one scalar override's variant and value before storing the candidate snapshot. */
         GraphInstanceFailure ValidateParameterValue(const GraphParameter &declaration, const GraphParameterInput &parameter) noexcept {
+            using enum GraphInstanceFailure;
             if (declaration.defaultValue.index() != parameter.value.index())
-                return GraphInstanceFailure::TypeMismatch;
+                return TypeMismatch;
             if (const auto value = std::get_if<float>(&parameter.value); value && !std::isfinite(*value))
-                return GraphInstanceFailure::Malformed;
-            return GraphInstanceFailure::None;
+                return Malformed;
+            return None;
         }
 
         /** @brief Captures all defaults and exact typed overrides before any instruction runs. */
@@ -43,7 +44,7 @@ namespace Horo::Animation::Detail {
             if (input.parameters.size() > declarations.size())
                 return {GraphInstanceFailure::LimitExceeded};
             for (std::size_t index = 0; index < declarations.size(); ++index)
-                state.candidateParameters[index] = declarations[index].defaultValue;
+                state.candidate.parameters[index] = declarations[index].defaultValue;
             for (std::size_t index = 0; index < input.parameters.size(); ++index) {
                 const auto &parameter = input.parameters[index];
                 const auto found = std::ranges::lower_bound(declarations, parameter.id, {}, &GraphParameter::id);
@@ -54,7 +55,7 @@ namespace Horo::Animation::Detail {
                 for (std::size_t earlier = 0; earlier < index; ++earlier)
                     if (input.parameters[earlier].id == parameter.id)
                         return {GraphInstanceFailure::Malformed};
-                state.candidateParameters[static_cast<std::size_t>(found - declarations.begin())] = parameter.value;
+                state.candidate.parameters[static_cast<std::size_t>(found - declarations.begin())] = parameter.value;
             }
             return {};
         }
@@ -88,7 +89,7 @@ namespace Horo::Animation::Detail {
         /** @brief Samples one actual immutable clip with its independent occurrence player candidate. */
         GraphInstanceOutcome SampleClip(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
                                         const GraphEvaluationInput &input) {
-            auto &player = state.candidatePlayers[*occurrence.clipPlayer];
+            auto &player = state.candidate.players[*occurrence.clipPlayer];
             const auto delta = ScaleDelta(input, player);
             if (delta.HasError())
                 return {GraphInstanceFailure::ClipFailure, delta.ErrorValue()};
@@ -97,11 +98,11 @@ namespace Horo::Animation::Detail {
             if (traversal.HasError())
                 return {GraphInstanceFailure::ClipFailure, traversal.ErrorValue()};
             const auto &binding = clip.Data().descriptor;
-            const auto sampled = clip.SamplePrepared(traversal.Value().sampleTime, {.skeleton = binding.skeleton,
-                                                                                    .skeletonGeneration = binding.skeletonGeneration,
-                                                                                    .clipGeneration = binding.generation,
-                                                                                    .outputPose = state.Pose(occurrence.output)});
-            if (sampled.HasError())
+            if (const auto sampled = clip.SamplePrepared(traversal.Value().sampleTime, {.skeleton = binding.skeleton,
+                                                                                        .skeletonGeneration = binding.skeletonGeneration,
+                                                                                        .clipGeneration = binding.generation,
+                                                                                        .outputPose = state.Pose(occurrence.output)});
+                sampled.HasError())
                 return {GraphInstanceFailure::ClipFailure, sampled.ErrorValue()};
             for (const auto &transform : state.Pose(occurrence.output))
                 if (!ValidTransform(transform))
@@ -113,9 +114,10 @@ namespace Horo::Animation::Detail {
         /** @brief Executes the compiler's two-pose blend without adding a second graph scheduling model. */
         GraphInstanceOutcome BlendPose(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
                                        const GraphInstruction &instruction) {
-            const auto first = state.Pose(Operand(occurrence, instruction, GraphPinRole::FirstPose));
-            const auto second = state.Pose(Operand(occurrence, instruction, GraphPinRole::SecondPose));
-            const auto weightSlot = Operand(occurrence, instruction, GraphPinRole::Weight);
+            using enum GraphPinRole;
+            const auto first = state.Pose(Operand(occurrence, instruction, FirstPose));
+            const auto second = state.Pose(Operand(occurrence, instruction, SecondPose));
+            const auto weightSlot = Operand(occurrence, instruction, Weight);
             const auto weight =
                 std::clamp(std::get<float>(
                                state.workingScalars[state.scalarOffsets[static_cast<std::size_t>(weightSlot.type)] + weightSlot.index]),
@@ -138,7 +140,7 @@ namespace Horo::Animation::Detail {
             return {GraphInstanceFailure::Malformed};
         if (const auto captured = CaptureParameters(state, input); captured.HasError())
             return captured;
-        std::ranges::copy(state.players, state.candidatePlayers.begin());
+        std::ranges::copy(state.players, state.candidate.players.begin());
         for (const auto &occurrence : state.program->Occurrences()) {
             if (input.cancellation.IsCancellationRequested() || state.ownerCancellation.IsCancellationRequested())
                 return {GraphInstanceFailure::Cancelled};
@@ -148,7 +150,7 @@ namespace Horo::Animation::Detail {
                     return sampled;
             } else if (std::holds_alternative<GraphParameterNode>(instruction.payload)) {
                 state.workingScalars[state.scalarOffsets[static_cast<std::size_t>(occurrence.output.type)] + occurrence.output.index] =
-                    state.candidateParameters[*occurrence.parameterRead];
+                    state.candidate.parameters[*occurrence.parameterRead];
             } else if (std::holds_alternative<GraphBlendNode>(instruction.payload)) {
                 if (const auto blended = BlendPose(state, occurrence, instruction); blended.HasError())
                     return blended;

@@ -42,36 +42,38 @@ namespace Horo::Animation {
 
         /** @brief Checks immutable track storage against the instance's admitted sampling limits. */
         GraphInstanceFailure AdmitClipTracks(const AnimationClipAsset &clip, const AnimationClipLimits &limits) noexcept {
+            using enum GraphInstanceFailure;
             if (clip.Data().tracks.size() > limits.maximumTracks)
-                return GraphInstanceFailure::LimitExceeded;
+                return LimitExceeded;
             std::uint64_t keys = 0;
             for (const auto &track : clip.Data().tracks) {
                 if (track.keys.size() > limits.maximumKeysPerTrack)
-                    return GraphInstanceFailure::LimitExceeded;
+                    return LimitExceeded;
                 keys += track.keys.size();
             }
-            return keys > limits.maximumTotalKeys ? GraphInstanceFailure::LimitExceeded : GraphInstanceFailure::None;
+            return keys > limits.maximumTotalKeys ? LimitExceeded : None;
         }
 
         /** @brief Proves exactly one admitted absolute publication exists for each compiled clip binding. */
         GraphInstanceFailure AdmitClipBindings(const GraphInstanceAssets &assets, const AnimationClipLimits &limits) noexcept {
+            using enum GraphInstanceFailure;
             for (const auto &expected : assets.program->ClipBindings()) {
                 std::size_t matches = 0;
                 for (const auto &clip : assets.clips) {
                     if (!clip)
-                        return GraphInstanceFailure::BindingMismatch;
+                        return BindingMismatch;
                     if (clip->Data().descriptor.id != expected.id)
                         continue;
                     if (clip->Data().descriptor != expected || expected.kind != AnimationClipKind::Absolute)
-                        return GraphInstanceFailure::BindingMismatch;
-                    if (const auto failure = AdmitClipTracks(*clip, limits); failure != GraphInstanceFailure::None)
+                        return BindingMismatch;
+                    if (const auto failure = AdmitClipTracks(*clip, limits); failure != None)
                         return failure;
                     ++matches;
                 }
                 if (matches != 1)
-                    return GraphInstanceFailure::BindingMismatch;
+                    return BindingMismatch;
             }
-            return GraphInstanceFailure::None;
+            return None;
         }
 
         /** @brief Charges complete per-tick pose/key-search work after exact clip bindings have been admitted. */
@@ -83,7 +85,7 @@ namespace Horo::Animation {
                 std::uint64_t cost = 0;
                 if (std::holds_alternative<GraphBlendNode>(instruction.payload))
                     cost = assets.program->SkeletonBinding().joints;
-                if (occurrence.clipBindingIndex) {
+                if (occurrence.clipBindingIndex.has_value()) {
                     const auto &descriptor = assets.program->ClipBindings()[*occurrence.clipBindingIndex];
                     const auto clip = std::ranges::find_if(assets.clips, [&descriptor](const auto &value) {
                         return value->Data().descriptor == descriptor;
@@ -130,27 +132,28 @@ namespace Horo::Animation {
 
         /** @brief Checks identity, immutable compatibility and complete storage before any runtime allocation. */
         GraphInstanceFailure Admit(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
+            using enum GraphInstanceFailure;
             if (context.cancellation.IsCancellationRequested())
-                return GraphInstanceFailure::Cancelled;
+                return Cancelled;
             if (!context.instance.IsValid())
-                return GraphInstanceFailure::HandleMalformed;
+                return HandleMalformed;
             if (!assets.program || !assets.skeleton || assets.program->Occurrences().empty())
-                return GraphInstanceFailure::BindingMismatch;
+                return BindingMismatch;
             const auto &binding = assets.program->SkeletonBinding();
-            const auto &skeleton = assets.skeleton->Data();
-            if (binding.id != skeleton.skeleton || binding.generation != assets.skeletonGeneration ||
+            if (const auto &skeleton = assets.skeleton->Data();
+                binding.id != skeleton.skeleton || binding.generation != assets.skeletonGeneration ||
                 binding.contractVersion != skeleton.contractVersion || binding.joints != skeleton.joints.size())
-                return GraphInstanceFailure::BindingMismatch;
+                return BindingMismatch;
             if (context.maximumInstructions == 0 || context.maximumInstructions > AnimationGraphHardLimits::EvaluationInstructions ||
                 assets.program->Occurrences().size() > context.maximumInstructions)
-                return GraphInstanceFailure::LimitExceeded;
+                return LimitExceeded;
             if (assets.clips.size() != assets.program->ClipBindings().size())
-                return GraphInstanceFailure::BindingMismatch;
+                return BindingMismatch;
             if (!ValidClipLimits(context.clipLimits))
-                return GraphInstanceFailure::LimitExceeded;
-            if (const auto failure = AdmitStorage(assets, context); failure != GraphInstanceFailure::None)
+                return LimitExceeded;
+            if (const auto failure = AdmitStorage(assets, context); failure != None)
                 return failure;
-            if (const auto failure = AdmitClipBindings(assets, context.clipLimits); failure != GraphInstanceFailure::None)
+            if (const auto failure = AdmitClipBindings(assets, context.clipLimits); failure != None)
                 return failure;
             return AdmitClipWork(assets, context);
         }
@@ -200,9 +203,9 @@ namespace Horo::Animation {
             }
             state->workingScalars.resize(scalars);
             state->players.resize(memory.clipPlayers);
-            state->candidatePlayers.resize(memory.clipPlayers);
+            state->candidate.players.resize(memory.clipPlayers);
             state->parameters.resize(memory.parameters);
-            state->candidateParameters.resize(memory.parameters);
+            state->candidate.parameters.resize(memory.parameters);
             for (auto &pose : state->publishedPoses)
                 pose.resize(state->program->SkeletonBinding().joints);
             if (context.cancellation.IsCancellationRequested())
@@ -225,7 +228,7 @@ namespace Horo::Animation {
         if (const auto owner = Owner(state_.get()); owner.HasError())
             return Result<void>::Failure(DescribeGraphInstanceFailure(owner));
         const auto &old = state_->identity;
-        if (state_->closed || state_->pendingTick.IsValid())
+        if (state_->closed || state_->candidate.tick.IsValid())
             return Result<void>::Failure(DescribeGraphInstanceFailure({GraphInstanceFailure::StateInvalid}));
         if (context.instance.owner != old.owner || context.instance.component != old.component ||
             context.instance.slot.index != old.slot.index || old.slot.generation == std::numeric_limits<std::uint32_t>::max() ||
@@ -248,17 +251,16 @@ namespace Horo::Animation {
             return {GraphInstanceFailure::AdmissionRejected};
         if (state_->ownerCancellation.IsCancellationRequested() || input.cancellation.IsCancellationRequested())
             return {GraphInstanceFailure::Cancelled};
-        if (state_->pendingTick.IsValid())
+        if (state_->candidate.tick.IsValid())
             return {GraphInstanceFailure::StateInvalid};
         if (!input.tick.IsValid() || input.tick <= state_->publication.tick)
             return {GraphInstanceFailure::TickStale};
         if (state_->nextPoseGeneration == 0 || state_->nextPoseGeneration > std::numeric_limits<std::uint32_t>::max())
             return {GraphInstanceFailure::LimitExceeded};
-        const auto executed = Detail::ExecuteGraph(*state_, input);
-        if (executed.HasError())
+        if (const auto executed = Detail::ExecuteGraph(*state_, input); executed.HasError())
             return executed;
-        state_->pendingCancellation = input.cancellation;
-        state_->pendingTick = input.tick;
+        state_->candidate.cancellation = input.cancellation;
+        state_->candidate.tick = input.tick;
         return {};
     }
 
@@ -268,10 +270,10 @@ namespace Horo::Animation {
             return owner;
         if (state_->closed)
             return {GraphInstanceFailure::AdmissionRejected};
-        if (!tick.IsValid() || tick != state_->pendingTick)
+        if (!tick.IsValid() || tick != state_->candidate.tick)
             return {GraphInstanceFailure::TickStale};
-        if (state_->ownerCancellation.IsCancellationRequested() || state_->pendingCancellation.IsCancellationRequested()) {
-            state_->pendingTick = {};
+        if (state_->ownerCancellation.IsCancellationRequested() || state_->candidate.cancellation.IsCancellationRequested()) {
+            state_->candidate.tick = {};
             return {GraphInstanceFailure::Cancelled};
         }
         const auto generation = state_->nextPoseGeneration;
@@ -281,12 +283,12 @@ namespace Horo::Animation {
                                 PoseGeneration::Create(generation).Value()};
         std::ranges::copy(state_->Pose(state_->program->OutputSlot()), state_->publishedPoses[slot].begin());
         state_->publishedHandles[slot] = handle;
-        state_->players.swap(state_->candidatePlayers);
-        state_->parameters.swap(state_->candidateParameters);
+        state_->players.swap(state_->candidate.players);
+        state_->parameters.swap(state_->candidate.parameters);
         state_->publication = {tick, state_->publication.currentPose, handle};
         state_->nextPoseGeneration = generation == std::numeric_limits<std::uint64_t>::max() ? 0 : generation + 1;
-        state_->pendingTick = {};
-        state_->pendingCancellation = {};
+        state_->candidate.tick = {};
+        state_->candidate.cancellation = {};
         return {GraphInstanceFailure::None, {}, state_->publication};
     }
 
@@ -294,8 +296,8 @@ namespace Horo::Animation {
     GraphInstanceOutcome AnimationGraphInstance::Abort() {
         if (const auto owner = Owner(state_.get()); owner.HasError())
             return owner;
-        state_->pendingTick = {};
-        state_->pendingCancellation = {};
+        state_->candidate.tick = {};
+        state_->candidate.cancellation = {};
         return {};
     }
 
@@ -326,8 +328,8 @@ namespace Horo::Animation {
         if (const auto owner = Owner(state_.get()); owner.HasError())
             return owner;
         state_->closed = true;
-        state_->pendingTick = {};
-        state_->pendingCancellation = {};
+        state_->candidate.tick = {};
+        state_->candidate.cancellation = {};
         return {};
     }
 }  // namespace Horo::Animation
