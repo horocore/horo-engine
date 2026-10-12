@@ -57,7 +57,10 @@ namespace Horo::UiTemplates::Detail {
         return !parameter.minimum.has_value() || !parameter.maximum.has_value() || *parameter.minimum <= *parameter.maximum;
     }
 
-    /** @brief Stack-only cumulative counters; conservative wire charges cover escaping before codecs allocate. */
+    /** @brief Stack-only cumulative counters; conservative wire charges cover escaping before codecs allocate.
+     * @details Range checks use the sequential algorithm overload, borrowing this ledger only for the synchronous call.
+     * Each charge retains its original field order and false result stops further charging; no callback or state escapes.
+     */
     struct TemplateBudgetLedger final {
         const UiTemplateLimits &limits;
         std::size_t elements{};
@@ -162,19 +165,17 @@ namespace Horo::UiTemplates::Detail {
             if (!Text(item.Key().namespaceId.size()) || !Text(item.Key().localKey.size()) || !Text(item.FallbackText().size()) ||
                 item.Arguments().size() > Runtime::Ui::MaximumUiLocalizedArguments)
                 return false;
-            for (const auto &argument : item.Arguments())
-                if (!LocalizedArgument(argument))
-                    return false;
-            return true;
+            return std::ranges::all_of(item.Arguments(), [this](const auto &argument) {
+                return LocalizedArgument(argument);
+            });
         }
 
         bool Arguments(const std::span<const UiTemplateArgument> arguments) {
             if (!Add(parameters, arguments.size(), limits.maximumParameters))
                 return false;
-            for (const auto &argument : arguments)
-                if (!Value(argument.value))
-                    return false;
-            return true;
+            return std::ranges::all_of(arguments, [this](const auto &argument) {
+                return Value(argument.value);
+            });
         }
 
         /** @brief Charges one ordinary property in wire order without copying its variant. */
@@ -205,22 +206,21 @@ namespace Horo::UiTemplates::Detail {
             for (const auto &property : element.properties)
                 if (!FragmentProperty(property))
                     return false;
-            for (const auto &reference : element.references)
-                if (!Reference(reference) || !Add(bytes, 128, limits.maximumPayloadBytes))
+            return std::ranges::all_of(element.references, [this](const auto &reference) {
+                if (!Reference(reference))
                     return false;
-            return true;
+                return Add(bytes, 128, limits.maximumPayloadBytes);
+            });
         }
 
         bool Fragment(const std::span<const Runtime::Ui::UiDocumentElement> fragment) {
             if (!Add(elements, fragment.size(), limits.maximumElements))
                 return false;
-            for (const auto &element : fragment) {
+            return std::ranges::all_of(fragment, [this, fragment](const auto &element) {
                 if (!ElementDepth(fragment, element.id, limits.maximumDepth).has_value())
                     return false;
-                if (!FragmentElement(element))
-                    return false;
-            }
-            return true;
+                return FragmentElement(element);
+            });
         }
 
         /** @brief Charges one supplied slot's ordinary fragment before any nested record admission. */
@@ -231,29 +231,30 @@ namespace Horo::UiTemplates::Detail {
                 return true;
             if (!Add(instances, slot.nested.size(), limits.maximumInstances))
                 return false;
-            for (const auto &nested : slot.nested)
-                if (!Arguments(nested.arguments) || !SlotInput(nested.slots, depth + 1))
+            return std::ranges::all_of(slot.nested, [this, depth](const auto &nested) {
+                if (!Arguments(nested.arguments))
                     return false;
-            return true;
+                return SlotInput(nested.slots, depth + 1);
+            });
         }
 
         bool SlotInput(const std::span<const UiTemplateSlotContent> content, const std::size_t depth, const bool recursive = true) {
             if (depth > limits.maximumDepth || !Add(slots, content.size(), limits.maximumSlots))
                 return false;
-            for (const auto &slot : content)
-                if (!SlotContent(slot, depth, recursive))
-                    return false;
-            return true;
+            return std::ranges::all_of(content, [this, depth, recursive](const auto &slot) {
+                return SlotContent(slot, depth, recursive);
+            });
         }
 
         /** @brief Charges the complete declared locale-variant set without resolving asset fallback. */
         bool LocalizedAsset(const Runtime::Ui::UiLocalizedAssetReference &asset) {
             if (!Text(asset.ExpectedType().Value().size()))
                 return false;
-            for (const auto &variant : asset.Variants())
-                if (!Add(bytes, 128, limits.maximumPayloadBytes) || !Text(variant.locale.Value().size()))
+            return std::ranges::all_of(asset.Variants(), [this](const auto &variant) {
+                if (!Add(bytes, 128, limits.maximumPayloadBytes))
                     return false;
-            return true;
+                return Text(variant.locale.Value().size());
+            });
         }
 
         /** @brief Charges the ordinary hierarchy, dependency count and canvas/route envelope in their original order. */
@@ -277,10 +278,9 @@ namespace Horo::UiTemplates::Detail {
             for (const auto &text : document.LocalizedTexts())
                 if (!Add(bytes, 512, limits.maximumPayloadBytes) || !Localized(text))
                     return false;
-            for (const auto &asset : document.LocalizedAssets())
-                if (!LocalizedAsset(asset))
-                    return false;
-            return true;
+            return std::ranges::all_of(document.LocalizedAssets(), [this](const auto &asset) {
+                return LocalizedAsset(asset);
+            });
         }
 
         /** @brief Charges a token dependency or typed literal after validating the exact value source. */
@@ -310,20 +310,19 @@ namespace Horo::UiTemplates::Detail {
             for (const auto &text : input.localizedTexts)
                 if (!Add(bytes, 512, limits.maximumPayloadBytes) || !Localized(text.text))
                     return false;
-            for (const auto &binding : input.bindings)
-                if (!Add(bytes, 512, limits.maximumPayloadBytes) || !Binding(binding))
+            return std::ranges::all_of(input.bindings, [this](const auto &binding) {
+                if (!Add(bytes, 512, limits.maximumPayloadBytes))
                     return false;
-            return true;
+                return Binding(binding);
+            });
         }
 
         /** @brief Admits actual composed hierarchy depth before any parent offset or candidate allocation. */
         template <typename Element> bool ComposedDepth(const std::span<const Element> fragment, const std::size_t parentDepth) const {
-            for (const auto &element : fragment) {
+            return std::ranges::all_of(fragment, [this, fragment, parentDepth](const auto &element) {
                 const auto depth = ElementDepth(fragment, element.id, limits.maximumDepth);
-                if (!depth.has_value() || parentDepth > limits.maximumDepth - *depth)
-                    return false;
-            }
-            return true;
+                return depth.has_value() && parentDepth <= limits.maximumDepth - *depth;
+            });
         }
 
         /** @brief Charges each traversed forwarding edge before resolving its exact destination. */
@@ -352,16 +351,14 @@ namespace Horo::UiTemplates::Detail {
                               const UiTemplateValue &value, const std::size_t depth) {
             if (depth >= limits.maximumDepth)
                 return false;
-            for (const auto &target : parameter.targets) {
+            return std::ranges::all_of(parameter.targets, [this, &catalog, &document, &value, depth](const auto &target) {
                 if (!Value(value))
                     return false;
                 const auto *forward = std::get_if<UiTemplateNestedParameterTarget>(&target);
                 if (!forward)
-                    continue;
-                if (!ForwardTargets(catalog, document, *forward, value, depth))
-                    return false;
-            }
-            return true;
+                    return true;
+                return ForwardTargets(catalog, document, *forward, value, depth);
+            });
         }
 
         /** @brief Charges each supplied value's complete target fanout, independently of encoded source storage. */
@@ -406,10 +403,9 @@ namespace Horo::UiTemplates::Detail {
                 return false;
             if (!DefaultValueCopies(parameter))
                 return false;
-            for (const auto &target : parameter.targets)
-                if (!Target(target))
-                    return false;
-            return true;
+            return std::ranges::all_of(parameter.targets, [this](const auto &target) {
+                return Target(target);
+            });
         }
 
         /** @brief Charges a source element's hierarchy and typed property payload in declaration order. */
@@ -419,10 +415,9 @@ namespace Horo::UiTemplates::Detail {
             if (!Text(element.type.Value().size()) || !Add(bytes, 128, limits.maximumPayloadBytes) ||
                 !Add(properties, element.properties.size(), limits.maximumProperties))
                 return false;
-            for (const auto &property : element.properties)
-                if (!Value(property.value))
-                    return false;
-            return true;
+            return std::ranges::all_of(element.properties, [this](const auto &property) {
+                return Value(property.value);
+            });
         }
 
         /** @brief Charges document counts in element/parameter/slot/package/frame order before walking declarations. */
@@ -437,10 +432,9 @@ namespace Horo::UiTemplates::Detail {
         bool SlotDefault(const UiTemplateSlot &slot) {
             if (!Fragment(slot.defaultContent) || slot.allowedRootKinds.size() > limits.maximumElements)
                 return false;
-            for (const auto &kind : slot.allowedRootKinds)
-                if (!Text(kind.Value().size()))
-                    return false;
-            return true;
+            return std::ranges::all_of(slot.allowedRootKinds, [this](const auto &kind) {
+                return Text(kind.Value().size());
+            });
         }
 
         bool Document(const UiTemplateDocument &document) {
@@ -452,10 +446,9 @@ namespace Horo::UiTemplates::Detail {
             for (const auto &parameter : document.parameters)
                 if (!Parameter(parameter))
                     return false;
-            for (const auto &slot : document.slots)
-                if (!SlotDefault(slot))
-                    return false;
-            return true;
+            return std::ranges::all_of(document.slots, [this](const auto &slot) {
+                return SlotDefault(slot);
+            });
         }
     };
 }  // namespace Horo::UiTemplates::Detail

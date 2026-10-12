@@ -283,3 +283,34 @@ definitions live with their existing declaration owner. These changes introduce
 no extra public dependency, rule suppression or alternate publisher. Original
 cancelled-analysis findings remain historical evidence, not a clean baseline;
 their current disposition requires fresh full-scope analysis after native checks.
+
+## Factory and input-capture migration
+
+`UiTemplateDocumentOwner::Create` and `UiTemplateHost::Create` remain the sole
+external construction authorities. Their exact final types now use
+`std::make_unique` with a private nested construction key. The key is nonaggregate
+in C++20, has a private user-declared constructor and deleted copying, is never
+issued to callers, and is accepted only as an ephemeral rvalue reference during
+construction. No key is stored, derived enabler is used, or extra allocation is
+introduced. The keyed constructors are callable by the standard allocator helper
+but external callers cannot name/construct the key, including via `{}`. Negative
+public-consumer assertions cover those boundaries; default construction and the
+previous unchecked constructor argument lists remain unavailable. Existing
+factory callers do not need migration.
+
+`UiTemplateInputLease::Capture` now groups the coupled package-publisher decision,
+Assets capture limits and aggregate byte bound in `UiTemplateInputCapturePolicy`.
+Existing four-argument calls keep their prior defaults. An explicit old call
+`Capture(root, registry, mutations, packages, publisher, limits, bytes, cancellation)`
+becomes `Capture(root, registry, mutations, packages, {publisher, limits, bytes}, cancellation)`.
+The real project lease is initialized by the admission `if` and remains alive
+through the complete success branch, including control/package capture, source
+capture, final control recheck and capability allocation. Busy/error/cancellation
+paths retain the same typed failures and lease release boundary.
+
+Budget ledger range checks retain sequential, short-circuit charging and the
+original Add/Text order. Invalid/missing identity admission remains before
+uniqueness insertion in catalog, expansion, document and rich artifact checks;
+the same failures are returned and rejected candidates cannot replace accepted
+authority. Codec `Take(Result<void>)` borrows a const validator result; the
+generic value-result overload remains an owning move sink.

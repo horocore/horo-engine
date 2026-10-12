@@ -168,7 +168,24 @@ namespace Horo::UiTemplates {
      * elements/properties and conservative dependency occurrences. Rebase cannot weaken that admitted policy.
      */
     class UiTemplateDocumentOwner final {
+        /** @brief Factory-only, non-aggregate construction authority; never issued to callers. */
+        class ConstructionKey final {
+            friend class UiTemplateDocumentOwner;
+            ConstructionKey() noexcept = default;
+
+        public:
+            ConstructionKey(const ConstructionKey &) = delete;
+            ConstructionKey &operator=(const ConstructionKey &) = delete;
+        };
+
     public:
+        /** @brief Constructs only with this owner's inaccessible admission key; use Create externally.
+         * @param key Private factory authority, borrowed only for construction.
+         * @param state Fully admitted owned state. @param identity Sole owner identity.
+         * @param undoLimit Validated undo capacity. @throws std::bad_alloc When reserving admitted history capacity fails.
+         */
+        UiTemplateDocumentOwner(ConstructionKey &&key, std::shared_ptr<const Detail::UiTemplateOwnerState> state,
+                                std::shared_ptr<const std::uint8_t> identity, std::size_t undoLimit);
         /** @brief Validates complete durable authority and its derived projections before admitting an owner.
          * @param source Owned authored authority. @param catalog Exact immutable accepted source/schema/package lease.
          * @return Sole owner or typed failure without partial publication.
@@ -276,8 +293,6 @@ namespace Horo::UiTemplates {
          * @pre The caller has checked the owning thread and catches allocation failure at its command boundary.
          */
         [[nodiscard]] Result<void> CheckPreparation(const CancellationToken &cancellation) const;
-        UiTemplateDocumentOwner(std::shared_ptr<const Detail::UiTemplateOwnerState> state, std::shared_ptr<const std::uint8_t> identity,
-                                std::size_t undoLimit);
         std::shared_ptr<const Detail::UiTemplateOwnerState> state_;
         std::shared_ptr<const std::uint8_t> identity_;
         std::vector<std::shared_ptr<const Detail::UiTemplateOwnerState>> undo_;

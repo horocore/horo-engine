@@ -130,6 +130,34 @@ namespace Horo::UiTemplates {
         CHECK(UiTemplateCatalog::Create({source}, Schemas(), {}).HasError());
     }
 
+    TEST_CASE("Missing and duplicated template property targets preserve exact admission failure and accepted catalog authority",
+              "[runtime_ui][template][headless][failure]") {
+        auto source = Source();
+        source.parameters = {TextParameter(1, source.root)};
+        auto accepted = UiTemplateCatalog::Create({source}, Schemas(), {});
+        REQUIRE(accepted.HasValue());
+        const auto record = Instance();
+        const std::array occupied{record.parent};
+        const auto before = ExpandTemplate(accepted.Value(), Identity<UiDocumentId>(1), record, occupied);
+        REQUIRE(before.HasValue());
+        for (const bool missing : {true, false}) {
+            auto malformed = source;
+            if (missing)
+                malformed.parameters.front().targets = {
+                    UiTemplateContentTarget{Identity<UiTemplateLocalElementId>(99), Identity<UiStylePropertyId>(1)}};
+            else
+                malformed.parameters.push_back(TextParameter(2, source.root));
+            const auto rejected = UiTemplateCatalog::Create({malformed}, Schemas(), {});
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == UiErrors::TemplateGraphInvalid.code.Value());
+            CHECK(rejected.ErrorValue().message == "Template parameter property target is absent or duplicated.");
+            const auto after = ExpandTemplate(accepted.Value(), Identity<UiDocumentId>(1), record, occupied);
+            REQUIRE(after.HasValue());
+            CHECK(after.Value().elements == before.Value().elements);
+            CHECK(after.Value().root == before.Value().root);
+        }
+    }
+
     TEST_CASE("Template numeric constraints reject nonfinite bounds and defaults at catalog admission",
               "[runtime_ui][template][headless][failure]") {
         auto source = Source();

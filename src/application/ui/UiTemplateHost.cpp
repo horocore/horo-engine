@@ -105,8 +105,10 @@ namespace Horo::Application {
         return *this;
     }
 
-    UiTemplateHost::UiTemplateHost(std::unique_ptr<UiTemplates::UiTemplateDocumentOwner> document, Runtime::Ui::UiHotReload runtime,
-                                   UiTemplateHostCook cook, std::vector<std::optional<UiTemplateHostCook>> retired) noexcept
+    /** @copydoc UiTemplateHost::UiTemplateHost */
+    UiTemplateHost::UiTemplateHost(ConstructionKey &&, std::unique_ptr<UiTemplates::UiTemplateDocumentOwner> document,
+                                   Runtime::Ui::UiHotReload runtime, UiTemplateHostCook cook,
+                                   std::vector<std::optional<UiTemplateHostCook>> retired) noexcept
         : document_(std::move(document)), current_(std::move(cook)), retired_(std::move(retired)), runtime_(std::move(runtime)) {}
 
     /** @copydoc UiTemplateHost::~UiTemplateHost */
@@ -134,8 +136,8 @@ namespace Horo::Application {
             auto publisher = Runtime::Ui::UiHotReload::Create(std::move(runtime), limits);
             if (publisher.HasError())
                 return Output::Failure(publisher.ErrorValue());
-            return Output::Success(std::unique_ptr<UiTemplateHost>{
-                new UiTemplateHost{std::move(document), std::move(publisher).Value(), std::move(cook), std::move(retired)}});
+            return Output::Success(std::make_unique<UiTemplateHost>(ConstructionKey{}, std::move(document), std::move(publisher).Value(),
+                                                                    std::move(cook), std::move(retired)));
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(UiTemplates::UiErrors::TemplateGraphBudgetExceeded));
         }

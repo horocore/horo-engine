@@ -127,7 +127,8 @@ TEST_CASE("Template capture accepts absent controls and uses real project admiss
     Editor::ProjectMutationCoordinator coordinator{files};
     files.coordinator = &coordinator;
     files.root = temporary.Path();
-    const auto captured = UiTemplateInputLease::Capture(temporary.Path(), {}, coordinator, nullptr);
+    const UiTemplateInputCapturePolicy policy{.requirePublisher = false, .limits = {}, .maximumBytes = 256U * 1024U * 1024U};
+    const auto captured = UiTemplateInputLease::Capture(temporary.Path(), {}, coordinator, nullptr, policy);
     REQUIRE(captured.HasValue());
     CHECK(files.nativeAdmissions == 1);
     CHECK(files.rivalDenied);

@@ -209,7 +209,9 @@ namespace Horo::UiTemplates {
             expansions.reserve(source.instances.size());
             for (std::size_t index = 0; index < source.instances.size(); ++index) {
                 const auto &instance = source.instances[index];
-                if (!catalogs[index] || !instance.id.IsValid() || !ids.insert(instance.id).second)
+                if (!catalogs[index] || !instance.id.IsValid())
+                    return Result<std::vector<UiTemplateExpansion>>::Failure(MakeError(UiErrors::TemplateGraphInvalid));
+                if (!ids.insert(instance.id).second)
                     return Result<std::vector<UiTemplateExpansion>>::Failure(MakeError(UiErrors::TemplateGraphInvalid));
                 if (cancellation.IsCancellationRequested())
                     return Result<std::vector<UiTemplateExpansion>>::Failure(MakeError(UiErrors::TemplateDocumentCancelled));
@@ -321,8 +323,9 @@ namespace Horo::UiTemplates {
         return UiTemplateDocumentSnapshot{next_};
     }
 
-    UiTemplateDocumentOwner::UiTemplateDocumentOwner(std::shared_ptr<const State> state, std::shared_ptr<const std::uint8_t> identity,
-                                                     const std::size_t undoLimit)
+    /** @copydoc UiTemplateDocumentOwner::UiTemplateDocumentOwner */
+    UiTemplateDocumentOwner::UiTemplateDocumentOwner(ConstructionKey &&, std::shared_ptr<const State> state,
+                                                     std::shared_ptr<const std::uint8_t> identity, const std::size_t undoLimit)
         : state_(std::move(state)), identity_(std::move(identity)), undoLimit_(undoLimit) {
         undo_.reserve(undoLimit_);
     }
@@ -343,8 +346,9 @@ namespace Horo::UiTemplates {
             auto state = PrepareState(std::move(source), std::move(catalogs), limits, {}, catalog);
             if (state.HasError())
                 return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Failure(state.ErrorValue());
-            return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Success(std::unique_ptr<UiTemplateDocumentOwner>{
-                new UiTemplateDocumentOwner{std::move(state).Value(), std::make_shared<const std::uint8_t>(0), undoLimit}});
+            return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Success(
+                std::make_unique<UiTemplateDocumentOwner>(ConstructionKey{}, std::move(state).Value(),
+                                                          std::make_shared<const std::uint8_t>(0), undoLimit));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
         }
@@ -368,8 +372,9 @@ namespace Horo::UiTemplates {
             auto state = PrepareState(std::move(source), std::move(catalogs).Value(), limits, {}, std::move(authoringSchemas));
             if (state.HasError())
                 return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Failure(state.ErrorValue());
-            return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Success(std::unique_ptr<UiTemplateDocumentOwner>{
-                new UiTemplateDocumentOwner{std::move(state).Value(), std::make_shared<const std::uint8_t>(0), limits.maximumUndoEntries}});
+            return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Success(
+                std::make_unique<UiTemplateDocumentOwner>(ConstructionKey{}, std::move(state).Value(),
+                                                          std::make_shared<const std::uint8_t>(0), limits.maximumUndoEntries));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
         }
@@ -483,7 +488,8 @@ namespace Horo::UiTemplates {
             if (inserted.HasError())
                 return Output::Failure(inserted.ErrorValue());
             // The intermediate owner is private preparation only; neither authority nor undo history is published.
-            UiTemplateDocumentOwner intermediate{inserted.Value().next_, std::make_shared<const std::uint8_t>(0), undoLimit_};
+            UiTemplateDocumentOwner intermediate{ConstructionKey{}, inserted.Value().next_, std::make_shared<const std::uint8_t>(0),
+                                                 undoLimit_};
             auto detached = intermediate.PrepareDetach(id, identities, cancellation);
             if (detached.HasError())
                 return Output::Failure(detached.ErrorValue());

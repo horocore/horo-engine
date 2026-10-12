@@ -315,7 +315,9 @@ namespace Horo::UiTemplates {
                                             const UiTemplateSchemaSnapshot &schemas,
                                             std::set<std::pair<UiTemplateLocalElementId, Runtime::Ui::UiStylePropertyId>> &written) {
             const auto element = std::ranges::find(document.elements, item.element, &UiTemplateElement::id);
-            if (element == document.elements.end() || !written.emplace(item.element, item.property).second)
+            if (element == document.elements.end())
+                return Invalid("Template parameter property target is absent or duplicated.");
+            if (!written.emplace(item.element, item.property).second)
                 return Invalid("Template parameter property target is absent or duplicated.");
             const auto *schema = PropertySchema(schemas, element->type, item.property);
             if (!schema || schema->kind != parameter.kind)

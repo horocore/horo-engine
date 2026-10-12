@@ -149,6 +149,13 @@ namespace Horo::Application {
         std::vector<UiTemplateBindingResource> bindings;
     };
 
+    /** @brief Coupled trust and capacity policy for one immutable input capture. */
+    struct UiTemplateInputCapturePolicy final {
+        bool requirePublisher{};                          /**< Requires accepted package publisher evidence when enabled. */
+        Assets::AssetCookLimits limits{};                 /**< Existing per-source Assets admission policy. */
+        std::uint64_t maximumBytes{256U * 1024U * 1024U}; /**< Positive aggregate source capture bound. */
+    };
+
     /** @brief Immutable real-file Assets capture and the existing package owner's exact verified graph.
      * @details Only Capture issues this capability. It retains owned source bytes and archive/publisher evidence;
      * later filesystem/catalog replacement does not substitute a different accepted revision.
@@ -160,8 +167,7 @@ namespace Horo::Application {
          * @param registry Exact existing Assets registry publication.
          * @param mutations Existing shared project coordinator; capture acquires its real native/in-process lease.
          * @param packages Existing restore owner, required for a nonempty package lock.
-         * @param requirePublisher Whether the owning package policy requires an accepted publisher decision.
-         * @param limits Existing Assets capture policy. @param maximumBytes Positive aggregate capture bound.
+         * @param policy Package-publisher and bounded Assets admission policy for this capture.
          * @param cancellation Cooperative load-time cancellation.
          * @return Immutable verified lease or preserved Assets/Packages/IO/capacity failure.
          * @pre The application completed restore. Capture holds the shared project lease until all final checks return.
@@ -169,8 +175,7 @@ namespace Horo::Application {
         [[nodiscard]] static Result<UiTemplateInputLease> Capture(const std::filesystem::path &root, Assets::AssetRegistrySnapshot registry,
                                                                   const Editor::ProjectMutationCoordinator &mutations,
                                                                   const Packages::PackageRestoreService *packages,
-                                                                  bool requirePublisher = false, const Assets::AssetCookLimits &limits = {},
-                                                                  std::uint64_t maximumBytes = 256U * 1024U * 1024U,
+                                                                  const UiTemplateInputCapturePolicy &policy = {},
                                                                   const CancellationToken &cancellation = {});
 
     private:
@@ -237,7 +242,26 @@ namespace Horo::Application {
      * Runtime replacement API and its ownership contracts remain unchanged.
      */
     class UiTemplateHost final {
+        /** @brief Factory-only, non-aggregate construction authority; never issued to callers. */
+        class ConstructionKey final {
+            friend class UiTemplateHost;
+            ConstructionKey() noexcept = default;
+
+        public:
+            ConstructionKey(const ConstructionKey &) = delete;
+            ConstructionKey &operator=(const ConstructionKey &) = delete;
+        };
+
     public:
+        /** @brief Constructs only with the inaccessible paired-admission key; use Create externally.
+         * @param key Private host factory authority, borrowed only during construction.
+         * @param document Admitted sole authoring owner. @param runtime Admitted runtime publisher.
+         * @param cook Exact verified cook. @param retired Fully preallocated retirement slots.
+         */
+        UiTemplateHost(ConstructionKey &&key, std::unique_ptr<UiTemplates::UiTemplateDocumentOwner> document,
+                       Runtime::Ui::UiHotReload runtime, UiTemplateHostCook cook,
+                       std::vector<std::optional<UiTemplateHostCook>> retired) noexcept;
+
         /** @brief Complete private paired candidate; dropping it cannot change either publication. */
         class Prepared final {
         public:
@@ -351,8 +375,6 @@ namespace Horo::Application {
         /** @brief Copies final focus/semantic evidence after the actual Runtime UI reconciliation. */
         [[nodiscard]] static Result<UiTemplateHostCook> RefreshSemantics(UiTemplateHostCook cook,
                                                                          const Runtime::Ui::UiReloadGeneration &candidate);
-        UiTemplateHost(std::unique_ptr<UiTemplates::UiTemplateDocumentOwner> document, Runtime::Ui::UiHotReload runtime,
-                       UiTemplateHostCook cook, std::vector<std::optional<UiTemplateHostCook>> retired) noexcept;
         std::unique_ptr<UiTemplates::UiTemplateDocumentOwner> document_;
         UiTemplateHostCook current_;
         std::vector<std::optional<UiTemplateHostCook>> retired_;

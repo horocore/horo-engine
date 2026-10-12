@@ -112,7 +112,9 @@ namespace Horo::UiTemplates {
                         return ForwardArgument(item, value, forwarded);
                     } else {
                         const auto element = std::ranges::find(elements, item.element, &UiTemplateElement::id);
-                        if (element == elements.end() || !targets.emplace(item.element, item.property).second)
+                        if (element == elements.end())
+                            return Invalid("Template parameter target is absent or written more than once.");
+                        if (!targets.emplace(item.element, item.property).second)
                             return Invalid("Template parameter target is absent or written more than once.");
                         if (const auto valid = catalog_.ValidateProperty(element->type, item.property, value); valid.HasError())
                             return valid;
@@ -363,9 +365,12 @@ namespace Horo::UiTemplates {
             Result<std::set<UiElementId>> AppendSlotElements(const UiTemplateSlot &slot, std::vector<UiDocumentElement> elements,
                                                              const UiElementId parent, const std::size_t depth, const bool templateOwned) {
                 std::set<UiElementId> fragmentIds;
-                for (const auto &element : elements)
-                    if (!element.id.IsValid() || !fragmentIds.insert(element.id).second)
+                for (const auto &element : elements) {
+                    if (!element.id.IsValid())
                         return Result<std::set<UiElementId>>::Failure(MakeError(UiErrors::TemplateGraphInvalid));
+                    if (!fragmentIds.insert(element.id).second)
+                        return Result<std::set<UiElementId>>::Failure(MakeError(UiErrors::TemplateGraphInvalid));
+                }
                 const auto order = FragmentOrder(elements);
                 std::size_t roots{};
                 for (const auto &[elementDepth, id] : order) {
@@ -387,9 +392,7 @@ namespace Horo::UiTemplates {
                 children.reserve(nested.size());
                 for (const auto &child : nested)
                     children.push_back(&child);
-                std::ranges::sort(children, {}, [](const auto *child) {
-                    return child->id;
-                });
+                std::ranges::sort(children, {}, &UiTemplateSlotNestedInstance::id);
                 for (const auto *child : children) {
                     const auto parent = documentOwned
                                             ? Result<UiElementId>::Success(child->parent)
@@ -451,9 +454,7 @@ namespace Horo::UiTemplates {
                 slots.reserve(source.slots.size());
                 for (const auto &slot : source.slots)
                     slots.push_back(&slot);
-                std::ranges::sort(slots, {}, [](const auto *slot) {
-                    return slot->id;
-                });
+                std::ranges::sort(slots, {}, &UiTemplateSlot::id);
                 for (const auto *selected : slots) {
                     if (const auto expanded = ExpandSlot(*selected, content, parents, depth, documentOwned); expanded.HasError())
                         return expanded;

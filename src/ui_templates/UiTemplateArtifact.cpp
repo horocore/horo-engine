@@ -52,8 +52,9 @@ namespace Horo::UiTemplates {
             std::set<std::pair<UiElementId, UiStylePropertyId>> properties;
             const auto admit = [&](const UiElementId element, const UiStylePropertyId property) {
                 if (!property.IsValid() ||
-                    std::ranges::find(rich.ordinary.Elements(), element, &UiDocumentElement::id) == rich.ordinary.Elements().end() ||
-                    !properties.emplace(element, property).second)
+                    std::ranges::find(rich.ordinary.Elements(), element, &UiDocumentElement::id) == rich.ordinary.Elements().end())
+                    Reject();
+                if (!properties.emplace(element, property).second)
                     Reject();
             };
             for (const auto &style : rich.styles)
@@ -64,8 +65,9 @@ namespace Horo::UiTemplates {
             std::set<UiBindingId> bindings;
             for (const auto &binding : rich.bindings) {
                 if (std::ranges::find(rich.ordinary.Elements(), binding.target.element, &UiDocumentElement::id) ==
-                        rich.ordinary.Elements().end() ||
-                    !bindings.insert(binding.id).second)
+                    rich.ordinary.Elements().end())
+                    Reject();
+                if (!bindings.insert(binding.id).second)
                     Reject();
             }
         }

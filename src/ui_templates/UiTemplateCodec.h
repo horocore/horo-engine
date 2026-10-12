@@ -66,7 +66,7 @@ namespace Horo::UiTemplates::Detail::Codec {
     }
 
     /** @brief Preserves a void validator's typed failure without inventing a value access. */
-    inline void Take(Result<void> result) {
+    inline void Take(const Result<void> &result) {
         if (result.HasError())
             throw Failure{result.ErrorValue()};
     }
