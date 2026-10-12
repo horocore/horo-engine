@@ -13,11 +13,15 @@
 namespace Horo::Render::OpenGLResourceTests {
     class ResourcePresentationPort final : public IOpenGLPresentationPort {
     public:
+        bool throwOnMakeCurrent{false}; /**< Owner-scoped exception injection before backend lease transfer. */
+
         Result<void> CreateContext(const OpenGLContextDescriptor &) override {
             return Result<void>::Success();
         }
 
         Result<void> MakeCurrent() override {
+            if (throwOnMakeCurrent)
+                throw std::bad_alloc{};
             return Result<void>::Success();
         }
 

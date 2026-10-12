@@ -19,17 +19,19 @@ namespace Horo::Render {
 
         /** @brief Admits only defined backend/payload pairs independently of enum ordering. */
         [[nodiscard]] bool TargetPayloadValid(const ShaderTargetBackend backend, const ShaderPayloadFormat format) noexcept {
+            using enum ShaderTargetBackend;
+            using enum ShaderPayloadFormat;
             switch (backend) {
-                case ShaderTargetBackend::Null:
-                    return format == ShaderPayloadFormat::ValidationFixture;
-                case ShaderTargetBackend::OpenGL:
-                    return format == ShaderPayloadFormat::Glsl410;
-                case ShaderTargetBackend::Vulkan:
-                    return format == ShaderPayloadFormat::SpirV16;
-                case ShaderTargetBackend::Metal:
-                    return format == ShaderPayloadFormat::MetalLibrary24;
-                case ShaderTargetBackend::D3D12:
-                    return format == ShaderPayloadFormat::Dxil60;
+                case Null:
+                    return format == ValidationFixture;
+                case OpenGL:
+                    return format == Glsl410;
+                case Vulkan:
+                    return format == SpirV16;
+                case Metal:
+                    return format == MetalLibrary24;
+                case D3D12:
+                    return format == Dxil60;
             }
             return false;
         }
@@ -148,8 +150,7 @@ namespace Horo::Render {
         if (!descriptor.vertex.IsValid() || !descriptor.fragment.IsValid() || descriptor.vertex == descriptor.fragment ||
             descriptor.vertex.owner != descriptor.fragment.owner)
             return failure();
-        const auto manifest = ValidateShaderManifest(descriptor.manifest);
-        if (manifest.HasError())
+        if (const auto manifest = ValidateShaderManifest(descriptor.manifest); manifest.HasError())
             return Result<PipelineCacheKey>::Failure(manifest.ErrorValue());
         if (std::ranges::none_of(descriptor.manifest.targets, [&](const ShaderTargetRequirement &target) {
             return SameTarget(target, descriptor.target);
@@ -206,11 +207,17 @@ namespace Horo::Render {
     }
 
     /** @copydoc IRenderResourceBackend::DestroyShaderModule */
-    void IRenderResourceBackend::DestroyShaderModule(std::uint64_t) noexcept {}
+    void IRenderResourceBackend::DestroyShaderModule(std::uint64_t) noexcept {
+        // The default creator returns Unsupported and never creates a native shader to destroy.
+    }
 
     /** @copydoc IRenderResourceBackend::DestroyGraphicsPipeline */
-    void IRenderResourceBackend::DestroyGraphicsPipeline(std::uint64_t) noexcept {}
+    void IRenderResourceBackend::DestroyGraphicsPipeline(std::uint64_t) noexcept {
+        // The default creator returns Unsupported and never creates a native pipeline to destroy.
+    }
 
     /** @copydoc IRenderResourceBackend::DestroySampler */
-    void IRenderResourceBackend::DestroySampler(std::uint64_t) noexcept {}
+    void IRenderResourceBackend::DestroySampler(std::uint64_t) noexcept {
+        // The default creator returns Unsupported and never creates a native sampler to destroy.
+    }
 }  // namespace Horo::Render

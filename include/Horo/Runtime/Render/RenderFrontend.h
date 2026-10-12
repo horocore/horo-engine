@@ -155,7 +155,10 @@ namespace Horo::Render {
         [[nodiscard]] Result<void> Execute(std::span<const RenderPassDescriptor> orderedPasses);
         /** @brief Consumes one bounded prepared material pass, retaining exact generations until native completion.
          * @param pass Ready target/meshes and immutable material leases, borrowed only during this call.
-         * @return Success or typed stage, identity, unsupported or native failure. No frame-hot preparation occurs. */
+         * @return Success or typed stage, identity, unsupported or native failure. No frame-hot preparation occurs.
+         * @details Native exceptions unwind leases and abort the frame before translation to FrameException.
+         * @throws std::bad_alloc If owned error construction cannot allocate, after exception cleanup has completed.
+         * @throws std::length_error If owned error construction exceeds its representation limits. */
         [[nodiscard]] Result<void> ExecuteMaterialPass(const RenderMaterialPass &pass);
 
         /**
@@ -267,6 +270,12 @@ namespace Horo::Render {
                                                         RenderGraphTransientResourcesHandle transientResources = {});
         /** @brief Transfers one acquired material lease to backend completion; failures retain frontend rollback authority. */
         [[nodiscard]] Result<void> ExecuteMaterialRequest(RenderMaterialExecutionRequest request);
+        struct MaterialExecutionOutcome;
+        struct MaterialExecutionInstances;
+        /** @brief Resolves bounded draw identities without acquiring or transferring completion ownership. */
+        [[nodiscard]] Result<void> ResolveMaterialDraws(const RenderMaterialPass &pass, MaterialExecutionInstances &instances) const;
+        /** @brief Contains admission/execution exceptions and completes rollback before allocation-free outcome transport. */
+        [[nodiscard]] MaterialExecutionOutcome ExecuteMaterialPassBoundary(const RenderMaterialPass &pass) noexcept;
         void Abort() noexcept;
         void Release() noexcept;
         /** @brief Enforces the one-shot frame admission gate shared by synchronous and worker routes. */

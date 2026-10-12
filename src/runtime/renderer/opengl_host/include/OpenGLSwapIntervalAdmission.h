@@ -21,15 +21,16 @@ namespace Horo::Render::Detail {
      */
     template <typename Query, typename Set>
     [[nodiscard]] SwapIntervalAdmission AdmitExactSwapInterval(const int interval, Query query, Set set) {
+        using enum SwapIntervalAdmission;
         int actual = 0;
         if (!query(&actual))
-            return SwapIntervalAdmission::QueryFailed;
+            return QueryFailed;
         if (actual == interval)
-            return SwapIntervalAdmission::Exact;
+            return Exact;
         if (!set(interval))
-            return SwapIntervalAdmission::SetFailed;
+            return SetFailed;
         if (!query(&actual))
-            return SwapIntervalAdmission::QueryFailed;
-        return actual == interval ? SwapIntervalAdmission::Exact : SwapIntervalAdmission::Mismatch;
+            return QueryFailed;
+        return actual == interval ? Exact : Mismatch;
     }
 }  // namespace Horo::Render::Detail

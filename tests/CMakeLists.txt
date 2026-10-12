@@ -3900,6 +3900,7 @@ if (HORO_BUILD_RENDER_OPENGL)
     add_test(NAME HoroOpenGLHostAdmissionInternalConsumer COMMAND HoroOpenGLHostAdmissionInternalConsumer)
     set_tests_properties(HoroOpenGLHostAdmissionInternalConsumer PROPERTIES LABELS "unit;headless;sonar-coverage")
     add_executable(HoroRenderOpenGLTests
+            support/AllocationProbe.cpp
             unit/runtime/renderer/OpenGLRenderBackendTests.cpp
             unit/runtime/renderer/OpenGLCommandAdaptationTests.cpp
             unit/runtime/renderer/OpenGLShaderRealizationTests.cpp

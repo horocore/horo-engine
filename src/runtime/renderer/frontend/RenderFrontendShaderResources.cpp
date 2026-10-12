@@ -22,11 +22,12 @@ namespace Horo::Render {
 
         /** @brief Deletes only an unpublished preparation candidate, never a registry-owned generation. */
         void DestroyCandidate(IRenderBackend &backend, const RenderResourceClass resourceClass, const std::uint64_t instance) noexcept {
-            if (resourceClass == RenderResourceClass::ShaderModule)
+            using enum RenderResourceClass;
+            if (resourceClass == ShaderModule)
                 backend.DestroyShaderModule(instance);
-            else if (resourceClass == RenderResourceClass::Pipeline)
+            else if (resourceClass == Pipeline)
                 backend.DestroyGraphicsPipeline(instance);
-            else if (resourceClass == RenderResourceClass::Buffer)
+            else if (resourceClass == Buffer)
                 backend.DestroyBuffer(instance);
             else
                 backend.DestroySampler(instance);
@@ -91,21 +92,30 @@ namespace Horo::Render {
         static_assert(!std::is_copy_constructible_v<PublicationGuard> && !std::is_copy_assignable_v<PublicationGuard> &&
                       !std::is_move_constructible_v<PublicationGuard> && !std::is_move_assignable_v<PublicationGuard>);
 
+        /** @brief Borrows one preparation authority and its admitted memory scope for a synchronous transaction. */
+        struct PreparationContext {
+            Detail::RenderResourceRegistry &registry;
+            RenderMemoryBudget &budget;
+            IRenderBackend &backend;
+            RenderMemoryScopeId scope;
+        };
+
         /** @brief Executes one synchronous loading transaction with rollback guarding every fallible ownership transition. */
         template <typename Query, typename Create>
-        [[nodiscard]] Result<ResourceReservation> PrepareResource(Detail::RenderResourceRegistry &registry, RenderMemoryBudget &budget,
-                                                                  IRenderBackend &backend, const RenderMemoryScopeId scope,
+        [[nodiscard]] Result<ResourceReservation> PrepareResource(const PreparationContext &context,
                                                                   const RenderResourceClass resourceClass,
                                                                   const std::span<const RenderResourceIdentity> dependencies, Query &&query,
                                                                   Create &&create) {
+            auto &registry = context.registry;
+            auto &budget = context.budget;
             const auto reserved = registry.Reserve(resourceClass, dependencies);
             if (reserved.HasError())
                 return Result<ResourceReservation>::Failure(reserved.ErrorValue());
-            PublicationGuard guard{registry, budget, backend, resourceClass, reserved.Value()};
+            PublicationGuard guard{registry, budget, context.backend, resourceClass, reserved.Value()};
             const auto cost = query();
             if (cost.HasError())
                 return Result<ResourceReservation>::Failure(cost.ErrorValue());
-            const auto memory = budget.Reserve(scope, reserved.Value().operation, cost.Value());
+            const auto memory = budget.Reserve(context.scope, reserved.Value().operation, cost.Value());
             if (memory.HasError())
                 return Result<ResourceReservation>::Failure(memory.ErrorValue());
             guard.OwnMemory(memory.Value());
@@ -122,8 +132,8 @@ namespace Horo::Render {
             if (allocation.HasError())
                 return Result<ResourceReservation>::Failure(allocation.ErrorValue());
             guard.OwnAllocation(allocation.Value().id);
-            const auto published = registry.Publish(resourceClass, reserved.Value().identity, native.Value(), allocation.Value().id);
-            if (published.HasError())
+            if (const auto published = registry.Publish(resourceClass, reserved.Value().identity, native.Value(), allocation.Value().id);
+                published.HasError())
                 return Result<ResourceReservation>::Failure(published.ErrorValue());
             guard.Commit();
             return Result<ResourceReservation>::Success(reserved.Value());
@@ -135,7 +145,7 @@ namespace Horo::Render {
             explicit FrontendMaterialBinding(Detail::RenderResourceRegistry &registry) noexcept : registry_(registry) {}
 
             ~FrontendMaterialBinding() override {
-                native.reset();
+                native_.reset();
                 for (std::size_t index = 0; index < bufferCount_; ++index)
                     static_cast<void>(registry_.Release(RenderResourceClass::Buffer, buffers_[index]));
                 for (std::size_t index = 0; index < pinCount_; ++index)
@@ -148,7 +158,12 @@ namespace Horo::Render {
 
             /** @copydoc IResidentMaterialBinding::NativeBinding */
             const IResidentMaterialBinding &NativeBinding() const noexcept override {
-                return native->NativeBinding();
+                return native_->NativeBinding();
+            }
+
+            /** @brief Takes the native table after its preparation succeeds, retaining sole registry-pin ownership. */
+            void OwnNative(std::unique_ptr<IResidentMaterialBinding> native) noexcept {
+                native_ = std::move(native);
             }
 
             /** @brief Pins before returning a native instance; fixed storage cannot fail after registry mutation. */
@@ -158,8 +173,7 @@ namespace Horo::Render {
                 const auto instance = registry_.BackendInstance(resourceClass, identity);
                 if (instance.HasError())
                     return Result<std::uint64_t>::Failure(instance.ErrorValue());
-                const auto pinned = registry_.AddSubmissionPin(resourceClass, identity);
-                if (pinned.HasError())
+                if (const auto pinned = registry_.AddSubmissionPin(resourceClass, identity); pinned.HasError())
                     return Result<std::uint64_t>::Failure(pinned.ErrorValue());
                 pins_[pinCount_++] = {resourceClass, identity};
                 return instance;
@@ -228,9 +242,10 @@ namespace Horo::Render {
                 std::vector<std::byte> padded(size.Value());
                 std::ranges::copy(packed.bytes, padded.begin());
                 const RenderBufferDescriptor buffer{.byteSize = padded.size(), .usage = RenderBufferUsage::Uniform};
-                const auto prepared = PrepareResource(registry_, budget, backend, scope, RenderResourceClass::Buffer, {}, [&] {
+                const auto prepared =
+                    PrepareResource({registry_, budget, backend, scope}, RenderResourceClass::Buffer, {}, [&backend, &buffer] {
                     return backend.QueryBufferMemoryCost(buffer);
-                }, [&](const RenderMemoryPlacement &placement) {
+                }, [&backend, &buffer, &padded](const RenderMemoryPlacement &placement) {
                     return backend.CreateBuffer(buffer, padded, placement);
                 });
                 if (prepared.HasError())
@@ -243,8 +258,6 @@ namespace Horo::Render {
                 return Preparation::Success({{MaterialResidentResourceKind::Buffer, instance.Value(), 0, padded.size()}, identity, buffer});
             }
 
-            std::unique_ptr<IResidentMaterialBinding> native;
-
         private:
             struct Pin {
                 RenderResourceClass resourceClass;
@@ -252,6 +265,7 @@ namespace Horo::Render {
             };
 
             Detail::RenderResourceRegistry &registry_;
+            std::unique_ptr<IResidentMaterialBinding> native_;
             std::array<Pin, 129> pins_{};
             std::array<RenderResourceIdentity, 128> buffers_{};
             std::size_t pinCount_{0};
@@ -288,80 +302,6 @@ namespace Horo::Render {
         return frontend.BackendInstance(sampler);
     }
 
-    /** @copydoc RenderFrameScope::ExecuteMaterialRequest */
-    Result<void> RenderFrameScope::ExecuteMaterialRequest(RenderMaterialExecutionRequest request) {
-        RenderGraphLeaseTransfer transfer;
-        const auto release = [&transfer](IRenderGraphResourceLease *lease) {
-            if (transfer.authority == RenderGraphLeaseAuthority::Frontend)
-                lease->Release();
-        };
-        std::unique_ptr<IRenderGraphResourceLease, decltype(release)> lease{request.lease, release};
-        request.transfer = &transfer;
-        const auto consumed = backend_->ExecuteMaterialPass(request);
-        if (consumed.HasError()) {
-            Abort();
-            return consumed;
-        }
-        // Unsupported/default adapters never accept a lease; fail closed if a success omitted completion ownership.
-        if (transfer.authority != RenderGraphLeaseAuthority::BackendCompletion) {
-            Abort();
-            return Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady));
-        }
-        static_cast<void>(lease.release());
-        return Result<void>::Success();
-    }
-
-    /** @copydoc RenderFrameScope::ExecuteMaterialPass */
-    Result<void> RenderFrameScope::ExecuteMaterialPass(const RenderMaterialPass &pass) {
-        if (const auto admitted = ValidateExecutionAdmission(); admitted.HasError())
-            return admitted;
-        try {
-            if (!owner_->IsLiveTarget(pass.target, pass.extent) || !pass.color.IsValid() || pass.draws.empty() ||
-                pass.draws.size() > RenderMaterialPass::MaximumDraws) {
-                Abort();
-                return Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady));
-            }
-            const auto target = owner_->BackendInstance(pass.target);
-            if (target.HasError()) {
-                Abort();
-                return Result<void>::Failure(target.ErrorValue());
-            }
-            std::array<RenderMaterialDrawInstance, RenderMaterialPass::MaximumDraws> instances;
-            std::array<Detail::RenderGraphResidentIdentity, RenderMaterialPass::MaximumDraws + 1> pins;
-            pins[0] = {Detail::RenderResourceClass::RenderTarget, {pass.target.owner, pass.target.slot, pass.target.generation}};
-            for (std::size_t index = 0; index < pass.draws.size(); ++index) {
-                const auto &draw = pass.draws[index];
-                if (!draw.material || draw.material->Id().owner != owner_->resourceRegistry_->Owner()) {
-                    Abort();
-                    return Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady));
-                }
-                const auto mesh = owner_->BackendInstance(draw.mesh);
-                if (mesh.HasError()) {
-                    Abort();
-                    return Result<void>::Failure(mesh.ErrorValue());
-                }
-                instances[index] = {mesh.Value(), &draw.material->BackendBinding().NativeBinding()};
-                pins[index + 1] = {Detail::RenderResourceClass::Mesh, {draw.mesh.owner, draw.mesh.slot, draw.mesh.generation}};
-            }
-            const auto retained = owner_->graphResourceLeases_->AcquireMaterial(std::span{pins}.first(pass.draws.size() + 1), pass.draws);
-            if (retained.HasError()) {
-                Abort();
-                return Result<void>::Failure(retained.ErrorValue());
-            }
-            const auto consumed = ExecuteMaterialRequest({frame_, target.Value(), pass.extent, pass.color, pass.depthClear,
-                                                          std::span{instances}.first(pass.draws.size()), retained.Value(), nullptr});
-            if (consumed.HasError()) {
-                Abort();
-                return consumed;
-            }
-            executed_ = true;
-            return Result<void>::Success();
-        } catch (...) {  // Frame boundary contains arbitrary backend exceptions after restoring completion ownership.
-            Abort();
-            return Result<void>::Failure(MakeError(FrontendErrors::FrameException));
-        }
-    }
-
     /** @copydoc RenderFrontend::Realize */
     Result<std::unique_ptr<IResidentMaterialBinding>> RenderFrontend::Realize(const MaterialBindingDescriptor &descriptor) {
         using Realization = Result<std::unique_ptr<IResidentMaterialBinding>>;
@@ -369,8 +309,7 @@ namespace Horo::Render {
             return Realization::Failure(MakeError(RenderShaderResourceErrors::WrongThread));
         if (activeFrameScope_)
             return Realization::Failure(MakeError(FrontendErrors::ResourceChangeDuringFrame));
-        const auto validated = ValidateMaterialBindingDescriptor(descriptor, resourceRegistry_->Owner());
-        if (validated.HasError())
+        if (const auto validated = ValidateMaterialBindingDescriptor(descriptor, resourceRegistry_->Owner()); validated.HasError())
             return Realization::Failure(validated.ErrorValue());
         try {
             auto lease = std::make_unique<FrontendMaterialBinding>(*resourceRegistry_);
@@ -403,7 +342,7 @@ namespace Horo::Render {
                 return Realization::Failure(native.ErrorValue());
             if (!native.Value())
                 return Realization::Failure(MakeError(MaterialBindingErrors::InvalidDescriptor));
-            lease->native = std::move(native).Value();
+            lease->OwnNative(std::move(native).Value());
             return Realization::Success(std::move(lease));
         } catch (const std::bad_alloc &) {
             return Realization::Failure(MakeError(MaterialBindingErrors::AllocationFailed));
@@ -429,8 +368,7 @@ namespace Horo::Render {
             return Result<Creation>::Failure(MakeError(RenderShaderResourceErrors::WrongThread));
         if (activeFrameScope_ != nullptr)
             return Result<Creation>::Failure(MakeError(FrontendErrors::ResourceChangeDuringFrame));
-        const auto valid = ValidateRenderShaderModuleDescriptor(descriptor);
-        if (valid.HasError())
+        if (const auto valid = ValidateRenderShaderModuleDescriptor(descriptor); valid.HasError())
             return Result<Creation>::Failure(valid.ErrorValue());
         const auto decoded =
             DecodeShaderArtifactStages(cookedPackage, descriptor.target.backend, descriptor.target.payloadFormat, 64U * 1024U * 1024U);
@@ -443,10 +381,10 @@ namespace Horo::Render {
         if (selected == stages.end())
             return Result<Creation>::Failure(MakeError(RenderShaderResourceErrors::InvalidModule));
         try {
-            const auto prepared = PrepareResource(*resourceRegistry_, *memoryBudget_, *backend_, memoryConfig_.defaultResourceScope,
-                                                  RenderResourceClass::ShaderModule, {}, [&] {
+            const auto prepared = PrepareResource({*resourceRegistry_, *memoryBudget_, *backend_, memoryConfig_.defaultResourceScope},
+                                                  RenderResourceClass::ShaderModule, {}, [this, &descriptor, selected] {
                 return backend_->QueryShaderModuleMemoryCost(descriptor, selected->bytes.size());
-            }, [&](const RenderMemoryPlacement &placement) {
+            }, [this, &descriptor, selected](const RenderMemoryPlacement &placement) {
                 return backend_->CreateShaderModule(descriptor, selected->bytes, placement);
             });
             if (prepared.HasError())
@@ -468,8 +406,7 @@ namespace Horo::Render {
             return Result<Creation>::Failure(MakeError(RenderShaderResourceErrors::WrongThread));
         if (activeFrameScope_ != nullptr)
             return Result<Creation>::Failure(MakeError(FrontendErrors::ResourceChangeDuringFrame));
-        const auto valid = ValidateRenderGraphicsPipelineDescriptor(descriptor);
-        if (valid.HasError())
+        if (const auto valid = ValidateRenderGraphicsPipelineDescriptor(descriptor); valid.HasError())
             return Result<Creation>::Failure(valid.ErrorValue());
         const std::array dependencies{RenderResourceIdentity{descriptor.vertex.owner, descriptor.vertex.slot, descriptor.vertex.generation},
                                       RenderResourceIdentity{descriptor.fragment.owner, descriptor.fragment.slot,
@@ -481,10 +418,10 @@ namespace Horo::Render {
         if (fragment.HasError())
             return Result<Creation>::Failure(fragment.ErrorValue());
         try {
-            const auto prepared = PrepareResource(*resourceRegistry_, *memoryBudget_, *backend_, memoryConfig_.defaultResourceScope,
-                                                  RenderResourceClass::Pipeline, dependencies, [&] {
+            const auto prepared = PrepareResource({*resourceRegistry_, *memoryBudget_, *backend_, memoryConfig_.defaultResourceScope},
+                                                  RenderResourceClass::Pipeline, dependencies, [this, &descriptor, &vertex, &fragment] {
                 return backend_->QueryGraphicsPipelineMemoryCost(descriptor, vertex.Value(), fragment.Value());
-            }, [&](const RenderMemoryPlacement &placement) {
+            }, [this, &descriptor, &vertex, &fragment](const RenderMemoryPlacement &placement) {
                 return backend_->CreateGraphicsPipeline(descriptor, vertex.Value(), fragment.Value(), placement);
             });
             if (prepared.HasError())
@@ -505,14 +442,13 @@ namespace Horo::Render {
             return Result<Creation>::Failure(MakeError(RenderShaderResourceErrors::WrongThread));
         if (activeFrameScope_ != nullptr)
             return Result<Creation>::Failure(MakeError(FrontendErrors::ResourceChangeDuringFrame));
-        const auto valid = ValidateRenderSamplerDescriptor(descriptor);
-        if (valid.HasError())
+        if (const auto valid = ValidateRenderSamplerDescriptor(descriptor); valid.HasError())
             return Result<Creation>::Failure(valid.ErrorValue());
         try {
-            const auto prepared = PrepareResource(*resourceRegistry_, *memoryBudget_, *backend_, memoryConfig_.defaultResourceScope,
-                                                  RenderResourceClass::Sampler, {}, [&] {
+            const auto prepared = PrepareResource({*resourceRegistry_, *memoryBudget_, *backend_, memoryConfig_.defaultResourceScope},
+                                                  RenderResourceClass::Sampler, {}, [this, &descriptor] {
                 return backend_->QuerySamplerMemoryCost(descriptor);
-            }, [&](const RenderMemoryPlacement &placement) {
+            }, [this, &descriptor](const RenderMemoryPlacement &placement) {
                 return backend_->CreateSampler(descriptor, placement);
             });
             if (prepared.HasError())

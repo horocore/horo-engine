@@ -2065,6 +2065,7 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderFrameInputInternal.cpp
         runtime/renderer/frontend/RenderFrameParallelExecution.cpp
         runtime/renderer/frontend/RenderFrameGraphResources.cpp
+        runtime/renderer/frontend/RenderFrameMaterialExecution.cpp
         runtime/renderer/frontend/RenderGraphTransientResourcePool.cpp
         runtime/renderer/frontend/RenderParallelWorkInternal.cpp
         runtime/renderer/frontend/RenderParallelWorkErrors.cpp
