@@ -1,6 +1,25 @@
 #include "UiTemplateCodec.h"
 
 namespace Horo::UiTemplates::Detail::Codec {
+    namespace {
+        /** @brief Checks exactly the identity alternative selected by the closed reference tag. */
+        bool ValidReference(const Runtime::Ui::UiReference &reference) {
+            using enum Runtime::Ui::UiReferenceKind;
+            switch (reference.kind) {
+                case Element:
+                    return reference.element.IsValid();
+                case Canvas:
+                    return reference.canvas.IsValid();
+                case Document:
+                    return reference.document.IsValid();
+                case Asset:
+                    return reference.asset.IsValid() && !reference.expectedAssetType.Value().empty();
+                default:
+                    return false;
+            }
+        }
+    }  // namespace
+
     /** @copydoc WriteReference */
     Json WriteReference(const Runtime::Ui::UiReference &value) {
         return {{"kind", static_cast<std::uint8_t>(value.kind)},
@@ -22,11 +41,7 @@ namespace Horo::UiTemplates::Detail::Codec {
                            Identity<UiDocumentId>(value.at("document"), true),
                            Asset(value.at("asset")),
                            type.empty() ? Assets::AssetTypeId{} : Take(Assets::AssetTypeId::Parse(type))};
-        const bool valid = output.kind == UiReferenceKind::Element    ? output.element.IsValid()
-                           : output.kind == UiReferenceKind::Canvas   ? output.canvas.IsValid()
-                           : output.kind == UiReferenceKind::Document ? output.document.IsValid()
-                                                                      : output.asset.IsValid() && !output.expectedAssetType.Value().empty();
-        if (!valid)
+        if (!ValidReference(output))
             Reject();
         return output;
     }

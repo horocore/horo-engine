@@ -8,9 +8,13 @@ namespace Horo::UiTemplates::Detail::Codec {
         /** @brief Cumulative decoding admission, checked before reserve or construction of authored containers. */
         struct DecodeBudget final {
             const UiTemplateLimits &limits;
-            std::size_t instances{}, parameters{}, slots{}, elements{}, properties{};
+            std::size_t instances{};
+            std::size_t parameters{};
+            std::size_t slots{};
+            std::size_t elements{};
+            std::size_t properties{};
 
-            void Add(std::size_t &count, const std::size_t amount, const std::size_t maximum) {
+            void Add(std::size_t &count, const std::size_t amount, const std::size_t maximum) const {
                 if (count > maximum || amount > maximum - count)
                     throw Failure{MakeError(UiErrors::TemplateGraphBudgetExceeded)};
                 count += amount;
@@ -19,7 +23,8 @@ namespace Horo::UiTemplates::Detail::Codec {
 
         /** @brief Writes ordinary element data through the same closed first-five value categories. */
         Json WriteElement(const UiDocumentElement &element) {
-            Json properties = Json::array(), references = Json::array();
+            Json properties = Json::array();
+            Json references = Json::array();
             for (const auto *property : Ordered(std::span{element.properties}, &UiTypedProperty::key))
                 properties.push_back({{"key", property->key}, {"value", std::visit([](const auto &item) {
                     return WriteValue(UiTemplateValue{item});
@@ -65,7 +70,7 @@ namespace Horo::UiTemplates::Detail::Codec {
             output.references.reserve(references.size());
             for (const auto &property : properties) {
                 Fields(property, {"key", "value"});
-                output.properties.push_back({Text(property.at("key")), ReadOrdinaryValue(property.at("value"))});
+                output.properties.emplace_back(Text(property.at("key")), ReadOrdinaryValue(property.at("value")));
             }
             for (const auto &reference : references)
                 output.references.push_back(ReadReference(reference));
@@ -112,7 +117,8 @@ namespace Horo::UiTemplates::Detail::Codec {
         Json WriteSlots(const std::span<const UiTemplateSlotContent> slots) {
             Json output = Json::array();
             for (const auto *slot : Ordered(slots, &UiTemplateSlotContent::slot)) {
-                Json elements = Json::array(), nested = Json::array();
+                Json elements = Json::array();
+                Json nested = Json::array();
                 for (const auto *element : Ordered(std::span{slot->elements}, &UiDocumentElement::id))
                     elements.push_back(WriteElement(*element));
                 for (const auto *instance : Ordered(std::span{slot->nested}, &UiTemplateSlotNestedInstance::id))

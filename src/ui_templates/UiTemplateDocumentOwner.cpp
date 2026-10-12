@@ -17,6 +17,37 @@ namespace Horo::UiTemplates {
         using namespace Runtime::Ui;
         using State = Detail::UiTemplateOwnerState;
 
+        /** @brief Admits complete unique exact catalog leases before prospective source budget validation. */
+        Result<void> ValidateLeases(std::span<const UiTemplateCatalogLease> leases) {
+            for (std::size_t i = 0; i < leases.size(); ++i) {
+                if (!leases[i].catalog)
+                    return Result<void>::Failure(MakeError(UiErrors::TemplateMissing));
+                for (std::size_t j = 0; j < i; ++j)
+                    if (leases[i].reference.asset == leases[j].reference.asset &&
+                        leases[i].reference.revision == leases[j].reference.revision)
+                        return Result<void>::Failure(MakeError(UiErrors::TemplateGraphInvalid));
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Retains a catalog for every accepted instance without ambient revision selection. */
+        Result<std::vector<std::shared_ptr<const UiTemplateCatalog>>> ResolveCatalogLeases(const UiTemplateAuthoredDocument &source,
+                                                                                           std::span<const UiTemplateCatalogLease> leases) {
+            std::vector<std::shared_ptr<const UiTemplateCatalog>> catalogs;
+            catalogs.reserve(source.instances.size());
+            for (const auto &instance : source.instances) {
+                const auto lease = std::ranges::find_if(leases, [&](const UiTemplateCatalogLease &candidate) {
+                    return candidate.reference.asset == instance.accepted.asset &&
+                           candidate.reference.revision == instance.accepted.revision;
+                });
+                if (lease == leases.end())
+                    return Result<std::vector<std::shared_ptr<const UiTemplateCatalog>>>::Failure(
+                        MakeError(UiErrors::TemplateRevisionUnavailable));
+                catalogs.push_back(lease->catalog);
+            }
+            return Result<std::vector<std::shared_ptr<const UiTemplateCatalog>>>::Success(std::move(catalogs));
+        }
+
         /** @brief Constructs a borrowed prospective policy view, including every durable rich attachment. */
         Detail::TemplateDocumentBudgetInput BudgetView(const UiTemplateAuthoredDocument &source, const UiTemplateLimits &limits,
                                                        const std::span<const std::shared_ptr<const UiTemplateCatalog>> catalogs = {},
@@ -52,10 +83,11 @@ namespace Horo::UiTemplates {
             const auto found = std::ranges::find(ordinary.Elements(), style.element, &UiDocumentElement::id);
             if (found == ordinary.Elements().end() || !style.assignment.property.IsValid() || !style.assignment.value.IsValid())
                 return Result<void>::Failure(MakeError(UiErrors::TemplateGraphInvalid));
-            const auto schema = std::ranges::find_if(catalog.Schemas().properties, [&](const auto &property) {
+            if (const auto schema = std::ranges::find_if(catalog.Schemas().properties,
+                                                         [&style, found](const auto &property) {
                 return property.elementType == found->type && property.property == style.assignment.property && property.style;
             });
-            if (schema == catalog.Schemas().properties.end())
+                schema == catalog.Schemas().properties.end())
                 return Result<void>::Failure(MakeError(UiErrors::TemplateGraphInvalid));
             return style.assignment.value.referencesToken
                        ? Result<void>::Success()
@@ -81,8 +113,8 @@ namespace Horo::UiTemplates {
             return ValidateUiBindingDescriptor(binding, *schema);
         }
 
-        /** @brief Checks canonical rich keys for conflicts before validating their own typed responsibilities. */
-        Result<void> ValidateAttachments(const UiTemplateAuthoredDocument &source, const UiTemplateCatalog &catalog) {
+        /** @brief Validates complete canonical style keys and their registered value authority. */
+        Result<void> ValidateStyles(const UiTemplateAuthoredDocument &source, const UiTemplateCatalog &catalog) {
             for (std::size_t i = 0; i < source.styles.size(); ++i) {
                 const auto &style = source.styles[i];
                 if (i && source.styles[i - 1].element == style.element &&
@@ -91,6 +123,11 @@ namespace Horo::UiTemplates {
                 if (const auto valid = ValidateStyle(style, source.ordinary, catalog); valid.HasError())
                     return valid;
             }
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates unique localized property keys before retaining message references. */
+        Result<void> ValidateTexts(const UiTemplateAuthoredDocument &source, const UiTemplateCatalog &catalog) {
             for (std::size_t i = 0; i < source.localizedTexts.size(); ++i) {
                 const auto &text = source.localizedTexts[i];
                 if (i && source.localizedTexts[i - 1].element == text.element && source.localizedTexts[i - 1].property == text.property)
@@ -98,6 +135,11 @@ namespace Horo::UiTemplates {
                 if (const auto valid = ValidateText(text, source.ordinary, catalog); valid.HasError())
                     return valid;
             }
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates unique durable binding identities against pinned provider schemas. */
+        Result<void> ValidateBindings(const UiTemplateAuthoredDocument &source, const UiTemplateCatalog &catalog) {
             for (std::size_t i = 0; i < source.bindings.size(); ++i) {
                 const auto &binding = source.bindings[i];
                 if (i && source.bindings[i - 1].id == binding.id)
@@ -106,6 +148,15 @@ namespace Horo::UiTemplates {
                     return valid;
             }
             return Result<void>::Success();
+        }
+
+        /** @brief Checks canonical rich keys for conflicts before validating their own typed responsibilities. */
+        Result<void> ValidateAttachments(const UiTemplateAuthoredDocument &source, const UiTemplateCatalog &catalog) {
+            if (const auto styles = ValidateStyles(source, catalog); styles.HasError())
+                return styles;
+            if (const auto texts = ValidateTexts(source, catalog); texts.HasError())
+                return texts;
+            return ValidateBindings(source, catalog);
         }
 
         /** @brief Owns a private mutable candidate with paired instance/catalog authority until complete admission. */
@@ -127,19 +178,25 @@ namespace Horo::UiTemplates {
                                                                   state.catalogs});
         }
 
-        /** @brief Admits complete owned expansions without publishing or replacing durable authority. */
-        Result<std::shared_ptr<const State>> PrepareState(UiTemplateAuthoredDocument source,
-                                                          std::vector<std::shared_ptr<const UiTemplateCatalog>> catalogs,
-                                                          const UiTemplateLimits &limits, const CancellationToken &cancellation,
-                                                          std::shared_ptr<const UiTemplateCatalog> authoringSchemas) {
-            if (const auto valid = Detail::ValidateTemplateDocumentBudget(BudgetView(source, limits, catalogs), cancellation);
-                valid.HasError())
-                return Result<std::shared_ptr<const State>>::Failure(valid.ErrorValue());
-            if (!authoringSchemas)
-                return Result<std::shared_ptr<const State>>::Failure(MakeError(UiErrors::TemplateMissing));
-            Canonicalize(source, catalogs);
-            if (const auto valid = ValidateAttachments(source, *authoringSchemas); valid.HasError())
-                return Result<std::shared_ptr<const State>>::Failure(valid.ErrorValue());
+        /** @brief Charges and admits one expansion's complete element and binding identity sets. */
+        Result<void> AdmitExpansion(const UiTemplateExpansion &expansion, std::vector<UiElementId> &occupied,
+                                    std::set<UiBindingId> &bindings, const UiTemplateLimits &limits) {
+            if (occupied.size() > limits.maximumElements || expansion.elements.size() > limits.maximumElements - occupied.size())
+                return Result<void>::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
+            for (const auto &element : expansion.elements)
+                occupied.push_back(element.id);
+            if (expansion.bindings.size() > MaximumUiBindingDescriptors - bindings.size())
+                return Result<void>::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
+            for (const auto &binding : expansion.bindings)
+                if (!bindings.insert(binding.id).second)
+                    return Result<void>::Failure(MakeError(UiErrors::TemplateGraphInvalid));
+            return Result<void>::Success();
+        }
+
+        /** @brief Expands the complete canonical authority with shared identity and binding collision fences. */
+        Result<std::vector<UiTemplateExpansion>> ExpandAuthority(const UiTemplateAuthoredDocument &source,
+                                                                 std::span<const std::shared_ptr<const UiTemplateCatalog>> catalogs,
+                                                                 const UiTemplateLimits &limits, const CancellationToken &cancellation) {
             std::vector<UiElementId> occupied;
             occupied.reserve(limits.maximumElements);
             for (const auto &element : source.ordinary.Elements())
@@ -153,33 +210,38 @@ namespace Horo::UiTemplates {
             for (std::size_t index = 0; index < source.instances.size(); ++index) {
                 const auto &instance = source.instances[index];
                 if (!catalogs[index] || !instance.id.IsValid() || !ids.insert(instance.id).second)
-                    return Result<std::shared_ptr<const State>>::Failure(MakeError(UiErrors::TemplateGraphInvalid));
+                    return Result<std::vector<UiTemplateExpansion>>::Failure(MakeError(UiErrors::TemplateGraphInvalid));
                 if (cancellation.IsCancellationRequested())
-                    return Result<std::shared_ptr<const State>>::Failure(MakeError(UiErrors::TemplateDocumentCancelled));
+                    return Result<std::vector<UiTemplateExpansion>>::Failure(MakeError(UiErrors::TemplateDocumentCancelled));
                 auto expansion = ExpandTemplate(*catalogs[index], source.ordinary.Id(), instance, occupied, cancellation);
                 if (expansion.HasError())
-                    return Result<std::shared_ptr<const State>>::Failure(expansion.ErrorValue());
-                if (occupied.size() > limits.maximumElements ||
-                    expansion.Value().elements.size() > limits.maximumElements - occupied.size())
-                    return Result<std::shared_ptr<const State>>::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
-                for (const auto &element : expansion.Value().elements)
-                    occupied.push_back(element.id);
-                if (expansion.Value().bindings.size() > MaximumUiBindingDescriptors - bindingIds.size())
-                    return Result<std::shared_ptr<const State>>::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
-                for (const auto &binding : expansion.Value().bindings)
-                    if (!bindingIds.insert(binding.id).second)
-                        return Result<std::shared_ptr<const State>>::Failure(MakeError(UiErrors::TemplateGraphInvalid));
-                expansions.push_back(std::move(expansion.Value()));
+                    return Result<std::vector<UiTemplateExpansion>>::Failure(expansion.ErrorValue());
+                if (const auto admitted = AdmitExpansion(expansion.Value(), occupied, bindingIds, limits); admitted.HasError())
+                    return Result<std::vector<UiTemplateExpansion>>::Failure(admitted.ErrorValue());
+                expansions.push_back(std::move(expansion).Value());
             }
-            return Result<std::shared_ptr<const State>>::Success(std::make_shared<const State>(
-                State{std::move(source), std::move(catalogs), std::move(expansions), limits, std::move(authoringSchemas)}));
+            return Result<std::vector<UiTemplateExpansion>>::Success(std::move(expansions));
         }
 
-        /** @brief Admits a private candidate with the accepted owner's original aggregate policy and authoring schema lease. */
-        Result<std::shared_ptr<const State>> AdmitAuthority(AuthorityDraft draft, const State &accepted,
-                                                            const CancellationToken &cancellation) {
-            return PrepareState(std::move(draft.source), std::move(draft.catalogs), accepted.limits, cancellation,
-                                accepted.authoringSchemas);
+        /** @brief Admits complete owned expansions without publishing or replacing durable authority. */
+        Result<std::shared_ptr<const State>> PrepareState(UiTemplateAuthoredDocument source,
+                                                          std::vector<std::shared_ptr<const UiTemplateCatalog>> catalogs,
+                                                          const UiTemplateLimits &limits, const CancellationToken &cancellation,
+                                                          std::shared_ptr<const UiTemplateCatalog> authoringSchemas) {
+            if (const auto valid = Detail::ValidateTemplateDocumentBudget(BudgetView(source, limits, catalogs), cancellation);
+                valid.HasError())
+                return Result<std::shared_ptr<const State>>::Failure(valid.ErrorValue());
+            if (!authoringSchemas)
+                return Result<std::shared_ptr<const State>>::Failure(MakeError(UiErrors::TemplateMissing));
+            Canonicalize(source, catalogs);
+            if (const auto valid = ValidateAttachments(source, *authoringSchemas); valid.HasError())
+                return Result<std::shared_ptr<const State>>::Failure(valid.ErrorValue());
+            auto expansions = ExpandAuthority(source, catalogs, limits, cancellation);
+            if (expansions.HasError())
+                return Result<std::shared_ptr<const State>>::Failure(expansions.ErrorValue());
+            return Result<std::shared_ptr<const State>>::Success(std::make_shared<const State>(std::move(source), std::move(catalogs),
+                                                                                               std::move(expansions).Value(), limits,
+                                                                                               std::move(authoringSchemas)));
         }
 
         /** @brief Retains exact authored values; missing declarations never implicitly drop populated customization. */
@@ -197,6 +259,36 @@ namespace Horo::UiTemplates {
             return Result<void>::Success();
         }
 
+        /** @brief Resolves and reconciles the exact accepted interface before preparing any source draft. */
+        Result<std::size_t> SelectRebase(const State &state, const UiTemplateInstanceId instance, const UiTemplateReference &target,
+                                         const std::shared_ptr<const UiTemplateCatalog> &catalog) {
+            const auto found = std::ranges::find(state.source.instances, instance, &UiTemplateInstanceRecord::id);
+            if (!catalog || found == state.source.instances.end() || target.asset != found->accepted.asset)
+                return Result<std::size_t>::Failure(MakeError(UiErrors::TemplateRebaseInvalid));
+            const auto index = static_cast<std::size_t>(found - state.source.instances.begin());
+            const auto previous = state.catalogs[index]->Resolve(found->accepted);
+            if (previous.HasError())
+                return Result<std::size_t>::Failure(previous.ErrorValue());
+            const auto selected = catalog->Resolve(target);
+            if (selected.HasError())
+                return Result<std::size_t>::Failure(selected.ErrorValue());
+            if (selected.Value()->dependency.interfaceVersion.major != previous.Value()->dependency.interfaceVersion.major)
+                return Result<std::size_t>::Failure(MakeError(UiErrors::TemplateVersionIncompatible));
+            if (const auto valid = Reconcile(*found, *selected.Value()); valid.HasError())
+                return Result<std::size_t>::Failure(valid.ErrorValue());
+            return Result<std::size_t>::Success(index);
+        }
+
+        /** @brief Checks all accepted ordinary and expanded identities before materializing a detached allocation. */
+        bool IndependentIdentityOccupied(const State &state, const UiElementId identity) {
+            if (std::ranges::find(state.source.ordinary.Elements(), identity, &UiDocumentElement::id) !=
+                state.source.ordinary.Elements().end())
+                return true;
+            return std::ranges::any_of(state.expansions, [identity](const auto &projection) {
+                return std::ranges::find(projection.elements, identity, &UiDocumentElement::id) != projection.elements.end();
+            });
+        }
+
         /** @brief Requires complete fresh host allocation before copying any candidate expansion payload. */
         Result<void> ValidateDetachIdentities(const State &state, const UiTemplateExpansion &expansion,
                                               const std::span<const UiTemplateDetachIdentity> identities) {
@@ -210,68 +302,12 @@ namespace Horo::UiTemplates {
                 for (std::size_t j = 0; j < i; ++j)
                     if (identities[j].expanded == identity.expanded || identities[j].independent == identity.independent)
                         return Result<void>::Failure(MakeError(UiErrors::TemplateGraphInvalid));
-                if (std::ranges::find(state.source.ordinary.Elements(), identity.independent, &UiDocumentElement::id) !=
-                    state.source.ordinary.Elements().end())
+                if (IndependentIdentityOccupied(state, identity.independent))
                     return Result<void>::Failure(MakeError(UiErrors::TemplateGraphInvalid));
-                for (const auto &projection : state.expansions)
-                    if (std::ranges::find(projection.elements, identity.independent, &UiDocumentElement::id) != projection.elements.end())
-                        return Result<void>::Failure(MakeError(UiErrors::TemplateGraphInvalid));
             }
             return Result<void>::Success();
         }
 
-        /** @brief Rewrites only element-reference alternatives through the complete typed identity allocation. */
-        void RemapReference(UiReference &reference, const std::map<UiElementId, UiElementId> &identities) {
-            if (reference.kind == UiReferenceKind::Element)
-                if (const auto found = identities.find(reference.element); found != identities.end())
-                    reference.element = found->second;
-        }
-
-        /** @brief Materializes resolved rich values and recursive ordinary content with no linked authority. */
-        Result<UiTemplateExpansion> Materialize(const UiTemplateExpansion &accepted,
-                                                const std::span<const UiTemplateDetachIdentity> allocation) {
-            std::map<UiElementId, UiElementId> identities;
-            for (const auto &identity : allocation)
-                identities.emplace(identity.expanded, identity.independent);
-            const auto remap = [&](const UiElementId id) {
-                const auto found = identities.find(id);
-                return found == identities.end() ? id : found->second;
-            };
-            auto output = accepted;
-            output.root = remap(output.root);
-            for (auto &element : output.elements) {
-                element.id = remap(element.id);
-                element.parent = remap(element.parent);
-                for (auto &reference : element.references)
-                    RemapReference(reference, identities);
-                for (auto &property : element.properties)
-                    if (auto *reference = std::get_if<UiReference>(&property.value))
-                        RemapReference(*reference, identities);
-            }
-            for (auto &style : output.styles)
-                style.element = remap(style.element);
-            for (auto &text : output.localizedTexts)
-                text.element = remap(text.element);
-            for (auto &binding : output.bindings) {
-                binding.target.element = remap(binding.target.element);
-                Sha256Builder hash;
-                constexpr std::string_view domain{"horo.ui-template.detached-binding.v1"};
-                if (!hash.Update(std::as_bytes(std::span{domain.data(), domain.size()})) ||
-                    !hash.Update(std::as_bytes(std::span{binding.id.Bytes()})) ||
-                    !hash.Update(std::as_bytes(std::span{binding.target.element.Bytes()})))
-                    return Result<UiTemplateExpansion>::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
-                SerializedUiId bytes{};
-                const auto digest = hash.Finalize();
-                std::copy_n(digest.bytes.begin(), bytes.size(), bytes.begin());
-                auto id = UiBindingId::Create(bytes);
-                if (id.HasError())
-                    return Result<UiTemplateExpansion>::Failure(id.ErrorValue());
-                binding.id = id.Value();
-            }
-            output.acceptedDependencies.clear();
-            output.templateOwnedElements.clear();
-            return Result<UiTemplateExpansion>::Success(std::move(output));
-        }
     }  // namespace
 
     UiTemplatePreparedTransaction::UiTemplatePreparedTransaction(std::shared_ptr<const State> base, std::shared_ptr<const State> next,
@@ -303,12 +339,12 @@ namespace Horo::UiTemplates {
                 return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Failure(valid.ErrorValue());
             std::ranges::sort(source.instances, {}, &UiTemplateInstanceRecord::id);
             const auto undoLimit = limits.maximumUndoEntries;
-            std::vector<std::shared_ptr<const UiTemplateCatalog>> catalogs(source.instances.size(), catalog);
+            std::vector catalogs(source.instances.size(), catalog);
             auto state = PrepareState(std::move(source), std::move(catalogs), limits, {}, catalog);
             if (state.HasError())
                 return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Failure(state.ErrorValue());
             return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Success(std::unique_ptr<UiTemplateDocumentOwner>{
-                new UiTemplateDocumentOwner{std::move(state.Value()), std::make_shared<const std::uint8_t>(0), undoLimit}});
+                new UiTemplateDocumentOwner{std::move(state).Value(), std::make_shared<const std::uint8_t>(0), undoLimit}});
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
         }
@@ -321,29 +357,15 @@ namespace Horo::UiTemplates {
         try {
             if (!authoringSchemas || leases.size() > 256)
                 return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Failure(MakeError(UiErrors::TemplateGraphInvalid));
-            for (std::size_t i = 0; i < leases.size(); ++i) {
-                if (!leases[i].catalog)
-                    return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Failure(MakeError(UiErrors::TemplateMissing));
-                for (std::size_t j = 0; j < i; ++j)
-                    if (leases[i].reference.asset == leases[j].reference.asset &&
-                        leases[i].reference.revision == leases[j].reference.revision)
-                        return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Failure(MakeError(UiErrors::TemplateGraphInvalid));
-            }
+            if (const auto valid = ValidateLeases(leases); valid.HasError())
+                return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Failure(valid.ErrorValue());
             if (const auto valid = Detail::ValidateTemplateDocumentBudget(BudgetView(source, limits, {}, nullptr, leases), {});
                 valid.HasError())
                 return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Failure(valid.ErrorValue());
-            std::vector<std::shared_ptr<const UiTemplateCatalog>> catalogs;
-            catalogs.reserve(source.instances.size());
-            for (const auto &instance : source.instances) {
-                const auto lease = std::ranges::find_if(leases, [&](const UiTemplateCatalogLease &candidate) {
-                    return candidate.reference.asset == instance.accepted.asset &&
-                           candidate.reference.revision == instance.accepted.revision;
-                });
-                if (lease == leases.end())
-                    return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Failure(MakeError(UiErrors::TemplateRevisionUnavailable));
-                catalogs.push_back(lease->catalog);
-            }
-            auto state = PrepareState(std::move(source), std::move(catalogs), limits, {}, std::move(authoringSchemas));
+            auto catalogs = ResolveCatalogLeases(source, leases);
+            if (catalogs.HasError())
+                return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Failure(catalogs.ErrorValue());
+            auto state = PrepareState(std::move(source), std::move(catalogs).Value(), limits, {}, std::move(authoringSchemas));
             if (state.HasError())
                 return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Failure(state.ErrorValue());
             return Result<std::unique_ptr<UiTemplateDocumentOwner>>::Success(std::unique_ptr<UiTemplateDocumentOwner>{
@@ -376,6 +398,16 @@ namespace Horo::UiTemplates {
         return Result<bool>::Success(available.revision != record->accepted.revision);
     }
 
+    /** @copydoc UiTemplateDocumentOwner::AdmitPublication */
+    Result<UiTemplatePreparedTransaction> UiTemplateDocumentOwner::AdmitPublication(
+        UiTemplateAuthoredDocument source, std::vector<std::shared_ptr<const UiTemplateCatalog>> catalogs,
+        const CancellationToken &cancellation) const {
+        auto next = PrepareState(std::move(source), std::move(catalogs), state_->limits, cancellation, state_->authoringSchemas);
+        if (next.HasError())
+            return Result<UiTemplatePreparedTransaction>::Failure(next.ErrorValue());
+        return Result<UiTemplatePreparedTransaction>::Success(PreparePublication(std::move(next).Value(), cancellation));
+    }
+
     /** @copydoc UiTemplateDocumentOwner::PrepareRebase */
     Result<UiTemplatePreparedTransaction> UiTemplateDocumentOwner::PrepareRebase(const UiTemplateInstanceId instance,
                                                                                  const UiTemplateReference &target,
@@ -386,20 +418,10 @@ namespace Horo::UiTemplates {
         try {
             if (const auto admission = CheckPreparation(cancellation); admission.HasError())
                 return Result<UiTemplatePreparedTransaction>::Failure(admission.ErrorValue());
-            const auto found = std::ranges::find(state_->source.instances, instance, &UiTemplateInstanceRecord::id);
-            if (!catalog || found == state_->source.instances.end() || target.asset != found->accepted.asset)
-                return Result<UiTemplatePreparedTransaction>::Failure(MakeError(UiErrors::TemplateRebaseInvalid));
-            const auto index = static_cast<std::size_t>(found - state_->source.instances.begin());
-            const auto previous = state_->catalogs[index]->Resolve(found->accepted);
-            if (previous.HasError())
-                return Result<UiTemplatePreparedTransaction>::Failure(previous.ErrorValue());
-            const auto selected = catalog->Resolve(target);
+            auto selected = SelectRebase(*state_, instance, target, catalog);
             if (selected.HasError())
                 return Result<UiTemplatePreparedTransaction>::Failure(selected.ErrorValue());
-            if (selected.Value()->dependency.interfaceVersion.major != previous.Value()->dependency.interfaceVersion.major)
-                return Result<UiTemplatePreparedTransaction>::Failure(MakeError(UiErrors::TemplateVersionIncompatible));
-            if (const auto valid = Reconcile(*found, *selected.Value()); valid.HasError())
-                return Result<UiTemplatePreparedTransaction>::Failure(valid.ErrorValue());
+            const auto index = selected.Value();
             auto prospective = BudgetView(state_->source, state_->limits, state_->catalogs);
             prospective.replacementIndex = index;
             prospective.replacement = &target;
@@ -412,10 +434,7 @@ namespace Horo::UiTemplates {
             auto draft = std::move(copied).Value();
             draft.source.instances[index].accepted = target;
             draft.catalogs[index] = std::move(catalog);
-            auto next = AdmitAuthority(std::move(draft), *state_, cancellation);
-            if (next.HasError())
-                return Result<UiTemplatePreparedTransaction>::Failure(next.ErrorValue());
-            return Result<UiTemplatePreparedTransaction>::Success(PreparePublication(std::move(next).Value(), cancellation));
+            return AdmitPublication(std::move(draft.source), std::move(draft.catalogs), cancellation);
         } catch (const std::bad_alloc &) {
             return Result<UiTemplatePreparedTransaction>::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
         }
@@ -445,10 +464,7 @@ namespace Horo::UiTemplates {
             auto draft = std::move(copied).Value();
             draft.source.instances.push_back(std::move(instance));
             draft.catalogs.push_back(std::move(catalog));
-            auto next = AdmitAuthority(std::move(draft), *state_, cancellation);
-            if (next.HasError())
-                return Output::Failure(next.ErrorValue());
-            return Output::Success(PreparePublication(std::move(next).Value(), cancellation));
+            return AdmitPublication(std::move(draft.source), std::move(draft.catalogs), cancellation);
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
         }
@@ -494,7 +510,7 @@ namespace Horo::UiTemplates {
             const auto &projection = state_->expansions[index];
             if (const auto valid = ValidateDetachIdentities(*state_, projection, identities); valid.HasError())
                 return Output::Failure(valid.ErrorValue());
-            auto materialized = Materialize(projection, identities);
+            auto materialized = Detail::MaterializeTemplateExpansion(projection, identities);
             if (materialized.HasError())
                 return Output::Failure(materialized.ErrorValue());
             const std::array additions{std::move(materialized).Value()};
@@ -510,10 +526,7 @@ namespace Horo::UiTemplates {
             source.localizedTexts.insert(source.localizedTexts.end(), additions[0].localizedTexts.begin(),
                                          additions[0].localizedTexts.end());
             source.bindings.insert(source.bindings.end(), additions[0].bindings.begin(), additions[0].bindings.end());
-            auto next = AdmitAuthority(std::move(draft), *state_, cancellation);
-            if (next.HasError())
-                return Output::Failure(next.ErrorValue());
-            return Output::Success(PreparePublication(std::move(next).Value(), cancellation));
+            return AdmitPublication(std::move(draft.source), std::move(draft.catalogs), cancellation);
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
         }

@@ -29,7 +29,9 @@ namespace Horo::UiTemplates::Detail::Codec {
 
     /** @copydoc WriteSchemas */
     Json WriteSchemas(const UiTemplateSchemaSnapshot &schemas) {
-        Json elements = Json::array(), properties = Json::array(), providers = Json::array();
+        Json elements = Json::array();
+        Json properties = Json::array();
+        Json providers = Json::array();
         for (const auto *element : Ordered(std::span{schemas.elementTypes}, [](const auto &value) {
             return value;
         }))

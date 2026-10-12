@@ -1,3 +1,4 @@
+#include "Horo/UiTemplates/UiTemplateErrors.h"
 #include "Horo/UiTemplates/UiTemplateExpansion.h"
 #include "UiTemplateTestFixtures.h"
 
@@ -49,7 +50,7 @@ namespace Horo::UiTemplates {
             UiTemplateParameter parameter;
             parameter.id = Identity<UiTemplateParameterId>(marker);
             parameter.kind = UiTemplateValueKind::Text;
-            parameter.targets.push_back(UiTemplateContentTarget{element, Identity<UiStylePropertyId>(1)});
+            parameter.targets.emplace_back(UiTemplateContentTarget{element, Identity<UiStylePropertyId>(1)});
             return parameter;
         }
     }  // namespace
@@ -145,6 +146,32 @@ namespace Horo::UiTemplates {
             source.parameters = {parameter};
             CHECK(UiTemplateCatalog::Create({source}, schemas, {}).HasError());
             parameter.defaultValue.reset();
+        }
+    }
+
+    TEST_CASE("Template zero numeric bounds admit zero defaults and reject nonzero supplied values",
+              "[runtime_ui][template][headless][failure]") {
+        auto source = Source();
+        auto parameter = TextParameter(1, source.root);
+        parameter.kind = UiTemplateValueKind::Number;
+        parameter.minimum = 0.0;
+        parameter.maximum = 0.0;
+        parameter.defaultValue = 0.0;
+        source.parameters = {parameter};
+        auto schemas = Schemas();
+        schemas.properties.front().kind = UiTemplateValueKind::Number;
+        auto catalog = UiTemplateCatalog::Create({source}, schemas, {});
+        REQUIRE(catalog.HasValue());
+        auto record = Instance();
+        const std::array occupied{record.parent};
+        const auto expanded = ExpandTemplate(catalog.Value(), Identity<UiDocumentId>(1), record, occupied);
+        REQUIRE(expanded.HasValue());
+        CHECK(std::get<double>(expanded.Value().elements.front().properties.front().value) == 0.0);
+        for (const auto nonzero : {-1.0, 1.0}) {
+            record.arguments = {{parameter.id, nonzero}};
+            const auto rejected = ExpandTemplate(catalog.Value(), Identity<UiDocumentId>(1), record, occupied);
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == UiErrors::TemplateGraphInvalid.code.Value());
         }
     }
 

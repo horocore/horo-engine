@@ -10,22 +10,15 @@ namespace Horo::Application {
     static_assert(std::is_nothrow_move_constructible_v<UiTemplateHostCook>);
     static_assert(std::is_nothrow_copy_assignable_v<UiTemplateHostCook>);
 
-    /** @copydoc UiTemplateHost::Matches */
-    Result<void> UiTemplateHost::Matches(const UiTemplates::UiTemplateDocumentSnapshot &source,
-                                         const Runtime::Ui::UiReloadGeneration &runtime, const UiTemplateHostCook &cook) {
-        auto durable = UiTemplates::SerializeTemplateDocument(source);
-        if (durable.HasError())
-            return Result<void>::Failure(durable.ErrorValue());
-        const auto &expected = cook.Document();
-        if (ComputeSha256(std::as_bytes(std::span{durable.Value()})) != expected.sourceIdentity ||
-            runtime.Instance().DocumentId() != expected.ordinary.Id() ||
-            runtime.Instance().DocumentRevision() != expected.ordinary.SourceRevision() ||
-            !std::ranges::equal(runtime.Instance().Payload(), expected.ordinary.Payload()))
-            return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::RevisionStale));
-        const bool rich = !expected.styles.empty() || !expected.localizedTexts.empty() || !expected.bindings.empty();
-        if (rich && cook.state_->projections.size() != runtime.Canvases().size())
-            return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::RenderCompositionInvalid));
-        for (const auto &projection : cook.state_->projections) {
+    namespace {
+        /** @brief Matches the exact ordinary source payload and revision independently of rich canvas projections. */
+        bool MatchesOrdinary(const Runtime::Ui::UiRuntimeInstance &instance, const UiTemplates::UiTemplateCookedDocument &expected) {
+            return instance.DocumentId() == expected.ordinary.Id() && instance.DocumentRevision() == expected.ordinary.SourceRevision() &&
+                   std::ranges::equal(instance.Payload(), expected.ordinary.Payload());
+        }
+
+        /** @brief Checks one owned projection against its actual canvas without retaining borrowed owners. */
+        Result<void> MatchesProjection(const UiTemplateCanvasProjection &projection, const Runtime::Ui::UiReloadGeneration &runtime) {
             const auto canvas = std::ranges::find(runtime.Canvases(), projection.canvas, &Runtime::Ui::UiReloadCanvas::id);
             if (canvas == runtime.Canvases().end() || !canvas->layout)
                 return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::RevisionStale));
@@ -37,6 +30,26 @@ namespace Horo::Application {
                 projection.layout.interaction != canvas->layout->Descriptor().interaction ||
                 projection.layout.sources != canvas->layout->Descriptor().sources)
                 return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::RevisionStale));
+            return Result<void>::Success();
+        }
+    }  // namespace
+
+    /** @copydoc UiTemplateHost::Matches */
+    Result<void> UiTemplateHost::Matches(const UiTemplates::UiTemplateDocumentSnapshot &source,
+                                         const Runtime::Ui::UiReloadGeneration &runtime, const UiTemplateHostCook &cook) {
+        auto durable = UiTemplates::SerializeTemplateDocument(source);
+        if (durable.HasError())
+            return Result<void>::Failure(durable.ErrorValue());
+        const auto &expected = cook.Document();
+        if (ComputeSha256(std::as_bytes(std::span{durable.Value()})) != expected.sourceIdentity ||
+            !MatchesOrdinary(runtime.Instance(), expected))
+            return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::RevisionStale));
+        if (const bool rich = !expected.styles.empty() || !expected.localizedTexts.empty() || !expected.bindings.empty();
+            rich && cook.state_->projections.size() != runtime.Canvases().size())
+            return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::RenderCompositionInvalid));
+        for (const auto &projection : cook.state_->projections) {
+            if (const auto matched = MatchesProjection(projection, runtime); matched.HasError())
+                return matched;
         }
         return Result<void>::Success();
     }

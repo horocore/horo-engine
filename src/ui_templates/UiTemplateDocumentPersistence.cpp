@@ -40,7 +40,7 @@ namespace Horo::UiTemplates {
     Detail::Codec::Json Detail::Codec::ParseBoundedTemplateJson(const std::string_view source) {
         Foundation::JsonParseGuard guard{256};
         std::size_t nodes = 0;
-        auto callback = [&](const int depth, const Json::parse_event_t event, const Json &value) {
+        auto callback = [&nodes, &guard](const int depth, const Json::parse_event_t event, const Json &value) {
             if (++nodes > 262144 || !guard(depth, event, value))
                 Reject();
             return true;
@@ -50,7 +50,7 @@ namespace Horo::UiTemplates {
 
     /** @copydoc SerializeTemplateDocument */
     Result<std::string> SerializeTemplateDocument(const UiTemplateDocumentSnapshot &snapshot) {
-        return CodecResult<std::string>([&]() -> Result<std::string> {
+        return CodecResult<std::string>([&snapshot] {
             const auto &limits = snapshot.Limits();
             const auto ordinary = Take(Runtime::Ui::SerializeUiDocument(snapshot.Source().ordinary, OrdinaryLimits(limits)));
             Json root{{"schema", 1},
@@ -72,7 +72,7 @@ namespace Horo::UiTemplates {
                                                                                  std::shared_ptr<const UiTemplateCatalog> authoringSchemas,
                                                                                  const UiTemplateLimits &limits) {
         using Output = Result<std::unique_ptr<UiTemplateDocumentOwner>>;
-        return CodecResult<std::unique_ptr<UiTemplateDocumentOwner>>([&]() -> Output {
+        return CodecResult<std::unique_ptr<UiTemplateDocumentOwner>>([source, leases, &authoringSchemas, &limits] {
             if (!limits.IsValid() || source.size() > limits.maximumPayloadBytes)
                 return Output::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
             if (source.empty() || !IsValidUtf8ScalarSequence(source))

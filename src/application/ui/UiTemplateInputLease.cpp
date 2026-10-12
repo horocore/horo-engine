@@ -27,11 +27,12 @@ namespace Horo::Application {
             if (source.HasError())
                 return Output::Failure(source.ErrorValue());
             // Keep the real project lease through the final control/graph recheck and capability allocation.
-            const auto unchanged = Detail::VerifyTemplateControls(root, controls.Value(), packages ? packages->ActiveGraph() : nullptr);
-            if (unchanged.HasError())
+            if (const auto unchanged = Detail::VerifyTemplateControls(root, controls.Value(), packages ? packages->ActiveGraph() : nullptr);
+                unchanged.HasError())
                 return Output::Failure(unchanged.ErrorValue());
-            return Output::Success(UiTemplateInputLease{std::make_shared<const State>(
-                State{std::move(source).Value(), std::move(registry), controls.Value().graph, std::move(identity).Value()})});
+            return Output::Success(
+                UiTemplateInputLease{std::make_shared<const State>(std::move(source).Value(), std::move(registry), controls.Value().graph,
+                                                                   std::move(identity).Value())});
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(UiTemplates::UiErrors::TemplateGraphBudgetExceeded));
         }

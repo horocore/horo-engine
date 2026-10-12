@@ -3,6 +3,12 @@
 #include "UiTemplateHostTestFixture.h"
 
 namespace Horo::Application::TemplateHostTests {
+    /** @brief Measures commit/acquisition/currentness/projection access at the actual structural cutoff.
+     * @param host Actual paired publisher. @param candidate Exact admitted reservation.
+     * @return Held current lease; asserts zero allocation and final free before returning.
+     */
+    [[nodiscard]] UiTemplateRuntimeLease CommitWithoutAllocation(UiTemplateHost &host, UiTemplateHost::Prepared &candidate);
+
     /** @brief Loads exact host cook bytes through Assets and composes real allocator-issued runtime trees. */
     struct PublicationFixture final {
         Fixture source;

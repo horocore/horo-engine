@@ -26,9 +26,13 @@ namespace Horo::UiTemplates::Detail {
      */
     [[nodiscard]] Result<void> ValidateTemplateDocumentBudget(const TemplateDocumentBudgetInput &input,
                                                               const CancellationToken &cancellation);
-    /** @brief Checks cumulative owned source/default/nested-slot budgets without copying or constructing expansion output. */
+    /** @brief Checks cumulative owned source/default/nested-slot budgets without copying or constructing expansion output.
+     * @pre limits.IsValid(); the catalog creation boundary admits limits before calling this helper.
+     */
     [[nodiscard]] Result<void> ValidateTemplateSourceBudget(std::span<const UiTemplateDocument> documents, const UiTemplateLimits &limits);
-    /** @brief Walks the actual pinned expansion/slot inputs under stack-only ancestry before expansion allocation. */
+    /** @brief Walks the actual pinned expansion/slot inputs under stack-only ancestry before expansion allocation.
+     * @pre catalog was created through UiTemplateCatalog::Create, which owns validated limits with maximumDepth <= 32.
+     */
     [[nodiscard]] Result<void> ValidateTemplateExpansionBudget(const UiTemplateCatalog &catalog, const UiTemplateInstanceRecord &instance,
                                                                const CancellationToken &cancellation);
 }  // namespace Horo::UiTemplates::Detail

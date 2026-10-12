@@ -48,7 +48,7 @@ namespace Horo::UiTemplates {
                                 {"ordinary", hex(ComputeSha256(std::as_bytes(cooked.ordinary.Payload())))},
                                 {"rich", hex(hash(rich))}};
             const auto digest = hash(identity.dump());
-            std::copy(digest.bytes.begin(), digest.bytes.end(), bytes.begin() + 128);
+            std::ranges::copy(digest.bytes, bytes.begin() + 128);
             return bytes;
         }
     }  // namespace
@@ -81,7 +81,7 @@ namespace Horo::UiTemplates {
         REQUIRE(encoded.HasValue());
         for (const auto length : {std::size_t{0}, std::size_t{159}, encoded.Value().size() - 1})
             CHECK(DecodeTemplateArtifact(std::span{encoded.Value()}.first(length), cooked.dependencyManifest, {}).HasError());
-        for (const auto [offset, width, value] :
+        for (const auto &[offset, width, value] :
              std::array<std::tuple<std::size_t, std::size_t, std::uint64_t>, 7>{{{0, 1, 0},
                                                                                  {4, 4, 2},
                                                                                  {8, 4, 2},

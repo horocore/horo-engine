@@ -64,6 +64,38 @@ namespace Horo::UiTemplates::TestSupport {
         return std::move(owner).Value();
     }
 
+    /** @brief Supplies an independently declared second instance for accepted-history tests. */
+    inline UiTemplateInstanceRecord SecondInstance() {
+        auto instance = Document().instances.front();
+        instance.id = Identity<UiTemplateInstanceId>(2);
+        return instance;
+    }
+
+    /** @brief Publishes a real second-instance transaction while retaining its detached reservation for assertions. */
+    inline UiTemplatePreparedTransaction InsertAccepted(UiTemplateDocumentOwner &owner, const UiTemplateInstanceRecord &instance) {
+        auto inserted = owner.PrepareInsert(instance, Catalog(Source(1)));
+        REQUIRE(inserted.HasValue());
+        REQUIRE(owner.Commit(inserted.Value()).HasValue());
+        return std::move(inserted).Value();
+    }
+
+    /** @brief Exercises the real canonical writer and exact pinned-lease reader in one shared roundtrip fixture. */
+    struct TemplateRoundTrip final {
+        std::string bytes;
+        std::unique_ptr<UiTemplateDocumentOwner> reopened;
+    };
+
+    inline TemplateRoundTrip RoundTrip(UiTemplateAuthoredDocument source, const std::shared_ptr<const UiTemplateCatalog> &catalog) {
+        auto owner = UiTemplateDocumentOwner::Create(std::move(source), catalog);
+        REQUIRE(owner.HasValue());
+        auto saved = SerializeTemplateDocument(owner.Value()->Capture());
+        REQUIRE(saved.HasValue());
+        const std::array leases{UiTemplateCatalogLease{Reference(1), catalog}};
+        auto reopened = DeserializeTemplateDocument(saved.Value(), leases, catalog, UiTemplateLimits{});
+        REQUIRE(reopened.HasValue());
+        return {std::move(saved).Value(), std::move(reopened).Value()};
+    }
+
     inline UiBindingProviderSchema Provider() {
         const auto type = UiBindingProviderTypeId::Parse("game.hud.player").Value();
         const std::array properties{

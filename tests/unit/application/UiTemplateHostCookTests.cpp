@@ -44,7 +44,7 @@ namespace Horo::Application::TemplateHostTests {
         const auto input = fixture.Capture();
         const std::array single{input};
         REQUIRE(UiTemplateHost::Cook(fixture.owner->Capture(), single, fixture.type, {}).HasValue());
-        const std::vector<UiTemplateInputLease> duplicated(128, input);
+        const std::vector duplicated(128, input);
         const auto rejected = UiTemplateHost::Cook(fixture.owner->Capture(), duplicated, fixture.type, {});
         REQUIRE(rejected.HasError());
         CHECK(rejected.ErrorValue().code.Value() == UiTemplates::UiErrors::TemplateGraphBudgetExceeded.code.Value());

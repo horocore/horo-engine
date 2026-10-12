@@ -23,6 +23,42 @@ namespace {
         REQUIRE(file.good());
     }
 
+    /** @brief Exercises a real directory link and retains the explicit unavailable-platform warning. */
+    void CheckDirectoryControlLink(const std::filesystem::path &root, const std::filesystem::path &target, const bool dangling) {
+        const auto control = root / ".horo";
+        if (!dangling)
+            std::filesystem::create_directory(target);
+        std::error_code error;
+        std::filesystem::create_directory_symlink(target, control, error);
+        if (error) {
+            WARN("Directory symlink creation unavailable: " << error.message());
+        } else {
+            CHECK(ReadTemplateControls(root, nullptr).HasError());
+            std::filesystem::remove(control);
+        }
+        std::filesystem::remove_all(target);
+    }
+
+    /** @brief Exercises each actual control file link with the same existing/dangling target coverage. */
+    void CheckFileControlLink(const std::filesystem::path &root, const std::filesystem::path &target, const char *name,
+                              const bool dangling) {
+        const auto control = root / ".horo";
+        std::filesystem::create_directories(control);
+        if (!dangling)
+            Write(target, "{}");
+        std::error_code error;
+        const auto link = control / name;
+        std::filesystem::create_symlink(target, link, error);
+        if (error) {
+            WARN("File symlink creation unavailable: " << error.message());
+        } else {
+            CHECK(ReadTemplateControls(root, nullptr).HasError());
+            std::filesystem::remove(link);
+        }
+        std::filesystem::remove(target);
+        std::filesystem::remove(control);
+    }
+
     /** @brief Independently verified archive and actual Packages-generated lock for the capture adapter. */
     struct PackageControls final {
         UiTemplateCaptureControls controls;
@@ -114,7 +150,7 @@ TEST_CASE("Template input factory preserves busy admission and releases failed c
     CHECK(coordinator.TryAcquire({temporary.Path(), Editor::ProjectMutationOwner::Save, "after-failure"}).HasValue());
 }
 
-TEST_CASE("Template controls reject file directories and existing or dangling symlinks", "[template][host][capture]") {
+TEST_CASE("Template controls reject file and directory kind substitutions", "[template][host][capture]") {
     TemporaryDirectory temporary;
     const auto control = temporary.Path() / ".horo";
     SECTION("control directory is a file") {
@@ -129,38 +165,19 @@ TEST_CASE("Template controls reject file directories and existing or dangling sy
         std::filesystem::create_directories(control / "packages.lock");
         CHECK(ReadTemplateControls(temporary.Path(), nullptr).HasError());
     }
+}
+
+TEST_CASE("Template controls reject existing and dangling symlinks", "[template][host][capture]") {
+    TemporaryDirectory temporary;
     SECTION("symlink controls") {
         const auto target = temporary.Path() / "target";
         for (const bool dangling : {false, true}) {
             DYNAMIC_SECTION("directory link dangling=" << dangling) {
-                if (!dangling)
-                    std::filesystem::create_directory(target);
-                std::error_code error;
-                std::filesystem::create_directory_symlink(target, control, error);
-                if (error) {
-                    WARN("Directory symlink creation unavailable: " << error.message());
-                } else {
-                    CHECK(ReadTemplateControls(temporary.Path(), nullptr).HasError());
-                    std::filesystem::remove(control);
-                }
-                std::filesystem::remove_all(target);
+                CheckDirectoryControlLink(temporary.Path(), target, dangling);
             }
             for (const char *name : {"packages.json", "packages.lock"}) {
                 DYNAMIC_SECTION(name << " link dangling=" << dangling) {
-                    std::filesystem::create_directories(control);
-                    if (!dangling)
-                        Write(target, "{}");
-                    std::error_code error;
-                    const auto link = control / name;
-                    std::filesystem::create_symlink(target, link, error);
-                    if (error) {
-                        WARN("File symlink creation unavailable: " << error.message());
-                    } else {
-                        CHECK(ReadTemplateControls(temporary.Path(), nullptr).HasError());
-                        std::filesystem::remove(link);
-                    }
-                    std::filesystem::remove(target);
-                    std::filesystem::remove(control);
+                    CheckFileControlLink(temporary.Path(), target, name, dangling);
                 }
             }
         }
@@ -188,25 +205,20 @@ TEST_CASE("Template final capture recheck separates stale replacement from typed
     SECTION("equal content graph republished") {
         packages.graph = std::make_shared<PackageRestoreGraph>(*packages.graph);
     }
+    const ErrorCodeDescriptor *expected = &Runtime::Ui::UiErrors::RevisionStale;
     SECTION("control became unreadable directory") {
         const auto path = temporary.Path() / ".horo/packages.json";
         std::filesystem::remove(path);
         std::filesystem::create_directory(path);
-        const auto result = VerifyTemplateControls(temporary.Path(), captured.Value(), packages.graph);
-        REQUIRE(result.HasError());
-        CHECK(result.ErrorValue().code.Value() == UiTemplates::UiErrors::TemplateGraphInvalid.code.Value());
-        return;
+        expected = &UiTemplates::UiErrors::TemplateGraphInvalid;
     }
     SECTION("control exceeded read ceiling") {
         Write(temporary.Path() / ".horo/packages.lock", std::string(4U * 1024U * 1024U + 1U, ' '));
-        const auto result = VerifyTemplateControls(temporary.Path(), captured.Value(), packages.graph);
-        REQUIRE(result.HasError());
-        CHECK(result.ErrorValue().code.Value() == UiTemplates::UiErrors::TemplateGraphBudgetExceeded.code.Value());
-        return;
+        expected = &UiTemplates::UiErrors::TemplateGraphBudgetExceeded;
     }
     const auto result = VerifyTemplateControls(temporary.Path(), captured.Value(), packages.graph);
     REQUIRE(result.HasError());
-    CHECK(result.ErrorValue().code.Value() == Runtime::Ui::UiErrors::RevisionStale.code.Value());
+    CHECK(result.ErrorValue().code.Value() == expected->code.Value());
 }
 
 TEST_CASE("Template package admission retains exact lock archive and publisher decisions", "[template][host][capture]") {
@@ -255,6 +267,10 @@ TEST_CASE("Template package admission retains exact lock archive and publisher d
         packages.graph->packages.front().archive.reset();
         CHECK(ValidateTemplatePackages(packages.controls, false).HasError());
     }
+}
+
+TEST_CASE("Template package admission rejects mismatched locked evidence", "[template][host][capture]") {
+    PackageControls packages;
     SECTION("exact locked evidence differs") {
         auto &entry = packages.graph->packages.front();
         SECTION("archive digest") {

@@ -1,8 +1,29 @@
 #include "UiTemplateHostPublicationFixture.h"
 
+#include "../../support/AllocationProbe.h"
+
 #include <algorithm>
 
 namespace Horo::Application::TemplateHostTests {
+    /** @copydoc CommitWithoutAllocation */
+    UiTemplateRuntimeLease CommitWithoutAllocation(UiTemplateHost &host, UiTemplateHost::Prepared &candidate) {
+        const auto allocations = Tests::AllocationProbe::Count();
+        const auto frees = Tests::AllocationProbe::FreeCount();
+        const auto committed = host.Commit(candidate, Runtime::Ui::UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands);
+        auto lease = host.Acquire();
+        const auto current = host.IsCurrent(lease.Value());
+        const auto projections = lease.Value().Projections();
+        const auto allocatedAfter = Tests::AllocationProbe::Count();
+        const auto freedAfter = Tests::AllocationProbe::FreeCount();
+        (void)projections;
+        REQUIRE(committed.HasValue());
+        REQUIRE(current.HasValue());
+        CHECK(current.Value());
+        CHECK(allocatedAfter == allocations);
+        CHECK(freedAfter == frees);
+        return std::move(lease).Value();
+    }
+
     namespace {
         /** @brief Encodes actual bytes as a real Assets artifact rather than manufacturing a loaded result. */
         void InsertArtifact(Assets::MemoryAssetProvider &provider, Assets::AssetId asset, const Assets::AssetTypeId &type,
@@ -47,7 +68,8 @@ namespace Horo::Application::TemplateHostTests {
             records.push_back(*record);
         }
         Assets::AssetRegistry registry;
-        REQUIRE(registry.Publish(std::move(records)).status == Assets::AssetRegistryBuildStatus::Complete);
+        const auto publication = registry.Publish(std::move(records));
+        REQUIRE(publication.status == Assets::AssetRegistryBuildStatus::Complete);
         JobSystem jobs{JobSystemConfig{1, 8}};
         Assets::AssetLoadService assets{jobs, provider};
         UiRuntimeAssetLoadService loader{registry, assets};
@@ -76,7 +98,7 @@ namespace Horo::Application::TemplateHostTests {
                     ancestor = std::to_address(found);
                 }
                 if (ancestor->id == canvas.rootElement)
-                    elements.push_back({element.id, element.parent});
+                    elements.emplace_back(element.id, element.parent);
             }
             const UiCanvasInstanceId runtimeCanvas{ownership, static_cast<std::uint32_t>(canvases.size() + 1), 1};
             auto tree = UiElementTree::Create(allocator,
@@ -88,7 +110,7 @@ namespace Horo::Application::TemplateHostTests {
                                                {64, 64, 64}},
                                               elements);
             REQUIRE(tree.HasValue());
-            canvases.push_back({canvas.id, std::move(tree).Value()});
+            canvases.emplace_back(canvas.id, std::move(tree).Value());
         }
         return canvases;
     }

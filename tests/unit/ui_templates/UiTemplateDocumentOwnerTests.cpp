@@ -1,9 +1,11 @@
 #include "Horo/UiTemplates/UiTemplateDocumentOwner.h"
+#include "Horo/UiTemplates/UiTemplateErrors.h"
 #include "UiTemplateOwnerTestFixture.h"
 
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <limits>
 #include <thread>
 
 namespace Horo::UiTemplates {
@@ -15,6 +17,36 @@ namespace Horo::UiTemplates {
 
         using namespace TestSupport;
     }  // namespace
+
+    TEST_CASE("Template binding default budgets reject each nonfinite numeric component before catalog publication",
+              "[runtime_ui][template][headless][failure]") {
+        const auto provider = Provider();
+        auto source = Source(1);
+        source.parameters.front().kind = UiTemplateValueKind::Binding;
+        source.parameters.front().targets = {
+            UiTemplateAttachmentTarget{source.root, Identity<UiStylePropertyId>(1), UiTemplateValueKind::Binding}};
+        source.parameters.front().defaultValue = Binding(provider);
+        const UiTemplateSchemaSnapshot schemas{{Kind()},
+                                               {{Kind(), Identity<UiStylePropertyId>(1), UiTemplateValueKind::Binding, "", {}}},
+                                               {provider}};
+        auto accepted = UiTemplateCatalog::Create({source}, schemas, {});
+        REQUIRE(accepted.HasValue());
+        const float invalid = std::numeric_limits<float>::quiet_NaN();
+        const std::array<UiBindingValue, 10>
+            fallbacks{std::numeric_limits<double>::infinity(), UiBindingVector2{invalid, 0},     UiBindingVector2{0, invalid},
+                      UiBindingVector3{invalid, 0, 0},         UiBindingVector3{0, invalid, 0},  UiBindingVector3{0, 0, invalid},
+                      UiBindingColor{invalid, 0, 0, 1},        UiBindingColor{0, invalid, 0, 1}, UiBindingColor{0, 0, invalid, 1},
+                      UiBindingColor{0, 0, 0, invalid}};
+        for (const auto &fallback : fallbacks) {
+            CAPTURE(fallback.index());
+            auto binding = Binding(provider);
+            binding.fallback = fallback;
+            source.parameters.front().defaultValue = std::move(binding);
+            const auto rejected = UiTemplateCatalog::Create({source}, schemas, {});
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == UiErrors::TemplateGraphBudgetExceeded.code.Value());
+        }
+    }
 
     TEST_CASE("All eight template value categories roundtrip without coercion or lost attachment identity",
               "[runtime_ui][template][headless]") {
@@ -35,31 +67,19 @@ namespace Horo::UiTemplates {
             auto catalog = ValueCatalog(value);
             auto source = Document();
             source.instances.front().arguments.front().value = value;
-            auto owner = UiTemplateDocumentOwner::Create(std::move(source), catalog);
-            REQUIRE(owner.HasValue());
-            auto saved = SerializeTemplateDocument(owner.Value()->Capture());
-            REQUIRE(saved.HasValue());
-            const std::array leases{UiTemplateCatalogLease{Reference(1), catalog}};
-            auto reopened = DeserializeTemplateDocument(saved.Value(), leases, catalog, UiTemplateLimits{});
-            REQUIRE(reopened.HasValue());
-            CHECK(reopened.Value()->Capture().Source().instances.front().arguments.front().value.index() == value.index());
-            CHECK(SerializeTemplateDocument(reopened.Value()->Capture()).Value() == saved.Value());
+            auto roundtrip = RoundTrip(std::move(source), catalog);
+            CHECK(roundtrip.reopened->Capture().Source().instances.front().arguments.front().value.index() == value.index());
+            CHECK(SerializeTemplateDocument(roundtrip.reopened->Capture()).Value() == roundtrip.bytes);
             if (TemplateValueKind(value) == UiTemplateValueKind::LocalizedText)
-                CHECK(reopened.Value()->Capture().Expansions().front().localizedTexts.front().property == Identity<UiStylePropertyId>(1));
+                CHECK(roundtrip.reopened->Capture().Expansions().front().localizedTexts.front().property == Identity<UiStylePropertyId>(1));
         }
     }
 
     TEST_CASE("Rich authored attachments survive persistence flatten cook and owner shutdown", "[runtime_ui][template][headless]") {
         auto catalog = ValueCatalog(Message());
         auto source = RichDocument();
-        auto owner = UiTemplateDocumentOwner::Create(std::move(source), catalog);
-        REQUIRE(owner.HasValue());
-        auto saved = SerializeTemplateDocument(owner.Value()->Capture());
-        REQUIRE(saved.HasValue());
-        const std::array leases{UiTemplateCatalogLease{Reference(1), catalog}};
-        auto reopened = DeserializeTemplateDocument(saved.Value(), leases, catalog, UiTemplateLimits{});
-        REQUIRE(reopened.HasValue());
-        const auto snapshot = reopened.Value()->Capture();
+        auto roundtrip = RoundTrip(std::move(source), catalog);
+        const auto snapshot = roundtrip.reopened->Capture();
         Sha256Digest manifest;
         manifest.bytes.front() = 1;
         const auto first = snapshot.Cook({manifest});
@@ -73,7 +93,7 @@ namespace Horo::UiTemplates {
         manifest.bytes.front() = 2;
         CHECK(snapshot.Cook({manifest}).Value().cacheIdentity != first.Value().cacheIdentity);
         CHECK(snapshot.Cook({}).HasError());
-        auto retiredOwner = std::move(reopened).Value();
+        auto retiredOwner = std::move(roundtrip.reopened);
         retiredOwner->Shutdown();
         retiredOwner.reset();
         CHECK(snapshot.Cook({manifest}).HasValue());
@@ -146,7 +166,7 @@ namespace Horo::UiTemplates {
         const auto durable = SerializeTemplateDocument(before).Value();
         std::array<bool, 8> rejected{};
         bool detachedSnapshotReadable{};
-        std::thread other{[&] {
+        std::jthread other{[&owner, &catalog, &rejected, &detachedSnapshotReadable, &before, &prepared] {
             const auto wrong = [](const auto &result) {
                 return result.HasError() && result.ErrorValue().code.Value() == UiErrors::TemplateDocumentWrongThread.code.Value();
             };
@@ -172,11 +192,8 @@ namespace Horo::UiTemplates {
     TEST_CASE("Prepared undo preserves both publication and history until exact owner commit", "[runtime_ui][template][headless]") {
         auto owner = Owner();
         CHECK(owner->PrepareUndo().HasError());
-        auto instance = Document().instances.front();
-        instance.id = Identity<UiTemplateInstanceId>(2);
-        const auto inserted = owner->PrepareInsert(instance, Catalog(Source(1)));
-        REQUIRE(inserted.HasValue());
-        REQUIRE(owner->Commit(inserted.Value()).HasValue());
+        auto instance = SecondInstance();
+        const auto inserted = InsertAccepted(*owner, instance);
         const auto current = SerializeTemplateDocument(owner->Capture()).Value();
         CancellationSource cancellation;
         const auto cancelled = owner->PrepareUndo(cancellation.Token());
@@ -192,7 +209,7 @@ namespace Horo::UiTemplates {
         const auto restored = owner->Commit(prepared.Value());
         REQUIRE(restored.HasValue());
         CHECK(restored.Value().Source().instances.size() == 1);
-        CHECK(restored.Value().Source().ordinary.Revision() > inserted.Value().Preview().Source().ordinary.Revision());
+        CHECK(restored.Value().Source().ordinary.Revision() > inserted.Preview().Source().ordinary.Revision());
         CHECK(owner->Commit(prepared.Value()).HasError());
         CHECK(owner->PrepareUndo().HasError());
     }
@@ -232,11 +249,8 @@ namespace Horo::UiTemplates {
 
     TEST_CASE("Prepared undo cannot cross a later owner transaction or shutdown", "[runtime_ui][template][headless]") {
         auto owner = Owner();
-        auto instance = Document().instances.front();
-        instance.id = Identity<UiTemplateInstanceId>(2);
-        const auto inserted = owner->PrepareInsert(instance, Catalog(Source(1)));
-        REQUIRE(inserted.HasValue());
-        REQUIRE(owner->Commit(inserted.Value()).HasValue());
+        auto instance = SecondInstance();
+        const auto inserted = InsertAccepted(*owner, instance);
         const auto prepared = owner->PrepareUndo();
         REQUIRE(prepared.HasValue());
         SECTION("later publication") {
@@ -373,7 +387,7 @@ namespace Horo::UiTemplates {
         const auto catalog = Catalog(Source(1), limits);
         auto source = Document();
         auto root = source.ordinary.Elements().front();
-        root.properties.push_back({"ordinary", std::string{"value"}});
+        root.properties.emplace_back("ordinary", std::string{"value"});
         const std::array elements{std::move(root)};
         CHECK(UiTemplateDocumentOwner::Create({OwnerOrdinaryDocument(elements), source.instances}, catalog).HasError());
     }
@@ -394,7 +408,8 @@ namespace Horo::UiTemplates {
         limits.maximumUndoEntries = 0;
         CHECK_FALSE(limits.IsValid());
         UiTemplateSchemaSnapshot schemas{{Kind()}, {{Kind(), Identity<UiStylePropertyId>(1), UiTemplateValueKind::Text, "text", {}}}, {}};
-        CHECK(UiTemplateCatalog::Create({Source(1)}, std::move(schemas), {}, limits).HasError());
+        const auto rejected = UiTemplateCatalog::Create({Source(1)}, std::move(schemas), {}, limits);
+        CHECK(rejected.HasError());
     }
 
     TEST_CASE("Rejected template rebase leaves complete accepted authority and projection unchanged", "[runtime_ui][template][headless]") {

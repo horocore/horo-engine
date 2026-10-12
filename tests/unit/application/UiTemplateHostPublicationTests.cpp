@@ -208,7 +208,7 @@ namespace Horo::Application::TemplateHostTests {
         const auto wrong = [](const auto &result) {
             return result.HasError() && result.ErrorValue().code.Value() == UiTemplates::UiErrors::TemplateDocumentWrongThread.code.Value();
         };
-        std::thread worker{[&] {
+        std::jthread worker{[&rejected, &host, &lease, &paired, &document, &runtime, &cook, &wrong] {
             rejected = {wrong(host->Acquire()), wrong(host->IsCurrent(lease.Value())), wrong(host->CollectRetired()),
                         wrong(host->Commit(paired, CommitPoint)), wrong(host->Prepare(document, std::move(runtime), cook))};
         }};
@@ -246,18 +246,7 @@ namespace Horo::Application::TemplateHostTests {
         PublicationFixture fixture;
         auto host = fixture.Host();
         auto prepared = fixture.Pair(*host, fixture.Detach(*host));
-        const auto allocations = Tests::AllocationProbe::Count();
-        const auto frees = Tests::AllocationProbe::FreeCount();
-        const auto committed = host->Commit(prepared, CommitPoint);
-        const auto lease = host->Acquire();
-        const auto current = host->IsCurrent(lease.Value());
-        const auto allocatedAfter = Tests::AllocationProbe::Count();
-        const auto freedAfter = Tests::AllocationProbe::FreeCount();
-        REQUIRE(committed.HasValue());
-        REQUIRE(current.HasValue());
-        CHECK(current.Value());
-        CHECK(allocatedAfter == allocations);
-        CHECK(freedAfter == frees);
+        (void)CommitWithoutAllocation(*host, prepared);
     }
 
     TEST_CASE("Template paired lease replacement retains the matching cooked projection after host destruction",

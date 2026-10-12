@@ -61,8 +61,12 @@ namespace Horo::UiTemplates {
         void Shutdown() noexcept;
 
     private:
+        /** @brief Adopts validated owned data and copies the exact admission policy into the catalog.
+         * @param documents Complete owned source batch. @param schemas Complete owned registered schemas.
+         * @param graph Complete owned dependency graph. @param limits Policy borrowed only until this constructor returns.
+         */
         UiTemplateCatalog(std::vector<UiTemplateDocument> documents, UiTemplateSchemaSnapshot schemas, UiTemplateDependencyGraph graph,
-                          UiTemplateLimits limits) noexcept;
+                          const UiTemplateLimits &limits) noexcept;
         std::vector<UiTemplateDocument> documents_;
         UiTemplateSchemaSnapshot schemas_;
         UiTemplateDependencyGraph graph_;

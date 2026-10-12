@@ -77,7 +77,7 @@ namespace Horo::UiTemplates::Detail::Codec {
         arguments.reserve(array.size());
         for (const auto &argument : array) {
             Fields(argument, {"name", "value"});
-            arguments.push_back({Text(argument.at("name")), ReadArgumentValue(argument.at("value"))});
+            arguments.emplace_back(Text(argument.at("name")), ReadArgumentValue(argument.at("value")));
         }
         return Take(UiLocalizedText::Create(Take(UiMessageKey::Create(Text(value.at("namespace")), Text(value.at("key")))),
                                             std::move(arguments), Text(value.at("fallback")),

@@ -261,6 +261,14 @@ namespace Horo::UiTemplates {
         /** @brief Pins current, proposed and any evicted history before the paired publication safe point. */
         [[nodiscard]] UiTemplatePreparedTransaction PreparePublication(std::shared_ptr<const Detail::UiTemplateOwnerState> next,
                                                                        const CancellationToken &cancellation) const noexcept;
+        /** @brief Admits a complete draft using this owner's policy before pinning its publication reservation.
+         * @param source Complete proposed source. @param catalogs Exact paired instance catalog leases.
+         * @param cancellation Preparation ancestry. @return Private reservation or preserved admission failure.
+         * @pre Owner thread/admission were checked; caller translates allocation failure at its command boundary.
+         */
+        [[nodiscard]] Result<UiTemplatePreparedTransaction> AdmitPublication(UiTemplateAuthoredDocument source,
+                                                                             std::vector<std::shared_ptr<const UiTemplateCatalog>> catalogs,
+                                                                             const CancellationToken &cancellation) const;
         /** @brief Checks the immutable creation thread before touching any mutable owner state. */
         [[nodiscard]] Result<void> CheckOwnerThread() const;
         /** @brief Checks common shutdown/cancellation admission without copying source or invoking a provider.

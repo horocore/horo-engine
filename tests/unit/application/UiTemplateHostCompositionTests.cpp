@@ -1,5 +1,6 @@
 #include "../../support/AllocationProbe.h"
 #include "Horo/Runtime/Ui/UiErrors.h"
+#include "UiTemplateHostFixedMessages.h"
 #include "UiTemplateHostPublicationFixture.h"
 
 #include <algorithm>
@@ -12,57 +13,6 @@ namespace Horo::Application::TemplateHostTests {
         template <typename T> T Revision(const std::uint64_t value = 1) {
             return T::Create(value).Value();
         }
-
-        /** @brief Explicit test Localization snapshot; never reads source fallback text or Editor state. */
-        class FixedMessages final : public UiTemplateLocalizationSnapshotQuery {
-        public:
-            UiLocaleTag locale{UiLocaleTag::Parse("tr-TR").Value()};
-            mutable Sha256Digest identity{ComputeSha256(std::as_bytes(std::span{"validated game messages", 23}))};
-            bool wrongIdentity{};
-            bool wrongKey{};
-            bool wrongLocale{};
-            bool invalidUtf8{};
-            bool invalidSpan{};
-            bool fail{};
-            bool mutateSnapshot{};
-            CancellationSource *cancel{};
-
-            Sha256Digest Identity() const noexcept override {
-                return identity;
-            }
-
-            const UiLocaleTag &Locale() const noexcept override {
-                return locale;
-            }
-
-            Result<UiTemplateResolvedMessage> Resolve(const LocalizedMessageRef &reference, std::size_t,
-                                                      const CancellationToken &) const override {
-                if (fail)
-                    return Result<UiTemplateResolvedMessage>::Failure(MakeError(UiErrors::LocalizedArgumentInvalid));
-                CHECK(reference.Arguments().size() == 2);
-                if (cancel)
-                    cancel->RequestCancellation();
-                if (mutateSnapshot)
-                    identity.bytes.front() ^= 1;
-                UiTemplateResolvedMessage result{identity,
-                                                 reference.Key(),
-                                                 locale,
-                                                 UiTextParagraphDirection::LeftToRight,
-                                                 "Merhaba Ada — 42",
-                                                 {{0, 7, UiTemplateMessageSpanKind::Strong}}};
-                if (wrongIdentity)
-                    result.snapshot.bytes.front() ^= 1;
-                if (wrongKey)
-                    result.key.localKey = "different";
-                if (wrongLocale)
-                    result.locale = UiLocaleTag::Parse("en-US").Value();
-                if (invalidUtf8)
-                    result.text = std::string(1, static_cast<char>(0x80));
-                if (invalidSpan)
-                    result.spans = {{12, 1, UiTemplateMessageSpanKind::Strong}};
-                return Result<UiTemplateResolvedMessage>::Success(std::move(result));
-            }
-        };
 
         /** @brief Real layout owner input adapter; its borrowed evaluator never survives the synchronous update. */
         class Layout final : public UiTemplateLayoutComposer, private UiLayoutEvaluator {
@@ -119,8 +69,9 @@ namespace Horo::Application::TemplateHostTests {
                                  nlohmann::json{{"schemaVersion", 1}, {"assetId", asset.ToString()}, {"assetType", type.Value()}}.dump());
             const auto snapshot = fixture.source.registry.Snapshot();
             std::vector<Assets::AssetRecord> records{snapshot.Records().begin(), snapshot.Records().end()};
-            records.push_back({asset, type, ProjectPath::Parse(path).Value(), ProjectPath::Parse(metadata).Value()});
-            REQUIRE(fixture.source.registry.Publish(std::move(records)).status == Assets::AssetRegistryBuildStatus::Complete);
+            records.emplace_back(asset, type, ProjectPath::Parse(path).Value(), ProjectPath::Parse(metadata).Value());
+            const auto publication = fixture.source.registry.Publish(std::move(records));
+            REQUIRE(publication.status == Assets::AssetRegistryBuildStatus::Complete);
             return {asset, type, true};
         }
 
@@ -130,10 +81,11 @@ namespace Horo::Application::TemplateHostTests {
             auto source = *provisional->Resolve(Reference(1)).Value();
             auto schemas = provisional->Schemas();
             const auto style = Identity<UiStylePropertyId>(2);
-            schemas.properties.push_back(
-                {Kind(), style, UiTemplates::UiTemplateValueKind::Style, "",
-                 UiStylePropertyDescriptor{.id = style, .category = UiStyleValueCategory::Color, .defaultValue = UiStyleColor{}}});
-            source.elements.front().properties.push_back({style, UiStyleValue{UiStyleColor{0.2F, 0.4F, 0.6F, 1.0F}}});
+            schemas.properties.emplace_back(Kind(), style, UiTemplates::UiTemplateValueKind::Style, "",
+                                            UiStylePropertyDescriptor{.id = style,
+                                                                      .category = UiStyleValueCategory::Color,
+                                                                      .defaultValue = UiStyleColor{}});
+            source.elements.front().properties.emplace_back(style, UiStyleValue{UiStyleColor{0.2F, 0.4F, 0.6F, 1.0F}});
             auto catalog = UiTemplates::UiTemplateCatalog::Create({source}, schemas, {});
             REQUIRE(catalog.HasValue());
             const auto bytes = UiTemplates::SerializeTemplateSource(catalog.Value(), Reference(1)).Value();
@@ -157,9 +109,10 @@ namespace Horo::Application::TemplateHostTests {
                 definition{{{Identity<UiStylePropertyId>(2), UiStyleValueCategory::Color, UiStyleValue{UiStyleColor{}}, {.paint = true}}},
                            {{.id = Identity<RuntimeStyleAssetId>(20)}}};
             if (token)
-                definition.assets.front().tokens.push_back({Identity<UiStyleTokenId>(30), UiStyleValueCategory::Color,
-                                                            UiStyleValueSource::Literal(UiStyleValue{UiStyleColor{0.7F, 0.2F, 0.1F, 1.0F}}),
-                                                            false});
+                definition.assets.front().tokens.emplace_back(Identity<UiStyleTokenId>(30), UiStyleValueCategory::Color,
+                                                              UiStyleValueSource::Literal(
+                                                                  UiStyleValue{UiStyleColor{0.7F, 0.2F, 0.1F, 1.0F}}),
+                                                              false);
             auto registry = RuntimeStyleRegistry::Create(std::move(definition), Revision<RuntimeStyleGeneration>());
             REQUIRE(registry.HasValue());
             return std::move(registry).Value();
@@ -202,9 +155,16 @@ namespace Horo::Application::TemplateHostTests {
                 std::vector<UiFocusNodeDescriptor> focus;
                 for (const auto &element : cook.Document().ordinary.Elements()) {
                     const auto handle = tree.Find(element.id).Value();
-                    styles.push_back({handle, Identity<RuntimeStyleAssetId>(20)});
-                    semantics.push_back({.element = element.id, .role = UiAccessibilityRole::Group});
-                    focus.push_back({handle, element.id, element.parent, {}, UiFocusBringIntoViewPolicy::Nearest, true, true, true});
+                    styles.emplace_back(handle, Identity<RuntimeStyleAssetId>(20));
+                    semantics.emplace_back(UiAccessibilityNodeInput{.element = element.id, .role = UiAccessibilityRole::Group});
+                    focus.emplace_back(UiFocusNodeDescriptor{handle,
+                                                             element.id,
+                                                             element.parent,
+                                                             {},
+                                                             UiFocusBringIntoViewPolicy::Nearest,
+                                                             true,
+                                                             true,
+                                                             true});
                 }
                 const UiFocusOwnerContext owner{tree.Instance(),
                                                 tree.Canvas(),
@@ -219,7 +179,7 @@ namespace Horo::Application::TemplateHostTests {
                                                                     focus))
                                          .Value());
                 for (const auto &text : cook.Document().localizedTexts)
-                    accessible.push_back({text.element, text.property, UiTemplateAccessibleTextField::Name});
+                    accessible.emplace_back(text.element, text.property, UiTemplateAccessibleTextField::Name);
             }
 
             /** @brief Binds explicit domain limits and coherent tree/document/interaction revisions. */
@@ -246,6 +206,34 @@ namespace Horo::Application::TemplateHostTests {
                 auto result = UiTemplateHost::Compose(std::move(cook), runtime, std::span{&input, 1}, &messages);
                 REQUIRE(result.HasValue());
                 return std::move(result).Value();
+            }
+        };
+
+        /** @brief Retains real detached owners for independent invalid-snapshot and domain-failure cases. */
+        struct CompositionFailure final {
+            PublicationFixture fixture;
+            UiTemplateHostCook cook;
+            UiReloadGeneration runtime;
+            Composition input;
+            CancellationSource cancellation;
+            const UiTemplateLocalizationSnapshotQuery *query;
+            const ErrorCodeDescriptor *expected{&UiErrors::LocalizedMessageInvalid};
+
+            CompositionFailure() : cook(Cook(fixture)), runtime(fixture.Generation(cook)), input(runtime, cook), query(&input.messages) {}
+
+            static UiTemplateHostCook Cook(PublicationFixture &fixture) {
+                RichSource(fixture);
+                return fixture.Cook(fixture.source.owner->Capture());
+            }
+
+            void Check() {
+                const auto result = UiTemplateHost::Compose(cook, runtime, std::span{&input.input, 1}, query, cancellation.Token());
+                REQUIRE(result.HasError());
+                CHECK(result.ErrorValue().code.Value() == expected->code.Value());
+                CHECK(runtime.Instance().State() == UiRuntimeInstanceState::Prepared);
+                CHECK(fixture.source.owner->Capture().Source().ordinary.Revision().Value() == 1);
+                CHECK(UiTemplateHost::Create(std::move(fixture.source.owner), std::move(runtime), cook).HasError());
+                CHECK(fixture.source.owner != nullptr);
             }
         };
 
@@ -288,7 +276,7 @@ namespace Horo::Application::TemplateHostTests {
         }
 
         /** @brief Exercises failure/retry and measures the exact successful rich publication safe point. */
-        bool PublishRichPair(UiTemplateHost &host, UiTemplateHost::Prepared &candidate, CancellationSource &cancellation) {
+        bool PublishRichPair(UiTemplateHost &host, UiTemplateHost::Prepared &candidate, const CancellationSource &cancellation) {
             SECTION("cancelled rich pair retains both old authorities") {
                 cancellation.RequestCancellation();
                 const auto failed = host.Commit(candidate, UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands);
@@ -303,21 +291,11 @@ namespace Horo::Application::TemplateHostTests {
                 CHECK(host.Commit(candidate, static_cast<UiStructuralCommitPoint>(255)).HasError());
                 CHECK(host.Capture().Source().ordinary.Revision().Value() == 1);
             }
-            SECTION("normal rich paired publication") {}
-            const auto allocations = Tests::AllocationProbe::Count();
-            const auto frees = Tests::AllocationProbe::FreeCount();
-            const auto committed = host.Commit(candidate, UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands);
-            const auto lease = host.Acquire();
-            const auto current = host.IsCurrent(lease.Value());
-            const auto projections = lease.Value().Projections();
-            const auto allocatedAfter = Tests::AllocationProbe::Count();
-            const auto freedAfter = Tests::AllocationProbe::FreeCount();
-            REQUIRE(committed.HasValue());
-            REQUIRE(current.HasValue());
-            CHECK(current.Value());
-            CHECK(projections.size() == 1);
-            CHECK(allocatedAfter == allocations);
-            CHECK(freedAfter == frees);
+            SECTION("normal rich paired publication") {
+                CHECK_FALSE(cancellation.Token().IsCancellationRequested());
+            }
+            const auto lease = CommitWithoutAllocation(host, candidate);
+            CHECK(lease.Projections().size() == 1);
             return true;
         }
     }  // namespace
@@ -372,16 +350,19 @@ namespace Horo::Application::TemplateHostTests {
         (void)RegisterResource(fixture, 20, "runtime.ui.style", "assets/style.json", "owned runtime style token");
         auto authored = fixture.source.owner->Capture().Source();
         const auto root = Identity<UiElementId>(99);
-        authored.styles.push_back({root,
-                                   {Identity<UiStylePropertyId>(2),
-                                    UiStyleValueSource::Token({Identity<RuntimeStyleAssetId>(20), Identity<UiStyleTokenId>(30)}), false}});
+        authored.styles.emplace_back(root, UiStyleAssignment{Identity<UiStylePropertyId>(2),
+                                                             UiStyleValueSource::Token(
+                                                                 {Identity<RuntimeStyleAssetId>(20), Identity<UiStyleTokenId>(30)}),
+                                                             false});
         auto owner = UiTemplates::UiTemplateDocumentOwner::Create(std::move(authored), fixture.source.catalog);
         REQUIRE(owner.HasValue());
         fixture.source.owner = std::move(owner).Value();
         auto cook = fixture.Cook(fixture.source.owner->Capture());
         auto runtime = fixture.Generation(cook);
         bool token = true;
-        SECTION("registered token resolves without a retained registry pointer") {}
+        SECTION("registered token resolves without a retained registry pointer") {
+            CHECK(token);
+        }
         SECTION("missing token preserves the owning style failure") {
             token = false;
         }
@@ -407,14 +388,9 @@ namespace Horo::Application::TemplateHostTests {
     }
 
     TEST_CASE("Rich template composition failure never activates partial owners", "[template][host][composition][failure]") {
-        PublicationFixture fixture;
-        RichSource(fixture);
-        auto cook = fixture.Cook(fixture.source.owner->Capture());
-        auto runtime = fixture.Generation(cook);
-        Composition input{runtime, cook};
-        CancellationSource cancellation;
-        const UiTemplateLocalizationSnapshotQuery *query = &input.messages;
-        const ErrorCodeDescriptor *expected = &UiErrors::LocalizedMessageInvalid;
+        CompositionFailure failure;
+        auto &input = failure.input;
+        auto &query = failure.query;
         SECTION("missing fixed snapshot") {
             query = nullptr;
         }
@@ -436,6 +412,15 @@ namespace Horo::Application::TemplateHostTests {
         SECTION("split Unicode scalar") {
             input.messages.invalidSpan = true;
         }
+        failure.Check();
+    }
+
+    TEST_CASE("Rich template composition preserves typed domain budget and cancellation failures",
+              "[template][host][composition][failure]") {
+        CompositionFailure failure;
+        auto &input = failure.input;
+        auto &expected = failure.expected;
+        auto &cancellation = failure.cancellation;
         SECTION("typed argument failure") {
             input.messages.fail = true;
             expected = &UiErrors::LocalizedArgumentInvalid;
@@ -446,8 +431,8 @@ namespace Horo::Application::TemplateHostTests {
         }
         SECTION("localized field substitutions share the whole semantic text arena") {
             input.input.semanticOwner.limits.textBytes = 36;
-            input.accessible.push_back(
-                {input.accessible.front().element, input.accessible.front().property, UiTemplateAccessibleTextField::Description});
+            input.accessible.emplace_back(input.accessible.front().element, input.accessible.front().property,
+                                          UiTemplateAccessibleTextField::Description);
             input.input.accessibleText = input.accessible;
             expected = &UiErrors::CapacityExceeded;
         }
@@ -463,13 +448,7 @@ namespace Horo::Application::TemplateHostTests {
             input.messages.cancel = &cancellation;
             expected = &UiErrors::AssetLoadCancelled;
         }
-        const auto result = UiTemplateHost::Compose(cook, runtime, std::span{&input.input, 1}, query, cancellation.Token());
-        REQUIRE(result.HasError());
-        CHECK(result.ErrorValue().code.Value() == expected->code.Value());
-        CHECK(runtime.Instance().State() == UiRuntimeInstanceState::Prepared);
-        CHECK(fixture.source.owner->Capture().Source().ordinary.Revision().Value() == 1);
-        CHECK(UiTemplateHost::Create(std::move(fixture.source.owner), std::move(runtime), cook).HasError());
-        CHECK(fixture.source.owner != nullptr);
+        failure.Check();
     }
 
     TEST_CASE("Template paired publication derives accessibility from reconciled preserved focus",

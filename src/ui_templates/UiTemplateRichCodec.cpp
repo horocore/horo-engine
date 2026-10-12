@@ -9,7 +9,9 @@ namespace Horo::UiTemplates::Detail::Codec {
     /** @copydoc WriteRich */
     Json WriteRich(const std::span<const UiTemplateExpandedStyle> assignments, const std::span<const UiTemplateExpandedText> localized,
                    const std::span<const Runtime::Ui::UiBindingDescriptor> descriptors) {
-        Json styles = Json::array(), texts = Json::array(), bindings = Json::array();
+        Json styles = Json::array();
+        Json texts = Json::array();
+        Json bindings = Json::array();
         for (const auto &style : assignments) {
             const auto &assignment = style.assignment;
             Json value = assignment.value.referencesToken
@@ -52,13 +54,14 @@ namespace Horo::UiTemplates::Detail::Codec {
                     {Identity<RuntimeStyleAssetId>(token.at("asset")), Identity<UiStyleTokenId>(token.at("token"))});
             } else
                 literal = UiStyleValueSource::Literal(ReadStyle(style.at("value")));
-            source.styles.push_back({Identity<UiElementId>(style.at("element")),
-                                     {Identity<UiStylePropertyId>(style.at("property")), std::move(literal), Boolean(style.at("sealed"))}});
+            source.styles.emplace_back(Identity<UiElementId>(style.at("element")),
+                                       UiStyleAssignment{Identity<UiStylePropertyId>(style.at("property")), std::move(literal),
+                                                         Boolean(style.at("sealed"))});
         }
         for (const auto &text : texts) {
             Fields(text, {"element", "property", "value"});
-            source.localizedTexts.push_back({Identity<UiElementId>(text.at("element")), ReadLocalized(text.at("value")),
-                                             Identity<UiStylePropertyId>(text.at("property"))});
+            source.localizedTexts.emplace_back(Identity<UiElementId>(text.at("element")), ReadLocalized(text.at("value")),
+                                               Identity<UiStylePropertyId>(text.at("property")));
         }
         for (const auto &binding : bindings)
             source.bindings.push_back(ReadBinding(binding));

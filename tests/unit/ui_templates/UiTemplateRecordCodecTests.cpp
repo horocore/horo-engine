@@ -12,20 +12,20 @@ namespace Horo::UiTemplates {
         auto source = Document();
         UiReference reference;
         reference.element = Identity<UiElementId>(99);
-        source.instances.front().slots.push_back(
-            {Identity<UiTemplateSlotId>(1),
-             {{Identity<UiElementId>(10), {}, Kind(),
-               {{"boolean", true}, {"integer", std::int64_t{-123}}, {"number", 1.75}, {"text", std::string{"owned slot text"}},
-                {"reference", reference}}, {}}}, {}});
-        const auto owner = UiTemplateDocumentOwner::Create(std::move(source), catalog);
-        REQUIRE(owner.HasValue());
-        const auto saved = SerializeTemplateDocument(owner.Value()->Capture());
-        REQUIRE(saved.HasValue());
-        const std::array leases{UiTemplateCatalogLease{Reference(1), catalog}};
-        auto reopened = DeserializeTemplateDocument(saved.Value(), leases, catalog, UiTemplateLimits{});
-        REQUIRE(reopened.HasValue());
-        CHECK(SerializeTemplateDocument(reopened.Value()->Capture()).Value() == saved.Value());
-        const auto &properties = reopened.Value()->Capture().Source().instances.front().slots.front().elements.front().properties;
+        source.instances.front().slots.push_back({Identity<UiTemplateSlotId>(1),
+                                                  {{Identity<UiElementId>(10),
+                                                    {},
+                                                    Kind(),
+                                                    {{"boolean", true},
+                                                     {"integer", std::int64_t{-123}},
+                                                     {"number", 1.75},
+                                                     {"text", std::string{"owned slot text"}},
+                                                     {"reference", reference}},
+                                                    {}}},
+                                                  {}});
+        auto roundtrip = RoundTrip(std::move(source), catalog);
+        CHECK(SerializeTemplateDocument(roundtrip.reopened->Capture()).Value() == roundtrip.bytes);
+        const auto &properties = roundtrip.reopened->Capture().Source().instances.front().slots.front().elements.front().properties;
         REQUIRE(properties.size() == 5);
         for (const auto &property : properties) {
             if (property.key == "text")
@@ -33,8 +33,9 @@ namespace Horo::UiTemplates {
             if (property.key == "reference")
                 CHECK(std::get<UiReference>(property.value).element == reference.element);
         }
-        auto malformed = nlohmann::json::parse(saved.Value());
+        auto malformed = nlohmann::json::parse(roundtrip.bytes);
         malformed["instances"][0]["slots"][0]["elements"][0]["properties"][0]["value"]["kind"] = 5;
+        const std::array leases{UiTemplateCatalogLease{Reference(1), catalog}};
         CHECK(DeserializeTemplateDocument(malformed.dump(), leases, catalog, UiTemplateLimits{}).HasError());
     }
-}
+}  // namespace Horo::UiTemplates

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <functional>
 #include <limits>
 #include <new>
@@ -156,9 +157,11 @@ namespace Horo::UiTemplates::Detail::Codec {
     inline std::string Hex(const std::span<const std::uint8_t> bytes) {
         constexpr std::string_view digits{"0123456789abcdef"};
         std::string text(bytes.size() * 2, '0');
+        const auto storage = std::as_bytes(bytes);
         for (std::size_t i = 0; i < bytes.size(); ++i) {
-            text[i * 2] = digits[bytes[i] >> 4];
-            text[i * 2 + 1] = digits[bytes[i] & 15];
+            const auto value = std::to_integer<std::size_t>(storage[i]);
+            text[i * 2] = digits[value >> 4];
+            text[i * 2 + 1] = digits[value & 15U];
         }
         return text;
     }
@@ -173,7 +176,7 @@ namespace Horo::UiTemplates::Detail::Codec {
         for (std::size_t i = 0; i < N; ++i) {
             const auto high = digits.find(text[i * 2]);
             const auto low = digits.find(text[i * 2 + 1]);
-            if (high == digits.npos || low == digits.npos)
+            if (high == std::string_view::npos || low == std::string_view::npos)
                 Reject();
             bytes[i] = static_cast<std::uint8_t>((high << 4) | low);
         }

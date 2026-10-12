@@ -82,18 +82,15 @@ namespace Horo::UiTemplates {
                 Reject();
             if (!SupportedHeader(bytes))
                 Reject();
-            const auto ordinary = ReadInteger(bytes, 16, 8), rich = ReadInteger(bytes, 24, 8);
-            const auto available = bytes.size() - HeaderBytes;
-            if (ordinary == 0 || ordinary > available || rich != available - ordinary)
+            const auto ordinary = ReadInteger(bytes, 16, 8);
+            const auto rich = ReadInteger(bytes, 24, 8);
+            if (const auto available = bytes.size() - HeaderBytes; ordinary == 0 || ordinary > available || rich != available - ordinary)
                 Reject();
             return {static_cast<std::size_t>(ordinary), static_cast<std::size_t>(rich)};
         }
-    }  // namespace
 
-    /** @copydoc EncodeTemplateArtifact */
-    Result<std::vector<std::uint8_t>> EncodeTemplateArtifact(const UiTemplateCookedDocument &document, const UiTemplateLimits &limits) {
-        using Output = Result<std::vector<std::uint8_t>>;
-        return CodecResult<std::vector<std::uint8_t>>([&]() -> Output {
+        /** @brief Emits the canonical frame only after its complete typed identity and payload have been validated. */
+        std::vector<std::uint8_t> EncodeFrame(const UiTemplateCookedDocument &document, const UiTemplateLimits &limits) {
             if (!limits.IsValid() || document.ordinary.Payload().size() > limits.maximumPayloadBytes ||
                 document.richPayload.size() > limits.maximumPayloadBytes - document.ordinary.Payload().size() ||
                 WriteRich(document.styles, document.localizedTexts, document.bindings).dump() != document.richPayload ||
@@ -113,17 +110,16 @@ namespace Horo::UiTemplates {
                 bytes.insert(bytes.end(), digest.bytes.begin(), digest.bytes.end());
             bytes.insert(bytes.end(), document.ordinary.Payload().begin(), document.ordinary.Payload().end());
             bytes.insert(bytes.end(), document.richPayload.begin(), document.richPayload.end());
-            return Output::Success(std::move(bytes));
-        });
-    }
+            return bytes;
+        }
 
-    /** @copydoc DecodeTemplateArtifact */
-    Result<UiTemplateCookedDocument> DecodeTemplateArtifact(const std::span<const std::uint8_t> bytes, const Sha256Digest &verifiedManifest,
-                                                            const UiTemplateLimits &limits) {
-        using Output = Result<UiTemplateCookedDocument>;
-        return CodecResult<UiTemplateCookedDocument>([&]() -> Output {
+        /** @brief Restores one canonical bounded frame while retaining exact manifest and rich-target admission. */
+        UiTemplateCookedDocument DecodeFrame(const std::span<const std::uint8_t> bytes, const Sha256Digest &verifiedManifest,
+                                             const UiTemplateLimits &limits) {
             const auto [ordinaryBytes, richBytes] = Lengths(bytes, limits);
-            const auto source = ReadDigest(bytes, 32), schemas = ReadDigest(bytes, 64), manifest = ReadDigest(bytes, 96);
+            const auto source = ReadDigest(bytes, 32);
+            const auto schemas = ReadDigest(bytes, 64);
+            const auto manifest = ReadDigest(bytes, 96);
             if (manifest != verifiedManifest || std::ranges::all_of(manifest.bytes, [](const auto byte) {
                 return byte == 0;
             }))
@@ -141,8 +137,30 @@ namespace Horo::UiTemplates {
             ValidateTargets(rich);
             if (WriteRich(rich).dump() != payload)
                 Reject();
-            return Output::Success({std::move(ordinary), std::move(rich.styles), std::move(rich.localizedTexts), std::move(rich.bindings),
-                                    std::string{payload}, cache, manifest, source, schemas});
+            return {std::move(ordinary),
+                    std::move(rich.styles),
+                    std::move(rich.localizedTexts),
+                    std::move(rich.bindings),
+                    std::string{payload},
+                    cache,
+                    manifest,
+                    source,
+                    schemas};
+        }
+    }  // namespace
+
+    /** @copydoc EncodeTemplateArtifact */
+    Result<std::vector<std::uint8_t>> EncodeTemplateArtifact(const UiTemplateCookedDocument &document, const UiTemplateLimits &limits) {
+        return CodecResult<std::vector<std::uint8_t>>([&document, &limits] {
+            return Result<std::vector<std::uint8_t>>::Success(EncodeFrame(document, limits));
+        });
+    }
+
+    /** @copydoc DecodeTemplateArtifact */
+    Result<UiTemplateCookedDocument> DecodeTemplateArtifact(const std::span<const std::uint8_t> bytes, const Sha256Digest &verifiedManifest,
+                                                            const UiTemplateLimits &limits) {
+        return CodecResult<UiTemplateCookedDocument>([bytes, &verifiedManifest, &limits] {
+            return Result<UiTemplateCookedDocument>::Success(DecodeFrame(bytes, verifiedManifest, limits));
         });
     }
 }  // namespace Horo::UiTemplates

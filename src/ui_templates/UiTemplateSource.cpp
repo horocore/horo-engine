@@ -87,16 +87,14 @@ namespace Horo::UiTemplates {
             std::vector<UiTemplateInstanceRecord> records;
             records.reserve(source.nested.size());
             for (const auto &instance : source.nested)
-                records.push_back({instance.id, Take(Runtime::Ui::UiElementId::Create(instance.parent.Bytes())), instance.accepted,
-                                   instance.arguments, instance.slots});
+                records.emplace_back(instance.id, Take(Runtime::Ui::UiElementId::Create(instance.parent.Bytes())), instance.accepted,
+                                     instance.arguments, instance.slots);
             return WriteRecords(records);
         }
-    }  // namespace
 
-    /** @copydoc SerializeTemplateSource */
-    Result<std::string> SerializeTemplateSource(const UiTemplateCatalog &catalog, const UiTemplateReference &reference) {
-        using Output = Result<std::string>;
-        return CodecResult<std::string>([&]() -> Output {
+        /** @brief Encodes the exact accepted source and its canonical package closure without mutating catalog authority. */
+        Result<std::string> SerializeAcceptedSource(const UiTemplateCatalog &catalog, const UiTemplateReference &reference) {
+            using Output = Result<std::string>;
             const auto resolved = catalog.Resolve(reference);
             if (resolved.HasError())
                 return Output::Failure(resolved.ErrorValue());
@@ -119,6 +117,13 @@ namespace Horo::UiTemplates {
             if (bytes.size() > catalog.Limits().maximumPayloadBytes)
                 return Output::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
             return Output::Success(std::move(bytes));
+        }
+    }  // namespace
+
+    /** @copydoc SerializeTemplateSource */
+    Result<std::string> SerializeTemplateSource(const UiTemplateCatalog &catalog, const UiTemplateReference &reference) {
+        return CodecResult<std::string>([&catalog, &reference] {
+            return SerializeAcceptedSource(catalog, reference);
         });
     }
 }  // namespace Horo::UiTemplates

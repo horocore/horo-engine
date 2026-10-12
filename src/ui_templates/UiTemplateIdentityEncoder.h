@@ -17,4 +17,14 @@ namespace Horo::UiTemplates::Detail {
     [[nodiscard]] Result<Runtime::Ui::UiElementId> EncodeTemplateIdentity(TemplateIdentityDomain domain, Runtime::Ui::UiDocumentId document,
                                                                           std::span<const UiTemplateInstanceId> lineage,
                                                                           std::span<const Runtime::Ui::SerializedUiId> suffix);
+
+    /** @brief Derives a slot-default element identity in its persistent domain, distinct from local template elements.
+     * @param document Owning document identity. @param lineage Valid instance lineage.
+     * @param slot Owning slot identity. @param authored Default-fragment element identity.
+     * @return Derived identity or the existing typed invalid/budget failure; no allocation or publication.
+     */
+    [[nodiscard]] Result<Runtime::Ui::UiElementId> DeriveTemplateSlotDefaultElementId(Runtime::Ui::UiDocumentId document,
+                                                                                      std::span<const UiTemplateInstanceId> lineage,
+                                                                                      UiTemplateSlotId slot,
+                                                                                      Runtime::Ui::UiElementId authored);
 }  // namespace Horo::UiTemplates::Detail

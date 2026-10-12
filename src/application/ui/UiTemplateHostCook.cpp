@@ -28,6 +28,34 @@ namespace Horo::Application {
             }, value);
         }
 
+        /** @brief Selects the sole valid declared owner for a fixed message namespace. */
+        Result<const UiTemplateMessageResource *> MessageResource(const Runtime::Ui::LocalizedMessageRef &text,
+                                                                  const UiTemplateResourceBindings &registrations) {
+            const UiTemplateMessageResource *selected = nullptr;
+            for (const auto &resource : registrations.messages)
+                if (resource.owner.namespaceId == text.Key().namespaceId) {
+                    if (selected || !resource.owner.IsValid())
+                        return Result<const UiTemplateMessageResource *>::Failure(MakeError(UiTemplates::UiErrors::TemplateGraphInvalid));
+                    selected = &resource;
+                }
+            if (!selected)
+                return Result<const UiTemplateMessageResource *>::Failure(MakeError(UiTemplates::UiErrors::TemplateMissing));
+            return Result<const UiTemplateMessageResource *>::Success(selected);
+        }
+
+        /** @brief Selects an optional explicit provider resource, rejecting competing registrations. */
+        Result<const UiTemplateBindingResource *> BindingResource(const UiBindingDescriptor &binding,
+                                                                  const UiTemplateResourceBindings &registrations) {
+            const UiTemplateBindingResource *selected = nullptr;
+            for (const auto &resource : registrations.bindings)
+                if (resource.provider == binding.source.providerType) {
+                    if (selected)
+                        return Result<const UiTemplateBindingResource *>::Failure(MakeError(UiTemplates::UiErrors::TemplateGraphInvalid));
+                    selected = &resource;
+                }
+            return Result<const UiTemplateBindingResource *>::Success(selected);
+        }
+
         /** @brief Derives rich resource requirements from explicit frozen Localization/provider registrations. */
         Result<std::vector<UiAssetDependency>> RichResources(const UiTemplates::UiTemplateFlattenedDocument &document,
                                                              const UiTemplateResourceBindings &registrations, const std::size_t maximum) {
@@ -39,27 +67,17 @@ namespace Horo::Application {
                     StyleResources(style.assignment.value.literal, result, maximum);
             }
             for (const auto &text : document.localizedTexts) {
-                const UiTemplateMessageResource *selected = nullptr;
-                for (const auto &resource : registrations.messages)
-                    if (resource.owner.namespaceId == text.text.Key().namespaceId) {
-                        if (selected || !resource.owner.IsValid())
-                            return Result<std::vector<UiAssetDependency>>::Failure(MakeError(UiTemplates::UiErrors::TemplateGraphInvalid));
-                        selected = &resource;
-                    }
-                if (!selected)
-                    return Result<std::vector<UiAssetDependency>>::Failure(MakeError(UiTemplates::UiErrors::TemplateMissing));
-                AddRichResource(result, selected->resource, maximum);
+                auto selected = MessageResource(text.text, registrations);
+                if (selected.HasError())
+                    return Result<std::vector<UiAssetDependency>>::Failure(selected.ErrorValue());
+                AddRichResource(result, selected.Value()->resource, maximum);
             }
             for (const auto &binding : document.bindings) {
-                const UiTemplateBindingResource *selected = nullptr;
-                for (const auto &resource : registrations.bindings)
-                    if (resource.provider == binding.source.providerType) {
-                        if (selected)
-                            return Result<std::vector<UiAssetDependency>>::Failure(MakeError(UiTemplates::UiErrors::TemplateGraphInvalid));
-                        selected = &resource;
-                    }
-                if (selected)
-                    AddRichResource(result, selected->resource, maximum);
+                auto selected = BindingResource(binding, registrations);
+                if (selected.HasError())
+                    return Result<std::vector<UiAssetDependency>>::Failure(selected.ErrorValue());
+                if (selected.Value())
+                    AddRichResource(result, selected.Value()->resource, maximum);
             }
             return Result<std::vector<UiAssetDependency>>::Success(std::move(result));
         }
@@ -69,7 +87,7 @@ namespace Horo::Application {
     /** @brief Admits cumulative framed identity bytes before copying package/resource strings into candidate storage. */
     class UiTemplateHost::VerifiedManifest final {
     public:
-        explicit VerifiedManifest(const std::size_t maximum) : maximum_(maximum), retained_(Domain.size()) {
+        explicit VerifiedManifest(const std::size_t maximum) : maximum_(maximum) {
             if (retained_ > maximum_)
                 throw ManifestCapacityExceeded{};
         }
@@ -85,7 +103,8 @@ namespace Horo::Application {
 
         Sha256Digest Finish() {
             std::ranges::sort(identities_);
-            identities_.erase(std::unique(identities_.begin(), identities_.end()), identities_.end());
+            const auto duplicate = std::ranges::unique(identities_);
+            identities_.erase(duplicate.begin(), duplicate.end());
             std::string bytes{Domain};
             bytes.reserve(retained_);
             for (const auto &identity : identities_) {
@@ -99,14 +118,14 @@ namespace Horo::Application {
     private:
         static constexpr std::string_view Domain{"horo.ui-template.verified-manifest.v1"};
         std::size_t maximum_;
-        std::size_t retained_;
+        std::size_t retained_{Domain.size()};
         std::vector<std::string> identities_;
     };
 
     namespace {
         /** @brief Checks complete captured template bytes and exact type/revision, not a caller digest alone. */
         bool ExactTemplate(const Assets::AssetCookPinnedSource &captured, const UiTemplates::UiTemplateReference &reference,
-                           const Assets::AssetTypeId &type, const std::string &source, const Sha256Digest &digest) {
+                           const Assets::AssetTypeId &type, const std::string_view source, const Sha256Digest &digest) {
             return captured.sourceDigest == digest && digest == reference.revision && captured.record.type == type &&
                    captured.bytes.size() == source.size() && std::equal(captured.bytes.begin(), captured.bytes.end(), source.begin());
         }
@@ -124,16 +143,16 @@ namespace Horo::Application {
 
         /** @brief Admits caller cardinalities before walking captured authority or allocating the manifest. */
         bool ValidCookRequest(const UiTemplates::UiTemplateDocumentSnapshot &snapshot, std::span<const UiTemplateInputLease> inputs,
-                                const Assets::AssetTypeId &type, const UiTemplateResourceBindings &resources) {
+                              const Assets::AssetTypeId &type, const UiTemplateResourceBindings &resources) {
             const auto maximum = snapshot.Limits().maximumDependencies;
-            return !type.Value().empty() && !inputs.empty() && inputs.size() <= maximum &&
-                   resources.messages.size() <= maximum && resources.bindings.size() <= maximum;
+            return !type.Value().empty() && !inputs.empty() && inputs.size() <= maximum && resources.messages.size() <= maximum &&
+                   resources.bindings.size() <= maximum;
         }
     }  // namespace
 
     /** @copydoc UiTemplateHost::SelectResource */
     Result<const Assets::AssetCookPinnedSource *> UiTemplateHost::SelectResource(std::span<const UiTemplateInputLease> inputs,
-                                                                                Assets::AssetId asset) {
+                                                                                 Assets::AssetId asset) {
         const Assets::AssetCookPinnedSource *selected = nullptr;
         for (const auto &input : inputs)
             if (const auto *candidate = input.state_->sources.Find(asset)) {

@@ -54,7 +54,7 @@ namespace Horo::Application {
                                             {input.relations.begin(), input.relations.end()},
                                             {}};
                 for (const auto &action : input.actions) {
-                    node.actions.push_back({action, std::string{action.name.text}});
+                    node.actions.emplace_back(action, std::string{action.name.text});
                     node.actions.back().descriptor.name.text = {};
                 }
                 node.descriptor.name.text = {};
@@ -69,18 +69,19 @@ namespace Horo::Application {
             /** @brief Assigns one explicit localized field without inventing label policy or fallback copy. */
             Result<void> SetText(UiTemplateSemanticNode &node, UiTemplateAccessibleTextField field, const UiTemplateResolvedText &text,
                                  std::size_t &remaining) {
+                using enum UiTemplateAccessibleTextField;
                 std::string *destination{};
                 UiAccessibilityTextInput *descriptor{};
                 switch (field) {
-                    case UiTemplateAccessibleTextField::Name:
+                    case Name:
                         destination = &node.name;
                         descriptor = &node.descriptor.name;
                         break;
-                    case UiTemplateAccessibleTextField::Description:
+                    case Description:
                         destination = &node.description;
                         descriptor = &node.descriptor.description;
                         break;
-                    case UiTemplateAccessibleTextField::Value:
+                    case Value:
                         destination = &node.value;
                         descriptor = &node.descriptor.value.text;
                         break;
@@ -92,8 +93,32 @@ namespace Horo::Application {
                     return Result<void>::Failure(MakeError(UiErrors::CapacityExceeded));
                 *destination = text.message.text;
                 descriptor->source = UiAccessibilityTextSource::ResolvedMessage;
-                if (field == UiTemplateAccessibleTextField::Value)
+                if (field == Value)
                     node.descriptor.value.kind = UiAccessibilityValueKind::Text;
+                return Result<void>::Success();
+            }
+
+            /** @brief Applies explicit unique semantic-field mappings under the single captured text budget. */
+            Result<void> ApplyAccessibleTexts(UiTemplateSemanticSource &source, std::span<const UiTemplateAccessibleTextTarget> targets,
+                                              std::span<const UiTemplateResolvedText> texts, std::size_t &remaining) {
+                for (std::size_t index = 0; index < targets.size(); ++index) {
+                    const auto &target = targets[index];
+                    // Two mappings for the same field would create order-dependent competing authority.
+                    if (std::ranges::any_of(targets.first(index), [&](const auto &prior) {
+                        return prior.element == target.element && prior.field == target.field;
+                    }))
+                        return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::AccessibilityTextInvalid));
+                    const auto text = std::ranges::find_if(texts, [&](const auto &value) {
+                        return value.element == target.element && value.property == target.property;
+                    });
+                    const auto node = std::ranges::find_if(source.nodes, [&](const auto &value) {
+                        return value.descriptor.element == target.element;
+                    });
+                    if (text == texts.end() || node == source.nodes.end())
+                        return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::AccessibilityTextInvalid));
+                    if (const auto applied = SetText(*node, target.field, *text, remaining); applied.HasError())
+                        return Result<void>::Failure(applied.ErrorValue());
+                }
                 return Result<void>::Success();
             }
 
@@ -131,24 +156,8 @@ namespace Horo::Application {
                 node.descriptor.bounds = layout.Value().arrangement.borderBox;
                 source.nodes.push_back(std::move(node));
             }
-            for (std::size_t index = 0; index < input.accessibleText.size(); ++index) {
-                const auto &target = input.accessibleText[index];
-                // Two mappings for the same field would create order-dependent competing authority.
-                if (std::ranges::any_of(input.accessibleText.first(index), [&](const auto &prior) {
-                    return prior.element == target.element && prior.field == target.field;
-                }))
-                    return Output::Failure(MakeError(Runtime::Ui::UiErrors::AccessibilityTextInvalid));
-                const auto text = std::ranges::find_if(texts, [&](const auto &value) {
-                    return value.element == target.element && value.property == target.property;
-                });
-                const auto node = std::ranges::find_if(source.nodes, [&](const auto &value) {
-                    return value.descriptor.element == target.element;
-                });
-                if (text == texts.end() || node == source.nodes.end())
-                    return Output::Failure(MakeError(Runtime::Ui::UiErrors::AccessibilityTextInvalid));
-                if (const auto applied = SetText(*node, target.field, *text, remaining); applied.HasError())
-                    return Output::Failure(applied.ErrorValue());
-            }
+            if (const auto mapped = ApplyAccessibleTexts(source, input.accessibleText, texts, remaining); mapped.HasError())
+                return Output::Failure(mapped.ErrorValue());
             return Output::Success(std::move(source));
         }
 

@@ -59,15 +59,18 @@ namespace Horo::UiTemplates::Detail::Codec {
             return {{"kind", value.index()}, {"value", payload}};
         }
 
-        /** @brief Restores complete closed fallback alternatives without scalar/reference coercion. */
-        UiBindingValue ReadFallback(const Json &value) {
-            const auto envelope = ReadTaggedPayload(value);
-            const auto &p = envelope.payload;
-            switch (envelope.kind) {
+        /** @brief Validates the distinct null fallback representation without coercing another payload. */
+        UiBindingValue ReadNullFallback(const Json &payload) {
+            if (!payload.is_null())
+                Reject();
+            return UiBindingNullValue{};
+        }
+
+        /** @brief Restores the closed primitive fallback categories before handling compound vectors/references. */
+        UiBindingValue ReadScalarFallback(const std::size_t kind, const Json &p) {
+            switch (kind) {
                 case 0:
-                    if (!p.is_null())
-                        Reject();
-                    return UiBindingNullValue{};
+                    return ReadNullFallback(p);
                 case 1:
                     return Boolean(p);
                 case 2:
@@ -84,6 +87,18 @@ namespace Horo::UiTemplates::Detail::Codec {
                     return UiBindingEnumValue{Integer<std::uint64_t>(p)};
                 case 8:
                     return UiBindingFlagsValue{Integer<std::uint64_t>(p)};
+                default:
+                    Reject();
+            }
+        }
+
+        /** @brief Restores complete closed fallback alternatives without scalar/reference coercion. */
+        UiBindingValue ReadFallback(const Json &value) {
+            const auto envelope = ReadTaggedPayload(value);
+            const auto &p = envelope.payload;
+            if (envelope.kind <= 8)
+                return ReadScalarFallback(envelope.kind, p);
+            switch (envelope.kind) {
                 case 9: {
                     const auto &v = Tuple(p, 2);
                     return UiBindingVector2{Scalar<float>(v[0]), Scalar<float>(v[1])};
