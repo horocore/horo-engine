@@ -3,6 +3,7 @@
 #include "OpenGLMaterialFixture.h"
 #include "OpenGLRenderBackendErrors.h"
 #include "RenderFrontendResourceAccess.h"
+#include "SdlOpenGLPresentationPort.h"
 
 #include <SDL3/SDL.h>
 #include <glad/gl.h>
@@ -53,6 +54,8 @@ namespace Horo::Render::OpenGLMaterialSmoke {
             glGetIntegerv(GL_MAX_TEXTURE_SIZE, &texture);
             glGetIntegerv(GL_MAX_COLOR_ATTACHMENTS, &attachments);
             glGetIntegerv(GL_MAX_VERTEX_ATTRIBS, &attributes);
+            std::cout << "Material context (SDL driver " << SDL_GetCurrentVideoDriver() << "): " << glGetString(GL_RENDERER) << " / "
+                      << glGetString(GL_VERSION) << '\n';
             if (glGetError() != GL_NO_ERROR || major < 0 || major > 255 || minor < 0 || minor > 255 || texture < 1 || attachments < 1 ||
                 attributes < 1)
                 return Result<OpenGLContextFacts>::Failure(MakeError(OpenGLBackendErrors::InvalidCapabilities));
@@ -70,7 +73,7 @@ namespace Horo::Render::OpenGLMaterialSmoke {
         Result<void> SetPresentMode(const PresentMode mode) override {
             if (mode != PresentMode::Immediate)
                 return Result<void>::Failure(MakeError(OpenGLBackendErrors::InvalidConfig));
-            return SDL_GL_SetSwapInterval(0) ? Result<void>::Success() : Failure();
+            return Editor::Detail::ApplyExactSwapInterval(0, SDL_GL_GetSwapInterval, SDL_GL_SetSwapInterval);
         }
 
         Result<void> SwapBuffers() override {
@@ -276,8 +279,14 @@ namespace Horo::Render::OpenGLMaterialSmoke {
         REQUIRE(glGetError() == GL_NO_ERROR);
     }
 
-    /** @brief Creates and identifies the selected real Core context without substituting a software renderer. */
-    std::unique_ptr<RenderFrontend> PrepareFrontend(Port &port) {
+    /** @brief Distinguishes software-capable contract coverage from mandatory real-hardware qualification. */
+    enum class MaterialEvidence {
+        HardwareQualification,
+        SoftwareCapableCoverage
+    };
+
+    /** @brief Creates the actual selected Core context; hardware qualification additionally rejects software identities. */
+    std::unique_ptr<RenderFrontend> PrepareFrontend(Port &port, const MaterialEvidence evidence) {
         RenderBackendRegistry registry;
         REQUIRE(RegisterOpenGLRenderBackend(registry, port).HasValue());
         REQUIRE(registry.Seal().HasValue());
@@ -291,14 +300,20 @@ namespace Horo::Render::OpenGLMaterialSmoke {
         auto frontend = std::move(created).Value();
         const auto device = frontend->QueryPipelineDeviceIdentity();
         REQUIRE(device.HasValue());
-        std::cout << "Native qualification device: " << device.Value().driverIdentity << " / " << device.Value().driverVersion << '\n';
-        const auto renderer = device.Value().driverIdentity;
-        REQUIRE(renderer.find("llvmpipe") == std::string::npos);
-        REQUIRE(renderer.find("softpipe") == std::string::npos);
+        std::cout << (evidence == MaterialEvidence::HardwareQualification ? "Native qualification device: " : "Contract coverage device: ")
+                  << device.Value().driverIdentity << " / " << device.Value().driverVersion << '\n';
+        if (evidence == MaterialEvidence::HardwareQualification) {
+            const auto renderer = device.Value().driverIdentity;
+            REQUIRE(renderer.find("llvmpipe") == std::string::npos);
+            REQUIRE(renderer.find("softpipe") == std::string::npos);
+        }
         return frontend;
     }
 
-    TEST_CASE("Prepared native OpenGL material renders exact pixels and restores caller state", "[gpu][display][opengl][material]") {
+    void VerifyDrawAndRetirement(RenderFrontend &frontend);
+
+    /** @brief Executes the identical full pixel, caller-state and resource-retirement contract for both evidence entrypoints. */
+    void VerifyMaterialContract(const MaterialEvidence evidence) {
         REQUIRE(SDL_Init(SDL_INIT_VIDEO));
         const auto quit = [](const int *) noexcept {
             SDL_Quit();
@@ -307,16 +322,24 @@ namespace Horo::Render::OpenGLMaterialSmoke {
         std::unique_ptr<const int, decltype(quit)> sdl{&token, quit};
         REQUIRE(SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1));
         REQUIRE(SDL_GL_SetAttribute(SDL_GL_ACCELERATED_VISUAL, 1));
-        std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window{SDL_CreateWindow("Horo native material qualification", 64, 32,
+        const char *title =
+            evidence == MaterialEvidence::HardwareQualification ? "Horo native material qualification" : "Horo material contract coverage";
+        std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window{SDL_CreateWindow(title, 64, 32,
                                                                                           SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN),
                                                                          &SDL_DestroyWindow};
         REQUIRE(window);
         Port port{*window};
-        auto frontend = PrepareFrontend(port);
-        auto draw = PrepareDraw(*frontend);
+        auto frontend = PrepareFrontend(port, evidence);
+        VerifyDrawAndRetirement(*frontend);
+        frontend.reset();
+    }
+
+    /** @brief Runs exact pixels, hostile caller state and deferred retirement against the borrowed admitted frontend. */
+    void VerifyDrawAndRetirement(RenderFrontend &frontend) {
+        auto draw = PrepareDraw(frontend);
         {
             CallerState caller{static_cast<GLuint>(draw.program), draw.features};
-            auto begun = frontend->BeginFrame({.frameNumber = 1, .outputExtent = {64, 32}});
+            auto begun = frontend.BeginFrame({.frameNumber = 1, .outputExtent = {64, 32}});
             REQUIRE(begun.HasValue());
             auto frame = std::move(begun).Value();
             std::array draws{RenderMaterialDraw{draw.mesh, draw.material}};
@@ -325,8 +348,8 @@ namespace Horo::Render::OpenGLMaterialSmoke {
             // Readback is explicitly test-only and may synchronize; the normal consumer never waits for native completion.
             CheckPixels(static_cast<GLuint>(draw.targetObject));
             REQUIRE(frame.Present().HasValue());
-            REQUIRE(frontend->ReleaseSampler(draw.sampler).HasValue());
-            REQUIRE(frontend->ReleaseGraphicsPipeline(draw.pipeline.pipeline).HasValue());
+            REQUIRE(frontend.ReleaseSampler(draw.sampler).HasValue());
+            REQUIRE(frontend.ReleaseGraphicsPipeline(draw.pipeline.pipeline).HasValue());
             REQUIRE(draw.table->Release(draw.binding).HasValue());
             draw.material.reset();
             draws[0].material.reset();
@@ -335,18 +358,27 @@ namespace Horo::Render::OpenGLMaterialSmoke {
         }
         glFinish();  // Bounded opt-in qualification/teardown only; never a production frame path.
         // The selected backend polls its completed fence at frame admission, before registry retirement can release backing.
-        auto completed = frontend->BeginFrame({.frameNumber = 2, .outputExtent = {64, 32}});
+        auto completed = frontend.BeginFrame({.frameNumber = 2, .outputExtent = {64, 32}});
         REQUIRE(completed.HasValue());
         auto nextFrame = std::move(completed).Value();
         nextFrame.Cancel();
-        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        REQUIRE(frontend.ProcessResourceRequests().HasValue());
         CHECK(glIsSampler(static_cast<GLuint>(draw.samplerObject)) == GL_FALSE);
         CHECK(glIsProgram(static_cast<GLuint>(draw.program)) == GL_FALSE);
         REQUIRE(draw.table->Shutdown().HasValue());
         draw.table.reset();
-        REQUIRE(frontend->ReleaseShaderModule(draw.pipeline.vertex).HasValue());
-        REQUIRE(frontend->ReleaseShaderModule(draw.pipeline.fragment).HasValue());
+        REQUIRE(frontend.ReleaseShaderModule(draw.pipeline.vertex).HasValue());
+        REQUIRE(frontend.ReleaseShaderModule(draw.pipeline.fragment).HasValue());
         REQUIRE(glGetError() == GL_NO_ERROR);
-        frontend.reset();
+    }
+
+    TEST_CASE("Prepared native OpenGL material renders exact pixels and restores caller state",
+              "[gpu][display][opengl][material][hardware-qualification]") {
+        VerifyMaterialContract(MaterialEvidence::HardwareQualification);
+    }
+
+    TEST_CASE("Software-capable OpenGL material coverage verifies exact pixels and restores caller state",
+              "[display][opengl][material][software-coverage]") {
+        VerifyMaterialContract(MaterialEvidence::SoftwareCapableCoverage);
     }
 }  // namespace Horo::Render::OpenGLMaterialSmoke
