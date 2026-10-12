@@ -2516,13 +2516,44 @@ if (TARGET HoroBuildInfo)
     add_dependencies(HoroEditorServices HoroBuildInfo)
 endif ()
 
+add_library(HoroEditorPresentationSurfaceInternal STATIC
+        editor/renderer/surface/EditorPresentationSurface.cpp
+)
+target_compile_features(HoroEditorPresentationSurfaceInternal PUBLIC cxx_std_20)
+# Deliberately non-installed host/test seam; no repository-wide source visibility.
+target_include_directories(HoroEditorPresentationSurfaceInternal PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/editor/renderer/surface)
+target_link_libraries(HoroEditorPresentationSurfaceInternal PUBLIC HoroEngine::RenderApi)
+
+if (HORO_BUILD_RENDER_OPENGL AND (HORO_BUILD_EDITOR_GUI OR HORO_ENABLE_GPU_SMOKE_TESTS))
+    # Only the deliberately shared presentation contracts are visible across these
+    # non-installed targets. Backend implementation headers remain private.
+    set(opengl_presentation_internal_root "${CMAKE_CURRENT_BINARY_DIR}/internal/opengl-presentation")
+    file(MAKE_DIRECTORY "${opengl_presentation_internal_root}")
+    configure_file(runtime/renderer/modules/opengl/OpenGLBackendModule.h
+            "${opengl_presentation_internal_root}/OpenGLBackendModule.h" COPYONLY)
+    add_library(HoroOpenGLPresentationContractInternal INTERFACE)
+    target_include_directories(HoroOpenGLPresentationContractInternal INTERFACE "${opengl_presentation_internal_root}")
+    target_link_libraries(HoroOpenGLPresentationContractInternal INTERFACE HoroEngine::RenderBackendRegistry)
+
+    set(sdl_presentation_internal_root "${CMAKE_CURRENT_BINARY_DIR}/internal/sdl-presentation")
+    file(MAKE_DIRECTORY "${sdl_presentation_internal_root}")
+    configure_file(editor/renderer/opengl/SdlOpenGLPresentationPort.h
+            "${sdl_presentation_internal_root}/SdlOpenGLPresentationPort.h" COPYONLY)
+    add_library(HoroSdlOpenGLPresentationInternal STATIC editor/renderer/opengl/SdlOpenGLPresentationPort.cpp)
+    target_compile_features(HoroSdlOpenGLPresentationInternal PUBLIC cxx_std_20)
+    target_include_directories(HoroSdlOpenGLPresentationInternal PUBLIC "${sdl_presentation_internal_root}")
+    target_link_libraries(HoroSdlOpenGLPresentationInternal
+            PUBLIC HoroOpenGLPresentationContractInternal ${HORO_SDL3_TARGET}
+            PRIVATE HoroThirdParty::Glad)
+endif ()
+
 if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_OPENGL)
     add_library(HoroEditorViewportOpenGL STATIC
             editor/renderer/opengl/EditorGuiRendererOpenGL.cpp
             editor/renderer/opengl/OpenGLViewportResourceBridge.cpp
             editor/renderer/opengl/OpenGLStateSnapshot.cpp
             editor/renderer/opengl/EditorViewportRendererOpenGL.cpp
-            editor/renderer/opengl/SdlOpenGLPresentationPort.cpp
     )
     add_library(HoroEngine::EditorViewportOpenGL ALIAS HoroEditorViewportOpenGL)
 
@@ -2540,6 +2571,7 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_OPENGL)
             HoroEngine::EditorViewportResources
             HoroEngine::RenderOpenGL
             HoroEngine::RenderFrontend
+            HoroSdlOpenGLPresentationInternal
             ${HORO_SDL3_TARGET}
             PRIVATE
             HoroThirdParty::Glad

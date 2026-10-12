@@ -169,6 +169,20 @@ namespace Horo::Editor::RendererErrors {
         .userActionable = false,
     };
 
+    inline const ErrorCodeDescriptor SdlWrongThread{SdlOpenGLDomain,
+                                                    ErrorCode{"render.sdl.wrong_thread"},
+                                                    ErrorSeverity::Error,
+                                                    "SDL OpenGL presentation was accessed outside its owner thread.",
+                                                    {},
+                                                    false,
+                                                    false};
+    inline const ErrorCodeDescriptor SdlInvalidContextDescriptor{SdlOpenGLDomain,
+                                                                 ErrorCode{"render.sdl.invalid_context_descriptor"},
+                                                                 ErrorSeverity::Error,
+                                                                 "SDL OpenGL context request is unsupported or invalid.",
+                                                                 {},
+                                                                 false,
+                                                                 false};
     inline const ErrorCodeDescriptor SdlContextExists{SdlOpenGLDomain,
                                                       ErrorCode{"render.sdl.context_exists"},
                                                       ErrorSeverity::Error,

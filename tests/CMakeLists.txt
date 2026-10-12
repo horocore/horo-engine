@@ -2682,6 +2682,9 @@ add_executable(HoroRenderSurfaceLifecycleTests
 )
 target_compile_features(HoroRenderSurfaceLifecycleTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRenderSurfaceLifecycleTests PRIVATE HoroEngine::RenderApi)
+add_executable(HoroEditorPresentationSurfaceTests unit/editor/EditorPresentationSurfaceTests.cpp)
+target_compile_features(HoroEditorPresentationSurfaceTests PRIVATE cxx_std_20)
+target_link_libraries(HoroEditorPresentationSurfaceTests PRIVATE HoroEditorPresentationSurfaceInternal)
 add_executable(HoroRenderResourceDescriptorTests
         unit/runtime/renderer/RenderResourceDescriptorTests.cpp
 )
@@ -3918,6 +3921,12 @@ if (HORO_BUILD_RENDER_OPENGL)
             HoroEngine::RenderOpenGL
     )
     if (HORO_ENABLE_GPU_SMOKE_TESTS)
+        add_executable(HoroOpenGLSurfaceLifecycleSmoke integration/renderer/OpenGLSurfaceLifecycleSmoke.cpp)
+        target_compile_features(HoroOpenGLSurfaceLifecycleSmoke PRIVATE cxx_std_20)
+        target_link_libraries(HoroOpenGLSurfaceLifecycleSmoke PRIVATE Catch2::Catch2WithMain
+                HoroEditorPresentationSurfaceInternal HoroSdlOpenGLPresentationInternal HoroEngine::RenderFrontend
+                HoroEngine::RenderOpenGL HoroThirdParty::Glad)
+        horo_register_catch_test(HoroOpenGLSurfaceLifecycleSmoke LABELS "gpu;display;opengl;surface")
         add_executable(HoroOpenGLMaterialSmoke integration/renderer/OpenGLMaterialSmoke.cpp)
         target_compile_features(HoroOpenGLMaterialSmoke PRIVATE cxx_std_20)
         target_include_directories(HoroOpenGLMaterialSmoke PRIVATE
@@ -3953,6 +3962,17 @@ if (HORO_BUILD_RENDER_OPENGL)
                 set_tests_properties(HoroEditorOpenGLFirstFrame PROPERTIES
                         LABELS "gpu;display;editor"
                         ENVIRONMENT "HOME=${HORO_OPENGL_FIRST_FRAME_HOME};USERPROFILE=${HORO_OPENGL_FIRST_FRAME_HOME}"
+                )
+                set(HORO_OPENGL_SURFACE_HOME "${CMAKE_CURRENT_BINARY_DIR}/surface-lifecycle-home/opengl")
+                file(MAKE_DIRECTORY "${HORO_OPENGL_SURFACE_HOME}")
+                add_test(NAME HoroEditorOpenGLSurfaceRecovery
+                        COMMAND $<TARGET_FILE:HoroEditor> --renderer opengl --exit-after-frames 32
+                                --qualify-opengl-surface-lifecycle)
+                set_tests_properties(HoroEditorOpenGLSurfaceRecovery PROPERTIES
+                        LABELS "gpu;display;editor;opengl;surface"
+                        TIMEOUT 60
+                        PASS_REGULAR_EXPRESSION "HoroEditor surface lifecycle qualification passed"
+                        ENVIRONMENT "HOME=${HORO_OPENGL_SURFACE_HOME};USERPROFILE=${HORO_OPENGL_SURFACE_HOME}"
                 )
             endif ()
         endif ()
@@ -4201,6 +4221,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroFramePacingTests
         HoroPresentModeTests
         HoroRenderSurfaceLifecycleTests
+        HoroEditorPresentationSurfaceTests
         HoroRenderGraphTests
         HoroRenderGraphInspectionTests
         HoroRenderGraphLifetimeTests

@@ -1,8 +1,8 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Scene/PrimitiveMesh.h"
+#include "OpenGLBackendModule.h"
 #include "editor/renderer/opengl/EditorViewportRendererOpenGL.h"
 #include "editor/renderer/opengl/SdlOpenGLPresentationPort.h"
-#include "runtime/renderer/modules/opengl/OpenGLBackendModule.h"
 
 #include <SDL3/SDL.h>
 #include <array>
@@ -82,7 +82,6 @@ namespace Horo::Render::OpenGLSmokeTests {
     void CheckSeamlessResourceTransition(EditorViewportRendererOpenGL &viewport, RenderFrontend &frontend,
                                          const EditorViewportSceneView &scene, const RenderTargetHandle activeTarget,
                                          const EditorViewportTextureView activeTexture) {
-        constexpr EditorViewportExtent activeExtent{512, 384};
         constexpr EditorViewportExtent resizedExtent{384, 256};
         std::vector<EditorViewportMeshResourceView> replacementMeshes{scene.meshResources.begin(), scene.meshResources.end()};
         replacementMeshes.front().handle.generation = 2;
@@ -95,7 +94,9 @@ namespace Horo::Render::OpenGLSmokeTests {
         RenderTargetHandle resizedTarget;
         RenderTargetHandle currentTarget = activeTarget;
         viewport.RequestExtent(resizedExtent);
-        for (std::size_t attempt = 0; attempt < 6 && !resizedTarget.IsValid(); ++attempt) {
+        for (std::size_t attempt = 0; attempt < 6; ++attempt) {
+            if (resizedTarget.IsValid())
+                break;
             auto prepared = viewport.PrepareResources(frontend, renderScene);
             Check(prepared.HasValue() && prepared.Value().has_value());
             currentTarget = *prepared.Value();
@@ -224,16 +225,14 @@ namespace Horo::Render::OpenGLSmokeTests {
     };
 
     [[nodiscard]] ViewportSceneFixture CreateViewportScene() {
+        using enum Runtime::PrimitiveMeshType;
         ViewportSceneFixture fixture{
             .lights = {RenderLight{.kind = RenderLightKind::Directional,
                                    .direction = Math::Normalize(Math::Vec3{0.5F, -1.0F, -0.5F}),
                                    .color = {1.0F, 0.95F, 0.88F},
                                    .intensity = 2.0F}},
         };
-        constexpr std::array primitiveTypes{Runtime::PrimitiveMeshType::Box,     Runtime::PrimitiveMeshType::Sphere,
-                                            Runtime::PrimitiveMeshType::Capsule, Runtime::PrimitiveMeshType::Cylinder,
-                                            Runtime::PrimitiveMeshType::Cone,    Runtime::PrimitiveMeshType::Plane,
-                                            Runtime::PrimitiveMeshType::Quad};
+        constexpr std::array primitiveTypes{Box, Sphere, Capsule, Cylinder, Cone, Plane, Quad};
         constexpr std::array positions{Math::Vec2{0, 0},         Math::Vec2{-1.0F, 0.7F}, Math::Vec2{0, 0.9F},    Math::Vec2{1.0F, 0.7F},
                                        Math::Vec2{-1.0F, -0.7F}, Math::Vec2{0, -0.9F},    Math::Vec2{1.0F, -0.7F}};
         for (std::size_t index = 0; index < primitiveTypes.size(); ++index) {
@@ -242,8 +241,10 @@ namespace Horo::Render::OpenGLSmokeTests {
             Runtime::PrimitiveMeshLease lease = std::move(acquired).Value();
             const MeshData &mesh = lease.Data();
             const RenderMeshSourceHandle handle{lease.Id(), 1};
-            fixture.meshResources.push_back({handle, mesh.vertices, mesh.indices, mesh.localBounds});
-            const float scale = primitiveTypes[index] == Runtime::PrimitiveMeshType::Plane ? 0.08F : index == 0 ? 0.65F : 0.45F;
+            fixture.meshResources.emplace_back(handle, mesh.vertices, mesh.indices, mesh.localBounds);
+            float scale = index == 0 ? 0.65F : 0.45F;
+            if (primitiveTypes[index] == Plane)
+                scale = 0.08F;
             fixture.instances.push_back(
                 {handle,
                  Math::Transform{.translation = {positions[index].x, positions[index].y, 0}, .scale = {scale, scale, scale}}.ToMatrix(),
@@ -295,7 +296,7 @@ namespace Horo::Render::OpenGLSmokeTests {
         Check(SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1));
         Check(SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24));
         SDL_Window *window = SDL_CreateWindow("Horo viewport smoke", 640, 480, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
-        Check(window != nullptr);
+        REQUIRE(window != nullptr);
 
         HeadlessOpenGLPresentationPort presentationPort{*window};
         RenderBackendRegistry registry;

@@ -290,15 +290,16 @@ namespace Horo::Render {
                 if (!initialized_) {
                     return Result<void>::Failure(MakeError(OpenGLBackendErrors::NotInitialized, "Renderer backend is not initialized."));
                 }
-                if (!extent.IsValid()) {
-                    return Result<void>::Failure(MakeError(OpenGLBackendErrors::InvalidExtent, "Renderer output extent must be non-zero."));
+                if (!extent.IsValid() || !std::in_range<std::int32_t>(extent.width) || !std::in_range<std::int32_t>(extent.height)) {
+                    return Result<void>::Failure(MakeError(OpenGLBackendErrors::InvalidExtent, "Expected nonzero int32 viewport extent."));
                 }
                 if (frameActive_) {
                     return Result<void>::Failure(
                         MakeError(OpenGLBackendErrors::FrameActive, "Renderer output cannot resize while a frame is active."));
                 }
 
-                return Result<void>::Success();
+                // A validated host extent is not proof that the attached native context is still usable.
+                return presentationPort_->MakeCurrent();
             }
 
             /** @copydoc IRenderBackend::Shutdown */

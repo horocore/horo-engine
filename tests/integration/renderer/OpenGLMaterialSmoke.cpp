@@ -15,6 +15,9 @@ namespace Horo::Render::OpenGLMaterialSmoke {
     public:
         explicit Port(SDL_Window &window) noexcept : window_(&window) {}
 
+        Port(const Port &) = delete;
+        Port &operator=(const Port &) = delete;
+
         ~Port() override {
             DestroyContext();
         }
@@ -38,7 +41,12 @@ namespace Horo::Render::OpenGLMaterialSmoke {
         }
 
         Result<OpenGLContextFacts> QueryContextFacts() override {
-            GLint major = 0, minor = 0, profile = 0, texture = 0, attachments = 0, attributes = 0;
+            GLint major = 0;
+            GLint minor = 0;
+            GLint profile = 0;
+            GLint texture = 0;
+            GLint attachments = 0;
+            GLint attributes = 0;
             glGetIntegerv(GL_MAJOR_VERSION, &major);
             glGetIntegerv(GL_MINOR_VERSION, &minor);
             glGetIntegerv(GL_CONTEXT_PROFILE_MASK, &profile);
@@ -87,7 +95,11 @@ namespace Horo::Render::OpenGLMaterialSmoke {
     /** @brief Test-only caller state sentinels for program, VAO, uniform range, texture, sampler and indexed raster state. */
     struct CallerState {
         static constexpr GLenum FixedIndexRestart = 0x8D69;
-        GLuint buffer{}, texture{}, sampler{}, vertexArray{}, program{};
+        GLuint buffer{};
+        GLuint texture{};
+        GLuint sampler{};
+        GLuint vertexArray{};
+        GLuint program{};
         bool fixedRestart{false};
         GLint clipDistances{0};
 
@@ -126,6 +138,9 @@ namespace Horo::Render::OpenGLMaterialSmoke {
                 glEnable(GL_CLIP_DISTANCE0 + static_cast<GLenum>(clipDistances - 1));
             REQUIRE(glGetError() == GL_NO_ERROR);
         }
+
+        CallerState(const CallerState &) = delete;
+        CallerState &operator=(const CallerState &) = delete;
 
         ~CallerState() {
             glUseProgram(0);
@@ -194,7 +209,9 @@ namespace Horo::Render::OpenGLMaterialSmoke {
         std::shared_ptr<const ResidentMaterialBinding> material;
         MaterialBindingGenerationId binding;
         Detail::OpenGLMaterialContextFeatures features;
-        std::uint64_t program, samplerObject, targetObject;
+        std::uint64_t program;
+        std::uint64_t samplerObject;
+        std::uint64_t targetObject;
     };
 
     /** @brief Prepares the same exact native resources before installing hostile caller state. */
@@ -266,6 +283,10 @@ namespace Horo::Render::OpenGLMaterialSmoke {
         REQUIRE(registry.Seal().HasValue());
         auto created = RenderFrontend::Create(registry, RenderBackendId{"opengl"},
                                               {.enableValidation = false, .maxFramesInFlight = 1, .presentMode = PresentMode::Immediate});
+        if (created.HasError()) {
+            FAIL("Frontend creation: " << created.ErrorValue().domain.Value() << '/' << created.ErrorValue().code.Value() << ": "
+                                       << created.ErrorValue().message);
+        }
         REQUIRE(created.HasValue());
         auto frontend = std::move(created).Value();
         const auto device = frontend->QueryPipelineDeviceIdentity();
