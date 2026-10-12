@@ -1,4 +1,5 @@
 #pragma once
+#include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "RenderResourceRegistry.h"
 #include "UiRenderSubmissionRetention.h"
@@ -31,6 +32,11 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<IRenderGraphResourceLease *> Acquire(std::span<const RenderGraphResource> resources,
                                                                   UiRenderSubmission *ui = nullptr,
                                                                   RenderGraphTransientResourceSet *transient = nullptr);
+        /** @brief Retains material consumers and exact target/mesh pins using the same preallocated frame-completion pool.
+         * @param pins Resolved target and mesh generations. @param draws Immutable materials to retain through completion.
+         * @return Existing frame lease or typed capacity/residency failure with complete rollback. */
+        [[nodiscard]] Result<IRenderGraphResourceLease *> AcquireMaterial(std::span<const RenderGraphResidentIdentity> pins,
+                                                                          std::span<const RenderMaterialDraw> draws);
 
     private:
         using Pin = RenderGraphResidentIdentity;
@@ -45,11 +51,15 @@ namespace Horo::Render::Detail {
              * @details The outer acquisition transaction owns rollback of an already retained prefix.
              */
             [[nodiscard]] Result<void> PinResource(const RenderGraphResource &resource);
+            /** @brief Adds one exact distinct registry pin without allocating storage. */
+            [[nodiscard]] Result<void> PinIdentity(const Pin &pin);
             RenderGraphResourceLeasePool *pool{nullptr};
             bool active{false};
             std::vector<Pin> pins;
             UiRenderSubmissionRetention ui;
             RenderGraphTransientResourceSet *transient{nullptr};
+            std::array<std::shared_ptr<const ResidentMaterialBinding>, RenderMaterialPass::MaximumDraws> materials;
+            std::size_t materialCount{0};
         };
 
         RenderResourceRegistry *registry_;

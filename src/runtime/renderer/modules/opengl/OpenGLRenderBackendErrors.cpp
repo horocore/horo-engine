@@ -222,4 +222,20 @@ namespace Horo::Render::OpenGLBackendErrors {
                                                       .remediationHint = "Use live dependency instances created by this OpenGL backend.",
                                                       .retryable = false,
                                                       .userActionable = false};
+    const ErrorCodeDescriptor ShaderCompileFailed{.domain = Domain,
+                                                  .code = ErrorCode{"render.opengl.shader_compile_failed"},
+                                                  .defaultSeverity = ErrorSeverity::Error,
+                                                  .summary = "OpenGL rejected a cooked shader stage.",
+                                                  .remediationHint = "Inspect the preserved driver log and recook the exact OpenGL target.",
+                                                  .retryable = false,
+                                                  .userActionable = true};
+
+    const ErrorCodeDescriptor PipelineLinkFailed{.domain = Domain,
+                                                 .code = ErrorCode{"render.opengl.pipeline_link_failed"},
+                                                 .defaultSeverity = ErrorSeverity::Error,
+                                                 .summary = "OpenGL rejected a cooked graphics pipeline.",
+                                                 .remediationHint =
+                                                     "Inspect the preserved driver log and verify the exact stage interfaces.",
+                                                 .retryable = false,
+                                                 .userActionable = true};
 }  // namespace Horo::Render::OpenGLBackendErrors

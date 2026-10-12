@@ -1,6 +1,10 @@
+#include "Horo/Runtime/Render/MaterialBinding.h"
+#include "Horo/Runtime/Render/MaterialBindingErrors.h"
+#include "Horo/Runtime/Render/RenderShaderResources.h"
 #include "OpenGLBackendInternal.h"
 #include "OpenGLExecutionAdapter.h"
 #include "OpenGLGraphWorkloads.h"
+#include "OpenGLPreparedMaterialState.h"
 #include "OpenGLRenderBackendErrors.h"
 
 #include <algorithm>
@@ -9,7 +13,9 @@
 #include <glad/gl.h>
 #include <limits>
 #include <memory>
+#include <new>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -151,6 +157,10 @@ namespace Horo::Render {
                     return Result<void>::Failure(MakeError(OpenGLBackendErrors::PresentationInUse,
                                                            "OpenGL presentation attachment is already owned by another backend."));
                 }
+                if (config.adapter)
+                    return Result<void>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation,
+                                                           "This OpenGL presentation port cannot realize an explicit adapter selection; no "
+                                                           "default device substitution occurs."));
                 contextLease_->claimed = true;
                 ownsContextLease_ = true;
                 ownerThread_ = std::this_thread::get_id();
@@ -233,6 +243,7 @@ namespace Horo::Render {
             }
 
 #include "OpenGLRenderBackendGraph.inl"
+#include "OpenGLRenderBackendMaterial.inl"
 
             /** @copydoc IRenderBackend::Present */
             Result<void> Present(const FrameToken frame) override {
@@ -299,6 +310,7 @@ namespace Horo::Render {
                 // Context destruction owns queued native references; no normal-frame or teardown GPU wait is introduced.
                 CompleteActiveFrame();
                 execution_.Reset();
+                prepared_.DestroyPrepared(functions_.shaders, functions_.samplers);
                 DestroyRemainingResources();
                 initialized_ = false;
                 DestroyContext();
@@ -440,6 +452,8 @@ namespace Horo::Render {
                 textureViews_.clear();
                 textureDescriptors_.clear();
                 bufferDescriptors_.clear();
+                prepared_.meshDescriptors.clear();
+                prepared_.materialTargets.clear();
             }
 
             [[nodiscard]] Result<void> ValidateActiveFrame(const FrameToken frame) const {
@@ -497,6 +511,7 @@ namespace Horo::Render {
             std::unordered_map<std::uint32_t, RenderBufferDescriptor> bufferDescriptors_;
             std::unordered_map<std::uint32_t, Detail::OpenGLGraphTexture> textureDescriptors_;
             std::unordered_map<std::uint64_t, OpenGLTextureView> textureViews_;
+            Detail::OpenGLPreparedMaterialState prepared_;
             std::uint32_t nextTextureViewIdentity_{1};
             std::unordered_set<std::uint32_t> buffers_;
             std::unordered_set<std::uint32_t> meshes_;

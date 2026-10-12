@@ -15,6 +15,10 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> MakeCurrent() override;
         [[nodiscard]] Result<void> LoadCommandDispatch() override;
         [[nodiscard]] Result<Render::OpenGLContextFacts> QueryContextFacts() override;
+        /** @brief Requires the retained current context and exact SDL interval readback, without fallback.
+         * @param mode Explicit FIFO or Immediate mode.
+         * @return Success only after exact readback; typed context, query, setter or mismatch failure otherwise.
+         */
         [[nodiscard]] Result<void> SetPresentMode(Render::PresentMode mode) override;
         [[nodiscard]] Result<void> SwapBuffers() override;
         void DestroyContext() noexcept override;

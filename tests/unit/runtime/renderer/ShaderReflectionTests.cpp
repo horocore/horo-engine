@@ -63,6 +63,24 @@ using Horo::Render::ShaderBindingId;
 using Horo::Render::ShaderManifest;
 using Horo::Render::ShaderReflectionCandidate;
 using Horo::Render::ShaderReflectionLimits;
+
+TEST_CASE("Shader reflection bounds final target stage names before admitting native lookup", "[runtime][renderer][shader-reflection]") {
+    const ShaderManifest manifest = ShaderReflectionTests::Manifest();
+    const auto target = ShaderReflectionTests::Target();
+    auto candidate = ShaderReflectionTests::Candidate();
+    candidate.stageInterface.back().nativeName = "FinalColor";
+    const auto normalized = NormalizeShaderReflection(manifest, target, candidate, ShaderReflectionTests::AdmittedIncludes);
+    REQUIRE(normalized.HasValue());
+    CHECK(normalized.Value().stageInterface.back().nativeName == "FinalColor");
+
+    candidate.stageInterface.back().nativeName.assign(ShaderReflectionLimits{}.maximumIdentityBytes + 1, 'x');
+    Horo::Tests::RequireError(NormalizeShaderReflection(manifest, target, candidate, ShaderReflectionTests::AdmittedIncludes),
+                              Horo::Render::ShaderReflectionErrors::InvalidReflection);
+    candidate.stageInterface.back().nativeName.assign("Color\0Hidden", 12);
+    Horo::Tests::RequireError(NormalizeShaderReflection(manifest, target, candidate, ShaderReflectionTests::AdmittedIncludes),
+                              Horo::Render::ShaderReflectionErrors::InvalidReflection);
+}
+
 using Horo::Render::ShaderTargetBackend;
 using Horo::Render::ShaderTargetRequirement;
 using Horo::Tests::RequireError;

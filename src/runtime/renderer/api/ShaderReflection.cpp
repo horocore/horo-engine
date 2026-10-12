@@ -326,6 +326,7 @@ namespace Horo::Render {
                 if (!IsKnown(variable.stage, ShaderStage::Compute) || !IsKnown(variable.direction, ShaderInterfaceDirection::Output) ||
                     !IsKnown(variable.type, ShaderValueType::Bool32) || variable.rows == 0 || variable.rows > 4 || variable.columns == 0 ||
                     variable.columns > 4 || variable.arrayCount == 0 || variable.stage == ShaderStage::Compute ||
+                    !IsValidNativeName(variable.nativeName, limits.maximumIdentityBytes) ||
                     (index > 0 && InterfaceKey(candidate.stageInterface[index - 1]) >= InterfaceKey(variable)))
                     return Result<void>::Failure(MakeError(ShaderReflectionErrors::InvalidReflection));
                 if (std::ranges::none_of(manifest.entryPoints, [&](const ShaderEntryPoint &entry) {

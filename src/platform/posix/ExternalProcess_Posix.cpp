@@ -102,7 +102,15 @@ namespace Horo {
             return readv(descriptor, &buffer, 1);
         }
 
-        void Drain(const int descriptor, bool &open, LineDecoder &decoder) {
+        enum class PipeDrainState {
+            Closed,
+            WriterPending,
+            Retry
+        };
+
+        /** @brief Distinguishes an open writer from a finite unread tail or interrupted read. */
+        PipeDrainState Drain(const int descriptor, bool &open, LineDecoder &decoder) {
+            using enum PipeDrainState;
             std::array<char, 4096> buffer{};
             for (std::size_t reads = 0; reads < 16; ++reads) {
                 const ssize_t count = ReadPipeChunk(descriptor, buffer);
@@ -113,9 +121,18 @@ namespace Horo {
                 if (count == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
                     open = false;
                     decoder.Finish();
+                    return Closed;
                 }
-                return;
+                return errno == EINTR ? Retry : WriterPending;
             }
+            return Retry;
+        }
+
+        /** @brief Observes terminal leader status without reaping, keeping its PID reserved for group cleanup. */
+        [[nodiscard]] bool LeaderExited(const pid_t process) {
+            siginfo_t information{};
+            return waitid(P_PID, static_cast<id_t>(process), &information, WEXITED | WNOHANG | WNOWAIT) == 0 &&
+                   information.si_pid == process;
         }
 
         /** @brief Adds the sole maintenance descriptor to the child file actions. */
@@ -224,7 +241,7 @@ namespace Horo {
         };
 
         void UpdateProcessTermination(const pid_t process, const ExternalProcessRequest &request, const CancellationToken &cancellation,
-                                      ProcessMonitorState &monitor, const bool childExited) {
+                                      ProcessMonitorState &monitor, const bool descendantWriter) {
             using enum ProcessStopCause;
             const auto now = std::chrono::steady_clock::now();
             if (request.forceCancellation.IsCancellationRequested() && !monitor.forced) {
@@ -236,11 +253,11 @@ namespace Horo {
                 return;
             }
             if (const bool cancelled = cancellation.IsCancellationRequested();
-                !monitor.terminationRequested && (cancelled || now - monitor.started >= request.timeout || childExited)) {
+                !monitor.terminationRequested && (cancelled || now - monitor.started >= request.timeout || descendantWriter)) {
                 monitor.terminationRequested = true;
                 if (cancelled)
                     monitor.cause = Cancellation;
-                else if (childExited)
+                else if (descendantWriter)
                     monitor.cause = DescendantCleanup;
                 else
                     monitor.cause = Timeout;
@@ -313,21 +330,20 @@ namespace Horo {
         };
 
         while (!childExited || stdoutOpen || stderrOpen) {
-            UpdateProcessTermination(process, request, cancellation, monitor, childExited);
-
+            using enum PipeDrainState;
             std::array<pollfd, 2> descriptors{{{stdoutPipe[0], static_cast<short>(stdoutOpen ? POLLIN : 0), 0},
                                                {stderrPipe[0], static_cast<short>(stderrOpen ? POLLIN : 0), 0}}};
             static_cast<void>(poll(descriptors.data(), static_cast<nfds_t>(descriptors.size()), 25));
-            if (stdoutOpen && (descriptors[0].revents & (POLLIN | POLLHUP | POLLERR)) != 0)
-                Drain(stdoutPipe[0], stdoutOpen, standardOutput);
-            if (stderrOpen && (descriptors[1].revents & (POLLIN | POLLHUP | POLLERR)) != 0)
-                Drain(stderrPipe[0], stderrOpen, standardError);
-            if (!childExited) {
-                siginfo_t information{};
-                childExited = waitid(P_PID, static_cast<id_t>(process), &information, WEXITED | WNOHANG | WNOWAIT) == 0 &&
-                              information.si_pid == process;
-            }
-            if (monitor.forced && std::chrono::steady_clock::now() - monitor.forcedAt >= request.maximumDrainDuration)
+            childExited = childExited || LeaderExited(process);
+            // Observe exit before reading: EAGAIN then proves a surviving pipe writer,
+            // whereas pending bytes, EOF and the reserved zombie leader do not.
+            const auto stdoutState = stdoutOpen ? Drain(stdoutPipe[0], stdoutOpen, standardOutput) : Closed;
+            const auto stderrState = stderrOpen ? Drain(stderrPipe[0], stderrOpen, standardError) : Closed;
+            const bool complete = childExited && !stdoutOpen && !stderrOpen;
+            const bool descendantWriter = childExited && (stdoutState == WriterPending || stderrState == WriterPending);
+            if (!complete)
+                UpdateProcessTermination(process, request, cancellation, monitor, descendantWriter);
+            if (complete || (monitor.forced && std::chrono::steady_clock::now() - monitor.forcedAt >= request.maximumDrainDuration))
                 break;
         }
         // Keep the unreaped leader PID reserved until the whole group has received its final kill.
