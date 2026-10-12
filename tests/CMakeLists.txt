@@ -3895,6 +3895,10 @@ target_link_libraries(HoroAgentPolicyTests PRIVATE HoroEngine::Security Catch2::
 horo_register_catch_test(HoroAgentPolicyTests LABELS "unit;security;headless")
 
 if (HORO_BUILD_RENDER_OPENGL)
+    add_executable(HoroOpenGLHostAdmissionInternalConsumer support/OpenGLHostAdmissionInternalConsumer.cpp)
+    target_link_libraries(HoroOpenGLHostAdmissionInternalConsumer PRIVATE HoroOpenGLHostAdmissionInternal)
+    add_test(NAME HoroOpenGLHostAdmissionInternalConsumer COMMAND HoroOpenGLHostAdmissionInternalConsumer)
+    set_tests_properties(HoroOpenGLHostAdmissionInternalConsumer PROPERTIES LABELS "unit;headless;sonar-coverage")
     add_executable(HoroRenderOpenGLTests
             unit/runtime/renderer/OpenGLRenderBackendTests.cpp
             unit/runtime/renderer/OpenGLCommandAdaptationTests.cpp
@@ -3916,6 +3920,7 @@ if (HORO_BUILD_RENDER_OPENGL)
             PRIVATE
             HoroEngine::RenderFrontend
             HoroEngine::RenderOpenGL
+            HoroOpenGLHostAdmissionInternal
     )
     if (HORO_ENABLE_GPU_SMOKE_TESTS)
         add_executable(HoroOpenGLMaterialSmoke integration/renderer/OpenGLMaterialSmoke.cpp)
@@ -3925,8 +3930,20 @@ if (HORO_BUILD_RENDER_OPENGL)
                 ${PROJECT_SOURCE_DIR}/src/runtime/renderer/frontend
                 ${PROJECT_SOURCE_DIR}/tests/unit/runtime/renderer)
         target_link_libraries(HoroOpenGLMaterialSmoke PRIVATE Catch2::Catch2WithMain
-                HoroEngine::RenderFrontend HoroEngine::RenderOpenGL HoroThirdParty::Glad ${HORO_SDL3_TARGET})
-        horo_register_catch_test(HoroOpenGLMaterialSmoke LABELS "gpu;display;opengl;material")
+                HoroEngine::RenderFrontend HoroEngine::RenderOpenGL HoroThirdParty::Glad ${HORO_SDL3_TARGET}
+                HoroOpenGLHostAdmissionInternal)
+        catch_discover_tests(HoroOpenGLMaterialSmoke
+                TEST_PREFIX "HoroOpenGLMaterialSmoke::"
+                TEST_SPEC "[hardware-qualification]"
+                TEST_LIST HoroOpenGLMaterialHardwareTests)
+        catch_discover_tests(HoroOpenGLMaterialSmoke
+                TEST_PREFIX "HoroOpenGLMaterialSmoke::"
+                TEST_SPEC "[software-coverage]"
+                TEST_LIST HoroOpenGLMaterialCoverageTests)
+        set(material_properties_file "${CMAKE_CURRENT_BINARY_DIR}/HoroOpenGLMaterialSmoke_evidence_properties.cmake")
+        file(GENERATE OUTPUT "${material_properties_file}" CONTENT
+                "if(HoroOpenGLMaterialHardwareTests)\n    set_tests_properties(\${HoroOpenGLMaterialHardwareTests} PROPERTIES LABELS [==[gpu;display;opengl;material;hardware-qualification]==] TIMEOUT 60 RUN_SERIAL TRUE)\nendif()\nif(HoroOpenGLMaterialCoverageTests)\n    set_tests_properties(\${HoroOpenGLMaterialCoverageTests} PROPERTIES LABELS [==[display;opengl;material;software-coverage;sonar-coverage]==] TIMEOUT 60 RUN_SERIAL TRUE)\nendif()\n")
+        set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES "${material_properties_file}")
     endif ()
     if (HORO_BUILD_EDITOR_GUI)
         add_executable(HoroEditorViewportOpenGLSmoke

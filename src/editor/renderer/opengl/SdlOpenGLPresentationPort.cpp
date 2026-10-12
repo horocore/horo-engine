@@ -1,5 +1,6 @@
 #include "SdlOpenGLPresentationPort.h"
 
+#include "OpenGLSwapIntervalAdmission.h"
 #include "editor/renderer/EditorRendererErrors.h"
 
 #include <glad/gl.h>
@@ -112,9 +113,17 @@ namespace Horo::Editor {
                 return Result<void>::Failure(MakeError(RendererErrors::SdlInvalidPresentMode, "Unsupported presentation mode."));
         }
 
-        if (!SDL_GL_SetSwapInterval(interval)) {
+        if (context_ == nullptr || SDL_GL_GetCurrentContext() != context_)
+            return Result<void>::Failure(MakeError(RendererErrors::SdlPresentModeFailed, "The retained OpenGL context is not current."));
+        const auto admitted = Render::Detail::AdmitExactSwapInterval(interval, SDL_GL_GetSwapInterval, SDL_GL_SetSwapInterval);
+        if (admitted == Render::Detail::SwapIntervalAdmission::QueryFailed)
+            return Result<void>::Failure(MakeSdlRenderError(RendererErrors::SdlPresentModeFailed, "SDL_GL_GetSwapInterval failed"));
+        if (admitted == Render::Detail::SwapIntervalAdmission::SetFailed) {
             return Result<void>::Failure(MakeSdlRenderError(RendererErrors::SdlPresentModeFailed, "SDL_GL_SetSwapInterval failed"));
         }
+        if (admitted == Render::Detail::SwapIntervalAdmission::Mismatch)
+            return Result<void>::Failure(
+                MakeError(RendererErrors::SdlPresentModeFailed, "The active swap interval differs from the required mode."));
         return Result<void>::Success();
     }
 

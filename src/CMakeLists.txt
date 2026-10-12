@@ -2152,6 +2152,12 @@ target_link_libraries(HoroRenderNull
 )
 
 if (HORO_BUILD_RENDER_OPENGL)
+    # One-header host contract; never installed or exposed by RenderOpenGL.
+    add_library(HoroOpenGLHostAdmissionInternal INTERFACE)
+    target_compile_features(HoroOpenGLHostAdmissionInternal INTERFACE cxx_std_20)
+    target_include_directories(HoroOpenGLHostAdmissionInternal INTERFACE
+            ${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/opengl_host/include)
+
     add_library(HoroRenderOpenGL STATIC
             runtime/renderer/modules/opengl/OpenGLBackendModule.cpp
             runtime/renderer/modules/opengl/OpenGLCommandFunctions.cpp
@@ -2544,6 +2550,7 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_OPENGL)
             PRIVATE
             HoroThirdParty::Glad
             HoroThirdParty::ImGuiOpenGL
+            HoroOpenGLHostAdmissionInternal
     )
 
 endif ()
