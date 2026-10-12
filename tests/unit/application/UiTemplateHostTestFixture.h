@@ -1,9 +1,9 @@
 #pragma once
 
-#include "Horo/Application/UiTemplateHost.h"
-#include "Horo/UiTemplates/UiTemplateSource.h"
 #include "../packages/PackageArchiveTestSupport.h"
 #include "../ui_templates/UiTemplateOwnerTestFixture.h"
+#include "Horo/Application/UiTemplateHost.h"
+#include "Horo/UiTemplates/UiTemplateSource.h"
 
 #include <fstream>
 
@@ -37,11 +37,12 @@ namespace Horo::Application::TemplateHostTests {
             REQUIRE(created.HasValue());
             owner = std::move(created).Value();
             WriteSource(sourceBytes);
-            Write("assets/template.uitmpl.horo", nlohmann::json{{"schemaVersion", 1}, {"assetId", reference.asset.asset.ToString()},
-                                                               {"assetType", type.Value()}}.dump());
-            REQUIRE(registry.Publish({{reference.asset.asset, type, ProjectPath::Parse("assets/template.uitmpl").Value(),
-                                       ProjectPath::Parse("assets/template.uitmpl.horo").Value()}}).status ==
-                    Assets::AssetRegistryBuildStatus::Complete);
+            Write("assets/template.uitmpl.horo",
+                  nlohmann::json{{"schemaVersion", 1}, {"assetId", reference.asset.asset.ToString()}, {"assetType", type.Value()}}.dump());
+            REQUIRE(registry
+                        .Publish({{reference.asset.asset, type, ProjectPath::Parse("assets/template.uitmpl").Value(),
+                                   ProjectPath::Parse("assets/template.uitmpl.horo").Value()}})
+                        .status == Assets::AssetRegistryBuildStatus::Complete);
         }
 
         void Write(const std::string_view relative, const std::string_view bytes) const {
@@ -63,4 +64,4 @@ namespace Horo::Application::TemplateHostTests {
             return std::move(captured).Value();
         }
     };
-}
+}  // namespace Horo::Application::TemplateHostTests

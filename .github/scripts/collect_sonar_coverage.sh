@@ -7,11 +7,9 @@ fastcov=${FASTCOV:-/tmp/horo-coverage/bin/fastcov}
 python=${COVERAGE_PYTHON:-/tmp/horo-coverage/bin/python}
 
 started=$SECONDS
-"$fastcov" \
-  --gcov gcov \
-  --jobs "$(nproc)" \
-  --process-gcno \
-  --search-directory "$build_dir" \
+"$python" "$workspace/scripts/collect_sonar_coverage.py" \
+  --fastcov "$fastcov" \
+  --build-directory "$build_dir" \
   --include \
     "$workspace/include/" \
     "$workspace/src/" \
@@ -23,11 +21,7 @@ started=$SECONDS
     "$workspace/apps/HoroEditor/app/ConfiguredEditorUpdateBackend.cpp" \
     "$workspace/apps/HoroEditor/app/RenderGraphInspectionPane.cpp" \
     "$workspace/apps/HoroEditor/app/EditorSurfaceLifecycleQualification.cpp" \
-  --output "$build_dir/fastcov-coverage.json"
-
-"$python" "$workspace/scripts/fastcov_sonar_coverage.py" \
-  --input "$build_dir/fastcov-coverage.json" \
-  --output "$build_dir/coverage.xml"
+  --root "$workspace"
 
 elapsed=$((SECONDS - started))
 echo "Fastcov collection and conversion: ${elapsed}s."
