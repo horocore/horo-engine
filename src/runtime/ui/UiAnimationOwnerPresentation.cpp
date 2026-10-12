@@ -3,8 +3,8 @@
 namespace Horo::Runtime::Ui {
     /** @copydoc UiAnimationOwner::ApplyPresentation */
     Result<bool> UiAnimationOwner::ApplyPresentation(const UiPresentationReceipt &receipt) {
-        if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->stopped || storage_->draining ||
-            storage_->candidate.admitted || !storage_->currentFrame.has_value())
+        if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->lifecycle.stopped ||
+            storage_->lifecycle.draining || storage_->candidate.admitted || !storage_->currentFrame.has_value())
             return Result<bool>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         const auto &frame = *storage_->frames[*storage_->currentFrame];
         if (!frame.layout || !storage_->publisher.IsCurrent(frame.generation) || receipt.canvas != frame.layout->Descriptor().canvas ||
@@ -29,9 +29,9 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAnimationOwner::InputEligible */
     bool UiAnimationOwner::InputEligible(const UiRenderViewId view) const noexcept {
-        return storage_ && storage_->ownerThread == std::this_thread::get_id() && !storage_->stopped && !storage_->draining &&
-               !storage_->candidate.admitted && !storage_->route.gate && storage_->currentFrame.has_value() &&
-               storage_->publisher.InputEligible(storage_->definition.canvas, view) &&
+        return storage_ && storage_->ownerThread == std::this_thread::get_id() && !storage_->lifecycle.stopped &&
+               !storage_->lifecycle.draining && !storage_->candidate.admitted && !storage_->route.gate &&
+               storage_->currentFrame.has_value() && storage_->publisher.InputEligible(storage_->definition.canvas, view) &&
                (storage_->definition.routes.empty() || (ReadCanvas(*storage_)->routes && ReadCanvas(*storage_)->routes->Top()));
     }
 }  // namespace Horo::Runtime::Ui

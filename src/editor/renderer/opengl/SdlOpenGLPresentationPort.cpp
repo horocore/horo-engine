@@ -1,6 +1,7 @@
 #include "SdlOpenGLPresentationPort.h"
 
 #include "../EditorRendererErrors.h"
+#include "OpenGLSwapIntervalAdmission.h"
 
 #include <glad/gl.h>
 #include <limits>
@@ -154,21 +155,18 @@ namespace Horo::Editor {
                 return Result<void>::Failure(MakeError(RendererErrors::SdlInvalidPresentMode, "Unsupported presentation mode."));
         }
 
-        if (context_ == nullptr || SDL_GL_GetCurrentContext() != context_) {
+        if (context_ == nullptr || SDL_GL_GetCurrentContext() != context_)
             return Result<void>::Failure(MakeError(RendererErrors::SdlPresentModeFailed, "The retained OpenGL context is not current."));
-        }
-        return Detail::ApplyExactSwapInterval(interval, SDL_GL_GetSwapInterval, SDL_GL_SetSwapInterval);
-    }
-
-    /** @copydoc Detail::SwapIntervalError */
-    Result<void> Detail::SwapIntervalError(const SwapIntervalFailure failure) {
-        if (failure == SwapIntervalFailure::Query)
+        const auto admitted = Render::Detail::AdmitExactSwapInterval(interval, SDL_GL_GetSwapInterval, SDL_GL_SetSwapInterval);
+        if (admitted == Render::Detail::SwapIntervalAdmission::QueryFailed)
             return Result<void>::Failure(MakeSdlRenderError(RendererErrors::SdlPresentModeFailed, "SDL_GL_GetSwapInterval failed"));
-        if (failure == SwapIntervalFailure::Set)
+        if (admitted == Render::Detail::SwapIntervalAdmission::SetFailed) {
             return Result<void>::Failure(MakeSdlRenderError(RendererErrors::SdlPresentModeFailed, "SDL_GL_SetSwapInterval failed"));
-        return Result<void>::Failure(
-            MakeError(RendererErrors::SdlPresentModeFailed,
-                      "The active native swap interval does not match the explicitly requested presentation mode."));
+        }
+        if (admitted == Render::Detail::SwapIntervalAdmission::Mismatch)
+            return Result<void>::Failure(
+                MakeError(RendererErrors::SdlPresentModeFailed, "The active swap interval differs from the required mode."));
+        return Result<void>::Success();
     }
 
     /** @copydoc SdlOpenGLPresentationPort::SwapBuffers */

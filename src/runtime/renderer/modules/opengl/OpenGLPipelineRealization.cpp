@@ -26,6 +26,7 @@ namespace Horo::Render::Detail {
 
         /** @brief Maps portable scalar/vector/matrix shape to a private GL4.1 reflection type. */
         [[nodiscard]] GLenum ValueType(const ShaderValueType type, const std::uint8_t rows, const std::uint8_t columns) noexcept {
+            using enum ShaderValueType;
             if (rows < 1 || rows > 4 || columns < 1 || columns > 4)
                 return 0;
             if (rows == 1 || columns == 1) {
@@ -35,17 +36,17 @@ namespace Horo::Render::Detail {
                 constexpr std::array unsignedIntegers{GL_UNSIGNED_INT, GL_UNSIGNED_INT_VEC2, GL_UNSIGNED_INT_VEC3, GL_UNSIGNED_INT_VEC4};
                 constexpr std::array booleans{GL_BOOL, GL_BOOL_VEC2, GL_BOOL_VEC3, GL_BOOL_VEC4};
                 switch (type) {
-                    case ShaderValueType::Float32:
+                    case Float32:
                         return floats[components - 1];
-                    case ShaderValueType::Int32:
+                    case Int32:
                         return integers[components - 1];
-                    case ShaderValueType::Uint32:
+                    case Uint32:
                         return unsignedIntegers[components - 1];
-                    case ShaderValueType::Bool32:
+                    case Bool32:
                         return booleans[components - 1];
                 }
             }
-            if (type != ShaderValueType::Float32 || rows < 2 || columns < 2)
+            if (type != Float32 || rows < 2 || columns < 2)
                 return 0;
             constexpr std::array<std::array<GLenum, 3>, 3> matrices{{{GL_FLOAT_MAT2, GL_FLOAT_MAT2x3, GL_FLOAT_MAT2x4},
                                                                      {GL_FLOAT_MAT3x2, GL_FLOAT_MAT3, GL_FLOAT_MAT3x4},
@@ -55,13 +56,15 @@ namespace Horo::Render::Detail {
 
         /** @brief Checks actual active attributes against the established MeshVertex layout and cooked locations. */
         [[nodiscard]] Result<void> ValidateAttributes(const GLuint program, const NormalizedShaderReflection &reflection) {
-            GLint count{}, maximumName{};
+            GLint count{};
+            GLint maximumName{};
             glGetProgramiv(program, GL_ACTIVE_ATTRIBUTES, &count);
             glGetProgramiv(program, GL_ACTIVE_ATTRIBUTE_MAX_LENGTH, &maximumName);
-            const auto expected = std::ranges::count_if(reflection.stageInterface, [](const auto &variable) {
+            if (const auto expected = std::ranges::count_if(reflection.stageInterface,
+                                                            [](const auto &variable) {
                 return variable.stage == ShaderStage::Vertex && variable.direction == ShaderInterfaceDirection::Input;
             });
-            if (count != expected || count < 0 || count > 3 || maximumName > 257)
+                count != expected || count < 0 || count > 3 || maximumName > 257)
                 return Mismatch("Linked vertex attributes differ from bounded cooked MeshVertex reflection.");
             for (GLint index = 0; index < count; ++index) {
                 std::array<char, 257> name{};
@@ -77,7 +80,8 @@ namespace Horo::Render::Detail {
                     return variable.stage == ShaderStage::Vertex && variable.direction == ShaderInterfaceDirection::Input &&
                            location >= 0 && variable.location == static_cast<std::uint32_t>(location);
                 });
-                const GLenum meshType = location == 0 || location == 1 ? GL_FLOAT_VEC3 : location == 2 ? GL_FLOAT_VEC2 : 0;
+                const GLenum textureCoordinateType = location == 2 ? GL_FLOAT_VEC2 : 0;
+                const GLenum meshType = location == 0 || location == 1 ? GL_FLOAT_VEC3 : textureCoordinateType;
                 if (match == reflection.stageInterface.end() || size != 1 || match->arrayCount != 1 || type != meshType ||
                     type != ValueType(match->type, match->rows, match->columns))
                     return Mismatch("Linked vertex attribute type/location does not match cooked reflection and MeshVertex.");
@@ -101,7 +105,12 @@ namespace Horo::Render::Detail {
 
         /** @brief Fixed native packing evidence queried once per active member, independently of comparison count. */
         struct UniformPacking {
-            GLint type{}, size{}, offset{}, arrayStride{}, matrixStride{}, rowMajor{};
+            GLint type{};
+            GLint size{};
+            GLint offset{};
+            GLint arrayStride{};
+            GLint matrixStride{};
+            GLint rowMajor{};
         };
 
         /** @brief Queries exactly six finite native facts for one member. */
@@ -137,13 +146,15 @@ namespace Horo::Render::Detail {
             if (block == GL_INVALID_INDEX)
                 return Result<GLint>::Failure(
                     MakeError(OpenGLBackendErrors::ResourceIdentityInvalid, "Active cooked uniform block is absent after linking."));
-            GLint count{}, bytes{};
+            GLint count{};
+            GLint bytes{};
             glGetActiveUniformBlockiv(program, block, GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS, &count);
             glGetActiveUniformBlockiv(program, block, GL_UNIFORM_BLOCK_DATA_SIZE, &bytes);
-            const auto expected = std::ranges::count_if(reflection.parameters, [&mapping](const auto &parameter) {
+            if (const auto expected = std::ranges::count_if(reflection.parameters,
+                                                            [&mapping](const auto &parameter) {
                 return parameter.active && parameter.binding == mapping.id;
             });
-            if (count < 0 || count > 512 || count != expected || bytes <= 0 || bytes > maximumBytes)
+                count < 0 || count > 512 || count != expected || bytes <= 0 || bytes > maximumBytes)
                 return Result<GLint>::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid,
                                                         "Linked uniform block extent/member count differs from cooked packing."));
             std::array<GLint, 512> indices{};
@@ -175,32 +186,39 @@ namespace Horo::Render::Detail {
         /** @brief Checks one actual combined sampler uniform and maps only the unpublished program. */
         [[nodiscard]] Result<void> ValidateTexture(const GLuint program, const ShaderTargetBindingMapEntry &mapping,
                                                    const NormalizedShaderReflection &reflection, const GLint maximumUnits) {
-            const auto sampler = std::ranges::find_if(reflection.bindings, [&mapping](const auto &binding) {
+            if (const auto sampler = std::ranges::find_if(reflection.bindings,
+                                                          [&mapping](const auto &binding) {
                 return binding.id == mapping.pairedSampler && binding.active && binding.kind == ShaderResourceKind::Sampler &&
                        binding.arrayCount == 1;
             });
-            if (sampler == reflection.bindings.end() || mapping.nativeBinding >= static_cast<std::uint32_t>(maximumUnits))
+                sampler == reflection.bindings.end() || mapping.nativeBinding >= static_cast<std::uint32_t>(maximumUnits))
                 return Mismatch("Active sampled texture needs an exact paired sampler and an admitted native texture unit.");
             const char *name = mapping.nativeName.c_str();
             GLuint index{};
             glGetUniformIndices(program, 1, &name, &index);
             if (index == GL_INVALID_INDEX)
                 return Mismatch("Active cooked sampled texture is absent from the linked program.");
-            GLint type{}, size{}, block{};
+            GLint type{};
+            GLint size{};
+            GLint block{};
             glGetActiveUniformsiv(program, 1, &index, GL_UNIFORM_TYPE, &type);
             glGetActiveUniformsiv(program, 1, &index, GL_UNIFORM_SIZE, &size);
             glGetActiveUniformsiv(program, 1, &index, GL_UNIFORM_BLOCK_INDEX, &block);
             const GLint location = glGetUniformLocation(program, name);
             if (location < 0 || block != -1 || size != 1 || (type != GL_SAMPLER_2D && type != GL_SAMPLER_2D_SHADOW))
                 return Mismatch("Linked sampled texture has an unsupported or mismatched native uniform type/array/location.");
-            const GLint unit = static_cast<GLint>(mapping.nativeBinding);
+            const auto unit = static_cast<GLint>(mapping.nativeBinding);
             glProgramUniform1iv(program, location, 1, &unit);
             return Result<void>::Success();
         }
 
         /** @brief Checks every active native resource; undeclared or silently omitted uniform resources fail closed. */
         [[nodiscard]] Result<void> ValidateBindings(const GLuint program, const RenderGraphicsPipelineDescriptor &descriptor) {
-            GLint maximumBindings{}, maximumBytes{}, maximumUnits{}, actualBlocks{}, actualUniforms{};
+            GLint maximumBindings{};
+            GLint maximumBytes{};
+            GLint maximumUnits{};
+            GLint actualBlocks{};
+            GLint actualUniforms{};
             glGetIntegerv(GL_MAX_UNIFORM_BUFFER_BINDINGS, &maximumBindings);
             glGetIntegerv(GL_MAX_UNIFORM_BLOCK_SIZE, &maximumBytes);
             glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maximumUnits);
@@ -208,7 +226,8 @@ namespace Horo::Render::Detail {
             glGetProgramiv(program, GL_ACTIVE_UNIFORMS, &actualUniforms);
             if (maximumBindings <= 0 || maximumBytes <= 0 || maximumUnits <= 0)
                 return Mismatch("Actual GL4.1 uniform/sampler capacities are unavailable.");
-            GLint expectedBlocks{}, expectedUniforms{};
+            GLint expectedBlocks{};
+            GLint expectedUniforms{};
             for (const auto &mapping : descriptor.reflection.targetBindings) {
                 if (!mapping.active)
                     continue;

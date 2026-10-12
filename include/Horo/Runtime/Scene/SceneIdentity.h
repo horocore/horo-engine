@@ -36,4 +36,15 @@ namespace Horo::Runtime {
         [[nodiscard]] constexpr auto operator<=>(const SceneDefinitionRevision &) const noexcept = default;
     };
 
+    /** @brief Unique identity of one activated runtime-scene instance. */
+    struct SceneRuntimeId {
+        std::uint64_t value{};
+
+        [[nodiscard]] constexpr bool IsValid() const noexcept {
+            return value != 0;
+        }
+
+        [[nodiscard]] constexpr auto operator<=>(const SceneRuntimeId &) const noexcept = default;
+    };
+
 }  // namespace Horo::Runtime

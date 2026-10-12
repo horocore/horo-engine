@@ -32,6 +32,7 @@ namespace Horo::Editor {
         Unsupported,
         UiCanvas,
         Sequence,
+        PCGGraph,
     };
 
     /** @brief Caller that requested one source-open operation. */
@@ -67,11 +68,12 @@ namespace Horo::Editor {
         bool embeddedEditorAvailable{true};              /**< Embedded workspace route is installed. */
         bool externalEditorAvailable{true};              /**< External fallback route is installed. */
         std::vector<std::string> uiCanvasExtensions;     /**< Runtime UI canvas document suffixes. */
+        std::vector<std::string> pcgGraphExtensions;     /**< Binary PCG source suffixes; bypass text admission. */
         std::vector<std::string> sequenceExtensions;     /**< Versioned cinematic sequence source suffixes. */
 
         /**
          * @brief Returns the default source and authored-document opening policy.
-         * @return A value containing native source, Horo Script, project-text, UI Canvas, and cinematic sequence extensions.
+         * @return A value containing native source, Horo Script, project-text, UI Canvas, cinematic sequence and binary PCG extensions.
          */
         [[nodiscard]] static SourceFilePolicy Default();
     };
@@ -117,6 +119,13 @@ namespace Horo::Editor {
         std::uint32_t line{};                                      /**< Line copied from the request. */
         std::uint32_t column{};                                    /**< Column copied from the request. */
         std::optional<SourceDocumentSnapshot> sourceSnapshot;      /**< Owned text lease for embedded Source routes only. */
+    };
+
+    /** @brief Explicit host decision for a revision-fenced dirty source close. */
+    enum class SourceCloseDecision : std::uint8_t {
+        Cancel,
+        Save,
+        Discard
     };
 
     /**
@@ -201,6 +210,20 @@ namespace Horo::Editor {
             return sourceDocuments_;
         }
 
+        /** @brief Publishes source bytes at a permitted project destination and rebinds its routing key atomically.
+         * @param request Exact revision and optional destination-byte overwrite consent. @param destination Project-relative or absolute
+         * path.
+         * @param files Host filesystem. @param cancellation Cooperative precommit cancellation.
+         * @return Visible/durable receipt or typed precommit failure; original file remains unchanged.
+         * @pre The shared registry is quiescent for this synchronous call, including provider callbacks.
+         */
+        [[nodiscard]] Result<SourceSaveResult> SaveAs(const SourceSaveRequest &request, const std::filesystem::path &destination,
+                                                      DurableFileSystem &files, CancellationToken cancellation = {});
+        /** @brief Applies the explicit close choice; a failed or unconfirmed save keeps the session open.
+         * @param request Exact source revision and optional save overwrite consent. @param decision Explicit host choice.
+         * @param files Host filesystem. @return True only after text and routing ownership close together; false for Cancel.
+         */
+        [[nodiscard]] Result<bool> ResolveClose(const SourceSaveRequest &request, SourceCloseDecision decision, DurableFileSystem &files);
         /** @brief Closes both text ownership and its routing identity after an explicit host close decision.
          * @param instance Exact open session. @param discardDirty Explicit permission to discard unsaved text.
          * @return Success or typed stale/dirty/thread failure; presentation-only destruction must not call this.
@@ -217,6 +240,7 @@ namespace Horo::Editor {
                                                             const SourceFileClassification &classification,
                                                             const SourceOpenLocation &location);
 
+        bool publishing_{};
         bool projectRootValid_{false};
         std::filesystem::path projectRoot_;
         SourceFilePolicy policy_;

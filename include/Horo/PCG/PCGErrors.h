@@ -74,6 +74,8 @@ namespace Horo::PCG::PCGErrors {
     extern const ErrorCodeDescriptor GraphTopologyInvalid;
     /** @brief A node type is unavailable under the selected unknown-node policy. */
     extern const ErrorCodeDescriptor GraphNodeTypeUnknown;
+    /** @brief An exact built-in schema or runtime version is unavailable. */
+    extern const ErrorCodeDescriptor GraphNodeVersionUnsupported;
     /** @brief A graph source migration was required but unavailable or invalid. */
     extern const ErrorCodeDescriptor GraphMigrationFailed;
     /** @brief A replacement changes graph identity or fails to advance its durable revision. */
@@ -90,6 +92,14 @@ namespace Horo::PCG::PCGErrors {
     extern const ErrorCodeDescriptor CookedPlanStale;
     /** @brief Canonical plan encoding exceeded its finite tier or caller byte ceiling. */
     extern const ErrorCodeDescriptor CookedPlanCapacityExceeded;
+    /** @brief A cooked node, typed binding, route, or payload has no valid CPU execution contract. */
+    extern const ErrorCodeDescriptor CpuEvaluationInvalid;
+    /** @brief A cooked node type or determinism promise is unsupported by built-in CPU dispatch. */
+    extern const ErrorCodeDescriptor CpuEvaluationUnsupported;
+    /** @brief CPU evaluation exceeds its predeclared output, candidate, or replacement envelope. */
+    extern const ErrorCodeDescriptor CpuEvaluationCapacityExceeded;
+    /** @brief CPU evaluation was rejected by cancellation or shutdown admission. */
+    extern const ErrorCodeDescriptor CpuEvaluationClosed;
     /** @brief A generation plan, output operation, receipt, or provenance tuple is malformed. */
     extern const ErrorCodeDescriptor GenerationPlanInvalid;
     /** @brief A generation plan exceeds its finite operation, dependency, or resource envelope. */
@@ -130,4 +140,10 @@ namespace Horo::PCG::PCGErrors {
     extern const ErrorCodeDescriptor AsyncPublicationFailed;
     /** @brief A never-reused async operation identity cannot advance without wraparound. */
     extern const ErrorCodeDescriptor AsyncGenerationExhausted;
+    /** @brief The requested minimum separation provably cannot fit the exact point count. */
+    extern const ErrorCodeDescriptor GenerationDensityImpossible;
+    /** @brief Bounded scatter attempts ended before the exact point count; no partial result is published. */
+    extern const ErrorCodeDescriptor GenerationAttemptsExhausted;
+    /** @brief A generated semantic sample identity is absent, mismatched or repeated. */
+    extern const ErrorCodeDescriptor GenerationIdentityInvalid;
 }  // namespace Horo::PCG::PCGErrors

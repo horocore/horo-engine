@@ -11,6 +11,7 @@
 namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::UpdateAutosave */
     void EditorWorkspaceController::UpdateAutosave(const float elapsedSeconds, const int intervalMinutes) {
+        UpdatePCGAutosave(elapsedSeconds, intervalMinutes);
         if (intervalMinutes <= 0 || !std::isfinite(elapsedSeconds) || elapsedSeconds <= 0.0F || !m_document.IsDirty() ||
             m_viewModel.recoveryAvailable || m_autosaveSuppressedForDiscard) {
             if (!m_document.IsDirty())
@@ -33,6 +34,11 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::FlushAutosave */
     void EditorWorkspaceController::FlushAutosave() {
+        if (auto graphRecovery = m_pcgDocumentsShutdown ? Result<void>::Success() : m_pcgDocuments.FlushRecovery();
+            graphRecovery.HasError() && !m_pcgAutosaveErrorPresented) {
+            m_pcgAutosaveErrorPresented = true;
+            LOG_ERROR("editor.pcg_recovery", "Graph recovery checkpoint failed: %s", graphRecovery.ErrorValue().message.c_str());
+        }
         if (m_document.IsDirty() && !m_viewModel.recoveryAvailable && !m_autosaveSuppressedForDiscard &&
             m_document.State() != m_lastAutosavedState)
             WriteAutosaveRecovery();

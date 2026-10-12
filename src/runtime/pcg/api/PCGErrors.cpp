@@ -5,6 +5,12 @@ namespace Horo::PCG::PCGErrors {
         const ErrorDomainId PcgDomain{"horo.pcg"};
     }
 
+    const ErrorCodeDescriptor GraphNodeVersionUnsupported{.domain = PcgDomain,
+                                                          .code = ErrorCode{"pcg.node.version_unsupported"},
+                                                          .defaultSeverity = ErrorSeverity::Error,
+                                                          .summary = "The built-in node schema or runtime version is incompatible.",
+                                                          .remediationHint =
+                                                              "Migrate the graph explicitly or compose its exact supported catalog."};
     const ErrorCodeDescriptor IdentityInvalid{.domain = PcgDomain,
                                               .code = ErrorCode{"pcg.identity.invalid"},
                                               .defaultSeverity = ErrorSeverity::Error,
@@ -234,6 +240,28 @@ namespace Horo::PCG::PCGErrors {
                                                          .summary = "The canonical PCG plan exceeds its admitted byte envelope.",
                                                          .remediationHint =
                                                              "Reduce graph complexity or select a larger admitted tier bound."};
+    const ErrorCodeDescriptor CpuEvaluationInvalid{.domain = PcgDomain,
+                                                   .code = ErrorCode{"pcg.cpu_evaluation.invalid"},
+                                                   .defaultSeverity = ErrorSeverity::Error,
+                                                   .summary = "The cooked CPU node contract or typed input is invalid.",
+                                                   .remediationHint = "Use exact built-in versions, pins, payloads, and typed bindings."};
+    const ErrorCodeDescriptor CpuEvaluationUnsupported{.domain = PcgDomain,
+                                                       .code = ErrorCode{"pcg.cpu_evaluation.unsupported"},
+                                                       .defaultSeverity = ErrorSeverity::Error,
+                                                       .summary = "The CPU evaluator cannot execute this node or determinism tier.",
+                                                       .remediationHint =
+                                                           "Cook with a supported built-in node and certified numeric tier."};
+    const ErrorCodeDescriptor CpuEvaluationCapacityExceeded{.domain = PcgDomain,
+                                                            .code = ErrorCode{"pcg.cpu_evaluation.capacity_exceeded"},
+                                                            .defaultSeverity = ErrorSeverity::Error,
+                                                            .summary = "CPU evaluation exceeds its admitted resource envelope.",
+                                                            .remediationHint =
+                                                                "Lower declared outputs or request a larger tier reservation."};
+    const ErrorCodeDescriptor CpuEvaluationClosed{.domain = PcgDomain,
+                                                  .code = ErrorCode{"pcg.cpu_evaluation.closed"},
+                                                  .defaultSeverity = ErrorSeverity::Warning,
+                                                  .summary = "CPU evaluation admission is closed by cancellation or shutdown.",
+                                                  .remediationHint = "Retire this request and submit under a live owner generation."};
     const ErrorCodeDescriptor GenerationPlanInvalid{.domain = PcgDomain,
                                                     .code = ErrorCode{"pcg.generation_plan.invalid"},
                                                     .defaultSeverity = ErrorSeverity::Error,
@@ -343,4 +371,25 @@ namespace Horo::PCG::PCGErrors {
                                                        .defaultSeverity = ErrorSeverity::Critical,
                                                        .summary = "PCG async operation identity space is exhausted.",
                                                        .remediationHint = "Retire this coordinator without reusing an operation identity."};
+    const ErrorCodeDescriptor
+        GenerationDensityImpossible{.domain = PcgDomain,
+                                    .code = ErrorCode{"pcg.generation.density_impossible"},
+                                    .defaultSeverity = ErrorSeverity::Error,
+                                    .summary = "The requested point count cannot satisfy the minimum separation in the captured domain.",
+                                    .remediationHint = "Reduce the count or separation, or enlarge the source volume."};
+    const ErrorCodeDescriptor
+        GenerationAttemptsExhausted{.domain = PcgDomain,
+                                    .code = ErrorCode{"pcg.generation.attempts_exhausted"},
+                                    .defaultSeverity = ErrorSeverity::Error,
+                                    .summary = "The bounded scatter attempt budget ended before producing the exact point count.",
+                                    .remediationHint =
+                                        "Increase the admitted attempt budget or reduce count or separation; partial output is discarded."};
+    const ErrorCodeDescriptor
+        GenerationIdentityInvalid{.domain = PcgDomain,
+                                  .code = ErrorCode{"pcg.generation.identity_invalid"},
+                                  .defaultSeverity = ErrorSeverity::Error,
+                                  .summary =
+                                      "The generated semantic sample identity column is absent, incompatible or contains duplicates.",
+                                  .remediationHint =
+                                      "Use the unsigned pcg.source_sample_id schema and preserve distinct source identities."};
 }  // namespace Horo::PCG::PCGErrors

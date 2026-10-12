@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
+#include <limits>
 
 namespace {
     using namespace Horo::Input;
@@ -36,6 +37,64 @@ namespace {
         REQUIRE((!released.State(Key::W).down && released.State(Key::W).released));
     }
 
+    TEST_CASE("Touch contacts retain simultaneous edges and exact immutable incarnations", "[unit][runtime][input][touch]") {
+        RawInputCollector collector;
+        collector.BeginFrame(1);
+        REQUIRE(collector.SetTouchContact({7, 1}, 10.0F, 20.0F, true) == TouchCollectionStatus::Accepted);
+        REQUIRE(collector.SetTouchContact({8, 1}, 30.0F, 40.0F, true) == TouchCollectionStatus::Accepted);
+        REQUIRE(collector.SetTouchContact({7, 1}, 11.0F, 21.0F, false) == TouchCollectionStatus::Accepted);
+        const auto &first = collector.Commit();
+        CHECK(first.touches[0].contact.pressed);
+        CHECK(first.touches[0].contact.released);
+        CHECK_FALSE(first.touches[0].contact.down);
+        CHECK_FALSE(first.touches[0].cancelled);
+        collector.BeginFrame(2);
+        REQUIRE(collector.SetTouchContact({7, 2}, 12.0F, 22.0F, true) == TouchCollectionStatus::Accepted);
+        CHECK((first.touches[0].id == TouchContactId{7, 1}));
+        CHECK(first.touches[0].x == 11.0F);
+        const auto &second = collector.Commit();
+        CHECK((second.touches[0].id == TouchContactId{7, 2}));
+        CHECK(second.touches[1].contact.down);
+        CHECK_FALSE(second.touches[1].contact.pressed);
+    }
+
+    TEST_CASE("Touch overflow cancels all held contacts without silently dropping release evidence", "[unit][runtime][input][touch]") {
+        RawInputCollector collector;
+        collector.BeginFrame(1);
+        for (std::size_t index = 0; index < MaximumTouchContacts; ++index)
+            REQUIRE(collector.SetTouchContact({index + 1, 1}, 0.0F, 0.0F, true) == TouchCollectionStatus::Accepted);
+        REQUIRE(collector.SetTouchContact({99, 1}, 0.0F, 0.0F, true) == TouchCollectionStatus::CapacityExceeded);
+        REQUIRE(collector.SetTouchContact({1, 1}, 0.0F, 0.0F, false) == TouchCollectionStatus::CapacityExceeded);
+        const auto &overflow = collector.Commit();
+        CHECK(overflow.touchOverflow);
+        for (const auto &touch : overflow.touches) {
+            CHECK(touch.cancelled);
+            CHECK(touch.contact.released);
+            CHECK_FALSE(touch.contact.down);
+        }
+        collector.BeginFrame(2);
+        REQUIRE(collector.SetTouchContact({99, 2}, 0.0F, 0.0F, true) == TouchCollectionStatus::Accepted);
+        CHECK_FALSE(collector.Commit().touchOverflow);
+    }
+
+    TEST_CASE("Touch malformed, stale and focus-loss inputs cannot activate replacement contacts", "[unit][runtime][input][touch]") {
+        RawInputCollector collector;
+        collector.BeginFrame(1);
+        CHECK(collector.SetTouchContact({}, 0.0F, 0.0F, true) == TouchCollectionStatus::Invalid);
+        CHECK(collector.SetTouchContact({1, 1}, std::numeric_limits<float>::infinity(), 0.0F, true) == TouchCollectionStatus::Invalid);
+        CHECK(collector.SetTouchContact({1, 1}, 0.0F, 0.0F, false) == TouchCollectionStatus::Stale);
+        REQUIRE(collector.SetTouchContact({1, 1}, 0.0F, 0.0F, true) == TouchCollectionStatus::Accepted);
+        REQUIRE(collector.SetTouchContact({1, 1}, 0.0F, 0.0F, false) == TouchCollectionStatus::Accepted);
+        CHECK(collector.SetTouchContact({1, 1}, 0.0F, 0.0F, true) == TouchCollectionStatus::Stale);
+        REQUIRE(collector.SetTouchContact({2, 1}, 0.0F, 0.0F, true) == TouchCollectionStatus::Accepted);
+        collector.SetWindowState({.focused = false});
+        CHECK(collector.SetTouchContact({3, 1}, 0.0F, 0.0F, true) == TouchCollectionStatus::Unavailable);
+        const auto &lost = collector.Commit();
+        CHECK(lost.touches[1].cancelled);
+        CHECK(lost.touches[1].contact.released);
+        CHECK_FALSE(lost.touches[1].contact.down);
+    }
+
     TEST_CASE("Input Service Commits Text And Ime Through The Same Snapshot", "[unit][runtime][input]") {
         InputService input;
         input.BeginFrame(7);
@@ -45,6 +104,26 @@ namespace {
         REQUIRE((snapshot.frame == 7 && snapshot.text == "a"));
         REQUIRE((snapshot.composition.active && snapshot.composition.text == "ö"));
         REQUIRE((&input.Router().Snapshot() == &snapshot));
+    }
+
+    TEST_CASE("Explicit physical touch cancellation cannot become a release default", "[unit][runtime][input][touch]") {
+        RawInputCollector collector;
+        collector.BeginFrame(1);
+        REQUIRE(collector.SetTouchContact({1, 1}, 10, 20, true) == TouchCollectionStatus::Accepted);
+        REQUIRE(collector.SetTouchContact({2, 1}, 30, 40, true) == TouchCollectionStatus::Accepted);
+        CHECK(collector.CancelTouchContact({1, 2}) == TouchCollectionStatus::Stale);
+        REQUIRE(collector.CancelTouchContact({1, 1}) == TouchCollectionStatus::Accepted);
+        const auto &first = collector.Commit();
+        CHECK(first.touches[0].cancelled);
+        CHECK(first.touches[0].contact.released);
+        CHECK(first.touches[1].contact.down);
+        collector.BeginFrame(2);
+        collector.CancelTouchContacts(TouchCancellationReason::CapacityExceeded);
+        CHECK(collector.SetTouchContact({3, 1}, 0, 0, true) == TouchCollectionStatus::CapacityExceeded);
+        const auto &second = collector.Commit();
+        CHECK(second.touchOverflow);
+        CHECK(second.touches[1].cancelled);
+        CHECK(first.touches[1].contact.down);
     }
 
     TEST_CASE("Context Priority And Capture Are Deterministic", "[unit][runtime][input]") {

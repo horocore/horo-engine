@@ -19,6 +19,9 @@
 #include <vector>
 
 namespace Horo::PCG {
+    /** @brief Maximum typed input stamps, matching the High operational graph tier. */
+    inline constexpr std::size_t MaximumPCGProvenanceInputs = 512;
+
     /** @brief Stable world identity; cell coordinates alone do not identify a world. */
     using PCGWorldId = PcgStableIdentity<struct PCGWorldIdentityTag>;
     /** @brief Stable identity of one typed exposed or external input. */
@@ -121,6 +124,14 @@ namespace Horo::PCG {
     private:
         std::shared_ptr<const State> state_;
     };
+
+    /** @brief Derives the existing schema-1 sample seed from an exact canonical root key.
+     * @param key Captured PCGProvenance::Key, or its unchanged retained point-identity bytes; borrowed only for this call.
+     * @param sample Nonzero semantic source sample, assigned before acceptance or compaction.
+     * @return Existing deterministic seed or typed invalid-sample failure.
+     * @pre The owning capture/evaluation boundary has admitted the deterministic numeric tier.
+     * @note This validates seed consistency, not authenticity of host-supplied provider content evidence. */
+    [[nodiscard]] Result<std::uint64_t> DerivePCGSampleSeed(const Sha256Digest &key, SourceSampleId sample);
 
     /** @brief Captures and canonicalizes a bounded provenance tuple.
      * @param candidate Complete detached graph, world, node, inputs, providers, and tier evidence.

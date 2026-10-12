@@ -1,5 +1,6 @@
 #include "EditorPresentationSurface.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
+#include "OpenGLSwapIntervalAdmission.h"
 #include "SdlOpenGLPresentationPort.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -184,13 +185,15 @@ namespace Horo::Editor {
     TEST_CASE("SDL swap interval admission requires verified exact mode without silent fallback", "[opengl][surface][unit]") {
         SwapIntervalProbe probe;
         int requested = 0;
-        bool expected = false;
+        using enum Render::Detail::SwapIntervalAdmission;
+        auto expected = SetFailed;
         int expectedSets = 0;
         SECTION("Already-active Immediate succeeds without swap control") {
-            expected = true;
+            expected = Exact;
         }
         SECTION("A failed getter writing zero is not verified Immediate") {
             probe.failedQuery = 1;
+            expected = QueryFailed;
         }
         SECTION("FIFO is rejected when native swap control is unsupported") {
             requested = 1;
@@ -199,31 +202,31 @@ namespace Horo::Editor {
         SECTION("Already-active FIFO is exact without reconfiguration") {
             requested = 1;
             probe.interval = 1;
-            expected = true;
+            expected = Exact;
         }
         SECTION("Successful reconfiguration still requires exact readback") {
             requested = 1;
             probe.setterSupported = true;
             probe.applySet = false;
+            expected = Mismatch;
             expectedSets = 1;
         }
         SECTION("A failed post-set query does not establish FIFO") {
             requested = 1;
             probe.setterSupported = true;
             probe.failedQuery = 2;
+            expected = QueryFailed;
             expectedSets = 1;
         }
         SECTION("Verified native reconfiguration admits FIFO") {
             requested = 1;
             probe.setterSupported = true;
             expectedSets = 1;
-            expected = true;
+            expected = Exact;
         }
-        const auto result = Detail::ApplyExactSwapInterval(requested, SwapIntervalProbe::Query, SwapIntervalProbe::Set);
-        CHECK(result.HasValue() == expected);
+        const auto result = Render::Detail::AdmitExactSwapInterval(requested, SwapIntervalProbe::Query, SwapIntervalProbe::Set);
+        CHECK(result == expected);
         CHECK(probe.sets == expectedSets);
-        if (result.HasError())
-            CHECK_FALSE(result.ErrorValue().code.Value().empty());
     }
 
     TEST_CASE("Production SDL OpenGL surface verifies exact present mode and owner lifecycle", "[gpu][display][opengl][surface]") {

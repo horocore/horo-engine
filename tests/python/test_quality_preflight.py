@@ -79,6 +79,18 @@ def test_missing_base_fails_without_fetch(repository: Path):
         preflight.selection(repository, preflight.arguments(["check", "--base", "origin/missing"]))
 
 
+def test_dirty_scope_expands_new_directories_without_staging(repository: Path):
+    directory = repository / "src" / "new surface ü"
+    directory.mkdir(parents=True)
+    (directory / "Surface.cpp").write_text("int surface;\n")
+    (directory / "Surface.h").write_text("#pragma once\n")
+    before = git(repository, "diff", "--cached", "--name-only")
+    files, skipped, _, _ = preflight.selection(repository, preflight.arguments(["check", "--dirty"]))
+    assert set(files) == {Path("src/new surface ü/Surface.cpp"), Path("src/new surface ü/Surface.h")}
+    assert not skipped
+    assert git(repository, "diff", "--cached", "--name-only") == before
+
+
 def test_snapshot_does_not_share_inodes_or_write_source(repository: Path, tmp_path: Path):
     mirror = tools.snapshot(repository, tmp_path / "mirror")
     (mirror / "old name.cpp").write_text("modified by tool")

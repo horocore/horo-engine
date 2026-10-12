@@ -98,6 +98,30 @@ TEST_CASE("OpenGL sampler rejects unsupported and malformed policies before nati
     CHECK(state.parameters == 0);
 }
 
+TEST_CASE("OpenGL sampler minification preserves all filter and mipmap combinations", "[render][opengl][sampler]") {
+    using namespace Horo::Render;
+    constexpr std::array filters{RenderSamplerFilter::Nearest, RenderSamplerFilter::Linear};
+    constexpr std::array mipmaps{RenderSamplerMipmapMode::Nearest, RenderSamplerMipmapMode::Linear};
+    constexpr std::array<std::int32_t, 4> expected{0x2700, 0x2702, 0x2701, 0x2703};
+    for (std::size_t filter = 0; filter < filters.size(); ++filter) {
+        for (std::size_t mipmap = 0; mipmap < mipmaps.size(); ++mipmap) {
+            SamplerState state;
+            const auto functions = Functions(state);
+            RenderSamplerDescriptor descriptor;
+            descriptor.minFilter = filters[filter];
+            descriptor.mipmapMode = mipmaps[mipmap];
+            const auto created = Detail::CreateOpenGLSampler(descriptor, functions);
+            REQUIRE(created.HasValue());
+            CHECK(state.integers[0].first == 0x2801);  // GL_TEXTURE_MIN_FILTER
+            CHECK(state.integers[0].second == expected[filter * mipmaps.size() + mipmap]);
+            CHECK(state.generates == 1);
+            CHECK(state.destroys == 0);
+            functions.destroy(created.Value());
+            CHECK(state.destroys == 1);
+        }
+    }
+}
+
 TEST_CASE("OpenGL sampler failure releases every unpublished candidate exactly once", "[render][opengl][sampler]") {
     using namespace Horo::Render;
     for (std::size_t fault = 1; fault <= 9; ++fault) {

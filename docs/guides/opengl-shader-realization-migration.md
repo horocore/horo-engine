@@ -75,6 +75,26 @@ native fences without waiting. `ProcessResourceRequests` drains upload/registry
 retirements and does not itself advance GPU completion. The host drains all material
 consumers before destroying the frontend and backend.
 
+Material execution has two synchronous phases. Its private no-escape boundary
+owns admission, lease transfer and rollback, returning either the original typed
+result or a stack-only exception tag after aborting the frame. The public method
+then constructs the existing `FrameException` error. It is deliberately not
+`noexcept`: owned error identities and messages can allocate, so allocation or
+length failure during this second phase may escape, but cleanup is already
+complete. Expected backend failures retain their original identity and detail.
+There is no Foundation identity migration, virtual-interface change, additional
+frame-hot allocation or new backend exception contract. Existing callers and
+member-function pointers retain the same signature; public-header consumers and
+standard, nonstandard, pre/post-transfer and double-allocation-fault regressions
+cover this boundary.
+
+`HoroRenderFrontend` owns this frame-consumption boundary in its private
+`RenderFrameMaterialExecution.cpp` translation unit, alongside its existing graph
+and parallel frame implementations. Shader resource loading/publication stays in
+`RenderFrontendShaderResources.cpp`. Draw identity resolution is separate from
+completion-lease acquisition/transfer; neither introduces a new public owner,
+cross-target header, dependency or native ABI.
+
 The GL encoder restores caller program, mesh, buffer ranges, texture/sampler units,
 target draw buffers and affected raster state. Generic primitive restart, supported
 fixed-index restart and all admitted clip distances are neutralized during the

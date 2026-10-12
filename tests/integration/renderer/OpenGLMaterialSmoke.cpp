@@ -2,8 +2,8 @@
 #include "OpenGLMaterialExecution.h"
 #include "OpenGLMaterialFixture.h"
 #include "OpenGLRenderBackendErrors.h"
+#include "OpenGLSwapIntervalAdmission.h"
 #include "RenderFrontendResourceAccess.h"
-#include "SdlOpenGLPresentationPort.h"
 
 #include <SDL3/SDL.h>
 #include <glad/gl.h>
@@ -18,6 +18,8 @@ namespace Horo::Render::OpenGLMaterialSmoke {
 
         Port(const Port &) = delete;
         Port &operator=(const Port &) = delete;
+        Port(Port &&) = delete;
+        Port &operator=(Port &&) = delete;
 
         ~Port() override {
             DestroyContext();
@@ -73,7 +75,12 @@ namespace Horo::Render::OpenGLMaterialSmoke {
         Result<void> SetPresentMode(const PresentMode mode) override {
             if (mode != PresentMode::Immediate)
                 return Result<void>::Failure(MakeError(OpenGLBackendErrors::InvalidConfig));
-            return Editor::Detail::ApplyExactSwapInterval(0, SDL_GL_GetSwapInterval, SDL_GL_SetSwapInterval);
+            if (context_ == nullptr || SDL_GL_GetCurrentContext() != context_)
+                return Result<void>::Failure(MakeError(OpenGLBackendErrors::CommandFailed, "The retained context is not current."));
+            const auto admitted = Detail::AdmitExactSwapInterval(0, SDL_GL_GetSwapInterval, SDL_GL_SetSwapInterval);
+            if (admitted == Detail::SwapIntervalAdmission::Mismatch)
+                return Result<void>::Failure(MakeError(OpenGLBackendErrors::CommandFailed, "The required swap interval was not realized."));
+            return admitted == Detail::SwapIntervalAdmission::Exact ? Result<void>::Success() : Failure();
         }
 
         Result<void> SwapBuffers() override {
@@ -105,6 +112,11 @@ namespace Horo::Render::OpenGLMaterialSmoke {
         GLuint program{};
         bool fixedRestart{false};
         GLint clipDistances{0};
+
+        CallerState(const CallerState &) = delete;
+        CallerState &operator=(const CallerState &) = delete;
+        CallerState(CallerState &&) = delete;
+        CallerState &operator=(CallerState &&) = delete;
 
         explicit CallerState(const GLuint preparedProgram, const Detail::OpenGLMaterialContextFeatures features)
             : program(preparedProgram), fixedRestart(features.fixedIndexRestart), clipDistances(features.clipDistances) {
@@ -141,9 +153,6 @@ namespace Horo::Render::OpenGLMaterialSmoke {
                 glEnable(GL_CLIP_DISTANCE0 + static_cast<GLenum>(clipDistances - 1));
             REQUIRE(glGetError() == GL_NO_ERROR);
         }
-
-        CallerState(const CallerState &) = delete;
-        CallerState &operator=(const CallerState &) = delete;
 
         ~CallerState() {
             glUseProgram(0);
@@ -279,13 +288,13 @@ namespace Horo::Render::OpenGLMaterialSmoke {
         REQUIRE(glGetError() == GL_NO_ERROR);
     }
 
-    /** @brief Distinguishes software-capable contract coverage from mandatory real-hardware qualification. */
+    /** @brief Separates software contract coverage from actual hardware qualification. */
     enum class MaterialEvidence {
         HardwareQualification,
         SoftwareCapableCoverage
     };
 
-    /** @brief Creates the actual selected Core context; hardware qualification additionally rejects software identities. */
+    /** @brief Creates the actual Core context; hardware evidence additionally rejects software identities. */
     std::unique_ptr<RenderFrontend> PrepareFrontend(Port &port, const MaterialEvidence evidence) {
         RenderBackendRegistry registry;
         REQUIRE(RegisterOpenGLRenderBackend(registry, port).HasValue());
@@ -312,7 +321,7 @@ namespace Horo::Render::OpenGLMaterialSmoke {
 
     void VerifyDrawAndRetirement(RenderFrontend &frontend);
 
-    /** @brief Executes the identical full pixel, caller-state and resource-retirement contract for both evidence entrypoints. */
+    /** @brief Runs the identical pixel, hostile state and deferred-retirement contract in both evidence lanes. */
     void VerifyMaterialContract(const MaterialEvidence evidence) {
         REQUIRE(SDL_Init(SDL_INIT_VIDEO));
         const auto quit = [](const int *) noexcept {
@@ -334,7 +343,7 @@ namespace Horo::Render::OpenGLMaterialSmoke {
         frontend.reset();
     }
 
-    /** @brief Runs exact pixels, hostile caller state and deferred retirement against the borrowed admitted frontend. */
+    /** @brief Verifies exact drawing and completion-owned retirement against one admitted real frontend. */
     void VerifyDrawAndRetirement(RenderFrontend &frontend) {
         auto draw = PrepareDraw(frontend);
         {

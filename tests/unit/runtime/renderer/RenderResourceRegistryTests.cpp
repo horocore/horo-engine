@@ -67,6 +67,8 @@ namespace {  // NOSONAR(cpp:S1000) File-local registry fixtures intentionally ha
         REQUIRE(reserved.Value().operation.IsValid());
         REQUIRE(registry.State(RenderResourceClass::Texture, Identity(reserved.Value())).Value() == RenderResourceState::Pending);
 
+        REQUIRE(registry.OperationState(reserved.Value().operation).HasValue());
+        CHECK(registry.OperationState(reserved.Value().operation).Value() == RenderResourceOperationState::Pending);
         const Result<void> pending = registry.OperationResult(reserved.Value().operation);
         REQUIRE(pending.HasError());
         REQUIRE(pending.ErrorValue().code.Value() == "render.frontend.resource.operation_pending");
@@ -75,6 +77,8 @@ namespace {  // NOSONAR(cpp:S1000) File-local registry fixtures intentionally ha
         REQUIRE(registry.State(RenderResourceClass::Texture, Identity(reserved.Value())).Value() == RenderResourceState::Ready);
         REQUIRE(registry.BackendInstance(RenderResourceClass::Texture, Identity(reserved.Value())).Value() == 17);
         REQUIRE(registry.OperationResult(reserved.Value().operation).HasValue());
+        REQUIRE(registry.OperationState(reserved.Value().operation).HasValue());
+        CHECK(registry.OperationState(reserved.Value().operation).Value() == RenderResourceOperationState::Succeeded);
     }
 
     TEST_CASE("Resource registry rejects foreign wrong-type and stale identities", "[unit][runtime][renderer][resource]") {
@@ -248,6 +252,8 @@ namespace {  // NOSONAR(cpp:S1000) File-local registry fixtures intentionally ha
         const std::array staleDependency{Identity(ready.Value())};
         REQUIRE(registry.Reserve(RenderResourceClass::Mesh, staleDependency).HasError());
 
+        CHECK(registry.OperationState({}).HasError());
+        CHECK(registry.OperationState(ResourceOperationId{999'999}).HasError());
         const auto invalidOperation = registry.OperationResult({});
         REQUIRE(invalidOperation.HasError());
         REQUIRE(invalidOperation.ErrorValue().code.Value() == "render.frontend.resource.operation_unknown");
@@ -295,6 +301,9 @@ namespace {  // NOSONAR(cpp:S1000) File-local registry fixtures intentionally ha
 
         auto second = registry.Reserve(RenderResourceClass::Sampler);
         REQUIRE(second.HasValue());
+        CHECK(registry.OperationState(first.Value().operation).HasError());
+        REQUIRE(registry.OperationState(second.Value().operation).HasValue());
+        CHECK(registry.OperationState(second.Value().operation).Value() == RenderResourceOperationState::Pending);
         const auto evicted = registry.OperationResult(first.Value().operation);
         REQUIRE(evicted.HasError());
         REQUIRE(evicted.ErrorValue().code.Value() == "render.frontend.resource.operation_unknown");
@@ -493,6 +502,8 @@ namespace {  // NOSONAR(cpp:S1000) File-local registry fixtures intentionally ha
                                  "Injected backend creation failure.",
                                  {}};
         REQUIRE(registry.Fail(RenderResourceClass::ShaderModule, Identity(failed.Value()), backendError).HasValue());
+        REQUIRE(registry.OperationState(failed.Value().operation).HasValue());
+        CHECK(registry.OperationState(failed.Value().operation).Value() == RenderResourceOperationState::Failed);
         const auto failure = registry.OperationResult(failed.Value().operation);
         REQUIRE(failure.HasError());
         REQUIRE(failure.ErrorValue().code.Value() == "render.test.create_failed");
@@ -501,6 +512,8 @@ namespace {  // NOSONAR(cpp:S1000) File-local registry fixtures intentionally ha
         auto cancelled = registry.Reserve(RenderResourceClass::Pipeline);
         REQUIRE(cancelled.HasValue());
         registry.Shutdown(BackendResourceReleaseMode::NativeAlreadyReleased);
+        CHECK(registry.OperationState(cancelled.Value().operation).HasError());
+        CHECK(registry.OperationState(failed.Value().operation).HasError());
         const auto cancellation = registry.OperationResult(cancelled.Value().operation);
         REQUIRE(cancellation.HasError());
         REQUIRE(cancellation.ErrorValue().code.Value() == "render.frontend.resource.registry_stopped");

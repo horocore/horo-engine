@@ -1,3 +1,4 @@
+#include "AllocationProbe.h"
 #include "OpenGLBackendInternal.h"
 #include "OpenGLMaterialFixture.h"
 #include "OpenGLRenderBackendErrors.h"
@@ -7,20 +8,47 @@
 #include "RenderFrontendResourceAccess.h"
 #include "TypedIdentityTestSupport.h"
 
+#include <optional>
+
 namespace Horo::Render::OpenGLResourceTests {
     /** @brief Borrows the existing deterministic resource dispatch; never creates a real context. */
     Detail::OpenGLCommandFunctions ResourceProbeFunctions() noexcept;
 }  // namespace Horo::Render::OpenGLResourceTests
 
 namespace Horo::Render::OpenGLMaterialTests {
+    enum class DrawException {
+        None,
+        Standard,
+        Nonstandard,
+        Allocation
+    };
+
     struct NativeState {
         std::uint32_t nextShader{1000}, nextProgram{2000}, nextSampler{3000};
         std::size_t shadersDeleted{}, programsDeleted{}, samplersDeleted{}, draws{};
         bool failDraw{}, throwDraw{}, failLink{};
+        DrawException exception{DrawException::None};
+        bool allocationWindow{};
     };
 
     thread_local NativeState native;
     thread_local IRenderBackend *borrowedBackend{nullptr};
+
+    /** @brief Scoped typed one-shot failures; records cleanup before the public translation's second allocation fault. */
+    struct TranslationFailureProbe {
+        std::optional<Horo::Tests::AllocationProbe::ScopedFailure> failure;
+        std::size_t faults{};
+        int fencesAtTranslation{};
+
+        void Observe(std::size_t) noexcept {
+            if (!native.allocationWindow || faults == 2)
+                return;
+            ++faults;
+            if (faults == 2)
+                fencesAtTranslation = OpenGLBackendTests::commandState.fenceCount;
+            failure.emplace();
+        }
+    };
 
     /** @brief Transfers exactly one inert real backend to the test host while retaining a borrowed fault-injection view. */
     class TestProvider final : public IRenderBackendProvider {
@@ -73,6 +101,23 @@ namespace Horo::Render::OpenGLMaterialTests {
         }};
     }
 
+    /** @brief Executes the native draw fault window independently of inert resource-dispatch composition. */
+    Result<void> ExecuteNativeMaterial(const RenderMaterialExecutionRequest &,
+                                       std::span<const Detail::OpenGLMaterialDrawCommand> commands) {
+        using enum DrawException;
+        native.draws += commands.size();
+        native.allocationWindow = true;
+        if (native.exception == Standard)
+            throw std::length_error{"native material metadata"};
+        if (native.exception == Nonstandard)
+            throw 17;
+        if (native.exception == Allocation || native.throwDraw)
+            throw std::bad_alloc{};
+        if (native.failDraw)
+            return Result<void>::Failure(MakeError(OpenGLBackendErrors::CommandFailed, "partial native draw"));
+        return Result<void>::Success();
+    }
+
     Detail::OpenGLCommandFunctions Functions() {
         auto functions = OpenGLResourceTests::ResourceProbeFunctions();
         functions.shaders = ShaderFunctions();
@@ -105,14 +150,7 @@ namespace Horo::Render::OpenGLMaterialTests {
             return true;
         }, .queryFeatures = []() {
             return Result<Detail::OpenGLMaterialContextFeatures>::Success({1, 8, false});
-        }, .execute = [](const RenderMaterialExecutionRequest &, std::span<const Detail::OpenGLMaterialDrawCommand> commands) {
-            native.draws += commands.size();
-            if (native.throwDraw)
-                throw std::bad_alloc{};
-            if (native.failDraw)
-                return Result<void>::Failure(MakeError(OpenGLBackendErrors::CommandFailed, "partial native draw"));
-            return Result<void>::Success();
-        }};
+        }, .execute = &ExecuteNativeMaterial};
         return functions;
     }
 
@@ -240,6 +278,94 @@ namespace Horo::Render::OpenGLMaterialTests {
         CHECK(native.samplersDeleted == 1);
         CHECK(native.programsDeleted == 1);
         CHECK(native.shadersDeleted == 2);
+    }
+
+    TEST_CASE("OpenGL material exception boundary cleans up before and after lease transfer", "[renderer][opengl][material]") {
+        OpenGLResourceTests::ResourcePresentationPort port;
+        auto frontend = Create(port);
+        auto fixture = Prepare(*frontend);
+        auto begun = frontend->BeginFrame({.frameNumber = 1, .outputExtent = {64, 32}});
+        REQUIRE(begun.HasValue());
+        auto frame = std::move(begun).Value();
+        SECTION("Before transfer") {
+            port.throwOnMakeCurrent = true;
+        }
+        SECTION("Standard native exception after transfer") {
+            native.exception = DrawException::Standard;
+        }
+        SECTION("Nonstandard native exception after transfer") {
+            native.exception = DrawException::Nonstandard;
+        }
+        SECTION("Allocation exception after transfer") {
+            native.exception = DrawException::Allocation;
+        }
+        OpenGLBackendTests::commandState.pollStatus = 0x911BU;
+        std::array draws{RenderMaterialDraw{fixture.mesh, fixture.material}};
+        const auto result = frame.ExecuteMaterialPass({fixture.target.target, {64, 32}, {}, 1.0F, draws});
+        Horo::Tests::RequireError(result, FrontendErrors::FrameException);
+        CHECK(OpenGLBackendTests::commandState.fenceCount == 1);
+        frame.Cancel();
+        CHECK(OpenGLBackendTests::commandState.fenceCount == 1);
+        const bool transferred = !port.throwOnMakeCurrent;
+        port.throwOnMakeCurrent = false;
+        native.exception = DrawException::None;
+        ReleaseCpu(*frontend, fixture);
+        draws[0].material.reset();
+        CHECK(native.programsDeleted == (transferred ? 0 : 1));
+        CHECK(native.samplersDeleted == (transferred ? 0 : 1));
+        OpenGLBackendTests::commandState.pollStatus = 0x911AU;
+        auto recovered = frontend->BeginFrame({.frameNumber = 2, .outputExtent = {64, 32}});
+        REQUIRE(recovered.HasValue());
+        auto recoveredFrame = std::move(recovered).Value();
+        recoveredFrame.Cancel();
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        CHECK(native.programsDeleted == 1);
+        CHECK(native.samplersDeleted == 1);
+    }
+
+    TEST_CASE("OpenGL material double allocation failure completes cleanup before public error construction escapes",
+              "[renderer][opengl][material]") {
+        OpenGLResourceTests::ResourcePresentationPort port;
+        auto frontend = Create(port);
+        auto fixture = Prepare(*frontend);
+        auto begun = frontend->BeginFrame({.frameNumber = 1, .outputExtent = {64, 32}});
+        REQUIRE(begun.HasValue());
+        auto frame = std::move(begun).Value();
+        std::array draws{RenderMaterialDraw{fixture.mesh, fixture.material}};
+        native.failDraw = true;
+        OpenGLBackendTests::commandState.pollStatus = 0x911BU;
+        TranslationFailureProbe probe;
+        bool allocationEscaped{};
+        {
+            // The existing observer ABI borrows opaque context; this capture-free adapter restores its exact stack-owned type.
+            const Horo::Tests::AllocationProbe::AllocationObserver adapter = [](std::size_t bytes, auto *opaque) noexcept {
+                static_cast<TranslationFailureProbe *>(opaque)->Observe(bytes);
+            };
+            Horo::Tests::AllocationProbe::ScopedObserver observer{adapter, &probe};
+            try {
+                static_cast<void>(frame.ExecuteMaterialPass({fixture.target.target, {64, 32}, {}, 1.0F, draws}));
+            } catch (const std::bad_alloc &) {
+                allocationEscaped = true;
+            }
+        }
+        probe.failure.reset();
+        CHECK(allocationEscaped);
+        CHECK(probe.faults == 2);
+        CHECK(probe.fencesAtTranslation == 1);
+        frame.Cancel();
+        CHECK(OpenGLBackendTests::commandState.fenceCount == 1);
+        ReleaseCpu(*frontend, fixture);
+        draws[0].material.reset();
+        CHECK(native.programsDeleted == 0);
+        CHECK(native.samplersDeleted == 0);
+        OpenGLBackendTests::commandState.pollStatus = 0x911AU;
+        auto recovered = frontend->BeginFrame({.frameNumber = 2, .outputExtent = {64, 32}});
+        REQUIRE(recovered.HasValue());
+        auto recoveredFrame = std::move(recovered).Value();
+        recoveredFrame.Cancel();
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        CHECK(native.programsDeleted == 1);
+        CHECK(native.samplersDeleted == 1);
     }
 
     TEST_CASE("OpenGL material admission rejects stale generations and mismatched layout before parameter allocation",

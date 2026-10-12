@@ -11,7 +11,14 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
+#include <string>
 #include <string_view>
+#include <vector>
+
+namespace Horo {
+    class DurableFileSystem;
+}
 
 namespace Horo::Editor {
     namespace SourceDocumentErrors {
@@ -26,6 +33,9 @@ namespace Horo::Editor {
         extern const ErrorCodeDescriptor Closed;
         extern const ErrorCodeDescriptor WrongThread;
         extern const ErrorCodeDescriptor Cancelled;
+        extern const ErrorCodeDescriptor SaveConflict;
+        extern const ErrorCodeDescriptor SaveOutcomeUnknown;
+        extern const ErrorCodeDescriptor Busy;
     }  // namespace SourceDocumentErrors
 
     /** @brief Exact newline families present in a UTF-8 byte sequence; no normalization occurs. */
@@ -74,13 +84,14 @@ namespace Horo::Editor {
         [[nodiscard]] DocumentIdentity Identity() const;
         /** @brief Returns the monotonic committed observation/edit revision. @return Zero when inert. */
         [[nodiscard]] std::uint64_t Revision() const noexcept;
-        /** @brief Returns the revision of the last explicitly loaded disk base. @return Zero when inert. */
+        /** @brief Returns the revision of the last explicitly loaded or durably saved disk base. @return Zero when inert. */
         [[nodiscard]] std::uint64_t BaseRevision() const noexcept;
         /** @brief Returns exact validated current bytes. @return Read-only call-independent borrowed view. */
         [[nodiscard]] std::string_view Text() const noexcept;
-        /** @brief Returns exact last explicitly loaded disk bytes. @return Read-only base view. */
+        /** @brief Returns exact last explicitly loaded or durably saved disk bytes. @return Read-only base view. */
         [[nodiscard]] std::string_view DiskBase() const noexcept;
-        /** @brief Compares current authored bytes to the saved base, not notification revisions. @return False when equal or inert. */
+        /** @brief Compares current authored bytes to the saved base, not notification revisions. @return False when equal and durability is
+         * confirmed, or inert. */
         [[nodiscard]] bool Dirty() const noexcept;
         /** @brief Returns current encoding/newline evidence. @return Default metadata when inert. */
         [[nodiscard]] SourceTextMetadata Metadata() const noexcept;
@@ -103,11 +114,37 @@ namespace Horo::Editor {
         std::string_view insert; /**< Synchronously borrowed, copied before publication; never retained. */
     };
 
-    /** @brief Single-owner-thread source sessions; no widget, renderer, save publication or ambient activation.
+    /** @brief Revision-fenced save intent; explicit overwrite consent is tied to exact observed disk bytes. */
+    struct SourceSaveRequest final {
+        DocumentInstanceId instance;
+        std::uint64_t expectedRevision{};
+        std::optional<std::string> approvedDiskBytes; /**< Empty optional compares the original disk base. */
+    };
+
+    /** @brief Native visibility and durability are distinct outcomes. */
+    enum class SourceSaveDisposition : std::uint8_t {
+        Durable,
+        VisibleDurabilityUnconfirmed
+    };
+
+    /** @brief Complete source save receipt; an unconfirmed visible write never claims rollback or a clean base. */
+    struct SourceSaveResult final {
+        SourceDocumentSnapshot snapshot;
+        SourceSaveDisposition disposition{SourceSaveDisposition::Durable};
+        std::optional<Error> diagnostic; /**< Preserved filesystem cause for an unconfirmed commit. */
+    };
+
+    /** @brief One bounded Save All item; failures remain independently inspectable. */
+    struct SourceSaveAllItem final {
+        DocumentInstanceId instance;
+        Result<SourceSaveResult> result;
+    };
+
+    /** @brief Single-owner-thread source sessions; no widget, renderer or ambient activation.
      * @details Open/InspectDisk/Reload are explicit bounded loading operations, never draw-loop work.
      * Edits prepare a complete validated replacement before publishing once. All service calls and moves
-     * stay on the creating thread; immutable snapshots alone cross threads. No jobs or locks are owned.
-     * Historical reader leases are caller-owned and must be bounded by the consuming service.
+     * stay on the creating thread; immutable snapshots alone cross threads. No jobs or persistent locks are owned; saves acquire scoped
+     * host filesystem locks. Historical reader leases are caller-owned and must be bounded by the consuming service.
      */
     class SourceDocumentService final {
     public:
@@ -146,6 +183,19 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<SourceDocumentSnapshot> Reload(DocumentInstanceId instance, std::uint64_t expectedRevision,
                                                             CancellationToken cancellation = {});
+        /** @brief Saves the exact current revision after disk-base conflict checks and tracked durable publication.
+         * @param request Revision and optional exact external-byte overwrite approval.
+         * @param files Host-composed filesystem; callbacks may not mutate document/routing ownership.
+         * @param cancellation Checked before native replacement; a visible commit is never cancelled retroactively.
+         * @return Complete receipt or typed precommit failure preserving current text/base and destination.
+         */
+        [[nodiscard]] Result<SourceSaveResult> Save(const SourceSaveRequest &request, DurableFileSystem &files,
+                                                    CancellationToken cancellation = {});
+        /** @brief Saves every dirty admitted document in stable admission order, retaining per-document failures.
+         * @param files Host-composed filesystem. @param cancellation Remaining items return cancellation after request.
+         * @return Bounded result list or admission/allocation failure before any save starts.
+         */
+        [[nodiscard]] Result<std::vector<SourceSaveAllItem>> SaveAll(DurableFileSystem &files, CancellationToken cancellation = {});
         /** @brief Releases one owner session; detached snapshots remain alive. @param instance Exact session.
          * @return Success or typed failure. Closing dirty sessions requires the host's explicit discard/save decision.
          */
@@ -156,6 +206,10 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> Shutdown();
 
     private:
+        friend class SourceFileOpenService;
+        /** @brief Saves to a host-validated replacement identity without postcommit identity allocation. */
+        [[nodiscard]] Result<SourceSaveResult> SaveTo(const SourceSaveRequest &request, DurableFileSystem &files, DocumentIdentity identity,
+                                                      std::filesystem::path path, CancellationToken cancellation);
         /** @brief Checks owner-thread lifecycle before accessing service storage. */
         [[nodiscard]] Result<void> CheckAccess() const;
         struct Storage;

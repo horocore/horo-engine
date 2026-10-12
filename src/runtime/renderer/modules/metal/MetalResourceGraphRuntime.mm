@@ -1,4 +1,5 @@
 #include "MetalColorAttachmentEncoding.h"
+#include "MetalLightCullingKernel.h"
 #include "MetalResourceRuntimeInternal.h"
 
 namespace Horo::Render::Detail {
@@ -62,11 +63,70 @@ namespace Horo::Render::Detail {
                                                        "Metal graph copy byte range exceeds its resolved resident buffer."));
             return Result<void>::Success();
         }
+
+        /** @brief Validates native kernel provenance and finite whole-buffer ranges before encoding. */
+        [[nodiscard]] Result<void> ValidateGraphLightCulling(const RenderGraphLightCulling &culling,
+                                                             const std::span<const RenderGraphResourceInstance> resources,
+                                                             const std::unordered_set<MetalBufferInstance *> &buffers, const void *owner,
+                                                             const std::uint64_t incarnation, const bool exhausted) {
+            const auto *kernel = dynamic_cast<const MetalLightCullingKernel *>(culling.kernel.get());
+            if (kernel == nullptr || kernel->pipeline == nil || kernel->owner.get() != owner || kernel->incarnation != incarnation ||
+                exhausted)
+                return Result<void>::Failure(
+                    MakeError(LightCullingErrors::InvalidInput, "Native light kernel lease belongs to another runtime incarnation."));
+            const auto &dispatch = culling.dispatch;
+            const LightCullingBudget bounds{.maximumLights = std::max(dispatch.referencesPerCluster, std::max(1U, dispatch.lightCount)),
+                                            .maximumClusters = dispatch.clusterCount,
+                                            .referencesPerCluster = dispatch.referencesPerCluster};
+            if (!bounds.IsValid() || dispatch.reserved != 0)
+                return Result<void>::Failure(MakeError(LightCullingErrors::Capacity));
+            const std::array ids{culling.lights, culling.clusters, culling.membership, culling.references};
+            const std::array<std::size_t, 4> bytes{std::max<std::size_t>(1, dispatch.lightCount) * sizeof(PackedRenderLight),
+                                                   dispatch.clusterCount * sizeof(PackedLightCluster),
+                                                   dispatch.clusterCount * sizeof(PackedLightMembership),
+                                                   std::size_t{dispatch.clusterCount} * dispatch.referencesPerCluster *
+                                                       sizeof(std::uint32_t)};
+            std::array<const MetalBufferInstance *, 4> resolved{};
+            for (std::size_t index = 0; index < ids.size(); ++index) {
+                resolved[index] = LiveGraphInstance(ids[index], resources, buffers);
+                if (resolved[index] == nullptr || !HasBufferUsage(resolved[index]->usage, RenderBufferUsage::Storage) ||
+                    bytes[index] > resolved[index]->buffer.length || culling.tableRevision == 0 ||
+                    resolved[index]->lightTableRevision != culling.tableRevision ||
+                    resolved[index]->lightTableDispatch.lightCount != dispatch.lightCount ||
+                    resolved[index]->lightTableDispatch.clusterCount != dispatch.clusterCount ||
+                    resolved[index]->lightTableDispatch.referencesPerCluster != dispatch.referencesPerCluster)
+                    return Result<void>::Failure(MakeError(LightCullingErrors::Capacity));
+                for (std::size_t previous = 0; previous < index; ++previous)
+                    if (resolved[previous] == resolved[index])
+                        return Result<void>::Failure(MakeError(LightCullingErrors::InvalidInput));
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Encodes an already validated light workload; the caller pins its buffers after success. */
+        Result<void> EncodeGraphLightCulling(id<MTLCommandBuffer> commands, const RenderGraphLightCulling &culling,
+                                             const std::array<MetalBufferInstance *, 4> &buffers) {
+            const auto &kernel = *dynamic_cast<const MetalLightCullingKernel *>(culling.kernel.get());
+            id<MTLComputeCommandEncoder> encoder = [commands computeCommandEncoder];
+            if (encoder == nil)
+                return Result<void>::Failure(
+                    MakeError(MetalBackendErrors::CommandSubmissionFailed, "Metal light compute encoder creation failed."));
+            [encoder setComputePipelineState:kernel.pipeline];
+            for (std::size_t index = 0; index < buffers.size(); ++index)
+                [encoder setBuffer:buffers[index]->buffer offset:0 atIndex:kernel.bindings[index]];
+            [encoder setBytes:&culling.dispatch length:sizeof(LightCullingDispatch) atIndex:kernel.bindings[4]];
+            [encoder dispatchThreads:MTLSizeMake(culling.dispatch.clusterCount, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+            [encoder endEncoding];
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc MetalResourceRuntime::ValidateGraphWorkload */
     Result<void> MetalResourceRuntime::ValidateGraphWorkload(const RenderGraphWorkload &workload,
                                                              const std::span<const RenderGraphResourceInstance> resources) const {
+        if (const auto *culling = std::get_if<RenderGraphLightCulling>(&workload))
+            return ValidateGraphLightCulling(*culling, resources, impl_->buffers, impl_->lightKernelOwner.get(),
+                                             impl_->lightKernelIncarnation, impl_->lightKernelIdentityExhausted);
         if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload))
             return ValidateGraphColor(*color, resources, impl_->textures);
         if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&workload))
@@ -84,7 +144,16 @@ namespace Horo::Render::Detail {
         if (commands == nil) {
             return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
         }
-        if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload)) {
+        if (const auto *culling = std::get_if<RenderGraphLightCulling>(&workload)) {
+            const std::array ids{culling->lights, culling->clusters, culling->membership, culling->references};
+            std::array<MetalBufferInstance *, 4> buffers{};
+            for (std::size_t index = 0; index < ids.size(); ++index)
+                buffers[index] = Decode<MetalBufferInstance>(GraphInstance(ids[index], resources));
+            if (const auto encoded = EncodeGraphLightCulling(commands, *culling, buffers); encoded.HasError())
+                return encoded;
+            for (auto *buffer : buffers)
+                Impl::TrackUse(buffer->use, commands);
+        } else if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload)) {
             auto *texture = Decode<MetalTextureInstance>(GraphInstance(color->texture, resources));
             MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
             auto *attachment = pass.colorAttachments[0];
@@ -123,6 +192,9 @@ namespace Horo::Render::Detail {
                                                                                id<MTLCommandBuffer> commands, id<MTLTexture> primary) {
         if (const auto valid = ValidateGraphWorkload(workload, resources); valid.HasError())
             return Result<MetalRecordedOperation>::Failure(valid.ErrorValue());
+        if (std::holds_alternative<RenderGraphLightCulling>(workload))
+            return Result<MetalRecordedOperation>::Failure(
+                MakeError(LightCullingErrors::Unsupported, "Light compute currently requires owner-thread graph encoding."));
         MetalRecordedOperation operation{.workload = workload, .commands = commands};
         if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload)) {
             auto *texture = Decode<MetalTextureInstance>(GraphInstance(color->texture, resources));

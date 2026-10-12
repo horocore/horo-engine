@@ -7,8 +7,8 @@
 #include <variant>
 
 namespace Horo::SceneSource::Detail {
-    [[nodiscard]] Json BehaviorFieldValueJson(const Gameplay::BehaviorFieldValue &value) {
-        return std::visit([]<typename T>(const T &typed) -> Json {
+    [[nodiscard]] WireJson BehaviorFieldValueJson(const Gameplay::BehaviorFieldValue &value) {
+        return std::visit([]<typename T>(const T &typed) -> WireJson {
             if constexpr (std::is_same_v<T, std::monostate>) {
                 return {{"type", "null"}, {"value", nullptr}};
             } else if constexpr (std::is_same_v<T, bool>) {
@@ -72,8 +72,8 @@ namespace Horo::SceneSource::Detail {
     }
 
     /** @brief Appends a navigation surface payload. */
-    void AppendNavigationSurface(Json &value, const Runtime::NavigationSurfaceComponent &surface) {
-        Json profiles = Json::array();
+    void AppendNavigationSurface(WireJson &value, const Runtime::NavigationSurfaceComponent &surface) {
+        WireJson profiles = WireJson::array();
         for (const Navigation::NavigationAgentProfileId profile : surface.profiles)
             profiles.push_back(profile.Value());
         value["navigationSurface"] = {
@@ -82,16 +82,16 @@ namespace Horo::SceneSource::Detail {
             {"schemaVersion", surface.schemaVersion},
             {"generation", surface.generation},
             {"bakeScope", surface.bakeScope == Runtime::NavigationBakeScope::ObjectSubtree ? "object_subtree" : "local_bounds"},
-            {"localBounds", surface.localBounds ? Json{{"center", Vec3Json(surface.localBounds->center)},
-                                                       {"halfExtents", Vec3Json(surface.localBounds->halfExtents)}}
-                                                : Json(nullptr)},
+            {"localBounds", surface.localBounds ? WireJson{{"center", Vec3Json(surface.localBounds->center)},
+                                                           {"halfExtents", Vec3Json(surface.localBounds->halfExtents)}}
+                                                : WireJson(nullptr)},
             {"profiles", std::move(profiles)},
             {"enabled", surface.enabled},
         };
     }
 
     /** @brief Appends a navigation region payload. */
-    void AppendNavigationRegion(Json &value, const Runtime::NavigationRegionComponent &region) {
+    void AppendNavigationRegion(WireJson &value, const Runtime::NavigationRegionComponent &region) {
         value["navigationRegion"] = {
             {"id", region.id.Value()},
             {"surface", region.surface.Value()},
@@ -107,8 +107,8 @@ namespace Horo::SceneSource::Detail {
     }
 
     /** @brief Appends a navigation modifier payload. */
-    void AppendNavigationModifier(Json &value, const Runtime::NavigationModifierComponent &modifier) {
-        Json volume;
+    void AppendNavigationModifier(WireJson &value, const Runtime::NavigationModifierComponent &modifier) {
+        WireJson volume;
         if (const auto *box = std::get_if<Runtime::NavigationLocalBounds>(&modifier.volume)) {
             volume = {{"shape", "box"}, {"center", Vec3Json(box->center)}, {"halfExtents", Vec3Json(box->halfExtents)}};
         } else {
@@ -131,15 +131,15 @@ namespace Horo::SceneSource::Detail {
             {"generation", modifier.generation},
             {"volume", std::move(volume)},
             {"operation", operation},
-            {"area", modifier.area ? Json(modifier.area->Value()) : Json(nullptr)},
-            {"traversalCost", modifier.traversalCost.has_value() ? Json(*modifier.traversalCost) : Json(nullptr)},
+            {"area", modifier.area ? WireJson(modifier.area->Value()) : WireJson(nullptr)},
+            {"traversalCost", modifier.traversalCost.has_value() ? WireJson(*modifier.traversalCost) : WireJson(nullptr)},
             {"enabled", modifier.enabled},
         };
     }
 
     /** @brief Appends a navigation link payload. */
-    void AppendNavigationLink(Json &value, const Runtime::NavigationLinkComponent &link) {
-        Json profiles = Json::array();
+    void AppendNavigationLink(WireJson &value, const Runtime::NavigationLinkComponent &link) {
+        WireJson profiles = WireJson::array();
         for (const Navigation::NavigationAgentProfileId profile : link.profiles)
             profiles.push_back(profile.Value());
         using enum Runtime::NavigationLinkKind;
@@ -171,19 +171,19 @@ namespace Horo::SceneSource::Detail {
     }
 
     /** @brief Appends one provider-neutral navigation-agent payload. */
-    void AppendNavigationAgent(Json &value, const Runtime::NavigationAgentComponent &agent) {
+    void AppendNavigationAgent(WireJson &value, const Runtime::NavigationAgentComponent &agent) {
         value["navigationAgent"] = {
             {"schemaVersion", agent.schemaVersion},
             {"profile", agent.profile.Value()},
             {"filter", agent.filter.Value()},
-            {"radiusOverride", agent.radiusOverride.has_value() ? Json(*agent.radiusOverride) : Json(nullptr)},
+            {"radiusOverride", agent.radiusOverride.has_value() ? WireJson(*agent.radiusOverride) : WireJson(nullptr)},
             {"movementCapability", "grounded"},
             {"enabled", agent.enabled},
         };
     }
 
     /** @brief Appends optional navigation authoring payloads without increasing the core component serializer's branching. */
-    void AppendNavigationComponents(Json &value, const SceneObjectComponentSet &components) {
+    void AppendNavigationComponents(WireJson &value, const SceneObjectComponentSet &components) {
         if (components.navigationSurface)
             AppendNavigationSurface(value, *components.navigationSurface);
         if (components.navigationRegion)
@@ -227,7 +227,7 @@ namespace Horo::SceneSource::Detail {
     }
 
     /** @brief Appends durable AI component values without runtime handles or descriptor state. */
-    void AppendAiComponents(Json &value, const SceneObjectComponentSet &components) {
+    void AppendAiComponents(WireJson &value, const SceneObjectComponentSet &components) {
         if (components.aiAgent) {
             value["aiAgent"] = {
                 {"agent", components.aiAgent->agent.Value()},
@@ -312,16 +312,16 @@ namespace Horo::SceneSource::Detail {
         return "stop_on_unload";
     }
 
-    [[nodiscard]] Json AudioConcurrencyPolicyJson(const Audio::AudioConcurrencyPolicy &policy) {
-        Json value{{"mode", AudioConcurrencyModeName(policy.mode)}, {"maxInstances", policy.maxInstances}};
+    [[nodiscard]] WireJson AudioConcurrencyPolicyJson(const Audio::AudioConcurrencyPolicy &policy) {
+        WireJson value{{"mode", AudioConcurrencyModeName(policy.mode)}, {"maxInstances", policy.maxInstances}};
         if (policy.group.has_value())
             value["group"] = policy.group->Value();
         return value;
     }
 
-    [[nodiscard]] Json AudioSoundReferenceJson(const Audio::AudioSoundReference &reference) {
+    [[nodiscard]] WireJson AudioSoundReferenceJson(const Audio::AudioSoundReference &reference) {
         using enum Audio::AudioSoundReferenceKind;
-        Json value{{"kind", AudioSoundReferenceKindName(reference.kind)}};
+        WireJson value{{"kind", AudioSoundReferenceKindName(reference.kind)}};
         if (reference.kind == Clip) {
             if (const auto *clip = std::get_if<Audio::AudioClipId>(&reference.target))
                 value["asset"] = clip->Asset().ToString();
@@ -389,7 +389,7 @@ namespace Horo::SceneSource::Detail {
     }
 
     /** @brief Appends the camera component payload. */
-    void AppendCameraJson(Json &value, const Runtime::CameraComponent &camera) {
+    void AppendCameraJson(WireJson &value, const Runtime::CameraComponent &camera) {
         value["camera"] = {
             {"projection", camera.projection == Runtime::CameraProjection::Perspective ? "perspective" : "orthographic"},
             {"verticalFieldOfViewRadians", camera.verticalFieldOfViewRadians},
@@ -401,7 +401,7 @@ namespace Horo::SceneSource::Detail {
     }
 
     /** @brief Appends the light component payload. */
-    void AppendLightJson(Json &value, const Runtime::LightComponent &light) {
+    void AppendLightJson(WireJson &value, const Runtime::LightComponent &light) {
         using enum Runtime::LightKind;
         const char *kind = "spot";
         if (light.kind == Directional)
@@ -420,7 +420,7 @@ namespace Horo::SceneSource::Detail {
     }
 
     /** @brief Appends the trigger-volume component payload. */
-    void AppendTriggerVolumeJson(Json &value, const Runtime::TriggerVolumeComponent &triggerVolume) {
+    void AppendTriggerVolumeJson(WireJson &value, const Runtime::TriggerVolumeComponent &triggerVolume) {
         value["triggerVolume"] = {
             {"shape", static_cast<std::uint8_t>(triggerVolume.shape)},
             {"enabled", triggerVolume.enabled},
@@ -428,7 +428,7 @@ namespace Horo::SceneSource::Detail {
     }
 
     /** @brief Appends the audio-source component payload. */
-    void AppendAudioSourceJson(Json &value, const Runtime::AudioSourceComponent &audio) {
+    void AppendAudioSourceJson(WireJson &value, const Runtime::AudioSourceComponent &audio) {
         value["audioSource"] = {
             {"sound", AudioSoundReferenceJson(audio.sound)},
             {"gain", audio.playback.gain},
@@ -447,12 +447,12 @@ namespace Horo::SceneSource::Detail {
     }
 
     /** @brief Appends attached behavior payloads. */
-    void AppendBehaviorsJson(Json &value, const std::vector<Gameplay::BehaviorComponent> &behaviors) {
+    void AppendBehaviorsJson(WireJson &value, const std::vector<Gameplay::BehaviorComponent> &behaviors) {
         if (behaviors.empty())
             return;
-        Json serialized = Json::array();
+        WireJson serialized = WireJson::array();
         for (const Gameplay::BehaviorComponent &behavior : behaviors) {
-            Json fields = Json::array();
+            WireJson fields = WireJson::array();
             for (const Gameplay::BehaviorField &field : behavior.fields)
                 fields.push_back({{"name", field.name}, {"value", BehaviorFieldValueJson(field.value)}});
             serialized.push_back({
@@ -481,15 +481,15 @@ namespace Horo::SceneSource::Detail {
         return encoded;
     }
 
-    [[nodiscard]] Json SerializedComponentJson(const Gameplay::SerializedComponent &component) {
-        return Json{{"typeId", component.typeId.Value()},
-                    {"schemaVersion", component.schemaVersion},
-                    {"encoding", "canonical_json"},
-                    {"payloadHex", PayloadHex(component.payload)}};
+    [[nodiscard]] WireJson SerializedComponentJson(const Gameplay::SerializedComponent &component) {
+        return WireJson{{"typeId", component.typeId.Value()},
+                        {"schemaVersion", component.schemaVersion},
+                        {"encoding", "canonical_json"},
+                        {"payloadHex", PayloadHex(component.payload)}};
     }
 
     /** @brief Appends opaque gameplay component envelopes in stable type-ID order. */
-    void AppendGameplayComponentsJson(Json &value, const std::vector<Gameplay::SerializedComponent> &components) {
+    void AppendGameplayComponentsJson(WireJson &value, const std::vector<Gameplay::SerializedComponent> &components) {
         if (components.empty())
             return;
         std::vector<const Gameplay::SerializedComponent *> sorted;
@@ -499,14 +499,14 @@ namespace Horo::SceneSource::Detail {
         std::ranges::sort(sorted, {}, [](const Gameplay::SerializedComponent *component) {
             return component->typeId.Value();
         });
-        Json serialized = Json::array();
+        WireJson serialized = WireJson::array();
         for (const Gameplay::SerializedComponent *component : sorted)
             serialized.push_back(SerializedComponentJson(*component));
         value["gameplayComponents"] = std::move(serialized);
     }
 
-    [[nodiscard]] Json ComponentsJson(const SceneObjectComponentSet &components) {
-        Json value = Json::object();
+    [[nodiscard]] WireJson ComponentsJson(const SceneObjectComponentSet &components) {
+        WireJson value = WireJson::object();
         if (components.camera)
             AppendCameraJson(value, *components.camera);
         if (components.light)

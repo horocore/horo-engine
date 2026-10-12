@@ -12,9 +12,11 @@
 namespace Horo::Render::Detail {
     namespace {
         /** @brief Deletes an unpublished candidate on every exit, including diagnostic allocation failure. */
-        class Candidate final {
+        template <typename Destroy> class Candidate final {
+            static_assert(std::is_nothrow_invocable_v<Destroy, std::uint32_t> && std::is_nothrow_copy_constructible_v<Destroy>);
+
         public:
-            Candidate(const std::uint32_t object, void (*destroy)(std::uint32_t) noexcept) noexcept : object_(object), destroy_(destroy) {}
+            Candidate(const std::uint32_t object, Destroy destroy) noexcept : object_(object), destroy_(destroy) {}
 
             ~Candidate() noexcept {
                 if (object_ != 0)
@@ -35,20 +37,22 @@ namespace Horo::Render::Detail {
 
         private:
             std::uint32_t object_;
-            void (*destroy_)(std::uint32_t) noexcept;
+            Destroy destroy_;
         };
 
-        static_assert(!std::is_copy_constructible_v<Candidate> && !std::is_copy_assignable_v<Candidate> &&
-                      !std::is_move_constructible_v<Candidate> && !std::is_move_assignable_v<Candidate>);
+        using NativeCandidate = Candidate<decltype(OpenGLShaderFunctions::deleteShader)>;
+        static_assert(!std::is_copy_constructible_v<NativeCandidate> && !std::is_copy_assignable_v<NativeCandidate> &&
+                      !std::is_move_constructible_v<NativeCandidate> && !std::is_move_assignable_v<NativeCandidate>);
 
         /** @brief Preserves at most 8191 original driver bytes without trusting a driver-reported allocation size. */
-        [[nodiscard]] Error DriverFailure(const ErrorCodeDescriptor &code, const std::uint32_t object,
-                                          std::size_t (*readLog)(std::uint32_t, std::span<char>) noexcept) {
+        template <typename ReadLog>
+        [[nodiscard]] Error DriverFailure(const ErrorCodeDescriptor &code, const std::uint32_t object, ReadLog readLog) {
+            static_assert(std::is_nothrow_invocable_r_v<std::size_t, ReadLog, std::uint32_t, std::span<char>>);
             std::array<char, 8'192> log{};
             const std::size_t reported = std::min(readLog(object, log), log.size() - 1);
             const auto written = std::span{log}.first(reported);
             const auto terminator = std::ranges::find(written, '\0');
-            const std::size_t count = static_cast<std::size_t>(terminator - written.begin());
+            const auto count = static_cast<std::size_t>(terminator - written.begin());
             return MakeError(code, std::string{log.data(), count});
         }
 
@@ -57,7 +61,7 @@ namespace Horo::Render::Detail {
         }
 
         void ShaderSource(const std::uint32_t shader, const std::span<const std::uint8_t> source) noexcept {
-            const char *text = reinterpret_cast<const char *>(source.data());
+            const auto *text = reinterpret_cast<const char *>(source.data());
             const auto length = static_cast<GLint>(source.size());
             glShaderSource(shader, 1, &text, &length);
         }
