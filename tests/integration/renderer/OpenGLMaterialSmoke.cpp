@@ -56,6 +56,8 @@ namespace Horo::Render::OpenGLMaterialSmoke {
             glGetIntegerv(GL_MAX_TEXTURE_SIZE, &texture);
             glGetIntegerv(GL_MAX_COLOR_ATTACHMENTS, &attachments);
             glGetIntegerv(GL_MAX_VERTEX_ATTRIBS, &attributes);
+            std::cout << "Material context (SDL driver " << SDL_GetCurrentVideoDriver() << "): " << glGetString(GL_RENDERER) << " / "
+                      << glGetString(GL_VERSION) << '\n';
             if (glGetError() != GL_NO_ERROR || major < 0 || major > 255 || minor < 0 || minor > 255 || texture < 1 || attachments < 1 ||
                 attributes < 1)
                 return Result<OpenGLContextFacts>::Failure(MakeError(OpenGLBackendErrors::InvalidCapabilities));
@@ -329,7 +331,9 @@ namespace Horo::Render::OpenGLMaterialSmoke {
         std::unique_ptr<const int, decltype(quit)> sdl{&token, quit};
         REQUIRE(SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1));
         REQUIRE(SDL_GL_SetAttribute(SDL_GL_ACCELERATED_VISUAL, 1));
-        std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window{SDL_CreateWindow("Horo native material qualification", 64, 32,
+        const char *title =
+            evidence == MaterialEvidence::HardwareQualification ? "Horo native material qualification" : "Horo material contract coverage";
+        std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window{SDL_CreateWindow(title, 64, 32,
                                                                                           SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN),
                                                                          &SDL_DestroyWindow};
         REQUIRE(window);

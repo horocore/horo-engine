@@ -15,7 +15,7 @@
 
 namespace Horo::Render::OpenGLBackendTests {
 
-    void CheckInitializedBackend(IRenderBackend &backend, PortState &portState) {
+    void CheckInitializedBackend(IRenderBackend &backend, const PortState &portState) {
         Check(backend
                   .Initialize(RenderBackendConfig{
                       .requirePresentation = true,
@@ -38,7 +38,7 @@ namespace Horo::Render::OpenGLBackendTests {
         Check(!backend.Capabilities().supportsCompute);
     }
 
-    void CheckFrameLifecycle(IRenderBackend &backend, PortState &portState) {
+    void CheckFrameLifecycle(IRenderBackend &backend, const PortState &portState) {
         const auto oversized = backend.BeginFrame(FrameDescriptor{
             .frameNumber = 1,
             .outputExtent = {std::numeric_limits<std::uint32_t>::max(), 720},
@@ -78,6 +78,40 @@ namespace Horo::Render::OpenGLBackendTests {
         Check(backend.Resize(FramebufferExtent{1920, 1080}).HasValue());
     }
 
+    TEST_CASE("Resize admits only native-representable extents on a usable idle context", "[unit][runtime][renderer]") {
+        commandState = {};
+        PortState state;
+        FakePresentationPort port{state};
+        auto backend = CreateBackend(port);
+        REQUIRE(backend->Initialize({}).HasValue());
+        const auto calls = state.makeCurrentCount;
+        const auto oversized = backend->Resize({(std::numeric_limits<std::uint32_t>::max)(), 720});
+        REQUIRE(oversized.HasError());
+        CHECK(oversized.ErrorValue().code.Value() == "render.backend.invalid_extent");
+        CHECK(state.makeCurrentCount == calls);
+        REQUIRE(backend->Resize({0, 720}).HasError());
+        CHECK(state.makeCurrentCount == calls);
+
+        auto frame = backend->BeginFrame({.frameNumber = 1, .outputExtent = {1280, 720}});
+        REQUIRE(frame.HasValue());
+        const auto activeCalls = state.makeCurrentCount;
+        REQUIRE(backend->Resize({1920, 1080}).HasError());
+        CHECK(state.makeCurrentCount == activeCalls);
+        backend->AbortFrame(frame.Value());
+
+        state.failure = PortFailure::MakeCurrent;
+        const auto lost = backend->Resize({1920, 1080});
+        REQUIRE(lost.HasError());
+        CHECK(lost.ErrorValue().domain.Value() == "horo.render.test");
+        CHECK(lost.ErrorValue().code.Value() == "render.test.current_failed");
+        CHECK(state.contextCreated);
+        CHECK(state.destroyCount == 0);
+        state.failure = PortFailure::None;
+        REQUIRE(backend->Resize({1920, 1080}).HasValue());
+        backend->Shutdown();
+        CHECK(state.destroyCount == 1);
+    }
+
     TEST_CASE("Provider Is Inert And Backend Owns Context Presentation Lifecycle", "[unit][runtime][renderer]") {
         commandState = {};
         PortState portState;
@@ -101,8 +135,8 @@ namespace Horo::Render::OpenGLBackendTests {
     }
 
     TEST_CASE("Initialization Failures Preserve Typed Errors And Rollback Created Context", "[unit][runtime][renderer]") {
-        constexpr std::array failures{PortFailure::Create, PortFailure::MakeCurrent, PortFailure::LoadDispatch, PortFailure::QueryFacts,
-                                      PortFailure::PresentMode};
+        using enum PortFailure;
+        constexpr std::array failures{Create, MakeCurrent, LoadDispatch, QueryFacts, PresentMode};
         for (const PortFailure failure : failures) {
             PortState portState{.failure = failure};
             FakePresentationPort port{portState};
@@ -112,12 +146,12 @@ namespace Horo::Render::OpenGLBackendTests {
             Check(initialized.ErrorValue().domain.Value() == "horo.render.test");
             Check(initialized.ErrorValue().severity == ErrorSeverity::Critical);
             Check(!portState.contextCreated);
-            Check(portState.destroyCount == (failure == PortFailure::Create ? 0 : 1));
+            Check(portState.destroyCount == (failure == Create ? 0 : 1));
 
-            portState.failure = PortFailure::None;
+            portState.failure = None;
             Check(backend->Initialize(RenderBackendConfig{}).HasValue());
             backend->Shutdown();
-            Check(portState.destroyCount == (failure == PortFailure::Create ? 1 : 2));
+            Check(portState.destroyCount == (failure == Create ? 1 : 2));
         }
     }
 
@@ -208,7 +242,7 @@ namespace Horo::Render::OpenGLBackendTests {
         Check(backend->Initialize(RenderBackendConfig{}).HasValue());
 
         std::string errorCode;
-        std::thread worker{[&] {
+        std::jthread worker{[&backend, &errorCode] {
             const Result<FrameToken> begun = backend->BeginFrame(FrameDescriptor{.frameNumber = 1, .outputExtent = {64, 64}});
             errorCode = begun.HasError() ? begun.ErrorValue().code.Value() : std::string{};
             backend->Shutdown();

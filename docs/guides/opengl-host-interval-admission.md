@@ -2,8 +2,10 @@
 
 `HoroOpenGLHostAdmissionInternal` owns the non-installed
 `OpenGLSwapIntervalAdmission.h` header in its dedicated one-header include
-directory. EditorViewportOpenGL, its test-owned material host, and backend
-regressions opt in with private dependencies. RenderApi and RenderOpenGL expose
+directory. The production `HoroSdlOpenGLPresentationInternal` port, the test-owned
+material host, surface admission regressions, and backend regressions opt in with
+private dependencies. `HoroEditorViewportOpenGL` consumes the production port,
+not a second admission implementation. RenderApi and RenderOpenGL expose
 no new public header and gain no editor or SDL dependency. The standalone
 `HoroOpenGLHostAdmissionInternalConsumer` links only that internal target, proving
 that the contract needs neither a broad source include nor another module.
