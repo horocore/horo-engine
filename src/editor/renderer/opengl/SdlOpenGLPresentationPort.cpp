@@ -49,8 +49,7 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc SdlOpenGLPresentationPort::SdlOpenGLPresentationPort */
-    SdlOpenGLPresentationPort::SdlOpenGLPresentationPort(SDL_Window &window) noexcept
-        : ownerThread_(std::this_thread::get_id()), window_(&window) {}
+    SdlOpenGLPresentationPort::SdlOpenGLPresentationPort(SDL_Window &window) noexcept : window_(&window) {}
 
     /** @copydoc SdlOpenGLPresentationPort::CheckOwner */
     Result<void> SdlOpenGLPresentationPort::CheckOwner() const {

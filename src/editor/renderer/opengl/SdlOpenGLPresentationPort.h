@@ -67,7 +67,7 @@ namespace Horo::Editor {
     private:
         /** @brief Rejects a foreign caller before reading context state or invoking SDL. */
         [[nodiscard]] Result<void> CheckOwner() const;
-        const std::thread::id ownerThread_;
+        const std::thread::id ownerThread_{std::this_thread::get_id()};
         SDL_Window *window_{nullptr};
         SDL_GLContext context_{nullptr};
     };

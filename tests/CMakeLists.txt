@@ -3987,6 +3987,29 @@ if (HORO_BUILD_RENDER_OPENGL)
                         PASS_REGULAR_EXPRESSION "HoroEditor surface lifecycle qualification passed"
                         ENVIRONMENT "HOME=${HORO_OPENGL_SURFACE_HOME};USERPROFILE=${HORO_OPENGL_SURFACE_HOME}"
                 )
+                # Software coverage runs the real application and observer, not
+                # the material fixture. Native qualification entries stay distinct.
+                set(HORO_OPENGL_COVERAGE_HOME "${CMAKE_CURRENT_BINARY_DIR}/software-coverage-home/opengl")
+                file(MAKE_DIRECTORY "${HORO_OPENGL_COVERAGE_HOME}/first-frame"
+                        "${HORO_OPENGL_COVERAGE_HOME}/surface-lifecycle")
+                add_test(NAME HoroEditorOpenGLFirstFrameSoftwareCoverage
+                        COMMAND $<TARGET_FILE:HoroEditor> --renderer opengl --exit-after-first-frame)
+                set_tests_properties(HoroEditorOpenGLFirstFrameSoftwareCoverage PROPERTIES
+                        LABELS "display;editor;opengl;software-coverage;sonar-coverage"
+                        TIMEOUT 60
+                        RUN_SERIAL TRUE
+                        ENVIRONMENT "HOME=${HORO_OPENGL_COVERAGE_HOME}/first-frame;USERPROFILE=${HORO_OPENGL_COVERAGE_HOME}/first-frame"
+                )
+                add_test(NAME HoroEditorOpenGLSurfaceRecoverySoftwareCoverage
+                        COMMAND $<TARGET_FILE:HoroEditor> --renderer opengl --exit-after-frames 32
+                                --qualify-opengl-surface-lifecycle)
+                set_tests_properties(HoroEditorOpenGLSurfaceRecoverySoftwareCoverage PROPERTIES
+                        LABELS "display;editor;opengl;surface;software-coverage;sonar-coverage"
+                        TIMEOUT 60
+                        RUN_SERIAL TRUE
+                        PASS_REGULAR_EXPRESSION "HoroEditor surface lifecycle qualification passed"
+                        ENVIRONMENT "HOME=${HORO_OPENGL_COVERAGE_HOME}/surface-lifecycle;USERPROFILE=${HORO_OPENGL_COVERAGE_HOME}/surface-lifecycle"
+                )
             endif ()
         endif ()
     endif ()

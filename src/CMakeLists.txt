@@ -2538,8 +2538,10 @@ if (HORO_BUILD_RENDER_OPENGL AND (HORO_BUILD_EDITOR_GUI OR HORO_ENABLE_GPU_SMOKE
 
     set(sdl_presentation_internal_root "${CMAKE_CURRENT_BINARY_DIR}/internal/sdl-presentation")
     file(MAKE_DIRECTORY "${sdl_presentation_internal_root}")
-    configure_file(editor/renderer/opengl/SdlOpenGLPresentationPort.h
-            "${sdl_presentation_internal_root}/SdlOpenGLPresentationPort.h" COPYONLY)
+    # Forward only this deliberate internal contract. Compiling the canonical
+    # header keeps template coverage attached to its source, not a staged copy.
+    file(GENERATE OUTPUT "${sdl_presentation_internal_root}/SdlOpenGLPresentationPort.h"
+            CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/editor/renderer/opengl/SdlOpenGLPresentationPort.h\"\n")
     add_library(HoroSdlOpenGLPresentationInternal STATIC editor/renderer/opengl/SdlOpenGLPresentationPort.cpp)
     target_compile_features(HoroSdlOpenGLPresentationInternal PUBLIC cxx_std_20)
     target_include_directories(HoroSdlOpenGLPresentationInternal PUBLIC "${sdl_presentation_internal_root}")
