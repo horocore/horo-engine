@@ -61,9 +61,9 @@ namespace Horo::UiTemplates::Detail::Codec {
 
         /** @brief Restores complete closed fallback alternatives without scalar/reference coercion. */
         UiBindingValue ReadFallback(const Json &value) {
-            Fields(value, {"kind", "value"});
-            const auto &p = value.at("value");
-            switch (Integer<std::uint8_t>(value.at("kind"))) {
+            const auto envelope = ReadTaggedPayload(value);
+            const auto &p = envelope.payload;
+            switch (envelope.kind) {
                 case 0:
                     if (!p.is_null())
                         Reject();

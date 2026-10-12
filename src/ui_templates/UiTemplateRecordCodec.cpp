@@ -5,19 +5,6 @@ namespace Horo::UiTemplates::Detail::Codec {
     namespace {
         using namespace Runtime::Ui;
 
-        /** @brief Sorts borrowed semantic declarations without copying any argument or fragment payload. */
-        template <typename T, typename Projection>
-        std::vector<const T *> Ordered(const std::span<const T> values, const Projection projection) {
-            std::vector<const T *> order;
-            order.reserve(values.size());
-            for (const auto &value : values)
-                order.push_back(&value);
-            std::ranges::sort(order, [&](const T *left, const T *right) {
-                return std::invoke(projection, *left) < std::invoke(projection, *right);
-            });
-            return order;
-        }
-
         /** @brief Cumulative decoding admission, checked before reserve or construction of authored containers. */
         struct DecodeBudget final {
             const UiTemplateLimits &limits;
@@ -57,7 +44,7 @@ namespace Horo::UiTemplates::Detail::Codec {
                 using Value = std::remove_cvref_t<T>;
                 if constexpr (std::is_same_v<Value, bool> || std::is_same_v<Value, std::int64_t> || std::is_same_v<Value, double> ||
                               std::is_same_v<Value, std::string> || std::is_same_v<Value, UiReference>)
-                    return std::move(item);
+                    return std::forward<T>(item);
                 else
                     Reject();
             }, ReadValue(source));
@@ -158,6 +145,14 @@ namespace Horo::UiTemplates::Detail::Codec {
             return output;
         }
     }  // namespace
+
+    /** @copydoc WriteTemplateOrdinaryElements */
+    Json WriteTemplateOrdinaryElements(const std::span<const Runtime::Ui::UiDocumentElement> elements) {
+        Json result = Json::array();
+        for (const auto *element : Ordered(elements, &Runtime::Ui::UiDocumentElement::id))
+            result.push_back(WriteElement(*element));
+        return result;
+    }
 
     /** @copydoc WriteAccepted */
     Json WriteAccepted(const UiTemplateReference &value) {

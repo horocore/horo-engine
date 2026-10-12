@@ -25,9 +25,9 @@ namespace Horo::UiTemplates::Detail::Codec {
 
         /** @brief Restores each argument category without converting integers, display strings or enum evidence. */
         UiLocalizedArgumentValue ReadArgumentValue(const Json &value) {
-            Fields(value, {"kind", "value"});
-            const auto &p = value.at("value");
-            switch (Integer<std::uint8_t>(value.at("kind"))) {
+            const auto envelope = ReadTaggedPayload(value);
+            const auto &p = envelope.payload;
+            switch (envelope.kind) {
                 case 0:
                     return Integer<std::int64_t>(p);
                 case 1:

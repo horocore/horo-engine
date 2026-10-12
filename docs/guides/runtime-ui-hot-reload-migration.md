@@ -30,6 +30,14 @@ makes `Commit` fail with a stale source. Cancellation and failure leave the old
 active generation intact. A rejected candidate's admitted element namespace is
 burned; it cannot be recycled by a restarted allocator.
 
+Host adapters may inspect `Prepared::Candidate()` after `Prepare` to derive owned
+accessibility/focus evidence from the actual reconciled replacement. This is a
+const owner-thread borrow, not another publisher or mutable composition path.
+It returns null for moved-from or successfully consumed candidates. A failed
+commit (including cancellation) leaves the candidate inspectable without active
+admission. Its borrow ends on move, consumption or destruction: finish copying
+derived snapshots before commit and never retain the pointer in published data.
+
 `Commit` runs on the serialized Runtime UI owner at an ADR-073 structural safe
 point. It closes old admission and publishes all replacement canvases together.
 Successful publication uses reserved retention slots and does not load assets,

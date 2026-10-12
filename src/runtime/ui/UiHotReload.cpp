@@ -257,4 +257,9 @@ namespace Horo::Runtime::Ui {
     const UiReloadReconciliation &UiHotReload::Prepared::Reconciliation() const noexcept {
         return storage_->reconciliation;
     }
+
+    /** @copydoc UiHotReload::Prepared::Candidate */
+    const UiReloadGeneration *UiHotReload::Prepared::Candidate() const noexcept {
+        return storage_ && !storage_->consumed ? storage_->replacement.get() : nullptr;
+    }
 }  // namespace Horo::Runtime::Ui

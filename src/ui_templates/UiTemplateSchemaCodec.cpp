@@ -2,19 +2,6 @@
 
 namespace Horo::UiTemplates::Detail::Codec {
     namespace {
-        /** @brief Canonicalizes borrowed finite schema entries without copying their owned metadata. */
-        template <typename T, typename Projection>
-        std::vector<const T *> Ordered(const std::span<const T> values, const Projection projection) {
-            std::vector<const T *> ordered;
-            ordered.reserve(values.size());
-            for (const auto &value : values)
-                ordered.push_back(&value);
-            std::ranges::sort(ordered, {}, [&](const auto *value) {
-                return std::invoke(projection, *value);
-            });
-            return ordered;
-        }
-
         /** @brief Includes complete style default, effects and numeric/inheritance constraints in schema evidence. */
         Json Style(const Runtime::Ui::UiStylePropertyDescriptor &value) {
             return Json::array({Hex(value.id.Bytes()), static_cast<std::uint8_t>(value.category), WriteStyle(value.defaultValue),

@@ -98,6 +98,36 @@ namespace Horo::UiTemplates {
                 return Result<void>::Success();
             }
 
+            /** @brief Applies a validated argument to one property or forwards it through an exact nested lineage. */
+            Result<void> WriteArgumentTarget(const UiTemplateParameterTarget &target, const UiTemplateValue &value,
+                                             std::vector<UiTemplateElement> &elements, std::vector<Forward> &forwarded,
+                                             std::set<std::pair<UiTemplateLocalElementId, UiStylePropertyId>> &targets) {
+                return std::visit([&]<typename Target>(const Target &item) -> Result<void> {
+                    if constexpr (std::is_same_v<Target, UiTemplateNestedParameterTarget>) {
+                        if (item.lineage.empty() || item.lineage.size() > catalog_.Limits().maximumDepth || !item.parameter.IsValid())
+                            return Invalid("Template forwarding lineage is invalid.");
+                        if (std::ranges::any_of(forwarded, [&](const Forward &previous) {
+                            return previous.lineage == item.lineage && previous.argument.parameter == item.parameter;
+                        }))
+                            return Invalid("Template parameters write the same nested target twice.");
+                        forwarded.push_back({item.lineage, {item.parameter, value}});
+                        return Result<void>::Success();
+                    } else {
+                        const auto element = std::ranges::find(elements, item.element, &UiTemplateElement::id);
+                        if (element == elements.end() || !targets.emplace(item.element, item.property).second)
+                            return Invalid("Template parameter target is absent or written more than once.");
+                        if (const auto valid = catalog_.ValidateProperty(element->type, item.property, value); valid.HasError())
+                            return valid;
+                        const auto property = std::ranges::find(element->properties, item.property, &UiTemplateProperty::property);
+                        if (property == element->properties.end())
+                            element->properties.push_back({item.property, value});
+                        else
+                            property->value = value;
+                        return Result<void>::Success();
+                    }
+                }, target);
+            }
+
             /** @brief Applies parameter writes to private element copies and explicit nested forwarding. */
             Result<void> Arguments(const UiTemplateDocument &source, const std::span<const UiTemplateArgument> arguments,
                                    std::vector<UiTemplateElement> &elements, std::vector<Forward> &forwarded) {
@@ -122,31 +152,7 @@ namespace Horo::UiTemplates {
                     if (const auto valid = ValidateArgument(parameter, *value); valid.HasError())
                         return valid;
                     for (const auto &target : parameter.targets) {
-                        const auto written = std::visit([&]<typename Target>(const Target &item) -> Result<void> {
-                            if constexpr (std::is_same_v<Target, UiTemplateNestedParameterTarget>) {
-                                if (item.lineage.empty() || item.lineage.size() > catalog_.Limits().maximumDepth ||
-                                    !item.parameter.IsValid())
-                                    return Invalid("Template forwarding lineage is invalid.");
-                                if (std::ranges::any_of(forwarded, [&](const Forward &previous) {
-                                    return previous.lineage == item.lineage && previous.argument.parameter == item.parameter;
-                                }))
-                                    return Invalid("Template parameters write the same nested target twice.");
-                                forwarded.push_back({item.lineage, {item.parameter, *value}});
-                                return Result<void>::Success();
-                            } else {
-                                const auto element = std::ranges::find(elements, item.element, &UiTemplateElement::id);
-                                if (element == elements.end() || !targets.emplace(item.element, item.property).second)
-                                    return Invalid("Template parameter target is absent or written more than once.");
-                                if (const auto valid = catalog_.ValidateProperty(element->type, item.property, *value); valid.HasError())
-                                    return valid;
-                                const auto property = std::ranges::find(element->properties, item.property, &UiTemplateProperty::property);
-                                if (property == element->properties.end())
-                                    element->properties.push_back({item.property, *value});
-                                else
-                                    property->value = *value;
-                                return Result<void>::Success();
-                            }
-                        }, target);
+                        const auto written = WriteArgumentTarget(target, *value, elements, forwarded, targets);
                         if (written.HasError())
                             return written;
                     }
@@ -391,28 +397,11 @@ namespace Horo::UiTemplates {
                 return Result<void>::Success();
             }
 
-            /** @brief Expands a pinned nested use while rejecting asset cycles independently of revision selection. */
-            Result<void> Instance(const UiTemplateReference &reference, const UiElementId parent,
-                                  const std::span<const UiTemplateArgument> arguments, const std::span<const UiTemplateSlotContent> slots,
-                                  std::vector<Forward> forwarded, const std::size_t depth, const bool documentOwned) {
-                if (++instances_ > catalog_.Limits().maximumInstances || lineage_.size() > catalog_.Limits().maximumDepth)
-                    return Result<void>::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
-                if (std::ranges::find(assets_, reference.asset) != assets_.end())
-                    return Result<void>::Failure(MakeError(UiErrors::TemplateDependencyCycle));
-                const auto resolved = catalog_.Resolve(reference);
-                if (resolved.HasError())
-                    return Result<void>::Failure(resolved.ErrorValue());
-                assets_.push_back(reference.asset);
-                const auto &source = *resolved.Value();
-                auto elements = source.elements;
-                if (const auto applied = Arguments(source, arguments, elements, forwarded); applied.HasError())
-                    return applied;
-                if (const auto expanded = Elements(elements, source.root, parent, depth); expanded.HasError())
-                    return expanded;
-                const auto parents = localIds_;
-                if (const auto expanded = Slots(source, slots, parents, depth, documentOwned); expanded.HasError())
-                    return expanded;
-                auto nested = source.nested;
+            /** @brief Resolves canonical child order and routes forwarded arguments before recursive expansion. */
+            Result<void> ExpandNested(const std::span<const UiTemplateNestedInstance> authored,
+                                      const std::map<UiTemplateLocalElementId, UiElementId> &parents,
+                                      const std::span<const Forward> forwarded, const std::size_t depth) {
+                std::vector<UiTemplateNestedInstance> nested(authored.begin(), authored.end());
                 std::ranges::sort(nested, {}, &UiTemplateNestedInstance::id);
                 for (auto &child : nested) {
                     std::vector<Forward> remaining;
@@ -439,6 +428,32 @@ namespace Horo::UiTemplates {
                 for (const auto &forward : forwarded)
                     if (std::ranges::find(nested, forward.lineage.front(), &UiTemplateNestedInstance::id) == nested.end())
                         return Invalid("Template forwarding lineage names an absent nested instance.");
+                return Result<void>::Success();
+            }
+
+            /** @brief Expands a pinned nested use while rejecting asset cycles independently of revision selection. */
+            Result<void> Instance(const UiTemplateReference &reference, const UiElementId parent,
+                                  const std::span<const UiTemplateArgument> arguments, const std::span<const UiTemplateSlotContent> slots,
+                                  std::vector<Forward> forwarded, const std::size_t depth, const bool documentOwned) {
+                if (++instances_ > catalog_.Limits().maximumInstances || lineage_.size() > catalog_.Limits().maximumDepth)
+                    return Result<void>::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
+                if (std::ranges::find(assets_, reference.asset) != assets_.end())
+                    return Result<void>::Failure(MakeError(UiErrors::TemplateDependencyCycle));
+                const auto resolved = catalog_.Resolve(reference);
+                if (resolved.HasError())
+                    return Result<void>::Failure(resolved.ErrorValue());
+                assets_.push_back(reference.asset);
+                const auto &source = *resolved.Value();
+                auto elements = source.elements;
+                if (const auto applied = Arguments(source, arguments, elements, forwarded); applied.HasError())
+                    return applied;
+                if (const auto expanded = Elements(elements, source.root, parent, depth); expanded.HasError())
+                    return expanded;
+                const auto parents = localIds_;
+                if (const auto expanded = Slots(source, slots, parents, depth, documentOwned); expanded.HasError())
+                    return expanded;
+                if (const auto expanded = ExpandNested(source.nested, parents, forwarded, depth); expanded.HasError())
+                    return expanded;
                 output_.acceptedDependencies.push_back(reference);
                 assets_.pop_back();
                 return Result<void>::Success();

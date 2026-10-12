@@ -61,9 +61,9 @@ namespace Horo::UiTemplates::Detail::Codec {
 
     /** @copydoc ReadValue */
     UiTemplateValue ReadValue(const Json &value) {
-        Fields(value, {"kind", "value"});
-        const auto &p = value.at("value");
-        switch (Integer<std::uint8_t>(value.at("kind"))) {
+        const auto envelope = ReadTaggedPayload(value);
+        const auto &p = envelope.payload;
+        switch (envelope.kind) {
             case 0:
                 return Boolean(p);
             case 1:

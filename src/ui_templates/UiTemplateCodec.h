@@ -2,23 +2,55 @@
 
 #include "Horo/Foundation/Utf8.h"
 #include "Horo/UiTemplates/UiTemplateDocumentOwner.h"
+#include "Horo/UiTemplates/UiTemplateErrors.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <new>
 #include <nlohmann/json.hpp>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 namespace Horo::UiTemplates::Detail::Codec {
     using Json = nlohmann::json;
+
+    /** @brief Orders borrowed canonical declarations without copying their payloads or changing identity. */
+    template <typename T, typename Projection>
+    std::vector<const T *> Ordered(const std::span<const T> values, const Projection projection) {
+        std::vector<const T *> order;
+        order.reserve(values.size());
+        for (const auto &value : values)
+            order.push_back(&value);
+        std::ranges::sort(order, [&](const T *left, const T *right) {
+            return std::invoke(projection, *left) < std::invoke(projection, *right);
+        });
+        return order;
+    }
 
     /** @brief Private typed unwind across codecs; public operations return the preserved Horo error. */
     struct Failure final {
         Error error;
     };
+
+    /** @brief Keeps typed codec failures and the common malformed/capacity translation at one explicit boundary.
+     * @param operation Synchronous bounded codec operation, returning Result<T>; no callback survives the call.
+     * @return Original result/failure or the existing malformed/capacity error, never a partially decoded value.
+     */
+    template <typename T, typename Operation> Result<T> CodecResult(Operation &&operation) {
+        try {
+            return std::invoke(std::forward<Operation>(operation));
+        } catch (const Failure &failure) {
+            return Result<T>::Failure(failure.error);
+        } catch (const Json::exception &) {
+            return Result<T>::Failure(MakeError(UiErrors::TemplatePersistenceMalformed));
+        } catch (const std::bad_alloc &) {
+            return Result<T>::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
+        }
+    }
 
     /** @brief Rejects malformed source without echoing authored values in diagnostics. */
     [[noreturn]] inline void Reject() {
@@ -30,6 +62,12 @@ namespace Horo::UiTemplates::Detail::Codec {
         if (result.HasError())
             throw Failure{result.ErrorValue()};
         return std::move(result).Value();
+    }
+
+    /** @brief Preserves a void validator's typed failure without inventing a value access. */
+    inline void Take(Result<void> result) {
+        if (result.HasError())
+            throw Failure{result.ErrorValue()};
     }
 
     /** @brief Requires the complete closed object shape, rejecting missing and unknown semantic fields. */
@@ -75,6 +113,18 @@ namespace Horo::UiTemplates::Detail::Codec {
         if (!std::isfinite(number) || std::abs(number) > std::numeric_limits<T>::max())
             Reject();
         return static_cast<T>(number);
+    }
+
+    /** @brief One validated discriminated wire envelope; category-specific codecs retain their closed typed switches. */
+    struct TaggedPayload final {
+        std::uint8_t kind;
+        const Json &payload;
+    };
+
+    /** @brief Validates shared envelope shape and ordinal without coercing category-specific payloads. */
+    inline TaggedPayload ReadTaggedPayload(const Json &value) {
+        Fields(value, {"kind", "value"});
+        return {Integer<std::uint8_t>(value.at("kind")), value.at("value")};
     }
 
     /** @brief Admits UTF-8 source text without interpreting markup, paths or property expressions. */
@@ -181,9 +231,19 @@ namespace Horo::UiTemplates::Detail::Codec {
     Json WriteAccepted(const UiTemplateReference &value);
     UiTemplateReference ReadAccepted(const Json &value);
     Json WriteRecords(std::span<const UiTemplateInstanceRecord> records);
+    /** @brief Encodes bounded ordinary slot/default elements through the shared typed value/reference vocabulary. */
+    Json WriteTemplateOrdinaryElements(std::span<const Runtime::Ui::UiDocumentElement> elements);
     std::vector<UiTemplateInstanceRecord> ReadRecords(const Json &value, const UiTemplateLimits &limits);
     Json WriteRich(const UiTemplateAuthoredDocument &source);
+    /** @brief Encodes runtime rich attachments without requiring an authored document or linked authority. */
+    Json WriteRich(std::span<const UiTemplateExpandedStyle> styles, std::span<const UiTemplateExpandedText> texts,
+                   std::span<const Runtime::Ui::UiBindingDescriptor> bindings);
     void ReadRich(const Json &value, UiTemplateAuthoredDocument &source, const UiTemplateLimits &limits);
     /** @brief Encodes exact registered schemas, including defaults/effects and binding signature/version evidence. */
     Json WriteSchemas(const UiTemplateSchemaSnapshot &schemas);
+    /** @brief Commits canonical source/schema/verified dependency and complete ordinary/rich runtime bytes. */
+    Sha256Digest CookIdentity(const Sha256Digest &source, const Sha256Digest &schemas, const Sha256Digest &manifest,
+                              const Runtime::Ui::CookedUiDocument &ordinary, std::string_view rich);
+    /** @brief Rejects duplicate fields and bounded depth/node overflow before admitting a closed typed JSON artifact. */
+    Json ParseBoundedTemplateJson(std::string_view source);
 }  // namespace Horo::UiTemplates::Detail::Codec

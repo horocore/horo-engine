@@ -34,41 +34,36 @@ namespace Horo::UiTemplates {
             return result;
         }
 
-        /** @brief Rejects duplicate fields, excessive structural depth and node counts during DOM construction. */
-        Json Parse(const std::string_view source) {
-            Foundation::JsonParseGuard guard{256};
-            std::size_t nodes = 0;
-            auto callback = [&](const int depth, const Json::parse_event_t event, const Json &value) {
-                if (++nodes > 262144 || !guard(depth, event, value))
-                    Reject();
-                return true;
-            };
-            return Json::parse(source, callback);
-        }
     }  // namespace
+
+    /** @copydoc Detail::Codec::ParseBoundedTemplateJson */
+    Detail::Codec::Json Detail::Codec::ParseBoundedTemplateJson(const std::string_view source) {
+        Foundation::JsonParseGuard guard{256};
+        std::size_t nodes = 0;
+        auto callback = [&](const int depth, const Json::parse_event_t event, const Json &value) {
+            if (++nodes > 262144 || !guard(depth, event, value))
+                Reject();
+            return true;
+        };
+        return Json::parse(source, callback);
+    }
 
     /** @copydoc SerializeTemplateDocument */
     Result<std::string> SerializeTemplateDocument(const UiTemplateDocumentSnapshot &snapshot) {
-        try {
+        return CodecResult<std::string>([&]() -> Result<std::string> {
             const auto &limits = snapshot.Limits();
             const auto ordinary = Take(Runtime::Ui::SerializeUiDocument(snapshot.Source().ordinary, OrdinaryLimits(limits)));
             Json root{{"schema", 1},
                       {"identityAlgorithm", 1},
                       {"limits", WriteLimits(limits)},
-                      {"ordinary", Parse(ordinary)},
+                      {"ordinary", ParseBoundedTemplateJson(ordinary)},
                       {"instances", WriteRecords(snapshot.Source().instances)},
                       {"rich", WriteRich(snapshot.Source())}};
             auto bytes = root.dump();
             if (bytes.size() > limits.maximumPayloadBytes)
                 return Result<std::string>::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
             return Result<std::string>::Success(std::move(bytes));
-        } catch (const Failure &failure) {
-            return Result<std::string>::Failure(failure.error);
-        } catch (const Json::exception &) {
-            return Result<std::string>::Failure(MakeError(UiErrors::TemplatePersistenceMalformed));
-        } catch (const std::bad_alloc &) {
-            return Result<std::string>::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
-        }
+        });
     }
 
     /** @copydoc DeserializeTemplateDocument */
@@ -77,12 +72,12 @@ namespace Horo::UiTemplates {
                                                                                  std::shared_ptr<const UiTemplateCatalog> authoringSchemas,
                                                                                  const UiTemplateLimits &limits) {
         using Output = Result<std::unique_ptr<UiTemplateDocumentOwner>>;
-        try {
+        return CodecResult<std::unique_ptr<UiTemplateDocumentOwner>>([&]() -> Output {
             if (!limits.IsValid() || source.size() > limits.maximumPayloadBytes)
                 return Output::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
             if (source.empty() || !IsValidUtf8ScalarSequence(source))
                 Reject();
-            const auto root = Parse(source);
+            const auto root = ParseBoundedTemplateJson(source);
             Fields(root, {"schema", "identityAlgorithm", "limits", "ordinary", "instances", "rich"});
             if (Integer<std::uint32_t>(root.at("schema")) != 1 || Integer<std::uint32_t>(root.at("identityAlgorithm")) != 1)
                 Reject();
@@ -91,12 +86,6 @@ namespace Horo::UiTemplates {
             UiTemplateAuthoredDocument candidate{std::move(ordinary), ReadRecords(root.at("instances"), limits)};
             ReadRich(root.at("rich"), candidate, limits);
             return UiTemplateDocumentOwner::Create(std::move(candidate), leases, std::move(authoringSchemas), limits);
-        } catch (const Failure &failure) {
-            return Output::Failure(failure.error);
-        } catch (const Json::exception &) {
-            return Output::Failure(MakeError(UiErrors::TemplatePersistenceMalformed));
-        } catch (const std::bad_alloc &) {
-            return Output::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
-        }
+        });
     }
 }  // namespace Horo::UiTemplates

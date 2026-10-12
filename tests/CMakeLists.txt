@@ -3028,10 +3028,24 @@ add_executable(HoroUiTemplateInstancesTests
         unit/ui_templates/UiTemplateModelTests.cpp
         unit/ui_templates/UiTemplateExpansionTests.cpp
         unit/ui_templates/UiTemplateDocumentOwnerTests.cpp
+        unit/ui_templates/UiTemplateArtifactTests.cpp
+        unit/ui_templates/UiTemplateRecordCodecTests.cpp
 )
 target_compile_features(HoroUiTemplateInstancesTests PRIVATE cxx_std_20)
-target_link_libraries(HoroUiTemplateInstancesTests PRIVATE HoroEngine::UiTemplateInstances)
+target_link_libraries(HoroUiTemplateInstancesTests PRIVATE HoroEngine::UiTemplateInstances nlohmann_json::nlohmann_json)
 horo_register_catch_test(HoroUiTemplateInstancesTests LABELS "unit;runtime_ui;template;headless")
+add_executable(HoroUiTemplateHostTests
+        unit/application/UiTemplateInputLeaseTests.cpp
+        unit/application/UiTemplateHostCookTests.cpp
+        unit/application/UiTemplateHostPublicationFixture.cpp
+        unit/application/UiTemplateHostPublicationTests.cpp
+        unit/application/UiTemplateHostCompositionTests.cpp
+        support/AllocationProbe.cpp)
+target_compile_features(HoroUiTemplateHostTests PRIVATE cxx_std_20)
+target_include_directories(HoroUiTemplateHostTests PRIVATE "${PROJECT_SOURCE_DIR}/src/application/ui")
+target_link_libraries(HoroUiTemplateHostTests PRIVATE HoroEngine::UiTemplateHost HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
+horo_register_catch_test(HoroUiTemplateHostTests LABELS "unit;runtime_ui;template;headless")
+target_sources(HoroUiTemplateHostPublicHeaderConsumer PRIVATE support/UiTemplateHostPublicContract.cpp)
 add_executable(HoroRuntimeUiLocalizationTests
         unit/runtime/ui/UiLocalizationTests.cpp
 )

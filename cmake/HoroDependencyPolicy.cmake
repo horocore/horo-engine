@@ -41,6 +41,9 @@ horo_allow_target_dependencies(TARGET HoroUiAnimationIntegrationInternal DEPENDE
 horo_allow_target_dependencies(TARGET HoroRuntimeUi DEPENDENCIES HoroSceneIdentity HoroFoundation HoroAssets HoroRationalDurationInternal)
 horo_allow_target_dependencies(TARGET HoroUiTemplateGraph DEPENDENCIES HoroFoundation HoroAssets HoroPackages)
 horo_allow_target_dependencies(TARGET HoroUiTemplateInstances DEPENDENCIES HoroUiTemplateGraph HoroRuntimeUi HoroFoundationJsonInternal)
+horo_allow_target_dependencies(TARGET HoroProjectMutationGuard DEPENDENCIES HoroFoundation)
+horo_allow_target_dependencies(TARGET HoroUiTemplateHost
+    DEPENDENCIES HoroUiTemplateInstances HoroRuntimeUi HoroAssets HoroPackageSecurity HoroProjectMutationGuard)
 horo_allow_target_dependencies(TARGET HoroRuntimeUiInput DEPENDENCIES HoroInput HoroRuntimeUi)
 horo_allow_target_dependencies(TARGET HoroAssets DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroNetworkApi DEPENDENCIES HoroFoundation)
@@ -190,7 +193,7 @@ horo_allow_target_dependencies(TARGET HoroEditorViewportResources
 horo_allow_target_dependencies(TARGET HoroEditorRenderExtraction
     DEPENDENCIES HoroEditorModel HoroEditorViewportScene)
 horo_allow_target_dependencies(TARGET HoroEditorServices
-    DEPENDENCIES HoroAudioApi HoroAudioFrontend
+    DEPENDENCIES HoroAudioApi HoroAudioFrontend HoroProjectMutationGuard
         HoroFoundation HoroHostErrors HoroCinematicRuntime
         HoroNetworkApi
         HoroNetworkDebuggerApplication

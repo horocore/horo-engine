@@ -9,6 +9,13 @@ static_assert(std::is_nothrow_move_constructible_v<Horo::Runtime::Ui::UiHotReloa
 static_assert(std::is_nothrow_move_assignable_v<Horo::Runtime::Ui::UiHotReload::Prepared>);
 static_assert(!std::is_copy_constructible_v<Horo::Runtime::Ui::UiHotReload::Prepared>);
 static_assert(!std::is_copy_assignable_v<Horo::Runtime::Ui::UiHotReload::Prepared>);
+static_assert(std::is_same_v<decltype(std::declval<const Horo::Runtime::Ui::UiHotReload::Prepared &>().Candidate()),
+                             const Horo::Runtime::Ui::UiReloadGeneration *>);
+static_assert(noexcept(std::declval<const Horo::Runtime::Ui::UiHotReload::Prepared &>().Candidate()));
+template <typename Candidate>
+concept CandidateAdmitsMutableCanvas =
+    requires(const Candidate &candidate) { candidate.Candidate()->Canvas(Horo::Runtime::Ui::UiCanvasId{}); };
+static_assert(!CandidateAdmitsMutableCanvas<Horo::Runtime::Ui::UiHotReload::Prepared>);
 
 template <typename Owner>
 concept ConstOwnerAdmitsShutdown = requires(const Owner &owner) { owner.Shutdown(); };

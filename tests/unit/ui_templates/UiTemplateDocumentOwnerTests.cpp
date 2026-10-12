@@ -1,8 +1,10 @@
 #include "Horo/UiTemplates/UiTemplateDocumentOwner.h"
-#include "UiTemplateTestFixtures.h"
+#include "UiTemplateOwnerTestFixture.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <thread>
 
 namespace Horo::UiTemplates {
     namespace {
@@ -11,116 +13,7 @@ namespace Horo::UiTemplates {
         using TestSupport::Identity;
         using TestSupport::OwnerOrdinaryDocument;
 
-        Assets::AssetTypeId Kind() {
-            return Assets::AssetTypeId::Parse("ui.panel").Value();
-        }
-
-        UiTemplateReference Reference(const std::uint8_t revision) {
-            Sha256Digest digest;
-            digest.bytes.front() = revision;
-            SerializedUiId asset{};
-            asset.back() = 1;
-            return {{Assets::AssetId::FromBytes(asset)}, digest, {1, 0}};
-        }
-
-        UiTemplateParameter Parameter() {
-            return {Identity<UiTemplateParameterId>(1),
-                    UiTemplateValueKind::Text,
-                    true,
-                    {},
-                    {},
-                    {},
-                    4096,
-                    {UiTemplateContentTarget{Identity<UiTemplateLocalElementId>(1), Identity<UiStylePropertyId>(1)}}};
-        }
-
-        UiTemplateDocument Source(const std::uint8_t revision) {
-            const auto reference = Reference(revision);
-            UiTemplateDocument source;
-            source.dependency = {reference.asset, CurrentUiTemplateSchemaVersion, {1, 0}, reference.revision, {}};
-            source.root = Identity<UiTemplateLocalElementId>(1);
-            source.elements = {{source.root, {}, Kind(), {}}};
-            source.parameters = {Parameter()};
-            return source;
-        }
-
-        std::shared_ptr<const UiTemplateCatalog> Catalog(UiTemplateDocument source, const UiTemplateLimits &limits = {}) {
-            UiTemplateSchemaSnapshot schemas{{Kind()},
-                                             {{Kind(), Identity<UiStylePropertyId>(1), UiTemplateValueKind::Text, "text", {}}},
-                                             {}};
-            auto catalog = UiTemplateCatalog::Create({std::move(source)}, std::move(schemas), {}, limits);
-            REQUIRE(catalog.HasValue());
-            return std::make_shared<const UiTemplateCatalog>(std::move(catalog).Value());
-        }
-
-        UiTemplateAuthoredDocument Document() {
-            const std::array elements{UiDocumentElement{Identity<UiElementId>(99), {}, Kind(), {}, {}}};
-            UiTemplateInstanceRecord record{Identity<UiTemplateInstanceId>(1),
-                                            Identity<UiElementId>(99),
-                                            Reference(1),
-                                            {{Identity<UiTemplateParameterId>(1), std::string{"authored value"}}},
-                                            {}};
-            return {OwnerOrdinaryDocument(elements), {std::move(record)}};
-        }
-
-        std::unique_ptr<UiTemplateDocumentOwner> Owner() {
-            auto owner = UiTemplateDocumentOwner::Create(Document(), Catalog(Source(1)));
-            REQUIRE(owner.HasValue());
-            return std::move(owner).Value();
-        }
-
-        UiBindingProviderSchema Provider() {
-            const auto type = UiBindingProviderTypeId::Parse("game.hud.player").Value();
-            const std::array properties{
-                UiBindingPropertyDescriptor{.id = UiBindingPropertyId::Parse("health").Value(), .type = UiBindingValueType::FixedScalar}};
-            UiBindingSchemaVersion version{1, 0, 0};
-            version.fingerprint = ComputeUiBindingSchemaFingerprint(type, version, properties);
-            auto schema = UiBindingProviderSchema::Create({type, ModuleId{"game.hud"}, version, properties,
-                                                           UiBindingProviderScopeBit(UiBindingProviderScopeKind::GameInstance),
-                                                           UiBindingProviderFlags::None});
-            REQUIRE(schema.HasValue());
-            return std::move(schema).Value();
-        }
-
-        UiBindingDescriptor Binding(const UiBindingProviderSchema &provider) {
-            return {.id = Identity<UiBindingId>(9),
-                    .source = {provider.Type(),
-                               provider.Properties().front().id,
-                               {1, 0},
-                               ComputeUiBindingPropertyFingerprint(provider.Properties().front())},
-                    .target = {Identity<UiElementId>(99), UiBindingTargetProperty::Progress},
-                    .fallback = UiBindingValue{0.5},
-                    .requirement = UiBindingRequirement::Optional};
-        }
-
-        LocalizedMessageRef Message() {
-            auto text = UiLocalizedText::Create(UiMessageKey::Create("game", "welcome").Value(),
-                                                {{"player", std::string{"Ada"}}, {"score", std::int64_t{42}}}, "Welcome");
-            REQUIRE(text.HasValue());
-            return std::move(text).Value();
-        }
-
-        std::shared_ptr<const UiTemplateCatalog> ValueCatalog(const UiTemplateValue &value) {
-            auto source = Source(1);
-            const auto kind = TemplateValueKind(value);
-            auto &parameter = source.parameters.front();
-            parameter.kind = kind;
-            if (kind == UiTemplateValueKind::Style)
-                parameter.targets = {UiTemplateStyleTarget{source.root, Identity<UiStylePropertyId>(1)}};
-            else if (kind >= UiTemplateValueKind::LocalizedText)
-                parameter.targets = {UiTemplateAttachmentTarget{source.root, Identity<UiStylePropertyId>(1), kind}};
-            UiTemplatePropertySchema property{Kind(),
-                                              Identity<UiStylePropertyId>(1),
-                                              kind,
-                                              kind < UiTemplateValueKind::Style ? "value" : "",
-                                              {}};
-            if (kind == UiTemplateValueKind::Style)
-                property.style = UiStylePropertyDescriptor{.id = property.property, .defaultValue = UiStyleColor{}};
-            UiTemplateSchemaSnapshot schemas{{Kind()}, {property}, {Provider()}};
-            auto catalog = UiTemplateCatalog::Create({std::move(source)}, std::move(schemas), {});
-            REQUIRE(catalog.HasValue());
-            return std::make_shared<const UiTemplateCatalog>(std::move(catalog).Value());
-        }
+        using namespace TestSupport;
     }  // namespace
 
     TEST_CASE("All eight template value categories roundtrip without coercion or lost attachment identity",
@@ -158,10 +51,7 @@ namespace Horo::UiTemplates {
 
     TEST_CASE("Rich authored attachments survive persistence flatten cook and owner shutdown", "[runtime_ui][template][headless]") {
         auto catalog = ValueCatalog(Message());
-        auto source = Document();
-        source.instances.front().arguments.front().value = Message();
-        source.localizedTexts.push_back({Identity<UiElementId>(99), Message(), Identity<UiStylePropertyId>(1)});
-        source.bindings.push_back(Binding(Provider()));
+        auto source = RichDocument();
         auto owner = UiTemplateDocumentOwner::Create(std::move(source), catalog);
         REQUIRE(owner.HasValue());
         auto saved = SerializeTemplateDocument(owner.Value()->Capture());
@@ -245,6 +135,125 @@ namespace Horo::UiTemplates {
         REQUIRE(owner->Undo().HasValue());
         CHECK(owner->Capture().Source().instances.size() == 2);
         CHECK(owner->Capture().Expansions().back().root == derived);
+    }
+
+    TEST_CASE("Template owner rejects another thread before reading or changing authority", "[runtime_ui][template][headless]") {
+        auto owner = Owner();
+        const auto catalog = Catalog(Source(2));
+        const auto prepared = owner->PrepareRebase(Identity<UiTemplateInstanceId>(1), Reference(2), catalog);
+        REQUIRE(prepared.HasValue());
+        const auto before = owner->Capture();
+        const auto durable = SerializeTemplateDocument(before).Value();
+        std::array<bool, 8> rejected{};
+        bool detachedSnapshotReadable{};
+        std::thread other{[&] {
+            const auto wrong = [](const auto &result) {
+                return result.HasError() && result.ErrorValue().code.Value() == UiErrors::TemplateDocumentWrongThread.code.Value();
+            };
+            rejected = {wrong(owner->PrepareRebase(Identity<UiTemplateInstanceId>(1), Reference(2), catalog)),
+                        wrong(owner->PrepareInsert(Document().instances.front(), catalog)),
+                        wrong(owner->PrepareInsertIndependent(Document().instances.front(), catalog, {})),
+                        wrong(owner->PrepareDetach(Identity<UiTemplateInstanceId>(1), {})),
+                        wrong(owner->PrepareUndo()),
+                        wrong(owner->CanCommit(prepared.Value())),
+                        wrong(owner->Commit(prepared.Value())),
+                        wrong(owner->UpdateAvailable(Identity<UiTemplateInstanceId>(1), Reference(2)))};
+            detachedSnapshotReadable = SerializeTemplateDocument(before).HasValue();
+        }};
+        other.join();
+        CHECK(std::ranges::all_of(rejected, [](const bool value) {
+            return value;
+        }));
+        CHECK(detachedSnapshotReadable);
+        CHECK(SerializeTemplateDocument(owner->Capture()).Value() == durable);
+        REQUIRE(owner->Commit(prepared.Value()).HasValue());
+    }
+
+    TEST_CASE("Prepared undo preserves both publication and history until exact owner commit", "[runtime_ui][template][headless]") {
+        auto owner = Owner();
+        CHECK(owner->PrepareUndo().HasError());
+        auto instance = Document().instances.front();
+        instance.id = Identity<UiTemplateInstanceId>(2);
+        const auto inserted = owner->PrepareInsert(instance, Catalog(Source(1)));
+        REQUIRE(inserted.HasValue());
+        REQUIRE(owner->Commit(inserted.Value()).HasValue());
+        const auto current = SerializeTemplateDocument(owner->Capture()).Value();
+        CancellationSource cancellation;
+        const auto cancelled = owner->PrepareUndo(cancellation.Token());
+        REQUIRE(cancelled.HasValue());
+        cancellation.RequestCancellation();
+        CHECK(owner->Commit(cancelled.Value()).HasError());
+        CHECK(SerializeTemplateDocument(owner->Capture()).Value() == current);
+        const auto prepared = owner->PrepareUndo();
+        REQUIRE(prepared.HasValue());
+        CHECK(prepared.Value().Preview().Source().instances.size() == 1);
+        CHECK(owner->Capture().Source().instances.size() == 2);
+        REQUIRE(owner->CanCommit(prepared.Value()).HasValue());
+        const auto restored = owner->Commit(prepared.Value());
+        REQUIRE(restored.HasValue());
+        CHECK(restored.Value().Source().instances.size() == 1);
+        CHECK(restored.Value().Source().ordinary.Revision() > inserted.Value().Preview().Source().ordinary.Revision());
+        CHECK(owner->Commit(prepared.Value()).HasError());
+        CHECK(owner->PrepareUndo().HasError());
+    }
+
+    TEST_CASE("History eviction retains catalog retirement outside the publication safe point", "[runtime_ui][template][headless]") {
+        UiTemplateLimits limits;
+        limits.maximumUndoEntries = 1;
+        auto source = Document();
+        source.instances.clear();
+        auto created = UiTemplateDocumentOwner::Create(std::move(source), Catalog(Source(1), limits));
+        REQUIRE(created.HasValue());
+        auto owner = std::move(created).Value();
+        std::size_t retired{};
+        {
+            const auto catalog = Catalog(Source(1), limits);
+            const std::shared_ptr<const UiTemplateCatalog> tracked{catalog.get(), [catalog, &retired](const UiTemplateCatalog *) {
+                ++retired;
+            }};
+            const auto inserted = owner->PrepareInsert(Document().instances.front(), tracked);
+            REQUIRE(inserted.HasValue());
+            REQUIRE(owner->Commit(inserted.Value()).HasValue());
+        }
+        {
+            const auto second = owner->PrepareRebase(Identity<UiTemplateInstanceId>(1), Reference(2), Catalog(Source(2), limits));
+            REQUIRE(second.HasValue());
+            REQUIRE(owner->Commit(second.Value()).HasValue());
+        }
+        CHECK(retired == 0);
+        {
+            const auto third = owner->PrepareRebase(Identity<UiTemplateInstanceId>(1), Reference(3), Catalog(Source(3), limits));
+            REQUIRE(third.HasValue());
+            REQUIRE(owner->Commit(third.Value()).HasValue());
+            CHECK(retired == 0);
+        }
+        CHECK(retired == 1);
+    }
+
+    TEST_CASE("Prepared undo cannot cross a later owner transaction or shutdown", "[runtime_ui][template][headless]") {
+        auto owner = Owner();
+        auto instance = Document().instances.front();
+        instance.id = Identity<UiTemplateInstanceId>(2);
+        const auto inserted = owner->PrepareInsert(instance, Catalog(Source(1)));
+        REQUIRE(inserted.HasValue());
+        REQUIRE(owner->Commit(inserted.Value()).HasValue());
+        const auto prepared = owner->PrepareUndo();
+        REQUIRE(prepared.HasValue());
+        SECTION("later publication") {
+            instance.id = Identity<UiTemplateInstanceId>(3);
+            const auto next = owner->PrepareInsert(instance, Catalog(Source(1)));
+            REQUIRE(next.HasValue());
+            REQUIRE(owner->Commit(next.Value()).HasValue());
+            CHECK(owner->Commit(prepared.Value()).HasError());
+            CHECK(owner->Capture().Source().instances.size() == 3);
+            REQUIRE(owner->Undo().HasValue());
+            CHECK(owner->Capture().Source().instances.size() == 2);
+        }
+        SECTION("shutdown") {
+            owner->Shutdown();
+            CHECK(owner->Commit(prepared.Value()).HasError());
+            CHECK(prepared.Value().Preview().Source().instances.size() == 1);
+        }
     }
 
     TEST_CASE("Detach preserves host slot identity while freshly allocating template owned content", "[runtime_ui][template][headless]") {

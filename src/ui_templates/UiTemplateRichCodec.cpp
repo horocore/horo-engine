@@ -3,8 +3,14 @@
 namespace Horo::UiTemplates::Detail::Codec {
     /** @copydoc WriteRich */
     Json WriteRich(const UiTemplateAuthoredDocument &source) {
+        return WriteRich(source.styles, source.localizedTexts, source.bindings);
+    }
+
+    /** @copydoc WriteRich */
+    Json WriteRich(const std::span<const UiTemplateExpandedStyle> assignments, const std::span<const UiTemplateExpandedText> localized,
+                   const std::span<const Runtime::Ui::UiBindingDescriptor> descriptors) {
         Json styles = Json::array(), texts = Json::array(), bindings = Json::array();
-        for (const auto &style : source.styles) {
+        for (const auto &style : assignments) {
             const auto &assignment = style.assignment;
             Json value = assignment.value.referencesToken
                              ? Json{{"token", Hex(assignment.value.token.id.Bytes())}, {"asset", Hex(assignment.value.token.asset.Bytes())}}
@@ -15,10 +21,10 @@ namespace Horo::UiTemplates::Detail::Codec {
                               {"token", assignment.value.referencesToken},
                               {"value", std::move(value)}});
         }
-        for (const auto &text : source.localizedTexts)
+        for (const auto &text : localized)
             texts.push_back(
                 {{"element", Hex(text.element.Bytes())}, {"property", Hex(text.property.Bytes())}, {"value", WriteLocalized(text.text)}});
-        for (const auto &binding : source.bindings)
+        for (const auto &binding : descriptors)
             bindings.push_back(WriteBinding(binding));
         return {{"styles", std::move(styles)}, {"texts", std::move(texts)}, {"bindings", std::move(bindings)}};
     }

@@ -160,3 +160,126 @@ repository-wide source root. Public ownership and both header consumers accompan
 the target registration. Current source and new rich/persistence/transaction/cook
 regressions require fresh native and provider receipts; old checkpoints do not
 validate this batch and do not establish full acceptance.
+
+## Application ownership and capture migration
+
+`HoroEngine::UiTemplateHost` is the headless application composition boundary.
+Its public header belongs only to `HoroUiTemplateHost`; it depends on the existing
+template, Runtime UI, Assets, PackageSecurity and shared project mutation contracts.
+`PackageRestore.h` and publisher-verification contracts belong to
+`HoroPackageSecurity`; `HoroPackages` alone does not expose that header or restore
+implementation. PackageSecurity supplies its ordinary Packages dependency.
+`Horo/Editor/ProjectMutation.h` now belongs to `HoroProjectMutationGuard`, which
+compiles the existing coordinator implementation once. `HoroEditorServices`
+declares that narrow dependency instead of compiling a second copy. Include
+spelling and coordinator behavior are unchanged. Standalone host and guard header
+consumers accompany the ownership registry; their new source requires validation.
+
+`UiTemplateInputLease::Capture` acquires the coordinator's actual in-process and
+native project lease through bounded Assets capture, package qualification and
+final control/graph checks. Missing control files are explicit optional values;
+regular-file read failures retain their typed diagnostic. Readable control-byte or
+graph-publication replacement is stale. Required publisher evidence must satisfy
+the existing restore owner's accepted-outcome policy, including exact archive,
+package-manifest and file-manifest identities. Captured owned bytes and package
+graphs survive later filesystem or catalog replacement.
+
+`PrepareUndo` prepares a monotonic authority without consuming history and can be
+paired with runtime replacement. Every prepared transaction pins any evicted
+history so final catalog retirement occurs after candidate release outside commit.
+Owner operations returning `Result` check their immutable creation-thread identity
+before reading mutable state. Nonthrowing owner borrows, shutdown and destruction
+require that thread and terminate on violation. Immutable captured snapshots remain
+readable on other threads; moving a `unique_ptr` does not transfer owner-thread
+authority. Host creation/replacement borrow rvalue owners until admission, and
+retirement capacity is allocated before consuming document ownership.
+
+The runtime artifact decoder admits the closed version/algorithm/length protocol,
+verifies the exact supplied manifest and cache commitment, and rejects noncanonical
+rich JSON, escaped targets and duplicate bindings. That primitive digest check is
+not resource authority: application cook derives manifest evidence from the real
+captured sources and existing verified package graph. Manifest and rich dependency
+storage are checked cumulatively before candidate copies, under the document's
+admitted limits.
+
+These are current implementation contracts and new regression sources, not test
+receipts. Complete production runtime composition, layout/focus/accessibility
+admission and integrated activation/reload lifecycle proof remain required before
+full HORO-811 acceptance. The published 28-test receipt predates this source growth.
+
+## Paired publication regression checkpoint
+
+The application regression fixture now encodes the verified ordinary cook output
+into an Assets artifact, loads it through `MemoryAssetProvider`, `AssetLoadService`
+and `UiRuntimeAssetLoadService`, and composes complete real element trees using
+one retained allocator. It does not manufacture a terminal runtime load result.
+The host tests cover paired detach and monotonic undo, explicit source-update
+rebase with retained arguments, incompatible parameter removal, document/runtime
+cancellation, invalid structural cutoff, foreign/stale/moved candidates, retained
+generation backpressure and retry, wrong-thread admission, initial allocation
+failure, idempotent shutdown and surviving external read leases. A synchronous
+allocation probe checks the successful paired commit for allocation and final
+deallocation at its structural safe point.
+
+Paired extraction now reads the exact immutable ordinary/rich projection through
+`UiTemplateRuntimeLease::CookedDocument`. `UiTemplateHost::IsCurrent` checks both
+the existing runtime publication fence and its paired cook identity. Replacement,
+foreign-host use and shutdown reject current extraction while retained historical
+runtime and cooked data remain readable. Both Acquire and the fence are checked
+alongside commit for owner-thread C++ allocation/free regressions; neither grants
+a new source resolver or runtime publisher.
+
+Host, candidate and paired-lease members release their runtime owners before
+their corresponding cook/package evidence. Lease copy/move assignment and
+candidate move assignment explicitly replace runtime ownership first while the
+old evidence is retained; default memberwise assignment would reverse that
+requirement. Regression sources exercise paired lease replacement after host
+destruction and candidate reservation replacement under the real publisher's
+two-candidate capacity bound.
+
+The richer load-time host path now calls the existing binding store, style
+resolver, layout engine and accessibility extractor. Localization remains a
+host-supplied fixed immutable query, with an explicit selected locale and owned
+resolved Unicode/spans; this ticket does not implement a catalog, locale engine
+or Editor localization authority. The host validates the exact snapshot/key/locale,
+Unicode ranges, output bounds, cancellation and actual tree/style/layout lineage.
+Application layout adapters are borrowed only during preparation. Published
+paired leases retain copied text, computed styles, layout and accessibility
+snapshots, never adapter or registry pointers.
+
+Runtime reconciliation remains owned by `UiHotReload::Prepare`. Its new narrow
+`Prepared::Candidate()` const owner-thread borrow lets the host refresh semantic
+and focus evidence **after** reconciliation. Complete owned declarations include
+hidden nodes, so the refresh does not reconstruct policy from a filtered snapshot.
+The bare candidate borrow is never retained. Successful consumption and moves
+return null; failed commit and cancellation leave the unconsumed candidate
+inspectable but grant no active admission. Existing callers need no migration.
+
+Regression sources cover mixed localized/style/binding composition, actual
+resource loading, adapter destruction, malformed/mismatched/cancelled text,
+layout failure and deterministic preserved-focus accessibility pairing. They do
+not claim shipping game/editor wiring or native renderer/text-shaping behavior.
+Native builds and analyzer execution for this expanded source batch remain
+pending manager admission; earlier ordinary-only receipts do not validate it.
+
+The follow-up failure review pins the Localization identity/locale across the
+entire multi-canvas composition, charges localized semantic substitutions to the
+same bounded text arena, and copies action names and relation declarations before
+adapter destruction. Authored style tokens are resolved by the existing registry
+into its admitted literal inline inputs; the original token commitment remains
+in the verified cook. Missing tokens preserve the owning style error.
+
+Rich regression sources now include typed domain-error preservation, token
+resolution, cancellation and invalid-cutoff retry, allocation/free observations
+at paired publication, preserved-focus accessibility, detach/monotonic undo,
+retirement draining and shutdown with retained historical projections. Layout
+slots are pinned only by the runtime generation/lease: the host projection copies
+layout lineage rather than retaining an extra slot that would prevent retirement.
+
+The coherent quality refactor centralizes wire-envelope parsing and codec error
+translation, splits captured package/content verification by responsibility, and
+separates document publication/lifecycle definitions from preparation. Inert error
+definitions live with their existing declaration owner. These changes introduce
+no extra public dependency, rule suppression or alternate publisher. Original
+cancelled-analysis findings remain historical evidence, not a clean baseline;
+their current disposition requires fresh full-scope analysis after native checks.

@@ -7,6 +7,11 @@
 #include "Horo/UiTemplates/UiTemplateExpansion.h"
 
 #include <memory>
+#include <thread>
+
+namespace Horo::Application {
+    class UiTemplateHost;
+}
 
 namespace Horo::UiTemplates {
     namespace UiErrors {
@@ -16,6 +21,8 @@ namespace Horo::UiTemplates {
         extern const ErrorCodeDescriptor TemplateRebaseInvalid;
         /** @brief A prepared document transaction belongs to another owner. */
         extern const ErrorCodeDescriptor TemplateDocumentOwnerMismatch;
+        /** @brief The operation crossed the sole authoring owner's creation-thread boundary. */
+        extern const ErrorCodeDescriptor TemplateDocumentWrongThread;
         /** @brief Captured cancellation prevents authoring preparation/publication. */
         extern const ErrorCodeDescriptor TemplateDocumentCancelled;
         /** @brief No prior accepted document remains in the bounded undo history. */
@@ -59,6 +66,7 @@ namespace Horo::UiTemplates {
      */
     struct UiTemplateCookContext final {
         Sha256Digest verifiedDependencyManifest;
+        std::span<const Runtime::Ui::UiAssetDependency> verifiedRichDependencies; /**< Exact host-verified rich resource closure. */
     };
 
     /** @brief Independently owned runtime cook output, rich inputs and deterministic cache identity.
@@ -73,6 +81,8 @@ namespace Horo::UiTemplates {
         std::string richPayload;
         Sha256Digest cacheIdentity;
         Sha256Digest dependencyManifest;
+        Sha256Digest sourceIdentity; /**< Opaque source commitment, never source/template authority. */
+        Sha256Digest schemaIdentity; /**< Exact cook schema commitment used to verify cache identity. */
     };
 
     namespace Detail {
@@ -96,6 +106,16 @@ namespace Horo::UiTemplates {
         [[nodiscard]] std::span<const UiTemplateExpansion> Expansions() const noexcept;
         /** @brief Reads the immutable aggregate admission policy. @return Borrowed limits valid for this snapshot's lifetime. */
         [[nodiscard]] const UiTemplateLimits &Limits() const noexcept;
+        /** @brief Encodes one exact retained accepted template source for Assets-backed host verification.
+         * @param reference Exact accepted root or nested reference. @return Canonical source or a typed missing/revision failure.
+         * @details Uses only this snapshot's retained immutable catalog leases; no current/global catalog is consulted.
+         */
+        [[nodiscard]] Result<std::string> AcceptedTemplateSource(const UiTemplateReference &reference) const;
+        /** @brief Reads one retained exact source's typed package/resource declarations for host qualification.
+         * @param reference Exact accepted reference. @return Borrowed source or a typed missing/revision failure.
+         * @pre This immutable snapshot outlives the borrow; no current catalog or global registry is consulted.
+         */
+        [[nodiscard]] Result<const UiTemplateDocument *> AcceptedTemplate(const UiTemplateReference &reference) const;
         /** @brief Materializes this accepted snapshot as independent ordinary/rich typed cook input.
          * @param cancellation Cooperative load-time cancellation; failure leaves authored authority unchanged.
          * @return Complete owned flattening or a typed composition/budget/cancellation failure.
@@ -126,15 +146,21 @@ namespace Horo::UiTemplates {
         friend class UiTemplateDocumentOwner;
         UiTemplatePreparedTransaction(std::shared_ptr<const Detail::UiTemplateOwnerState> base,
                                       std::shared_ptr<const Detail::UiTemplateOwnerState> next, std::weak_ptr<const std::uint8_t> owner,
-                                      CancellationToken cancellation) noexcept;
+                                      CancellationToken cancellation, std::shared_ptr<const Detail::UiTemplateOwnerState> retirement,
+                                      bool undo = false) noexcept;
         std::shared_ptr<const Detail::UiTemplateOwnerState> base_;
         std::shared_ptr<const Detail::UiTemplateOwnerState> next_;
         std::weak_ptr<const std::uint8_t> owner_;
         CancellationToken cancellation_;
+        std::shared_ptr<const Detail::UiTemplateOwnerState> retirement_; /**< Pins evicted history until outside paired publication. */
+        bool undo_{};
     };
 
     /** @brief Sole owner-thread authority for synchronous load-time linked document transactions.
-     * @details All entry points require the same host owner thread; no background work or runtime publisher is created.
+     * @details Result-returning owner operations reject another thread before accessing mutable state.
+     * Capture, Shutdown and destruction require the creation thread and terminate on violation because their
+     * nonthrowing contracts cannot return a typed error. Captured immutable snapshots can cross threads.
+     * No background work or runtime publisher is created.
      * Preparation owns all output and pins immutable catalog leases. Commit publishes only by replacing one pointer
      * after all fallible work. Bounded undo retains complete source/catalog snapshots. Shutdown rejects late commits;
      * separately captured snapshots and previews remain readable. Existing runtime replacement APIs are unchanged.
@@ -207,6 +233,16 @@ namespace Horo::UiTemplates {
          * @param candidate Prepared complete owned transaction. @return New snapshot or cancellation/stale/shutdown failure.
          */
         [[nodiscard]] Result<UiTemplateDocumentSnapshot> Commit(const UiTemplatePreparedTransaction &candidate);
+        /** @brief Qualifies exact owner/revision/cancellation without changing publication or undo history.
+         * @param candidate Complete prepared authority. @return Success or the same typed rejection as Commit.
+         * @details Qualification and publication require one uninterrupted owner-thread safe point.
+         */
+        [[nodiscard]] Result<void> CanCommit(const UiTemplatePreparedTransaction &candidate) const;
+        /** @brief Prepares the prior complete authority under a new monotonic revision without consuming undo history.
+         * @param cancellation Captured cancellation ancestry.
+         * @return Owned candidate suitable for paired host publication, or typed empty-history/shutdown/exhaustion failure.
+         */
+        [[nodiscard]] Result<UiTemplatePreparedTransaction> PrepareUndo(const CancellationToken &cancellation = {}) const;
         /** @brief Restores the prior complete authority under a new monotonic document revision.
          * @return Restored snapshot or typed empty-history/shutdown/exhaustion failure; failure preserves current state.
          */
@@ -215,12 +251,30 @@ namespace Horo::UiTemplates {
         void Shutdown() noexcept;
 
     private:
+        friend class Horo::Application::UiTemplateHost;
+        /** @brief Publishes already-qualified authority using reserved undo storage and pointer operations only.
+         * @pre CanCommit succeeded at this uninterrupted owner-thread safe point. No callback or owner mutation intervenes.
+         * @details The application pairs this with runtime publication. Cancellation is sampled before that pair's
+         * linearization point; a later request cannot leave the pair half-published.
+         */
+        void CommitValidated(const UiTemplatePreparedTransaction &candidate) noexcept;
+        /** @brief Pins current, proposed and any evicted history before the paired publication safe point. */
+        [[nodiscard]] UiTemplatePreparedTransaction PreparePublication(std::shared_ptr<const Detail::UiTemplateOwnerState> next,
+                                                                       const CancellationToken &cancellation) const noexcept;
+        /** @brief Checks the immutable creation thread before touching any mutable owner state. */
+        [[nodiscard]] Result<void> CheckOwnerThread() const;
+        /** @brief Checks common shutdown/cancellation admission without copying source or invoking a provider.
+         * @param cancellation Exact preparation ancestry. @return Admission or preserved lifecycle failure.
+         * @pre The caller has checked the owning thread and catches allocation failure at its command boundary.
+         */
+        [[nodiscard]] Result<void> CheckPreparation(const CancellationToken &cancellation) const;
         UiTemplateDocumentOwner(std::shared_ptr<const Detail::UiTemplateOwnerState> state, std::shared_ptr<const std::uint8_t> identity,
                                 std::size_t undoLimit);
         std::shared_ptr<const Detail::UiTemplateOwnerState> state_;
         std::shared_ptr<const std::uint8_t> identity_;
         std::vector<std::shared_ptr<const Detail::UiTemplateOwnerState>> undo_;
         std::size_t undoLimit_;
+        const std::thread::id ownerThread_{std::this_thread::get_id()};
     };
 
     /** @brief Emits canonical UTF-8 source with ordinary/rich authored data and linked records; derived copies are excluded.

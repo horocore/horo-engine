@@ -22,13 +22,17 @@ namespace Horo::UiTemplates {
                 schemas.properties.size() > limits.maximumProperties || schemas.bindingProviders.size() > limits.maximumParameters)
                 return Invalid("Template schema snapshot exceeds its finite bounds.");
             std::set<Assets::AssetTypeId> types;
-            for (const auto &type : schemas.elementTypes)
-                if (type.Value().empty() || !types.insert(type).second)
+            for (const auto &type : schemas.elementTypes) {
+                if (type.Value().empty())
                     return Invalid("Template element schema identities are invalid or duplicated.");
+                if (!types.insert(type).second)
+                    return Invalid("Template element schema identities are invalid or duplicated.");
+            }
             std::set<std::pair<Assets::AssetTypeId, Runtime::Ui::UiStylePropertyId>> properties;
             for (const auto &property : schemas.properties) {
-                if (!types.contains(property.elementType) || !property.property.IsValid() ||
-                    !properties.emplace(property.elementType, property.property).second)
+                if (!types.contains(property.elementType) || !property.property.IsValid())
+                    return Invalid("Template property schema identities are invalid or duplicated.");
+                if (!properties.emplace(property.elementType, property.property).second)
                     return Invalid("Template property schema identities are invalid or duplicated.");
                 if (property.kind <= UiTemplateValueKind::Reference) {
                     if (property.documentKey.empty() || property.documentKey.size() > Runtime::Ui::MaximumUiDocumentTextBytes ||
@@ -98,8 +102,9 @@ namespace Horo::UiTemplates {
             std::set<UiTemplateLocalElementId> ids;
             std::size_t properties{};
             for (const auto &element : document.elements) {
-                if (!element.id.IsValid() || !ids.insert(element.id).second ||
-                    std::ranges::find(schemas.elementTypes, element.type) == schemas.elementTypes.end())
+                if (!element.id.IsValid() || std::ranges::find(schemas.elementTypes, element.type) == schemas.elementTypes.end())
+                    return Invalid("Template element identity or registered kind is invalid.");
+                if (!ids.insert(element.id).second)
                     return Invalid("Template element identity or registered kind is invalid.");
                 if (element.properties.size() > limits.maximumProperties - properties)
                     return Result<void>::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
@@ -107,7 +112,9 @@ namespace Horo::UiTemplates {
                 std::set<Runtime::Ui::UiStylePropertyId> written;
                 for (const auto &property : element.properties) {
                     const auto *schema = PropertySchema(schemas, element.type, property.property);
-                    if (!schema || !written.insert(property.property).second)
+                    if (!schema)
+                        return Invalid("Template property is unregistered or duplicated.");
+                    if (!written.insert(property.property).second)
                         return Invalid("Template property is unregistered or duplicated.");
                     if (const auto valid = ValidateValue(property.value, *schema, schemas); valid.HasError())
                         return valid;
@@ -137,9 +144,11 @@ namespace Horo::UiTemplates {
                 return Result<void>::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
             std::set<UiTemplateParameterId> parameters;
             for (const auto &parameter : document.parameters) {
-                if (!parameter.id.IsValid() || !parameters.insert(parameter.id).second || parameter.kind > UiTemplateValueKind::Binding ||
+                if (!parameter.id.IsValid() || parameter.kind > UiTemplateValueKind::Binding ||
                     parameter.targets.empty() || parameter.targets.size() > limits.maximumProperties || parameter.maximumTextBytes == 0 ||
                     parameter.maximumTextBytes > Runtime::Ui::MaximumUiDocumentTextBytes)
+                    return Invalid("Template parameter identity, category or target budget is invalid.");
+                if (!parameters.insert(parameter.id).second)
                     return Invalid("Template parameter identity, category or target budget is invalid.");
                 if (const auto constraints = Detail::ValidateParameterConstraints(parameter); constraints.HasError())
                     return constraints;
@@ -149,22 +158,79 @@ namespace Horo::UiTemplates {
             }
             std::set<UiTemplateSlotId> slots;
             for (const auto &slot : document.slots) {
-                if (!slot.id.IsValid() || !slots.insert(slot.id).second || slot.minimumChildren > slot.maximumChildren ||
+                if (!slot.id.IsValid() || slot.minimumChildren > slot.maximumChildren ||
                     slot.maximumChildren > limits.maximumElements || slot.allowedRootKinds.empty() ||
                     slot.allowedRootKinds.size() > limits.maximumElements || slot.defaultContent.size() > limits.maximumElements ||
                     std::ranges::find(document.elements, slot.parent, &UiTemplateElement::id) == document.elements.end())
                     return Invalid("Template slot identity, parent, cardinality or source budget is invalid.");
+                if (!slots.insert(slot.id).second)
+                    return Invalid("Template slot identity, parent, cardinality or source budget is invalid.");
             }
             std::set<UiTemplateInstanceId> instances;
-            for (const auto &nested : document.nested)
-                if (!nested.id.IsValid() || !instances.insert(nested.id).second ||
+            for (const auto &nested : document.nested) {
+                if (!nested.id.IsValid() ||
                     std::ranges::find(document.elements, nested.parent, &UiTemplateElement::id) == document.elements.end() ||
                     nested.arguments.size() > limits.maximumParameters || nested.slots.size() > limits.maximumSlots)
                     return Invalid("Nested template identity, parent or customization budget is invalid.");
+                if (!instances.insert(nested.id).second)
+                    return Invalid("Nested template identity, parent or customization budget is invalid.");
+            }
             return Result<void>::Success();
         }
 
-        /** @brief Validates every declared target, including targets whose optional parameter has no value. */
+        /** @brief Resolves an exact nested forwarding lineage and rejects type mismatch or competing writes. */
+        Result<void> ValidateForwardTarget(const UiTemplateNestedParameterTarget &item, const UiTemplateParameter &parameter,
+                                           const UiTemplateDocument &document, const std::span<const UiTemplateDocument> documents,
+                                           std::vector<const UiTemplateNestedParameterTarget *> &forwarded) {
+            if (!item.parameter.IsValid() || item.lineage.empty() || item.lineage.size() > 32)
+                return Invalid("Template forwarding target has no bounded stable lineage.");
+            const UiTemplateDocument *current = &document;
+            for (const auto instance : item.lineage) {
+                const auto child = std::ranges::find(current->nested, instance, &UiTemplateNestedInstance::id);
+                if (child == current->nested.end())
+                    return Invalid("Template forwarding names an absent nested instance.");
+                const auto next = std::ranges::find(documents, child->accepted.asset, [](const UiTemplateDocument &candidate) {
+                    return candidate.dependency.asset;
+                });
+                if (next == documents.end() || next->dependency.revision != child->accepted.revision)
+                    return Invalid("Template forwarding has no exact pinned target document.");
+                current = &*next;
+            }
+            const auto destination = std::ranges::find(current->parameters, item.parameter, &UiTemplateParameter::id);
+            if (destination == current->parameters.end() || destination->kind != parameter.kind)
+                return Invalid("Template forwarding has no exact type-compatible declared parameter.");
+            if (std::ranges::any_of(forwarded, [&](const auto *previous) {
+                return previous->lineage == item.lineage && previous->parameter == item.parameter;
+            }))
+                return Invalid("Template forwarding targets are duplicated.");
+            forwarded.push_back(&item);
+            return Result<void>::Success();
+        }
+
+        /** @brief Admits one exact element/property write under the registered typed target contract. */
+        template <typename Target>
+        Result<void> ValidatePropertyTarget(const Target &item, const UiTemplateParameter &parameter, const UiTemplateDocument &document,
+                                            const UiTemplateSchemaSnapshot &schemas,
+                                            std::set<std::pair<UiTemplateLocalElementId, Runtime::Ui::UiStylePropertyId>> &written) {
+            const auto element = std::ranges::find(document.elements, item.element, &UiTemplateElement::id);
+            if (element == document.elements.end() || !written.emplace(item.element, item.property).second)
+                return Invalid("Template parameter property target is absent or duplicated.");
+            const auto *schema = PropertySchema(schemas, element->type, item.property);
+            if (!schema || schema->kind != parameter.kind)
+                return Invalid("Template parameter has no exact registered target property category.");
+            if constexpr (std::is_same_v<Target, UiTemplateContentTarget>) {
+                if (parameter.kind > UiTemplateValueKind::Reference)
+                    return Invalid("An ordinary template target cannot address a rich attachment.");
+            } else if constexpr (std::is_same_v<Target, UiTemplateStyleTarget>) {
+                if (parameter.kind != UiTemplateValueKind::Style)
+                    return Invalid("A style target requires a typed style parameter.");
+            } else if (item.kind != parameter.kind ||
+                       (item.kind != UiTemplateValueKind::LocalizedText && item.kind != UiTemplateValueKind::Binding))
+                return Invalid("A template attachment target requires its exact declared attachment category.");
+            return parameter.defaultValue ? ValidateValue(*parameter.defaultValue, *schema, schemas) : Result<void>::Success();
+        }
+
+        /** @brief Coordinates all declared writes, including optional parameters without a supplied value. */
         Result<void> ValidateTargets(const UiTemplateDocument &document, const std::span<const UiTemplateDocument> documents,
                                      const UiTemplateSchemaSnapshot &schemas) {
             std::set<std::pair<UiTemplateLocalElementId, Runtime::Ui::UiStylePropertyId>> written;
@@ -174,50 +240,10 @@ namespace Horo::UiTemplates {
                     if (target.valueless_by_exception())
                         return Invalid("Template target has no category.");
                     const auto valid = std::visit([&]<typename Target>(const Target &item) -> Result<void> {
-                        if constexpr (std::is_same_v<Target, UiTemplateNestedParameterTarget>) {
-                            if (!item.parameter.IsValid() || item.lineage.empty() || item.lineage.size() > 32)
-                                return Invalid("Template forwarding target has no bounded stable lineage.");
-                            const UiTemplateDocument *current = &document;
-                            for (const auto instance : item.lineage) {
-                                const auto child = std::ranges::find(current->nested, instance, &UiTemplateNestedInstance::id);
-                                if (child == current->nested.end())
-                                    return Invalid("Template forwarding names an absent nested instance.");
-                                const auto next =
-                                    std::ranges::find(documents, child->accepted.asset, [](const UiTemplateDocument &candidate) {
-                                    return candidate.dependency.asset;
-                                });
-                                if (next == documents.end() || next->dependency.revision != child->accepted.revision)
-                                    return Invalid("Template forwarding has no exact pinned target document.");
-                                current = &*next;
-                            }
-                            const auto destination = std::ranges::find(current->parameters, item.parameter, &UiTemplateParameter::id);
-                            if (destination == current->parameters.end() || destination->kind != parameter.kind)
-                                return Invalid("Template forwarding has no exact type-compatible declared parameter.");
-                            if (std::ranges::any_of(forwarded, [&](const auto *previous) {
-                                return previous->lineage == item.lineage && previous->parameter == item.parameter;
-                            }))
-                                return Invalid("Template forwarding targets are duplicated.");
-                            forwarded.push_back(&item);
-                            return Result<void>::Success();
-                        } else {
-                            const auto element = std::ranges::find(document.elements, item.element, &UiTemplateElement::id);
-                            if (element == document.elements.end() || !written.emplace(item.element, item.property).second)
-                                return Invalid("Template parameter property target is absent or duplicated.");
-                            const auto *schema = PropertySchema(schemas, element->type, item.property);
-                            if (!schema || schema->kind != parameter.kind)
-                                return Invalid("Template parameter has no exact registered target property category.");
-                            if constexpr (std::is_same_v<Target, UiTemplateContentTarget>) {
-                                if (parameter.kind > UiTemplateValueKind::Reference)
-                                    return Invalid("An ordinary template target cannot address a rich attachment.");
-                            } else if constexpr (std::is_same_v<Target, UiTemplateStyleTarget>) {
-                                if (parameter.kind != UiTemplateValueKind::Style)
-                                    return Invalid("A style target requires a typed style parameter.");
-                            } else if (item.kind != parameter.kind ||
-                                       (item.kind != UiTemplateValueKind::LocalizedText && item.kind != UiTemplateValueKind::Binding))
-                                return Invalid("A template attachment target requires its exact declared attachment category.");
-                            return parameter.defaultValue ? ValidateValue(*parameter.defaultValue, *schema, schemas)
-                                                          : Result<void>::Success();
-                        }
+                        if constexpr (std::is_same_v<Target, UiTemplateNestedParameterTarget>)
+                            return ValidateForwardTarget(item, parameter, document, documents, forwarded);
+                        else
+                            return ValidatePropertyTarget(item, parameter, document, schemas, written);
                     }, target);
                     if (valid.HasError())
                         return valid;

@@ -2,82 +2,17 @@
 
 #include "Horo/UiTemplates/UiTemplateErrors.h"
 #include "UiTemplateBudget.h"
-#include "UiTemplateCodec.h"
+#include "UiTemplateOwnerState.h"
 #include "UiTemplateParameterValidation.h"
 
 #include <algorithm>
+#include <exception>
 #include <map>
 #include <new>
 #include <set>
 #include <tuple>
 
 namespace Horo::UiTemplates {
-    namespace UiErrors {
-        namespace {
-            const ErrorDomainId DocumentDomain{"horo.runtime_ui"};
-        }
-
-        /** @copydoc TemplateDocumentShutdown */
-        const ErrorCodeDescriptor TemplateDocumentShutdown{DocumentDomain,
-                                                           ErrorCode{"runtime_ui.template.document_shutdown"},
-                                                           ErrorSeverity::Error,
-                                                           "Template document authoring admission is closed.",
-                                                           "Prepare through a live document owner.",
-                                                           false,
-                                                           true};
-        /** @copydoc TemplateRebaseInvalid */
-        const ErrorCodeDescriptor TemplateRebaseInvalid{DocumentDomain,
-                                                        ErrorCode{"runtime_ui.template.rebase_invalid"},
-                                                        ErrorSeverity::Error,
-                                                        "Template rebase requires an explicit data-preserving migration.",
-                                                        "Review the rejected parameter or populated slot.",
-                                                        false,
-                                                        true};
-        /** @copydoc TemplateDocumentOwnerMismatch */
-        const ErrorCodeDescriptor TemplateDocumentOwnerMismatch{DocumentDomain,
-                                                                ErrorCode{"runtime_ui.template.document_owner_mismatch"},
-                                                                ErrorSeverity::Error,
-                                                                "The prepared transaction belongs to another document owner.",
-                                                                "Prepare again against the intended owner.",
-                                                                false,
-                                                                true};
-        /** @copydoc TemplateDocumentCancelled */
-        const ErrorCodeDescriptor TemplateDocumentCancelled{DocumentDomain,
-                                                            ErrorCode{"runtime_ui.template.document_cancelled"},
-                                                            ErrorSeverity::Error,
-                                                            "Template document preparation or publication was cancelled.",
-                                                            "Prepare a new explicitly admitted transaction.",
-                                                            false,
-                                                            true};
-        /** @copydoc TemplateUndoEmpty */
-        const ErrorCodeDescriptor TemplateUndoEmpty{DocumentDomain,
-                                                    ErrorCode{"runtime_ui.template.undo_empty"},
-                                                    ErrorSeverity::Error,
-                                                    "No prior template document is retained for undo.",
-                                                    "Continue from the current accepted document.",
-                                                    false,
-                                                    true};
-        /** @copydoc TemplatePersistenceMalformed */
-        const ErrorCodeDescriptor TemplatePersistenceMalformed{DocumentDomain,
-                                                               ErrorCode{"runtime_ui.template.persistence_malformed"},
-                                                               ErrorSeverity::Error,
-                                                               "Linked UI source is malformed or unsupported.",
-                                                               "Review source schema and typed identities without dropping authored data.",
-                                                               false,
-                                                               true};
-    }  // namespace UiErrors
-
-    namespace Detail {
-        /** @brief One immutable publication; catalogs and derived projections share the source's exact lifetime. */
-        struct UiTemplateOwnerState final {
-            UiTemplateAuthoredDocument source;
-            std::vector<std::shared_ptr<const UiTemplateCatalog>> catalogs;
-            std::vector<UiTemplateExpansion> expansions;
-            UiTemplateLimits limits;
-            std::shared_ptr<const UiTemplateCatalog> authoringSchemas;
-        };
-    }  // namespace Detail
-
     namespace {
         using namespace Runtime::Ui;
         using State = Detail::UiTemplateOwnerState;
@@ -173,64 +108,6 @@ namespace Horo::UiTemplates {
             return Result<void>::Success();
         }
 
-        /** @brief Publishes typed asset requirements carried by ordinary expanded references into the candidate builder. */
-        Result<void> RequireReference(UiDocumentBuilder &builder, const UiReference &reference) {
-            if (reference.kind != UiReferenceKind::Asset)
-                return Result<void>::Success();
-            return builder.RequireAsset({reference.asset, reference.expectedAssetType, true});
-        }
-
-        /** @brief Preserves one expanded element and its complete explicit/typed-property asset reference evidence. */
-        Result<void> AppendExpandedElement(UiDocumentBuilder &builder, const UiDocumentElement &element) {
-            for (const auto &reference : element.references)
-                if (const auto result = RequireReference(builder, reference); result.HasError())
-                    return result;
-            for (const auto &property : element.properties)
-                if (const auto *reference = std::get_if<UiReference>(&property.value))
-                    if (const auto result = RequireReference(builder, *reference); result.HasError())
-                        return result;
-            return builder.AddElement(element);
-        }
-
-        /** @brief Composes an admitted projection's ordinary hierarchy and localized message authority. */
-        Result<void> AppendExpansion(UiDocumentBuilder &builder, const UiTemplateExpansion &expansion) {
-            for (const auto &element : expansion.elements)
-                if (const auto result = AppendExpandedElement(builder, element); result.HasError())
-                    return result;
-            for (const auto &text : expansion.localizedTexts)
-                if (const auto result = builder.AddLocalizedText(text.text); result.HasError())
-                    return result;
-            return Result<void>::Success();
-        }
-
-        /** @brief Copies ordinary authority through its existing validator under a new monotonic revision. */
-        Result<UiDocument> RevisionCopy(const UiDocument &source, const UiDocumentRevision revision,
-                                        const std::span<const UiTemplateExpansion> expansions = {}) {
-            UiDocumentBuilder builder{source.Id(), revision, source.SchemaVersion()};
-            for (const auto &canvas : source.Canvases())
-                if (const auto result = builder.AddCanvas(canvas); result.HasError())
-                    return Result<UiDocument>::Failure(result.ErrorValue());
-            for (const auto &element : source.Elements())
-                if (const auto result = builder.AddElement(element); result.HasError())
-                    return Result<UiDocument>::Failure(result.ErrorValue());
-            for (const auto &text : source.LocalizedTexts())
-                if (const auto result = builder.AddLocalizedText(text); result.HasError())
-                    return Result<UiDocument>::Failure(result.ErrorValue());
-            for (const auto &asset : source.LocalizedAssets())
-                if (const auto result = builder.AddLocalizedAsset(asset); result.HasError())
-                    return Result<UiDocument>::Failure(result.ErrorValue());
-            for (const auto &dependency : source.Dependencies())
-                if (const auto result = builder.RequireAsset(dependency); result.HasError())
-                    return Result<UiDocument>::Failure(result.ErrorValue());
-            for (const auto &route : source.Routes())
-                if (const auto result = builder.AddRoute(route); result.HasError())
-                    return Result<UiDocument>::Failure(result.ErrorValue());
-            for (const auto &expansion : expansions)
-                if (const auto result = AppendExpansion(builder, expansion); result.HasError())
-                    return Result<UiDocument>::Failure(result.ErrorValue());
-            return std::move(builder).Build();
-        }
-
         /** @brief Owns a private mutable candidate with paired instance/catalog authority until complete admission. */
         struct AuthorityDraft final {
             UiTemplateAuthoredDocument source;
@@ -242,7 +119,7 @@ namespace Horo::UiTemplates {
             const auto revision = state.source.ordinary.Revision().Next();
             if (revision.HasError())
                 return Result<AuthorityDraft>::Failure(revision.ErrorValue());
-            auto ordinary = RevisionCopy(state.source.ordinary, revision.Value(), additions);
+            auto ordinary = Detail::CopyTemplateOrdinary(state.source.ordinary, revision.Value(), additions);
             if (ordinary.HasError())
                 return Result<AuthorityDraft>::Failure(ordinary.ErrorValue());
             return Result<AuthorityDraft>::Success(AuthorityDraft{{std::move(ordinary).Value(), state.source.instances, state.source.styles,
@@ -397,116 +274,11 @@ namespace Horo::UiTemplates {
         }
     }  // namespace
 
-    UiTemplateDocumentSnapshot::UiTemplateDocumentSnapshot(std::shared_ptr<const State> state) noexcept : state_(std::move(state)) {}
-
-    /** @copydoc UiTemplateDocumentSnapshot::Source */
-    const UiTemplateAuthoredDocument &UiTemplateDocumentSnapshot::Source() const noexcept {
-        return state_->source;
-    }
-
-    /** @copydoc UiTemplateDocumentSnapshot::Expansions */
-    std::span<const UiTemplateExpansion> UiTemplateDocumentSnapshot::Expansions() const noexcept {
-        return state_->expansions;
-    }
-
-    /** @copydoc UiTemplateDocumentSnapshot::Limits */
-    const UiTemplateLimits &UiTemplateDocumentSnapshot::Limits() const noexcept {
-        return state_->limits;
-    }
-
-    /** @copydoc UiTemplateDocumentSnapshot::Flatten */
-    Result<UiTemplateFlattenedDocument> UiTemplateDocumentSnapshot::Flatten(const CancellationToken &cancellation) const {
-        try {
-            if (cancellation.IsCancellationRequested())
-                return Result<UiTemplateFlattenedDocument>::Failure(MakeError(UiErrors::TemplateDocumentCancelled));
-            auto ordinary = RevisionCopy(state_->source.ordinary, state_->source.ordinary.Revision(), state_->expansions);
-            if (ordinary.HasError())
-                return Result<UiTemplateFlattenedDocument>::Failure(ordinary.ErrorValue());
-            UiTemplateFlattenedDocument output{std::move(ordinary).Value(),
-                                               state_->source.styles,
-                                               state_->source.localizedTexts,
-                                               state_->source.bindings,
-                                               {}};
-            for (const auto &expansion : state_->expansions) {
-                if (cancellation.IsCancellationRequested())
-                    return Result<UiTemplateFlattenedDocument>::Failure(MakeError(UiErrors::TemplateDocumentCancelled));
-                output.styles.insert(output.styles.end(), expansion.styles.begin(), expansion.styles.end());
-                output.localizedTexts.insert(output.localizedTexts.end(), expansion.localizedTexts.begin(), expansion.localizedTexts.end());
-                output.bindings.insert(output.bindings.end(), expansion.bindings.begin(), expansion.bindings.end());
-                output.acceptedDependencies.insert(output.acceptedDependencies.end(), expansion.acceptedDependencies.begin(),
-                                                   expansion.acceptedDependencies.end());
-            }
-            return Result<UiTemplateFlattenedDocument>::Success(std::move(output));
-        } catch (const std::bad_alloc &) {
-            return Result<UiTemplateFlattenedDocument>::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
-        }
-    }
-
-    /** @copydoc UiTemplateDocumentSnapshot::Cook */
-    Result<UiTemplateCookedDocument> UiTemplateDocumentSnapshot::Cook(const UiTemplateCookContext &context,
-                                                                      const CancellationToken &cancellation) const {
-        using namespace Detail::Codec;
-        using Output = Result<UiTemplateCookedDocument>;
-        try {
-            if (std::ranges::all_of(context.verifiedDependencyManifest.bytes, [](const auto byte) {
-                return byte == 0;
-            }))
-                return Output::Failure(MakeError(UiErrors::TemplateGraphInvalid));
-            auto flattened = Flatten(cancellation);
-            if (flattened.HasError())
-                return Output::Failure(flattened.ErrorValue());
-            auto value = std::move(flattened).Value();
-            Runtime::Ui::UiDocumentCookLimits limits;
-            limits.maximumElements = state_->limits.maximumElements;
-            limits.maximumPayloadBytes = state_->limits.maximumPayloadBytes;
-            auto ordinary = Runtime::Ui::CookedUiDocument::Cook(value.ordinary, limits);
-            if (ordinary.HasError())
-                return Output::Failure(ordinary.ErrorValue());
-            auto durable = SerializeTemplateDocument(*this);
-            if (durable.HasError())
-                return Output::Failure(durable.ErrorValue());
-            UiTemplateAuthoredDocument rich{std::move(value.ordinary),
-                                            {},
-                                            std::move(value.styles),
-                                            std::move(value.localizedTexts),
-                                            std::move(value.bindings)};
-            auto payload = WriteRich(rich).dump();
-            Json schemas = Json::array({WriteSchemas(state_->authoringSchemas->Schemas())});
-            for (const auto &catalog : state_->catalogs)
-                schemas.push_back(WriteSchemas(catalog->Schemas()));
-            const auto schemaBytes = schemas.dump();
-            if (ordinary.Value().Payload().size() > state_->limits.maximumPayloadBytes ||
-                payload.size() > state_->limits.maximumPayloadBytes - ordinary.Value().Payload().size() ||
-                schemaBytes.size() > state_->limits.maximumPayloadBytes)
-                return Output::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
-            const auto digest = [](const std::string_view bytes) {
-                return ComputeSha256(std::as_bytes(std::span{bytes.data(), bytes.size()}));
-            };
-            const Json identity{{"algorithm", 1},
-                                {"source", Hex(digest(durable.Value()).bytes)},
-                                {"schemas", Hex(digest(schemaBytes).bytes)},
-                                {"dependencies", Hex(context.verifiedDependencyManifest.bytes)},
-                                {"ordinary", Hex(ComputeSha256(std::as_bytes(ordinary.Value().Payload())).bytes)},
-                                {"rich", Hex(digest(payload).bytes)}};
-            const auto identityBytes = identity.dump();
-            if (cancellation.IsCancellationRequested())
-                return Output::Failure(MakeError(UiErrors::TemplateDocumentCancelled));
-            return Output::Success({std::move(ordinary).Value(), std::move(rich.styles), std::move(rich.localizedTexts),
-                                    std::move(rich.bindings), std::move(payload), digest(identityBytes),
-                                    context.verifiedDependencyManifest});
-        } catch (const Failure &failure) {
-            return Output::Failure(failure.error);
-        } catch (const Json::exception &) {
-            return Output::Failure(MakeError(UiErrors::TemplatePersistenceMalformed));
-        } catch (const std::bad_alloc &) {
-            return Output::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
-        }
-    }
-
     UiTemplatePreparedTransaction::UiTemplatePreparedTransaction(std::shared_ptr<const State> base, std::shared_ptr<const State> next,
-                                                                 std::weak_ptr<const std::uint8_t> owner,
-                                                                 CancellationToken cancellation) noexcept
-        : base_(std::move(base)), next_(std::move(next)), owner_(std::move(owner)), cancellation_(std::move(cancellation)) {}
+                                                                 std::weak_ptr<const std::uint8_t> owner, CancellationToken cancellation,
+                                                                 std::shared_ptr<const State> retirement, const bool undo) noexcept
+        : base_(std::move(base)), next_(std::move(next)), owner_(std::move(owner)), cancellation_(std::move(cancellation)),
+          retirement_(std::move(retirement)), undo_(undo) {}
 
     /** @copydoc UiTemplatePreparedTransaction::Preview */
     UiTemplateDocumentSnapshot UiTemplatePreparedTransaction::Preview() const noexcept {
@@ -587,11 +359,15 @@ namespace Horo::UiTemplates {
 
     /** @copydoc UiTemplateDocumentOwner::Capture */
     UiTemplateDocumentSnapshot UiTemplateDocumentOwner::Capture() const noexcept {
+        if (ownerThread_ != std::this_thread::get_id())
+            std::terminate();
         return UiTemplateDocumentSnapshot{state_};
     }
 
     /** @copydoc UiTemplateDocumentOwner::UpdateAvailable */
     Result<bool> UiTemplateDocumentOwner::UpdateAvailable(const UiTemplateInstanceId instance, const UiTemplateReference &available) const {
+        if (const auto thread = CheckOwnerThread(); thread.HasError())
+            return Result<bool>::Failure(thread.ErrorValue());
         if (!identity_)
             return Result<bool>::Failure(MakeError(UiErrors::TemplateDocumentShutdown));
         const auto record = std::ranges::find(state_->source.instances, instance, &UiTemplateInstanceRecord::id);
@@ -605,11 +381,11 @@ namespace Horo::UiTemplates {
                                                                                  const UiTemplateReference &target,
                                                                                  std::shared_ptr<const UiTemplateCatalog> catalog,
                                                                                  const CancellationToken &cancellation) const {
+        if (const auto thread = CheckOwnerThread(); thread.HasError())
+            return Result<UiTemplatePreparedTransaction>::Failure(thread.ErrorValue());
         try {
-            if (!identity_)
-                return Result<UiTemplatePreparedTransaction>::Failure(MakeError(UiErrors::TemplateDocumentShutdown));
-            if (cancellation.IsCancellationRequested())
-                return Result<UiTemplatePreparedTransaction>::Failure(MakeError(UiErrors::TemplateDocumentCancelled));
+            if (const auto admission = CheckPreparation(cancellation); admission.HasError())
+                return Result<UiTemplatePreparedTransaction>::Failure(admission.ErrorValue());
             const auto found = std::ranges::find(state_->source.instances, instance, &UiTemplateInstanceRecord::id);
             if (!catalog || found == state_->source.instances.end() || target.asset != found->accepted.asset)
                 return Result<UiTemplatePreparedTransaction>::Failure(MakeError(UiErrors::TemplateRebaseInvalid));
@@ -639,8 +415,7 @@ namespace Horo::UiTemplates {
             auto next = AdmitAuthority(std::move(draft), *state_, cancellation);
             if (next.HasError())
                 return Result<UiTemplatePreparedTransaction>::Failure(next.ErrorValue());
-            return Result<UiTemplatePreparedTransaction>::Success(
-                UiTemplatePreparedTransaction{state_, std::move(next.Value()), identity_, cancellation});
+            return Result<UiTemplatePreparedTransaction>::Success(PreparePublication(std::move(next).Value(), cancellation));
         } catch (const std::bad_alloc &) {
             return Result<UiTemplatePreparedTransaction>::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
         }
@@ -650,12 +425,12 @@ namespace Horo::UiTemplates {
     Result<UiTemplatePreparedTransaction> UiTemplateDocumentOwner::PrepareInsert(UiTemplateInstanceRecord instance,
                                                                                  std::shared_ptr<const UiTemplateCatalog> catalog,
                                                                                  const CancellationToken &cancellation) const {
+        if (const auto thread = CheckOwnerThread(); thread.HasError())
+            return Result<UiTemplatePreparedTransaction>::Failure(thread.ErrorValue());
         using Output = Result<UiTemplatePreparedTransaction>;
         try {
-            if (!identity_)
-                return Output::Failure(MakeError(UiErrors::TemplateDocumentShutdown));
-            if (cancellation.IsCancellationRequested())
-                return Output::Failure(MakeError(UiErrors::TemplateDocumentCancelled));
+            if (const auto admission = CheckPreparation(cancellation); admission.HasError())
+                return Output::Failure(admission.ErrorValue());
             if (!catalog || !instance.id.IsValid() ||
                 std::ranges::find(state_->source.instances, instance.id, &UiTemplateInstanceRecord::id) != state_->source.instances.end())
                 return Output::Failure(MakeError(UiErrors::TemplateGraphInvalid));
@@ -673,7 +448,7 @@ namespace Horo::UiTemplates {
             auto next = AdmitAuthority(std::move(draft), *state_, cancellation);
             if (next.HasError())
                 return Output::Failure(next.ErrorValue());
-            return Output::Success(UiTemplatePreparedTransaction{state_, std::move(next).Value(), identity_, cancellation});
+            return Output::Success(PreparePublication(std::move(next).Value(), cancellation));
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
         }
@@ -683,6 +458,8 @@ namespace Horo::UiTemplates {
     Result<UiTemplatePreparedTransaction> UiTemplateDocumentOwner::PrepareInsertIndependent(
         UiTemplateInstanceRecord instance, std::shared_ptr<const UiTemplateCatalog> catalog,
         const std::span<const UiTemplateDetachIdentity> identities, const CancellationToken &cancellation) const {
+        if (const auto thread = CheckOwnerThread(); thread.HasError())
+            return Result<UiTemplatePreparedTransaction>::Failure(thread.ErrorValue());
         using Output = Result<UiTemplatePreparedTransaction>;
         try {
             const auto id = instance.id;
@@ -694,7 +471,7 @@ namespace Horo::UiTemplates {
             auto detached = intermediate.PrepareDetach(id, identities, cancellation);
             if (detached.HasError())
                 return Output::Failure(detached.ErrorValue());
-            return Output::Success(UiTemplatePreparedTransaction{state_, detached.Value().next_, identity_, cancellation});
+            return Output::Success(PreparePublication(detached.Value().next_, cancellation));
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
         }
@@ -704,12 +481,12 @@ namespace Horo::UiTemplates {
     Result<UiTemplatePreparedTransaction> UiTemplateDocumentOwner::PrepareDetach(const UiTemplateInstanceId instance,
                                                                                  const std::span<const UiTemplateDetachIdentity> identities,
                                                                                  const CancellationToken &cancellation) const {
+        if (const auto thread = CheckOwnerThread(); thread.HasError())
+            return Result<UiTemplatePreparedTransaction>::Failure(thread.ErrorValue());
         using Output = Result<UiTemplatePreparedTransaction>;
         try {
-            if (!identity_)
-                return Output::Failure(MakeError(UiErrors::TemplateDocumentShutdown));
-            if (cancellation.IsCancellationRequested())
-                return Output::Failure(MakeError(UiErrors::TemplateDocumentCancelled));
+            if (const auto admission = CheckPreparation(cancellation); admission.HasError())
+                return Output::Failure(admission.ErrorValue());
             const auto found = std::ranges::find(state_->source.instances, instance, &UiTemplateInstanceRecord::id);
             if (found == state_->source.instances.end())
                 return Output::Failure(MakeError(UiErrors::TemplateGraphInvalid));
@@ -736,59 +513,39 @@ namespace Horo::UiTemplates {
             auto next = AdmitAuthority(std::move(draft), *state_, cancellation);
             if (next.HasError())
                 return Output::Failure(next.ErrorValue());
-            return Output::Success(UiTemplatePreparedTransaction{state_, std::move(next).Value(), identity_, cancellation});
+            return Output::Success(PreparePublication(std::move(next).Value(), cancellation));
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
         }
     }
 
-    /** @copydoc UiTemplateDocumentOwner::Commit */
-    Result<UiTemplateDocumentSnapshot> UiTemplateDocumentOwner::Commit(const UiTemplatePreparedTransaction &candidate) {
-        if (!identity_)
-            return Result<UiTemplateDocumentSnapshot>::Failure(MakeError(UiErrors::TemplateDocumentShutdown));
-        if (candidate.owner_.lock() != identity_)
-            return Result<UiTemplateDocumentSnapshot>::Failure(MakeError(UiErrors::TemplateDocumentOwnerMismatch));
-        if (candidate.base_ != state_)
-            return Result<UiTemplateDocumentSnapshot>::Failure(MakeError(Runtime::Ui::UiErrors::RevisionStale));
-        if (candidate.cancellation_.IsCancellationRequested())
-            return Result<UiTemplateDocumentSnapshot>::Failure(MakeError(UiErrors::TemplateDocumentCancelled));
-        if (undo_.size() == undoLimit_)
-            undo_.erase(undo_.begin());
-        undo_.push_back(state_);
-        state_ = candidate.next_;
-        return Result<UiTemplateDocumentSnapshot>::Success(Capture());
-    }
-
-    /** @copydoc UiTemplateDocumentOwner::Undo */
-    Result<UiTemplateDocumentSnapshot> UiTemplateDocumentOwner::Undo() {
+    /** @copydoc UiTemplateDocumentOwner::PrepareUndo */
+    Result<UiTemplatePreparedTransaction> UiTemplateDocumentOwner::PrepareUndo(const CancellationToken &cancellation) const {
+        if (const auto thread = CheckOwnerThread(); thread.HasError())
+            return Result<UiTemplatePreparedTransaction>::Failure(thread.ErrorValue());
+        using Output = Result<UiTemplatePreparedTransaction>;
         try {
-            if (!identity_)
-                return Result<UiTemplateDocumentSnapshot>::Failure(MakeError(UiErrors::TemplateDocumentShutdown));
+            if (const auto admission = CheckPreparation(cancellation); admission.HasError())
+                return Output::Failure(admission.ErrorValue());
             if (undo_.empty())
-                return Result<UiTemplateDocumentSnapshot>::Failure(MakeError(UiErrors::TemplateUndoEmpty));
+                return Output::Failure(MakeError(UiErrors::TemplateUndoEmpty));
             const auto revision = state_->source.ordinary.Revision().Next();
             if (revision.HasError())
-                return Result<UiTemplateDocumentSnapshot>::Failure(revision.ErrorValue());
+                return Output::Failure(revision.ErrorValue());
             const auto previous = undo_.back();
-            auto ordinary = RevisionCopy(previous->source.ordinary, revision.Value());
+            auto ordinary = Detail::CopyTemplateOrdinary(previous->source.ordinary, revision.Value());
             if (ordinary.HasError())
-                return Result<UiTemplateDocumentSnapshot>::Failure(ordinary.ErrorValue());
+                return Output::Failure(ordinary.ErrorValue());
             auto restored = PrepareState({std::move(ordinary).Value(), previous->source.instances, previous->source.styles,
                                           previous->source.localizedTexts, previous->source.bindings},
-                                         previous->catalogs, state_->limits, {}, previous->authoringSchemas);
+                                         previous->catalogs, state_->limits, cancellation, previous->authoringSchemas);
             if (restored.HasError())
-                return Result<UiTemplateDocumentSnapshot>::Failure(restored.ErrorValue());
-            state_ = std::move(restored.Value());
-            undo_.pop_back();
-            return Result<UiTemplateDocumentSnapshot>::Success(Capture());
+                return Output::Failure(restored.ErrorValue());
+            return Output::Success(
+                UiTemplatePreparedTransaction{state_, std::move(restored).Value(), identity_, cancellation, previous, true});
         } catch (const std::bad_alloc &) {
-            return Result<UiTemplateDocumentSnapshot>::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
+            return Output::Failure(MakeError(UiErrors::TemplateGraphBudgetExceeded));
         }
     }
 
-    /** @copydoc UiTemplateDocumentOwner::Shutdown */
-    void UiTemplateDocumentOwner::Shutdown() noexcept {
-        identity_.reset();
-        undo_.clear();
-    }
 }  // namespace Horo::UiTemplates
