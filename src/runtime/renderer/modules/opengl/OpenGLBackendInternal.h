@@ -1,6 +1,9 @@
 #pragma once
 
 #include "OpenGLBackendModule.h"
+#include "OpenGLMaterialExecution.h"
+#include "OpenGLPipelineRealization.h"
+#include "OpenGLShaderRealization.h"
 
 #include <algorithm>
 #include <array>
@@ -138,6 +141,11 @@ namespace Horo::Render::Detail {
         OpenGLVertexArrayFunctions vertexArrays;
         OpenGLTextureFunctions textures;
         OpenGLFramebufferFunctions framebuffers;
+        OpenGLShaderFunctions shaders;
+        OpenGLPipelineFunctions pipelines;
+        OpenGLSamplerFunctions samplers;
+        OpenGLMaterialFunctions materials;
+        OpenGLMaterialExecutionFunctions materialExecution;
 
         [[nodiscard]] bool IsValid() const noexcept {
             return isAvailable != nullptr && viewport != nullptr && clearColor != nullptr && clear != nullptr && state.IsValid() &&

@@ -1036,7 +1036,10 @@ horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
     Horo/Runtime/Render/RenderMemoryTypes.h
     Horo/Runtime/Render/RenderResourceDescriptorErrors.h
     Horo/Runtime/Render/RenderResourceDescriptors.h
+    Horo/Runtime/Render/RenderShaderResources.h
+    Horo/Runtime/Render/RenderShaderResourceErrors.h
     Horo/Runtime/Render/RenderSubmission.h
+    Horo/Runtime/Render/ShaderArtifact.h
     Horo/Runtime/Render/ShaderCompilerPipeline.h
     Horo/Runtime/Render/ShaderCompilerPipelineErrors.h
     Horo/Runtime/Render/ShaderManifest.h
@@ -1148,6 +1151,8 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroEditorViewportOpenGL)
+horo_configure_target_header_boundary(HoroEditorPresentationSurfaceInternal)
+horo_configure_target_header_boundary(HoroSdlOpenGLPresentationInternal)
 horo_configure_target_header_boundary(HoroEditorViewportMetal)
 horo_configure_target_header_boundary(HoroInputSdl)
 horo_configure_target_header_boundary(HoroRuntimeUiInput PUBLIC_HEADERS

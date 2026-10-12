@@ -1814,6 +1814,42 @@ cap. Surface resize publishes only after native Resize succeeds; minimized/zero
 extent suspends presentation while short host sleeps keep event pumping alive.
 Focus changes reset pacing without selecting a new backend or clock.
 
+The editor's non-installed `HoroEditorPresentationSurfaceInternal` host/test seam
+uses the same `RenderSurfaceLifecycle` authority. It freezes a candidate before
+native resize through a typed borrowed operation, without owning that operation
+or allocating a callback. Dispatch is confined to resize/recovery safe points.
+It publishes Ready only on success and Lost without a usable active output on
+failure. A later explicit Recover retries surface realization with the retained
+backend; it never replaces a context, registry owner, or resource handles.
+Initial zero-size attachment and minimized output publish
+Suspended without native resize. Active frames and cancellation reject ordinary
+surface work; the host cancels its frame and publishes Close before backend teardown.
+Native/context loss requiring renderer restart retains ADR-179 ownership.
+The actual editor host treats native resize failure as an event-pumpable Lost
+publication: it reports the exact typed failure and admits no viewport resource,
+native frame, or GUI work. Owner-window restored/exposed/pixel-size observations
+coalesce into one explicit retry, and another failure consumes that retry. A
+successful recovery retains the native context and resumes presentation. Surface
+Close failure remains diagnostic and prevents a healthy process result.
+
+When tests and OpenGL GPU smoke qualification are enabled, the application may
+run `HoroEditorOpenGLSurfaceRecovery` through its real runtime participant and SDL
+event queue. Its bounded test-only failure injection verifies deferred and foreign
+events, coalesced failed retry, retained-context recovery, real GUI/native present,
+and owner-thread Close. This does not qualify physical device/context replacement
+or driver-induced loss. It requires a display/device grant and remains distinct
+from the headless surface authority tests.
+
+`HoroSdlOpenGLPresentationInternal` compiles the production SDL port independently
+of editor GUI composition when OpenGL GPU qualification is enabled. Its staged,
+non-installed contracts expose only the named presentation seam to host/test
+consumers; native types remain private to those concrete compositions. SDL mode
+admission confirms the current retained context and reads back the actual swap
+interval. An unsupported, failed, or mismatched explicit request returns a typed
+failure rather than publishing an assumed Exact mode. These source contracts need
+fresh native and real-device qualification; logical helper tests alone provide no
+device evidence.
+
 `RenderFrameScope::Present` optionally borrows `PresentationTimingRequest` for
 one call, validates the exact host frame and propagates it through
 `IRenderBackend::PresentWithTiming`. Native feedback is polled without waiting.

@@ -1,9 +1,9 @@
 #include "EditorUiTestSurface.h"
 #include "InteractiveEditorUiTestRenderer.h"
+#include "OpenGLBackendModule.h"
 #include "editor/renderer/opengl/EditorGuiRendererOpenGL.h"
 #include "editor/renderer/opengl/EditorViewportRendererOpenGL.h"
 #include "editor/renderer/opengl/SdlOpenGLPresentationPort.h"
-#include "runtime/renderer/modules/opengl/OpenGLBackendModule.h"
 
 #include <SDL3/SDL.h>
 #include <imgui_impl_sdl3.h>
@@ -14,12 +14,24 @@
 
 namespace Horo::Tests {
     namespace {
-        [[nodiscard]] std::runtime_error MakeSdlError(const char *operation) {
-            return std::runtime_error(std::string{operation} + ": " + SDL_GetError());
+        /** @brief Keeps UI-test native setup/frame failures distinct while preserving their diagnostic text. */
+        class OpenGlUiSurfaceError final : public std::runtime_error {
+        public:
+            using std::runtime_error::runtime_error;
+        };
+
+        /** @brief Preserves logic-error classification for double initialization of the borrowed test surface. */
+        class OpenGlUiSurfaceAlreadyInitialized final : public std::logic_error {
+        public:
+            using std::logic_error::logic_error;
+        };
+
+        [[nodiscard]] OpenGlUiSurfaceError MakeSdlError(const char *operation) {
+            return OpenGlUiSurfaceError(std::string{operation} + ": " + SDL_GetError());
         }
 
         [[noreturn]] void ThrowRendererError(const Error &error) {
-            throw std::runtime_error(error.message);
+            throw OpenGlUiSurfaceError(error.message);
         }
 
         class InteractiveOpenGlEditorUiTestSurface final : public IEditorUiTestSurface {
@@ -30,7 +42,7 @@ namespace Horo::Tests {
 
             void Initialize(ImGuiContext &context) override {
                 if (initialized_)
-                    throw std::logic_error("Interactive OpenGL UI-test surface is already initialized.");
+                    throw OpenGlUiSurfaceAlreadyInitialized("Interactive OpenGL UI-test surface is already initialized.");
                 ImGui::SetCurrentContext(&context);
 
                 if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
@@ -48,11 +60,10 @@ namespace Horo::Tests {
 
                 presentationPort_ = std::make_unique<Editor::SdlOpenGLPresentationPort>(*window_);
                 Render::RenderBackendRegistry registry;
-                const Result<void> registered = Render::RegisterOpenGLRenderBackend(registry, *presentationPort_);
-                if (registered.HasError())
+                if (const Result<void> registered = Render::RegisterOpenGLRenderBackend(registry, *presentationPort_);
+                    registered.HasError())
                     ThrowRendererError(registered.ErrorValue());
-                const Result<void> sealed = registry.Seal();
-                if (sealed.HasError())
+                if (const Result<void> sealed = registry.Seal(); sealed.HasError())
                     ThrowRendererError(sealed.ErrorValue());
 
                 auto frontend = Render::RenderFrontend::Create(registry, Render::RenderBackendId{"opengl"},
@@ -65,8 +76,7 @@ namespace Horo::Tests {
 
                 std::unique_ptr<Render::RenderFrontend> frontendOwner = std::move(frontend).Value();
                 auto viewportRenderer = std::make_unique<Editor::EditorViewportRendererOpenGL>(*frontendOwner);
-                const Result<void> viewportInitialized = viewportRenderer->Initialize();
-                if (viewportInitialized.HasError())
+                if (const Result<void> viewportInitialized = viewportRenderer->Initialize(); viewportInitialized.HasError())
                     ThrowRendererError(viewportInitialized.ErrorValue());
                 auto guiRenderer =
                     std::make_unique<Editor::EditorGuiRendererOpenGL>(*window_, presentationPort_->Context(), *frontendOwner);

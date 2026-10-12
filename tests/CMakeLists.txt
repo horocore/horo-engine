@@ -99,6 +99,7 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 horo_add_public_header_consumer_targets()
 target_sources(HoroShaderBuildPublicHeaderConsumer PRIVATE support/ShaderBuildPublicHeaderConsumer.cpp)
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderGraphWorkloadPublicHeaderConsumer.cpp)
+target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/ShaderArtifactPublicHeaderConsumer.cpp)
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderGraphInspectionPublicHeaderConsumer.cpp)
 target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/RenderFrontendInspectionPublicHeaderConsumer.cpp)
 target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/LightFramePoolPublicHeaderConsumer.cpp)
@@ -2685,6 +2686,9 @@ add_executable(HoroRenderSurfaceLifecycleTests
 )
 target_compile_features(HoroRenderSurfaceLifecycleTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRenderSurfaceLifecycleTests PRIVATE HoroEngine::RenderApi)
+add_executable(HoroEditorPresentationSurfaceTests unit/editor/EditorPresentationSurfaceTests.cpp)
+target_compile_features(HoroEditorPresentationSurfaceTests PRIVATE cxx_std_20)
+target_link_libraries(HoroEditorPresentationSurfaceTests PRIVATE HoroEditorPresentationSurfaceInternal)
 add_executable(HoroRenderResourceDescriptorTests
         unit/runtime/renderer/RenderResourceDescriptorTests.cpp
 )
@@ -2711,6 +2715,7 @@ target_link_libraries(HoroPipelinePreparationTests PRIVATE HoroEngine::RenderApi
 
 add_executable(HoroPipelineCacheTests
         unit/runtime/renderer/PipelineCacheTests.cpp
+        unit/runtime/renderer/RenderShaderResourceDescriptorTests.cpp
 )
 target_compile_features(HoroPipelineCacheTests PRIVATE cxx_std_20)
 target_include_directories(HoroPipelineCacheTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
@@ -2759,6 +2764,7 @@ target_compile_features(HoroStandardPbrPassPlanTests PRIVATE cxx_std_20)
 target_include_directories(HoroStandardPbrPassPlanTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroStandardPbrPassPlanTests PRIVATE HoroEngine::RenderApi)
 add_executable(HoroShaderCompilerPipelineTests
+        unit/runtime/renderer/ShaderArtifactTests.cpp
         unit/runtime/renderer/ShaderCompilerPipelineTests.cpp
         unit/runtime/renderer/ShaderCompilerToolchainTests.cpp
         unit/application/ShaderBuildServiceTests.cpp
@@ -3965,6 +3971,9 @@ if (HORO_BUILD_RENDER_OPENGL)
     add_executable(HoroRenderOpenGLTests
             unit/runtime/renderer/OpenGLRenderBackendTests.cpp
             unit/runtime/renderer/OpenGLCommandAdaptationTests.cpp
+            unit/runtime/renderer/OpenGLShaderRealizationTests.cpp
+            unit/runtime/renderer/OpenGLSamplerRealizationTests.cpp
+            unit/runtime/renderer/OpenGLMaterialBindingTests.cpp
             unit/runtime/renderer/OpenGLRenderBackendQualificationTests.cpp
             unit/runtime/renderer/OpenGLRenderResourceTests.cpp
             unit/runtime/renderer/OpenGLRenderGraphTests.cpp
@@ -3973,6 +3982,7 @@ if (HORO_BUILD_RENDER_OPENGL)
     target_compile_features(HoroRenderOpenGLTests PRIVATE cxx_std_20)
     target_include_directories(HoroRenderOpenGLTests PRIVATE
             ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/opengl
+            ${PROJECT_SOURCE_DIR}/src/runtime/renderer/frontend
             ${PROJECT_SOURCE_DIR}/tests/support
     )
     target_link_libraries(HoroRenderOpenGLTests
@@ -3980,6 +3990,23 @@ if (HORO_BUILD_RENDER_OPENGL)
             HoroEngine::RenderFrontend
             HoroEngine::RenderOpenGL
     )
+    if (HORO_ENABLE_GPU_SMOKE_TESTS)
+        add_executable(HoroOpenGLSurfaceLifecycleSmoke integration/renderer/OpenGLSurfaceLifecycleSmoke.cpp)
+        target_compile_features(HoroOpenGLSurfaceLifecycleSmoke PRIVATE cxx_std_20)
+        target_link_libraries(HoroOpenGLSurfaceLifecycleSmoke PRIVATE Catch2::Catch2WithMain
+                HoroEditorPresentationSurfaceInternal HoroSdlOpenGLPresentationInternal HoroEngine::RenderFrontend
+                HoroEngine::RenderOpenGL HoroThirdParty::Glad)
+        horo_register_catch_test(HoroOpenGLSurfaceLifecycleSmoke LABELS "gpu;display;opengl;surface")
+        add_executable(HoroOpenGLMaterialSmoke integration/renderer/OpenGLMaterialSmoke.cpp)
+        target_compile_features(HoroOpenGLMaterialSmoke PRIVATE cxx_std_20)
+        target_include_directories(HoroOpenGLMaterialSmoke PRIVATE
+                ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/opengl
+                ${PROJECT_SOURCE_DIR}/src/runtime/renderer/frontend
+                ${PROJECT_SOURCE_DIR}/tests/unit/runtime/renderer)
+        target_link_libraries(HoroOpenGLMaterialSmoke PRIVATE Catch2::Catch2WithMain
+                HoroEngine::RenderFrontend HoroEngine::RenderOpenGL HoroThirdParty::Glad ${HORO_SDL3_TARGET})
+        horo_register_catch_test(HoroOpenGLMaterialSmoke LABELS "gpu;display;opengl;material")
+    endif ()
     if (HORO_BUILD_EDITOR_GUI)
         add_executable(HoroEditorViewportOpenGLSmoke
                 integration/renderer/EditorViewportOpenGLSmoke.cpp
@@ -4005,6 +4032,17 @@ if (HORO_BUILD_RENDER_OPENGL)
                 set_tests_properties(HoroEditorOpenGLFirstFrame PROPERTIES
                         LABELS "gpu;display;editor"
                         ENVIRONMENT "HOME=${HORO_OPENGL_FIRST_FRAME_HOME};USERPROFILE=${HORO_OPENGL_FIRST_FRAME_HOME}"
+                )
+                set(HORO_OPENGL_SURFACE_HOME "${CMAKE_CURRENT_BINARY_DIR}/surface-lifecycle-home/opengl")
+                file(MAKE_DIRECTORY "${HORO_OPENGL_SURFACE_HOME}")
+                add_test(NAME HoroEditorOpenGLSurfaceRecovery
+                        COMMAND $<TARGET_FILE:HoroEditor> --renderer opengl --exit-after-frames 32
+                                --qualify-opengl-surface-lifecycle)
+                set_tests_properties(HoroEditorOpenGLSurfaceRecovery PROPERTIES
+                        LABELS "gpu;display;editor;opengl;surface"
+                        TIMEOUT 60
+                        PASS_REGULAR_EXPRESSION "HoroEditor surface lifecycle qualification passed"
+                        ENVIRONMENT "HOME=${HORO_OPENGL_SURFACE_HOME};USERPROFILE=${HORO_OPENGL_SURFACE_HOME}"
                 )
             endif ()
         endif ()
@@ -4255,6 +4293,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroFramePacingTests
         HoroPresentModeTests
         HoroRenderSurfaceLifecycleTests
+        HoroEditorPresentationSurfaceTests
         HoroRenderGraphTests
         HoroRenderGraphInspectionTests
         HoroRenderGraphLifetimeTests
