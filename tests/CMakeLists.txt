@@ -4004,8 +4004,21 @@ if (HORO_BUILD_RENDER_OPENGL)
                 ${PROJECT_SOURCE_DIR}/src/runtime/renderer/frontend
                 ${PROJECT_SOURCE_DIR}/tests/unit/runtime/renderer)
         target_link_libraries(HoroOpenGLMaterialSmoke PRIVATE Catch2::Catch2WithMain
-                HoroEngine::RenderFrontend HoroEngine::RenderOpenGL HoroThirdParty::Glad ${HORO_SDL3_TARGET})
-        horo_register_catch_test(HoroOpenGLMaterialSmoke LABELS "gpu;display;opengl;material")
+                HoroEngine::RenderFrontend HoroEngine::RenderOpenGL HoroThirdParty::Glad HoroSdlOpenGLPresentationInternal)
+        # Xvfb coverage executes the same pixel/state contract, not hardware qualification.
+        # The original native case remains registered for opt-in device qualification.
+        catch_discover_tests(HoroOpenGLMaterialSmoke
+                TEST_PREFIX "HoroOpenGLMaterialSmoke::"
+                TEST_SPEC "[hardware-qualification]"
+                TEST_LIST HoroOpenGLMaterialHardwareTests)
+        catch_discover_tests(HoroOpenGLMaterialSmoke
+                TEST_PREFIX "HoroOpenGLMaterialSmoke::"
+                TEST_SPEC "[software-coverage]"
+                TEST_LIST HoroOpenGLMaterialCoverageTests)
+        set(material_properties_file "${CMAKE_CURRENT_BINARY_DIR}/HoroOpenGLMaterialSmoke_evidence_properties.cmake")
+        file(GENERATE OUTPUT "${material_properties_file}" CONTENT
+                "if(HoroOpenGLMaterialHardwareTests)\n    set_tests_properties(\${HoroOpenGLMaterialHardwareTests} PROPERTIES LABELS [==[gpu;display;opengl;material;hardware-qualification]==])\nendif()\nif(HoroOpenGLMaterialCoverageTests)\n    set_tests_properties(\${HoroOpenGLMaterialCoverageTests} PROPERTIES LABELS [==[display;opengl;material;software-coverage;sonar-coverage]==])\nendif()\n")
+        set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES "${material_properties_file}")
     endif ()
     if (HORO_BUILD_EDITOR_GUI)
         add_executable(HoroEditorViewportOpenGLSmoke
@@ -4043,6 +4056,29 @@ if (HORO_BUILD_RENDER_OPENGL)
                         TIMEOUT 60
                         PASS_REGULAR_EXPRESSION "HoroEditor surface lifecycle qualification passed"
                         ENVIRONMENT "HOME=${HORO_OPENGL_SURFACE_HOME};USERPROFILE=${HORO_OPENGL_SURFACE_HOME}"
+                )
+                # Software coverage runs the real application and observer, not
+                # the material fixture. Native qualification entries stay distinct.
+                set(HORO_OPENGL_COVERAGE_HOME "${CMAKE_CURRENT_BINARY_DIR}/software-coverage-home/opengl")
+                file(MAKE_DIRECTORY "${HORO_OPENGL_COVERAGE_HOME}/first-frame"
+                        "${HORO_OPENGL_COVERAGE_HOME}/surface-lifecycle")
+                add_test(NAME HoroEditorOpenGLFirstFrameSoftwareCoverage
+                        COMMAND $<TARGET_FILE:HoroEditor> --renderer opengl --exit-after-first-frame)
+                set_tests_properties(HoroEditorOpenGLFirstFrameSoftwareCoverage PROPERTIES
+                        LABELS "display;editor;opengl;software-coverage;sonar-coverage"
+                        TIMEOUT 60
+                        RUN_SERIAL TRUE
+                        ENVIRONMENT "HOME=${HORO_OPENGL_COVERAGE_HOME}/first-frame;USERPROFILE=${HORO_OPENGL_COVERAGE_HOME}/first-frame"
+                )
+                add_test(NAME HoroEditorOpenGLSurfaceRecoverySoftwareCoverage
+                        COMMAND $<TARGET_FILE:HoroEditor> --renderer opengl --exit-after-frames 32
+                                --qualify-opengl-surface-lifecycle)
+                set_tests_properties(HoroEditorOpenGLSurfaceRecoverySoftwareCoverage PROPERTIES
+                        LABELS "display;editor;opengl;surface;software-coverage;sonar-coverage"
+                        TIMEOUT 60
+                        RUN_SERIAL TRUE
+                        PASS_REGULAR_EXPRESSION "HoroEditor surface lifecycle qualification passed"
+                        ENVIRONMENT "HOME=${HORO_OPENGL_COVERAGE_HOME}/surface-lifecycle;USERPROFILE=${HORO_OPENGL_COVERAGE_HOME}/surface-lifecycle"
                 )
             endif ()
         endif ()

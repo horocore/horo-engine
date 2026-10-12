@@ -49,8 +49,7 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc SdlOpenGLPresentationPort::SdlOpenGLPresentationPort */
-    SdlOpenGLPresentationPort::SdlOpenGLPresentationPort(SDL_Window &window) noexcept
-        : ownerThread_(std::this_thread::get_id()), window_(&window) {}
+    SdlOpenGLPresentationPort::SdlOpenGLPresentationPort(SDL_Window &window) noexcept : window_(&window) {}
 
     /** @copydoc SdlOpenGLPresentationPort::CheckOwner */
     Result<void> SdlOpenGLPresentationPort::CheckOwner() const {
@@ -155,17 +154,21 @@ namespace Horo::Editor {
                 return Result<void>::Failure(MakeError(RendererErrors::SdlInvalidPresentMode, "Unsupported presentation mode."));
         }
 
-        if (context_ == nullptr || SDL_GL_GetCurrentContext() != context_ || !SDL_GL_SetSwapInterval(interval)) {
-            return Result<void>::Failure(MakeSdlRenderError(RendererErrors::SdlPresentModeFailed, "SDL_GL_SetSwapInterval failed"));
+        if (context_ == nullptr || SDL_GL_GetCurrentContext() != context_) {
+            return Result<void>::Failure(MakeError(RendererErrors::SdlPresentModeFailed, "The retained OpenGL context is not current."));
         }
-        int actualInterval = 0;
-        if (!SDL_GL_GetSwapInterval(&actualInterval))
+        return Detail::ApplyExactSwapInterval(interval, SDL_GL_GetSwapInterval, SDL_GL_SetSwapInterval);
+    }
+
+    /** @copydoc Detail::SwapIntervalError */
+    Result<void> Detail::SwapIntervalError(const SwapIntervalFailure failure) {
+        if (failure == SwapIntervalFailure::Query)
             return Result<void>::Failure(MakeSdlRenderError(RendererErrors::SdlPresentModeFailed, "SDL_GL_GetSwapInterval failed"));
-        if (actualInterval != interval)
-            return Result<void>::Failure(
-                MakeError(RendererErrors::SdlPresentModeFailed,
-                          "The active native swap interval does not match the explicitly requested presentation mode."));
-        return Result<void>::Success();
+        if (failure == SwapIntervalFailure::Set)
+            return Result<void>::Failure(MakeSdlRenderError(RendererErrors::SdlPresentModeFailed, "SDL_GL_SetSwapInterval failed"));
+        return Result<void>::Failure(
+            MakeError(RendererErrors::SdlPresentModeFailed,
+                      "The active native swap interval does not match the explicitly requested presentation mode."));
     }
 
     /** @copydoc SdlOpenGLPresentationPort::SwapBuffers */

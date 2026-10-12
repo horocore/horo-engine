@@ -11,6 +11,61 @@
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Owner-thread test fixture for SDL query/set outcomes, with no native context substitution. */
+        struct SwapIntervalProbe {
+            int interval{0};
+            int queries{0};
+            int sets{0};
+            int failedQuery{0};
+            bool setterSupported{false};
+            bool applySet{true};
+            static thread_local SwapIntervalProbe *active;
+
+            SwapIntervalProbe() {
+                active = this;
+            }
+
+            SwapIntervalProbe(const SwapIntervalProbe &) = delete;
+            SwapIntervalProbe &operator=(const SwapIntervalProbe &) = delete;
+
+            ~SwapIntervalProbe() {
+                active = nullptr;
+            }
+
+            static bool Query(int *value) {
+                *value = active->interval;
+                return ++active->queries != active->failedQuery;
+            }
+
+            static bool Set(const int value) {
+                ++active->sets;
+                if (!active->setterSupported)
+                    return false;
+                if (active->applySet)
+                    active->interval = value;
+                return true;
+            }
+        };
+
+        thread_local SwapIntervalProbe *SwapIntervalProbe::active = nullptr;
+
+        /** @brief Creates the owned frontend transaction and reports its exact native admission failure. */
+        std::unique_ptr<Render::RenderFrontend> CreateSurfaceFrontend(SdlOpenGLPresentationPort &port) {
+            Render::RenderBackendRegistry registry;
+            REQUIRE(Render::RegisterOpenGLRenderBackend(registry, port).HasValue());
+            REQUIRE(registry.Seal().HasValue());
+            auto created = Render::RenderFrontend::Create(registry, Render::RenderBackendId{"opengl"},
+                                                          {.enableValidation = false,
+                                                           .maxFramesInFlight = 1,
+                                                           .presentMode = Render::PresentMode::Immediate});
+            if (created.HasError()) {
+                FAIL("Frontend creation (SDL driver " << SDL_GetCurrentVideoDriver() << "): " << created.ErrorValue().domain.Value() << '/'
+                                                      << created.ErrorValue().code.Value() << ": " << created.ErrorValue().message);
+            }
+            REQUIRE(created.HasValue());
+            return std::move(created).Value();
+        }
+
         /** @brief Bounds opt-in test synchronization after cancellation; production frames never wait for slot retirement. */
         void CompleteCancelledNativeWork() {
             const auto destroy = [](GLsync fence) {
@@ -25,6 +80,9 @@ namespace Horo::Editor {
         /** @brief Verifies actual mode readback and explicit unsupported-mode diagnostics. */
         void CheckPresentPolicy(SdlOpenGLPresentationPort &port) {
             int interval = -1;
+            REQUIRE(SDL_GL_GetSwapInterval(&interval));
+            CHECK(interval == 0);
+            REQUIRE(port.SetPresentMode(Render::PresentMode::Immediate).HasValue());
             REQUIRE(SDL_GL_GetSwapInterval(&interval));
             CHECK(interval == 0);
             if (const auto fifo = port.SetPresentMode(Render::PresentMode::Fifo); fifo.HasValue()) {
@@ -123,6 +181,51 @@ namespace Horo::Editor {
         };
     }  // namespace
 
+    TEST_CASE("SDL swap interval admission requires verified exact mode without silent fallback", "[opengl][surface][unit]") {
+        SwapIntervalProbe probe;
+        int requested = 0;
+        bool expected = false;
+        int expectedSets = 0;
+        SECTION("Already-active Immediate succeeds without swap control") {
+            expected = true;
+        }
+        SECTION("A failed getter writing zero is not verified Immediate") {
+            probe.failedQuery = 1;
+        }
+        SECTION("FIFO is rejected when native swap control is unsupported") {
+            requested = 1;
+            expectedSets = 1;
+        }
+        SECTION("Already-active FIFO is exact without reconfiguration") {
+            requested = 1;
+            probe.interval = 1;
+            expected = true;
+        }
+        SECTION("Successful reconfiguration still requires exact readback") {
+            requested = 1;
+            probe.setterSupported = true;
+            probe.applySet = false;
+            expectedSets = 1;
+        }
+        SECTION("A failed post-set query does not establish FIFO") {
+            requested = 1;
+            probe.setterSupported = true;
+            probe.failedQuery = 2;
+            expectedSets = 1;
+        }
+        SECTION("Verified native reconfiguration admits FIFO") {
+            requested = 1;
+            probe.setterSupported = true;
+            expectedSets = 1;
+            expected = true;
+        }
+        const auto result = Detail::ApplyExactSwapInterval(requested, SwapIntervalProbe::Query, SwapIntervalProbe::Set);
+        CHECK(result.HasValue() == expected);
+        CHECK(probe.sets == expectedSets);
+        if (result.HasError())
+            CHECK_FALSE(result.ErrorValue().code.Value().empty());
+    }
+
     TEST_CASE("Production SDL OpenGL surface verifies exact present mode and owner lifecycle", "[gpu][display][opengl][surface]") {
         REQUIRE(SDL_Init(SDL_INIT_VIDEO));
         const int token = 0;
@@ -138,15 +241,7 @@ namespace Horo::Editor {
                                                                          &SDL_DestroyWindow};
         REQUIRE(window);
         SdlOpenGLPresentationPort port{*window};
-        Render::RenderBackendRegistry registry;
-        REQUIRE(Render::RegisterOpenGLRenderBackend(registry, port).HasValue());
-        REQUIRE(registry.Seal().HasValue());
-        auto created = Render::RenderFrontend::Create(registry, Render::RenderBackendId{"opengl"},
-                                                      {.enableValidation = false,
-                                                       .maxFramesInFlight = 1,
-                                                       .presentMode = Render::PresentMode::Immediate});
-        REQUIRE(created.HasValue());
-        auto frontend = std::move(created).Value();
+        auto frontend = CreateSurfaceFrontend(port);
         const auto facts = port.QueryContextFacts();
         REQUIRE(facts.HasValue());
         std::cout << "Surface context: " << glGetString(GL_RENDERER) << " / " << glGetString(GL_VERSION) << '\n';

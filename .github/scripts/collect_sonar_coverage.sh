@@ -22,6 +22,7 @@ started=$SECONDS
     "$workspace/apps/HoroEditor/app/EditorUserStateMigration.cpp" \
     "$workspace/apps/HoroEditor/app/ConfiguredEditorUpdateBackend.cpp" \
     "$workspace/apps/HoroEditor/app/RenderGraphInspectionPane.cpp" \
+    "$workspace/apps/HoroEditor/app/EditorSurfaceLifecycleQualification.cpp" \
   --output "$build_dir/fastcov-coverage.json"
 
 "$python" "$workspace/scripts/fastcov_sonar_coverage.py" \
