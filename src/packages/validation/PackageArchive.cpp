@@ -271,6 +271,27 @@ namespace Horo::Packages {
                                                      const Sha256Digest &digest, const Sha256Digest &packageManifestDigest)
         : m_bytes(std::move(bytes)), m_manifest(std::move(manifest)), m_digest(digest), m_packageManifestDigest(packageManifestDigest) {}
 
+    /** @copydoc ValidatedPackageArchive::ReadDeclaredFile */
+    Result<std::vector<std::byte>> ValidatedPackageArchive::ReadDeclaredFile(const PackagePath &path,
+                                                                             const std::uint64_t maximumBytes) const {
+        const auto entries = m_manifest.Entries();
+        const auto entry = std::ranges::find(entries, path.Value(), [](const PackageFileEntry &file) -> const std::string & {
+            return file.id.path.Value();
+        });
+        if (entry == entries.end())
+            return Result<std::vector<std::byte>>::Failure(MakeError(Detail::InventoryMismatch));
+        if (entry->size > maximumBytes || entry->size > std::numeric_limits<std::size_t>::max())
+            return Result<std::vector<std::byte>>::Failure(MakeError(Detail::ResourceLimit));
+        ZipReader zip;
+        if (!mz_zip_reader_init_mem(&zip.value, m_bytes.data(), m_bytes.size(), 0))
+            return Result<std::vector<std::byte>>::Failure(MakeError(Detail::InvalidArchive));
+        const int index = mz_zip_reader_locate_file(&zip.value, path.Value().c_str(), nullptr, MZ_ZIP_FLAG_CASE_SENSITIVE);
+        mz_zip_archive_file_stat stat{};
+        if (index < 0 || !mz_zip_reader_file_stat(&zip.value, static_cast<mz_uint>(index), &stat) || stat.m_uncomp_size != entry->size)
+            return Result<std::vector<std::byte>>::Failure(MakeError(Detail::InventoryMismatch));
+        return ReadFile(zip.value, stat);
+    }
+
     /** @copydoc ValidatedPackageArchive::Manifest */
     const ValidatedPackageFileManifestV1 &ValidatedPackageArchive::Manifest() const noexcept {
         return m_manifest;

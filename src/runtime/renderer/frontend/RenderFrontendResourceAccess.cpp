@@ -36,6 +36,11 @@ namespace Horo::Render {
         return resourceRegistry_->State(Detail::RenderResourceClass::RenderTarget, Identity(target));
     }
 
+    /** @copydoc RenderFrontend::ResourceOperationState */
+    Result<RenderResourceOperationState> RenderFrontend::ResourceOperationState(const ResourceOperationId operation) const {
+        return resourceRegistry_->OperationState(operation);
+    }
+
     /** @copydoc RenderFrontend::ResourceOperationResult */
     Result<void> RenderFrontend::ResourceOperationResult(const ResourceOperationId operation) const {
         return resourceRegistry_->OperationResult(operation);

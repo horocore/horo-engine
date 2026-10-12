@@ -16,10 +16,18 @@ set(HORO_CI_AUDIO_TARGETS
 # The full Windows suite remains disabled. Preserve all existing focused checks
 # in one headless Debug build, including their public-header compile consumers.
 set(HORO_CI_WINDOWS_TARGETS
+    HoroAnimationApiTests
+    HoroAnimationGraphPublicHeaderConsumer
     HoroLightCullingTests
     HoroLightFramePoolTests
     HoroAITaskSchedulerTests
     HoroAITaskSchedulerPublicConsumer
+    HoroAITests
+    HoroAISightTests
+    HoroAIPublicHeaderConsumer
+    HoroAISceneIntegrationPublicHeaderConsumer
+    HoroAISightIntegrationPublicHeaderConsumer
+    HoroGameplayPerceptionIntegrationPublicHeaderConsumer
     HoroMaterialBindingTests
     HoroMaterialBindingPublicHeaderConsumer
     HoroD3D12InitializationTests
@@ -29,6 +37,12 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroNetworkDebuggerPublicHeaderConsumer
     HoroTerrainAuthoringTests
     HoroTerrainAuthoringPublicHeaderConsumer
+    HoroPCGTests
+    HoroPCGTerrainAdapterTests
+    HoroPCGPublicHeaderConsumer
+    HoroPCGTerrainAdapterPublicHeaderConsumer
+    HoroPCGDocumentTests
+    HoroPCGDocumentPublicHeaderConsumer
     HoroMixerDocumentTests
     ${HORO_CI_AUDIO_TARGETS}
     HoroCliCommandRegistryTests
@@ -48,13 +62,22 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroCinematicModelPublicHeaderConsumer
     HoroCinematicRuntimePublicHeaderConsumer
     HoroEditorServicesPublicHeaderConsumer
+    HoroEditorSurfaceIdentityTests
+    HoroSourceFileOpenServiceTests
     HoroPrefabTests
     HoroPrefabSceneExpansionTests
     HoroPrefabSceneExpansionContractConsumer
     HoroAssetRegistryTests
     HoroInputTests
+    HoroCharacterInputTests
+    HoroCharacterInputPublicHeaderConsumer
     HoroInputSdlTests
     HoroRuntimeUiInputTests
+    HoroRuntimeUiAnimationIntegrationTests
+    HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer
+    HoroRuntimeUiHitTestingTests
+    HoroRuntimeUiEventDispatchTests
+    HoroRuntimeUiPointerPublicHeaderConsumer
     HoroRuntimeUiTextUnicodeTests
     HoroRuntimeUiUnicodeStartupTests
     HoroRuntimeUiUnicodeLifecycleTests
@@ -76,8 +99,20 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroExtensionManagerTests
     HoroEditorActivityBoundaryTests
     HoroExtensionsPublicHeaderConsumer
+
+    HoroPackageLifecycleTests
+    HoroPackageLifecyclePublicHeaderConsumer
     HoroMcpSessionTests
     HoroMcpSessionPublicHeaderConsumer
+    HoroProjectCodeQueryTests
+    HoroProjectReadFilesTests
+    HoroMcpProjectCodeQueryTests
+    HoroSourceDocumentCodeQueryTests
+    HoroProjectReadFilesApiPublicHeaderConsumer
+    HoroPlatformProjectReadFilesPublicHeaderConsumer
+    HoroProjectCodeQueryPublicHeaderConsumer
+    HoroMcpProjectCodeQueryPublicHeaderConsumer
+    HoroSourceDocumentCodeQueryPublicHeaderConsumer
     HoroRuntimeSaveRootResolverTests
     HoroRuntimeSaveStorageQualificationTests
     HoroSaveStorageUserStateQualificationTests
@@ -96,6 +131,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroTerrainPayloadManifestPublicHeaderConsumer
     HoroTerrainProducerSnapshotTests
     HoroTerrainProducerSnapshotPublicHeaderConsumer
+    HoroTerrainRenderIntegrationTests
+    HoroTerrainRenderIntegrationPublicHeaderConsumer
     HoroNavigationRuntimeTests
     HoroNavigationTransportReservationTests
     HoroNavigationCoordinatorPublicConsumer
@@ -128,6 +165,7 @@ set(HORO_SONAR_EDITOR_TARGETS
     HoroCameraCutEditorIntegrationTests
     HoroCinematicPropertyIntegrationTests
     HoroConfiguredEditorUpdateBackendTests
+    HoroSourceDocumentCodeQueryTests
 )
 
 function(horo_ci_catch_labels target)

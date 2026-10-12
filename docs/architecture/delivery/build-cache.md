@@ -51,8 +51,71 @@ cmake --preset debug \
 ```
 
 Once configured, every subsequent `cmake --build --preset debug` uses
-ccache transparently. No changes to `scripts/dev.py` are required because
-the launcher variables are stored in `CMakeCache.txt`.
+ccache transparently through the launcher variables in `CMakeCache.txt`.
+
+For a shared main-derived checkpoint across local worktrees, use the developer
+runner instead:
+
+```bash
+python3 scripts/dev.py cache prepare -j 2
+python3 scripts/dev.py cache status
+python3 scripts/dev.py build HoroEditor -j 2
+```
+
+`cache prepare` fetches `origin/main`, pins its exact commit, and builds an
+isolated detached checkout. It never switches or incorporates changes from the
+calling worktree. Run it again after main changes to refresh the checkpoint;
+`--offline` uses the already fetched `origin/main` reference. `--target HoroFoundation`
+warms only that target's compilation closure, and `--type Release` selects a
+Release preparation. Additional configuration is supplied as repeatable
+`--cmake-arg=-DNAME=value` options, also accepted by `build`, `test`, and `check`.
+Use the same composition and build type to benefit from the prepared entries.
+
+The runner stores compiler entries outside the repository in the host's user
+cache directory, keyed by the Git common directory, OS, and architecture. Linked
+worktrees discover the same completed checkpoint automatically through `build`,
+`test`, `check`, and `run editor`. No machine-specific paths are committed. A
+second computer creates its own checkpoint with the same command; these are
+local stores rather than copied object directories or a remote cache service.
+
+Preparation copies the previous compiler store into a new candidate without
+hard links. The old generation remains published until the new main build
+succeeds and its source is still clean. Publication replaces a small ready
+manifest atomically. Failed preparation preserves the ready generation and
+keeps its failed checkout available for diagnosis. Old completed generations
+are removed only when their reader leases have released; leased generations
+are checked again during a later refresh. Unknown directories are preserved.
+
+Feature worktrees consume the completed compiler store read-only. Changed
+sources still compile normally into their own build directories; only main
+preparation publishes shared compiler entries. ccache's content checks remain
+authoritative for source, headers, compiler, and flags. GCC/Clang debug paths
+are normalized for different worktree directories, and PCH is disabled for
+managed cache builds. Compiler flags from the existing build or explicit
+configure arguments are preserved. Other toolchains may miss across build
+directories; there is no relaxed hashing or ignored-header workaround.
+
+The default budget is 4 GB per generation, so allow space for two compiler
+stores plus the candidate build. The runner serializes configure/compilation
+across linked worktrees and defaults to two compiler jobs. This lock covers
+`dev.py` builds; direct CMake invocations still require orchestration. Cache
+refresh enters the same build queue. Tests and editor execution happen after
+the build lock is released. A cache checkpoint records successful compilation,
+not passing tests or a Sonar/Codacy gate.
+
+On macOS/Linux, cancellation verifies and terminates owned subprocesses before
+releasing build and cache leases. If termination cannot be verified, the runner
+records `cleanup-unverified.json` in its cache root and blocks later builds and
+generation retirement. Audit the remaining process tree before removing this
+marker; it is not an automatic retry or cleanup shortcut.
+
+Missing or invalid checkpoints fall back to an ordinary build. Explicit
+`--compiler-launcher`, cache environment variables, and PCH requests take
+precedence over automatic discovery. `--no-cache` disables discovery. This
+first managed lifecycle supports ccache on macOS and Linux. Windows preparation
+and automatic discovery remain disabled until descendant process cleanup is
+qualified there; explicit Windows sccache configurations continue through the
+existing launcher option.
 
 **Verify it's working:**
 

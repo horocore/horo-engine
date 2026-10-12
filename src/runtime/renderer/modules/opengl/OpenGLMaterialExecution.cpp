@@ -14,7 +14,8 @@ namespace Horo::Render::Detail {
 
         /** @brief Inspects optional fixed-index restart without issuing an unsupported enum query on baseline contexts. */
         Result<bool> SupportsFixedIndexRestart() {
-            GLint major = 0, minor = 0;
+            GLint major = 0;
+            GLint minor = 0;
             glGetIntegerv(GL_MAJOR_VERSION, &major);
             glGetIntegerv(GL_MINOR_VERSION, &minor);
             if (major > 4 || (major == 4 && minor >= 3))
@@ -38,41 +39,41 @@ namespace Horo::Render::Detail {
         public:
             MaterialState(const GLuint target, const GLint drawBuffers, const GLint clips, const bool fixedRestartSupported) noexcept
                 : target_(target), clipCount_(clips), fixedRestartSupported_(fixedRestartSupported), drawBufferCount_(drawBuffers) {
-                glGetIntegerv(GL_CURRENT_PROGRAM, &program_);
-                glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vertexArray_);
-                glGetIntegerv(GL_ACTIVE_TEXTURE, &activeTexture_);
-                glGetIntegerv(GL_UNIFORM_BUFFER_BINDING, &uniformBuffer_);
-                glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &framebuffer_);
-                glGetFloati_v(GL_VIEWPORT, 0, viewport_.data());
-                glGetFloatv(GL_COLOR_CLEAR_VALUE, clearColor_.data());
-                glGetDoublev(GL_DEPTH_CLEAR_VALUE, &clearDepth_);
-                glGetBooleani_v(GL_COLOR_WRITEMASK, 0, colorMask_.data());
-                glGetBooleanv(GL_DEPTH_WRITEMASK, &depthMask_);
-                glGetIntegerv(GL_DEPTH_FUNC, &depthFunction_);
-                glGetIntegerv(GL_CULL_FACE_MODE, &cull_);
-                glGetIntegerv(GL_FRONT_FACE, &frontFace_);
-                glGetIntegerv(GL_POLYGON_MODE, polygonMode_.data());
-                glGetIntegeri_v(GL_BLEND_SRC_RGB, 0, &blendSourceRgb_);
-                glGetIntegeri_v(GL_BLEND_DST_RGB, 0, &blendDestinationRgb_);
-                glGetIntegeri_v(GL_BLEND_SRC_ALPHA, 0, &blendSourceAlpha_);
-                glGetIntegeri_v(GL_BLEND_DST_ALPHA, 0, &blendDestinationAlpha_);
-                glGetIntegeri_v(GL_BLEND_EQUATION_RGB, 0, &blendEquationRgb_);
-                glGetIntegeri_v(GL_BLEND_EQUATION_ALPHA, 0, &blendEquationAlpha_);
-                blend_ = glIsEnabledi(GL_BLEND, 0);
-                scissor_ = glIsEnabledi(GL_SCISSOR_TEST, 0);
+                glGetIntegerv(GL_CURRENT_PROGRAM, &bindings_.program);
+                glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &bindings_.vertexArray);
+                glGetIntegerv(GL_ACTIVE_TEXTURE, &bindings_.activeTexture);
+                glGetIntegerv(GL_UNIFORM_BUFFER_BINDING, &bindings_.uniformBuffer);
+                glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &bindings_.framebuffer);
+                glGetFloati_v(GL_VIEWPORT, 0, clear_.viewport.data());
+                glGetFloatv(GL_COLOR_CLEAR_VALUE, clear_.color.data());
+                glGetDoublev(GL_DEPTH_CLEAR_VALUE, &clear_.depth);
+                glGetBooleani_v(GL_COLOR_WRITEMASK, 0, raster_.colorMask.data());
+                glGetBooleanv(GL_DEPTH_WRITEMASK, &raster_.depthMask);
+                glGetIntegerv(GL_DEPTH_FUNC, &raster_.depthFunction);
+                glGetIntegerv(GL_CULL_FACE_MODE, &raster_.cull);
+                glGetIntegerv(GL_FRONT_FACE, &raster_.frontFace);
+                glGetIntegerv(GL_POLYGON_MODE, raster_.polygonMode.data());
+                glGetIntegeri_v(GL_BLEND_SRC_RGB, 0, &blendState_.sourceRgb);
+                glGetIntegeri_v(GL_BLEND_DST_RGB, 0, &blendState_.destinationRgb);
+                glGetIntegeri_v(GL_BLEND_SRC_ALPHA, 0, &blendState_.sourceAlpha);
+                glGetIntegeri_v(GL_BLEND_DST_ALPHA, 0, &blendState_.destinationAlpha);
+                glGetIntegeri_v(GL_BLEND_EQUATION_RGB, 0, &blendState_.equationRgb);
+                glGetIntegeri_v(GL_BLEND_EQUATION_ALPHA, 0, &blendState_.equationAlpha);
+                raster_.blend = glIsEnabledi(GL_BLEND, 0);
+                raster_.scissor = glIsEnabledi(GL_SCISSOR_TEST, 0);
                 for (std::size_t index = 0; index < capabilities_.size(); ++index)
-                    enabled_[index] = glIsEnabled(capabilities_[index]);
+                    raster_.enabled[index] = glIsEnabled(capabilities_[index]);
                 if (fixedRestartSupported_)
                     fixedRestartEnabled_ = glIsEnabled(FixedIndexRestart);
                 for (std::size_t index = 0; index < static_cast<std::size_t>(clipCount_); ++index)
-                    clipEnabled_[index] = glIsEnabled(GL_CLIP_DISTANCE0 + static_cast<GLenum>(index));
+                    raster_.clipEnabled[index] = glIsEnabled(GL_CLIP_DISTANCE0 + static_cast<GLenum>(index));
                 glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target_);
                 for (GLint index = 0; index < drawBufferCount_; ++index) {
                     GLint value = 0;
                     glGetIntegerv(GL_DRAW_BUFFER0 + static_cast<GLenum>(index), &value);
                     targetDrawBuffers_[static_cast<std::size_t>(index)] = static_cast<GLenum>(value);
                 }
-                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(framebuffer_));
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(bindings_.framebuffer));
             }
 
             ~MaterialState() noexcept {
@@ -91,33 +92,33 @@ namespace Horo::Render::Detail {
                                               static_cast<GLintptr>(buffer.offset), static_cast<GLsizeiptr>(buffer.size));
                     }
                 }
-                glBindBuffer(GL_UNIFORM_BUFFER, static_cast<GLuint>(uniformBuffer_));
-                glActiveTexture(static_cast<GLenum>(activeTexture_));
-                glUseProgram(static_cast<GLuint>(program_));
-                glBindVertexArray(static_cast<GLuint>(vertexArray_));
-                glViewportIndexedf(0, viewport_[0], viewport_[1], viewport_[2], viewport_[3]);
-                glClearColor(clearColor_[0], clearColor_[1], clearColor_[2], clearColor_[3]);
-                glClearDepth(clearDepth_);
-                glColorMaski(0, colorMask_[0], colorMask_[1], colorMask_[2], colorMask_[3]);
-                glDepthMask(depthMask_);
-                glDepthFunc(static_cast<GLenum>(depthFunction_));
-                glCullFace(static_cast<GLenum>(cull_));
-                glFrontFace(static_cast<GLenum>(frontFace_));
-                glPolygonMode(GL_FRONT_AND_BACK, static_cast<GLenum>(polygonMode_[0]));
-                glBlendFuncSeparatei(0, static_cast<GLenum>(blendSourceRgb_), static_cast<GLenum>(blendDestinationRgb_),
-                                     static_cast<GLenum>(blendSourceAlpha_), static_cast<GLenum>(blendDestinationAlpha_));
-                glBlendEquationSeparatei(0, static_cast<GLenum>(blendEquationRgb_), static_cast<GLenum>(blendEquationAlpha_));
-                SetIndexed(GL_BLEND, blend_);
-                SetIndexed(GL_SCISSOR_TEST, scissor_);
+                glBindBuffer(GL_UNIFORM_BUFFER, static_cast<GLuint>(bindings_.uniformBuffer));
+                glActiveTexture(static_cast<GLenum>(bindings_.activeTexture));
+                glUseProgram(static_cast<GLuint>(bindings_.program));
+                glBindVertexArray(static_cast<GLuint>(bindings_.vertexArray));
+                glViewportIndexedf(0, clear_.viewport[0], clear_.viewport[1], clear_.viewport[2], clear_.viewport[3]);
+                glClearColor(clear_.color[0], clear_.color[1], clear_.color[2], clear_.color[3]);
+                glClearDepth(clear_.depth);
+                glColorMaski(0, raster_.colorMask[0], raster_.colorMask[1], raster_.colorMask[2], raster_.colorMask[3]);
+                glDepthMask(raster_.depthMask);
+                glDepthFunc(static_cast<GLenum>(raster_.depthFunction));
+                glCullFace(static_cast<GLenum>(raster_.cull));
+                glFrontFace(static_cast<GLenum>(raster_.frontFace));
+                glPolygonMode(GL_FRONT_AND_BACK, static_cast<GLenum>(raster_.polygonMode[0]));
+                glBlendFuncSeparatei(0, static_cast<GLenum>(blendState_.sourceRgb), static_cast<GLenum>(blendState_.destinationRgb),
+                                     static_cast<GLenum>(blendState_.sourceAlpha), static_cast<GLenum>(blendState_.destinationAlpha));
+                glBlendEquationSeparatei(0, static_cast<GLenum>(blendState_.equationRgb), static_cast<GLenum>(blendState_.equationAlpha));
+                SetIndexed(GL_BLEND, raster_.blend);
+                SetIndexed(GL_SCISSOR_TEST, raster_.scissor);
                 for (std::size_t index = 0; index < capabilities_.size(); ++index)
-                    Set(capabilities_[index], enabled_[index]);
+                    Set(capabilities_[index], raster_.enabled[index]);
                 if (fixedRestartSupported_)
                     Set(FixedIndexRestart, fixedRestartEnabled_);
                 for (std::size_t index = 0; index < static_cast<std::size_t>(clipCount_); ++index)
-                    Set(GL_CLIP_DISTANCE0 + static_cast<GLenum>(index), clipEnabled_[index]);
+                    Set(GL_CLIP_DISTANCE0 + static_cast<GLenum>(index), raster_.clipEnabled[index]);
                 glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target_);
                 glDrawBuffers(drawBufferCount_, targetDrawBuffers_.data());
-                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(framebuffer_));
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(bindings_.framebuffer));
             }
 
             MaterialState(const MaterialState &) = delete;
@@ -125,28 +126,10 @@ namespace Horo::Render::Detail {
 
             /** @brief Captures only distinct native resource slots before any caller bindings change. */
             void Capture(const std::span<const OpenGLMaterialDrawCommand> commands) noexcept {
-                for (const auto &command : commands) {
-                    for (const auto &slot : command.slots) {
-                        if (slot.kind == MaterialResidentResourceKind::Buffer) {
-                            auto &buffer = buffers_[slot.binding];
-                            if (buffer.used)
-                                continue;
-                            glGetIntegeri_v(GL_UNIFORM_BUFFER_BINDING, slot.binding, &buffer.object);
-                            glGetInteger64i_v(GL_UNIFORM_BUFFER_START, slot.binding, &buffer.offset);
-                            glGetInteger64i_v(GL_UNIFORM_BUFFER_SIZE, slot.binding, &buffer.size);
-                            buffer.used = true;
-                        } else {
-                            auto &texture = textures_[slot.binding];
-                            if (texture.used)
-                                continue;
-                            glActiveTexture(GL_TEXTURE0 + slot.binding);
-                            glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture.texture);
-                            glGetIntegeri_v(GL_SAMPLER_BINDING, slot.binding, &texture.sampler);
-                            texture.used = true;
-                        }
-                    }
-                }
-                glActiveTexture(static_cast<GLenum>(activeTexture_));
+                for (const auto &command : commands)
+                    for (const auto &slot : command.slots)
+                        CaptureSlot(slot);
+                glActiveTexture(static_cast<GLenum>(bindings_.activeTexture));
             }
 
             /** @brief Selects deterministic state at the admitted attachment without changing higher indexed draw state. */
@@ -169,7 +152,7 @@ namespace Horo::Render::Detail {
                     glClearColor(color.red, color.green, color.blue, color.alpha);
                     clear |= GL_COLOR_BUFFER_BIT;
                 }
-                if (request.depthClear) {
+                if (request.depthClear.has_value()) {
                     glDepthMask(GL_TRUE);
                     glClearDepth(*request.depthClear);
                     clear |= GL_DEPTH_BUFFER_BIT;
@@ -179,6 +162,27 @@ namespace Horo::Render::Detail {
             }
 
         private:
+            /** @brief Captures each distinct buffer/texture unit exactly once before encoding changes it. */
+            void CaptureSlot(const OpenGLMaterialSlot &slot) noexcept {
+                if (slot.kind == MaterialResidentResourceKind::Buffer) {
+                    auto &buffer = buffers_[slot.binding];
+                    if (buffer.used)
+                        return;
+                    glGetIntegeri_v(GL_UNIFORM_BUFFER_BINDING, slot.binding, &buffer.object);
+                    glGetInteger64i_v(GL_UNIFORM_BUFFER_START, slot.binding, &buffer.offset);
+                    glGetInteger64i_v(GL_UNIFORM_BUFFER_SIZE, slot.binding, &buffer.size);
+                    buffer.used = true;
+                    return;
+                }
+                auto &texture = textures_[slot.binding];
+                if (texture.used)
+                    return;
+                glActiveTexture(GL_TEXTURE0 + slot.binding);
+                glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture.texture);
+                glGetIntegeri_v(GL_SAMPLER_BINDING, slot.binding, &texture.sampler);
+                texture.used = true;
+            }
+
             static void Set(const GLenum capability, const bool enabled) noexcept {
                 if (enabled)
                     glEnable(capability);
@@ -194,13 +198,15 @@ namespace Horo::Render::Detail {
             }
 
             struct TextureState {
-                GLint texture{}, sampler{};
+                GLint texture{};
+                GLint sampler{};
                 bool used{false};
             };
 
             struct BufferState {
                 GLint object{};
-                GLint64 offset{}, size{};
+                GLint64 offset{};
+                GLint64 size{};
                 bool used{false};
             };
 
@@ -217,20 +223,56 @@ namespace Horo::Render::Detail {
                                                       GL_SAMPLE_COVERAGE,
                                                       GL_SAMPLE_MASK,
                                                       GL_PRIMITIVE_RESTART};
+
+            /** @brief Caller object bindings restored after slot-specific state. */
+            struct ObjectBindings {
+                GLint program{};
+                GLint vertexArray{};
+                GLint activeTexture{};
+                GLint uniformBuffer{};
+                GLint framebuffer{};
+            };
+
+            /** @brief Indexed viewport and attachment-clear values borrowed from the caller. */
+            struct ViewportClearState {
+                std::array<float, 4> viewport{};
+                std::array<float, 4> color{};
+                GLdouble depth{};
+            };
+
+            /** @brief Depth, culling, write masks and capability state for the caller's raster configuration. */
+            struct RasterState {
+                GLint depthFunction{};
+                GLint cull{};
+                GLint frontFace{};
+                std::array<GLint, 2> polygonMode{};
+                std::array<GLboolean, 4> colorMask{};
+                GLboolean depthMask{};
+                GLboolean blend{};
+                GLboolean scissor{};
+                std::array<GLboolean, capabilities_.size()> enabled{};
+                std::array<GLboolean, MaximumClipDistances> clipEnabled{};
+            };
+
+            /** @brief Indexed color blending factors and equations restored independently of enablement. */
+            struct BlendState {
+                GLint sourceRgb{};
+                GLint destinationRgb{};
+                GLint sourceAlpha{};
+                GLint destinationAlpha{};
+                GLint equationRgb{};
+                GLint equationAlpha{};
+            };
+
             GLuint target_;
             GLint clipCount_;
-            bool fixedRestartSupported_, fixedRestartEnabled_{false};
-            GLint drawBufferCount_, program_{}, vertexArray_{}, activeTexture_{}, uniformBuffer_{}, framebuffer_{};
-            GLint depthFunction_{}, cull_{}, frontFace_{};
-            GLint blendSourceRgb_{}, blendDestinationRgb_{}, blendSourceAlpha_{}, blendDestinationAlpha_{};
-            GLint blendEquationRgb_{}, blendEquationAlpha_{};
-            std::array<GLint, 2> polygonMode_{};
-            std::array<float, 4> viewport_{}, clearColor_{};
-            GLdouble clearDepth_{};
-            std::array<GLboolean, 4> colorMask_{};
-            GLboolean depthMask_{}, blend_{}, scissor_{};
-            std::array<GLboolean, capabilities_.size()> enabled_{};
-            std::array<GLboolean, MaximumClipDistances> clipEnabled_{};
+            bool fixedRestartSupported_;
+            bool fixedRestartEnabled_{false};
+            GLint drawBufferCount_;
+            ObjectBindings bindings_;
+            ViewportClearState clear_;
+            RasterState raster_;
+            BlendState blendState_;
             std::array<GLenum, 64> targetDrawBuffers_{};
             std::array<TextureState, MaximumBindings> textures_{};
             std::array<BufferState, MaximumBindings> buffers_{};
@@ -257,16 +299,17 @@ namespace Horo::Render::Detail {
                 glEnablei(GL_BLEND, 0);
             glBlendEquationSeparatei(0, GL_FUNC_ADD, GL_FUNC_ADD);
             switch (state.blend) {
-                case RenderBlendMode::Disabled:
+                using enum RenderBlendMode;
+                case Disabled:
                     glBlendFuncSeparatei(0, GL_ONE, GL_ZERO, GL_ONE, GL_ZERO);
                     break;
-                case RenderBlendMode::Alpha:
+                case Alpha:
                     glBlendFuncSeparatei(0, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
                     break;
-                case RenderBlendMode::PremultipliedAlpha:
+                case PremultipliedAlpha:
                     glBlendFuncSeparatei(0, GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
                     break;
-                case RenderBlendMode::Additive:
+                case Additive:
                     glBlendFuncSeparatei(0, GL_ONE, GL_ONE, GL_ONE, GL_ONE);
                     break;
             }
@@ -276,7 +319,8 @@ namespace Horo::Render::Detail {
         Result<OpenGLMaterialContextFeatures> QueryFeatures() {
             if (glGetError() != GL_NO_ERROR)
                 return Result<OpenGLMaterialContextFeatures>::Failure(MakeError(OpenGLBackendErrors::CommandFailed));
-            GLint drawBuffers = 0, clips = 0;
+            GLint drawBuffers = 0;
+            GLint clips = 0;
             glGetIntegerv(GL_MAX_DRAW_BUFFERS, &drawBuffers);
             glGetIntegerv(GL_MAX_CLIP_DISTANCES, &clips);
             if (drawBuffers < 1 || drawBuffers > 64 || clips < 0 || clips > static_cast<GLint>(MaximumClipDistances))
@@ -296,7 +340,8 @@ namespace Horo::Render::Detail {
             const auto features = commands.front().features;
             if (!features.IsValid())
                 return Result<void>::Failure(MakeError(OpenGLBackendErrors::InvalidCapabilities));
-            GLboolean feedback = GL_FALSE, paused = GL_FALSE;
+            GLboolean feedback = GL_FALSE;
+            GLboolean paused = GL_FALSE;
             glGetBooleanv(GL_TRANSFORM_FEEDBACK_BUFFER_ACTIVE, &feedback);
             glGetBooleanv(GL_TRANSFORM_FEEDBACK_BUFFER_PAUSED, &paused);
             if (feedback && !paused)

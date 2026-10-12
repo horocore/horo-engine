@@ -397,6 +397,11 @@ alone.
 contracts. It depends one-way on Foundation and Assets for stable primitives and
 canonical asset identity; runtime registries, evaluators, pose storage,
 presentation extraction, and native animation backends must remain downstream.
+`HoroEngine::AnimationRuntime` is the explicit ANI-002.2 graph instance/evaluation
+owner downstream of `AnimationApi`; it owns prepared per-instance storage and
+transactional fixed-tick pose/cursor/parameter publication, with no scene, renderer,
+platform or backend dependency. Compiler and prepared clip kernels stay in
+`AnimationApi`, while scene activation remains a separate composition consumer.
 
 `HoroEngine::SaveApi` owns canonical save identity, error and inert participant
 descriptor/registry contracts and depends only on Foundation. Runtime consumes

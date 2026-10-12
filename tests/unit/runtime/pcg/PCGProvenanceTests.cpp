@@ -142,11 +142,34 @@ namespace Horo::PCG {
         CheckError(CapturePCGProvenance(invalid), PCGErrors::ProvenanceDuplicate);
         invalid = Candidate();
         invalid.inputs.clear();
-        for (std::uint64_t id = 1; id <= 64; ++id)
+        for (std::uint64_t id = 1; id <= MaximumPCGProvenanceInputs; ++id)
             invalid.inputs.push_back({Id<PCGInputId>(id), 1, Digest(1), PCGInputDeterminism::Deterministic});
         CHECK(CapturePCGProvenance(invalid).HasValue());
-        invalid.inputs.push_back({Id<PCGInputId>(65), 1, Digest(1), PCGInputDeterminism::Deterministic});
+        invalid.inputs.push_back({Id<PCGInputId>(MaximumPCGProvenanceInputs + 1), 1, Digest(1), PCGInputDeterminism::Deterministic});
         CheckError(CapturePCGProvenance(invalid), PCGErrors::ProvenanceCapacityExceeded);
+    }
+
+    TEST_CASE("PCG provenance admits full Standard and High input boundaries without losing seed evidence", "[unit][pcg][provenance]") {
+        for (const std::size_t count : {128U, 512U}) {
+            CAPTURE(count);
+            auto candidate = Candidate();
+            candidate.inputs.clear();
+            for (std::uint64_t id = 1; id <= count; ++id)
+                candidate.inputs.push_back({Id<PCGInputId>(id), id, Digest(1), PCGInputDeterminism::Deterministic});
+            const auto first = CapturePCGProvenance(candidate);
+            REQUIRE(first.HasValue());
+            REQUIRE(first.Value().Data().inputs.size() == count);
+            std::ranges::reverse(candidate.inputs);
+            const auto reordered = CapturePCGProvenance(candidate);
+            REQUIRE(reordered.HasValue());
+            CHECK(first.Value().Key() == reordered.Value().Key());
+            candidate.inputs.front().content = Digest(2);
+            const auto changed = CapturePCGProvenance(candidate);
+            REQUIRE(changed.HasValue());
+            CHECK(changed.Value().Key() != first.Value().Key());
+            CHECK(changed.Value().Seed(Id<SourceSampleId>(40)).Value() != first.Value().Seed(Id<SourceSampleId>(40)).Value());
+            CHECK(ValidatePCGProvenanceReuse(first.Value(), changed.Value()).HasError());
+        }
     }
 
     TEST_CASE("PCG output hashes ignore execution attempt and input order", "[unit][pcg][provenance]") {
@@ -182,5 +205,20 @@ namespace Horo::PCG {
         CHECK(replacement.Data().graph.revision == Id<GraphRevision>(3));
         CheckError(ValidatePCGProvenanceReuse(oldRoot, replacement), PCGErrors::ProvenanceStale);
         CHECK(oldRoot.Seed(Id<SourceSampleId>(40)).HasValue());
+    }
+
+    TEST_CASE("PCG retained sample seed uses the unchanged schema-one domain and network words", "[unit][pcg][provenance]") {
+        Sha256Digest key;
+        for (std::size_t index = 0; index < key.bytes.size(); ++index)
+            key.bytes[index] = static_cast<std::uint8_t>(index);
+        // Independently fixed SHA-256 golden: HPCGSEED + version 1 + bytes 0..31 + network-order sample.
+        CHECK(DerivePCGSampleSeed(key, Id<SourceSampleId>(1)).Value() == 0x5aab42c0f82f8051ULL);
+        CHECK(DerivePCGSampleSeed(key, Id<SourceSampleId>(40)).Value() == 0xd7e828bb097e968cULL);
+        CHECK(DerivePCGSampleSeed(key, Id<SourceSampleId>(41)).Value() == 0x6efdf3e2ab35bc0eULL);
+        CheckError(DerivePCGSampleSeed(key, {}), PCGErrors::ProvenanceInvalid);
+        const auto captured = CapturePCGProvenance(Candidate());
+        REQUIRE(captured.HasValue());
+        const auto &root = captured.Value();
+        CHECK(DerivePCGSampleSeed(root.Key(), Id<SourceSampleId>(40)).Value() == root.Seed(Id<SourceSampleId>(40)).Value());
     }
 }  // namespace Horo::PCG

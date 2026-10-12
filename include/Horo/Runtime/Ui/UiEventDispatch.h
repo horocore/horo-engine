@@ -20,7 +20,42 @@ namespace Horo::Runtime::Ui {
         PointerRelease,
         Submit,
         Cancel,
+        Gesture,
         Count,
+    };
+
+    /** @brief Closed UI-local gesture vocabulary; semantic effects still require a routed default decision. */
+    enum class UiGestureKind : std::uint8_t {
+        Press,
+        Release,
+        Tap,
+        DoubleTap,
+        LongPress,
+        PanBegin,
+        PanUpdate,
+        PanEnd,
+        PinchRotate,
+        DragBegin,
+        DragUpdate,
+        Drop,
+        Cancel,
+        HoverEnter,
+        HoverMove,
+        HoverLeave,
+        Count
+    };
+
+    /** @brief Owned bounded gesture evidence, with no payload callback, device handle or application object. */
+    struct UiGestureEvent final {
+        UiGestureKind kind{UiGestureKind::Count};
+        std::uint32_t pointer{}; /**< Owner-local pointer, or zero for the keyboard/accessibility alternative. */
+        UiElementHandle source;  /**< Exact original presented source; a drop's routed target may differ. */
+        UiLogicalPoint delta;
+        double scale{1.0}; /**< Finite positive relative two-contact scale. */
+        double rotation{}; /**< Finite relative angle in radians. */
+        bool accessible{}; /**< Explicit focused alternative, not synthetic physical input. */
+        /** @brief Checks closed kinds, finite geometry and exact source representation. @return Whether dispatch may inspect it. */
+        [[nodiscard]] bool IsValid() const noexcept;
     };
 
     /** @brief Ordered routed-event phase. */
@@ -33,10 +68,11 @@ namespace Horo::Runtime::Ui {
 
     /** @brief Immutable event payload already normalized and targeted by the Runtime UI owner. */
     struct UiRoutedEvent final {
-        UiEventKind kind{};               /**< Typed normalized event kind. */
-        std::uint64_t sequence{};         /**< Non-zero owner-ordered event sequence. */
-        UiLogicalPoint logicalPosition{}; /**< Canvas-space point when hasLogicalPosition is true. */
-        bool hasLogicalPosition{};        /**< Whether the event carries pointer position. */
+        UiEventKind kind{};                    /**< Typed normalized event kind. */
+        std::uint64_t sequence{};              /**< Non-zero owner-ordered event sequence. */
+        UiLogicalPoint logicalPosition{};      /**< Canvas-space point when hasLogicalPosition is true. */
+        bool hasLogicalPosition{};             /**< Whether the event carries pointer position. */
+        std::optional<UiGestureEvent> gesture; /**< Present only for Gesture; copied, never a lazy query. */
     };
 
     /** @brief Exact immutable source lineage and route boundary for one dispatch. */

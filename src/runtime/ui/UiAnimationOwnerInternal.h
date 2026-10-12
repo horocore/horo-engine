@@ -146,7 +146,14 @@ namespace Horo::Runtime::Ui {
         std::uint64_t commandRevision{1};
         std::uint32_t pendingCommands{};
         std::uint64_t lastSourceFrame{};
-        bool stopped{};
-        bool draining{};
+
+        /** @brief Owner-thread lifecycle admission; callback dispatch excludes reload, publication and reclamation. */
+        struct LifecycleState final {
+            bool stopped{};
+            bool draining{};
+            bool pointerDispatching{};
+        };
+
+        LifecycleState lifecycle;
     };
 }  // namespace Horo::Runtime::Ui

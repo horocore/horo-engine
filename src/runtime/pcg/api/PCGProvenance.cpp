@@ -15,7 +15,6 @@ namespace Horo::PCG {
     };
 
     namespace {
-        constexpr std::size_t MaximumInputs = 64;
         constexpr std::size_t MaximumProviders = 64;
         constexpr std::size_t MaximumOutputs = 16'384;
 
@@ -136,8 +135,14 @@ namespace Horo::PCG {
             return Failure<std::uint64_t>(PCGErrors::ProvenanceInvalid);
         if (!IsDeterministic(Data()))
             return Failure<std::uint64_t>(PCGErrors::ProvenanceTierUnsupported);
+        return DerivePCGSampleSeed(Key(), sample);
+    }
+
+    /** @copydoc DerivePCGSampleSeed */
+    Result<std::uint64_t> DerivePCGSampleSeed(const Sha256Digest &key, const SourceSampleId sample) {
+        if (!sample.IsValid())
+            return Failure<std::uint64_t>(PCGErrors::ProvenanceInvalid);
         std::array<std::uint8_t, 49> bytes{'H', 'P', 'C', 'G', 'S', 'E', 'E', 'D', 1};
-        const Sha256Digest key = Key();
         std::ranges::copy(key.bytes, bytes.begin() + 9);
         const auto sampleBytes = SerializeStableIdentity(sample);
         std::ranges::copy(sampleBytes, bytes.begin() + 41);
@@ -152,7 +157,7 @@ namespace Horo::PCG {
     Result<PCGProvenance> CapturePCGProvenance(PCGProvenanceCandidate candidate, const PCGProvenanceAdmission admission) {
         if (admission != PCGProvenanceAdmission::Accepting)
             return Failure<PCGProvenance>(PCGErrors::ProvenanceLifecycleUnavailable);
-        if (candidate.inputs.size() > MaximumInputs || candidate.providers.size() > MaximumProviders)
+        if (candidate.inputs.size() > MaximumPCGProvenanceInputs || candidate.providers.size() > MaximumProviders)
             return Failure<PCGProvenance>(PCGErrors::ProvenanceCapacityExceeded);
         if (!candidate.graph.IsValid() || !candidate.world.IsValid() || !candidate.node.IsValid() || candidate.numericPolicyVersion == 0 ||
             !HasContent(candidate.graphContent))

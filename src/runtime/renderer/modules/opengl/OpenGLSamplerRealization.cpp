@@ -66,8 +66,9 @@ namespace Horo::Render::Detail {
             return Result<std::uint32_t>::Failure(MakeError(OpenGLBackendErrors::ResourceCreationFailed));
         const bool linearMin = descriptor.minFilter == RenderSamplerFilter::Linear;
         const bool linearMip = descriptor.mipmapMode == RenderSamplerMipmapMode::Linear;
-        const auto minification = linearMin ? (linearMip ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR_MIPMAP_NEAREST)
-                                            : (linearMip ? GL_NEAREST_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_NEAREST);
+        const auto linearMipmap = linearMin ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_LINEAR;
+        const auto nearestMipmap = linearMin ? GL_LINEAR_MIPMAP_NEAREST : GL_NEAREST_MIPMAP_NEAREST;
+        const auto minification = linearMip ? linearMipmap : nearestMipmap;
         functions.parameterInteger(sampler, GL_TEXTURE_MIN_FILTER, static_cast<std::int32_t>(minification));
         functions.parameterInteger(sampler, GL_TEXTURE_MAG_FILTER,
                                    descriptor.magFilter == RenderSamplerFilter::Linear ? GL_LINEAR : GL_NEAREST);

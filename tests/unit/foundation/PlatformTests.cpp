@@ -2,9 +2,11 @@
 #include "Horo/Platform/ConfigurationFileStore.h"
 #include "Horo/Platform/ExternalProcess.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -19,11 +21,42 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #else
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
 
 namespace {
+#if !defined(_WIN32)
+    /** @brief Owns an exclusively created mode-0700 marker directory in the test working directory. */
+    class PrivateProcessDirectory final {
+    public:
+        PrivateProcessDirectory() {
+            REQUIRE(mkdtemp(directory_.data()) != nullptr);
+        }
+
+        ~PrivateProcessDirectory() {
+            if (const int descriptor = open(directory_.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW); descriptor >= 0) {
+                static_cast<void>(unlinkat(descriptor, "heartbeat", 0));
+                close(descriptor);
+            }
+            static_cast<void>(rmdir(directory_.c_str()));
+        }
+
+        PrivateProcessDirectory(const PrivateProcessDirectory &) = delete;
+        PrivateProcessDirectory &operator=(const PrivateProcessDirectory &) = delete;
+        PrivateProcessDirectory(PrivateProcessDirectory &&) = delete;
+        PrivateProcessDirectory &operator=(PrivateProcessDirectory &&) = delete;
+
+        [[nodiscard]] std::filesystem::path Marker() const {
+            return std::filesystem::absolute(directory_) / "heartbeat";
+        }
+
+    private:
+        std::string directory_{"horo-posix-process-XXXXXX"};
+    };
+#endif
+
     const Horo::ErrorCodeDescriptor kInjectedStoreFailure{
         .domain = Horo::ErrorDomainId{"test.configuration-store"},
         .code = Horo::ErrorCode{"injected_failure"},
@@ -587,6 +620,7 @@ namespace {
         const auto failed = runner.Run(failure, {});
         REQUIRE(failed.HasValue());
         REQUIRE(failed.Value().reason == Horo::ProcessTerminationReason::Exited);
+        REQUIRE(failed.Value().stopCause == Horo::ProcessStopCause::None);
         REQUIRE(failed.Value().exitCode == 17);
 
         std::vector<Horo::ProcessOutputLine> output;
@@ -637,12 +671,35 @@ namespace {
 
         const Horo::ExternalProcessRequest valid{.executable = HORO_PROCESS_TEST_CHILD, .arguments = {"exit-failure"}};
         for (int attempt = 0; attempt < 8; ++attempt) {
+            REQUIRE(runner.Run(invalid, {}).HasError());
             const auto recovered = runner.Run(valid, {});
             REQUIRE(recovered.HasValue());
             REQUIRE(recovered.Value().reason == Horo::ProcessTerminationReason::Exited);
             REQUIRE(recovered.Value().stopCause == Horo::ProcessStopCause::None);
             REQUIRE(recovered.Value().exitCode == 17);
         }
+    }
+
+    TEST_CASE("External process drains a large finite tail without descendant cleanup", "[unit][platform][process]") {
+        Horo::NativeExternalProcessRunner runner;
+        std::array<std::size_t, 2> lines{};
+        const Horo::ExternalProcessRequest request{
+            .executable = HORO_PROCESS_TEST_CHILD,
+            .arguments = {"finite-tail"},
+            .maximumLineBytes = 1024,
+            .onOutput =
+                [&lines](Horo::ProcessOutputLine line) {
+            REQUIRE(line.text == std::string(1024, line.stream == Horo::ProcessOutputStream::StandardOutput ? 'o' : 'e'));
+            REQUIRE_FALSE(line.truncated);
+            ++lines[line.stream == Horo::ProcessOutputStream::StandardOutput ? 0 : 1];
+        },
+        };
+        const auto result = runner.Run(request, {});
+        REQUIRE(result.HasValue());
+        REQUIRE(result.Value().reason == Horo::ProcessTerminationReason::Exited);
+        REQUIRE(result.Value().stopCause == Horo::ProcessStopCause::None);
+        REQUIRE(result.Value().exitCode == 17);
+        REQUIRE((lines == std::array<std::size_t, 2>{256, 256}));
     }
 
     TEST_CASE("External process cancellation and forced timeout keep their stop causes", "[unit][platform][process]") {
@@ -743,6 +800,29 @@ namespace {
     }
 #endif
 #if !defined(_WIN32)
+    TEST_CASE("Exited POSIX parent cleans up a descendant retaining captured pipes", "[unit][platform][process]") {
+        const PrivateProcessDirectory directory;
+        const auto marker = directory.Marker();
+        Horo::NativeExternalProcessRunner runner;
+        const Horo::ExternalProcessRequest tree{
+            .executable = HORO_PROCESS_TEST_CHILD,
+            .arguments = {"exiting-tree", marker.string()},
+            .timeout = std::chrono::seconds{5},
+            .gracefulTermination = std::chrono::milliseconds{100},
+            .maximumDrainDuration = std::chrono::milliseconds{100},
+        };
+        const auto started = std::chrono::steady_clock::now();
+        const auto result = runner.Run(tree, {});
+        REQUIRE(result.HasValue());
+        REQUIRE(result.Value().stopCause == Horo::ProcessStopCause::DescendantCleanup);
+        REQUIRE(result.Value().exitCode == 0);
+        REQUIRE(std::chrono::steady_clock::now() - started < tree.timeout);
+        REQUIRE(std::filesystem::exists(marker));
+        const auto before = std::filesystem::file_size(marker);
+        std::this_thread::sleep_for(std::chrono::milliseconds{100});
+        REQUIRE(std::filesystem::file_size(marker) == before);
+    }
+
     TEST_CASE("External process preserves spontaneous POSIX signal outcome", "[unit][platform][process]") {
         Horo::NativeExternalProcessRunner runner;
         Horo::ExternalProcessRequest request{.executable = HORO_PROCESS_TEST_CHILD, .arguments = {"signalled"}};

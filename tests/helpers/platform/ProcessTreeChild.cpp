@@ -19,13 +19,22 @@
 #endif
 
 namespace {
-    void Heartbeat(const std::filesystem::path &path) {
+    [[noreturn]] void Heartbeat(const std::filesystem::path &path) {
         for (;;) {
             std::ofstream stream{path, std::ios::app};
             stream << 'x';
             stream.close();
             std::this_thread::sleep_for(std::chrono::milliseconds{10});
         }
+    }
+
+    /** @brief Produces a finite multi-drain tail while leaving native pipes to ordinary process teardown. */
+    int WriteFiniteTail() {
+        for (int line = 0; line < 256; ++line) {
+            std::cout << std::string(1024, 'o') << '\n';
+            std::cerr << std::string(1024, 'e') << '\n';
+        }
+        return 17;
     }
 
     [[nodiscard]] bool SpawnDescendant(const char *executable, const char *marker) {
@@ -44,10 +53,19 @@ namespace {
         const pid_t child = fork();
         if (child == 0) {
             Heartbeat(marker);
-            _exit(0);
         }
         return child > 0;
 #endif
+    }
+
+    /** @brief Confirms that a real descendant owns its marker before the leader exits. */
+    int RunExitingTree(const char *executable, const char *marker) {
+        if (!SpawnDescendant(executable, marker))
+            return 3;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{1};
+        while (!std::filesystem::exists(marker) && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds{10});
+        return std::filesystem::exists(marker) ? 0 : 4;
     }
 }  // namespace
 
@@ -86,23 +104,18 @@ int main(const int argc, char **argv) {
         std::cerr << std::string(65536, 'e') << std::flush;
         return 0;
     }
+    if (mode == "finite-tail")
+        return WriteFiniteTail();
     if (mode == "descendant" && argc == 3) {
         Heartbeat(argv[2]);
-        return 0;
     }
     if (mode == "tree" && argc == 3) {
         if (!SpawnDescendant(argv[0], argv[2]))
             return 3;
         std::cout << "ready\n" << std::flush;
     }
-    if (mode == "exiting-tree" && argc == 3) {
-        if (!SpawnDescendant(argv[0], argv[2]))
-            return 3;
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{1};
-        while (!std::filesystem::exists(argv[2]) && std::chrono::steady_clock::now() < deadline)
-            std::this_thread::sleep_for(std::chrono::milliseconds{10});
-        return std::filesystem::exists(argv[2]) ? 0 : 4;
-    }
+    if (mode == "exiting-tree" && argc == 3)
+        return RunExitingTree(argv[0], argv[2]);
     if (mode == "stubborn") {
 #if defined(_WIN32)
         SetConsoleCtrlHandler([](const DWORD) -> BOOL {

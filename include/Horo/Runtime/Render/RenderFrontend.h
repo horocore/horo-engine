@@ -155,7 +155,10 @@ namespace Horo::Render {
         [[nodiscard]] Result<void> Execute(std::span<const RenderPassDescriptor> orderedPasses);
         /** @brief Consumes one bounded prepared material pass, retaining exact generations until native completion.
          * @param pass Ready target/meshes and immutable material leases, borrowed only during this call.
-         * @return Success or typed stage, identity, unsupported or native failure. No frame-hot preparation occurs. */
+         * @return Success or typed stage, identity, unsupported or native failure. No frame-hot preparation occurs.
+         * @details Native exceptions unwind leases and abort the frame before translation to FrameException.
+         * @throws std::bad_alloc If owned error construction cannot allocate, after exception cleanup has completed.
+         * @throws std::length_error If owned error construction exceeds its representation limits. */
         [[nodiscard]] Result<void> ExecuteMaterialPass(const RenderMaterialPass &pass);
 
         /**
@@ -267,6 +270,12 @@ namespace Horo::Render {
                                                         RenderGraphTransientResourcesHandle transientResources = {});
         /** @brief Transfers one acquired material lease to backend completion; failures retain frontend rollback authority. */
         [[nodiscard]] Result<void> ExecuteMaterialRequest(RenderMaterialExecutionRequest request);
+        struct MaterialExecutionOutcome;
+        struct MaterialExecutionInstances;
+        /** @brief Resolves bounded draw identities without acquiring or transferring completion ownership. */
+        [[nodiscard]] Result<void> ResolveMaterialDraws(const RenderMaterialPass &pass, MaterialExecutionInstances &instances) const;
+        /** @brief Contains admission/execution exceptions and completes rollback before allocation-free outcome transport. */
+        [[nodiscard]] MaterialExecutionOutcome ExecuteMaterialPassBoundary(const RenderMaterialPass &pass) noexcept;
         void Abort() noexcept;
         void Release() noexcept;
         /** @brief Enforces the one-shot frame admission gate shared by synchronous and worker routes. */
@@ -557,6 +566,13 @@ namespace Horo::Render {
 
         /** @brief Returns the current state of one generic render-target generation. */
         [[nodiscard]] Result<RenderResourceState> ResourceState(RenderTargetHandle target) const;
+
+        /** @brief Observes a known creation outcome without conflating failures with query errors.
+         * @param operation Exact frontend-issued operation.
+         * @return Pending, Succeeded or Failed; unknown/evicted identities and stopped frontend are typed errors.
+         * @details Failed retains the original diagnostic in ResourceOperationResult. Bounded history can evict
+         * completed operations; callers must preserve ownership when their outcome cannot be proven. */
+        [[nodiscard]] Result<RenderResourceOperationState> ResourceOperationState(ResourceOperationId operation) const;
 
         /** @brief Returns success, pending, or the stored typed result for one resource operation. */
         [[nodiscard]] Result<void> ResourceOperationResult(ResourceOperationId operation) const;

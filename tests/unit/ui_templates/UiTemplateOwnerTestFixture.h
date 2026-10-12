@@ -141,8 +141,11 @@ namespace Horo::UiTemplates::TestSupport {
                                           kind,
                                           kind < UiTemplateValueKind::Style ? "value" : "",
                                           {}};
-        if (kind == UiTemplateValueKind::Style)
-            property.style = UiStylePropertyDescriptor{.id = property.property, .defaultValue = UiStyleColor{}};
+        if (kind == UiTemplateValueKind::Style) {
+            const auto &style = std::get<UiStyleValue>(value);
+            property.style =
+                UiStylePropertyDescriptor{.id = property.property, .category = UiStyleValueCategoryOf(style), .defaultValue = style};
+        }
         UiTemplateSchemaSnapshot schemas{{Kind()}, {property}, {Provider()}};
         auto catalog = UiTemplateCatalog::Create({std::move(source)}, std::move(schemas), {});
         REQUIRE(catalog.HasValue());

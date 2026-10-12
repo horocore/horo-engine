@@ -2,6 +2,7 @@
 
 #include "Horo/Runtime/Ui/UiErrors.h"
 
+#include <cmath>
 #include <new>
 #include <optional>
 #include <utility>
@@ -29,10 +30,24 @@ namespace Horo::Runtime::Ui {
                     return true;
                 case Submit:
                 case Cancel:
+                case Gesture:
                 case Count:
                     return false;
             }
             return false;
+        }
+
+        /** @brief Checks the gesture/position payload before route construction. */
+        bool ValidPayload(const UiRoutedEvent &event) noexcept {
+            return event.kind == UiEventKind::Gesture
+                       ? event.gesture.has_value() && event.gesture->IsValid() && event.hasLogicalPosition != event.gesture->accessible
+                       : !event.gesture.has_value() && IsPointerEvent(event.kind) == event.hasLogicalPosition;
+        }
+
+        /** @brief Validates the event payload and route handles before any callback or route mutation. */
+        bool ValidDispatchInput(const UiEventRoute &route, const UiRoutedEvent &event) noexcept {
+            return IsKnown(event.kind) && event.sequence != 0 && ValidPayload(event) && route.target.IsValid() &&
+                   (!route.modalRoot || route.modalRoot->IsValid());
         }
 
         /** @brief Restores non-reentrant admission on every handler return or exception path. */
@@ -55,6 +70,12 @@ namespace Horo::Runtime::Ui {
             bool &dispatching_;
         };
     }  // namespace
+
+    /** @copydoc UiGestureEvent::IsValid */
+    bool UiGestureEvent::IsValid() const noexcept {
+        return kind < UiGestureKind::Count && source.IsValid() && (accessible ? pointer == 0 : pointer != 0) && std::isfinite(scale) &&
+               scale > 0.0 && std::isfinite(rotation);
+    }
 
     struct UiEventDispatcher::Storage final {
         UiEventDispatcherDescriptor descriptor;
@@ -170,10 +191,11 @@ namespace Horo::Runtime::Ui {
             return Result<UiEventDispatchResult>::Failure(DispatchError(UiErrors::EventDispatchLifecycleUnavailable));
         if (storage_->dispatching)
             return Result<UiEventDispatchResult>::Failure(DispatchError(UiErrors::EventDispatchReentrant));
-        const bool eventValid = IsKnown(event.kind) && event.sequence != 0 && IsPointerEvent(event.kind) == event.hasLogicalPosition;
-        if (const bool routeValid = route.target.IsValid() && (!route.modalRoot || route.modalRoot->IsValid()); !eventValid || !routeValid)
+        if (!ValidDispatchInput(route, event))
             return Result<UiEventDispatchResult>::Failure(DispatchError(UiErrors::EventDispatchInvalid));
         if (!storage_->Matches(tree, route))
+            return Result<UiEventDispatchResult>::Failure(DispatchError(UiErrors::EventDispatchSourceStale));
+        if (event.gesture && (event.gesture->source.ownership != route.instance.ownership || tree.Get(event.gesture->source).HasError()))
             return Result<UiEventDispatchResult>::Failure(DispatchError(UiErrors::EventDispatchSourceStale));
         if (const auto built = storage_->BuildRoute(tree, route); built.HasError())
             return Result<UiEventDispatchResult>::Failure(built.ErrorValue());

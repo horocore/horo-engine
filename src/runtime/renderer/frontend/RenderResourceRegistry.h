@@ -88,6 +88,10 @@ namespace Horo::Render::Detail {
         /** @brief Cancels a still-pending exact reservation using its pre-owned rollback error; terminal records are unchanged. */
         void RollbackPending(RenderResourceClass resourceClass, ResourceReservation reservation) noexcept;
         [[nodiscard]] Result<RenderResourceState> State(RenderResourceClass resourceClass, RenderResourceIdentity identity) const;
+        /** @brief Returns a known active-registry outcome, keeping unknown/stopped query failures separate.
+         * @param operation Exact registry-issued identity.
+         * @return Known outcome or typed unknown/evicted/stopped query error. */
+        [[nodiscard]] Result<RenderResourceOperationState> OperationState(ResourceOperationId operation) const;
         [[nodiscard]] Result<void> OperationResult(ResourceOperationId operation) const;
         [[nodiscard]] Result<std::uint64_t> BackendInstance(RenderResourceClass resourceClass, RenderResourceIdentity identity) const;
 
@@ -141,6 +145,8 @@ namespace Horo::Render::Detail {
             std::uint64_t completed{0};
         };
 
+        /** @brief Resolves the single authoritative bounded operation record without copying its diagnostic. */
+        [[nodiscard]] Result<const OperationRecord *> LookupOperation(ResourceOperationId operation) const;
         [[nodiscard]] Result<std::size_t> Validate(RenderResourceClass resourceClass, RenderResourceIdentity identity) const;
         [[nodiscard]] Result<void> ValidateReservationAdmission() const;
         [[nodiscard]] Result<void> ValidateDependencies(std::span<const RenderResourceIdentity> dependencies) const;

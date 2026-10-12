@@ -14,6 +14,14 @@ static_assert(!std::is_copy_constructible_v<UiAnimationRuntimeComposition>);
 static_assert(std::is_move_constructible_v<UiAnimationRuntimeComposition>);
 static_assert(!std::is_default_constructible_v<UiAnimationRuntimeParticipant>);
 static_assert(!std::is_copy_constructible_v<UiAnimationRuntimeParticipant>);
+static_assert(!std::is_move_constructible_v<UiAnimationRuntimeParticipant>);
+static_assert(std::is_base_of_v<Horo::Runtime::Ui::UiPointerInteractionHost, UiAnimationRuntimeParticipant>);
+using PointerDispatchSignature = Horo::Result<Horo::Runtime::Ui::UiPointerInteractionResult> (UiAnimationRuntimeParticipant::*)(
+    const Horo::Runtime::Ui::UiAnimationPointerInput &, Horo::Runtime::Ui::UiEventHandler &);
+static_assert(std::is_same_v<decltype(&UiAnimationRuntimeParticipant::PumpPointers), PointerDispatchSignature>);
+using PointerEligibilitySignature =
+    bool (UiAnimationRuntimeParticipant::*)(const Horo::Runtime::Ui::UiPointerCaptureContext &) const noexcept;
+static_assert(std::is_same_v<decltype(&UiAnimationRuntimeParticipant::PointerInputEligible), PointerEligibilitySignature>);
 static_assert(std::is_default_constructible_v<UiAnimationClockController>);
 static_assert(!std::is_copy_constructible_v<UiAnimationClockController>);
 static_assert(std::is_nothrow_move_constructible_v<UiAnimationClockController>);

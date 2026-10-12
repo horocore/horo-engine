@@ -9,6 +9,7 @@
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -96,6 +97,93 @@ namespace {
 
         std::error_code cleanupError;
         std::filesystem::remove_all(projectRoot, cleanupError);
+    }
+
+    /** @brief Removes the test project after controller and snapshot owners have been destroyed. */
+    struct ScopedSourceProjectCleanup final {
+        const std::filesystem::path &path;
+
+        ~ScopedSourceProjectCleanup() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+    };
+
+    /** @brief Exercises actual Save As and explicit close commands after a conflicted Save All. */
+    void CheckSourceRelocationAndClose(TestWorkspaceController &controller, const SourceDocumentSnapshot &saved,
+                                       std::uint64_t editedRevision) {
+        EditorWorkspaceViewCommandData command;
+        command.command = EditorWorkspaceViewCommand::SaveSourceDocumentAs;
+        command.sourceSave = SourceSaveRequest{saved.Identity().instance, editedRevision, {}};
+        command.stringPayload = "renamed.cpp";
+        controller.ProcessCommand(command);
+        REQUIRE(controller.SourceSaveOutcome()->HasValue());
+        const auto relocated = controller.SourceSaveOutcome()->Value().snapshot;
+        CHECK(relocated.Identity().instance == saved.Identity().instance);
+        CHECK(relocated.Identity().key.source.Value() == "renamed.cpp");
+        command = {};
+        command.command = EditorWorkspaceViewCommand::CloseSourceDocument;
+        command.sourceSave = SourceSaveRequest{relocated.Identity().instance, relocated.Revision(), {}};
+        command.sourceCloseDecision = SourceCloseDecision::Cancel;
+        controller.ProcessCommand(command);
+        REQUIRE(controller.SourceCloseOutcome());
+        REQUIRE(controller.SourceCloseOutcome()->HasValue());
+        CHECK_FALSE(controller.SourceCloseOutcome()->Value());
+        CHECK(controller.SourceDocuments().Snapshot(relocated.Identity().instance).HasValue());
+        command.sourceCloseDecision = SourceCloseDecision::Save;
+        controller.ProcessCommand(command);
+        REQUIRE(controller.SourceCloseOutcome()->HasValue());
+        CHECK(controller.SourceCloseOutcome()->Value());
+        CHECK(controller.SourceDocuments().Snapshot(relocated.Identity().instance).HasError());
+        CHECK(relocated.Text() == "nextedited");
+    }
+
+    TEST_CASE("Workspace commands publish source saves and expose conflict and close outcomes", "[unit][editor][source][save]") {
+        const auto projectRoot =
+            std::filesystem::temp_directory_path() /
+            ("horo-workspace-source-save-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directory(projectRoot);
+
+        ScopedSourceProjectCleanup cleanup{projectRoot};
+
+        {
+            std::ofstream file(projectRoot / "code.cpp");
+            file << "base";
+        }
+        std::optional<SourceDocumentSnapshot> opened;
+        TestWorkspaceController controller{projectRoot, {}, [&](const SourceOpenResult &result) {
+            opened = result.sourceSnapshot;
+            return true;
+        }};
+        EditorWorkspaceViewCommandData command;
+        command.command = EditorWorkspaceViewCommand::OpenSourceFile;
+        command.sourceOpenRequest = SourceOpenRequest{.path = "code.cpp"};
+        controller.ProcessCommand(command);
+        REQUIRE(opened);
+        auto edited = controller.SourceDocuments().Edit(opened->Identity().instance, {opened->Revision(), 0, 4, "edited"});
+        REQUIRE(edited.HasValue());
+        command = {};
+        command.command = EditorWorkspaceViewCommand::SaveSourceDocument;
+        command.sourceSave = SourceSaveRequest{opened->Identity().instance, edited.Value().Revision(), {}};
+        controller.ProcessCommand(command);
+        REQUIRE(controller.SourceSaveOutcome());
+        REQUIRE(controller.SourceSaveOutcome()->HasValue());
+        CHECK_FALSE(controller.SourceSaveOutcome()->Value().snapshot.Dirty());
+        const auto saved = controller.SourceSaveOutcome()->Value().snapshot;
+        edited = controller.SourceDocuments().Edit(saved.Identity().instance, {saved.Revision(), 0, 0, "next"});
+        REQUIRE(edited.HasValue());
+        {
+            std::ofstream file(projectRoot / "code.cpp");
+            file << "external";
+        }
+        command = {};
+        command.command = EditorWorkspaceViewCommand::SaveAllSourceDocuments;
+        controller.ProcessCommand(command);
+        REQUIRE(controller.SourceSaveAllOutcome());
+        REQUIRE(controller.SourceSaveAllOutcome()->HasValue());
+        REQUIRE(controller.SourceSaveAllOutcome()->Value().size() == 1);
+        CHECK(controller.SourceSaveAllOutcome()->Value().front().result.HasError());
+        CheckSourceRelocationAndClose(controller, saved, edited.Value().Revision());
     }
 
 }  // namespace
