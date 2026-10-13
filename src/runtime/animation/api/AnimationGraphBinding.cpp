@@ -1,6 +1,7 @@
 #include "AnimationGraphCompilerInternal.h"
 
 #include <map>
+#include <type_traits>
 
 namespace Horo::Animation::GraphCompileDetail {
     namespace {
@@ -42,6 +43,62 @@ namespace Horo::Animation::GraphCompileDetail {
             std::vector<GraphInstructionOccurrence> occurrences{};
             GraphMemoryRequirements memory{};
         };
+
+        /** @brief Resolves a canonical sparse layer mask against the exact skeleton. */
+        Result<void> BindMask(const GraphBlendNode &blend, GraphInstructionOccurrence &occurrence,
+                              const AnimationGraphCompileContext &context) {
+            const auto &joints = context.skeleton->Data().joints;
+            occurrence.jointMask.assign(joints.size(), blend.mask.defaultWeight);
+            for (const auto &entry : blend.mask.joints) {
+                const auto found = std::ranges::find(joints, entry.joint, &SkeletonJoint::id);
+                if (found == joints.end())
+                    return Result<void>::Failure(Failure(GraphBindingMismatch, occurrence.source));
+                occurrence.jointMask[static_cast<std::size_t>(found - joints.begin())] = entry.weight;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Binds the exact additive declaration and authored track coverage. */
+        Result<void> BindClipCoverage(const GraphClipNode &clipNode, GraphInstructionOccurrence &occurrence,
+                                      const AnimationGraphCompileContext &context) {
+            const auto &joints = context.skeleton->Data().joints;
+            const auto clip = std::ranges::find_if(context.clips, [&clipNode](const auto &value) {
+                return value.Data().descriptor.id == clipNode.clip;
+            });
+            const auto &descriptor = clip->Data().descriptor;
+            if (const bool additive = descriptor.kind == AnimationClipKind::Additive;
+                additive != clipNode.referencePose.has_value() ||
+                (additive && (!descriptor.referencePose || descriptor.referencePose->id != *clipNode.referencePose)))
+                return Result<void>::Failure(Failure(GraphBindingMismatch, occurrence.source));
+            occurrence.clipCoverage.assign(joints.size(), 0);
+            for (const auto &track : clip->Data().tracks) {
+                const auto found = std::ranges::find(joints, track.joint, &SkeletonJoint::id);
+                if (found == joints.end())
+                    return Result<void>::Failure(Failure(GraphBindingMismatch, occurrence.source));
+                occurrence.clipCoverage[static_cast<std::size_t>(found - joints.begin())] = 1;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Resolves typed writer policy once and charges immutable dense storage. */
+        Result<void> BindComposition(const GraphInstruction &instruction, GraphInstructionOccurrence &occurrence, OccurrencePlan &plan,
+                                     const AnimationGraphCompileContext &context) {
+            if (const auto bound = std::visit(
+                    [&occurrence, &context]<typename Payload>(const Payload &payload) {
+                if constexpr (std::is_same_v<Payload, GraphBlendNode>)
+                    return BindMask(payload, occurrence, context);
+                else if constexpr (std::is_same_v<Payload, GraphClipNode>)
+                    return BindClipCoverage(payload, occurrence, context);
+                else
+                    return Result<void>::Success();
+            }, instruction.payload);
+                bound.HasError())
+                return bound;
+            plan.memory.compositionEntries += occurrence.jointMask.size() + occurrence.clipCoverage.size();
+            if (plan.memory.compositionEntries > context.limits.poseTransforms)
+                return Result<void>::Failure(Failure(GraphLimitExceeded));
+            return Result<void>::Success();
+        }
 
         /** @brief Allocates one compile-time working slot only within exact captured storage limits. */
         Result<GraphWorkingSlot> AllocateSlot(GraphValueType type, OccurrencePlan &plan, const AnimationGraphCompileContext &context,
@@ -128,7 +185,7 @@ namespace Horo::Animation::GraphCompileDetail {
                 occurrence.clipPlayer = plan.memory.clipPlayers++;
                 occurrence.clipBindingIndex = static_cast<std::uint32_t>(Find(dependencies.clips, clip->clip) - dependencies.clips.data());
             }
-            return Result<void>::Success();
+            return BindComposition(instruction, occurrence, plan, context);
         }
 
         /** @brief Creates the callee's interface bindings and stable path from the exact caller operands. */

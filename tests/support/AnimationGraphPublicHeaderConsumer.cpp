@@ -5,6 +5,9 @@
 
 #include <type_traits>
 static_assert(!std::is_convertible_v<Horo::Animation::GraphNodeId, Horo::Animation::GraphPinId>);
+static_assert(Horo::Animation::GraphBlendNode{}.mode == Horo::Animation::GraphBlendMode::Normalized);
+static_assert(Horo::Animation::GraphBlendNode{}.missingJoint == Horo::Animation::GraphMissingJointPolicy::SkeletonReference);
+static_assert(Horo::Animation::CurrentAnimationGraphSchemaVersion == 3);
 
 int main() {
     const auto unavailable = Horo::Animation::AnimationGraphInstance::Create({}, {});
