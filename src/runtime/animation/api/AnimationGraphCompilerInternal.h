@@ -11,6 +11,8 @@ namespace Horo::Animation::GraphCompileDetail {
     Error Failure(const ErrorCodeDescriptor &code, GraphSourceLocation location = {});
     /** @brief Checks captured admission/cancellation at bounded compiler checkpoints. */
     Result<void> Admission(const AnimationGraphCompileContext &context);
+    /** @brief Admits whole-asset identity, structural counts and caller-lowerable budgets before copying any candidate storage. */
+    Result<void> PreflightGraph(const AnimationGraphData &data, const AnimationGraphCompileContext &context);
     /** @brief Validates exact typed node settings and semantic pin shape. */
     Result<void> ValidatePins(const GraphNode &node, const GraphDefinition &definition, const AnimationGraphData &data);
 

@@ -221,12 +221,56 @@ namespace Horo::Animation {
             return AdmitClipWork(assets, context);
         }
 
+        /** @brief Allocates all scalar, pose, control and publication workspaces before the instance can execute. */
+        GraphInstanceFailure PrepareWorkspace(Detail::GraphInstanceState &state, const GraphInstanceAssets &assets) {
+            const auto &memory = state.program->Memory();
+            state.poses.transforms.resize(static_cast<std::size_t>(memory.poseTransforms));
+            state.poses.coverage.resize(static_cast<std::size_t>(memory.poseTransforms));
+            std::size_t scalars = 0;
+            for (std::size_t type = 1; type < memory.workingSlots.size(); ++type) {
+                state.scalars.offsets[type] = scalars;
+                scalars += memory.workingSlots[type];
+            }
+            state.scalars.values.resize(scalars);
+            state.players.resize(memory.clipPlayers);
+            state.candidate.players.resize(memory.clipPlayers);
+            if (const auto failure = Detail::PrepareGraphStateMachines(state); failure != GraphInstanceFailure::None)
+                return failure;
+            state.parameters.resize(memory.parameters);
+            state.candidate.parameters.resize(memory.parameters);
+            state.queuedTriggers.resize(memory.parameters);
+            for (auto &parameters : state.publishedParameters)
+                parameters.resize(memory.parameters);
+            state.curves.publications.assign(assets.curves.begin(), assets.curves.end());
+            state.curves.parameters.reserve(assets.curves.size());
+            for (const auto &curve : assets.curves) {
+                const auto declarations = state.program->Parameters();
+                const auto found = std::ranges::lower_bound(declarations, curve->Parameter(), {}, &GraphParameter::id);
+                state.curves.parameters.push_back(static_cast<std::size_t>(found - declarations.begin()));
+            }
+            for (auto &pose : state.publishedPoses)
+                pose.resize(state.program->SkeletonBinding().joints);
+            return GraphInstanceFailure::None;
+        }
+
         /** @brief Owner-thread gate does not inspect mutable runtime state from another thread. */
         GraphInstanceOutcome Owner(const Detail::GraphInstanceState *state) noexcept {
             if (!state)
                 return {GraphInstanceFailure::AdmissionRejected};
             if (state->ownerThread != std::this_thread::get_id())
                 return {GraphInstanceFailure::ThreadViolation};
+            return {};
+        }
+
+        /** @brief Fences all copied publications before reading mutable handle metadata or caller outputs. */
+        GraphInstanceOutcome ResidentPublication(const Detail::GraphInstanceState *state, const PoseHandle &publication) noexcept {
+            if (const auto owner = Owner(state); owner.HasError())
+                return owner;
+            if (!publication.IsValid())
+                return {GraphInstanceFailure::HandleMalformed};
+            if (publication.instance != state->identity || publication.slot.index >= state->publishedHandles.size() ||
+                publication != state->publishedHandles[publication.slot.index])
+                return {GraphInstanceFailure::HandleStale};
             return {};
         }
     }  // namespace
@@ -257,33 +301,8 @@ namespace Horo::Animation {
                 });
                 state->clips.push_back(*found);
             }
-            const auto &memory = state->program->Memory();
-            state->poses.transforms.resize(static_cast<std::size_t>(memory.poseTransforms));
-            state->poses.coverage.resize(static_cast<std::size_t>(memory.poseTransforms));
-            std::size_t scalars = 0;
-            for (std::size_t type = 1; type < memory.workingSlots.size(); ++type) {
-                state->scalars.offsets[type] = scalars;
-                scalars += memory.workingSlots[type];
-            }
-            state->scalars.values.resize(scalars);
-            state->players.resize(memory.clipPlayers);
-            state->candidate.players.resize(memory.clipPlayers);
-            if (const auto failure = Detail::PrepareGraphStateMachines(*state); failure != GraphInstanceFailure::None)
+            if (const auto failure = PrepareWorkspace(*state, assets); failure != GraphInstanceFailure::None)
                 return Result<AnimationGraphInstance>::Failure(DescribeGraphInstanceFailure({failure}));
-            state->parameters.resize(memory.parameters);
-            state->candidate.parameters.resize(memory.parameters);
-            state->queuedTriggers.resize(memory.parameters);
-            for (auto &parameters : state->publishedParameters)
-                parameters.resize(memory.parameters);
-            state->curves.publications.assign(assets.curves.begin(), assets.curves.end());
-            state->curves.parameters.reserve(assets.curves.size());
-            for (const auto &curve : assets.curves) {
-                const auto declarations = state->program->Parameters();
-                const auto found = std::ranges::lower_bound(declarations, curve->Parameter(), {}, &GraphParameter::id);
-                state->curves.parameters.push_back(static_cast<std::size_t>(found - declarations.begin()));
-            }
-            for (auto &pose : state->publishedPoses)
-                pose.resize(state->program->SkeletonBinding().joints);
             if (context.cancellation.IsCancellationRequested())
                 return Result<AnimationGraphInstance>::Failure(DescribeGraphInstanceFailure({GraphInstanceFailure::Cancelled}));
             return Result<AnimationGraphInstance>::Success(AnimationGraphInstance{std::move(state)});
@@ -416,13 +435,8 @@ namespace Horo::Animation {
     /** @copydoc AnimationGraphInstance::CopyParameters */
     GraphInstanceOutcome AnimationGraphInstance::CopyParameters(const PoseHandle &publication,
                                                                 const std::span<GraphParameterInput> output) const {
-        if (const auto owner = Owner(state_.get()); owner.HasError())
-            return owner;
-        if (!publication.IsValid())
-            return {GraphInstanceFailure::HandleMalformed};
-        if (publication.instance != state_->identity || publication.slot.index >= state_->publishedHandles.size() ||
-            publication != state_->publishedHandles[publication.slot.index])
-            return {GraphInstanceFailure::HandleStale};
+        if (const auto resident = ResidentPublication(state_.get(), publication); resident.HasError())
+            return resident;
         const auto declarations = state_->program->Parameters();
         if (output.size() != declarations.size())
             return {GraphInstanceFailure::LimitExceeded};
@@ -434,13 +448,8 @@ namespace Horo::Animation {
     /** @copydoc AnimationGraphInstance::CopyStateEvents */
     GraphInstanceOutcome AnimationGraphInstance::CopyStateEvents(const PoseHandle &publication, const std::span<GraphStateEvent> output,
                                                                  std::uint32_t &written) const {
-        if (const auto owner = Owner(state_.get()); owner.HasError())
-            return owner;
-        if (!publication.IsValid())
-            return {GraphInstanceFailure::HandleMalformed};
-        if (publication.instance != state_->identity || publication.slot.index >= state_->publishedHandles.size() ||
-            publication != state_->publishedHandles[publication.slot.index])
-            return {GraphInstanceFailure::HandleStale};
+        if (const auto resident = ResidentPublication(state_.get(), publication); resident.HasError())
+            return resident;
         const auto count = state_->publishedEventCounts[publication.slot.index];
         if (output.size() < count)
             return {GraphInstanceFailure::LimitExceeded};
@@ -451,13 +460,8 @@ namespace Horo::Animation {
 
     /** @copydoc AnimationGraphInstance::CopyPose */
     GraphInstanceOutcome AnimationGraphInstance::CopyPose(const PoseHandle &pose, const std::span<Math::Transform> output) const {
-        if (const auto owner = Owner(state_.get()); owner.HasError())
-            return owner;
-        if (!pose.IsValid())
-            return {GraphInstanceFailure::HandleMalformed};
-        if (pose.instance != state_->identity || pose.slot.index >= state_->publishedHandles.size() ||
-            pose != state_->publishedHandles[pose.slot.index])
-            return {GraphInstanceFailure::HandleStale};
+        if (const auto resident = ResidentPublication(state_.get(), pose); resident.HasError())
+            return resident;
         if (output.size() != state_->program->SkeletonBinding().joints)
             return {GraphInstanceFailure::LimitExceeded};
         std::ranges::copy(state_->publishedPoses[pose.slot.index], output.begin());

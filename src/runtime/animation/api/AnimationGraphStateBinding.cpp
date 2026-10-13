@@ -95,6 +95,42 @@ namespace Horo::Animation::GraphCompileDetail {
                 return output;
             }
 
+            /** @brief Expands the two incarnations of one state with exact guarded child ranges. */
+            GraphStateBranch StateBranch(const GraphState &state, const GraphInstructionOccurrence &occurrence, const std::uint32_t machine,
+                                         const std::uint32_t stateIndex) {
+                GraphStateBranch branch;
+                branch.id = state.id;
+                branch.loopPeriod = state.loopPeriod;
+                for (std::uint8_t lane = 0; lane < 2; ++lane) {
+                    auto child = occurrence;
+                    child.phase = GraphOccurrencePhase::Evaluate;
+                    child.stateMachine.reset();
+                    child.callPath.push_back(occurrence.source);
+                    child.guards.push_back({machine, stateIndex, lane});
+                    branch.begin[lane] = static_cast<std::uint32_t>(plan_.occurrences.size());
+                    branch.output[lane] = StateSource(state, std::move(child)).slot;
+                    branch.end[lane] = static_cast<std::uint32_t>(plan_.occurrences.size());
+                }
+                if (const auto *clip = std::get_if<AnimationClipId>(&state.source)) {
+                    const auto &descriptor = *Find(plan_.clips, *clip);
+                    if (descriptor.wrapMode == AnimationWrapMode::Loop)
+                        branch.loopPeriod = descriptor.duration;
+                    if (descriptor.wrapMode == AnimationWrapMode::PingPong)
+                        branch.loopPeriod = AnimationDeltaTime{2 * descriptor.duration.ticks};
+                }
+                return branch;
+            }
+
+            /** @brief Resolves one state source through canonical clip binding or the bounded subgraph expander. */
+            Access StateSource(const GraphState &state, GraphInstructionOccurrence child) {
+                if (const auto *clip = std::get_if<AnimationClipId>(&state.source))
+                    return Clip(GraphClipNode{*clip}, std::move(child));
+                const auto id = std::get<GraphDefinitionId>(state.source);
+                const auto definitions = program_.Definitions();
+                const auto found = std::ranges::lower_bound(definitions, id, {}, &GraphCompiledDefinition::id);
+                return Expand(static_cast<std::uint32_t>(found - definitions.begin()), child.callPath, child.guards, {});
+            }
+
             /** @brief Emits control, guarded state lanes, and final composition in actual runtime order. */
             Access Machine(const GraphStateMachineNode &machine, GraphInstructionOccurrence occurrence) {
                 const auto index = static_cast<std::uint32_t>(plan_.stateMachines.size());
@@ -117,39 +153,9 @@ namespace Horo::Animation::GraphCompileDetail {
                 // Four complete owner buffers: committed/candidate composed poses and frozen interruption sources.
                 for (std::size_t buffer = 0; buffer < 4; ++buffer)
                     plan_.stateMachines[index].poses[buffer] = Slot(GraphValueType::Pose);
-                auto path = occurrence.callPath;
-                path.push_back(occurrence.source);
                 for (std::uint32_t stateIndex = 0; stateIndex < machine.states.size(); ++stateIndex) {
-                    const auto &state = machine.states[stateIndex];
-                    GraphStateBranch branch;
-                    branch.id = state.id;
-                    branch.loopPeriod = state.loopPeriod;
-                    for (std::uint8_t lane = 0; lane < 2; ++lane) {
-                        auto guards = occurrence.guards;
-                        guards.push_back({index, stateIndex, lane});
-                        branch.begin[lane] = static_cast<std::uint32_t>(plan_.occurrences.size());
-                        Access output;
-                        if (const auto *clip = std::get_if<AnimationClipId>(&state.source)) {
-                            auto child = occurrence;
-                            child.phase = GraphOccurrencePhase::Evaluate;
-                            child.stateMachine.reset();
-                            child.callPath = path;
-                            child.guards = std::move(guards);
-                            output = Clip(GraphClipNode{*clip}, std::move(child));
-                            const auto &descriptor = *Find(plan_.clips, *clip);
-                            if (descriptor.wrapMode == AnimationWrapMode::Loop)
-                                branch.loopPeriod = descriptor.duration;
-                            if (descriptor.wrapMode == AnimationWrapMode::PingPong)
-                                branch.loopPeriod = AnimationDeltaTime{2 * descriptor.duration.ticks};
-                        } else {
-                            const auto id = std::get<GraphDefinitionId>(state.source);
-                            const auto definitions = program_.Definitions();
-                            const auto found = std::ranges::lower_bound(definitions, id, {}, &GraphCompiledDefinition::id);
-                            output = Expand(static_cast<std::uint32_t>(found - definitions.begin()), path, guards, {});
-                        }
-                        branch.output[lane] = output.slot;
-                        branch.end[lane] = static_cast<std::uint32_t>(plan_.occurrences.size());
-                    }
+                    // Expanding a nested source may grow stateMachines; reacquire its owner only after that expansion.
+                    auto branch = StateBranch(machine.states[stateIndex], occurrence, index, stateIndex);
                     plan_.stateMachines[index].branches.push_back(branch);
                 }
                 occurrence.phase = GraphOccurrencePhase::StateEnd;
@@ -157,6 +163,31 @@ namespace Horo::Animation::GraphCompileDetail {
                 plan_.stateMachines[index].endOccurrence = occurrence.outputProducer;
                 const Access output{occurrence.output, occurrence.outputProducer};
                 Append(std::move(occurrence));
+                return output;
+            }
+
+            /** @brief Binds ordinary aliases/calls or a new typed writer without changing evaluation order. */
+            Access OutputAccess(const GraphInstruction &instruction, GraphInstructionOccurrence &occurrence,
+                                const std::map<GraphInterfaceId, Access> &interfaceInputs) {
+                Access output;
+                if (instruction.definitionIndex) {
+                    std::map<GraphInterfaceId, Access> inputs;
+                    for (const auto &input : occurrence.inputs)
+                        inputs.emplace(Find(instruction.pins, input.destination)->interfaceId, Access{input.slot, input.sourceOccurrence});
+                    auto childPath = occurrence.callPath;
+                    childPath.push_back(instruction.source);
+                    output = Expand(*instruction.definitionIndex, childPath, occurrence.guards, inputs);
+                } else if (const auto *input = std::get_if<GraphInputNode>(&instruction.payload)) {
+                    output = interfaceInputs.at(input->input);
+                    occurrence.inputs.push_back({instruction.pins.front().id, output.slot, output.producer});
+                } else if (std::holds_alternative<GraphOutputNode>(instruction.payload)) {
+                    output = {occurrence.inputs.front().slot, occurrence.inputs.front().sourceOccurrence};
+                } else {
+                    const auto pin = std::ranges::find_if(instruction.pins, [](const auto &value) {
+                        return value.output;
+                    });
+                    output = {Slot(pin->type), static_cast<std::uint32_t>(plan_.occurrences.size())};
+                }
                 return output;
             }
 
@@ -188,26 +219,7 @@ namespace Horo::Animation::GraphCompileDetail {
                         outputs[instructionIndex] = Machine(*machine, std::move(occurrence));
                         continue;
                     }
-                    Access output;
-                    if (instruction.definitionIndex) {
-                        std::map<GraphInterfaceId, Access> inputs;
-                        for (const auto &input : occurrence.inputs)
-                            inputs.emplace(Find(instruction.pins, input.destination)->interfaceId,
-                                           Access{input.slot, input.sourceOccurrence});
-                        auto childPath = path;
-                        childPath.push_back(instruction.source);
-                        output = Expand(*instruction.definitionIndex, childPath, guards, inputs);
-                    } else if (const auto *input = std::get_if<GraphInputNode>(&instruction.payload)) {
-                        output = interfaceInputs.at(input->input);
-                        occurrence.inputs.push_back({instruction.pins.front().id, output.slot, output.producer});
-                    } else if (std::holds_alternative<GraphOutputNode>(instruction.payload)) {
-                        output = {occurrence.inputs.front().slot, occurrence.inputs.front().sourceOccurrence};
-                    } else {
-                        const auto pin = std::ranges::find_if(instruction.pins, [](const auto &value) {
-                            return value.output;
-                        });
-                        output = {Slot(pin->type), static_cast<std::uint32_t>(plan_.occurrences.size())};
-                    }
+                    const auto output = OutputAccess(instruction, occurrence, interfaceInputs);
                     occurrence.output = output.slot;
                     occurrence.outputProducer = output.producer;
                     outputs[instructionIndex] = output;

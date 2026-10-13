@@ -8,17 +8,9 @@ namespace Horo::Animation::Detail {
             for (const auto &guard : occurrence.guards) {
                 if (guard.machine == outer)
                     continue;
+                if (!GraphStateGuardActive(state, guard, true))
+                    return false;
                 const auto &machine = state.candidate.machines[guard.machine];
-                if (!machine.runtime.initialized) {
-                    if (guard.lane != 0 || guard.state != state.preparedMachines[guard.machine].initial)
-                        return false;
-                } else {
-                    const bool source = guard.lane == machine.sourceLane && guard.state == machine.runtime.source.state;
-                    const bool destination = machine.runtime.destination && guard.lane == machine.destinationLane &&
-                                             guard.state == machine.runtime.destination->state;
-                    if (!source && !destination)
-                        return false;
-                }
                 if (machine.held[guard.lane])
                     input.delta = {};
             }

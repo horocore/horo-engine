@@ -1461,6 +1461,7 @@ add_library(HoroAnimationApi STATIC
         runtime/animation/api/AnimationGraphStateValidation.cpp
         runtime/animation/api/AnimationGraphStateBinding.cpp
         runtime/animation/api/AnimationGraph.cpp
+        runtime/animation/api/AnimationGraphAdmission.cpp
         runtime/animation/api/AnimationGraphBinding.cpp
         runtime/animation/api/AnimationGraphNodeValidation.cpp
         runtime/animation/api/AnimationCompression.cpp

@@ -124,6 +124,10 @@ namespace Horo::Animation::Detail {
     /** @brief Resolves compiled branch guards and supplies entry-zero delta for newly activated destination branches. */
     [[nodiscard]] bool StateBranchInput(const GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
                                         GraphEvaluationInput &input) noexcept;
+    /** @brief Checks a lane incarnation; retirement preflight may inspect the cold initial lane before control admission. */
+    [[nodiscard]] bool GraphStateGuardActive(const GraphInstanceState &state, const GraphStateGuard &guard, bool allowCold) noexcept;
+    /** @brief Resets candidate control/latches while preserving its monotonic next-entry identity. */
+    void ResetGraphStateControl(GraphInstanceState &state, std::uint32_t machine) noexcept;
     /** @brief Stages control state and events before the compiler's guarded child occurrences. */
     [[nodiscard]] GraphInstanceOutcome BeginGraphStateMachine(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
                                                               const GraphEvaluationInput &input);

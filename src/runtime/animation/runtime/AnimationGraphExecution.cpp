@@ -223,13 +223,7 @@ namespace Horo::Animation::Detail {
             auto &machine = state.candidate.machines[index];
             if (!machine.retiring)
                 continue;
-            const auto nextActivation = machine.runtime.nextActivation;
-            machine = {};
-            machine.runtime.nextActivation = nextActivation;
-            const auto &binding = state.program->StateMachines()[index];
-            std::ranges::fill(std::span{state.candidate.latches}.subspan(binding.conditionOffset,
-                                                                         state.preparedMachines[index].conditions.size()),
-                              0);
+            ResetGraphStateControl(state, static_cast<std::uint32_t>(index));
         }
         return {};
     }

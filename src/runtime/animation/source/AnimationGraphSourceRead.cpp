@@ -85,6 +85,18 @@ namespace Horo::Animation {
             return ticks;
         }
 
+        /** @brief Resolves one condition's declared transport type before decoding its threshold. */
+        GraphStateCondition StateCondition(const Json &condition, const std::span<const GraphParameter> parameters) {
+            Keys(condition, {"parameter", "predicate", "threshold", "release"});
+            const auto parameterId = Id<GraphParameterId>(condition["parameter"]);
+            const auto parameter = std::ranges::find(parameters, parameterId, &GraphParameter::id);
+            if (parameter == parameters.end())
+                Reject(AnimationErrors::GraphBindingMismatch);
+            return {parameterId, EnumValue<GraphStatePredicate>(condition["predicate"], Predicates),
+                    Default(condition["threshold"], parameter->type),
+                    std::get<float>(Default(condition["release"], GraphValueType::Float))};
+        }
+
         /** @brief Decodes bounded state tables; every retained field still undergoes authoritative compiler validation. */
         GraphStateMachineNode StateMachine(const Json &value, Budget &budget, const AnimationGraphCompileContext &context,
                                            const std::span<const GraphParameter> parameters) {
@@ -124,16 +136,8 @@ namespace Horo::Animation {
                 transition.curve = EnumValue<GraphStateBlendCurve>(entry["curve"], BlendCurves);
                 transition.conditions.reserve(
                     Spend(entry["conditions"], budget.conditions, context.limits.conditions, AnimationGraphHardLimits::Conditions));
-                for (const auto &condition : entry["conditions"]) {
-                    Keys(condition, {"parameter", "predicate", "threshold", "release"});
-                    const auto parameterId = Id<GraphParameterId>(condition["parameter"]);
-                    const auto parameter = std::ranges::find(parameters, parameterId, &GraphParameter::id);
-                    if (parameter == parameters.end())
-                        Reject(AnimationErrors::GraphBindingMismatch);
-                    transition.conditions.push_back({parameterId, EnumValue<GraphStatePredicate>(condition["predicate"], Predicates),
-                                                     Default(condition["threshold"], parameter->type),
-                                                     std::get<float>(Default(condition["release"], GraphValueType::Float))});
-                }
+                for (const auto &condition : entry["conditions"])
+                    transition.conditions.push_back(StateCondition(condition, parameters));
                 machine.transitions.push_back(std::move(transition));
             }
             return machine;

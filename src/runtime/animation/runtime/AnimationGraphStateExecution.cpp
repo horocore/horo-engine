@@ -64,15 +64,167 @@ namespace Horo::Animation::Detail {
                 if (occurrence.clipPlayer)
                     state.candidate.players[*occurrence.clipPlayer] = {};
                 if (occurrence.phase == GraphOccurrencePhase::StateBegin) {
-                    const auto nested = *occurrence.stateMachine;
-                    const auto nextActivation = state.candidate.machines[nested].runtime.nextActivation;
-                    state.candidate.machines[nested] = {};
-                    state.candidate.machines[nested].runtime.nextActivation = nextActivation;
-                    const auto &binding = state.program->StateMachines()[nested];
-                    std::ranges::fill(std::span{state.candidate.latches}.subspan(binding.conditionOffset,
-                                                                                 state.preparedMachines[nested].conditions.size()),
-                                      0);
+                    ResetGraphStateControl(state, *occurrence.stateMachine);
                 }
+            }
+        }
+
+        /** @brief Complete stack-owned clock observations consumed by exactly one control step. */
+        struct ControlObservation final {
+            std::array<StateMachinePlayback, 2> playback;
+            std::size_t observations{};
+            AnimationTimeDelta advance{};
+        };
+
+        /** @brief Proves the old active clip ranges remain admissible even if this tick cuts them away. */
+        GraphInstanceOutcome PreflightControl(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
+                                              const GraphEvaluationInput &input, const GraphMachineState &baseline) {
+            const auto index = *occurrence.stateMachine;
+            const auto &binding = state.program->StateMachines()[index];
+            const auto &prepared = state.preparedMachines[index];
+            const auto sourceState = baseline.runtime.initialized ? baseline.runtime.source.state : prepared.initial;
+            const auto sourceLane = baseline.runtime.initialized ? baseline.sourceLane : 0U;
+            if (const auto preflight = TraverseGraphStateBranch(state, index, binding.branches[sourceState],
+                                                                static_cast<std::uint8_t>(sourceLane), input, false);
+                preflight.HasError())
+                return preflight;
+            if (baseline.runtime.destination)
+                if (const auto preflight = TraverseGraphStateBranch(state, index, binding.branches[baseline.runtime.destination->state],
+                                                                    baseline.destinationLane, input, false);
+                    preflight.HasError())
+                    return preflight;
+            return {};
+        }
+
+        /** @brief Captures exact source/destination authored clocks before transition selection. */
+        GraphInstanceOutcome ObserveControl(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
+                                            const GraphEvaluationInput &input, const GraphMachineState &baseline,
+                                            ControlObservation &observation) {
+            const auto index = *occurrence.stateMachine;
+            const auto &binding = state.program->StateMachines()[index];
+            const auto &prepared = state.preparedMachines[index];
+            auto &candidate = state.candidate.machines[index];
+            auto &playback = observation.playback;
+            auto &observations = observation.observations;
+            auto &advance = observation.advance;
+            if (baseline.runtime.initialized) {
+                if (const auto observed = AdvanceClock(candidate.clocks[baseline.sourceLane], input,
+                                                       binding.branches[baseline.runtime.source.state].loopPeriod, baseline.runtime.source,
+                                                       playback[0], advance);
+                    observed.HasError())
+                    return observed;
+                observations = 1;
+                if (baseline.runtime.destination) {
+                    AnimationTimeDelta targetAdvance;
+                    if (const auto observed = AdvanceClock(candidate.clocks[baseline.destinationLane], input,
+                                                           binding.branches[baseline.runtime.destination->state].loopPeriod,
+                                                           *baseline.runtime.destination, playback[1], targetAdvance);
+                        observed.HasError())
+                        return observed;
+                    observations = 2;
+                }
+            } else {
+                if (const auto observed = AdvanceClock(candidate.clocks[0], input, binding.branches[prepared.initial].loopPeriod,
+                                                       {prepared.initial, baseline.runtime.nextActivation}, playback[0], advance);
+                    observed.HasError())
+                    return observed;
+                observations = 1;
+            }
+            if (advance.ticks == std::numeric_limits<std::int64_t>::min())
+                return {GraphInstanceFailure::LimitExceeded};
+            return {};
+        }
+
+        /** @brief Stages latches/control and copies the complete bounded lifecycle block into the tick candidate. */
+        GraphInstanceOutcome StepControl(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
+                                         const GraphEvaluationInput &input, const GraphMachineState &baseline,
+                                         const ControlObservation &observation) {
+            const auto index = *occurrence.stateMachine;
+            const auto &binding = state.program->StateMachines()[index];
+            const auto &prepared = state.preparedMachines[index];
+            auto &candidate = state.candidate.machines[index];
+            const auto &playback = observation.playback;
+            const auto observations = observation.observations;
+            const auto advance = observation.advance;
+            const auto count = prepared.conditions.size();
+            const auto latches = std::span{state.candidate.latches}.subspan(binding.conditionOffset, count);
+            const auto scratch = std::span{state.latchScratch}.subspan(binding.conditionOffset, count);
+            std::ranges::copy(latches, scratch.begin());
+            std::array<StateMachineEvent, 262> events;
+            candidate.outcome = StepStateMachine(prepared.Plan(), baseline.runtime, scratch,
+                                                 {state.candidate.parameters,
+                                                  std::span{playback}.first(observations),
+                                                  {advance.ticks < 0 ? -advance.ticks : advance.ticks},
+                                                  input.cancellation},
+                                                 candidate.runtime, latches, events);
+            if (candidate.outcome.failure != GraphInstanceFailure::None)
+                return {candidate.outcome.failure};
+            candidate.visited = true;
+            if (const auto appended = AppendGraphStateEvents(state, occurrence, input, std::span{events}.first(candidate.outcome.events));
+                appended.HasError())
+                return appended;
+            return {};
+        }
+
+        /** @brief Retires only semantic incarnations absent from the newly staged source/destination pair. */
+        GraphInstanceOutcome RetireControl(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
+                                           const GraphEvaluationInput &input, const GraphMachineState &baseline) {
+            const auto index = *occurrence.stateMachine;
+            const auto &binding = state.program->StateMachines()[index];
+            const auto &prepared = state.preparedMachines[index];
+            auto &candidate = state.candidate.machines[index];
+            const auto remains = [&candidate](const std::uint64_t generation) {
+                return candidate.runtime.source.generation == generation ||
+                       (candidate.runtime.destination && candidate.runtime.destination->generation == generation);
+            };
+            const auto oldSource = baseline.runtime.initialized ? baseline.runtime.source.generation : baseline.runtime.nextActivation;
+            if (!remains(oldSource))
+                if (const auto retired =
+                        RetireGraphStateBranch(state, index,
+                                               binding.branches[baseline.runtime.initialized ? baseline.runtime.source.state
+                                                                                             : prepared.initial],
+                                               baseline.runtime.initialized ? baseline.sourceLane : 0, input);
+                    retired.HasError())
+                    return retired;
+            if (baseline.runtime.destination && !remains(baseline.runtime.destination->generation))
+                if (const auto retired = RetireGraphStateBranch(state, index, binding.branches[baseline.runtime.destination->state],
+                                                                baseline.destinationLane, input);
+                    retired.HasError())
+                    return retired;
+            return {};
+        }
+
+        /** @brief Applies entry resets and committed-source capture after old subtree retirement succeeds. */
+        void ActivateControl(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence, const GraphMachineState &baseline) {
+            const auto index = *occurrence.stateMachine;
+            const auto &binding = state.program->StateMachines()[index];
+            const auto &prepared = state.preparedMachines[index];
+            auto &candidate = state.candidate.machines[index];
+            std::ranges::copy(state.Pose(binding.poses[2]), state.Pose(binding.poses[3]).begin());
+            std::ranges::copy(state.Coverage(binding.poses[2]), state.Coverage(binding.poses[3]).begin());
+            if (!baseline.runtime.initialized) {
+                candidate.sourceLane = 0;
+                candidate.destinationLane = 1;
+                ResetBranch(state, binding.branches[prepared.initial], 0);
+            }
+            if (candidate.outcome.resetDestination) {
+                if (baseline.runtime.destination && candidate.runtime.source.generation == baseline.runtime.destination->generation)
+                    candidate.sourceLane = baseline.destinationLane;
+                candidate.destinationLane = static_cast<std::uint8_t>(1U - candidate.sourceLane);
+                const auto entered = candidate.runtime.destination.value_or(candidate.runtime.source);
+                const auto lane = candidate.destinationLane;
+                candidate.clocks[lane] = {};
+                candidate.held[lane] = true;
+                ResetBranch(state, binding.branches[entered.state], lane);
+                if (candidate.outcome.captureSource) {
+                    std::ranges::copy(state.Pose(binding.poses[0]), state.Pose(binding.poses[3]).begin());
+                    std::ranges::copy(state.Coverage(binding.poses[0]), state.Coverage(binding.poses[3]).begin());
+                }
+                if (!candidate.runtime.transition)
+                    candidate.sourceLane = lane;
+            } else if (baseline.runtime.destination && !candidate.runtime.transition) {
+                candidate.sourceLane = baseline.destinationLane;
+                candidate.destinationLane = static_cast<std::uint8_t>(1U - candidate.sourceLane);
             }
         }
 
@@ -152,15 +304,34 @@ namespace Horo::Animation::Detail {
         return GraphInstanceFailure::None;
     }
 
+    /** @copydoc ResetGraphStateControl */
+    void ResetGraphStateControl(GraphInstanceState &state, const std::uint32_t machine) noexcept {
+        const auto nextActivation = state.candidate.machines[machine].runtime.nextActivation;
+        state.candidate.machines[machine] = {};
+        state.candidate.machines[machine].runtime.nextActivation = nextActivation;
+        const auto &binding = state.program->StateMachines()[machine];
+        std::ranges::fill(std::span{state.candidate.latches}.subspan(binding.conditionOffset,
+                                                                     state.preparedMachines[machine].conditions.size()),
+                          0);
+    }
+
+    /** @copydoc GraphStateGuardActive */
+    bool GraphStateGuardActive(const GraphInstanceState &state, const GraphStateGuard &guard, const bool allowCold) noexcept {
+        const auto &machine = state.candidate.machines[guard.machine];
+        if (!machine.runtime.initialized)
+            return allowCold && guard.lane == 0 && guard.state == state.preparedMachines[guard.machine].initial;
+        const bool source = guard.lane == machine.sourceLane && guard.state == machine.runtime.source.state;
+        const bool destination =
+            machine.runtime.destination && guard.lane == machine.destinationLane && guard.state == machine.runtime.destination->state;
+        return source || destination;
+    }
+
     /** @copydoc StateBranchInput */
     bool StateBranchInput(const GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
                           GraphEvaluationInput &input) noexcept {
         for (const auto &guard : occurrence.guards) {
             const auto &machine = state.candidate.machines[guard.machine];
-            const bool source = guard.lane == machine.sourceLane && guard.state == machine.runtime.source.state;
-            const bool destination =
-                machine.runtime.destination && guard.lane == machine.destinationLane && guard.state == machine.runtime.destination->state;
-            if (!machine.runtime.initialized || (!source && !destination))
+            if (!GraphStateGuardActive(state, guard, false))
                 return false;
             if (machine.held[guard.lane])
                 input.delta = {};
@@ -171,108 +342,17 @@ namespace Horo::Animation::Detail {
     /** @copydoc BeginGraphStateMachine */
     GraphInstanceOutcome BeginGraphStateMachine(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
                                                 const GraphEvaluationInput &input) {
-        const auto index = *occurrence.stateMachine;
-        const auto &binding = state.program->StateMachines()[index];
-        const auto &prepared = state.preparedMachines[index];
-        auto &candidate = state.candidate.machines[index];
-        const auto baseline = candidate;
-        const auto sourceState = baseline.runtime.initialized ? baseline.runtime.source.state : prepared.initial;
-        const auto sourceLane = baseline.runtime.initialized ? baseline.sourceLane : 0U;
-        if (const auto preflight =
-                TraverseGraphStateBranch(state, index, binding.branches[sourceState], static_cast<std::uint8_t>(sourceLane), input, false);
-            preflight.HasError())
-            return preflight;
-        if (baseline.runtime.destination)
-            if (const auto preflight = TraverseGraphStateBranch(state, index, binding.branches[baseline.runtime.destination->state],
-                                                                baseline.destinationLane, input, false);
-                preflight.HasError())
-                return preflight;
-        std::array<StateMachinePlayback, 2> playback;
-        std::size_t observations = 0;
-        AnimationTimeDelta advance{};
-        if (baseline.runtime.initialized) {
-            if (const auto observed =
-                    AdvanceClock(candidate.clocks[baseline.sourceLane], input, binding.branches[baseline.runtime.source.state].loopPeriod,
-                                 baseline.runtime.source, playback[0], advance);
-                observed.HasError())
-                return observed;
-            observations = 1;
-            if (baseline.runtime.destination) {
-                AnimationTimeDelta targetAdvance;
-                if (const auto observed = AdvanceClock(candidate.clocks[baseline.destinationLane], input,
-                                                       binding.branches[baseline.runtime.destination->state].loopPeriod,
-                                                       *baseline.runtime.destination, playback[1], targetAdvance);
-                    observed.HasError())
-                    return observed;
-                observations = 2;
-            }
-        } else {
-            if (const auto observed = AdvanceClock(candidate.clocks[0], input, binding.branches[prepared.initial].loopPeriod,
-                                                   {prepared.initial, baseline.runtime.nextActivation}, playback[0], advance);
-                observed.HasError())
-                return observed;
-            observations = 1;
-        }
-        if (advance.ticks == std::numeric_limits<std::int64_t>::min())
-            return {GraphInstanceFailure::LimitExceeded};
-        const auto count = prepared.conditions.size();
-        const auto latches = std::span{state.candidate.latches}.subspan(binding.conditionOffset, count);
-        const auto scratch = std::span{state.latchScratch}.subspan(binding.conditionOffset, count);
-        std::ranges::copy(latches, scratch.begin());
-        std::array<StateMachineEvent, 262> events;
-        candidate.outcome = StepStateMachine(prepared.Plan(), baseline.runtime, scratch,
-                                             {state.candidate.parameters,
-                                              std::span{playback}.first(observations),
-                                              {advance.ticks < 0 ? -advance.ticks : advance.ticks},
-                                              input.cancellation},
-                                             candidate.runtime, latches, events);
-        if (candidate.outcome.failure != GraphInstanceFailure::None)
-            return {candidate.outcome.failure};
-        candidate.visited = true;
-        if (const auto appended = AppendGraphStateEvents(state, occurrence, input, std::span{events}.first(candidate.outcome.events));
-            appended.HasError())
-            return appended;
-        const auto remains = [&candidate](const std::uint64_t generation) {
-            return candidate.runtime.source.generation == generation ||
-                   (candidate.runtime.destination && candidate.runtime.destination->generation == generation);
-        };
-        const auto oldSource = baseline.runtime.initialized ? baseline.runtime.source.generation : baseline.runtime.nextActivation;
-        if (!remains(oldSource))
-            if (const auto retired =
-                    RetireGraphStateBranch(state, index, binding.branches[sourceState], static_cast<std::uint8_t>(sourceLane), input);
-                retired.HasError())
-                return retired;
-        if (baseline.runtime.destination && !remains(baseline.runtime.destination->generation))
-            if (const auto retired = RetireGraphStateBranch(state, index, binding.branches[baseline.runtime.destination->state],
-                                                            baseline.destinationLane, input);
-                retired.HasError())
-                return retired;
-        std::ranges::copy(state.Pose(binding.poses[2]), state.Pose(binding.poses[3]).begin());
-        std::ranges::copy(state.Coverage(binding.poses[2]), state.Coverage(binding.poses[3]).begin());
-        if (!baseline.runtime.initialized) {
-            candidate.sourceLane = 0;
-            candidate.destinationLane = 1;
-            ResetBranch(state, binding.branches[prepared.initial], 0);
-        }
-        if (candidate.outcome.resetDestination) {
-            if (baseline.runtime.destination && candidate.runtime.source.generation == baseline.runtime.destination->generation)
-                candidate.sourceLane = baseline.destinationLane;
-            candidate.destinationLane = static_cast<std::uint8_t>(1U - candidate.sourceLane);
-            const auto entered = candidate.runtime.destination.value_or(candidate.runtime.source);
-            const auto lane = candidate.destinationLane;
-            candidate.clocks[lane] = {};
-            candidate.held[lane] = true;
-            ResetBranch(state, binding.branches[entered.state], lane);
-            if (candidate.outcome.captureSource) {
-                std::ranges::copy(state.Pose(binding.poses[0]), state.Pose(binding.poses[3]).begin());
-                std::ranges::copy(state.Coverage(binding.poses[0]), state.Coverage(binding.poses[3]).begin());
-            }
-            if (!candidate.runtime.transition)
-                candidate.sourceLane = lane;
-        } else if (baseline.runtime.destination && !candidate.runtime.transition) {
-            candidate.sourceLane = baseline.destinationLane;
-            candidate.destinationLane = static_cast<std::uint8_t>(1U - candidate.sourceLane);
-        }
+        const auto baseline = state.candidate.machines[*occurrence.stateMachine];
+        if (const auto outcome = PreflightControl(state, occurrence, input, baseline); outcome.HasError())
+            return outcome;
+        ControlObservation observation;
+        if (const auto outcome = ObserveControl(state, occurrence, input, baseline, observation); outcome.HasError())
+            return outcome;
+        if (const auto outcome = StepControl(state, occurrence, input, baseline, observation); outcome.HasError())
+            return outcome;
+        if (const auto outcome = RetireControl(state, occurrence, input, baseline); outcome.HasError())
+            return outcome;
+        ActivateControl(state, occurrence, baseline);
         return {};
     }
 

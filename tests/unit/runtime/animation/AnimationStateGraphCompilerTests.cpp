@@ -1,3 +1,4 @@
+#include "AnimationPoseCompositionTestFixtures.h"
 #include "AnimationStateGraphTestFixtures.h"
 
 #include <nlohmann/json.hpp>
@@ -120,4 +121,89 @@ namespace Horo::Animation::Test {
         }
         CHECK(DeserializeAnimationGraphSource(source.dump(), graph.id).HasError());
     }
+
+    TEST_CASE("Graph schema three migration preserves real pose policies and additive operands", "[animation][state_graph][migration]") {
+        using namespace PoseComposition;
+        auto source = Layer(GraphBlendMode::AdditiveParent);
+        SECTION("masked additive layer") {
+            auto &blend = std::get<GraphBlendNode>(source.definitions.front().nodes[3].payload);
+            blend.missingJoint = GraphMissingJointPolicy::PreserveBase;
+            blend.mask = {0.25F, {{Id<JointId>(3), 0.75F}}};
+        }
+        SECTION("explicit additive clip") {
+            source = AdditiveClipGraph();
+        }
+        const auto encoded = SerializeAnimationGraphSource(source);
+        REQUIRE(encoded.HasValue());
+        auto old = nlohmann::ordered_json::parse(encoded.Value());
+        old["schemaVersion"] = 3;
+        old["contractVersion"]["minor"] = 1;
+        CHECK(DeserializeAnimationGraphSource(old.dump(), source.id).HasError());
+        CHECK(
+            DeserializeAnimationGraphSource(old.dump(), source.id, {}, {}, AnimationGraphSourceMigration::MigrateLegacySchemas).HasError());
+        const auto migrated =
+            DeserializeAnimationGraphSource(old.dump(), source.id, {}, {}, AnimationGraphSourceMigration::MigrateSupported);
+        REQUIRE(migrated.HasValue());
+        const auto rewritten = SerializeAnimationGraphSource(migrated.Value());
+        REQUIRE(rewritten.HasValue());
+        CHECK(rewritten.Value() == encoded.Value());
+        auto oldData = source;
+        oldData.schemaVersion = 3;
+        oldData.contractVersion = {1, 1, 0};
+        const auto migratedData = MigrateAnimationGraph(oldData);
+        REQUIRE(migratedData.HasValue());
+        CHECK(migratedData.Value() == migrated.Value());
+        oldData.schemaVersion = 2;
+        oldData.contractVersion = {1, 0, 0};
+        CHECK(MigrateAnimationGraph(oldData).HasError());
+    }
+
+    TEST_CASE("State graph subgraphs execute the canonical masked additive pose contract", "[animation][state_graph][composition]") {
+        using namespace PoseComposition;
+        auto source = Layer();
+        bool additiveClip = false;
+        SECTION("normalized sparse mask") {
+            auto &blend = std::get<GraphBlendNode>(source.definitions.front().nodes[3].payload);
+            blend.missingJoint = GraphMissingJointPolicy::PreserveBase;
+            blend.mask = {0.0F, {{Id<JointId>(3), 0.75F}}};
+        }
+        SECTION("local additive layer") {
+            source = Layer(GraphBlendMode::AdditiveLocal);
+        }
+        SECTION("parent additive layer") {
+            source = Layer(GraphBlendMode::AdditiveParent);
+        }
+        SECTION("explicit additive clip") {
+            source = AdditiveClipGraph();
+            additiveClip = true;
+            source.parameters.push_back({Id<GraphParameterId>(1), "weight", GraphValueType::Float, 0.5F});
+        }
+        LayerFixture standalone(source, additiveClip);
+        auto direct = standalone.Create();
+        const auto expected = Evaluate(direct, 0.5F);
+        const auto callee = source.entry;
+        source.entry = Id<GraphDefinitionId>(99);
+        GraphStateMachineNode machine;
+        machine.initial = Id<GraphStateId>(10);
+        machine.states = {{machine.initial, callee}};
+        GraphDefinition wrapper;
+        wrapper.id = source.entry;
+        wrapper.nodes = {{Id<GraphNodeId>(1), machine, {Pin(1, GraphPinRole::Result, GraphValueType::Pose, true)}}, Output(2)};
+        wrapper.connections = {Edge(1, 1, 2, 1)};
+        source.definitions.push_back(std::move(wrapper));
+        const auto canonical = RoundTrip(source);
+        LayerFixture guarded(canonical, additiveClip);
+        auto instance = guarded.Create();
+        CHECK(Evaluate(instance, 0.5F) == expected);
+        std::array<GraphStateEvent, 262> events;
+        std::uint32_t count = 0;
+        REQUIRE(instance.CopyStateEvents(instance.Publication().currentPose, events, count).HasValue());
+        REQUIRE(count == 1);
+        CHECK(events[0].kind == GraphStateEventKind::Entered);
+        CHECK(events[0].state == machine.initial);
+        const auto compiled = guarded.Compile();
+        REQUIRE(compiled.HasValue());
+        CHECK(compiled.Value().Memory().compositionEntries > 0);
+    }
+
 }  // namespace Horo::Animation::Test
