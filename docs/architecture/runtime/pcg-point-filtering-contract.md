@@ -8,7 +8,8 @@ or global registration.
 ## Settings and semantics
 
 `PCGPointFiltering.h` belongs to HoroPCG. Five settings-backed kinds extend the
-catalog to twelve entries without renumbering the seven existing kinds/type IDs.
+catalog by five entries without renumbering the seven existing kinds/type IDs.
+With the transformation family, the combined default/maximum capacity is seventeen.
 Each new kind has one PointSet input and one PointSet output. The existing
 DensityFilter with a Scalar threshold input retains its schema and semantics.
 Hosts explicitly register the selected new kinds; catalog creation remains inert.
@@ -81,7 +82,8 @@ existing replacement admission contract.
 ## Migration and regression obligations
 
 Consumers may continue registering the original seven kinds with unchanged schemas.
-The default capacity grows from seven to twelve; explicitly lowered capacities remain
+The filtering extension originally grew capacity from seven to twelve; the combined
+filter/transformation catalog now supports seventeen. Explicitly lowered capacities remain
 valid. New public-header ownership and consumer coverage accompany the header.
 Regression fixtures exercise exact column preservation, integer precision, stable
 compaction, inclusive boundaries, empty selections/inputs, invalid settings/envelopes,

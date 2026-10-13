@@ -1,7 +1,10 @@
+#include "Horo/Foundation/JobSystem.h"
 #include "Horo/PCG/PCGErrors.h"
+#include "PCGCpuEvaluatorInternal.h"
 #include "PCGPointFilteringInternal.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <new>
@@ -10,6 +13,18 @@
 
 namespace Horo::PCG::detail {
     namespace {
+        /** @brief Counts an immutable disjoint density range with the legacy cancellation cadence. */
+        [[nodiscard]] Result<std::size_t> CountPartition(std::span<const float> densities, double threshold, std::size_t begin,
+                                                         std::size_t end, const CancellationToken &cancellation) {
+            std::size_t selected{};
+            for (std::size_t index = begin; index < end; ++index) {
+                if ((index - begin) % 256 == 0 && cancellation.IsCancellationRequested())
+                    return Result<std::size_t>::Failure(MakeError(PCGErrors::CpuEvaluationClosed));
+                selected += densities[index] >= threshold ? 1U : 0U;
+            }
+            return Result<std::size_t>::Success(selected);
+        }
+
         /** @brief Retains a typed evaluation failure without losing its error domain. */
         template <class T> Result<T> Reject(const ErrorCodeDescriptor &error) {
             return Result<T>::Failure(MakeError(error));
@@ -232,5 +247,38 @@ namespace Horo::PCG::detail {
         } catch (const std::bad_alloc &) {
             return Reject<std::vector<std::size_t>>(PCGErrors::CpuEvaluationCapacityExceeded);
         }
+    }
+
+    /** @copydoc CountSelected */
+    Result<std::size_t> CountSelected(const PCGPointReadView &source, double threshold, std::uint32_t workers, JobSystem *jobs,
+                                      const CancellationToken &cancellation) {
+        const auto densities = source.Densities();
+        if (workers == 1)
+            return CountPartition(densities, threshold, 0, densities.size(), cancellation);
+        std::array<std::size_t, 8> counts{};
+        // Each child owns one disjoint count slot; the group drains before counts or source storage retire.
+        TaskGroup group(*jobs, TaskGroupFailurePolicy::FailFast, cancellation);
+        for (std::uint32_t partition = 0; partition < workers; ++partition) {
+            const std::size_t begin = partition == 0 ? 0 : PartitionEnd(densities.size(), workers, partition - 1);
+            const std::size_t end = PartitionEnd(densities.size(), workers, partition);
+            auto submitted = group.Spawn({}, [densities, threshold, begin, end, partition, &counts](const CancellationToken &child) {
+                const auto selected = CountPartition(densities, threshold, begin, end, child);
+                if (selected.HasError())
+                    return Result<void>::Failure(selected.ErrorValue());
+                counts[partition] = selected.Value();
+                return Result<void>::Success();
+            });
+            if (submitted.HasError()) {
+                group.RequestCancel();
+                static_cast<void>(group.Join());
+                return Result<std::size_t>::Failure(submitted.ErrorValue());
+            }
+        }
+        if (const auto joined = group.Join(); joined.HasError())
+            return Result<std::size_t>::Failure(joined.ErrorValue());
+        std::size_t total{};
+        for (std::uint32_t partition = 0; partition < workers; ++partition)
+            total += counts[partition];
+        return Result<std::size_t>::Success(total);
     }
 }  // namespace Horo::PCG::detail

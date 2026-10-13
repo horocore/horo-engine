@@ -6,6 +6,7 @@
 #include "PCGPointFilteringInternal.h"
 #include "PCGPointGenerationInternal.h"
 #include "PCGPointIdentityInternal.h"
+#include "PCGPointTransformationInternal.h"
 
 #include <algorithm>
 #include <bit>
@@ -263,8 +264,9 @@ namespace Horo::PCG {
                 const auto descriptor = plan.Catalog().Find(plan.Nodes()[node].type);
                 if (descriptor.HasError())
                     return Result<std::size_t>::Failure(descriptor.ErrorValue());
-                const std::size_t elements =
-                    descriptor.Value()->kind == PCGCpuNodeKind::SlopeFilter ? spatial.Surfaces().size() : generationElements.Value();
+                const bool surfaceInput =
+                    descriptor.Value()->kind == PCGCpuNodeKind::SlopeFilter || descriptor.Value()->kind == PCGCpuNodeKind::SurfaceAlignment;
+                const std::size_t elements = surfaceInput ? spatial.Surfaces().size() : generationElements.Value();
                 const auto cost = plan.Catalog().Cost(plan.Nodes()[node], points[node], elements);
                 if (cost.HasError())
                     return Result<std::size_t>::Failure(cost.ErrorValue());
@@ -293,6 +295,25 @@ namespace Horo::PCG {
                 total = next.Value();
             }
             return Result<std::size_t>::Success(total);
+        }
+
+        /** @brief Validates one transformation's routed source and preservation schema before any workspace allocation. */
+        [[nodiscard]] Result<void> ValidateTransformationBound(const PCGCookedPlan &plan, const std::span<const PCGPointOutputBound> bounds,
+                                                               const PCGPointOutputBound &bound) {
+            const auto settings = detail::DecodePointTransformation(plan.Nodes()[bound.node]);
+            if (settings.HasError())
+                return Result<void>::Failure(settings.ErrorValue());
+            const auto route = std::ranges::find_if(plan.Routes(), [&bound](const auto &candidate) {
+                return candidate.targetNode == bound.node;
+            });
+            if (route == plan.Routes().end())
+                return Reject<void>(PCGErrors::CpuEvaluationInvalid);
+            const auto source = std::ranges::find_if(bounds, [&route](const auto &candidate) {
+                return candidate.node == route->sourceNode && candidate.pin == route->sourcePin;
+            });
+            if (source == bounds.end())
+                return Reject<void>(PCGErrors::CpuEvaluationInvalid);
+            return detail::ValidatePointTransformation(settings.Value(), *source, bound);
         }
 
         /** @brief Requires every routed filter input to retain the complete output schema before allocation. */
@@ -333,7 +354,10 @@ namespace Horo::PCG {
                 const auto descriptor = plan.Catalog().Find(node.type);
                 if (descriptor.HasError())
                     return Result<void>::Failure(descriptor.ErrorValue());
-                if (detail::IsPointFilter(descriptor.Value()->kind)) {
+                if (detail::IsPointTransformation(descriptor.Value()->kind)) {
+                    if (const auto valid = ValidateTransformationBound(plan, bounds, bound); valid.HasError())
+                        return valid;
+                } else if (detail::IsPointFilter(descriptor.Value()->kind)) {
                     if (const auto valid = ValidateFilterBounds(plan, spatial, bound, bounds); valid.HasError())
                         return valid;
                 } else if (descriptor.Value()->settings != PCGNodeSettingsSchema::None) {

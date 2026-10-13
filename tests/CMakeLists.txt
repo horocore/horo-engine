@@ -854,6 +854,8 @@ horo_register_catch_test(HoroAnimationApiTests LABELS "unit;animation;headless")
 
 add_executable(HoroPCGTests
         unit/runtime/pcg/PCGNodeCatalogTests.cpp
+        unit/runtime/pcg/PCGPointTransformationTests.cpp
+        unit/runtime/pcg/PCGPointNoiseTests.cpp
         unit/runtime/pcg/PCGPointGenerationSettingsTests.cpp
         unit/runtime/pcg/PCGPointGenerationTests.cpp
         unit/runtime/pcg/PCGPointFilteringTests.cpp

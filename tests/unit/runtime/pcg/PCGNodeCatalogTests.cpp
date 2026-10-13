@@ -148,7 +148,7 @@ namespace Horo::PCG {
         CheckError(catalog.Register(Forward), PCGErrors::RegistryDuplicate);
         CheckError(catalog.Register(static_cast<PCGCpuNodeKind>(99)), PCGErrors::CpuEvaluationUnsupported);
         CheckError(PCGNodeCatalog::Create(root.Value().Capabilities(), 0), PCGErrors::RegistryCapacityExceeded);
-        CheckError(PCGNodeCatalog::Create(root.Value().Capabilities(), 13), PCGErrors::RegistryCapacityExceeded);
+        CheckError(PCGNodeCatalog::Create(root.Value().Capabilities(), 18), PCGErrors::RegistryCapacityExceeded);
         auto small = Catalog(1);
         REQUIRE(small.Register(Forward).HasValue());
         CheckError(small.Register(Merge), PCGErrors::RegistryCapacityExceeded);
@@ -224,7 +224,7 @@ namespace Horo::PCG {
                 CHECK(entry.settings != PCGNodeSettingsSchema::None);
             }
         }
-        CHECK(PCGCpuNodeType(static_cast<PCGCpuNodeKind>(12)).HasError());
+        CHECK(PCGCpuNodeType(static_cast<PCGCpuNodeKind>(17)).HasError());
         auto lowered = Catalog(4);
         for (const auto kind : {SnapshotGrid, GridJitter, Stratified, PoissonScatter})
             REQUIRE(lowered.Register(kind).HasValue());

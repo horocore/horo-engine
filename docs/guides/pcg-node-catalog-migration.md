@@ -107,9 +107,33 @@ SnapshotGrid v1 also preserves its established missing-grid `CpuEvaluationInvali
 diagnostic. New generation source lookups report `SpatialInputInvalid`; the paired
 admission regression asserts both exact codes rather than flattening either error.
 
+## Point transformation extension (HORO-2032)
+
+`HoroPCG` now owns `PCGPointTransformation.h`; the narrow public consumer includes
+and exercises its typed encoders. Register five operations explicitly. Capacity
+counts actual registrations and grows from twelve to seventeen with the filters
+already available. Stable kinds 12–16 and settings schemas 10–14 coexist with
+filter kinds 7–11 and schemas 5–9 without renumbering either family. Hosts must
+enumerate `Nodes()` rather than index storage by kind or infer registration from
+the numeric maximum. Unknown IDs and unregistered supported kinds still fail.
+Legacy type IDs, generation payload bytes and schema-1 sample seeds are unchanged.
+
+New operations require the existing nonzero numeric-profile fingerprint. Every
+output preserves all input fields; noise additionally requires its exact scalar
+or vector output field (or exact-type replacement). Hosts declare this field in
+the output schema and retain the original five identity fields. Settings remain
+opaque canonical source payloads and serialize through existing graph envelopes;
+no automatic version conversion or ambient node registration is introduced.
+See the [transformation contract](../architecture/runtime/pcg-point-transformation-contract.md)
+for coordinate composition, normal selection, gradient algorithms, seed streams,
+finite boundaries and complete work admission. EditorServices and PCGDocument
+consumers retain the same target boundaries and compile against the updated PCG
+public dependency; no editor/runtime scheduling behavior changes.
+
 ## Point filtering extension (HORO-2018)
 
-The default/maximum catalog capacity grows from seven to twelve while all existing
+The filtering extension originally grew catalog capacity from seven to twelve;
+combined with the transformation extension it is now seventeen. All existing
 kind values, type IDs, payloads, and explicitly lowered capacities remain valid.
 Register the five new settings-backed kinds explicitly and encode their payloads
 with `EncodePCGPointFilterSettings`; the legacy Scalar-input DensityFilter remains

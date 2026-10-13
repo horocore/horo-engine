@@ -6,6 +6,7 @@
 #include "PCGPointFilteringInternal.h"
 #include "PCGPointGenerationInternal.h"
 #include "PCGPointIdentityInternal.h"
+#include "PCGPointTransformationInternal.h"
 
 #include <algorithm>
 #include <format>
@@ -27,7 +28,7 @@ namespace Horo::PCG {
             return Result<void>::Failure(std::move(cause));
         }
 
-        /** @brief Selects only the closed settings schema; descriptor construction remains inert. */
+        /** @brief Closed mapping from stable built-in kinds to exact inert authored settings schemas. */
         PCGNodeSettingsSchema SettingsSchema(PCGCpuNodeKind kind) {
             using enum PCGCpuNodeKind;
             using enum PCGNodeSettingsSchema;
@@ -40,6 +41,16 @@ namespace Horo::PCG {
                     return StratifiedV1;
                 case PoissonScatter:
                     return PoissonScatterV1;
+                case Transform:
+                    return TransformV1;
+                case SurfaceAlignment:
+                    return SurfaceAlignmentV1;
+                case RandomOffset:
+                    return RandomOffsetV1;
+                case PerlinNoise:
+                    return PerlinNoiseV1;
+                case SimplexNoise:
+                    return SimplexNoiseV1;
                 case DensityRangeFilter:
                     return DensityRangeFilterV1;
                 case BoundsFilter:
@@ -55,10 +66,21 @@ namespace Horo::PCG {
             }
         }
 
+        /** @brief Adds the descriptor fixed work to the already bounded typed-filter charge. */
+        Result<PCGNodeCost> FilterCost(const PCGBuiltInNodeDescriptor &descriptor, std::size_t points, std::size_t elements) {
+            const auto charge = detail::ChargePointFilter(descriptor.kind, points, elements);
+            if (charge.HasError())
+                return Result<PCGNodeCost>::Failure(charge.ErrorValue());
+            const auto total = CheckedPCGAdd(charge.Value().pointVisits, descriptor.fixedWork);
+            if (total.HasError())
+                return Result<PCGNodeCost>::Failure(total.ErrorValue());
+            return Result<PCGNodeCost>::Success({total.Value(), charge.Value().snapshotElementVisits, charge.Value().scratchBytes});
+        }
+
         Result<PCGBuiltInNodeDescriptor> Describe(PCGCpuNodeKind kind) {
             using enum PCGCpuNodeKind;
             const auto index = static_cast<std::size_t>(kind);
-            if (index >= 12)
+            if (index >= 17)
                 return Reject<PCGBuiltInNodeDescriptor>(PCGErrors::CpuEvaluationUnsupported);
             const auto type = NodeTypeId::Create(0x5043470206000001ULL + index);
             if (type.HasError())
@@ -72,7 +94,7 @@ namespace Horo::PCG {
             descriptor.kind = kind;
             descriptor.requiredCapabilities = capabilities.Value();
             const bool generation = kind == SnapshotGrid || kind == GridJitter || kind == Stratified || kind == PoissonScatter;
-            descriptor.determinism = generation || kind == SlopeFilter || kind == DistanceFilter
+            descriptor.determinism = generation || kind == SlopeFilter || kind == DistanceFilter || detail::IsPointTransformation(kind)
                                          ? PCGNodeDeterminism::ProfileDeterministic
                                          : PCGNodeDeterminism::PortableDeterministic;
             descriptor.settings = SettingsSchema(kind);
@@ -93,7 +115,7 @@ namespace Horo::PCG {
     /** @copydoc PCGCpuNodeType */
     Result<NodeTypeId> PCGCpuNodeType(PCGCpuNodeKind kind) {
         const auto index = static_cast<std::size_t>(kind);
-        if (index >= 12)
+        if (index >= 17)
             return Reject<NodeTypeId>(PCGErrors::CpuEvaluationUnsupported);
         return NodeTypeId::Create(0x5043470206000001ULL + index);
     }
@@ -159,6 +181,9 @@ namespace Horo::PCG {
         if (descriptor.settings == PCGNodeSettingsSchema::None) {
             if (!node.payload.empty())
                 return NodeFailure(PCGErrors::RegistryDescriptorInvalid, node.id);
+        } else if (detail::IsPointTransformation(descriptor.kind)) {
+            if (const auto decoded = detail::DecodePointTransformation(node); decoded.HasError())
+                return NodeFailure(PCGErrors::RegistryDescriptorInvalid, node.id);
         } else if (detail::IsPointFilter(descriptor.kind)) {
             if (const auto decoded = detail::DecodePointFilter(node); decoded.HasError())
                 return NodeFailure(PCGErrors::RegistryDescriptorInvalid, node.id);
@@ -176,15 +201,14 @@ namespace Horo::PCG {
         const auto descriptor = Find(node.type);
         if (descriptor.HasError())
             return Result<PCGNodeCost>::Failure(descriptor.ErrorValue());
-        if (detail::IsPointFilter(descriptor.Value()->kind)) {
-            const auto charge = detail::ChargePointFilter(descriptor.Value()->kind, maximumPoints, maximumSnapshotElements);
-            if (charge.HasError())
-                return Result<PCGNodeCost>::Failure(charge.ErrorValue());
-            const auto total = CheckedPCGAdd(charge.Value().pointVisits, descriptor.Value()->fixedWork);
-            if (total.HasError())
-                return Result<PCGNodeCost>::Failure(total.ErrorValue());
-            return Result<PCGNodeCost>::Success({total.Value(), charge.Value().snapshotElementVisits, charge.Value().scratchBytes});
+        if (detail::IsPointTransformation(descriptor.Value()->kind)) {
+            const auto settings = detail::DecodePointTransformation(node);
+            if (settings.HasError())
+                return Result<PCGNodeCost>::Failure(settings.ErrorValue());
+            return detail::ChargePointTransformation(settings.Value(), maximumPoints, maximumSnapshotElements);
         }
+        if (detail::IsPointFilter(descriptor.Value()->kind))
+            return FilterCost(*descriptor.Value(), maximumPoints, maximumSnapshotElements);
         if (descriptor.Value()->settings != PCGNodeSettingsSchema::None) {
             const auto settings = detail::DecodePointGeneration(node);
             if (settings.HasError())
@@ -227,7 +251,7 @@ namespace Horo::PCG {
         auto projection = ProjectPCGCapabilities(capabilities.profile, capabilities.granted);
         if (projection.HasError())
             return Result<PCGNodeCatalog>::Failure(projection.ErrorValue());
-        if (maximumNodes == 0 || maximumNodes > 12)
+        if (maximumNodes == 0 || maximumNodes > 17)
             return Reject<PCGNodeCatalog>(PCGErrors::RegistryCapacityExceeded);
         try {
             auto state = std::make_shared<PCGNodeCatalogSnapshot::State>();
