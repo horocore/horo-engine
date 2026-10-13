@@ -411,17 +411,22 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
-        /** @brief Collects the complete immutable clip dependency set, including inactive state branches. */
+        /** @brief Projects one typed opcode's direct clips, including every inactive state source. */
+        void CollectPayloadClips(const GraphNodePayload &opcode, std::set<AnimationClipId> &clips) {
+            std::visit([&clips]<typename Payload>(const Payload &payload) {
+                if constexpr (std::is_same_v<Payload, GraphClipNode>)
+                    clips.insert(payload.clip);
+                else if constexpr (std::is_same_v<Payload, GraphStateMachineNode>)
+                    for (const auto &state : payload.states)
+                        if (const auto *clip = std::get_if<AnimationClipId>(&state.source))
+                            clips.insert(*clip);
+            }, opcode);
+        }
+
+        /** @brief Collects each compiled definition's immutable dependency set without selecting active branches. */
         void CollectClips(const GraphCompiledDefinition &definition, std::set<AnimationClipId> &clips) {
             for (const auto &instruction : definition.instructions)
-                std::visit([&clips]<typename Payload>(const Payload &payload) {
-                    if constexpr (std::is_same_v<Payload, GraphClipNode>)
-                        clips.insert(payload.clip);
-                    else if constexpr (std::is_same_v<Payload, GraphStateMachineNode>)
-                        for (const auto &state : payload.states)
-                            if (const auto *clip = std::get_if<AnimationClipId>(&state.source))
-                                clips.insert(*clip);
-                }, instruction.payload);
+                CollectPayloadClips(instruction.payload, clips);
         }
 
         /** @brief Compiles the complete detached definition set and collects even inactive clip dependencies before publication. */

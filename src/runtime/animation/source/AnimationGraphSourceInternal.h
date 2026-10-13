@@ -66,7 +66,9 @@ namespace Horo::Animation::GraphSourceDetail {
         }
 
         /** @brief Non-clip references and scalar/composition opcodes add no direct clip dependency. */
-        template <typename Payload> void operator()(const Payload &) const noexcept {}
+        template <typename Payload> void operator()(const Payload &) const noexcept {
+            // Scalar/composition metadata has no direct clip. Definition references are covered by the complete outer walk.
+        }
     };
 
     /** @brief Produces the exact canonical typed dependency projection used by the host sink. */
