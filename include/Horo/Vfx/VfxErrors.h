@@ -16,6 +16,8 @@ namespace Horo::Vfx::VfxErrors {
     extern const ErrorCodeDescriptor IdentityStale;
     /** @brief A generation cannot advance without wrapping into a reserved value. */
     extern const ErrorCodeDescriptor GenerationExhausted;
+    /** @brief Scene clone requires explicit VFX storage/budget preparation. */
+    extern const ErrorCodeDescriptor SceneCloneUnavailable;
     /** @brief Canonical serialized identity bytes are malformed. */
     extern const ErrorCodeDescriptor SerializedIdentityInvalid;
     /** @brief Capability evidence is malformed, incomplete, or contradictory. */

@@ -2,10 +2,11 @@
 
 HORO-2032 / [PCG-3.5] extends the inert CPU catalog with Transform (12),
 SurfaceAlignment (13), RandomOffset (14), PerlinNoise (15), and SimplexNoise (16).
-IDs 0–6 retain their existing type IDs. IDs 7–11 and settings schemas 5–9 are
-reserved for the independently delivered point filters. Transformation schemas
-10–14 are version 1; catalog capacity counts registered descriptors, never the
-largest enum value. Reserved and unknown kinds remain typed unsupported errors.
+IDs 0–6 retain their existing type IDs. IDs 7–11 and settings schemas 5–9 belong
+to the point filters already delivered on main. Transformation schemas 10–14
+are version 1; the combined capacity is seventeen and counts registered descriptors,
+never an inferred registration from the largest enum value. Unknown kinds remain
+typed unsupported errors, and supported but unregistered kinds remain unavailable.
 No descriptor construction or registration selects a backend or invokes a provider.
 
 ## Coordinates and records

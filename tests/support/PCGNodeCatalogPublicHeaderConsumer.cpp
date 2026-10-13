@@ -1,5 +1,6 @@
 #include "Horo/PCG/PCGCpuEvaluator.h"
 #include "Horo/PCG/PCGNodeCatalog.h"
+#include "Horo/PCG/PCGPointFiltering.h"
 #include "Horo/PCG/PCGPointGeneration.h"
 #include "Horo/PCG/PCGPointTransformation.h"
 #include "Horo/PCG/PCGProvenance.h"
@@ -18,3 +19,5 @@ static_assert(
     std::is_same_v<decltype(Horo::PCG::EncodePCGPointTransformationSettings(std::declval<const Horo::PCG::PCGPointNoiseSettings &>())),
                    Horo::Result<std::vector<std::uint8_t>>>);
 static_assert(static_cast<unsigned>(Horo::PCG::PCGCpuNodeKind::Transform) == 12);
+static_assert(std::variant_size_v<Horo::PCG::PCGPointFilterSettings> == 5);
+static_assert(std::variant_size_v<Horo::PCG::PCGAttributePredicateValue> == 7);

@@ -27,6 +27,10 @@
 
 namespace Horo::Render {
     struct RenderGraphExecutionRequest;
+    struct RenderShaderModuleDescriptor;
+    struct RenderGraphicsPipelineDescriptor;
+    struct RenderPipelineDeviceIdentity;
+    struct RenderMaterialExecutionRequest;
 
     /** @brief Stable renderer backend identity used by configuration and registries. */
     class RenderBackendId {
@@ -313,6 +317,58 @@ namespace Horo::Render {
          */
         [[nodiscard]] virtual Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const = 0;
 
+        /** @brief Queries the initialized backend's actual pipeline compatibility facts during owner-thread preparation.
+         * @return Native-free device/driver identity or typed unsupported/lifecycle failure.
+         * @details Does not select a device or mutate native rendering state. Only owned metadata allocation/length exceptions may escape.
+         */
+        [[nodiscard]] virtual Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const;
+
+        /** @brief Queries native-free shader backing requirements before admission.
+         * @param descriptor Exact validated cooked stage identity. @param cookedBytes Selected stage payload size.
+         * @return Admitted estimate/requirements or original typed unsupported/failure; only owned metadata allocation/length exceptions
+         * may escape. */
+        [[nodiscard]] virtual Result<RenderMemoryCostPlan> QueryShaderModuleMemoryCost(const RenderShaderModuleDescriptor &descriptor,
+                                                                                       std::size_t cookedBytes) const;
+        /** @brief Queries native-free graphics program backing requirements over exact ready shader instances.
+         * @param descriptor Validated immutable pipeline. @param vertex Backend-private vertex instance.
+         * @param fragment Backend-private fragment instance.
+         * @return Requirements or typed failure; only owned metadata allocation/length exceptions may escape. */
+        [[nodiscard]] virtual Result<RenderMemoryCostPlan> QueryGraphicsPipelineMemoryCost(
+            const RenderGraphicsPipelineDescriptor &descriptor, std::uint64_t vertex, std::uint64_t fragment) const;
+        /** @brief Queries native-free sampler backing requirements before admission.
+         * @param descriptor Validated immutable sampling policy.
+         * @return Requirements or typed failure; only owned metadata allocation/length exceptions may escape. */
+        [[nodiscard]] virtual Result<RenderMemoryCostPlan> QuerySamplerMemoryCost(const RenderSamplerDescriptor &descriptor) const;
+
+        /** @brief Realizes an admitted cooked shader during render-owner preparation, outside an active frame.
+         * @param descriptor Exact cooked stage identity. @param cookedCode Borrowed selected stage bytes, consumed synchronously.
+         * @param placement Previously admitted requirements for this exact request.
+         * @return Non-zero backend-private instance or original typed failure; no source cooker or fallback is invoked. */
+        [[nodiscard]] virtual Result<std::uint64_t> CreateShaderModule(const RenderShaderModuleDescriptor &descriptor,
+                                                                       std::span<const std::uint8_t> cookedCode,
+                                                                       const RenderMemoryPlacement &placement);
+        /** @brief Realizes an admitted graphics pipeline during render-owner preparation, outside an active frame.
+         * @param descriptor Exact immutable shader/layout/state compatibility. @param vertex Exact ready vertex instance.
+         * @param fragment Exact ready fragment instance. @param placement Previously admitted requirements.
+         * @return Non-zero backend-private instance or original typed link/reflection/unsupported failure. */
+        [[nodiscard]] virtual Result<std::uint64_t> CreateGraphicsPipeline(const RenderGraphicsPipelineDescriptor &descriptor,
+                                                                           std::uint64_t vertex, std::uint64_t fragment,
+                                                                           const RenderMemoryPlacement &placement);
+        /** @brief Realizes an admitted immutable sampler during render-owner preparation.
+         * @param descriptor Exact sampling policy. @param placement Previously admitted requirements.
+         * @return Non-zero backend-private instance or typed failure with no policy fallback. */
+        [[nodiscard]] virtual Result<std::uint64_t> CreateSampler(const RenderSamplerDescriptor &descriptor,
+                                                                  const RenderMemoryPlacement &placement);
+        /** @brief Releases a shader after all pipeline dependency and submission pins drain.
+         * @param backendInstance Exact instance returned by CreateShaderModule. */
+        virtual void DestroyShaderModule(std::uint64_t backendInstance) noexcept;
+        /** @brief Releases a graphics pipeline after its submission pins drain.
+         * @param backendInstance Exact instance returned by CreateGraphicsPipeline. */
+        virtual void DestroyGraphicsPipeline(std::uint64_t backendInstance) noexcept;
+        /** @brief Releases a sampler after all material and submission pins drain.
+         * @param backendInstance Exact instance returned by CreateSampler. */
+        virtual void DestroySampler(std::uint64_t backendInstance) noexcept;
+
         /**
          * @brief Realizes one validated immutable buffer and its initial upload.
          * @param descriptor Backend-neutral buffer policy validated by the frontend.
@@ -436,6 +492,12 @@ namespace Horo::Render {
          * @return Success or a typed unsupported/admission/encoding failure, without fallback.
          */
         [[nodiscard]] virtual Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request);
+        /** @brief Consumes prepared immutable material tables on exact ready meshes, with completion-owned resource retention.
+         * @param request Synchronous resolved native request with the frontend's existing frame lease/transfer authority.
+         * @return Success or original typed validation/unsupported/native failure.
+         * @details Validate all inputs before encoding. Immediate backends transfer ownership before the first queued command;
+         * a later error or cancellation retains submitted resources until completion or context teardown. */
+        [[nodiscard]] virtual Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &request);
 
         /** @brief Returns explicit worker-native support; unsupported backends return zero bounds. */
         [[nodiscard]] virtual RenderParallelRecordingCapabilities ParallelRecordingCapabilities() const noexcept;

@@ -536,6 +536,47 @@ new tick and leave both old poses readable. Cancellation is observed before work
 between bounded instructions and at the commit fence. The commit fence is the
 linearization boundary: a later cancellation does not undo a committed tick.
 
+### Typed gameplay parameters, triggers and authored curves
+
+`GraphParameterInput` is the canonical typed parameter-block entry. Stable graph-local
+IDs identify float, boolean, integer and trigger values. Each invocation copies its
+admitted inputs before instruction execution; missing declarations, duplicate IDs,
+non-finite values and variant/type mismatches return finite binding/malformed/type
+diagnostics. Omitted scalar inputs retain compiled-default behavior. There is no
+second mutable gameplay parameter store.
+
+The owner calls `QueueTrigger` before evaluation. Repeated events coalesce within the
+pending fixed tick. False invocation input cannot erase an accepted queued event.
+Successful `Commit` consumes the queue only after the cancellation fence. Failed
+evaluation, `Abort` and cancelled commit retain it for retry. Explicit true invocation
+inputs are events for that invocation, not retained queue commands. Each next successful
+tick reconstructs trigger values from false defaults and newly accepted events, so
+gameplay output cannot remain latched. Queueing during a pending candidate, after
+shutdown, from a foreign thread, against a missing identity or a scalar declaration
+fails explicitly.
+
+`AnimationParameterCurve` prepares version-1 authored data at a control boundary:
+one float parameter identity and 1–4096 strictly ordered non-negative nanosecond keys
+with finite values. Step and linear interpolation are explicit. Unknown versions or
+interpolation, malformed keys, exceeded capacity and cancellation publish nothing.
+The instance pins immutable curves, admits unique exact float bindings, and charges
+logarithmic key-search work together with clip/joint work before runtime allocation.
+`GraphEvaluationInput::curveTime` explicitly supplies authored timeline position
+independently of clip cursors. Samples clamp at endpoints; linear interpolation uses
+double intermediates. Curves apply after defaults; explicit scalar inputs take precedence.
+No graph node mutates curves. Authoring hosts supply typed curve publications; the
+existing graph-source codec remains unchanged and rejects undeclared serialized fields.
+
+`CopyParameters` copies a complete immutable block in stable identity order into
+caller-owned storage. Exact instance/slot/generation publication from `Commit` shares
+the two-publication pose retention fence. Size, owner and stale/malformed handles fail
+before any write. A trigger value describes that committed tick only, including in
+historical snapshots. Failed reload preserves the queue/publications; successful reload
+starts an empty queue and retires old-generation snapshots. Shutdown clears pending
+events and rejects execution while historical blocks remain readable like poses.
+Preparation may allocate. Queueing, evaluation, commit, abort, sampling, snapshot copy
+and shutdown allocate nothing and perform no I/O.
+
 Pose consumers use `CopyPose` into their own complete storage. No borrowed pose
 pointer or consumer lease escapes. Exact previous/current handles identify the
 last two committed poses; a third commit retires the oldest storage generation.

@@ -124,6 +124,42 @@ namespace Horo::Navigation {
         };
     }  // namespace
 
+    TEST_CASE("Movement repath feedback requires the latest exact operation path and tick", "[unit][navigation][movement]") {
+        Fixture fixture;
+        const auto id = fixture.Start(fixture.Move(), fixture.Now());
+        REQUIRE(fixture.Update(fixture.Now()).state == NavigationMovementState::Querying);
+        auto intent = fixture.Publish();
+        auto current = fixture.Now(2);
+        current.feedback = NavigationMovementFeedback{{id.agent, id.sequence + 1}, intent.path, 1, 0, {}, true};
+        intent = fixture.Update(current);
+        CHECK(intent.state == NavigationMovementState::Following);
+        current.path.tick = 3;
+        current.feedback = NavigationMovementFeedback{id, intent.path, 2, 0, {}, true};
+        intent = fixture.Update(current);
+        CHECK(intent.state == NavigationMovementState::Querying);
+        CHECK(intent.path == PathId{});
+        CHECK(intent.desiredVelocity == Math::Vec3{});
+    }
+
+    TEST_CASE("Movement motion reset validates before clearing corridor and old arrival evidence", "[unit][navigation][movement]") {
+        Fixture fixture;
+        const auto id = fixture.Start(fixture.Move(), fixture.Now());
+        REQUIRE(fixture.Update(fixture.Now()).state == NavigationMovementState::Querying);
+        const auto intent = fixture.Publish();
+        auto invalid = fixture.Now(2);
+        invalid.stepSeconds = 0;
+        CHECK(fixture.movement->ResetMotionAtSafePoint(invalid).HasError());
+        CHECK(fixture.movement->IsCurrentIntent(intent));
+        auto reset = fixture.Now(2);
+        reset.position = {10, 0, 0};
+        REQUIRE(fixture.movement->ResetMotionAtSafePoint(reset).HasValue());
+        CHECK_FALSE(fixture.movement->IsCurrentIntent(intent));
+        reset.feedback = NavigationMovementFeedback{id, intent.path, 1, 0};
+        const auto next = fixture.Update(reset);
+        CHECK(next.state == NavigationMovementState::Querying);
+        CHECK(next.desiredVelocity == Math::Vec3{});
+    }
+
     TEST_CASE("Movement arrival requires a current path and exact achieved motion acknowledgement", "[unit][navigation][movement]") {
         Fixture fixture;
         const auto id = fixture.Start(fixture.Move(), fixture.Now());

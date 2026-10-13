@@ -11,6 +11,23 @@ namespace Horo::Render::RenderGraphExecutionErrors {
         Detail::MakeErrorDescriptor(Domain, "render.graph.execution.workload_unsupported", ErrorSeverity::Error,
                                     "The selected backend cannot execute this graph workload or resource class.",
                                     "Use an admitted workload and resolved resident resources; no backend fallback is performed.");
+    const ErrorCodeDescriptor VfxExecutionUnavailable =
+        Detail::MakeErrorDescriptor(Domain, "render.graph.execution.vfx_unavailable", ErrorSeverity::Error,
+                                    "Typed VFX graph scheduling is available, but native particle encoding is not implemented.",
+                                    "Provide a qualified particle encoder before submitting VFX workloads; no empty-pass substitution is "
+                                    "permitted.");
+    const ErrorCodeDescriptor VfxDrawBudgetExceeded =
+        Detail::MakeErrorDescriptor(Domain, "render.graph.execution.vfx_draw_budget_exceeded", ErrorSeverity::Error,
+                                    "Complete VFX sorted draw runs exceed the remaining global draw-call allowance.",
+                                    "Re-admit the scene/view budget or explicitly reduce cosmetic effects at the owner boundary.");
+    const ErrorCodeDescriptor VfxSchedulingCapacity =
+        Detail::MakeErrorDescriptor(Domain, "render.graph.execution.vfx_scheduling_capacity", ErrorSeverity::Error,
+                                    "VFX view scheduling exceeds its prepared renderer capacity.",
+                                    "Prepare aggregate view/order storage before activation; frame-hot growth is prohibited.");
+    const ErrorCodeDescriptor VfxViewsRetained =
+        Detail::MakeErrorDescriptor(Domain, "render.graph.execution.vfx_views_retained", ErrorSeverity::Warning,
+                                    "All prepared VFX view slots remain leased by outstanding workloads.",
+                                    "Release retired view/graph leases before explicitly retrying admission.");
     const ErrorCodeDescriptor AllocationFailed =
         Detail::MakeErrorDescriptor(Domain, "render.graph.execution.allocation_failed", ErrorSeverity::Error,
                                     "Compiled graph execution storage allocation failed.",

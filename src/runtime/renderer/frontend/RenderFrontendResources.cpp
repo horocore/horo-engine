@@ -31,14 +31,16 @@ namespace Horo::Render {
                 return Supported;
             constexpr std::byte supportedUsageBits =
                 std::byte{static_cast<std::uint8_t>(Vertex)} | std::byte{static_cast<std::uint8_t>(Index)} |
-                std::byte{static_cast<std::uint8_t>(CopySource)} | std::byte{static_cast<std::uint8_t>(CopyDestination)};
+                std::byte{static_cast<std::uint8_t>(CopySource)} | std::byte{static_cast<std::uint8_t>(CopyDestination)} |
+                std::byte{static_cast<std::uint8_t>(Uniform)};
             const auto requested = static_cast<std::byte>(descriptor.usage);
             return (requested & ~supportedUsageBits) == std::byte{} ? Supported : Unsupported;
         }
 
         [[nodiscard]] constexpr bool IsCurrentTextureFormatSupported(const RenderTextureFormat format) noexcept {
             using enum RenderTextureFormat;
-            return format == Rgba8Unorm || format == Depth24Stencil8 || format == Depth32Float;
+            return format == Rgba8Unorm || format == Rgba16Float || format == Rgba32Float || format == Depth24Stencil8 ||
+                   format == Depth32Float;
         }
 
         [[nodiscard]] constexpr ResourceDescriptorAdmission AdmitCurrentTextureDescriptor(

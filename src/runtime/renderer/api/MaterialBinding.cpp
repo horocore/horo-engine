@@ -120,6 +120,24 @@ namespace Horo::Render {
         bool accepting{true};
     };
 
+    /** @copydoc IRenderBackend::ExecuteMaterialPass */
+    Result<void> IRenderBackend::ExecuteMaterialPass(const RenderMaterialExecutionRequest &) {
+        return Result<void>::Failure(MakeError(MaterialBindingErrors::Unsupported));
+    }
+
+    /** @copydoc IMaterialBindingBackend::QueryMaterialParameterBufferSize */
+    Result<std::size_t> IMaterialBindingBackend::QueryMaterialParameterBufferSize(std::uint64_t, const MaterialBindingDescriptor &,
+                                                                                  ShaderBindingId) const {
+        return Result<std::size_t>::Failure(MakeError(MaterialBindingErrors::Unsupported));
+    }
+
+    /** @copydoc IMaterialBindingBackend::RealizeResolved */
+    Result<std::unique_ptr<IResidentMaterialBinding>> IMaterialBindingBackend::RealizeResolved(const MaterialBindingDescriptor &,
+                                                                                               std::uint64_t,
+                                                                                               std::span<const MaterialResidentResource>) {
+        return Result<std::unique_ptr<IResidentMaterialBinding>>::Failure(MakeError(MaterialBindingErrors::Unsupported));
+    }
+
     /** @copydoc IMaterialBindingBackend::Realize */
     Result<std::unique_ptr<IResidentMaterialBinding>> IMaterialBindingBackend::Realize(const MaterialBindingDescriptor &) {
         return Result<std::unique_ptr<IResidentMaterialBinding>>::Failure(MakeError(MaterialBindingErrors::Unsupported));

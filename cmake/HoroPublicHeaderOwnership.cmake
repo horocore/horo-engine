@@ -366,6 +366,21 @@ horo_configure_target_header_boundary(HoroUiTemplateGraph PUBLIC_HEADERS
     Horo/UiTemplates/UiTemplateDependencyGraph.h
     Horo/UiTemplates/UiTemplateErrors.h
 )
+horo_configure_target_header_boundary(HoroUiTemplateInstances PUBLIC_HEADERS
+    Horo/UiTemplates/UiTemplateArtifact.h
+    Horo/UiTemplates/UiTemplateSource.h
+    Horo/UiTemplates/UiTemplateModel.h
+    Horo/UiTemplates/UiTemplateCatalog.h
+    Horo/UiTemplates/UiTemplateExpansion.h
+    Horo/UiTemplates/UiTemplateDocumentOwner.h
+)
+
+horo_configure_target_header_boundary(HoroProjectMutationGuard PUBLIC_HEADERS
+    Horo/Editor/ProjectMutation.h
+)
+horo_configure_target_header_boundary(HoroUiTemplateHost PUBLIC_HEADERS
+    Horo/Application/UiTemplateHost.h
+)
 horo_configure_target_header_boundary(HoroPlayTopologyApplication PUBLIC_HEADERS
     Horo/Application/PlayTopology.h
 )
@@ -688,6 +703,7 @@ horo_configure_target_header_boundary(HoroAnimationGraphSourceCodec PUBLIC_HEADE
 )
 horo_configure_target_header_boundary(HoroAnimationRuntime PUBLIC_HEADERS
     Horo/Animation/AnimationGraphInstance.h
+    Horo/Animation/AnimationParameterCurve.h
 )
 horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
     Horo/Animation/AnimationGraph.h
@@ -704,6 +720,7 @@ horo_configure_target_header_boundary(HoroPCG PUBLIC_HEADERS
     Horo/PCG/PCGNodeCatalog.h
     Horo/PCG/PCGPointGeneration.h
     Horo/PCG/PCGPointTransformation.h
+    Horo/PCG/PCGPointFiltering.h
     Horo/PCG/PCGCpuEvaluator.h
     Horo/PCG/PCGCookedPlan.h
     Horo/PCG/PCGErrors.h
@@ -730,6 +747,7 @@ horo_configure_target_header_boundary(HoroVfxApi PUBLIC_HEADERS
     Horo/Vfx/VfxErrors.h
     Horo/Vfx/VfxIdentity.h
     Horo/Vfx/VfxQualityPolicy.h
+Horo/Vfx/VfxWorld.h
 )
 horo_configure_target_header_boundary(HoroDestructionApi PUBLIC_HEADERS
     Horo/Destruction/DestructibleDescriptor.h
@@ -831,6 +849,7 @@ horo_configure_target_header_boundary(HoroNavigationRuntime PUBLIC_HEADERS
     Horo/Navigation/NavigationPathPolicy.h
     Horo/Navigation/NavigationCoordinator.h
     Horo/Navigation/NavigationMovement.h
+    Horo/Navigation/NavigationVelocityPipeline.h
     Horo/Navigation/NavigationRuntimeQueues.h
     Horo/Navigation/NavigationWorldLifecycle.h
 )
@@ -1011,6 +1030,9 @@ horo_configure_target_header_boundary(HoroPrefabCookHost PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
+Horo/Runtime/Render/RenderWorldSnapshot.h
+Horo/Runtime/Render/VfxGraphWorkload.h
+Horo/Runtime/Render/VfxGraphScheduling.h
     Horo/Runtime/Render/LightCulling.h
     Horo/Runtime/Render/LightCullingKernel.h
     Horo/Runtime/Render/LightFrameLayout.h
@@ -1056,7 +1078,10 @@ horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
     Horo/Runtime/Render/RenderMemoryTypes.h
     Horo/Runtime/Render/RenderResourceDescriptorErrors.h
     Horo/Runtime/Render/RenderResourceDescriptors.h
+    Horo/Runtime/Render/RenderShaderResources.h
+    Horo/Runtime/Render/RenderShaderResourceErrors.h
     Horo/Runtime/Render/RenderSubmission.h
+    Horo/Runtime/Render/ShaderArtifact.h
     Horo/Runtime/Render/ShaderCompilerPipeline.h
     Horo/Runtime/Render/ShaderCompilerPipelineErrors.h
     Horo/Runtime/Render/ShaderManifest.h
@@ -1152,7 +1177,6 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/ProjectCreationService.h
     Horo/Editor/ProjectIntegrityValidatorService.h
     Horo/Editor/ProjectMigrationTransaction.h
-    Horo/Editor/ProjectMutation.h
     Horo/Editor/ProjectOpenService.h
     Horo/Editor/ProjectSession.h
     Horo/Editor/RecentProject.h
@@ -1173,6 +1197,8 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroEditorViewportOpenGL)
+horo_configure_target_header_boundary(HoroEditorPresentationSurfaceInternal)
+horo_configure_target_header_boundary(HoroSdlOpenGLPresentationInternal)
 horo_configure_target_header_boundary(HoroEditorViewportMetal)
 horo_configure_target_header_boundary(HoroInputSdl)
 horo_configure_target_header_boundary(HoroRuntimeUiInput PUBLIC_HEADERS

@@ -54,6 +54,7 @@ namespace Horo::Render {
         std::uint8_t rows{1};
         std::uint8_t columns{1};
         std::uint32_t arrayCount{1};
+        std::string nativeName; /**< Optional final-target name; OpenGL 4.1 fragment-output realization requires it for location lookup. */
     };
 
     /** @brief Native target placement represented without exposing an API handle or native enum. */

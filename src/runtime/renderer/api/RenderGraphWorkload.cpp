@@ -75,7 +75,7 @@ namespace Horo::Render {
             }
             if (const auto *primary = std::get_if<PrimaryOutputAttachment>(&workload))
                 return pass.kind == RenderPassKind::Graphics && uses.empty() && primary->IsValid();
-            return pass.kind == RenderPassKind::Graphics && uses.empty();
+            return std::holds_alternative<std::monostate>(workload) && pass.kind == RenderPassKind::Graphics && uses.empty();
         }
 
         /** @brief Validates exact pass semantics and records retained first/last uses without allocation. */
@@ -154,6 +154,9 @@ namespace Horo::Render {
             graph.Passes().size() > RenderGraphLimits::HardMaxPasses || request.workloads.size() != graph.Passes().size() ||
             request.resources.size() != graph.Resources().size())
             return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
+        for (const auto &binding : request.workloads)
+            if (std::holds_alternative<RenderGraphVfx>(binding.workload))
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::VfxExecutionUnavailable));
         if (!graph.ReleaseTransfers().empty() || !graph.AcquireTransfers().empty())
             return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload,
                                                    "Single-queue workload admission does not implement ownership transfers."));

@@ -1242,3 +1242,133 @@ architecture-only change:
 - [World Streaming Architecture](./world-streaming-architecture.md): Provider barriers and cell ownership.
 - [Render Backend Parity Contract](./render-backend-parity-contract.md): Typed capabilities and equal backends.
 - [Renderer Distribution And Availability](./renderer-distribution-and-availability.md): Explicit renderer selection.
+
+## CPU Live-Effect Extraction Implementation
+
+`Horo/Vfx/VfxWorld.h` implements the prepared CPU ownership and single immutable
+extraction channel. Host composition prepares fixed cooked emitter bindings and
+one aggregate extraction reservation before attaching the world to its exact
+`RuntimeScene` incarnation. The existing CPU simulator/spawn pipeline operates on
+that world's owner-thread buffers. `RuntimeSceneService` captures the world during
+`RenderExtraction` and exposes the current `VfxFrame` with typed overload evidence.
+Scene replacement destroys simulation storage; retained frames contain copied values
+and remain independent of the old scene.
+
+`VfxRenderExtractor` copies complete emitters into preallocated frame slots and never
+submits graph work. Slots cannot be overwritten while any snapshot or renderer view
+order retains them. A full ring reports `FramesRetained`; instance/batch/draw overflow
+omits the complete incoming emitter and records counts plus its exact identity.
+Solid batches reserve worst-case depth/color/shadow draws; alpha reserves one draw
+per particle to cover interleaved global sorting. These credits are a slice of the
+host's global scene draw allowance. The host must include all views when reserving
+and decrementing that allowance; renderer view admission cannot create extra credits.
+CPU positions remain relative to an emitter's canonical ADR-026 origin. Extraction
+computes hierarchical cell differences before converting to render-relative floats.
+
+`RenderFrontend::ScheduleVfx` consumes `RenderWorldSnapshot` into the actual open
+recipe `RenderGraphBuilder`. The host supplies graph-local ready attachments and
+opaque/output-transform anchors. Every inserted pass owns a `RenderGraphVfx` workload
+with the immutable snapshot and exact per-view instance references. Opaque/masked
+mesh uses matching depth/shadow membership and compatible Deferred GBuffer or opaque
+forward color. Alpha is globally stable-radix ordered back-to-front with batch and
+particle identity ties, followed by unsorted additive; both use completed read-only
+depth and unexposed scene-linear floating-point color. Admission validates the entire
+contribution before mutation, and append rollback preserves existing graph records
+on failure. Merge returned workloads by pass identity into compiled schedule order.
+
+The frontend admits single-layer, single-sample 2D `Rgba16Float` and `Rgba32Float`
+texture resources so the host can supply these scene-linear color attachments.
+Backend format support and memory-cost admission remain mandatory; frontend
+admission does not grant a backend an unsupported format or VFX execution capability.
+The current OpenGL texture realization path rejects these floating-point formats;
+its typed unsupported result remains intact, with no LDR substitution.
+
+The public-header migration introduces renderer-owned `RenderWorldSnapshot`,
+`VfxGraphWorkload` and `VfxGraphScheduling` under `HoroRenderApi`, and scene-owned
+`VfxWorld` under `HoroVfxApi`. VFX depends only on the neutral Render API; the
+frontend does not depend on VFX simulation. RuntimeScene explicitly owns the prepared
+world. Existing static mesh, CPU particle and graph callers remain source-compatible.
+Public-header consumer coverage exercises these target boundaries.
+
+Render origins are borrowed by const reference only for synchronous attachment
+and extraction. Attachment copies the coordinate into scene-owned storage;
+extraction copies derived positions into its immutable frame. No origin reference
+is retained. Call sites remain source-compatible, including temporary coordinates,
+but consumers taking member-function pointers must adopt the const-reference
+signature and rebuild against the updated declarations.
+
+This implementation publishes CPU particle scheduling, not physical particle draws.
+`ExecuteGraph` rejects any VFX workload with `VfxExecutionUnavailable` before any
+pass is encoded. The shared execution validator also rejects it on every backend,
+including Null. Native uploads, particle shaders/encoding, GPU simulation and GPU
+sorting remain their subsequent implementation owners; an ordering-only empty pass
+must never replace a particle workload or be reported as successful rendering.
+
+Normal `RuntimeSceneService::QueuePreparation` composition uses the deliberate
+`SceneActivationParticipant::PrepareOwnedScene` hook to attach prepared VFX under
+the candidate's actual scene incarnation. The service completes **all** owner
+preparation before **any** existing immutable `Prepare(definition, view)` call.
+Failure destroys the unpublished Scene and its owned VFX via RAII; publication
+performs no new VFX preparation or registration. Existing participants inherit the
+no-op hook. The service releases only its previous extraction lease before taking
+another frame; external renderer/read leases continue to apply ring backpressure.
+`CloneActive` rejects an attached VFX world with `SceneCloneUnavailable` until an
+explicit clone preparation and aggregate admission path exists, preserving live
+state instead of silently dropping or sharing simulation ownership.
+
+### Prepared Renderer View Storage Migration
+
+VFX-004.2 replaces allocation of renderer view metadata during `ScheduleVfx` with
+explicit `RenderFrontend::PrepareVfxScheduling(VfxSchedulingBudget)` before scene
+activation. The host admits maximum instances, retained view slots across **all**
+views/frames, and a finite byte envelope. Reconfiguration reserves the peak of old
+and candidate payload storage and rejects outstanding view leases; failed preparation
+keeps the old workspace intact. Scheduling never grows this storage or changes the
+selected backend. Saturation returns `VfxViewsRetained`; an unprepared or undersized
+workspace returns `VfxSchedulingCapacity`. The host decides whether and when to retry.
+
+Each prepared slot holds six finite semantic index orders and one radix scratch
+array. Actual `RenderGraphVfx` payloads alias these orders and retain their exact
+source `RenderWorldSnapshot` separately. A slot is reusable only after every workload
+and copied view lease releases it. Pool storage cannot retain a source frame after
+the final workload releases, so it cannot deadlock a one-slot extraction ring. Leased
+orders and source values survive frontend/world destruction; native submission must
+retain these workload leases until final GPU reference retirement when VFX-004.3
+implements encoding. Physical execution remains explicitly unavailable here.
+
+`VfxGraphSchedule::Workloads()` replaces the growable vector with six owned records;
+`VfxGraphSchedulingOutcome` replaces its owning-error `Result` on the frame path.
+Expected failures retain static descriptor/context references. `ErrorValue()` is the
+explicit diagnostic projection outside measured frame work and preserves the exact
+code/context; unexpected graph failures preserve their original owning error.
+Existing static-mesh and other graph callers do not change. The affected callers
+are the newly introduced VFX scene/frontend contract and its regression/public-header
+consumers. These renderer-neutral declarations remain owned by `HoroRenderApi` and
+`HoroRenderFrontend`; OpenGL, Metal and headless compositions consume the same contract.
+
+`RenderFrontend::ScheduleVfx` is const: it does not replace frontend state, but
+still mutates prepared view slots and the caller's graph on the declared render
+owner. Const access does not permit concurrent scheduling. Ordinary calls remain
+source-compatible; callers storing a member-function pointer must add the const
+qualifier to that pointer type. Consumers must rebuild for the changed symbol.
+
+Regression coverage measures success over 128 prepared view admissions and typed
+draw-budget, instance-capacity and retained-slot failures, with assertions outside
+the allocation window. It also verifies opposite-view ordering, copied-lease
+backpressure, reconfiguration rejection, graph rollback, source-ring release and
+retained data after frontend/world destruction. Measurement is not qualified until
+the corresponding native tests actually run; no GPU performance claim is made.
+
+The current applications do not yet build a PBR recipe graph from runtime Scene
+frames. This ticket implements the public `RuntimeSceneService::VfxFrame()` to
+host-supplied `RenderGraphBuilder` / `RenderFrontend::ScheduleVfx` pipeline and an
+executable composition regression. It does not claim application VFX rendering:
+application recipe composition and physical billboard/mesh encoding remain under
+VFX-004.3. The existing editor primary-output path is not silently replaced.
+
+The CPU extraction boundary uses `TryReadView` and `TryHandleAt`: both return
+`CpuParticleReadStatus`, clear their output on rejection, and allocate no owning
+diagnostic even when a live emitter's borrowed buffer was shut down or moved.
+Legacy `View() const` and `HandleAt()` project the same validation into the existing
+owned `Result` errors outside the hot window. The extraction regression covers
+both invalid-storage variants and verifies the preserved shutdown error code.

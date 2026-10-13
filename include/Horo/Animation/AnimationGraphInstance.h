@@ -5,6 +5,7 @@
  */
 
 #include "Horo/Animation/AnimationGraph.h"
+#include "Horo/Animation/AnimationParameterCurve.h"
 #include "Horo/Foundation/CancellationToken.h"
 
 #include <memory>
@@ -29,6 +30,7 @@ namespace Horo::Animation {
         std::shared_ptr<const SkeletonAsset> skeleton;
         SkeletonAssetGeneration skeletonGeneration{}; /**< Exact generation issued with this pinned skeleton publication. */
         std::span<const std::shared_ptr<const AnimationClipAsset>> clips;
+        std::span<const std::shared_ptr<const AnimationParameterCurve>> curves{}; /**< Unique float bindings; pinned through reload. */
     };
 
     /** @brief Owner-assigned identity and finite storage/work admission, captured at the control boundary. */
@@ -46,8 +48,9 @@ namespace Horo::Animation {
         AnimationTickId tick{};
         AnimationTimeDelta delta{};
         GraphPlaybackRate rate{};
-        std::span<const GraphParameterInput> parameters{}; /**< Omitted parameters use immutable defaults. */
+        std::span<const GraphParameterInput> parameters{}; /**< Defaults, curves, explicit scalars; triggers OR queued events. */
         CancellationToken cancellation{};
+        AnimationTime curveTime{}; /**< Exact authored curve time; independent of each clip's local playback cursor. */
     };
 
     /** @brief Committed immutable pose identities; failed attempts never change these values. */
@@ -147,6 +150,21 @@ namespace Horo::Animation {
         [[nodiscard]] GraphInstanceOutcome Commit(AnimationTickId tick);
         /** @brief Discards a pending candidate; committed state is unchanged. */
         [[nodiscard]] GraphInstanceOutcome Abort();
+        /** @brief Queues one coalesced one-tick trigger without allocation.
+         * @param parameter Stable declared trigger identity; scalar and missing identities are rejected.
+         * @return Success or typed owner, lifecycle, identity or type diagnostic.
+         * @details Successful Commit consumes queued triggers. Abort, failed evaluation and cancelled Commit retain them.
+         * Queueing while a candidate is pending is rejected. Explicit true input triggers apply only to that attempted tick.
+         */
+        [[nodiscard]] GraphInstanceOutcome QueueTrigger(GraphParameterId parameter);
+        /** @brief Copies an immutable typed gameplay parameter block from an exact committed pose publication.
+         * @param publication Exact resident instance/slot/generation identity returned by Commit.
+         * @param output Complete caller-owned parameter storage; results are ordered by stable parameter identity.
+         * @return Success or typed owner, malformed/stale publication or size diagnostic before any writes.
+         * @details Both resident publications remain queryable, including after Shutdown. Trigger values describe that
+         * publication only; the next successful tick clears them unless another event is queued or explicitly supplied.
+         */
+        [[nodiscard]] GraphInstanceOutcome CopyParameters(const PoseHandle &publication, std::span<GraphParameterInput> output) const;
         /** @brief Copies an exact resident immutable committed local pose.
          * @param pose Exact instance, recyclable slot and semantic generation.
          * @param output Caller-owned complete skeleton pose storage.

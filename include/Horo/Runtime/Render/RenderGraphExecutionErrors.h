@@ -9,6 +9,14 @@
 
 namespace Horo::Render::RenderGraphExecutionErrors {
     extern const ErrorCodeDescriptor UnsupportedWorkload;
+    /** @brief Retained typed VFX work has no implemented native particle encoder. */
+    extern const ErrorCodeDescriptor VfxExecutionUnavailable;
+    /** @brief Complete view sorting/draw runs exceed the remaining global budget. */
+    extern const ErrorCodeDescriptor VfxDrawBudgetExceeded;
+    /** @brief Renderer view storage was not prepared or requested instances exceed its admitted capacity. */
+    extern const ErrorCodeDescriptor VfxSchedulingCapacity;
+    /** @brief Every prepared view slot remains retained by an outstanding graph/workload reader. */
+    extern const ErrorCodeDescriptor VfxViewsRetained;
     extern const ErrorCodeDescriptor AllocationFailed;
     extern const ErrorCodeDescriptor InvalidGraph;
     extern const ErrorCodeDescriptor InvalidQueueTopology;

@@ -12,27 +12,6 @@
 #include <utility>
 
 namespace Horo::Render::ShaderCompilerToolchainDetail {
-    namespace {
-        constexpr std::array<std::uint8_t, 8> PackageMagic{'H', 'O', 'R', 'O', 'S', 'H', 'D', 'R'};
-        constexpr std::uint32_t PackageVersion = 1;
-        constexpr std::size_t RecordHeaderBytes = sizeof(std::uint8_t) + sizeof(std::uint32_t) + sizeof(std::uint64_t);
-
-        template <typename ValueT> void AppendInteger(std::vector<std::uint8_t> &output, ValueT value) {
-            using UnsignedT = std::make_unsigned_t<ValueT>;
-            auto bits = static_cast<UnsignedT>(value);
-            for (std::size_t index = 0; index < sizeof(UnsignedT); ++index) {
-                output.push_back(static_cast<std::uint8_t>(bits & 0xffU));
-                if constexpr (sizeof(UnsignedT) > 1U)
-                    bits >>= 8U;
-            }
-        }
-
-        void AppendBytes(std::vector<std::uint8_t> &output, const std::span<const std::uint8_t> bytes) {
-            AppendInteger(output, static_cast<std::uint64_t>(bytes.size()));
-            output.insert(output.end(), bytes.begin(), bytes.end());
-        }
-    }  // namespace
-
     Result<std::vector<std::uint8_t>> ReadBoundedFile(const std::filesystem::path &path, const std::size_t maximumBytes,
                                                       const ErrorCodeDescriptor &failure) {
         std::error_code error;
@@ -62,30 +41,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
 
     Result<std::vector<std::uint8_t>> PackageStages(const ShaderTargetBackend backend, const ShaderPayloadFormat format,
                                                     const std::vector<ToolArtifactRecord> &stages, const std::size_t maximumBytes) {
-        try {
-            std::vector<std::uint8_t> output(PackageMagic.begin(), PackageMagic.end());
-            AppendInteger(output, PackageVersion);
-            AppendInteger(output, static_cast<std::uint8_t>(backend));
-            AppendInteger(output, static_cast<std::uint8_t>(format));
-            AppendInteger(output, static_cast<std::uint32_t>(stages.size()));
-            for (const ToolArtifactRecord &record : stages) {
-                if (maximumBytes < RecordHeaderBytes || record.entryPoint.size() > std::numeric_limits<std::uint32_t>::max() ||
-                    record.entryPoint.size() > maximumBytes - RecordHeaderBytes || record.bytes.size() > maximumBytes ||
-                    output.size() > maximumBytes - RecordHeaderBytes ||
-                    record.entryPoint.size() > maximumBytes - RecordHeaderBytes - output.size() ||
-                    record.bytes.size() > maximumBytes - RecordHeaderBytes - output.size() - record.entryPoint.size())
-                    return Result<std::vector<std::uint8_t>>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-                AppendInteger(output, static_cast<std::uint8_t>(record.stage));
-                AppendInteger(output, static_cast<std::uint32_t>(record.entryPoint.size()));
-                output.insert(output.end(), record.entryPoint.begin(), record.entryPoint.end());
-                AppendBytes(output, record.bytes);
-                if (output.size() > maximumBytes)
-                    return Result<std::vector<std::uint8_t>>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-            }
-            return Result<std::vector<std::uint8_t>>::Success(std::move(output));
-        } catch (const std::bad_alloc &) {
-            return Result<std::vector<std::uint8_t>>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-        }
+        return PackageShaderArtifactStages(backend, format, stages, maximumBytes);
     }
 
     std::string_view StageProfile(const ShaderStage stage) noexcept {

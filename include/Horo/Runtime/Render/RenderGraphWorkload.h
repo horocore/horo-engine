@@ -5,6 +5,7 @@
  */
 #include "Horo/Runtime/Render/LightCullingKernel.h"
 #include "Horo/Runtime/Render/RenderGraphExecution.h"
+#include "Horo/Runtime/Render/VfxGraphWorkload.h"
 
 #include <cstdint>
 #include <variant>
@@ -41,8 +42,8 @@ namespace Horo::Render {
     };
 
     /** @brief Exact typed operation; an empty workload represents an ordering-only pass. */
-    using RenderGraphWorkload =
-        std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy, RenderGraphLightCulling>;
+    using RenderGraphWorkload = std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy,
+                                             RenderGraphLightCulling, RenderGraphVfx>;
 
     /** @brief Explicit operation for one retained pass in compiled order. */
     struct RenderGraphPassWorkload {

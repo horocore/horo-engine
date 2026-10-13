@@ -3,7 +3,7 @@
 namespace Horo::PCG {
     using namespace PointTransformationTestSupport;
 
-    TEST_CASE("Point transformation catalog preserves sparse and legacy identities", "[unit][pcg][transformation]") {
+    TEST_CASE("Point transformation catalog coexists with filters and preserves legacy identities", "[unit][pcg][transformation]") {
         using enum PCGCpuNodeKind;
         auto created = PCGNodeCatalog::Create(ProjectPCGCapabilities(PCGHostProfile::Interactive, Grant()).Value());
         REQUIRE(created.HasValue());
@@ -16,9 +16,18 @@ namespace Horo::PCG {
         CHECK(PCGCpuNodeType(SnapshotGrid).Value().Value() == 0x5043470206000001ULL);
         CHECK(PCGCpuNodeType(Transform).Value().Value() == 0x504347020600000dULL);
         for (unsigned value = 7; value < 12; ++value) {
-            CHECK(PCGCpuNodeType(static_cast<PCGCpuNodeKind>(value)).HasError());
-            CHECK(owner.Register(static_cast<PCGCpuNodeKind>(value)).HasError());
+            const auto kind = static_cast<PCGCpuNodeKind>(value);
+            REQUIRE(PCGCpuNodeType(kind).HasValue());
+            CHECK(PCGCpuNodeType(kind).Value().Value() == 0x5043470206000001ULL + value);
+            CHECK(root.Find(PCGCpuNodeType(kind).Value()).HasError());
+            REQUIRE(owner.Register(kind).HasValue());
         }
+        const auto combined = owner.Snapshot().Value();
+        CHECK(combined.Nodes().size() == 17);
+        CHECK(combined.Find(PCGCpuNodeType(DensityRangeFilter).Value()).Value()->settings == PCGNodeSettingsSchema::DensityRangeFilterV1);
+        CHECK(combined.Find(PCGCpuNodeType(AttributeFilter).Value()).Value()->settings == PCGNodeSettingsSchema::AttributeFilterV1);
+        CHECK(PCGCpuNodeType(static_cast<PCGCpuNodeKind>(17)).HasError());
+        CHECK(owner.Register(static_cast<PCGCpuNodeKind>(17)).HasError());
         CHECK(root.Find(PCGCpuNodeType(PerlinNoise).Value()).Value()->settings == PCGNodeSettingsSchema::PerlinNoiseV1);
         REQUIRE(owner.Close().HasValue());
         CHECK(root.Find(PCGCpuNodeType(Transform).Value()).HasValue());

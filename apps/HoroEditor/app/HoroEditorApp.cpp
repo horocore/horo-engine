@@ -1,5 +1,9 @@
 #include "HoroEditorApp.h"
 
+#include "EditorPresentationSurface.h"
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+#include "EditorSurfaceLifecycleQualification.h"
+#endif
 #include "EditorUserStateMigration.h"
 #include "EditorWorkerShutdown.h"
 #include "Horo/Application/GameplayBuildService.h"
@@ -61,7 +65,7 @@
 #include "runtime/input/sdl/SdlInputBackend.h"
 
 #if defined(HORO_HAS_RENDER_OPENGL)
-#include "runtime/renderer/modules/opengl/OpenGLBackendModule.h"
+#include "OpenGLBackendModule.h"
 #endif
 #if defined(HORO_HAS_RENDER_METAL)
 #include "runtime/renderer/modules/metal/MetalBackendModule.h"
@@ -204,6 +208,9 @@ namespace Horo::Editor {
             std::uint32_t frameRateLimit = 0;
             std::string rendererBackend;
             std::string projectRoot;
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+            bool qualifySurfaceLifecycle = false;
+#endif
         };
 
         struct EditorTextures {
@@ -491,49 +498,72 @@ namespace Horo::Editor {
         return 1001;
     }
 
+    /** @brief Identifies the one pending option value without stringly typed parser state. */
+    enum class PendingEditorOption : std::uint8_t {
+        None,
+        Renderer,
+        Project,
+        FrameRateLimit,
+        ExitAfterFrames
+    };
+
+    /** @brief Consumes one value before interpreting flag syntax, preserving existing argument ordering. */
+    [[nodiscard]] static bool ConsumeEditorOptionValue(const std::string_view value, PendingEditorOption &pending,
+                                                       EditorGuiOptions &opts) noexcept {
+        using enum PendingEditorOption;
+        switch (std::exchange(pending, None)) {
+            case Renderer:
+                opts.rendererBackend = value;
+                return true;
+            case Project:
+                opts.projectRoot = value;
+                return true;
+            case FrameRateLimit:
+                opts.frameRateLimit = ParseFrameRateLimit(value);
+                return true;
+            case ExitAfterFrames:
+                if (const auto parsed = std::from_chars(value.data(), value.data() + value.size(), opts.exitAfterFrames);
+                    parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size())
+                    opts.exitAfterFrames = 0;
+                return true;
+            case None:
+                return false;
+        }
+        return false;
+    }
+
+    /** @brief Applies one independent flag or records which value the next argument owns. */
+    static void ApplyEditorOptionFlag(const std::string_view argument, PendingEditorOption &pending, EditorGuiOptions &opts) noexcept {
+        using enum PendingEditorOption;
+        if (argument == "--text-preview")
+            opts.textPreview = true;
+        else if (argument == "--exit-after-first-frame")
+            opts.exitAfterFirstFrame = true;
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+        else if (argument == "--qualify-opengl-surface-lifecycle")
+            opts.qualifySurfaceLifecycle = true;
+#endif
+        else if (argument == "--frame-rate-limit")
+            pending = FrameRateLimit;
+        else if (argument == "--exit-after-frames")
+            pending = ExitAfterFrames;
+        else if (argument.starts_with("--renderer="))
+            opts.rendererBackend = std::string{argument.substr(std::string_view{"--renderer="}.size())};
+        else if (argument == "--renderer")
+            pending = Renderer;
+        else if (argument == "--project")
+            pending = Project;
+    }
+
     [[nodiscard]] static EditorGuiOptions ParseOptions(const std::span<char *> args) noexcept {
         EditorGuiOptions opts;
-        std::optional<std::string_view> pendingValue;
+        PendingEditorOption pending = PendingEditorOption::None;
         for (const char *rawArgument : args.subspan(std::min<std::size_t>(1, args.size()))) {
-            const std::string_view a{rawArgument};
-            if (pendingValue == "renderer") {
-                opts.rendererBackend = a;
-                pendingValue.reset();
-                continue;
-            }
-            if (pendingValue == "project") {
-                opts.projectRoot = a;
-                pendingValue.reset();
-                continue;
-            }
-            if (pendingValue == "frame-rate-limit") {
-                opts.frameRateLimit = ParseFrameRateLimit(a);
-                pendingValue.reset();
-                continue;
-            }
-            if (pendingValue == "exit-after-frames") {
-                if (const auto parsed = std::from_chars(a.data(), a.data() + a.size(), opts.exitAfterFrames);
-                    parsed.ec != std::errc{} || parsed.ptr != a.data() + a.size())
-                    opts.exitAfterFrames = 0;
-                pendingValue.reset();
-                continue;
-            }
-            if (a == "--text-preview")
-                opts.textPreview = true;
-            else if (a == "--exit-after-first-frame")
-                opts.exitAfterFirstFrame = true;
-            else if (a == "--frame-rate-limit")
-                pendingValue = "frame-rate-limit";
-            else if (a == "--exit-after-frames")
-                pendingValue = "exit-after-frames";
-            else if (a.starts_with("--renderer="))
-                opts.rendererBackend = std::string{a.substr(std::string_view{"--renderer="}.size())};
-            else if (a == "--renderer")
-                pendingValue = "renderer";
-            else if (a == "--project")
-                pendingValue = "project";
+            const std::string_view argument{rawArgument};
+            if (!ConsumeEditorOptionValue(argument, pending, opts))
+                ApplyEditorOptionFlag(argument, pending, opts);
         }
-        if (pendingValue == "frame-rate-limit")
+        if (pending == PendingEditorOption::FrameRateLimit)
             opts.frameRateLimit = 1001;
         return opts;
     }
@@ -844,21 +874,26 @@ namespace Horo::Editor {
             Clock &clock;
             std::optional<CancellationToken> hostCancellation;
             Render::FramePacer pacer;
-            std::optional<Render::RenderSurfaceLifecycle> surface;
-            std::uint64_t surfaceSequence{};
+            std::optional<EditorPresentationSurface> surface;
             std::uint64_t presentingFrameNumber{};
             bool focused{};
             bool nativeFeedbackSupported{};
             Render::FramebufferExtent committedOutputExtent{};
         };
 
-        class EditorRuntimeParticipant final : public Runtime::RuntimeLifecycleParticipant {
+        class EditorRuntimeParticipant final : public Runtime::RuntimeLifecycleParticipant, public EditorSurfaceRealizer {
         public:
             EditorRuntimeParticipant(RunEditorMainLoopParams &params, GuiScreenHost &screenHost,
                                      EditorViewportSceneState &viewportSceneState, EditorSettingsSnapshot &settingsSnapshot,
                                      std::optional<EditorRendererRestartRequest> &rendererRestart, Clock &clock) noexcept
                 : p_(&params), screenHost_(&screenHost), viewportSceneState_(&viewportSceneState), settingsSnapshot_(&settingsSnapshot),
-                  rendererRestart_(&rendererRestart), pacing_{clock} {}
+                  rendererRestart_(&rendererRestart), pacing_{clock}
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+                  ,
+                  qualification_{params.options.qualifySurfaceLifecycle}
+#endif
+            {
+            }
 
             void BindHost(Runtime::RuntimeHost &host) noexcept {
                 host_ = &host;
@@ -873,7 +908,7 @@ namespace Horo::Editor {
                 // The selected backend remains fixed for this participant's lifetime.
                 pacing_.nativeFeedbackSupported = timing.HasValue();
                 p_->telemetry.nativeFeedbackSupported.Set(pacing_.nativeFeedbackSupported ? 1.0 : 0.0);
-                auto created = Render::RenderSurfaceLifecycle::Create(1);
+                auto created = EditorPresentationSurface::Create(1, *this);
                 if (created.HasError())
                     return Result<void>::Failure(created.ErrorValue());
                 pacing_.surface.emplace(std::move(created).Value());
@@ -926,24 +961,18 @@ namespace Horo::Editor {
                     case Runtime::RuntimePhase::RenderGui:
                         if (!frame_.has_value())
                             return Result<void>::Success();
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+                        qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::GuiRender);
+#endif
                         return p_->presentation.guiRenderer.RenderDrawData();
                     case Runtime::RuntimePhase::Presentation:
                         return PresentFrame();
                     case Runtime::RuntimePhase::CommitDeferredLifecycleChanges:
                         return Result<void>::Success();
                     case Runtime::RuntimePhase::EndFrame:
-                        if (context.frameNumber % 60U == 1U) {
-                            p_->telemetry.frameNumber.Set(static_cast<double>(context.frameNumber));
-                            p_->telemetry.frameDuration.Set(static_cast<double>(context.variableDelta.ToNanoseconds()) / 1'000'000'000.0);
-                            const Telemetry::Statistics statistics = Telemetry::Runtime::GetStatistics();
-                            p_->telemetry.droppedRecords.Set(static_cast<double>(statistics.droppedRecords));
-                            p_->telemetry.sinkFailures.Set(static_cast<double>(statistics.sinkFailures));
-                        }
-                        if (p_->options.exitAfterFirstFrame ||
-                            (p_->options.exitAfterFrames > 0 && context.frameNumber >= p_->options.exitAfterFrames)) {
-                            static_cast<void>(screenHost_->RequestCloseApplication());
-                        }
-                        return Result<void>::Success();
+                        return EndRuntimeFrame(context);
+                    case Runtime::RuntimePhase::NetworkPoll:
+                    case Runtime::RuntimePhase::NetworkFlush:
                     case Runtime::RuntimePhase::FixedUpdate:
                         break;
                 }
@@ -960,6 +989,20 @@ namespace Horo::Editor {
                 p_->background.jobs.StopAccepting();
                 static_cast<void>(pacing_.pacer.Stop());
                 frame_.reset();
+                if (pacing_.surface) {
+                    const auto closed = pacing_.surface->Close();
+                    surfaceClosed_ = closed.HasValue();
+                    if (closed.HasError()) {
+                        const Error &error = closed.ErrorValue();
+                        LOG_ERROR("editor.renderer.surface", "Surface Close failed [%s/%s]: %s", error.domain.Value().c_str(),
+                                  error.code.Value().c_str(), error.message.c_str());
+                    }
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+                    qualificationPassed_ = closed.HasValue() && qualification_.Complete(closed.Value());
+                    if (p_->options.qualifySurfaceLifecycle && qualificationPassed_)
+                        std::puts("HoroEditor surface lifecycle qualification passed");
+#endif
+                }
                 *rendererRestart_ = screenHost_->RendererRestartRequest();
                 p_->inputRouter.CancelCapture(Input::CaptureCancellationReason::OwnerDestroyed);
                 p_->modalHost.ForceDetachAllForShutdown();
@@ -968,46 +1011,126 @@ namespace Horo::Editor {
                 p_->background.jobs.Shutdown(ShutdownPolicy::Cancel);
             }
 
+            /** @brief Reports whether shutdown published Close before backend teardown. */
+            [[nodiscard]] bool SurfaceClosed() const noexcept {
+                return surfaceClosed_;
+            }
+
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+            /** @brief Returns the real shutdown qualification result after RuntimeHost::Shutdown. */
+            [[nodiscard]] bool QualificationPassed() const noexcept {
+                return !p_->options.qualifySurfaceLifecycle || qualificationPassed_;
+            }
+#endif
+
         private:
+            /** @brief Qualifies the completed frame before telemetry and bounded-process exit admission. */
+            Result<void> EndRuntimeFrame(const Runtime::FrameContext &context) {
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+                if (const auto checked = QualifySurfaceFrame(); checked.HasError())
+                    return checked;
+#endif
+                if (context.frameNumber % 60U == 1U) {
+                    p_->telemetry.frameNumber.Set(static_cast<double>(context.frameNumber));
+                    p_->telemetry.frameDuration.Set(static_cast<double>(context.variableDelta.ToNanoseconds()) / 1'000'000'000.0);
+                    const Telemetry::Statistics statistics = Telemetry::Runtime::GetStatistics();
+                    p_->telemetry.droppedRecords.Set(static_cast<double>(statistics.droppedRecords));
+                    p_->telemetry.sinkFailures.Set(static_cast<double>(statistics.sinkFailures));
+                }
+                if (p_->options.exitAfterFirstFrame ||
+                    (p_->options.exitAfterFrames > 0 && context.frameNumber >= p_->options.exitAfterFrames)) {
+                    static_cast<void>(screenHost_->RequestCloseApplication());
+                }
+                return Result<void>::Success();
+            }
+
+            /** @brief Invokes the retained frontend resize only from the frozen surface safe point. */
+            Result<void> Resize(const Render::FramebufferExtent extent) override {
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+                if (const auto admitted = qualification_.BeforeResize(); admitted.HasError())
+                    return admitted;
+#endif
+                return p_->presentation.renderFrontend.Resize(extent);
+            }
+
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+            /** @brief Inspects the actual participant after all presentation phases without creating a parallel host. */
+            Result<void> QualifySurfaceFrame() {
+                const auto snapshot = pacing_.surface->Snapshot();
+                if (snapshot.HasError())
+                    return Result<void>::Failure(snapshot.ErrorValue());
+                return qualification_.EndFrame(snapshot.Value());
+            }
+#endif
+
             Result<void> PollPlatformEvents() {
                 while (const std::optional<EditorMenuInvocation> invocation = PollNativeEditorMenuAction()) {
                     screenHost_->DispatchMenuInvocation(*invocation);
                 }
                 p_->projectCreationService.PumpMainThread();
                 p_->engineEvents.DispatchQueued();
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+                if (const auto prepared = qualification_.BeforeEvents(*p_->presentation.window); prepared.HasError())
+                    return prepared;
+#endif
                 SDL_Event event;
-                while (SDL_PollEvent(&event)) {
-                    if (const bool smoothWheel = event.type == SDL_EVENT_MOUSE_WHEEL &&
-                                                 event.wheel.windowID == SDL_GetWindowID(p_->presentation.window) &&
-                                                 (SDL_GetModState() & SDL_KMOD_CTRL) == 0;
-                        smoothWheel) {
-                        scrollSource_ = event.wheel.which == SDL_TOUCH_MOUSEID ? ImGuiMouseSource_TouchScreen : ImGuiMouseSource_Mouse;
-                        scrollSmoother_.Queue(-event.wheel.x, event.wheel.y);
-                    } else {
-                        ImGui_ImplSDL3_ProcessEvent(&event);
-                    }
-                    p_->inputBackend.ProcessEvent(event);
-
-                    // SDL3 drag-and-drop: forward dropped file paths to the active import modal.
-                    if (event.type == SDL_EVENT_DROP_FILE) {
-                        const char *droppedPath = event.drop.data;
-                        if (droppedPath && droppedPath[0]) {
-                            screenHost_->HandleDropFiles({std::filesystem::path(droppedPath)});
-                        }
-                    }
-
-                    if (event.type == SDL_EVENT_QUIT || (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
-                                                         event.window.windowID == SDL_GetWindowID(p_->presentation.window))) {
-                        static_cast<void>(screenHost_->RequestCloseApplication());
-                        host_->RequestShutdown();
-                    }
-                }
+                while (SDL_PollEvent(&event))
+                    DispatchPlatformEvent(event);
 
                 if (!nativeMenuInstalled_) {
                     InstallNativeEditorMenuBar(GetEditorMenuModel(), p_->localization);
                     nativeMenuInstalled_ = true;
                 }
                 return Result<void>::Success();
+            }
+
+            /** @brief Routes one event while retaining window-specific recovery and close ownership. */
+            void DispatchPlatformEvent(const SDL_Event &event) {
+                ObserveSurfaceRecoveryEvent(event);
+                if (const bool smoothWheel = event.type == SDL_EVENT_MOUSE_WHEEL &&
+                                             event.wheel.windowID == SDL_GetWindowID(p_->presentation.window) &&
+                                             (SDL_GetModState() & SDL_KMOD_CTRL) == 0;
+                    smoothWheel) {
+                    scrollSource_ = event.wheel.which == SDL_TOUCH_MOUSEID ? ImGuiMouseSource_TouchScreen : ImGuiMouseSource_Mouse;
+                    scrollSmoother_.Queue(-event.wheel.x, event.wheel.y);
+                } else {
+                    ImGui_ImplSDL3_ProcessEvent(&event);
+                }
+                p_->inputBackend.ProcessEvent(event);
+
+                // SDL3 drag-and-drop: forward dropped file paths to the active import modal.
+                if (event.type == SDL_EVENT_DROP_FILE) {
+                    const char *droppedPath = event.drop.data;
+                    if (droppedPath && droppedPath[0]) {
+                        screenHost_->HandleDropFiles({std::filesystem::path(droppedPath)});
+                    }
+                }
+
+                if (IsHostCloseRequest(event)) {
+                    static_cast<void>(screenHost_->RequestCloseApplication());
+                    host_->RequestShutdown();
+                }
+            }
+
+            /** @brief Accepts process Quit or Close belonging to the retained primary host window. */
+            [[nodiscard]] bool IsHostCloseRequest(const SDL_Event &event) const noexcept {
+                if (event.type == SDL_EVENT_QUIT)
+                    return true;
+                return event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(p_->presentation.window);
+            }
+
+            /** @brief Admits one recovery attempt only after an owner-window presentation observation. */
+            void ObserveSurfaceRecoveryEvent(const SDL_Event &event) {
+                switch (event.type) {
+                    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+                    case SDL_EVENT_WINDOW_RESTORED:
+                    case SDL_EVENT_WINDOW_EXPOSED:
+                        if (event.window.windowID == SDL_GetWindowID(p_->presentation.window))
+                            surfaceRecovery_ = EditorSurfaceRecovery::Retry;
+                        break;
+                    default:
+                        break;
+                }
             }
 
             Result<void> UpdatePresentation(const Runtime::FrameContext &context) {
@@ -1017,6 +1140,9 @@ namespace Horo::Editor {
 
                 focusedWidgetInputContext_.Reset();
                 if (renderBegun.Value()) {
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+                    qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::GuiBegin);
+#endif
                     if (const Result<void> guiBegun = p_->presentation.guiRenderer.BeginFrame(); guiBegun.HasError()) {
                         frame_.reset();
                         return guiBegun;
@@ -1040,11 +1166,8 @@ namespace Horo::Editor {
                 return Result<void>::Success();
             }
 
-            Result<void> ExtractFrame() {
-                if (!frame_.has_value())
-                    return Result<void>::Success();
-
-                screenHost_->Draw();
+            /** @brief Draws only the modal-owned dim surface without changing extraction or modal ownership. */
+            void DrawModalBackdrop() {
                 if (const EditorModal *const modal = p_->modalHost.TopModal(); modal != nullptr && modal->Presentation().dimWorkspace) {
                     const ImGuiViewport *viewport = ImGui::GetMainViewport();
                     ImGui::SetNextWindowPos(viewport->Pos);
@@ -1059,6 +1182,17 @@ namespace Horo::Editor {
                     ImGui::PopStyleColor();
                     ImGui::PopStyleVar();
                 }
+            }
+
+            Result<void> ExtractFrame() {
+                if (!frame_.has_value())
+                    return Result<void>::Success();
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+                qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::Extraction);
+#endif
+
+                screenHost_->Draw();
+                DrawModalBackdrop();
                 p_->modalHost.Draw();
                 ImGui::Render();
 
@@ -1100,76 +1234,79 @@ namespace Horo::Editor {
                 return Result<void>::Success();
             }
 
-            /** @brief Realizes a new pixel extent before constructing its lifecycle commit command. */
-            Result<Render::RenderSurfaceCommand> ResizePacingSurface(const Render::RenderSurfaceSnapshot &snapshot,
-                                                                     const Render::FramebufferExtent extent) {
-                if (const auto resized = p_->presentation.renderFrontend.Resize(extent); resized.HasError())
-                    return Result<Render::RenderSurfaceCommand>::Failure(resized.ErrorValue());
-                const auto mode = p_->options.exitAfterFirstFrame || p_->options.exitAfterFrames > 0 ? Render::PresentMode::Immediate
-                                                                                                     : Render::PresentMode::Fifo;
-                const auto kind = snapshot.state == Render::RenderSurfaceState::Unattached ? Render::RenderSurfaceCommandKind::Attach
-                                                                                           : Render::RenderSurfaceCommandKind::Resize;
-                pacing_.committedOutputExtent = extent;
-                const auto sequence = ++pacing_.surfaceSequence;
-                return Result<Render::RenderSurfaceCommand>::Success(
-                    {sequence, kind,
-                     Render::RenderSurfaceConfiguration{extent, {mode, mode, Render::PresentModeResolution::Exact, 0}, sequence}});
-            }
-
-            /** @brief Commits one already realized native outcome through the surface safe-point contract. */
-            Result<Render::RenderSurfaceSnapshot> CommitPacingSurface(const Render::RenderSurfaceCommand &command,
-                                                                      const Render::RenderSurfaceRealization realization) {
-                if (auto queued = pacing_.surface->Queue(command); queued.HasError())
-                    return Result<Render::RenderSurfaceSnapshot>::Failure(queued.ErrorValue());
-                auto transition = pacing_.surface->BeginFrameBoundary();
-                if (transition.HasError())
-                    return Result<Render::RenderSurfaceSnapshot>::Failure(transition.ErrorValue());
-                return pacing_.surface->Complete(transition.Value(), realization);
-            }
-
-            /** @brief Publishes surface facts after native resize and resets pacing on focus changes. */
-            Result<void> UpdatePacingSurface() {
+            /** @brief Resets scheduling when focus changes without changing renderer or simulation clock. */
+            Result<void> UpdateSurfaceFocus() {
                 const auto flags = SDL_GetWindowFlags(p_->presentation.window);
                 if (const bool focused = (flags & SDL_WINDOW_INPUT_FOCUS) != 0; focused != pacing_.focused) {
                     pacing_.focused = focused;
                     if (auto reset = pacing_.pacer.Reset(); reset.HasError())
                         return reset;
                 }
+                return Result<void>::Success();
+            }
+
+            /** @brief Distinguishes unavailable native size queries from minimized/zero-size output. */
+            Result<std::optional<Render::FramebufferExtent>> QuerySurfaceExtent() {
                 int width = 0;
                 int height = 0;
                 if (!SDL_GetWindowSizeInPixels(p_->presentation.window, &width, &height))
-                    return Result<void>::Failure(MakeEditorRendererError("editor.renderer.extent_unavailable", SDL_GetError()));
-                const bool suspended = (flags & SDL_WINDOW_MINIMIZED) != 0 || width <= 0 || height <= 0;
-                auto snapshot = pacing_.surface->Snapshot();
-                if (snapshot.HasError())
-                    return Result<void>::Failure(snapshot.ErrorValue());
-                std::optional<Render::RenderSurfaceCommand> command;
-                if (suspended) {
-                    if (snapshot.Value().state == Render::RenderSurfaceState::Ready)
-                        command = Render::RenderSurfaceCommand{++pacing_.surfaceSequence, Render::RenderSurfaceCommandKind::Suspend,
-                                                               std::nullopt};
-                } else {
-                    const Render::FramebufferExtent extent{static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)};
-                    if (snapshot.Value().state != Render::RenderSurfaceState::Ready || extent != pacing_.committedOutputExtent) {
-                        auto resized = ResizePacingSurface(snapshot.Value(), extent);
-                        if (resized.HasError())
-                            return Result<void>::Failure(resized.ErrorValue());
-                        command = resized.Value();
-                    }
+                    return Result<std::optional<Render::FramebufferExtent>>::Failure(
+                        MakeEditorRendererError("editor.renderer.extent_unavailable", SDL_GetError()));
+                if ((SDL_GetWindowFlags(p_->presentation.window) & SDL_WINDOW_MINIMIZED) != 0 || width <= 0 || height <= 0)
+                    return Result<std::optional<Render::FramebufferExtent>>::Success(std::nullopt);
+                return Result<std::optional<Render::FramebufferExtent>>::Success(
+                    Render::FramebufferExtent{static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)});
+            }
+
+            /** @brief Resolves the immutable request already admitted by the selected native backend at startup. */
+            Render::PresentMode SurfacePresentMode() const noexcept {
+                return p_->options.exitAfterFirstFrame || p_->options.exitAfterFrames > 0 ? Render::PresentMode::Immediate
+                                                                                          : Render::PresentMode::Fifo;
+            }
+
+            /** @brief Samples cancellation before active-frame ownership at the native safe point. */
+            EditorSurfaceAdmission SurfaceAdmission() const noexcept {
+                using enum EditorSurfaceAdmission;
+                if (pacing_.hostCancellation && pacing_.hostCancellation->IsCancellationRequested())
+                    return Cancelled;
+                if (frame_)
+                    return FrameActive;
+                return Idle;
+            }
+
+            /** @brief Reports the unchanged native diagnostic; qualification may reject lost error/cause evidence. */
+            Result<void> ReportNativeSurfaceFailure(const Error &error) {
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+                if (const auto checked = qualification_.ObserveFailure(error); checked.HasError())
+                    return checked;
+#endif
+                LOG_ERROR("editor.renderer.surface", "Native surface lost [%s/%s]: %s; awaiting an owner-window recovery event",
+                          error.domain.Value().c_str(), error.code.Value().c_str(), error.message.c_str());
+                return Result<void>::Success();
+            }
+
+            /** @brief Keeps native surface loss event-pumpable while preserving its exact typed diagnostic. */
+            Result<void> UpdatePacingSurface() {
+                if (const auto focused = UpdateSurfaceFocus(); focused.HasError())
+                    return focused;
+                const auto extent = QuerySurfaceExtent();
+                if (extent.HasError())
+                    return Result<void>::Failure(extent.ErrorValue());
+                const auto mode = SurfacePresentMode();
+                auto observed = pacing_.surface->Observe(extent.Value(), {mode, mode, Render::PresentModeResolution::Exact, 0},
+                                                         SurfaceAdmission(), std::exchange(surfaceRecovery_, EditorSurfaceRecovery::Defer));
+                if (observed.HasError())
+                    return Result<void>::Failure(observed.ErrorValue());
+                if (observed.Value().nativeFailure) {
+                    if (const auto reported = ReportNativeSurfaceFailure(*observed.Value().nativeFailure); reported.HasError())
+                        return reported;
                 }
-                if (command) {
-                    snapshot = CommitPacingSurface(*command, suspended ? Render::RenderSurfaceRealization::Suspended
-                                                                       : Render::RenderSurfaceRealization::Ready);
-                    if (snapshot.HasError())
-                        return Result<void>::Failure(snapshot.ErrorValue());
-                }
-                return pacing_.pacer.Configure({p_->options.frameRateLimit}, snapshot.Value());
+                if (observed.Value().snapshot.active)
+                    pacing_.committedOutputExtent = observed.Value().snapshot.active->extent;
+                return pacing_.pacer.Configure({p_->options.frameRateLimit}, observed.Value().snapshot);
             }
 
             Result<bool> BeginRenderFrame(const Runtime::FrameContext &context) {
-                if (const Result<void> prepared = PrepareViewportResources(); prepared.HasError())
-                    return Result<bool>::Failure(prepared.ErrorValue());
-
                 if (auto updated = UpdatePacingSurface(); updated.HasError())
                     return Result<bool>::Failure(updated.ErrorValue());
                 const auto snapshot = pacing_.surface->Snapshot();
@@ -1177,9 +1314,15 @@ namespace Horo::Editor {
                     return Result<bool>::Failure(snapshot.ErrorValue());
                 if (snapshot.Value().state != Render::RenderSurfaceState::Ready)
                     return Result<bool>::Success(false);
+                // Retain pending viewport work while the native surface cannot admit rendering.
+                if (const Result<void> prepared = PrepareViewportResources(); prepared.HasError())
+                    return Result<bool>::Failure(prepared.ErrorValue());
                 const Render::FramebufferExtent outputExtent = pacing_.committedOutputExtent;
                 pacing_.presentingFrameNumber = context.frameNumber;
 
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+                qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::NativeBegin);
+#endif
                 auto begun = p_->presentation.renderFrontend.BeginFrame(
                     Render::FrameDescriptor{.frameNumber = context.frameNumber, .outputExtent = outputExtent});
                 if (begun.HasError())
@@ -1189,6 +1332,9 @@ namespace Horo::Editor {
             }
 
             Result<void> PrepareViewportResources() {
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+                qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::ViewportResources);
+#endif
                 const EditorViewportSceneView viewportScene = viewportSceneState_->View();
                 auto prepared =
                     p_->presentation.viewportRenderer.PrepareResources(p_->presentation.renderFrontend,
@@ -1219,7 +1365,22 @@ namespace Horo::Editor {
             Result<void> ExecuteFrame(const Runtime::FrameContext &) {
                 if (!frame_.has_value())
                     return Result<void>::Success();
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+                qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::Execution);
+#endif
                 return frame_->Execute(std::span<const Render::RenderPassDescriptor>{passes_.data(), passCount_});
+            }
+
+            /** @brief Observes the actual native present at its owner boundary, before host timing is committed. */
+            Result<void> PresentNativeFrame(const Render::PresentationTimingRequest *timing) {
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+                qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::Presentation);
+#endif
+                Result<void> result = frame_->Present(timing);
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+                qualification_.RecordPresent(result.HasValue());
+#endif
+                return result;
             }
 
             Result<void> PresentFrame() {
@@ -1231,7 +1392,7 @@ namespace Horo::Editor {
                 const Render::PresentationTimingRequest timingRequest{surface.Value().surface, pacing_.presentingFrameNumber,
                                                                       pacing_.clock};
                 const Duration start = pacing_.clock.MonotonicNow();
-                Result<void> result = frame_->Present(pacing_.nativeFeedbackSupported ? &timingRequest : nullptr);
+                Result<void> result = PresentNativeFrame(pacing_.nativeFeedbackSupported ? &timingRequest : nullptr);
                 const Duration end = pacing_.clock.MonotonicNow();
                 frame_.reset();
                 std::optional<Render::NativePresentTiming> native;
@@ -1261,6 +1422,12 @@ namespace Horo::Editor {
             std::optional<EditorRendererRestartRequest> *rendererRestart_{};
             Runtime::RuntimeHost *host_{};
             EditorPacingState pacing_;
+            bool surfaceClosed_{};
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+            EditorSurfaceLifecycleQualification qualification_;
+            bool qualificationPassed_{};
+#endif
+            EditorSurfaceRecovery surfaceRecovery_{EditorSurfaceRecovery::Defer};
             Input::FrameNumber inputFrameNumber_{1};
             Input::InputContextToken focusedWidgetInputContext_;
             std::array<Render::RenderPassDescriptor, 2> passes_{};
@@ -1311,6 +1478,16 @@ namespace Horo::Editor {
                 });
             }};
             RegisterDefaultWorkspacePanels(registry, graphInspectionPanes);
+        }
+
+        /** @brief Shuts down the runtime before checking surface closure and preserving the host's prior health. */
+        bool CompleteEditorRuntimeShutdown(Runtime::RuntimeHost &runtime, const EditorRuntimeParticipant &participant, const bool healthy) {
+            runtime.Shutdown();
+            bool completed = participant.SurfaceClosed();
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+            completed = completed && participant.QualificationPassed();
+#endif
+            return healthy && completed;
         }
 
         /** @brief Runs the actual editor startup and reports failures to the process boundary. */
@@ -1462,8 +1639,7 @@ namespace Horo::Editor {
             bool completedFrame = false;
             while (!screenHost.IsApplicationCloseRequested() && (runtime->State() == Runtime::RuntimeLifecycleState::Running ||
                                                                  runtime->State() == Runtime::RuntimeLifecycleState::Suspended)) {
-                const Result<void> frame = RunPacedEditorFrame(*pacingParticipant, *runtime);
-                if (frame.HasError()) {
+                if (const Result<void> frame = RunPacedEditorFrame(*pacingParticipant, *runtime); frame.HasError()) {
                     if (frame.ErrorValue().code.Value() != "runtime.host.cancelled" &&
                         frame.ErrorValue().code.Value() != Render::FramePacingErrors::Cancelled.code.Value()) {
                         LOG_ERROR("editor.runtime", "Host frame failed: %s", frame.ErrorValue().message.c_str());
@@ -1476,8 +1652,7 @@ namespace Horo::Editor {
             }
             healthy = healthy && screenHost.IsApplicationCloseRequested() &&
                       ((!p.options.exitAfterFirstFrame && p.options.exitAfterFrames == 0) || completedFrame);
-            runtime->Shutdown();
-            p.healthy = healthy;
+            p.healthy = CompleteEditorRuntimeShutdown(*runtime, *pacingParticipant, healthy);
             RequestUpdateActivationOnExit(updateSession, screenHost.IsApplicationCloseRequested(), rendererRestart.has_value());
             return rendererRestart;
         }

@@ -111,10 +111,11 @@ admission regression asserts both exact codes rather than flattening either erro
 
 `HoroPCG` now owns `PCGPointTransformation.h`; the narrow public consumer includes
 and exercises its typed encoders. Register five operations explicitly. Capacity
-counts actual registrations and grows from seven to twelve. Stable kinds 12–16
-and settings schemas 10–14 leave kinds 7–11/schemas 5–9 reserved for the separately
-delivered filters. Hosts must enumerate `Nodes()` rather than index storage by
-kind or infer support from the numeric maximum. Unknown/reserved IDs still fail.
+counts actual registrations and grows from twelve to seventeen with the filters
+already available. Stable kinds 12–16 and settings schemas 10–14 coexist with
+filter kinds 7–11 and schemas 5–9 without renumbering either family. Hosts must
+enumerate `Nodes()` rather than index storage by kind or infer registration from
+the numeric maximum. Unknown IDs and unregistered supported kinds still fail.
 Legacy type IDs, generation payload bytes and schema-1 sample seeds are unchanged.
 
 New operations require the existing nonzero numeric-profile fingerprint. Every
@@ -128,3 +129,14 @@ for coordinate composition, normal selection, gradient algorithms, seed streams,
 finite boundaries and complete work admission. EditorServices and PCGDocument
 consumers retain the same target boundaries and compile against the updated PCG
 public dependency; no editor/runtime scheduling behavior changes.
+## Point filtering extension (HORO-2018)
+
+The filtering extension originally grew catalog capacity from seven to twelve;
+combined with the transformation extension it is now seventeen. All existing
+kind values, type IDs, payloads, and explicitly lowered capacities remain valid.
+Register the five new settings-backed kinds explicitly and encode their payloads
+with `EncodePCGPointFilterSettings`; the legacy Scalar-input DensityFilter remains
+unchanged. `Horo/PCG/PCGPointFiltering.h` is owned by HoroPCG and its staged public
+consumer. The [point filtering contract](../architecture/runtime/pcg-point-filtering-contract.md)
+defines schema bytes, exact typed comparison, terrain sampling, stable separation,
+work/byte admission and lifecycle semantics. No new dependency or backend is added.

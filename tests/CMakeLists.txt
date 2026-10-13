@@ -99,7 +99,9 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 horo_add_public_header_consumer_targets()
 target_sources(HoroPCGPublicHeaderConsumer PRIVATE support/PCGNodeCatalogPublicHeaderConsumer.cpp)
 target_sources(HoroShaderBuildPublicHeaderConsumer PRIVATE support/ShaderBuildPublicHeaderConsumer.cpp)
+target_sources(HoroVfxApiPublicHeaderConsumer PRIVATE support/VfxWorldPublicHeaderConsumer.cpp)
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderGraphWorkloadPublicHeaderConsumer.cpp)
+target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/ShaderArtifactPublicHeaderConsumer.cpp)
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderGraphInspectionPublicHeaderConsumer.cpp)
 target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/RenderFrontendInspectionPublicHeaderConsumer.cpp)
 target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/LightFramePoolPublicHeaderConsumer.cpp)
@@ -836,6 +838,7 @@ add_executable(HoroAnimationApiTests
         unit/runtime/animation/AnimationGraphTests.cpp
         unit/runtime/animation/AnimationGraphBindingTests.cpp
         unit/runtime/animation/AnimationGraphInstanceTests.cpp
+        unit/runtime/animation/AnimationParameterTests.cpp
         unit/runtime/animation/AnimationGraphSourceTests.cpp
         unit/runtime/animation/AnimationCompressionTests.cpp
         unit/runtime/animation/AnimationClipTests.cpp
@@ -855,6 +858,8 @@ add_executable(HoroPCGTests
         unit/runtime/pcg/PCGPointNoiseTests.cpp
         unit/runtime/pcg/PCGPointGenerationSettingsTests.cpp
         unit/runtime/pcg/PCGPointGenerationTests.cpp
+        unit/runtime/pcg/PCGPointFilteringTests.cpp
+        unit/runtime/pcg/PCGPointFilterCodecTests.cpp
         unit/runtime/pcg/PCGCpuEvaluatorTests.cpp
         unit/runtime/pcg/PCGCookedPlanTests.cpp
         unit/runtime/pcg/PCGPointCloudWorkspaceTests.cpp
@@ -900,6 +905,16 @@ target_include_directories(HoroVfxApiTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(HoroVfxApiTests PRIVATE HORO_VFX_CPU_BASELINE_PATH="${PROJECT_SOURCE_DIR}/tests/fixtures/vfx/cpu_simulation_baseline.json")
 target_link_libraries(HoroVfxApiTests PRIVATE HoroEngine::VfxApi nlohmann_json::nlohmann_json)
 horo_register_catch_test(HoroVfxApiTests LABELS "unit;vfx;headless")
+
+add_executable(HoroVfxRenderExtractionTests
+        support/AllocationProbe.cpp
+        unit/runtime/vfx/VfxRenderExtractionTests.cpp
+        unit/runtime/vfx/VfxSchedulingTests.cpp
+)
+target_compile_features(HoroVfxRenderExtractionTests PRIVATE cxx_std_20)
+target_include_directories(HoroVfxRenderExtractionTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroVfxRenderExtractionTests PRIVATE HoroEngine::VfxApi HoroEngine::RuntimeScene HoroEngine::RenderFrontend HoroEngine::RenderNull)
+horo_register_catch_test(HoroVfxRenderExtractionTests LABELS "unit;vfx;renderer;headless")
 
 add_executable(HoroVfxCpuSimulationBenchmark EXCLUDE_FROM_ALL benchmarks/vfx/CpuSimulationBenchmark.cpp)
 target_compile_features(HoroVfxCpuSimulationBenchmark PRIVATE cxx_std_20)
@@ -1106,6 +1121,7 @@ add_executable(HoroNavigationRuntimeTests
         unit/runtime/navigation/NavigationObstacleOverlayTests.cpp
         unit/runtime/navigation/NavigationAgentRegistryTests.cpp
         unit/runtime/navigation/NavigationMovementTests.cpp
+        unit/runtime/navigation/NavigationVelocityPipelineTests.cpp
         unit/runtime/navigation/NavigationPathPolicyTests.cpp
         unit/runtime/navigation/NavigationFoundationQualificationTests.cpp
         unit/runtime/navigation/NavigationCoordinatorTests.cpp
@@ -2754,6 +2770,9 @@ add_executable(HoroRenderSurfaceLifecycleTests
 )
 target_compile_features(HoroRenderSurfaceLifecycleTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRenderSurfaceLifecycleTests PRIVATE HoroEngine::RenderApi)
+add_executable(HoroEditorPresentationSurfaceTests unit/editor/EditorPresentationSurfaceTests.cpp)
+target_compile_features(HoroEditorPresentationSurfaceTests PRIVATE cxx_std_20)
+target_link_libraries(HoroEditorPresentationSurfaceTests PRIVATE HoroEditorPresentationSurfaceInternal)
 add_executable(HoroRenderResourceDescriptorTests
         unit/runtime/renderer/RenderResourceDescriptorTests.cpp
 )
@@ -2780,6 +2799,7 @@ target_link_libraries(HoroPipelinePreparationTests PRIVATE HoroEngine::RenderApi
 
 add_executable(HoroPipelineCacheTests
         unit/runtime/renderer/PipelineCacheTests.cpp
+        unit/runtime/renderer/RenderShaderResourceDescriptorTests.cpp
 )
 target_compile_features(HoroPipelineCacheTests PRIVATE cxx_std_20)
 target_include_directories(HoroPipelineCacheTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
@@ -2828,6 +2848,7 @@ target_compile_features(HoroStandardPbrPassPlanTests PRIVATE cxx_std_20)
 target_include_directories(HoroStandardPbrPassPlanTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroStandardPbrPassPlanTests PRIVATE HoroEngine::RenderApi)
 add_executable(HoroShaderCompilerPipelineTests
+        unit/runtime/renderer/ShaderArtifactTests.cpp
         unit/runtime/renderer/ShaderCompilerPipelineTests.cpp
         unit/runtime/renderer/ShaderCompilerToolchainTests.cpp
         unit/application/ShaderBuildServiceTests.cpp
@@ -3099,6 +3120,28 @@ add_executable(HoroUiTemplateGraphTests unit/ui_templates/UiTemplateDependencyGr
 target_compile_features(HoroUiTemplateGraphTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUiTemplateGraphTests PRIVATE HoroEngine::UiTemplateGraph)
 horo_register_catch_test(HoroUiTemplateGraphTests LABELS "unit;runtime_ui;template;headless")
+add_executable(HoroUiTemplateInstancesTests
+        unit/ui_templates/UiTemplateModelTests.cpp
+        unit/ui_templates/UiTemplateExpansionTests.cpp
+        unit/ui_templates/UiTemplateDocumentOwnerTests.cpp
+        unit/ui_templates/UiTemplateArtifactTests.cpp
+        unit/ui_templates/UiTemplateRecordCodecTests.cpp
+)
+target_compile_features(HoroUiTemplateInstancesTests PRIVATE cxx_std_20)
+target_link_libraries(HoroUiTemplateInstancesTests PRIVATE HoroEngine::UiTemplateInstances nlohmann_json::nlohmann_json)
+horo_register_catch_test(HoroUiTemplateInstancesTests LABELS "unit;runtime_ui;template;headless")
+add_executable(HoroUiTemplateHostTests
+        unit/application/UiTemplateInputLeaseTests.cpp
+        unit/application/UiTemplateHostCookTests.cpp
+        unit/application/UiTemplateHostPublicationFixture.cpp
+        unit/application/UiTemplateHostPublicationTests.cpp
+        unit/application/UiTemplateHostCompositionTests.cpp
+        support/AllocationProbe.cpp)
+target_compile_features(HoroUiTemplateHostTests PRIVATE cxx_std_20)
+target_include_directories(HoroUiTemplateHostTests PRIVATE "${PROJECT_SOURCE_DIR}/src/application/ui")
+target_link_libraries(HoroUiTemplateHostTests PRIVATE HoroEngine::UiTemplateHost HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
+horo_register_catch_test(HoroUiTemplateHostTests LABELS "unit;runtime_ui;template;headless")
+target_sources(HoroUiTemplateHostPublicHeaderConsumer PRIVATE support/UiTemplateHostPublicContract.cpp)
 add_executable(HoroRuntimeUiLocalizationTests
         unit/runtime/ui/UiLocalizationTests.cpp
 )
@@ -4030,9 +4073,17 @@ target_link_libraries(HoroAgentPolicyTests PRIVATE HoroEngine::Security Catch2::
 horo_register_catch_test(HoroAgentPolicyTests LABELS "unit;security;headless")
 
 if (HORO_BUILD_RENDER_OPENGL)
+    add_executable(HoroOpenGLHostAdmissionInternalConsumer support/OpenGLHostAdmissionInternalConsumer.cpp)
+    target_link_libraries(HoroOpenGLHostAdmissionInternalConsumer PRIVATE HoroOpenGLHostAdmissionInternal)
+    add_test(NAME HoroOpenGLHostAdmissionInternalConsumer COMMAND HoroOpenGLHostAdmissionInternalConsumer)
+    set_tests_properties(HoroOpenGLHostAdmissionInternalConsumer PROPERTIES LABELS "unit;headless;sonar-coverage")
     add_executable(HoroRenderOpenGLTests
+            support/AllocationProbe.cpp
             unit/runtime/renderer/OpenGLRenderBackendTests.cpp
             unit/runtime/renderer/OpenGLCommandAdaptationTests.cpp
+            unit/runtime/renderer/OpenGLShaderRealizationTests.cpp
+            unit/runtime/renderer/OpenGLSamplerRealizationTests.cpp
+            unit/runtime/renderer/OpenGLMaterialBindingTests.cpp
             unit/runtime/renderer/OpenGLRenderBackendQualificationTests.cpp
             unit/runtime/renderer/OpenGLRenderResourceTests.cpp
             unit/runtime/renderer/OpenGLRenderGraphTests.cpp
@@ -4041,13 +4092,46 @@ if (HORO_BUILD_RENDER_OPENGL)
     target_compile_features(HoroRenderOpenGLTests PRIVATE cxx_std_20)
     target_include_directories(HoroRenderOpenGLTests PRIVATE
             ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/opengl
+            ${PROJECT_SOURCE_DIR}/src/runtime/renderer/frontend
             ${PROJECT_SOURCE_DIR}/tests/support
     )
     target_link_libraries(HoroRenderOpenGLTests
             PRIVATE
             HoroEngine::RenderFrontend
             HoroEngine::RenderOpenGL
+            HoroOpenGLHostAdmissionInternal
     )
+    if (HORO_ENABLE_GPU_SMOKE_TESTS)
+        add_executable(HoroOpenGLSurfaceLifecycleSmoke integration/renderer/OpenGLSurfaceLifecycleSmoke.cpp)
+        target_compile_features(HoroOpenGLSurfaceLifecycleSmoke PRIVATE cxx_std_20)
+        target_link_libraries(HoroOpenGLSurfaceLifecycleSmoke PRIVATE Catch2::Catch2WithMain
+                HoroEditorPresentationSurfaceInternal HoroSdlOpenGLPresentationInternal HoroEngine::RenderFrontend
+                HoroEngine::RenderOpenGL HoroThirdParty::Glad HoroOpenGLHostAdmissionInternal)
+        horo_register_catch_test(HoroOpenGLSurfaceLifecycleSmoke LABELS "gpu;display;opengl;surface")
+        add_executable(HoroOpenGLMaterialSmoke integration/renderer/OpenGLMaterialSmoke.cpp)
+        target_compile_features(HoroOpenGLMaterialSmoke PRIVATE cxx_std_20)
+        target_include_directories(HoroOpenGLMaterialSmoke PRIVATE
+                ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/opengl
+                ${PROJECT_SOURCE_DIR}/src/runtime/renderer/frontend
+                ${PROJECT_SOURCE_DIR}/tests/unit/runtime/renderer)
+        target_link_libraries(HoroOpenGLMaterialSmoke PRIVATE Catch2::Catch2WithMain
+                HoroEngine::RenderFrontend HoroEngine::RenderOpenGL HoroThirdParty::Glad ${HORO_SDL3_TARGET}
+                HoroOpenGLHostAdmissionInternal)
+        # Xvfb coverage executes the same pixel/state contract, not hardware qualification.
+        # The original native case remains registered for opt-in device qualification.
+        catch_discover_tests(HoroOpenGLMaterialSmoke
+                TEST_PREFIX "HoroOpenGLMaterialSmoke::"
+                TEST_SPEC "[hardware-qualification]"
+                TEST_LIST HoroOpenGLMaterialHardwareTests)
+        catch_discover_tests(HoroOpenGLMaterialSmoke
+                TEST_PREFIX "HoroOpenGLMaterialSmoke::"
+                TEST_SPEC "[software-coverage]"
+                TEST_LIST HoroOpenGLMaterialCoverageTests)
+        set(material_properties_file "${CMAKE_CURRENT_BINARY_DIR}/HoroOpenGLMaterialSmoke_evidence_properties.cmake")
+        file(GENERATE OUTPUT "${material_properties_file}" CONTENT
+                "if(HoroOpenGLMaterialHardwareTests)\n    set_tests_properties(\${HoroOpenGLMaterialHardwareTests} PROPERTIES LABELS [==[gpu;display;opengl;material;hardware-qualification]==] TIMEOUT 60 RUN_SERIAL TRUE)\nendif()\nif(HoroOpenGLMaterialCoverageTests)\n    set_tests_properties(\${HoroOpenGLMaterialCoverageTests} PROPERTIES LABELS [==[display;opengl;material;software-coverage;sonar-coverage]==] TIMEOUT 60 RUN_SERIAL TRUE)\nendif()\n")
+        set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES "${material_properties_file}")
+    endif ()
     if (HORO_BUILD_EDITOR_GUI)
         add_executable(HoroEditorViewportOpenGLSmoke
                 integration/renderer/EditorViewportOpenGLSmoke.cpp
@@ -4073,6 +4157,40 @@ if (HORO_BUILD_RENDER_OPENGL)
                 set_tests_properties(HoroEditorOpenGLFirstFrame PROPERTIES
                         LABELS "gpu;display;editor"
                         ENVIRONMENT "HOME=${HORO_OPENGL_FIRST_FRAME_HOME};USERPROFILE=${HORO_OPENGL_FIRST_FRAME_HOME}"
+                )
+                set(HORO_OPENGL_SURFACE_HOME "${CMAKE_CURRENT_BINARY_DIR}/surface-lifecycle-home/opengl")
+                file(MAKE_DIRECTORY "${HORO_OPENGL_SURFACE_HOME}")
+                add_test(NAME HoroEditorOpenGLSurfaceRecovery
+                        COMMAND $<TARGET_FILE:HoroEditor> --renderer opengl --exit-after-frames 32
+                                --qualify-opengl-surface-lifecycle)
+                set_tests_properties(HoroEditorOpenGLSurfaceRecovery PROPERTIES
+                        LABELS "gpu;display;editor;opengl;surface"
+                        TIMEOUT 60
+                        PASS_REGULAR_EXPRESSION "HoroEditor surface lifecycle qualification passed"
+                        ENVIRONMENT "HOME=${HORO_OPENGL_SURFACE_HOME};USERPROFILE=${HORO_OPENGL_SURFACE_HOME}"
+                )
+                # Software coverage runs the real application and observer, not
+                # the material fixture. Native qualification entries stay distinct.
+                set(HORO_OPENGL_COVERAGE_HOME "${CMAKE_CURRENT_BINARY_DIR}/software-coverage-home/opengl")
+                file(MAKE_DIRECTORY "${HORO_OPENGL_COVERAGE_HOME}/first-frame"
+                        "${HORO_OPENGL_COVERAGE_HOME}/surface-lifecycle")
+                add_test(NAME HoroEditorOpenGLFirstFrameSoftwareCoverage
+                        COMMAND $<TARGET_FILE:HoroEditor> --renderer opengl --exit-after-first-frame)
+                set_tests_properties(HoroEditorOpenGLFirstFrameSoftwareCoverage PROPERTIES
+                        LABELS "display;editor;opengl;software-coverage;sonar-coverage"
+                        TIMEOUT 60
+                        RUN_SERIAL TRUE
+                        ENVIRONMENT "HOME=${HORO_OPENGL_COVERAGE_HOME}/first-frame;USERPROFILE=${HORO_OPENGL_COVERAGE_HOME}/first-frame"
+                )
+                add_test(NAME HoroEditorOpenGLSurfaceRecoverySoftwareCoverage
+                        COMMAND $<TARGET_FILE:HoroEditor> --renderer opengl --exit-after-frames 32
+                                --qualify-opengl-surface-lifecycle)
+                set_tests_properties(HoroEditorOpenGLSurfaceRecoverySoftwareCoverage PROPERTIES
+                        LABELS "display;editor;opengl;surface;software-coverage;sonar-coverage"
+                        TIMEOUT 60
+                        RUN_SERIAL TRUE
+                        PASS_REGULAR_EXPRESSION "HoroEditor surface lifecycle qualification passed"
+                        ENVIRONMENT "HOME=${HORO_OPENGL_COVERAGE_HOME}/surface-lifecycle;USERPROFILE=${HORO_OPENGL_COVERAGE_HOME}/surface-lifecycle"
                 )
             endif ()
         endif ()
@@ -4323,6 +4441,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroFramePacingTests
         HoroPresentModeTests
         HoroRenderSurfaceLifecycleTests
+        HoroEditorPresentationSurfaceTests
         HoroRenderGraphTests
         HoroRenderGraphInspectionTests
         HoroRenderGraphLifetimeTests

@@ -13,6 +13,7 @@
 #include "RenderResourceRegistry.h"
 #include "RenderResourceUploadQueue.h"
 
+#include <algorithm>
 #include <array>
 #include <new>
 #include <optional>
@@ -24,6 +25,13 @@ namespace Horo::Render {
     namespace {
         [[nodiscard]] Error MakeFrontendError(const ErrorCodeDescriptor &descriptor, std::string message) {
             return MakeError(descriptor, std::move(message));
+        }
+
+        /** @brief Detects VFX workloads whose physical encoder has not been admitted. */
+        [[nodiscard]] bool RequiresVfxEncoding(const std::span<const RenderGraphPassWorkload> workloads) noexcept {
+            return std::ranges::any_of(workloads, [](const auto &workload) {
+                return std::holds_alternative<RenderGraphVfx>(workload.workload);
+            });
         }
 
         [[nodiscard]] Result<void> ValidateFrontendConfiguration(const RenderResourceUploadLimits &uploadLimits,
@@ -81,6 +89,12 @@ namespace Horo::Render {
                 backend.DestroyTextureView(backendInstance);
             else if (resourceClass == RenderTarget)
                 backend.DestroyRenderTarget(backendInstance);
+            else if (resourceClass == ShaderModule)
+                backend.DestroyShaderModule(backendInstance);
+            else if (resourceClass == Pipeline)
+                backend.DestroyGraphicsPipeline(backendInstance);
+            else if (resourceClass == Sampler)
+                backend.DestroySampler(backendInstance);
         }
 
         /** @brief Applies backend-release disposition and retires admitted memory when it remains valid. */
@@ -182,6 +196,10 @@ namespace Horo::Render {
                                                         const RenderGraphTransientResourcesHandle transientResources) {
         if (const auto admitted = ValidateExecutionAdmission(); admitted.HasError())
             return admitted;
+        if (RequiresVfxEncoding(workloads)) {
+            Abort();
+            return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::VfxExecutionUnavailable));
+        }
         try {
             Detail::RenderGraphTransientResourceSet *transient = nullptr;
             if (transientResources.IsValid()) {
