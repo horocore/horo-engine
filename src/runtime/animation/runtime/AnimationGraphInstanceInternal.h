@@ -135,6 +135,15 @@ namespace Horo::Animation::Detail {
     [[nodiscard]] GraphInstanceOutcome EndGraphStateMachine(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence);
     /** @brief Allocates and resolves immutable machine control tables only at instance preparation. */
     [[nodiscard]] GraphInstanceFailure PrepareGraphStateMachines(GraphInstanceState &state);
+    /** @brief Borrows the exact immutable occurrence interval of one compiler-admitted state lane.
+     * @param state Owner retaining the immutable prepared program for the invocation.
+     * @param branch Previously admitted branch ranges in that program.
+     * @param lane Previously admitted source or destination lane (0 or 1).
+     * @return Non-owning ordered span; it is never stored beyond the invocation and performs no allocation.
+     */
+    [[nodiscard]] std::span<const GraphInstructionOccurrence> GraphStateBranchOccurrences(const GraphInstanceState &state,
+                                                                                          const GraphStateBranch &branch,
+                                                                                          std::uint8_t lane) noexcept;
     /** @brief Preflights the exact shared clip traversals for a complete active state branch, optionally staging retired cursors. */
     [[nodiscard]] GraphInstanceOutcome TraverseGraphStateBranch(GraphInstanceState &state, std::uint32_t machine,
                                                                 const GraphStateBranch &branch, std::uint8_t lane,

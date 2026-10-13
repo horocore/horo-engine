@@ -55,6 +55,21 @@ namespace Horo::Animation::Detail {
             return slot < input.playback.size() ? input.playback[slot].elapsed.ticks >= transition.exitTime->ticks
                                                 : transition.exitTime->ticks == 0;
         }
+
+        /** @brief Every retained condition latch must admit the candidate transition. */
+        bool ConditionsSatisfied(const StateMachineTransition &transition, const std::span<const std::uint8_t> latches) noexcept {
+            for (std::uint32_t condition = 0; condition < transition.conditions; ++condition)
+                if (latches[transition.firstCondition + condition] == 0)
+                    return false;
+            return true;
+        }
+
+        /** @brief Priority wins first; stable transition identity breaks an equal-priority tie. */
+        bool PreferredTransition(const StateMachineTransition &candidate, const StateMachineTransition &selected) noexcept {
+            if (candidate.priority != selected.priority)
+                return candidate.priority > selected.priority;
+            return candidate.id < selected.id;
+        }
     }  // namespace
 
     /** @copydoc SelectStateMachineTransition */
@@ -71,13 +86,9 @@ namespace Horo::Animation::Detail {
             const auto &transition = plan.transitions[index];
             if (!EligibleSource(plan, runtime, transition) || !ExitTimeReached(plan, transition, runtime, input))
                 continue;
-            bool satisfied = true;
-            for (std::uint32_t condition = 0; condition < transition.conditions; ++condition)
-                satisfied = satisfied && latches[transition.firstCondition + condition] != 0;
-            if (!satisfied)
+            if (!ConditionsSatisfied(transition, latches))
                 continue;
-            if (!selected || transition.priority > plan.transitions[*selected].priority ||
-                (transition.priority == plan.transitions[*selected].priority && transition.id < plan.transitions[*selected].id))
+            if (!selected || PreferredTransition(transition, plan.transitions[*selected]))
                 selected = index;
         }
         return selected;

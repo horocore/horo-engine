@@ -287,4 +287,27 @@ namespace Horo::Animation::Test {
         }
         CHECK(ValidateStateMachine(machine.Plan(), machine.declarations) != GraphInstanceFailure::None);
     }
+
+    TEST_CASE("Animation state machine admission preserves ordered failures and bounded remaining condition storage",
+              "[animation][state_machine]") {
+        Machine machine;
+        SECTION("transition binding precedes malformed policy") {
+            machine.transitions[0].source = 99;
+            machine.transitions[0].duration = {-1};
+            CHECK(ValidateStateMachine(machine.Plan(), machine.declarations) == GraphInstanceFailure::BindingMismatch);
+        }
+        SECTION("condition type precedes nonfinite release threshold") {
+            machine.conditions[0].threshold = true;
+            machine.conditions[0].releaseThreshold = std::numeric_limits<float>::quiet_NaN();
+            CHECK(ValidateStateMachine(machine.Plan(), machine.declarations) == GraphInstanceFailure::TypeMismatch);
+        }
+        SECTION("later condition interval cannot exceed the admitted remaining table") {
+            auto next = machine.transitions[0];
+            next.id = {101};
+            next.firstCondition = 1;
+            next.conditions = std::numeric_limits<std::uint32_t>::max();
+            machine.transitions.push_back(next);
+            CHECK(ValidateStateMachine(machine.Plan(), machine.declarations) == GraphInstanceFailure::Malformed);
+        }
+    }
 }  // namespace Horo::Animation::Test

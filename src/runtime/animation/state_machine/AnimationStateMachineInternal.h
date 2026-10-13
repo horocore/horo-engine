@@ -126,6 +126,12 @@ namespace Horo::Animation::Detail {
         bool resetDestination{}; /**< Start the new state's clip/subgraph occurrence at its explicit entry boundary. */
     };
 
+    /** @brief Checks the common immutable table ceilings before either preparation or tick evidence admission.
+     * @param plan Candidate tables, without dereferencing their entries.
+     * @return Whether all four caller-independent table-size invariants hold.
+     */
+    [[nodiscard]] bool StateMachineStorageAdmitted(const StateMachinePlan &plan) noexcept;
+
     /** @brief Validates detached immutable plan data at compiler/control time without allocation.
      * @param plan Complete candidate tables.
      * @param parameters Exact canonical parameter declarations used to compile condition accesses.

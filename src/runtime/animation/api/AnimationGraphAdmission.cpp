@@ -107,6 +107,11 @@ namespace Horo::Animation::GraphCompileDetail {
                     return Result<void>::Failure(Failure(GraphMalformed));
             return Result<void>::Success();
         }
+
+        /** @brief Captures the complete caller-lowerable policy before traversing any candidate table. */
+        bool ValidLimits(const AnimationGraphLimits &limits) {
+            return ValidStateLimits(limits) && ValidStructureLimits(limits) && ValidExpansionLimits(limits) && ValidStorageLimits(limits);
+        }
     }  // namespace
 
     /** @copydoc PreflightGraph */
@@ -118,9 +123,7 @@ namespace Horo::Animation::GraphCompileDetail {
         if (context.replacing && *context.replacing != data.id)
             return Result<void>::Failure(Failure(GraphReloadMismatch));
         const auto &limits = context.limits;
-        if (!ValidStateLimits(limits))
-            return Result<void>::Failure(Failure(GraphLimitExceeded));
-        if (!ValidStructureLimits(limits) || !ValidExpansionLimits(limits) || !ValidStorageLimits(limits))
+        if (!ValidLimits(limits))
             return Result<void>::Failure(Failure(GraphLimitExceeded));
         if (!ValidCollections(data, limits))
             return Result<void>::Failure(Failure(GraphLimitExceeded));

@@ -18,12 +18,16 @@ namespace Horo::Animation::Detail {
         }
     }  // namespace
 
+    /** @copydoc GraphStateBranchOccurrences */
+    std::span<const GraphInstructionOccurrence> GraphStateBranchOccurrences(const GraphInstanceState &state, const GraphStateBranch &branch,
+                                                                            const std::uint8_t lane) noexcept {
+        return state.program->Occurrences().subspan(branch.begin[lane], branch.end[lane] - branch.begin[lane]);
+    }
+
     /** @copydoc TraverseGraphStateBranch */
     GraphInstanceOutcome TraverseGraphStateBranch(GraphInstanceState &state, const std::uint32_t machine, const GraphStateBranch &branch,
                                                   const std::uint8_t lane, const GraphEvaluationInput &input, const bool stageCursors) {
-        const auto occurrences = state.program->Occurrences();
-        for (auto index = branch.begin[lane]; index < branch.end[lane]; ++index) {
-            const auto &occurrence = occurrences[index];
+        for (const auto &occurrence : GraphStateBranchOccurrences(state, branch, lane)) {
             if (!occurrence.clipPlayer)
                 continue;
             auto localInput = input;
@@ -50,9 +54,7 @@ namespace Horo::Animation::Detail {
                                                 const std::uint8_t lane, const GraphEvaluationInput &input) {
         if (const auto traversed = TraverseGraphStateBranch(state, machine, branch, lane, input, true); traversed.HasError())
             return traversed;
-        const auto occurrences = state.program->Occurrences();
-        for (auto index = branch.begin[lane]; index < branch.end[lane]; ++index) {
-            const auto &occurrence = occurrences[index];
+        for (const auto &occurrence : GraphStateBranchOccurrences(state, branch, lane)) {
             if (occurrence.phase != GraphOccurrencePhase::StateBegin)
                 continue;
             auto localInput = input;

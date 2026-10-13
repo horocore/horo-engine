@@ -144,8 +144,7 @@ namespace Horo::Animation::Test {
         CHECK(instance.Publication().currentPose == first.outcome.publication.currentPose);
         auto invalid = fixture.Assets();
         invalid.skeletonGeneration = Id<SkeletonAssetGeneration>(99);
-        auto replacement = fixture.context;
-        replacement.instance.slot.generation = 2;
+        const auto replacement = fixture.ReplacementContext();
         CHECK(instance.Replace(invalid, replacement).HasError());
         Tick retry(instance, 2, 10);
         std::array<GraphParameterInput, 2> parameters;

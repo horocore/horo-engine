@@ -4,6 +4,17 @@
 #include "Horo/Animation/AnimationGraphInstance.h"
 
 namespace Horo::Animation::Test::Instance {
+    /** @brief Discovers actual direct and state-branch clip dependencies without fabricating an executable plan. */
+    inline bool ReferencesClip(const GraphNodePayload &payload, const AnimationClipId wanted) {
+        if (const auto *clip = std::get_if<GraphClipNode>(&payload))
+            return clip->clip == wanted;
+        if (const auto *machine = std::get_if<GraphStateMachineNode>(&payload))
+            for (const auto &state : machine->states)
+                if (const auto *clip = std::get_if<AnimationClipId>(&state.source); clip && *clip == wanted)
+                    return true;
+        return false;
+    }
+
     /** @brief Actual compiler, skeleton and sampled-clip fixture; no synthetic executable plan. */
     struct Prepared final {
         std::shared_ptr<const SkeletonAsset> skeleton;
@@ -33,14 +44,8 @@ namespace Horo::Animation::Test::Instance {
             }
             bool secondClip{};
             for (const auto &definition : graph.definitions)
-                for (const auto &node : definition.nodes) {
-                    if (const auto *clip = std::get_if<GraphClipNode>(&node.payload); clip && clip->clip == Asset<AnimationClipId>(4))
-                        secondClip = true;
-                    if (const auto *machine = std::get_if<GraphStateMachineNode>(&node.payload))
-                        for (const auto &state : machine->states)
-                            if (const auto *clip = std::get_if<AnimationClipId>(&state.source); clip && *clip == Asset<AnimationClipId>(4))
-                                secondClip = true;
-                }
+                for (const auto &node : definition.nodes)
+                    secondClip = ReferencesClip(node.payload, Asset<AnimationClipId>(4)) || secondClip;
             if (!secondClip)
                 compileClips.erase(compileClips.begin() + 1);
             for (const auto &clip : compileClips)
@@ -57,6 +62,13 @@ namespace Horo::Animation::Test::Instance {
 
         [[nodiscard]] GraphInstanceAssets Assets() const {
             return {program, skeleton, Id<SkeletonAssetGeneration>(5), clips};
+        }
+
+        /** @brief Creates the explicit next-generation reload context without mutating the current instance fixture. */
+        [[nodiscard]] GraphInstanceCreateContext ReplacementContext() const {
+            auto replacement = context;
+            ++replacement.instance.slot.generation;
+            return replacement;
         }
 
         [[nodiscard]] AnimationGraphInstance Create() const {

@@ -76,6 +76,28 @@ namespace Horo::Animation {
             return None;
         }
 
+        /** @brief Charges one prepared writer's complete pose and binary-search work, including state control phases. */
+        std::uint64_t OccurrenceJointCost(const GraphInstanceAssets &assets, const GraphInstructionOccurrence &occurrence) noexcept {
+            const auto &instruction = assets.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex];
+            std::uint64_t cost = 0;
+            if (std::holds_alternative<GraphBlendNode>(instruction.payload))
+                cost = 3ULL * assets.program->SkeletonBinding().joints;
+            if (occurrence.phase == GraphOccurrencePhase::StateBegin)
+                cost = 4ULL * assets.program->SkeletonBinding().joints;
+            if (occurrence.phase == GraphOccurrencePhase::StateEnd)
+                cost = 8ULL * assets.program->SkeletonBinding().joints;
+            if (occurrence.clipBindingIndex.has_value()) {
+                const auto &descriptor = assets.program->ClipBindings()[*occurrence.clipBindingIndex];
+                const auto clip = std::ranges::find_if(assets.clips, [&descriptor](const auto &value) {
+                    return value->Data().descriptor == descriptor;
+                });
+                cost = (descriptor.kind == AnimationClipKind::Additive ? 6ULL : 3ULL) * assets.program->SkeletonBinding().joints;
+                for (const auto &track : (*clip)->Data().tracks)
+                    cost += 1 + std::bit_width(track.keys.size());
+            }
+            return cost;
+        }
+
         /** @brief Charges complete per-tick pose/key-search work after exact clip bindings have been admitted. */
         GraphInstanceFailure AdmitClipWork(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
             std::uint64_t operations = 0;
@@ -84,24 +106,7 @@ namespace Horo::Animation {
             if (operations > context.maximumJointOperations)
                 return GraphInstanceFailure::LimitExceeded;
             for (const auto &occurrence : assets.program->Occurrences()) {
-                const auto &instruction =
-                    assets.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex];
-                std::uint64_t cost = 0;
-                if (std::holds_alternative<GraphBlendNode>(instruction.payload))
-                    cost = 3ULL * assets.program->SkeletonBinding().joints;
-                if (occurrence.phase == GraphOccurrencePhase::StateBegin)
-                    cost = 4ULL * assets.program->SkeletonBinding().joints;
-                if (occurrence.phase == GraphOccurrencePhase::StateEnd)
-                    cost = 8ULL * assets.program->SkeletonBinding().joints;
-                if (occurrence.clipBindingIndex.has_value()) {
-                    const auto &descriptor = assets.program->ClipBindings()[*occurrence.clipBindingIndex];
-                    const auto clip = std::ranges::find_if(assets.clips, [&descriptor](const auto &value) {
-                        return value->Data().descriptor == descriptor;
-                    });
-                    cost = (descriptor.kind == AnimationClipKind::Additive ? 6ULL : 3ULL) * assets.program->SkeletonBinding().joints;
-                    for (const auto &track : (*clip)->Data().tracks)
-                        cost += 1 + std::bit_width(track.keys.size());
-                }
+                const auto cost = OccurrenceJointCost(assets, occurrence);
                 if (cost > context.maximumJointOperations || operations > context.maximumJointOperations - cost)
                     return GraphInstanceFailure::LimitExceeded;
                 operations += cost;
@@ -144,31 +149,52 @@ namespace Horo::Animation {
             return work > context.maximumJointOperations ? LimitExceeded : None;
         }
 
-        /** @brief Charges every retained workspace and both transaction/publication buffers without overflow. */
-        GraphInstanceFailure AdmitStorage(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
-            const auto &memory = assets.program->Memory();
-            std::uint64_t bytes = sizeof(Detail::GraphInstanceState);
-            const auto charge = [&bytes, &context](std::uint64_t count, std::uint64_t stride) {
+        /** @brief Load-time checked byte accumulator; a failed charge never wraps or admits an oversized workspace. */
+        struct StorageBudget final {
+            std::uint64_t maximum;
+            std::uint64_t bytes{sizeof(Detail::GraphInstanceState)};
+
+            bool operator()(const std::uint64_t count, const std::uint64_t stride) noexcept {
                 if (count > (std::numeric_limits<std::uint64_t>::max() - bytes) / stride)
                     return false;
                 bytes += count * stride;
-                return bytes <= context.maximumStorageBytes;
-            };
+                return bytes <= maximum;
+            }
+        };
+
+        /** @brief Charges the existing pose/player/parameter and immutable-publication categories in their original order. */
+        bool AdmitBaseStorage(const GraphInstanceAssets &assets, StorageBudget &charge) noexcept {
+            const auto &memory = assets.program->Memory();
             if (!charge(memory.poseTransforms + 2ULL * assets.program->SkeletonBinding().joints, sizeof(Math::Transform)) ||
                 !charge(memory.poseTransforms, sizeof(std::uint8_t)) ||
                 !charge(memory.clipPlayers, 2ULL * sizeof(Detail::GraphPlayerState)) ||
                 !charge(memory.parameters, 4ULL * sizeof(GraphParameterValue) + sizeof(std::uint8_t)) ||
                 !charge(assets.clips.size(), sizeof(std::shared_ptr<const AnimationClipAsset>)) ||
                 !charge(assets.curves.size(), sizeof(std::shared_ptr<const AnimationParameterCurve>) + sizeof(std::size_t)))
+                return false;
+            return true;
+        }
+
+        /** @brief Resolves one immutable state declaration for both storage and control-work admission. */
+        const GraphStateMachineNode &MachineDefinition(const AnimationGraphProgram &program,
+                                                       const GraphStateMachineBinding &binding) noexcept {
+            const auto &occurrence = program.Occurrences()[binding.beginOccurrence];
+            return std::get<GraphStateMachineNode>(
+                program.Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex].payload);
+        }
+
+        /** @brief Charges every retained workspace and both transaction/publication buffers without overflow. */
+        GraphInstanceFailure AdmitStorage(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
+            const auto &memory = assets.program->Memory();
+            StorageBudget charge{context.maximumStorageBytes};
+            if (!AdmitBaseStorage(assets, charge))
                 return GraphInstanceFailure::LimitExceeded;
             if (!charge(memory.stateMachines, 2ULL * sizeof(Detail::GraphMachineState) + sizeof(Detail::GraphPreparedMachine)) ||
                 !charge(memory.conditionLatches, 3ULL * sizeof(std::uint8_t) + sizeof(Detail::StateMachineCondition)) ||
                 !charge(memory.stateEvents, 3ULL * sizeof(GraphStateEvent)))
                 return GraphInstanceFailure::LimitExceeded;
             for (const auto &binding : assets.program->StateMachines()) {
-                const auto &occurrence = assets.program->Occurrences()[binding.beginOccurrence];
-                const auto &machine = std::get<GraphStateMachineNode>(
-                    assets.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex].payload);
+                const auto &machine = MachineDefinition(*assets.program, binding);
                 if (!charge(machine.states.size(), sizeof(Detail::StateMachineState)) ||
                     !charge(machine.transitions.size(), sizeof(Detail::StateMachineTransition)))
                     return GraphInstanceFailure::LimitExceeded;
@@ -179,45 +205,69 @@ namespace Horo::Animation {
             return GraphInstanceFailure::None;
         }
 
-        /** @brief Checks identity, immutable compatibility and complete storage before any runtime allocation. */
-        GraphInstanceFailure Admit(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
+        /** @brief The immutable program must exactly pin the supplied skeleton publication. */
+        bool SkeletonMatches(const GraphInstanceAssets &assets) noexcept {
+            const auto &binding = assets.program->SkeletonBinding();
+            const auto &skeleton = assets.skeleton->Data();
+            return binding.id == skeleton.skeleton && binding.generation == assets.skeletonGeneration &&
+                   binding.contractVersion == skeleton.contractVersion && binding.joints == skeleton.joints.size();
+        }
+
+        /** @brief Caller instruction policy must admit the entire prepared stream, not merely its active subset. */
+        bool InstructionsAdmitted(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
+            return context.maximumInstructions != 0 && context.maximumInstructions <= AnimationGraphHardLimits::EvaluationInstructions &&
+                   assets.program->Occurrences().size() <= context.maximumInstructions;
+        }
+
+        /** @brief Checks runtime identity, skeleton publication compatibility and immutable instruction/clip policy. */
+        GraphInstanceFailure AdmitCompatibility(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
             using enum GraphInstanceFailure;
-            if (context.cancellation.IsCancellationRequested())
-                return Cancelled;
             if (!context.instance.IsValid())
                 return HandleMalformed;
             if (!assets.program || !assets.skeleton || assets.program->Occurrences().empty())
                 return BindingMismatch;
-            const auto &binding = assets.program->SkeletonBinding();
-            if (const auto &skeleton = assets.skeleton->Data();
-                binding.id != skeleton.skeleton || binding.generation != assets.skeletonGeneration ||
-                binding.contractVersion != skeleton.contractVersion || binding.joints != skeleton.joints.size())
+            if (!SkeletonMatches(assets))
                 return BindingMismatch;
-            if (context.maximumInstructions == 0 || context.maximumInstructions > AnimationGraphHardLimits::EvaluationInstructions ||
-                assets.program->Occurrences().size() > context.maximumInstructions)
+            if (!InstructionsAdmitted(assets, context))
                 return LimitExceeded;
             if (assets.clips.size() != assets.program->ClipBindings().size())
                 return BindingMismatch;
             if (!ValidClipLimits(context.clipLimits))
                 return LimitExceeded;
+            return None;
+        }
+
+        /** @brief Charges the complete bounded control/latch/event stream independently of pose sampling work. */
+        GraphInstanceFailure AdmitControlWork(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
+            using enum GraphInstanceFailure;
+            if (context.maximumControlOperations > 64ULL * 1024ULL * 1024ULL)
+                return LimitExceeded;
+            std::uint64_t control = assets.program->Occurrences().size() * (4ULL * assets.program->Memory().callDepth + 4ULL);
+            control += 3ULL * assets.program->Memory().conditionLatches + 3ULL * assets.program->Memory().stateEvents;
+            for (const auto &binding : assets.program->StateMachines()) {
+                const auto &machine = MachineDefinition(*assets.program, binding);
+                control += 2ULL * machine.transitions.size() + assets.program->Parameters().size();
+            }
+            if (control > context.maximumControlOperations)
+                return LimitExceeded;
+            return None;
+        }
+
+        /** @brief Checks identity, immutable compatibility and complete storage before any runtime allocation. */
+        GraphInstanceFailure Admit(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
+            using enum GraphInstanceFailure;
+            if (context.cancellation.IsCancellationRequested())
+                return Cancelled;
+            if (const auto failure = AdmitCompatibility(assets, context); failure != None)
+                return failure;
             if (const auto failure = AdmitStorage(assets, context); failure != None)
                 return failure;
             if (const auto failure = AdmitClipBindings(assets, context.clipLimits); failure != None)
                 return failure;
             if (const auto failure = AdmitCurves(assets, context); failure != None)
                 return failure;
-            if (context.maximumControlOperations > 64ULL * 1024ULL * 1024ULL)
-                return LimitExceeded;
-            std::uint64_t control = assets.program->Occurrences().size() * (4ULL * assets.program->Memory().callDepth + 4ULL);
-            control += 3ULL * assets.program->Memory().conditionLatches + 3ULL * assets.program->Memory().stateEvents;
-            for (const auto &binding : assets.program->StateMachines()) {
-                const auto &occurrence = assets.program->Occurrences()[binding.beginOccurrence];
-                const auto &machine = std::get<GraphStateMachineNode>(
-                    assets.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex].payload);
-                control += 2ULL * machine.transitions.size() + assets.program->Parameters().size();
-            }
-            if (control > context.maximumControlOperations)
-                return LimitExceeded;
+            if (const auto failure = AdmitControlWork(assets, context); failure != None)
+                return failure;
             return AdmitClipWork(assets, context);
         }
 

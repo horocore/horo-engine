@@ -326,6 +326,29 @@ namespace Horo::Animation {
             return {Id<GraphParameterId>(value["id"]), value["name"].get<std::string>(), type, Default(value["default"], type)};
         }
 
+        /** @brief The migration selector admits only its explicit supported source-schema range. */
+        bool AdmittedSchema(const std::uint32_t schema, const AnimationGraphSourceMigration migration) {
+            if (schema == CurrentAnimationGraphSchemaVersion)
+                return true;
+            switch (migration) {
+                case AnimationGraphSourceMigration::RequireCurrent:
+                    return false;
+                case AnimationGraphSourceMigration::MigrateVersion1:
+                    return schema == 1;
+                case AnimationGraphSourceMigration::MigrateLegacySchemas:
+                    return schema >= 1 && schema <= 2;
+                case AnimationGraphSourceMigration::MigrateSupported:
+                    return schema >= 1 && schema <= 3;
+            }
+            return false;
+        }
+
+        /** @brief Serialized semantic-version fields must be exact unsigned components of the schema's contract. */
+        bool ContractMatches(const Json &value, const AnimationGraphContractVersion expected) {
+            return value["major"].is_number_unsigned() && value["minor"].is_number_unsigned() && value["patch"].is_number_unsigned() &&
+                   value["major"] == expected.major && value["minor"] == expected.minor && value["patch"] == expected.patch;
+        }
+
         /** @brief Decodes only the current model contract and explicit source-schema migration versions. */
         std::uint32_t Version(const Json &envelope, AnimationGraphSourceMigration migration) {
             Keys(envelope, {"schemaVersion", "assetType", "contractVersion", "dependencies", "payload"});
@@ -337,13 +360,7 @@ namespace Horo::Animation {
             const auto expected = schema <= 2   ? AnimationGraphContractVersion{1, 0, 0}
                                   : schema == 3 ? AnimationGraphContractVersion{1, 1, 0}
                                                 : CurrentAnimationGraphContractVersion;
-            if ((schema != CurrentAnimationGraphSchemaVersion &&
-                 !(schema == 1 && migration == AnimationGraphSourceMigration::MigrateVersion1) &&
-                 !(schema >= 1 && schema <= 3 && migration == AnimationGraphSourceMigration::MigrateSupported) &&
-                 !(schema >= 1 && schema <= 2 && migration == AnimationGraphSourceMigration::MigrateLegacySchemas)) ||
-                !envelope["contractVersion"]["major"].is_number_unsigned() || !envelope["contractVersion"]["minor"].is_number_unsigned() ||
-                !envelope["contractVersion"]["patch"].is_number_unsigned() || envelope["contractVersion"]["major"] != expected.major ||
-                envelope["contractVersion"]["minor"] != expected.minor || envelope["contractVersion"]["patch"] != expected.patch)
+            if (!AdmittedSchema(schema, migration) || !ContractMatches(envelope["contractVersion"], expected))
                 Reject(AnimationErrors::GraphVersionUnsupported);
             if (envelope["assetType"] != "core.animation.graph")
                 Reject(AnimationErrors::GraphTypeMismatch);

@@ -178,6 +178,47 @@ namespace Horo::Animation::Detail {
                 }
             }, instruction.payload);
         }
+
+        /** @brief Starts a tick transaction in already allocated candidate storage; committed state is untouched. */
+        void PrepareCandidate(GraphInstanceState &state) {
+            std::ranges::copy(state.players, state.candidate.players.begin());
+            std::ranges::copy(state.machines, state.candidate.machines.begin());
+            std::ranges::copy(state.latches, state.candidate.latches.begin());
+            state.candidate.eventCount = 0;
+            for (auto &machine : state.candidate.machines) {
+                machine.visited = false;
+                machine.retiring = false;
+                machine.held = {};
+            }
+        }
+
+        /** @brief Executes one active guarded phase using the sole prepared clip/pose dispatch path. */
+        GraphInstanceOutcome ExecuteGuardedOccurrence(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
+                                                      const GraphEvaluationInput &input) {
+            const auto &instruction = state.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex];
+            auto branchInput = input;
+            if (!StateBranchInput(state, occurrence, branchInput))
+                return {};
+            if (occurrence.phase == GraphOccurrencePhase::StateBegin)
+                return BeginGraphStateMachine(state, occurrence, branchInput);
+            if (occurrence.phase == GraphOccurrencePhase::StateEnd)
+                return EndGraphStateMachine(state, occurrence);
+            if (occurrence.clipBindingIndex)
+                return SampleClip(state, occurrence, instruction, branchInput);
+            return ExecuteOccurrence(state, occurrence, instruction, branchInput);
+        }
+
+        /** @brief Either invocation or owner cancellation aborts the candidate before publication. */
+        bool Cancelled(const GraphInstanceState &state, const GraphEvaluationInput &input) noexcept {
+            return input.cancellation.IsCancellationRequested() || state.ownerCancellation.IsCancellationRequested();
+        }
+
+        /** @brief Completes retirement only after the full occurrence stream and final cancellation fence succeed. */
+        void CompleteRetirement(GraphInstanceState &state) {
+            for (std::size_t index = 0; index < state.candidate.machines.size(); ++index)
+                if (state.candidate.machines[index].retiring)
+                    ResetGraphStateControl(state, static_cast<std::uint32_t>(index));
+        }
     }  // namespace
 
     /** @copydoc ExecuteGraph */
@@ -186,44 +227,17 @@ namespace Horo::Animation::Detail {
             return {GraphInstanceFailure::Malformed};
         if (const auto captured = CaptureParameters(state, input); captured.HasError())
             return captured;
-        std::ranges::copy(state.players, state.candidate.players.begin());
-        std::ranges::copy(state.machines, state.candidate.machines.begin());
-        std::ranges::copy(state.latches, state.candidate.latches.begin());
-        state.candidate.eventCount = 0;
-        for (auto &machine : state.candidate.machines) {
-            machine.visited = false;
-            machine.retiring = false;
-            machine.held = {};
-        }
+        PrepareCandidate(state);
         for (const auto &occurrence : state.program->Occurrences()) {
-            if (input.cancellation.IsCancellationRequested() || state.ownerCancellation.IsCancellationRequested())
+            if (Cancelled(state, input))
                 return {GraphInstanceFailure::Cancelled};
-            const auto &instruction = state.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex];
-            auto branchInput = input;
-            if (!StateBranchInput(state, occurrence, branchInput))
-                continue;
-            if (occurrence.phase == GraphOccurrencePhase::StateBegin) {
-                if (const auto begun = BeginGraphStateMachine(state, occurrence, branchInput); begun.HasError())
-                    return begun;
-            } else if (occurrence.phase == GraphOccurrencePhase::StateEnd) {
-                if (const auto ended = EndGraphStateMachine(state, occurrence); ended.HasError())
-                    return ended;
-            } else if (occurrence.clipBindingIndex) {
-                if (const auto sampled = SampleClip(state, occurrence, instruction, branchInput); sampled.HasError())
-                    return sampled;
-            } else if (const auto executed = ExecuteOccurrence(state, occurrence, instruction, branchInput); executed.HasError()) {
+            if (const auto executed = ExecuteGuardedOccurrence(state, occurrence, input); executed.HasError())
                 return executed;
-            }
             // Input, Call and Output alias the actual earlier writer, as established by the compiled access plan.
         }
-        if (input.cancellation.IsCancellationRequested() || state.ownerCancellation.IsCancellationRequested())
+        if (Cancelled(state, input))
             return {GraphInstanceFailure::Cancelled};
-        for (std::size_t index = 0; index < state.candidate.machines.size(); ++index) {
-            auto &machine = state.candidate.machines[index];
-            if (!machine.retiring)
-                continue;
-            ResetGraphStateControl(state, static_cast<std::uint32_t>(index));
-        }
+        CompleteRetirement(state);
         return {};
     }
 }  // namespace Horo::Animation::Detail
