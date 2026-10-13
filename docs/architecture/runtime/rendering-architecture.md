@@ -1797,6 +1797,12 @@ translation remain in their owning downstream contracts.
 
 ### Host frame pacing and presentation evidence
 
+[Frames-in-Flight and Latency Policy](frames-in-flight-and-latency-policy.md)
+owns the proposed credit-depth modes, profile defaults, nonblocking admission,
+completion-owned retirement and migration gaps. CPU rate-cap readiness, GPU
+completion, native image capacity and display presentation remain distinct;
+the policy document is their single queue-depth decision source.
+
 `FramePacer` is the host-owned, owner-thread scheduling policy from RND-008.5.
 It consumes committed `RenderSurfaceLifecycle` publications and a separate typed
 0 (unlimited) or 1..1000 Hz frame cap. `Poll` returns Ready, a wait slice of at
