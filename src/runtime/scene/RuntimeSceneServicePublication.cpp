@@ -6,6 +6,13 @@
 #include <utility>
 
 namespace Horo::Runtime {
+    /** @copydoc ScenePublicationDetail::ShutdownCandidates */
+    void ScenePublicationDetail::ShutdownCandidates(std::vector<std::unique_ptr<SceneActivationCandidate>> &candidates) noexcept {
+        for (auto candidate = candidates.rbegin(); candidate != candidates.rend(); ++candidate)
+            (*candidate)->Shutdown();
+        candidates.clear();
+    }
+
     /** @brief Private no-fail transfer retaining the retired Scene through save operation completion. */
     struct RuntimeSceneService::AggregateTransfer final : IStagedRestoreAggregatePublication {
         explicit AggregateTransfer(RuntimeSceneService &service) noexcept : service(service) {}
@@ -63,7 +70,7 @@ namespace Horo::Runtime {
         }
         RetirePublicationReceipt(ScenePublicationStatus::Rejected);
         publicationCheck_.reset();
-        ShutdownCandidates(transfer.retired.candidates);
+        ScenePublicationDetail::ShutdownCandidates(transfer.retired.candidates);
         transfer.retired.restore.reset();
         transfer.retired.scene.reset();
         return Result<void>::Success();
@@ -72,12 +79,13 @@ namespace Horo::Runtime {
     Result<void> RuntimeSceneService::CommitDeferredChanges() {
         using enum TransitionKind;
         if (structuralCommands_) {
-            const auto revision = assetRegistry_ ? assetRegistry_->Snapshot().Revision() : Assets::AssetRegistryRevision{};
+            const auto revision = assetPreparationServices_.registry ? assetPreparationServices_.registry->Snapshot().Revision()
+                                                                     : Assets::AssetRegistryRevision{};
             auto admitted = structuralCommands_->ValidateAdmission(active_.scene->View().RuntimeId(), revision);
             Result<StructuralCommitResult> committed =
-                admitted.HasValue()
-                    ? active_.scene->CommitWithRegistry(*structuralCommands_, assetRegistry_, structuralParticipants_, &operationError_)
-                    : Result<StructuralCommitResult>::Failure(admitted.ErrorValue());
+                admitted.HasValue() ? active_.scene->CommitWithRegistry(*structuralCommands_, assetPreparationServices_.registry,
+                                                                        structuralParticipants_, &operationError_)
+                                    : Result<StructuralCommitResult>::Failure(admitted.ErrorValue());
             structuralCommands_.reset();
             if (committed.HasError())
                 operationError_ = committed.ErrorValue();
@@ -105,7 +113,7 @@ namespace Horo::Runtime {
             }
         } else if (transition_ == Unload) {
             SceneAggregate retired = std::move(active_);
-            ShutdownCandidates(retired.candidates);
+            ScenePublicationDetail::ShutdownCandidates(retired.candidates);
             retired.restore.reset();
             retired.scene.reset();
         }
@@ -119,7 +127,7 @@ namespace Horo::Runtime {
             aggregateRestore_->Rollback();
         aggregateRestore_.reset();
         operationError_ = std::move(error);
-        ShutdownCandidates(pending_.candidates);
+        ScenePublicationDetail::ShutdownCandidates(pending_.candidates);
         pending_.scene.reset();
         RetirePublicationReceipt(ScenePublicationStatus::Rejected);
         publicationCheck_.reset();

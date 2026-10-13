@@ -30,7 +30,10 @@ namespace Horo::Vfx {
      * The host subtracts ordinary scene draws before assigning this slice. No independent per-effect allowance exists.
      */
     struct VfxExtractionBudget final {
-        std::uint32_t maximumBatches{}, maximumInstances{}, maximumDrawCalls{}, frameSlots{};
+        std::uint32_t maximumBatches{};
+        std::uint32_t maximumInstances{};
+        std::uint32_t maximumDrawCalls{};
+        std::uint32_t frameSlots{};
         std::size_t maximumBytes{}; /**< Includes all prepared immutable frame payload copies. */
     };
     /** @brief Typed frame-hot outcome; failure/overrun builds no heap-backed diagnostic. */
@@ -47,7 +50,10 @@ namespace Horo::Vfx {
     /** @brief Full frame admission/omission evidence. A batch is never partially packed. */
     struct VfxExtractionReport final {
         VfxExtractionStatus status{VfxExtractionStatus::Complete};
-        std::uint32_t admittedBatches{}, admittedInstances{}, reservedDrawCalls{}, omittedBatches{};
+        std::uint32_t admittedBatches{};
+        std::uint32_t admittedInstances{};
+        std::uint32_t reservedDrawCalls{};
+        std::uint32_t omittedBatches{};
         std::uint64_t omittedInstances{};
         Render::VfxBatchId firstOmitted{};
     };

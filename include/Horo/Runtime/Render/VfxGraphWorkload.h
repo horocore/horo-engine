@@ -18,12 +18,15 @@ namespace Horo::Render {
 
     /** @brief Exact retained instance reference, including renderer-computed canonical sort depth. */
     struct VfxDrawReference final {
-        std::uint32_t batch{}, instance{}, depthKey{};
+        std::uint32_t batch{};
+        std::uint32_t instance{};
+        std::uint32_t depthKey{};
     };
 
     /** @brief Immutable renderer-owned view order, independent of CPU simulation and snapshot packing order. */
     struct VfxDrawOrder final {
-        std::uint64_t view{}, viewGeneration{};
+        std::uint64_t view{};
+        std::uint64_t viewGeneration{};
         std::vector<VfxDrawReference> instances;
     };
 
@@ -33,7 +36,8 @@ namespace Horo::Render {
      */
     struct RenderGraphVfx final {
         VfxGraphStage stage{VfxGraphStage::AdditiveForward};
-        RenderGraphResourceId color{}, depth{};
+        RenderGraphResourceId color{};
+        RenderGraphResourceId depth{};
         std::shared_ptr<const VfxDrawOrder> order;
         RenderWorldSnapshot snapshot; /**< Exact source lease paired with this order, released with the workload. */
     };

@@ -20,7 +20,8 @@ namespace {
     using namespace Test::VfxRender;
 
     struct PreparationTrace {
-        unsigned owned{}, immutable{};
+        unsigned owned{};
+        unsigned immutable{};
         bool failSecond{};
     };
 
@@ -30,7 +31,9 @@ namespace {
             return Result<void>::Success();
         }
 
-        void Shutdown() noexcept override {}
+        void Shutdown() noexcept override {
+            // This validation-only candidate owns no subsystem resources to retire.
+        }
     };
 
     class VfxHostAdapter final : public Runtime::SceneActivationParticipant {
@@ -43,7 +46,9 @@ namespace {
                 return trace_.failSecond ? Result<void>::Failure(MakeError(VfxErrors::IdentityInvalid)) : Result<void>::Success();
             auto binding = Binding(0);
             const auto scope = VfxIdentityScope::Create(scene.View().RuntimeId().value).Value();
-            binding.effect.scope = binding.emitter.scope = binding.particles.buffer.scope = scope;
+            binding.effect.scope = scope;
+            binding.emitter.scope = scope;
+            binding.particles.buffer.scope = scope;
             auto budget = Budget();
             budget.frameSlots = 1;
             const std::array bindings{binding};
@@ -73,11 +78,29 @@ namespace {
         return std::move(built).Value();
     }
 
+    /** @brief Verifies one stage's blend membership and records exactly one color visit per instance. */
+    void CheckStageInstances(const RenderGraphVfx &payload, const RenderWorldSnapshot &snapshot, StandardPbrRasterFamily family,
+                             std::array<std::uint32_t, 8> &colorVisits) {
+        using enum VfxGraphStage;
+        for (const auto &reference : payload.order->instances) {
+            const auto blend = snapshot.Batches()[reference.batch].blend;
+            if (payload.stage == TranslucentForward)
+                CHECK(blend == VfxParticlePass::Translucent);
+            if (payload.stage == AdditiveForward)
+                CHECK(blend == VfxParticlePass::Additive);
+            if (payload.stage != Shadow && payload.stage != Depth)
+                ++colorVisits[reference.instance];
+            if (payload.stage == GBuffer)
+                CHECK(family == StandardPbrRasterFamily::Deferred);
+        }
+    }
+
 }  // namespace
 
 TEST_CASE("Frontend admits scene-linear VFX textures while preserving unsupported format rejection", "[vfx][graph][resource]") {
+    using enum RenderTextureFormat;
     auto frontend = Frontend();
-    for (const auto format : {RenderTextureFormat::Rgba16Float, RenderTextureFormat::Rgba32Float}) {
+    for (const auto format : {Rgba16Float, Rgba32Float}) {
         auto texture = frontend->CreateTexture({.extent = {16, 16}, .format = format, .usage = RenderTextureUsage::RenderAttachment});
         REQUIRE(texture.HasValue());
         REQUIRE(frontend->ProcessResourceRequests().Value() == 1);
@@ -85,8 +108,8 @@ TEST_CASE("Frontend admits scene-linear VFX textures while preserving unsupporte
         auto builder = Builder();
         CHECK(builder.ImportTexture(texture.Value().handle, RenderGraphResourceClass::Persistent).HasValue());
     }
-    const auto unsupported = frontend->CreateTexture(
-        {.extent = {16, 16}, .format = RenderTextureFormat::Rg16Float, .usage = RenderTextureUsage::RenderAttachment});
+    const auto unsupported =
+        frontend->CreateTexture({.extent = {16, 16}, .format = Rg16Float, .usage = RenderTextureUsage::RenderAttachment});
     REQUIRE(unsupported.HasError());
     CHECK(unsupported.ErrorValue().code.Value() == "render.frontend.resource.unsupported");
     CHECK(frontend->ProcessResourceRequests().Value() == 0);
@@ -142,7 +165,7 @@ TEST_CASE("Retained frame ring applies backpressure and supports independent con
     CHECK(world->Extract(2, {}, 1).report.status == VfxExtractionStatus::FramesRetained);
     auto reader = retained;
     std::uint64_t observed{};
-    std::thread thread{[reader = std::move(reader), &observed] {
+    std::jthread thread{[reader = std::move(reader), &observed] {
         observed = reader.Instances()[0].particle;
     }};
     thread.join();
@@ -189,17 +212,7 @@ TEST_CASE("Every blend class is consumed by frontend typed graph passes for ever
         std::array<std::uint32_t, 8> colorVisits{};
         for (const auto &work : scheduled.Value().Workloads()) {
             const auto &payload = std::get<RenderGraphVfx>(work.workload);
-            for (const auto &reference : payload.order->instances) {
-                const auto blend = snapshot.Batches()[reference.batch].blend;
-                if (payload.stage == VfxGraphStage::TranslucentForward)
-                    CHECK(blend == VfxParticlePass::Translucent);
-                if (payload.stage == VfxGraphStage::AdditiveForward)
-                    CHECK(blend == VfxParticlePass::Additive);
-                if (payload.stage != VfxGraphStage::Shadow && payload.stage != VfxGraphStage::Depth)
-                    ++colorVisits[reference.instance];
-                if (payload.stage == VfxGraphStage::GBuffer)
-                    CHECK(family == StandardPbrRasterFamily::Deferred);
-            }
+            CheckStageInstances(payload, snapshot, family, colorVisits);
         }
         CHECK(std::ranges::all_of(colorVisits, [](auto count) {
             return count == 1;
@@ -269,7 +282,8 @@ TEST_CASE("RuntimeScene owns live VFX and renderer workload lease survives scene
     const std::array bindings{Binding(0)};
     auto world = World(bindings);
     Populate(*world, bindings[0]);
-    REQUIRE(scene->AttachVfxWorld(std::move(world), {}, 1).HasValue());
+    const auto attached = scene->AttachVfxWorld(std::move(world), {}, 1);
+    REQUIRE(attached.HasValue());
     const auto extracted = scene->CaptureVfx(1);
     auto frontend = Frontend();
     auto builder = Builder();

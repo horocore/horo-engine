@@ -854,6 +854,15 @@ namespace Horo::Runtime {
         struct AggregateTransfer;
         struct LifecycleMutation;
 
+        /** @brief Borrowed asset preparation authorities and their owned admission limits.
+         * @details The registry and load service outlive this owner-thread scene service; assetless services retain null borrows.
+         */
+        struct BorrowedAssetPreparationServices final {
+            Assets::AssetRegistry *registry{};
+            Assets::AssetLoadService *loads{};
+            RuntimeSceneAssetLimits limits{};
+        };
+
         struct SceneAggregate final {
             SceneAggregate() = default;
             SceneAggregate(const SceneAggregate &) = delete;
@@ -878,7 +887,6 @@ namespace Horo::Runtime {
         void CancelPreparation(bool waitForCompletion) noexcept;
         [[nodiscard]] Result<void> SubmitPreparationLoads();
         [[nodiscard]] Result<void> PrepareParticipants(const RuntimeSceneDefinition &definition);
-        static void ShutdownCandidates(std::vector<std::unique_ptr<SceneActivationCandidate>> &candidates) noexcept;
         [[nodiscard]] Result<void> CommitDeferredChanges();
         /** @brief Waits for owners and validates every candidate before any ownership transfer.
          * @return Ready, pending, or the original typed preparation/validation failure. */
@@ -905,9 +913,7 @@ namespace Horo::Runtime {
         std::optional<StructuralCommitResult> structuralResult_;
         std::optional<Error> operationError_;
         std::uint64_t nextRuntimeId_{1};
-        Assets::AssetRegistry *assetRegistry_{};
-        Assets::AssetLoadService *assetLoads_{};
-        RuntimeSceneAssetLimits assetLimits_{};
+        BorrowedAssetPreparationServices assetPreparationServices_{};
         TransitionKind transition_{TransitionKind::None};
         bool started_{};
         bool shutdown_{};

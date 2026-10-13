@@ -9,9 +9,28 @@
 #include <utility>
 
 namespace Test::VfxRender {
-    using namespace Horo;
-    using namespace Horo::Render;
-    using namespace Horo::Vfx;
+    using Horo::Render::MaterialAlphaMode;
+    using Horo::Render::RegisterNullRenderBackend;
+    using Horo::Render::RenderBackendId;
+    using Horo::Render::RenderBackendRegistry;
+    using Horo::Render::RenderFrontend;
+    using Horo::Render::RenderGraphBuilder;
+    using Horo::Render::RenderGraphDependencyKind;
+    using Horo::Render::RenderGraphResourceClass;
+    using Horo::Render::RenderGraphResourceId;
+    using Horo::Render::RenderPassKind;
+    using Horo::Render::RenderQueueRole;
+    using Horo::Render::RenderResourceState;
+    using Horo::Render::RenderTextureFormat;
+    using Horo::Render::RenderTextureUsage;
+    using Horo::Render::VfxGraphRequest;
+    using Horo::Render::VfxParticlePass;
+    using Horo::Render::VfxPrimitiveTopology;
+    using Horo::Vfx::ParticleSimulationId;
+    using Horo::Vfx::VfxEmitterPreparation;
+    using Horo::Vfx::VfxExtractionBudget;
+    using Horo::Vfx::VfxIdentityScope;
+    using Horo::Vfx::VfxWorld;
 
     inline VfxIdentityScope Scope() {
         return VfxIdentityScope::Create(17).Value();
@@ -51,7 +70,8 @@ namespace Test::VfxRender {
         REQUIRE(view.HasValue());
         for (std::uint32_t index = 0; index < count; ++index) {
             view.Value().positionZ[index] = -static_cast<float>(index + 1);
-            view.Value().sizeX[index] = view.Value().sizeY[index] = 1;
+            view.Value().sizeX[index] = 1;
+            view.Value().sizeY[index] = 1;
             view.Value().packedColor[index] = 0x11223344U;
         }
     }

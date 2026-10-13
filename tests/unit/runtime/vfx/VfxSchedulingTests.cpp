@@ -150,7 +150,8 @@ TEST_CASE("Closed or moved live particle buffers reject extraction without alloc
         REQUIRE(buffer.Shutdown().HasValue());
 
     VfxExtractionReport report;
-    CpuParticleReadStatus viewStatus{}, identityStatus{};
+    CpuParticleReadStatus viewStatus{};
+    CpuParticleReadStatus identityStatus{};
     std::size_t requests{};
     {
         Tests::AllocationProbe::ScopedMeasurement measurement;

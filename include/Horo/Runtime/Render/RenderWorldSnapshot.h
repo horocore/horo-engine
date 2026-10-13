@@ -34,7 +34,10 @@ namespace Horo::Render {
     /** @brief Stable scene/effect/emitter identity retained independently of live simulation storage. */
     struct VfxBatchId final {
         std::uint64_t scene{};
-        std::uint32_t effectSlot{}, effectGeneration{}, emitterSlot{}, emitterGeneration{};
+        std::uint32_t effectSlot{};
+        std::uint32_t effectGeneration{};
+        std::uint32_t emitterSlot{};
+        std::uint32_t emitterGeneration{};
         auto operator<=>(const VfxBatchId &) const noexcept = default;
     };
 
@@ -56,7 +59,8 @@ namespace Horo::Render {
         VfxPrimitiveTopology topology{VfxPrimitiveTopology::CameraFacingBillboard};
         bool deferredCompatible{}; /**< Cooked material supports the selected GBuffer contract. */
         bool shadowCaster{};       /**< Only opaque/masked mesh may request the standard shadow pass. */
-        std::uint32_t firstInstance{}, instanceCount{};
+        std::uint32_t firstInstance{};
+        std::uint32_t instanceCount{};
     };
 
     /** @brief Preallocated storage; only extraction may populate an unleased slot. */
@@ -64,7 +68,9 @@ namespace Horo::Render {
     private:
         friend class Horo::Vfx::VfxRenderExtractor;
         friend class RenderWorldSnapshot;
-        std::uint64_t scene_{}, frame_{}, originRevision_{};
+        std::uint64_t scene_{};
+        std::uint64_t frame_{};
+        std::uint64_t originRevision_{};
         std::vector<VfxRenderBatch> batches_;
         std::vector<VfxRenderInstance> instances_;
     };

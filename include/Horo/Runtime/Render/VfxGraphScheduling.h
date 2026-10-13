@@ -11,7 +11,8 @@
 namespace Horo::Render {
     /** @brief Host-admitted renderer storage prepared before scene activation, including all views and retained frames. */
     struct VfxSchedulingBudget final {
-        std::uint32_t maximumInstances{}, retainedViewSlots{};
+        std::uint32_t maximumInstances{};
+        std::uint32_t retainedViewSlots{};
         std::size_t maximumBytes{}; /**< Bound for prepared slot records, six orders and shared radix scratch. */
     };
 
@@ -23,18 +24,30 @@ namespace Horo::Render {
     struct VfxGraphRequest final {
         StandardPbrRasterFamily family{StandardPbrRasterFamily::Forward};
         bool depthPrepass{};
-        std::uint64_t scene{}, frame{}, originRevision{}, view{}, viewGeneration{};
-        Math::Vec3 camera{}, forward{0, 0, -1}; /**< Same captured origin as the snapshot; forward must be normalized. */
-        std::uint32_t maximumInstances{}, remainingDrawCalls{};
-        RenderGraphPassRef opaqueBegin{}, opaqueComplete{}, outputTransform{};
-        RenderGraphResourceId sceneColor{}, sceneDepth{}, shadowDepth{}, gBuffer{};
+        std::uint64_t scene{};
+        std::uint64_t frame{};
+        std::uint64_t originRevision{};
+        std::uint64_t view{};
+        std::uint64_t viewGeneration{};
+        Math::Vec3 camera{};
+        Math::Vec3 forward{0, 0, -1}; /**< Same captured origin as the snapshot; forward must be normalized. */
+        std::uint32_t maximumInstances{};
+        std::uint32_t remainingDrawCalls{};
+        RenderGraphPassRef opaqueBegin{};
+        RenderGraphPassRef opaqueComplete{};
+        RenderGraphPassRef outputTransform{};
+        RenderGraphResourceId sceneColor{};
+        RenderGraphResourceId sceneDepth{};
+        RenderGraphResourceId shadowDepth{};
+        RenderGraphResourceId gBuffer{};
     };
 
     /** @brief Exact typed work inserted into the graph; merge workloads by pass identity after graph compilation. */
     struct VfxGraphSchedule final {
         std::array<RenderGraphPassWorkload, 6> records{};
         std::uint32_t recordCount{};
-        std::uint32_t drawCalls{}, instances{};
+        std::uint32_t drawCalls{};
+        std::uint32_t instances{};
 
         /** @brief Returns only inserted semantic passes. @return Stable records owned by this result. */
         [[nodiscard]] std::span<RenderGraphPassWorkload> Workloads() noexcept {
