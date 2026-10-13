@@ -24,14 +24,15 @@ namespace Horo::Animation::GraphCompileDetail {
 
         /** @brief Validates an absolute or explicitly reference-bound additive clip's exact shape. */
         Shape NodePins(const GraphClipNode &clip, const ShapeContext &context) {
+            using enum GraphValueType;
             if (!clip.clip.IsValid() || clip.clip.Asset() == context.data.id.Asset() || clip.clip.Asset() == context.data.skeleton.Asset())
                 return Shape::Failure(Failure(GraphMalformed, context.location));
-            std::vector<GraphPin> pins{Pin(Result, GraphValueType::Pose, true)};
+            std::vector pins{Pin(Result, Pose, true)};
             if (clip.referencePose) {
                 if (!clip.referencePose->IsValid())
                     return Shape::Failure(Failure(GraphMalformed, context.location));
-                pins.push_back(Pin(FirstPose, GraphValueType::Pose, false));
-                pins.push_back(Pin(ReferencePose, GraphValueType::Pose, false));
+                pins.push_back(Pin(FirstPose, Pose, false));
+                pins.push_back(Pin(ReferencePose, Pose, false));
             }
             return Shape::Success(std::move(pins));
         }
@@ -54,14 +55,14 @@ namespace Horo::Animation::GraphCompileDetail {
 
         /** @brief Validates a typed layer policy and its required reference operand. */
         Shape NodePins(const GraphBlendNode &blend, const ShapeContext &context) {
+            using enum GraphValueType;
             if (blend.mode >= GraphBlendMode::Count || blend.missingJoint >= GraphMissingJointPolicy::Count)
                 return Shape::Failure(Failure(GraphTypeMismatch, context.location));
             if (!ValidMask(blend.mask))
                 return Shape::Failure(Failure(GraphMalformed, context.location));
-            std::vector<GraphPin> pins{Pin(FirstPose, GraphValueType::Pose, false), Pin(SecondPose, GraphValueType::Pose, false),
-                                       Pin(Weight, GraphValueType::Float, false), Pin(Result, GraphValueType::Pose, true)};
+            std::vector pins{Pin(FirstPose, Pose, false), Pin(SecondPose, Pose, false), Pin(Weight, Float, false), Pin(Result, Pose, true)};
             if (blend.mode != GraphBlendMode::Normalized)
-                pins.push_back(Pin(ReferencePose, GraphValueType::Pose, false));
+                pins.push_back(Pin(ReferencePose, Pose, false));
             return Shape::Success(std::move(pins));
         }
 
