@@ -54,7 +54,7 @@ namespace Horo::Animation {
             return keys > limits.maximumTotalKeys ? LimitExceeded : None;
         }
 
-        /** @brief Proves exactly one admitted absolute publication exists for each compiled clip binding. */
+        /** @brief Proves exactly one exact immutable publication exists for each compiled clip binding. */
         GraphInstanceFailure AdmitClipBindings(const GraphInstanceAssets &assets, const AnimationClipLimits &limits) noexcept {
             using enum GraphInstanceFailure;
             for (const auto &expected : assets.program->ClipBindings()) {
@@ -64,7 +64,7 @@ namespace Horo::Animation {
                         return BindingMismatch;
                     if (clip->Data().descriptor.id != expected.id)
                         continue;
-                    if (clip->Data().descriptor != expected || expected.kind != AnimationClipKind::Absolute)
+                    if (clip->Data().descriptor != expected)
                         return BindingMismatch;
                     if (const auto failure = AdmitClipTracks(*clip, limits); failure != None)
                         return failure;
@@ -88,17 +88,17 @@ namespace Horo::Animation {
                     assets.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex];
                 std::uint64_t cost = 0;
                 if (std::holds_alternative<GraphBlendNode>(instruction.payload))
-                    cost = assets.program->SkeletonBinding().joints;
+                    cost = 3ULL * assets.program->SkeletonBinding().joints;
                 if (occurrence.phase == GraphOccurrencePhase::StateBegin)
-                    cost = 2ULL * assets.program->SkeletonBinding().joints;
-                if (occurrence.phase == GraphOccurrencePhase::StateEnd)
                     cost = 4ULL * assets.program->SkeletonBinding().joints;
+                if (occurrence.phase == GraphOccurrencePhase::StateEnd)
+                    cost = 8ULL * assets.program->SkeletonBinding().joints;
                 if (occurrence.clipBindingIndex.has_value()) {
                     const auto &descriptor = assets.program->ClipBindings()[*occurrence.clipBindingIndex];
                     const auto clip = std::ranges::find_if(assets.clips, [&descriptor](const auto &value) {
                         return value->Data().descriptor == descriptor;
                     });
-                    cost = assets.program->SkeletonBinding().joints;
+                    cost = (descriptor.kind == AnimationClipKind::Additive ? 6ULL : 3ULL) * assets.program->SkeletonBinding().joints;
                     for (const auto &track : (*clip)->Data().tracks)
                         cost += 1 + std::bit_width(track.keys.size());
                 }
@@ -155,6 +155,7 @@ namespace Horo::Animation {
                 return bytes <= context.maximumStorageBytes;
             };
             if (!charge(memory.poseTransforms + 2ULL * assets.program->SkeletonBinding().joints, sizeof(Math::Transform)) ||
+                !charge(memory.poseTransforms, sizeof(std::uint8_t)) ||
                 !charge(memory.clipPlayers, 2ULL * sizeof(Detail::GraphPlayerState)) ||
                 !charge(memory.parameters, 4ULL * sizeof(GraphParameterValue) + sizeof(std::uint8_t)) ||
                 !charge(assets.clips.size(), sizeof(std::shared_ptr<const AnimationClipAsset>)) ||
@@ -257,7 +258,8 @@ namespace Horo::Animation {
                 state->clips.push_back(*found);
             }
             const auto &memory = state->program->Memory();
-            state->workingPoses.resize(static_cast<std::size_t>(memory.poseTransforms));
+            state->poses.transforms.resize(static_cast<std::size_t>(memory.poseTransforms));
+            state->poses.coverage.resize(static_cast<std::size_t>(memory.poseTransforms));
             std::size_t scalars = 0;
             for (std::size_t type = 1; type < memory.workingSlots.size(); ++type) {
                 state->scalars.offsets[type] = scalars;
@@ -370,6 +372,8 @@ namespace Horo::Animation {
             const auto &binding = state_->program->StateMachines()[index];
             std::ranges::copy(state_->Pose(binding.poses[1]), state_->Pose(binding.poses[0]).begin());
             std::ranges::copy(state_->Pose(binding.poses[3]), state_->Pose(binding.poses[2]).begin());
+            std::ranges::copy(state_->Coverage(binding.poses[1]), state_->Coverage(binding.poses[0]).begin());
+            std::ranges::copy(state_->Coverage(binding.poses[3]), state_->Coverage(binding.poses[2]).begin());
         }
         state_->parameters.swap(state_->candidate.parameters);
         state_->publication = {tick, state_->publication.currentPose, handle};

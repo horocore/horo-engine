@@ -43,6 +43,10 @@ namespace Horo::Animation::Test {
             auto old = nlohmann::json::parse(encoded.Value());
             old["schemaVersion"] = schema;
             old["contractVersion"] = {{"major", 1}, {"minor", schema == 3 ? 1 : 0}, {"patch", 0}};
+            if (schema < 3)
+                for (auto &definition : old["payload"]["definitions"])
+                    for (auto &node : definition["nodes"])
+                        node.erase("settings");
             if (schema == 1)
                 for (auto &definition : old["payload"]["definitions"])
                     for (auto &edge : definition["connections"])

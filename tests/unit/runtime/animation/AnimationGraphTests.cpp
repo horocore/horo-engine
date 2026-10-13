@@ -39,13 +39,13 @@ TEST_CASE("Graph canonical programs ignore authoring collection order", "[animat
     auto data = Subgraphs();
     const auto first = CompileGraph(data);
     REQUIRE(first.HasValue());
-    std::reverse(data.definitions.begin(), data.definitions.end());
+    std::ranges::reverse(data.definitions);
     for (auto &definition : data.definitions) {
-        std::reverse(definition.nodes.begin(), definition.nodes.end());
-        std::reverse(definition.inputs.begin(), definition.inputs.end());
-        std::reverse(definition.connections.begin(), definition.connections.end());
+        std::ranges::reverse(definition.nodes);
+        std::ranges::reverse(definition.inputs);
+        std::ranges::reverse(definition.connections);
         for (auto &node : definition.nodes)
-            std::reverse(node.pins.begin(), node.pins.end());
+            std::ranges::reverse(node.pins);
     }
     const auto second = CompileGraph(data);
     REQUIRE(second.HasValue());
@@ -107,15 +107,16 @@ TEST_CASE("Graph malformed identities and endpoint structures fail without publi
 }
 
 TEST_CASE("Graph typed connections reject implicit coercions and invalid enums", "[animation][graph]") {
+    using enum GraphValueType;
     auto data = Simple();
     SECTION("wrong edge") {
-        data.definitions.front().connections.front().type = GraphValueType::Float;
+        data.definitions.front().connections.front().type = Float;
     }
     SECTION("untyped current edge") {
-        data.definitions.front().connections.front().type = GraphValueType::Unspecified;
+        data.definitions.front().connections.front().type = Unspecified;
     }
     SECTION("wrong pin") {
-        data.definitions.front().nodes.front().pins.front().type = GraphValueType::Float;
+        data.definitions.front().nodes.front().pins.front().type = Float;
     }
     SECTION("unknown type") {
         data.definitions.front().nodes.front().pins.front().type = static_cast<GraphValueType>(255);
@@ -166,10 +167,11 @@ TEST_CASE("Graph parameters have stable ids and finite exactly typed defaults", 
 }
 
 TEST_CASE("Graph unused scalar declarations retain their exact types", "[animation][graph]") {
+    using enum GraphValueType;
     auto data = Simple();
-    data.parameters = {{Id<GraphParameterId>(1), "enabled", GraphValueType::Boolean, true},
-                       {Id<GraphParameterId>(2), "mode", GraphValueType::Integer, std::int32_t{3}},
-                       {Id<GraphParameterId>(3), "fire", GraphValueType::Trigger, false}};
+    data.parameters = {{Id<GraphParameterId>(1), "enabled", Boolean, true},
+                       {Id<GraphParameterId>(2), "mode", Integer, std::int32_t{3}},
+                       {Id<GraphParameterId>(3), "fire", Trigger, false}};
     const auto program = CompileGraph(data);
     REQUIRE(program.HasValue());
     REQUIRE(program.Value().Parameters().size() == 3);
@@ -185,8 +187,8 @@ TEST_CASE("Graph cycle diagnostics are independent of vector ordering", "[animat
     const auto first = CompileGraph(data);
     REQUIRE(first.HasError());
     CHECK(first.ErrorValue().code.Value() == AnimationErrors::GraphCycle.code.Value());
-    std::reverse(definition.nodes.begin(), definition.nodes.end());
-    std::reverse(definition.connections.begin(), definition.connections.end());
+    std::ranges::reverse(definition.nodes);
+    std::ranges::reverse(definition.connections);
     const auto second = CompileGraph(data);
     REQUIRE(second.HasError());
     CHECK(second.ErrorValue().code.Value() == first.ErrorValue().code.Value());
@@ -251,7 +253,7 @@ TEST_CASE("Graph policies preflight counts names and call depth", "[animation][g
         context.limits.callDepth = 1;
     }
     SECTION("long name") {
-        data.parameters.push_back({Id<GraphParameterId>(1), std::string(65, 'a'), GraphValueType::Float, 0.0F});
+        data.parameters.emplace_back(GraphParameter{Id<GraphParameterId>(1), std::string(65, 'a'), GraphValueType::Float, 0.0F});
         Fails(data, AnimationErrors::GraphMalformed);
         return;
     }
@@ -260,7 +262,7 @@ TEST_CASE("Graph policies preflight counts names and call depth", "[animation][g
 
 TEST_CASE("Graph repeated calls are budgeted without exponential program expansion", "[animation][graph]") {
     auto data = Simple();
-    data.parameters.push_back({Id<GraphParameterId>(1), "weight", GraphValueType::Float, 0.5F});
+    data.parameters.emplace_back(GraphParameter{Id<GraphParameterId>(1), "weight", GraphValueType::Float, 0.5F});
     data.entry = Id<GraphDefinitionId>(16);
     for (std::uint64_t definition = 2; definition <= 16; ++definition) {
         data.definitions.push_back({Id<GraphDefinitionId>(definition),
@@ -316,7 +318,7 @@ TEST_CASE("Graph cancellation shutdown and failed reload leave the last good pro
     auto data = Simple();
     const auto good = CompileGraph(data);
     REQUIRE(good.HasValue());
-    const auto saved = good.Value();
+    const AnimationGraphProgram saved{good.Value()};  // Exercise independent owned program snapshot copying.
     AnimationGraphCompileContext context;
     context.replacing = data.id;
     CHECK(CompileGraph(data, context).HasValue());
@@ -355,7 +357,9 @@ TEST_CASE("Graph indirect and unused subgraph call cycles are rejected", "[anima
     SECTION("entry traverses cycle") {
         data.definitions.front().nodes.front() = Call(4, 2);
     }
-    SECTION("unused definitions contain cycle") {}
+    SECTION("unused definitions contain cycle") {
+        // Keep the entry clip unchanged so only unused definitions contain recursion.
+    }
     Fails(data, AnimationErrors::GraphCycle);
 }
 

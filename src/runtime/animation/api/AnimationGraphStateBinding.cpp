@@ -9,6 +9,11 @@ namespace Horo::Animation::GraphCompileDetail {
             const ErrorCodeDescriptor *code;
         };
 
+        /** @brief Retains exact canonical pose-binding diagnostics across compile-only expansion unwinding. */
+        struct BindingRejection final {
+            Error error;
+        };
+
         /** @brief Exact earlier writer access, independent of aliases and active state lanes. */
         struct Access final {
             GraphWorkingSlot slot;
@@ -76,11 +81,13 @@ namespace Horo::Animation::GraphCompileDetail {
             }
 
             /** @brief Gives this exact clip occurrence its own player and complete pose storage. */
-            Access Clip(const AnimationClipId id, GraphInstructionOccurrence occurrence) {
+            Access Clip(const GraphClipNode &clip, GraphInstructionOccurrence occurrence) {
                 if (plan_.memory.clipPlayers >= context_.limits.clipPlayers)
                     throw Rejection{&AnimationErrors::GraphLimitExceeded};
                 occurrence.clipPlayer = plan_.memory.clipPlayers++;
-                occurrence.clipBindingIndex = static_cast<std::uint32_t>(Find(plan_.clips, id) - plan_.clips.data());
+                occurrence.clipBindingIndex = static_cast<std::uint32_t>(Find(plan_.clips, clip.clip) - plan_.clips.data());
+                if (auto bound = BindWriterComposition(clip, occurrence, plan_.memory, context_); bound.HasError())
+                    throw BindingRejection{bound.ErrorValue()};
                 occurrence.output = Slot(GraphValueType::Pose);
                 occurrence.outputProducer = static_cast<std::uint32_t>(plan_.occurrences.size());
                 const Access output{occurrence.output, occurrence.outputProducer};
@@ -128,7 +135,7 @@ namespace Horo::Animation::GraphCompileDetail {
                             child.stateMachine.reset();
                             child.callPath = path;
                             child.guards = std::move(guards);
-                            output = Clip(*clip, std::move(child));
+                            output = Clip(GraphClipNode{*clip}, std::move(child));
                             const auto &descriptor = *Find(plan_.clips, *clip);
                             if (descriptor.wrapMode == AnimationWrapMode::Loop)
                                 branch.loopPeriod = descriptor.duration;
@@ -174,7 +181,7 @@ namespace Horo::Animation::GraphCompileDetail {
                         occurrence.inputs.push_back(
                             {input.destination, outputs[input.instruction].slot, outputs[input.instruction].producer});
                     if (const auto *clip = std::get_if<GraphClipNode>(&instruction.payload)) {
-                        outputs[instructionIndex] = Clip(clip->clip, std::move(occurrence));
+                        outputs[instructionIndex] = Clip(*clip, std::move(occurrence));
                         continue;
                     }
                     if (const auto *machine = std::get_if<GraphStateMachineNode>(&instruction.payload)) {
@@ -204,6 +211,8 @@ namespace Horo::Animation::GraphCompileDetail {
                     occurrence.output = output.slot;
                     occurrence.outputProducer = output.producer;
                     outputs[instructionIndex] = output;
+                    if (auto bound = BindWriterComposition(instruction.payload, occurrence, plan_.memory, context_); bound.HasError())
+                        throw BindingRejection{bound.ErrorValue()};
                     Append(std::move(occurrence));
                 }
                 return outputs[definition.outputInstruction];
@@ -223,6 +232,8 @@ namespace Horo::Animation::GraphCompileDetail {
             return Result<BoundPlan>::Success(Builder{program, context, skeleton, std::move(clips)}.Build());
         } catch (const Rejection &rejection) {
             return Result<BoundPlan>::Failure(Failure(*rejection.code));
+        } catch (const BindingRejection &rejection) {
+            return Result<BoundPlan>::Failure(rejection.error);
         }
     }
 }  // namespace Horo::Animation::GraphCompileDetail

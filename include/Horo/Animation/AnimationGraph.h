@@ -86,6 +86,7 @@ namespace Horo::Animation {
         Weight,
         Interface,
         Result,
+        ReferencePose,
         Count
     };
 
@@ -102,11 +103,48 @@ namespace Horo::Animation {
     /** @brief Clip sampling reference; the instance owner resolves its skeleton and generation. */
     struct GraphClipNode final {
         AnimationClipId clip{};
+        std::optional<AnimationReferencePoseId> referencePose{}; /**< Additive reference identity supplied by the ReferencePose operand. */
         bool operator==(const GraphClipNode &) const = default;
     };
 
-    /** @brief Two-pose blend opcode without runtime blending policy. */
+    /** @brief Normalized interpolation or reference-relative rotation delta application space. */
+    enum class GraphBlendMode : std::uint8_t {
+        Normalized,
+        AdditiveLocal,
+        AdditiveParent,
+        Count
+    };
+    /** @brief Completion policy for joints without an authored overlay contribution. */
+    enum class GraphMissingJointPolicy : std::uint8_t {
+        SkeletonReference,
+        PreserveBase,
+        Count
+    };
+
+    /** @brief Stable skeleton-local mask entry; weights must be finite in [0,1]. */
+    struct GraphBoneWeight final {
+        JointId joint{};
+        float weight{1.0F};
+        bool operator==(const GraphBoneWeight &) const = default;
+    };
+
+    /** @brief Bounded sparse mask resolved to exact skeleton order during compilation. */
+    struct GraphBoneMask final {
+        float defaultWeight{1.0F}; /**< Applies to joints not explicitly listed. */
+        std::vector<GraphBoneWeight> joints{};
+        bool operator==(const GraphBoneMask &) const = default;
+    };
+
+    /** @brief Ordered pose layer; additive modes require an explicit ReferencePose operand.
+     * @details FirstPose is the base, SecondPose the overlay. Finite Weight is clamped
+     * to [0,1], then multiplied by the mask. Normalized weights sum to one per joint.
+     * AdditiveLocal postmultiplies a reference-relative rotation delta; AdditiveParent
+     * premultiplies it. Translation and scale remain local in both modes.
+     */
     struct GraphBlendNode final {
+        GraphBlendMode mode{GraphBlendMode::Normalized};
+        GraphBoneMask mask{};
+        GraphMissingJointPolicy missingJoint{GraphMissingJointPolicy::SkeletonReference};
         bool operator==(const GraphBlendNode &) const = default;
     };
 
@@ -232,7 +270,7 @@ namespace Horo::Animation {
         bool operator==(const GraphDefinition &) const = default;
     };
 
-    /** @brief Complete detached schema-4 candidate with explicit edges and typed state payloads. */
+    /** @brief Complete detached schema-4 candidate retaining pose-layer policies and adding typed state payloads. */
     struct AnimationGraphData final {
         std::uint32_t schemaVersion{CurrentAnimationGraphSchemaVersion};
         AnimationGraphContractVersion contractVersion{CurrentAnimationGraphContractVersion};
@@ -387,6 +425,8 @@ namespace Horo::Animation {
         std::optional<std::uint32_t> stateMachine{};
         GraphOccurrencePhase phase{GraphOccurrencePhase::Evaluate};
         std::vector<GraphStateGuard> guards{};
+        std::vector<float> jointMask{};           /**< Complete dense blend mask, bound to exact skeleton order. */
+        std::vector<std::uint8_t> clipCoverage{}; /**< Complete dense authored-track coverage for a clip writer. */
         bool operator==(const GraphInstructionOccurrence &) const = default;
     };
 
@@ -429,6 +469,7 @@ namespace Horo::Animation {
         std::uint32_t stateMachines{};
         std::uint32_t conditionLatches{};
         std::uint32_t stateEvents{};
+        std::uint64_t compositionEntries{}; /**< Immutable dense mask/coverage elements; bounded by poseTransforms. */
         bool operator==(const GraphMemoryRequirements &) const = default;
     };
 
@@ -530,7 +571,7 @@ namespace Horo::Animation {
     /** @brief Explicitly migrates supported source contracts and infers version-1 edge types, retaining stable IDs.
      * @param data Detached version-1/2/3/current candidate with its exact semantic version; input is never changed.
      * @param context Captured limits, admission and replacement identity.
-     * @return Validated current candidate or stable failure; unknown versions and legacy state payloads are rejected.
+     * @return Validated current candidate or stable failure; unknown versions, legacy pose policies and legacy state payloads reject.
      * @throws std::bad_alloc When detached migration storage cannot be allocated.
      */
     [[nodiscard]] Result<AnimationGraphData> MigrateAnimationGraph(const AnimationGraphData &data,

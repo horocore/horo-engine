@@ -11,6 +11,16 @@ namespace Horo::Animation::GraphCompileDetail {
     Error Failure(const ErrorCodeDescriptor &code, GraphSourceLocation location = {});
     /** @brief Checks captured admission/cancellation at bounded compiler checkpoints. */
     Result<void> Admission(const AnimationGraphCompileContext &context);
+    /** @brief Validates exact typed node settings and semantic pin shape. */
+    Result<void> ValidatePins(const GraphNode &node, const GraphDefinition &definition, const AnimationGraphData &data);
+
+    /** @brief Rejects reserved and duplicated identities in canonical collections. */
+    template <typename Collection> bool UniqueIds(const Collection &values) {
+        for (std::size_t index = 0; index < values.size(); ++index)
+            if (!values[index].id.IsValid() || (index != 0 && values[index - 1].id == values[index].id))
+                return false;
+        return true;
+    }
 
     /** @brief Finds a stable id in a canonical collection. */
     template <typename Collection, typename Id> const typename Collection::value_type *Find(const Collection &values, Id id) {
@@ -30,6 +40,9 @@ namespace Horo::Animation::GraphCompileDetail {
 
     /** @brief Captures exact dependencies and produces finite occurrence-to-storage/state accesses. */
     Result<BoundPlan> Bind(const AnimationGraphProgram &program, const AnimationGraphCompileContext &context);
+    /** @brief Binds canonical dense clip coverage/layer masks and charges immutable composition storage for either expansion path. */
+    Result<void> BindWriterComposition(const GraphNodePayload &payload, GraphInstructionOccurrence &occurrence,
+                                       GraphMemoryRequirements &memory, const AnimationGraphCompileContext &context);
     /** @brief Validates typed state sources, identities and transition conditions against exact graph declarations. */
     Result<void> ValidateStateNode(const GraphStateMachineNode &machine, const AnimationGraphData &data, GraphSourceLocation location);
     /** @brief Expands actual guarded clip/subgraph branches into the same compiler-owned occurrence plan. */

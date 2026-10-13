@@ -1,4 +1,5 @@
 #include "AnimationGraphInstanceInternal.h"
+#include "AnimationPoseComposition.h"
 
 #include <algorithm>
 #include <limits>
@@ -247,6 +248,7 @@ namespace Horo::Animation::Detail {
                 retired.HasError())
                 return retired;
         std::ranges::copy(state.Pose(binding.poses[2]), state.Pose(binding.poses[3]).begin());
+        std::ranges::copy(state.Coverage(binding.poses[2]), state.Coverage(binding.poses[3]).begin());
         if (!baseline.runtime.initialized) {
             candidate.sourceLane = 0;
             candidate.destinationLane = 1;
@@ -261,8 +263,10 @@ namespace Horo::Animation::Detail {
             candidate.clocks[lane] = {};
             candidate.held[lane] = true;
             ResetBranch(state, binding.branches[entered.state], lane);
-            if (candidate.outcome.captureSource)
+            if (candidate.outcome.captureSource) {
                 std::ranges::copy(state.Pose(binding.poses[0]), state.Pose(binding.poses[3]).begin());
+                std::ranges::copy(state.Coverage(binding.poses[0]), state.Coverage(binding.poses[3]).begin());
+            }
             if (!candidate.runtime.transition)
                 candidate.sourceLane = lane;
         } else if (baseline.runtime.destination && !candidate.runtime.transition) {
@@ -281,14 +285,26 @@ namespace Horo::Animation::Detail {
         const auto first = candidate.runtime.frozenSource
                                ? state.Pose(binding.poses[3])
                                : state.Pose(binding.branches[candidate.runtime.source.state].output[candidate.sourceLane]);
+        const auto firstCoverage = candidate.runtime.frozenSource
+                                       ? state.Coverage(binding.poses[3])
+                                       : state.Coverage(binding.branches[candidate.runtime.source.state].output[candidate.sourceLane]);
+        const auto coverage = state.Coverage(occurrence.output);
         if (candidate.runtime.destination) {
             const auto second = state.Pose(binding.branches[candidate.runtime.destination->state].output[candidate.destinationLane]);
-            if (const auto composed = ComposeGraphPoses(first, second, candidate.outcome.weight, output); composed.HasError())
-                return composed;
+            if (const auto failure = ComposePose({.base = first, .overlay = second, .weight = candidate.outcome.weight}, output);
+                failure != GraphInstanceFailure::None)
+                return {failure};
+            const auto secondCoverage =
+                state.Coverage(binding.branches[candidate.runtime.destination->state].output[candidate.destinationLane]);
+            for (std::size_t joint = 0; joint < coverage.size(); ++joint)
+                coverage[joint] = static_cast<std::uint8_t>((candidate.outcome.weight < 1.0F && firstCoverage[joint] != 0) ||
+                                                            (candidate.outcome.weight > 0.0F && secondCoverage[joint] != 0));
         } else {
             std::ranges::copy(first, output.begin());
+            std::ranges::copy(firstCoverage, coverage.begin());
         }
         std::ranges::copy(output, state.Pose(binding.poses[1]).begin());
+        std::ranges::copy(coverage, state.Coverage(binding.poses[1]).begin());
         return {};
     }
 }  // namespace Horo::Animation::Detail

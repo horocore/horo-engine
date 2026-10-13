@@ -128,9 +128,9 @@ namespace Horo::Animation {
             auto context = fixture.context;
             context.maximumJointOperations = 0;
             CHECK(AnimationGraphInstance::Create(fixture.Assets(), context).HasError());
-            context.maximumJointOperations = 4;
+            context.maximumJointOperations = 6;
             CHECK(AnimationGraphInstance::Create(fixture.Assets(), context).HasValue());
-            context.maximumJointOperations = 3;
+            context.maximumJointOperations = 5;
             CHECK(AnimationGraphInstance::Create(fixture.Assets(), context).HasError());
         }
         SECTION("clip key policy") {
@@ -260,7 +260,8 @@ namespace Horo::Animation {
         const auto tick = Id<AnimationTickId>(3);
         REQUIRE(combined.Evaluate({tick, {33}, {333'333}}).HasValue());
         REQUIRE(combined.Commit(tick).HasValue());
-        std::array<Math::Transform, 1> first, second;
+        std::array<Math::Transform, 1> first;
+        std::array<Math::Transform, 1> second;
         REQUIRE(partitioned.CopyPose(partitioned.Publication().currentPose, first).HasValue());
         REQUIRE(combined.CopyPose(combined.Publication().currentPose, second).HasValue());
         CHECK(first == second);

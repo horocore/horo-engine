@@ -8,6 +8,8 @@ static_assert(!std::is_convertible_v<Horo::Animation::GraphNodeId, Horo::Animati
 static_assert(!std::is_convertible_v<Horo::Animation::GraphStateId, Horo::Animation::GraphTransitionId>);
 static_assert(std::is_trivially_copyable_v<Horo::Animation::GraphStateEvent>);
 static_assert(Horo::Animation::CurrentAnimationGraphSchemaVersion == 4);
+static_assert(Horo::Animation::GraphBlendNode{}.mode == Horo::Animation::GraphBlendMode::Normalized);
+static_assert(Horo::Animation::GraphBlendNode{}.missingJoint == Horo::Animation::GraphMissingJointPolicy::SkeletonReference);
 
 int main() {
     const auto unavailable = Horo::Animation::AnimationGraphInstance::Create({}, {});

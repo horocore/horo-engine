@@ -1,8 +1,10 @@
 #include "AnimationGraphInstanceInternal.h"
+#include "AnimationPoseComposition.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <type_traits>
 
 namespace Horo::Animation::Detail {
     namespace {
@@ -79,28 +81,9 @@ namespace Horo::Animation::Detail {
             return std::ranges::find(occurrence.inputs, pin->id, &GraphOccurrenceInput::destination)->slot;
         }
 
-        /** @brief Rejects non-finite sampled/blended candidates before any pose publication. */
-        bool ValidTransform(const Math::Transform &transform) noexcept {
-            if (!Math::IsFinite(transform.translation) || !Math::IsFinite(transform.scale) || !Math::IsFinite(transform.rotation))
-                return false;
-            const auto &q = transform.rotation;
-            const auto length = static_cast<double>(q.x) * q.x + static_cast<double>(q.y) * q.y + static_cast<double>(q.z) * q.z +
-                                static_cast<double>(q.w) * q.w;
-            return length > static_cast<double>(Math::DefaultEpsilon) * Math::DefaultEpsilon && std::abs(transform.scale.x) > 1.0e-8F &&
-                   std::abs(transform.scale.y) > 1.0e-8F && std::abs(transform.scale.z) > 1.0e-8F;
-        }
-
-        /** @brief Uses double intermediates so blending opposite finite extrema cannot overflow subtraction. */
-        Math::Vec3 BlendVector(const Math::Vec3 first, const Math::Vec3 second, const float weight) noexcept {
-            const auto component = [weight](float a, float b) {
-                return static_cast<float>((1.0 - weight) * static_cast<double>(a) + weight * static_cast<double>(b));
-            };
-            return {component(first.x, second.x), component(first.y, second.y), component(first.z, second.z)};
-        }
-
         /** @brief Samples one actual immutable clip with its independent occurrence player candidate. */
         GraphInstanceOutcome SampleClip(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
-                                        const GraphEvaluationInput &input) {
+                                        const GraphInstruction &instruction, const GraphEvaluationInput &input) {
             auto &player = state.candidate.players[*occurrence.clipPlayer];
             const auto delta = ScaleGraphDelta(input, player);
             if (delta.HasError())
@@ -110,48 +93,93 @@ namespace Horo::Animation::Detail {
             if (traversal.HasError())
                 return {GraphInstanceFailure::ClipFailure, traversal.ErrorValue()};
             const auto &binding = clip.Data().descriptor;
-            if (const auto sampled = clip.SamplePrepared(traversal.Value().sampleTime, {.skeleton = binding.skeleton,
-                                                                                        .skeletonGeneration = binding.skeletonGeneration,
-                                                                                        .clipGeneration = binding.generation,
-                                                                                        .outputPose = state.Pose(occurrence.output)});
-                sampled.HasError())
+            AnimationClipSampleContext sample{.skeleton = binding.skeleton,
+                                              .skeletonGeneration = binding.skeletonGeneration,
+                                              .clipGeneration = binding.generation,
+                                              .outputPose = state.Pose(occurrence.output)};
+            if (binding.kind == AnimationClipKind::Additive) {
+                sample.basePose = state.Pose(Operand(occurrence, instruction, GraphPinRole::FirstPose));
+                sample.referenceLocalPose = state.Pose(Operand(occurrence, instruction, GraphPinRole::ReferencePose));
+                sample.referencePose = binding.referencePose;
+            }
+            if (const auto sampled = clip.SamplePrepared(traversal.Value().sampleTime, sample); sampled.HasError())
                 return {GraphInstanceFailure::ClipFailure, sampled.ErrorValue()};
             for (const auto &transform : state.Pose(occurrence.output))
-                if (!ValidTransform(transform))
+                if (!ValidPoseTransform(transform))
                     return {GraphInstanceFailure::Malformed};
+            const auto coverage = state.Coverage(occurrence.output);
+            std::ranges::copy(occurrence.clipCoverage, coverage.begin());
+            if (binding.kind == AnimationClipKind::Additive) {
+                const auto baseCoverage = state.Coverage(Operand(occurrence, instruction, GraphPinRole::FirstPose));
+                for (std::size_t joint = 0; joint < coverage.size(); ++joint)
+                    coverage[joint] = static_cast<std::uint8_t>(coverage[joint] != 0 || baseCoverage[joint] != 0);
+            }
             player.cursor = traversal.Value().cursor;
             return {};
         }
 
-        /** @brief Executes the compiler's two-pose blend without adding a second graph scheduling model. */
+        /** @brief Propagates authored coverage using only contributions that affect the candidate pose. */
+        void LayerCoverage(const GraphBlendNode &policy, const std::span<const float> mask, const float weight,
+                           const std::span<const std::uint8_t> base, const std::span<const std::uint8_t> overlay,
+                           const std::span<std::uint8_t> output) noexcept {
+            for (std::size_t joint = 0; joint < output.size(); ++joint) {
+                const auto effective =
+                    policy.missingJoint == GraphMissingJointPolicy::PreserveBase && overlay[joint] == 0 ? 0.0F : weight * mask[joint];
+                const bool retainsBase = policy.mode != GraphBlendMode::Normalized || effective < 1.0F;
+                output[joint] = static_cast<std::uint8_t>((retainsBase && base[joint] != 0) || (effective > 0.0F && overlay[joint] != 0));
+            }
+        }
+
+        /** @brief Executes one ordered layer using the compiler's exact immutable mask and pose operands. */
         GraphInstanceOutcome BlendPose(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
                                        const GraphInstruction &instruction) {
             using enum GraphPinRole;
             const auto first = state.Pose(Operand(occurrence, instruction, FirstPose));
             const auto second = state.Pose(Operand(occurrence, instruction, SecondPose));
+            const auto firstCoverage = state.Coverage(Operand(occurrence, instruction, FirstPose));
+            const auto secondCoverage = state.Coverage(Operand(occurrence, instruction, SecondPose));
+            const auto &policy = std::get<GraphBlendNode>(instruction.payload);
             const auto weightSlot = Operand(occurrence, instruction, Weight);
             const auto weight =
                 std::clamp(std::get<float>(
                                state.scalars.values[state.scalars.offsets[static_cast<std::size_t>(weightSlot.type)] + weightSlot.index]),
                            0.0F, 1.0F);
-            return ComposeGraphPoses(first, second, weight, state.Pose(occurrence.output));
+            PoseCompositionInput composition{.base = first,
+                                             .overlay = second,
+                                             .mask = occurrence.jointMask,
+                                             .mode = policy.mode,
+                                             .weight = weight};
+            if (policy.mode != GraphBlendMode::Normalized)
+                composition.reference = state.Pose(Operand(occurrence, instruction, ReferencePose));
+            if (policy.missingJoint == GraphMissingJointPolicy::PreserveBase)
+                composition.coverage = secondCoverage;
+            if (const auto failure = ComposePose(composition, state.Pose(occurrence.output)); failure != GraphInstanceFailure::None)
+                return {failure};
+            LayerCoverage(policy, occurrence.jointMask, weight, firstCoverage, secondCoverage, state.Coverage(occurrence.output));
+            return {};
+        }
+
+        /** @brief Executes one compiler occurrence with exhaustive typed opcode dispatch. */
+        GraphInstanceOutcome ExecuteOccurrence(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
+                                               const GraphInstruction &instruction, const GraphEvaluationInput &input) {
+            return std::visit([&state, &occurrence, &instruction, &input](const auto &payload) -> GraphInstanceOutcome {
+                using Payload = std::decay_t<decltype(payload)>;
+                if constexpr (std::is_same_v<Payload, GraphClipNode>) {
+                    return SampleClip(state, occurrence, instruction, input);
+                } else if constexpr (std::is_same_v<Payload, GraphParameterNode>) {
+                    state.scalars
+                        .values[state.scalars.offsets[static_cast<std::size_t>(occurrence.output.type)] + occurrence.output.index] =
+                        state.candidate.parameters[*occurrence.parameterRead];
+                    return {};
+                } else if constexpr (std::is_same_v<Payload, GraphBlendNode>) {
+                    return BlendPose(state, occurrence, instruction);
+                } else {
+                    // Input, Call and Output alias the actual earlier writer in the compiled access plan.
+                    return {};
+                }
+            }, instruction.payload);
         }
     }  // namespace
-
-    /** @copydoc ComposeGraphPoses */
-    GraphInstanceOutcome ComposeGraphPoses(const std::span<const Math::Transform> first, const std::span<const Math::Transform> second,
-                                           const float weight, const std::span<Math::Transform> output) {
-        if (first.size() != output.size() || second.size() != output.size() || !std::isfinite(weight) || weight < 0.0F || weight > 1.0F)
-            return {GraphInstanceFailure::Malformed};
-        for (std::size_t joint = 0; joint < output.size(); ++joint) {
-            output[joint] = {BlendVector(first[joint].translation, second[joint].translation, weight),
-                             Math::Slerp(first[joint].rotation, second[joint].rotation, weight),
-                             BlendVector(first[joint].scale, second[joint].scale, weight)};
-            if (!ValidTransform(output[joint]))
-                return {GraphInstanceFailure::Malformed};
-        }
-        return {};
-    }
 
     /** @copydoc ExecuteGraph */
     GraphInstanceOutcome ExecuteGraph(GraphInstanceState &state, const GraphEvaluationInput &input) {
@@ -182,14 +210,10 @@ namespace Horo::Animation::Detail {
                 if (const auto ended = EndGraphStateMachine(state, occurrence); ended.HasError())
                     return ended;
             } else if (occurrence.clipBindingIndex) {
-                if (const auto sampled = SampleClip(state, occurrence, branchInput); sampled.HasError())
+                if (const auto sampled = SampleClip(state, occurrence, instruction, branchInput); sampled.HasError())
                     return sampled;
-            } else if (std::holds_alternative<GraphParameterNode>(instruction.payload)) {
-                state.scalars.values[state.scalars.offsets[static_cast<std::size_t>(occurrence.output.type)] + occurrence.output.index] =
-                    state.candidate.parameters[*occurrence.parameterRead];
-            } else if (std::holds_alternative<GraphBlendNode>(instruction.payload)) {
-                if (const auto blended = BlendPose(state, occurrence, instruction); blended.HasError())
-                    return blended;
+            } else if (const auto executed = ExecuteOccurrence(state, occurrence, instruction, branchInput); executed.HasError()) {
+                return executed;
             }
             // Input, Call and Output alias the actual earlier writer, as established by the compiled access plan.
         }

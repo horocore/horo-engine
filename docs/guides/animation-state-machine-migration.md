@@ -14,6 +14,11 @@ The version-1-only policy still accepts only schema 1. Unknown/mismatched versio
 and state payloads disguised as older schemas fail. Stable asset, definition,
 node, pin, parameter, state and transition IDs survive migration. The project
 version and unrelated asset schemas do not change.
+The parent's `MigrateLegacySchemas` policy remains restricted to schemas 1/2;
+`MigrateSupported` additionally accepts actual schema-3 pose settings. These
+settings, masks, missing-joint policies and explicit additive reference operands
+are preserved, not reset to normalized defaults. Schemas 1/2 reject those new
+settings when mislabeled as legacy in-memory data.
 
 Existing Clip/Parameter/Call/Input/Output/normalized-Blend callers retain their
 meaning. Recompile immutable programs at their load/control boundary and prepare
@@ -27,8 +32,16 @@ semantics come from the pose parent, not a second state-machine blend kernel.
 `GraphStateMachineNode` owns typed states and transitions. State sources are
 exact clips or asset-local definitions with no external interface inputs.
 Definition-call recursion, including state-call edges and unused definitions,
-is rejected by the compiler. All source counts and expanded storage/work are
-bounded before allocation. The compiled plan supplies control before guarded
+is rejected by the compiler.
+Direct state clip sources are absolute clips. An additive source is a referenced
+definition containing the parent's typed additive clip node with explicit base
+and reference operands; no missing reference or base is invented by state control.
+The state-aware binder uses the same canonical dense mask/coverage binding as
+ordinary graph expansion. Composed and frozen-source coverage is committed with
+the corresponding poses, so downstream PreserveBase layers observe actual
+contributions rather than implicit full-skeleton authorship.
+All source counts and expanded storage/work are bounded before allocation.
+The compiled plan supplies control before guarded
 children and composition after children. Two lanes give a self-transition two
 distinct player/subgraph incarnations; inactive players do not advance. Active
 branch traversals are preflighted through the exact shared clip kernel even when

@@ -6,6 +6,7 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <type_traits>
 
 namespace Horo::Animation {
     namespace GraphCompileDetail {
@@ -38,6 +39,79 @@ namespace Horo::Animation {
         using namespace AnimationErrors;
         using namespace GraphCompileDetail;
 
+        /** @brief Checks caller structural ceilings without traversing candidate storage. */
+        bool ValidStructureLimits(const AnimationGraphLimits &limits) {
+            const AnimationGraphLimits hard{};
+            return limits.definitions > 0 && limits.definitions <= hard.definitions && limits.nodes > 0 && limits.nodes <= hard.nodes &&
+                   limits.pins > 0 && limits.pins <= hard.pins && limits.connections <= hard.connections &&
+                   limits.parameters <= hard.parameters;
+        }
+
+        /** @brief Checks finite expansion policy independently from allocation categories. */
+        bool ValidExpansionLimits(const AnimationGraphLimits &limits) {
+            const AnimationGraphLimits hard{};
+            return limits.callDepth > 0 && limits.callDepth <= hard.callDepth && limits.evaluationInstructions > 0 &&
+                   limits.evaluationInstructions <= hard.evaluationInstructions && limits.sourceMapCallEntries <= hard.sourceMapCallEntries;
+        }
+
+        /** @brief Checks caller-lowerable prepared storage categories. */
+        bool ValidStorageLimits(const AnimationGraphLimits &limits) {
+            const AnimationGraphLimits hard{};
+            return limits.poseSlots <= hard.poseSlots && limits.scalarSlots <= hard.scalarSlots && limits.clipPlayers <= hard.clipPlayers &&
+                   limits.poseTransforms <= hard.poseTransforms;
+        }
+
+        /** @brief Whole-asset storage admission counters before any detached copy. */
+        struct CandidateCounts final {
+            std::uint64_t nodes{};
+            std::uint64_t pins{};
+            std::uint64_t connections{};
+            std::uint64_t interfaces{};
+            std::uint64_t maskEntries{};
+            std::uint64_t machines{}, states{}, transitions{}, conditions{};
+        };
+
+        /** @brief Charges one node's bounded pins and sparse mask storage. */
+        Result<void> CountNode(const GraphNode &node, CandidateCounts &counts, const AnimationGraphLimits &limits) {
+            counts.pins += node.pins.size();
+            if (counts.pins > limits.pins)
+                return Result<void>::Failure(Failure(GraphLimitExceeded));
+            if (const auto *blend = std::get_if<GraphBlendNode>(&node.payload)) {
+                counts.maskEntries += blend->mask.joints.size();
+                if (blend->mask.joints.size() > SkeletonAssetHardLimits::Joints || counts.maskEntries > limits.poseTransforms)
+                    return Result<void>::Failure(Failure(GraphLimitExceeded));
+            }
+            if (const auto *machine = std::get_if<GraphStateMachineNode>(&node.payload)) {
+                ++counts.machines;
+                counts.states += machine->states.size();
+                counts.transitions += machine->transitions.size();
+                for (const auto &transition : machine->transitions)
+                    counts.conditions += transition.conditions.size();
+                if (counts.machines > limits.stateMachines || counts.states > limits.states || counts.transitions > limits.transitions ||
+                    counts.conditions > limits.conditions)
+                    return Result<void>::Failure(Failure(GraphLimitExceeded));
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Charges one definition with cancellation checkpoints between nodes. */
+        Result<void> CountDefinition(const GraphDefinition &definition, CandidateCounts &counts,
+                                     const AnimationGraphCompileContext &context) {
+            counts.nodes += definition.nodes.size();
+            counts.connections += definition.connections.size();
+            counts.interfaces += definition.inputs.size();
+            if (counts.nodes > context.limits.nodes || counts.connections > context.limits.connections ||
+                counts.interfaces > context.limits.pins)
+                return Result<void>::Failure(Failure(GraphLimitExceeded));
+            for (const auto &node : definition.nodes) {
+                if (auto state = Admission(context); state.HasError())
+                    return state;
+                if (auto counted = CountNode(node, counts, context.limits); counted.HasError())
+                    return counted;
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Preflights all storage counts before making a detached candidate copy. */
         Result<void> Preflight(const AnimationGraphData &data, const AnimationGraphCompileContext &context) {
             if (auto state = Admission(context); state.HasError())
@@ -47,50 +121,18 @@ namespace Horo::Animation {
             if (context.replacing && *context.replacing != data.id)
                 return Result<void>::Failure(Failure(GraphReloadMismatch));
             const auto &limits = context.limits;
-            if (const AnimationGraphLimits hard{};
-                limits.definitions == 0 || limits.definitions > hard.definitions || limits.nodes == 0 || limits.nodes > hard.nodes ||
-                limits.pins == 0 || limits.pins > hard.pins || limits.connections > hard.connections ||
-                limits.parameters > hard.parameters || limits.callDepth == 0 || limits.callDepth > hard.callDepth ||
-                limits.evaluationInstructions == 0 || limits.evaluationInstructions > hard.evaluationInstructions ||
-                limits.sourceMapCallEntries > hard.sourceMapCallEntries || limits.poseSlots > hard.poseSlots ||
-                limits.scalarSlots > hard.scalarSlots || limits.clipPlayers > hard.clipPlayers ||
-                limits.poseTransforms > hard.poseTransforms)
-                return Result<void>::Failure(Failure(GraphLimitExceeded));
-            if (data.definitions.empty() || data.definitions.size() > limits.definitions || data.parameters.size() > limits.parameters)
-                return Result<void>::Failure(Failure(GraphLimitExceeded));
-            std::uint64_t nodes{};
-            std::uint64_t pins{};
-            std::uint64_t connections{};
-            std::uint64_t interfaces{};
-            std::uint64_t machines{}, states{}, transitions{}, conditions{};
             if (limits.stateMachines > AnimationGraphHardLimits::StateMachines || limits.states > AnimationGraphHardLimits::States ||
                 limits.transitions > AnimationGraphHardLimits::Transitions || limits.conditions > AnimationGraphHardLimits::Conditions ||
                 limits.stateEvents > AnimationGraphHardLimits::StateEvents)
                 return Result<void>::Failure(Failure(GraphLimitExceeded));
-            for (const auto &definition : data.definitions) {
-                nodes += definition.nodes.size();
-                connections += definition.connections.size();
-                interfaces += definition.inputs.size();
-                if (nodes > limits.nodes || connections > limits.connections || interfaces > limits.pins)
-                    return Result<void>::Failure(Failure(GraphLimitExceeded));
-                for (const auto &node : definition.nodes) {
-                    if (auto state = Admission(context); state.HasError())
-                        return state;
-                    pins += node.pins.size();
-                    if (pins > limits.pins)
-                        return Result<void>::Failure(Failure(GraphLimitExceeded));
-                    if (const auto *machine = std::get_if<GraphStateMachineNode>(&node.payload)) {
-                        ++machines;
-                        states += machine->states.size();
-                        transitions += machine->transitions.size();
-                        for (const auto &transition : machine->transitions)
-                            conditions += transition.conditions.size();
-                        if (machines > limits.stateMachines || states > limits.states || transitions > limits.transitions ||
-                            conditions > limits.conditions)
-                            return Result<void>::Failure(Failure(GraphLimitExceeded));
-                    }
-                }
-            }
+            if (!ValidStructureLimits(limits) || !ValidExpansionLimits(limits) || !ValidStorageLimits(limits))
+                return Result<void>::Failure(Failure(GraphLimitExceeded));
+            if (data.definitions.empty() || data.definitions.size() > limits.definitions || data.parameters.size() > limits.parameters)
+                return Result<void>::Failure(Failure(GraphLimitExceeded));
+            CandidateCounts counts;
+            for (const auto &definition : data.definitions)
+                if (auto counted = CountDefinition(definition, counts, context); counted.HasError())
+                    return counted;
             for (const auto &parameter : data.parameters)
                 if (parameter.name.empty() || parameter.name.size() > AnimationGraphHardLimits::ParameterNameBytes)
                     return Result<void>::Failure(Failure(GraphMalformed));
@@ -114,16 +156,33 @@ namespace Horo::Animation {
                         std::ranges::sort(machine->states, byId);
                         std::ranges::sort(machine->transitions, byId);
                     }
+                    if (auto *blend = std::get_if<GraphBlendNode>(&node.payload))
+                        std::ranges::sort(blend->mask.joints, {}, &GraphBoneWeight::joint);
                 }
             }
         }
 
-        /** @brief Rejects zero or duplicated identities in a canonical collection. */
-        template <typename Collection> bool UniqueIds(const Collection &values) {
-            for (std::size_t index = 0; index < values.size(); ++index)
-                if (!values[index].id.IsValid() || (index != 0 && values[index - 1].id == values[index].id))
-                    return false;
-            return true;
+        /** @brief Rejects new pose policies mislabeled as a legacy node contract. */
+        bool LegacyNode(const GraphNode &node) {
+            const bool defaults = std::visit([](const auto &payload) {
+                using Payload = std::decay_t<decltype(payload)>;
+                if constexpr (std::is_same_v<Payload, GraphClipNode>)
+                    return !payload.referencePose;
+                else if constexpr (std::is_same_v<Payload, GraphBlendNode>)
+                    return payload == GraphBlendNode{};
+                else
+                    return true;
+            }, node.payload);
+            return defaults && std::ranges::none_of(node.pins, [](const GraphPin &pin) {
+                return pin.role == GraphPinRole::ReferencePose;
+            });
+        }
+
+        /** @brief Requires every legacy definition to retain its original opcode defaults. */
+        bool LegacyDefaults(const AnimationGraphData &data) {
+            return std::ranges::all_of(data.definitions, [](const GraphDefinition &definition) {
+                return std::ranges::all_of(definition.nodes, LegacyNode);
+            });
         }
 
         /** @brief Checks scalar defaults without interpreting gameplay values or trigger consumption. */
@@ -148,72 +207,6 @@ namespace Horo::Animation {
                 default:
                     return false;
             }
-        }
-
-        /** @brief Returns the only admitted node shape using typed references and subgraph interfaces. */
-        Result<std::vector<GraphPin>> ExpectedPins(const GraphNode &node, const GraphDefinition &definition,
-                                                   const AnimationGraphData &data) {
-            std::vector<GraphPin> expected;
-            const auto add = [&expected](GraphPinRole role, GraphValueType type, bool output, GraphInterfaceId input = {}) {
-                expected.push_back({{}, role, type, output, input});
-            };
-            const GraphSourceLocation location{definition.id, node.id, {}};
-            if (const auto *clip = std::get_if<GraphClipNode>(&node.payload)) {
-                if (!clip->clip.IsValid() || clip->clip.Asset() == data.id.Asset() || clip->clip.Asset() == data.skeleton.Asset())
-                    return Result<std::vector<GraphPin>>::Failure(Failure(GraphMalformed, location));
-                add(GraphPinRole::Result, GraphValueType::Pose, true);
-            } else if (std::holds_alternative<GraphBlendNode>(node.payload)) {
-                add(GraphPinRole::FirstPose, GraphValueType::Pose, false);
-                add(GraphPinRole::SecondPose, GraphValueType::Pose, false);
-                add(GraphPinRole::Weight, GraphValueType::Float, false);
-                add(GraphPinRole::Result, GraphValueType::Pose, true);
-            } else if (const auto *parameter = std::get_if<GraphParameterNode>(&node.payload)) {
-                const auto *value = Find(data.parameters, parameter->parameter);
-                if (!value)
-                    return Result<std::vector<GraphPin>>::Failure(Failure(GraphMalformed, location));
-                add(GraphPinRole::Result, value->type, true);
-            } else if (std::holds_alternative<GraphOutputNode>(node.payload)) {
-                add(GraphPinRole::Value, GraphValueType::Pose, false);
-            } else if (const auto *input = std::get_if<GraphInputNode>(&node.payload)) {
-                const auto *value = Find(definition.inputs, input->input);
-                if (!value)
-                    return Result<std::vector<GraphPin>>::Failure(Failure(GraphMalformed, location));
-                add(GraphPinRole::Result, value->type, true);
-            } else if (const auto *call = std::get_if<GraphCallNode>(&node.payload)) {
-                const auto *target = Find(data.definitions, call->definition);
-                if (!target)
-                    return Result<std::vector<GraphPin>>::Failure(Failure(GraphMalformed, location));
-                for (const auto &definitionInput : target->inputs)
-                    add(GraphPinRole::Interface, definitionInput.type, false, definitionInput.id);
-                add(GraphPinRole::Result, GraphValueType::Pose, true);
-            } else if (const auto *machine = std::get_if<GraphStateMachineNode>(&node.payload)) {
-                if (auto validated = ValidateStateNode(*machine, data, location); validated.HasError())
-                    return Result<std::vector<GraphPin>>::Failure(validated.ErrorValue());
-                add(GraphPinRole::Result, GraphValueType::Pose, true);
-            } else {
-                return Result<std::vector<GraphPin>>::Failure(Failure(GraphMalformed, location));
-            }
-            return Result<std::vector<GraphPin>>::Success(std::move(expected));
-        }
-
-        /** @brief Validates stable pins against exactly one declared semantic role each. */
-        Result<void> ValidatePins(const GraphNode &node, const GraphDefinition &definition, const AnimationGraphData &data) {
-            auto expected = ExpectedPins(node, definition, data);
-            if (expected.HasError())
-                return Result<void>::Failure(expected.ErrorValue());
-            if (!UniqueIds(node.pins) || node.pins.size() != expected.Value().size())
-                return Result<void>::Failure(Failure(GraphMalformed, {definition.id, node.id, {}}));
-            std::set<std::pair<GraphPinRole, GraphInterfaceId>> seen;
-            for (const auto &pin : node.pins) {
-                const auto found = std::ranges::find_if(expected.Value(), [&pin](const auto &value) {
-                    return value.role == pin.role && value.interfaceId == pin.interfaceId;
-                });
-                if (found == expected.Value().end() || !seen.emplace(pin.role, pin.interfaceId).second || found->output != pin.output)
-                    return Result<void>::Failure(Failure(GraphMalformed, {definition.id, node.id, pin.id}));
-                if (found->type != pin.type)
-                    return Result<void>::Failure(Failure(GraphTypeMismatch, {definition.id, node.id, pin.id}));
-            }
-            return Result<void>::Success();
         }
 
         /** @brief Invocation-local dependency indexes; never retained by the immutable program. */
@@ -552,6 +545,7 @@ namespace Horo::Animation {
 
     /** @copydoc MigrateAnimationGraph */
     Result<AnimationGraphData> MigrateAnimationGraph(const AnimationGraphData &data, const AnimationGraphCompileContext &context) {
+        const bool legacy = data.schemaVersion == 1 || data.schemaVersion == 2;
         if (data.schemaVersion == 0 || data.schemaVersion > CurrentAnimationGraphSchemaVersion)
             return Result<AnimationGraphData>::Failure(Failure(GraphVersionUnsupported));
         const AnimationGraphContractVersion expected = data.schemaVersion <= 2   ? AnimationGraphContractVersion{1, 0, 0}
@@ -567,6 +561,8 @@ namespace Horo::Animation {
         if (auto preflight = Preflight(data, context); preflight.HasError())
             return Result<AnimationGraphData>::Failure(preflight.ErrorValue());
         auto migrated = data;
+        if (legacy && !LegacyDefaults(data))
+            return Result<AnimationGraphData>::Failure(Failure(GraphVersionUnsupported));
         Canonicalize(migrated);
         if (migrated.schemaVersion == 1) {
             for (auto &definition : migrated.definitions)

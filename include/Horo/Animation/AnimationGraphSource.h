@@ -25,6 +25,9 @@ namespace Horo::Animation {
     enum class AnimationGraphSourceMigration : std::uint8_t {
         RequireCurrent,
         MigrateVersion1,
+        /** @brief Preserves the schema-3 API policy: only schemas 1 and 2 may migrate. */
+        MigrateLegacySchemas,
+        /** @brief Explicitly admits schemas 1, 2 and 3 with their exact historical semantic contracts. */
         MigrateSupported
     };
     /** @brief Serializes a valid current-schema candidate as canonical UTF-8 JSON with one trailing newline.

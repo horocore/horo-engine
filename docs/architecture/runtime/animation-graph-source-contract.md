@@ -49,7 +49,7 @@ normalizes signed floating zero and emits the exact stored binary32 value.
 
 Definitions are sorted by stable ID and contain `id`, `inputs`, `nodes`,
 `connections`. Definition inputs are sorted by ID and contain `id`, `type`.
-Nodes are sorted by stable ID and contain `id`, `kind`, `reference`, `pins`.
+Nodes are sorted by stable ID and contain `id`, `kind`, `reference`, `pins`, `settings`.
 Kinds/references are:
 
 | Kind | Reference |
@@ -91,7 +91,8 @@ Pins are sorted by stable ID and contain `id`, `role`, `type`, `output`,
 `interface`. Roles are `value`, `firstPose`, `secondPose`, `weight`, `interface`,
 `result`; direction is a JSON boolean; `interface` is a stable interface ID only
 for an interface role and otherwise null. Pin types additionally admit `pose`.
-The compiler owns the exact shape of every node and rejects extra/missing or
+The additional `referencePose` pin role supplies a complete explicit additive
+reference. The compiler owns the exact shape of every node and rejects extra/missing or
 contradictory roles. It never interprets an unknown node as an opaque extension.
 
 Connections are sorted by source endpoint, destination endpoint and type. Their
@@ -99,6 +100,24 @@ fields are `source`, `destination`, `type`; each endpoint has `node`, `pin`.
 Every input has exactly one same-type source; no coercion or implicit defaults
 repair a malformed edge. Node cycles, self/indirect call recursion, unused cyclic
 definitions, unbound interfaces and unreachable nodes all fail.
+
+`settings` is an empty object for Parameter/Output/Input/Call/StateMachine. Clip settings have
+exactly `referencePose`, a nullable stable nonzero reference-pose ID. Null declares
+absolute sampling. A reference identity declares additive sampling and requires
+FirstPose (base) and ReferencePose inputs besides Result. It must match the exact
+pinned additive clip descriptor; the descriptor's reference generation remains
+runtime compatibility metadata and is not persisted. The node's authored contract
+associates its reference operand with that identity. No skeleton-reference pose is
+invented when the additive reference operand is absent.
+
+Blend settings have `mode`, `missingJoint`, `mask`. Mode is `normalized`,
+`additiveLocal` or `additiveParent`; missingJoint is `skeletonReference` or
+`preserveBase`. Mask has `defaultWeight`, then `joints`, an array of stable
+`joint`/`weight` records sorted by JointId. All mask weights are finite binary32 in
+[0,1]; signed zero is canonicalized. Duplicate/unknown joints fail. Per-node mask
+counts are bounded by the skeleton hard joint ceiling, aggregate sparse/dense
+entries by the pose-transform policy. A normalized node keeps its legacy four
+pins. Additive modes require one additional ReferencePose input.
 
 ## Migration And Hostile Input
 
@@ -109,6 +128,10 @@ and validates the complete destination/node/call/parameter contract. It neither
 repairs IDs nor changes persistent identity. The result is a detached canonical
 current candidate. `MigrateSupported` additionally admits schemas 2 and 3 with
 their exact semantic contracts; `MigrateVersion1` stays restricted to schema 1.
+The parent API's `MigrateLegacySchemas` stays restricted to schemas 1/2. Those old
+schemas omit settings and gain only absolute/unmasked normalized defaults. Schema 3
+retains its actual settings, additive reference operands, masks and missing-joint
+policies through migration. New pose policies mislabeled as schema 1/2 reject.
 Earlier schemas reject state-machine payloads. Serialization requires schema 4;
 callers must explicitly migrate older in-memory data first. Current migration is
 an idempotent validated canonical copy. The pose parent owns schema 3; the state
@@ -152,7 +175,12 @@ reads address the canonical parameter block; graph nodes never write it. Input,
 Output and Call alias exact interface/result slots; Clip/Blend own pose slots.
 
 The plan exposes exact counts for five working storage types, joint transforms,
-clip players, parameters and call depth. Expanded instruction work, call-path entries
+clip players, parameters, call depth and immutable composition entries. Every clip
+occurrence owns dense authored-track coverage; every blend owns a dense mask in
+the exact canonical skeleton order. These tables are compiled once, bounded by
+poseTransforms and retained by the immutable program. Instance coverage storage
+has one byte per pose transform; no frame-hot stable-ID lookup is needed.
+Expanded instruction work, call-path entries
 and each storage category have hard and caller-lowerable budgets. Budget failure
 rejects the entire detached program before an instance can allocate it. This
 compiler provides the access/allocation plan. ANI-002.4 adds control/completion
