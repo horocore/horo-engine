@@ -1,12 +1,22 @@
 #pragma once
 
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
+#include "Horo/Navigation/NavigationMovement.h"
 #include "navigation/NavigationRuntimeTestFixtures.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 
 namespace Horo::Navigation::TestSupport {
+    /** @brief Require the complete positive-velocity intent produced by this fixture's diagonal grounded corridor. */
+    inline void RequireFollowingIntent(const Result<NavigationMovementIntent> &intent) {
+        REQUIRE(intent.HasValue());
+        REQUIRE(intent.Value().state == NavigationMovementState::Following);
+        REQUIRE(intent.Value().path.IsValid());
+        REQUIRE(intent.Value().desiredVelocity.x > 0);
+        REQUIRE(intent.Value().desiredVelocity.z > 0);
+    }
+
     inline std::unique_ptr<INavigationQueryBackend> MakeGroundedProvider(const NavigationWorldId world = World(),
                                                                          const NavigationGeneration topology = Topology()) {
         const std::array<Math::Vec3, 4> vertices{{{0, 0, 0}, {10, 0, 0}, {10, 0, 10}, {0, 0, 10}}};

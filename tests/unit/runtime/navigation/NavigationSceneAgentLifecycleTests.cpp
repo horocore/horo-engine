@@ -21,11 +21,7 @@ namespace Horo::Navigation {
                 }
                 REQUIRE(fixture.lifecycle->ReconcileAtSafePoint(fixture.scene.ActiveScene()).HasError());
                 REQUIRE(fixture.registry.Find(fixture.agent).HasError());
-                REQUIRE(fixture.world.Unload(fixture.binding.world).HasValue());
-                fixture.jobs.Shutdown(ShutdownPolicy::Drain);
-                REQUIRE(fixture.coordinator.Commit({.tick = 1}) == 0);
-                REQUIRE(fixture.coordinator.IsDrained());
-                REQUIRE(fixture.world.CollectRetired() == NavigationWorldLifecycleState::Empty);
+                fixture.DrainRevokedWorld(1);
                 REQUIRE(fixture.fence->destructions == 1);
             }
         }
@@ -41,12 +37,8 @@ namespace Horo::Navigation {
         REQUIRE(fixture.lifecycle->ReconcileAtSafePoint(fixture.scene.ActiveScene()).HasError());
         REQUIRE(fixture.world.Unload(fixture.binding.world).HasValue());
         REQUIRE(fixture.coordinator.Commit({.tick = 1}) == 0);
-        REQUIRE_FALSE(fixture.coordinator.IsDrained());
-        REQUIRE(fixture.world.RetiredCount() == 1);
-        REQUIRE(fixture.fence->destructions == 0);
-        fixture.fence->Release();
-        fixture.jobs.Shutdown(ShutdownPolicy::Drain);
-        REQUIRE(fixture.fence->reachable);
+        fixture.RequireRetainedProvider();
+        fixture.FinishHeldProvider();
         REQUIRE(fixture.coordinator.Commit({.tick = 2}) == 0);
         REQUIRE(fixture.coordinator.IsDrained());
         REQUIRE(fixture.world.CollectRetired() == NavigationWorldLifecycleState::Empty);
@@ -59,9 +51,7 @@ namespace Horo::Navigation {
         Fixture fixture;
         fixture.StartQuery();
         REQUIRE(fixture.coordinator.Dispatch(0) == 1);
-        fixture.jobs.Shutdown(ShutdownPolicy::Drain);
-        const std::array callers{fixture.caller};
-        REQUIRE(fixture.coordinator.Commit({fixture.activation, fixture.Now().path.provenance, callers, 1}) == 1);
+        fixture.PublishCompletedQuery(fixture.Now(), 1);
         const auto intent = fixture.lifecycle->Update(*fixture.scene.ActiveScene(), fixture.Now(1));
         REQUIRE(intent.HasValue());
         REQUIRE(intent.Value().state == NavigationMovementState::Following);
@@ -85,14 +75,7 @@ namespace Horo::Navigation {
               "[unit][navigation][scene][lifecycle][reload][provider]") {
         for (const bool replaceWorld : {false, true}) {
             Fixture fixture;
-            auto request = fixture.Move();
-            request.mode = NavigationMovementMode::Follow;
-            request.entity = NavigationAgentOwner{fixture.binding.scene, fixture.target.entity.index, fixture.target.entity.generation};
-            auto current = fixture.Now();
-            current.target = NavigationMovementTarget{*request.entity, {9, 0, 9}, 1};
-            const auto accepted = fixture.lifecycle->Start(*fixture.scene.ActiveScene(), request, current);
-            REQUIRE(accepted.HasValue());
-            REQUIRE(fixture.lifecycle->Update(*fixture.scene.ActiveScene(), current).HasValue());
+            const auto [accepted, current] = fixture.BeginFollow();
             fixture.Reload(replaceWorld);
             auto rebound = fixture.Now(1);
             rebound.target = current.target;
@@ -100,21 +83,15 @@ namespace Horo::Navigation {
                 fixture.lifecycle->RebindAtSafePoint(*fixture.scene.ActiveScene(), fixture.agent, fixture.caller, rebound, 2).HasValue());
             const auto pending = fixture.lifecycle->Update(*fixture.scene.ActiveScene(), rebound);
             REQUIRE(pending.HasValue());
-            REQUIRE(pending.Value().operation.sequence == accepted.Value().accepted.sequence);
+            REQUIRE(pending.Value().operation.sequence == accepted.accepted.sequence);
             REQUIRE(pending.Value().operation.agent == fixture.agent);
             REQUIRE_FALSE(pending.Value().path.IsValid());
             REQUIRE(pending.Value().desiredVelocity == Math::Vec3{});
             REQUIRE(fixture.coordinator.Dispatch(1) == 1);
-            fixture.jobs.Shutdown(ShutdownPolicy::Drain);
-            const std::array callers{fixture.caller};
-            REQUIRE(fixture.coordinator.Commit({fixture.activation, rebound.path.provenance, callers, 2}) == 1);
+            fixture.PublishCompletedQuery(rebound, 2);
             rebound.path.tick = 2;
             const auto intent = fixture.lifecycle->Update(*fixture.scene.ActiveScene(), rebound);
-            REQUIRE(intent.HasValue());
-            REQUIRE(intent.Value().state == NavigationMovementState::Following);
-            REQUIRE(intent.Value().path.IsValid());
-            REQUIRE(intent.Value().desiredVelocity.x > 0);
-            REQUIRE(intent.Value().desiredVelocity.z > 0);
+            RequireFollowingIntent(intent);
             REQUIRE(fixture.coordinator.IsDrained());
             static_cast<void>(fixture.world.CollectRetired());
             REQUIRE(fixture.world.RetiredCount() == 0);
@@ -146,17 +123,10 @@ namespace Horo::Navigation {
     TEST_CASE("Committed Follow target destruction overrides stale host facts before late path consumption",
               "[unit][navigation][scene][lifecycle][follow]") {
         Fixture fixture;
-        auto request = fixture.Move();
-        request.mode = NavigationMovementMode::Follow;
-        request.entity = NavigationAgentOwner{fixture.binding.scene, fixture.target.entity.index, fixture.target.entity.generation};
-        auto current = fixture.Now();
-        current.target = NavigationMovementTarget{*request.entity, {9, 0, 9}, 1};
-        REQUIRE(fixture.lifecycle->Start(*fixture.scene.ActiveScene(), request, current).HasValue());
-        REQUIRE(fixture.lifecycle->Update(*fixture.scene.ActiveScene(), current).HasValue());
+        auto [accepted, current] = fixture.BeginFollow();
+        static_cast<void>(accepted);
         REQUIRE(fixture.coordinator.Dispatch(0) == 1);
-        fixture.jobs.Shutdown(ShutdownPolicy::Drain);
-        const std::array callers{fixture.caller};
-        REQUIRE(fixture.coordinator.Commit({fixture.activation, current.path.provenance, callers, 1}) == 1);
+        fixture.PublishCompletedQuery(current, 1);
         fixture.Destroy(fixture.target);
         current.path.tick = 1;  // Deliberately retain the old apparently valid target fact.
         const auto intent = fixture.lifecycle->Update(*fixture.scene.ActiveScene(), current);
@@ -166,21 +136,14 @@ namespace Horo::Navigation {
         REQUIRE(intent.Value().desiredVelocity == Math::Vec3{});
         REQUIRE(fixture.coordinator.Commit({.tick = 2}) == 0);
         REQUIRE_FALSE(fixture.coordinator.IsDrained());  // The live consumer still owns its terminal retirement receipt.
-        REQUIRE(fixture.lifecycle->ReconcileAtSafePoint(fixture.scene.ActiveScene()).HasValue());
-        REQUIRE(fixture.coordinator.IsDrained());
-        REQUIRE(fixture.registry.Find(fixture.agent).HasValue());
+        fixture.ReconcileLiveRetirement();
     }
 
     TEST_CASE("Inactive live Scene owner reconciliation drains TargetLost work only after the real worker fence",
               "[unit][navigation][scene][lifecycle][follow][jobs][retirement]") {
         Fixture fixture{1, true};
-        auto request = fixture.Move();
-        request.mode = NavigationMovementMode::Follow;
-        request.entity = NavigationAgentOwner{fixture.binding.scene, fixture.target.entity.index, fixture.target.entity.generation};
-        auto current = fixture.Now();
-        current.target = NavigationMovementTarget{*request.entity, {9, 0, 9}, 1};
-        REQUIRE(fixture.lifecycle->Start(*fixture.scene.ActiveScene(), request, current).HasValue());
-        REQUIRE(fixture.lifecycle->Update(*fixture.scene.ActiveScene(), current).HasValue());
+        auto [accepted, current] = fixture.BeginFollow();
+        static_cast<void>(accepted);
         REQUIRE(fixture.coordinator.Dispatch(0) == 1);
         REQUIRE(fixture.fence->WaitEntered());
         fixture.Destroy(fixture.target);
@@ -191,16 +154,10 @@ namespace Horo::Navigation {
         REQUIRE(lost.Value().desiredVelocity == Math::Vec3{});
         REQUIRE(fixture.lifecycle->ReconcileAtSafePoint(fixture.scene.ActiveScene()).HasValue());
         REQUIRE(fixture.world.Unload(fixture.binding.world).HasValue());
-        REQUIRE_FALSE(fixture.coordinator.IsDrained());
-        REQUIRE(fixture.world.RetiredCount() == 1);
-        REQUIRE(fixture.fence->destructions == 0);
-        fixture.fence->Release();
-        fixture.jobs.Shutdown(ShutdownPolicy::Drain);
-        REQUIRE(fixture.fence->reachable);
+        fixture.RequireRetainedProvider();
+        fixture.FinishHeldProvider();
         // No Update, Commit, disable or owner destruction after TargetLost: the canonical reconcile phase owns drain.
-        REQUIRE(fixture.lifecycle->ReconcileAtSafePoint(fixture.scene.ActiveScene()).HasValue());
-        REQUIRE(fixture.coordinator.IsDrained());
-        REQUIRE(fixture.registry.Find(fixture.agent).HasValue());
+        fixture.ReconcileLiveRetirement();
         REQUIRE(fixture.world.CollectRetired() == NavigationWorldLifecycleState::Empty);
         REQUIRE(fixture.fence->destructions == 1);
     }

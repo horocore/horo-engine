@@ -226,6 +226,18 @@ namespace Horo::Navigation {
                                                              const NavigationMovementObservation &current);
 
     private:
+        /** @brief Admit the replacement caller/observation without modifying the accepted operation. */
+        [[nodiscard]] Result<void> ValidateRebindCaller(NavigationPathCaller caller, const NavigationMovementObservation &current) const;
+        /** @brief Snapshot one compatible live registration under the committed replacement binding. */
+        [[nodiscard]] Result<NavigationAgentRecord> AdmitRebindAgent(CrowdAgentHandle agent,
+                                                                     const NavigationMovementObservation &current) const;
+        /** @brief Require current evidence for the same accepted Follow target before rebind. */
+        [[nodiscard]] Result<void> ValidateRebindTarget(const NavigationMovementObservation &current) const;
+        /** @brief Validate the pinned replacement provider and prepare an empty forced-repath candidate, never copy the old corridor.
+         * @param current Replacement observation. @param lease Borrowed replacement-world pin, retained through commit by the caller.
+         */
+        [[nodiscard]] Result<NavigationPathPolicy> PrepareRebindPolicy(const NavigationMovementObservation &current,
+                                                                       const NavigationWorldReadLease &lease) const;
         /** @brief Check complete observation shape before changing state. */
         [[nodiscard]] bool ValidObservation(const NavigationMovementObservation &current) const noexcept;
         /** @brief Validate agent, Scene/world and target identities without replacing the current operation. */

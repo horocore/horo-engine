@@ -25,6 +25,48 @@ namespace Horo::Navigation {
             REQUIRE(prepared.HasValue());
             return prepared.Value();
         }
+
+        /** @brief Own a deliberately late real solver job's immutable inputs and terminal result independently of Scene lifetime. */
+        struct HeldAvoidanceWork final {
+            std::shared_ptr<ProviderFence> fence{std::make_shared<ProviderFence>()};
+            std::shared_ptr<std::optional<Result<NavigationAvoidanceOutcome>>> result{
+                std::make_shared<std::optional<Result<NavigationAvoidanceOutcome>>>()};
+            JobHandle job;
+
+            HeldAvoidanceWork(JobSystem &jobs, const NavigationVelocityWork &work, const NavigationCrowdSnapshot &snapshot) {
+                auto provider = CreateRecastDetourCrowdBackend();
+                REQUIRE(provider.HasValue());
+                auto solver = std::shared_ptr<INavigationCrowdBackend>{std::move(provider).Value()};
+                fence->held = true;
+                auto admitted = jobs.Submit({}, [work, snapshot, solver, fence = fence, result = result](const CancellationToken &) {
+                    {
+                        std::unique_lock lock{fence->mutex};
+                        fence->entered = true;
+                        fence->condition.notify_all();
+                        if (!fence->condition.wait_for(lock, std::chrono::seconds{3}, [&] {
+                            return !fence->held;
+                        }))
+                            return;
+                    }
+                    *result = solver->Solve(snapshot, work.request);
+                });
+                REQUIRE(admitted.HasValue());
+                job = std::move(admitted).Value();
+                REQUIRE(fence->WaitEntered());
+            }
+
+            ~HeldAvoidanceWork() {
+                // Release even on an assertion exception; fixture teardown then owns the actual JobSystem join.
+                fence->Release();
+            }
+
+            void Finish(JobSystem &jobs) {
+                fence->Release();
+                jobs.Shutdown(ShutdownPolicy::Drain);
+                REQUIRE(result->has_value());
+                REQUIRE(result->value().HasValue());
+            }
+        };
     }  // namespace
 
     TEST_CASE("Scene lifecycle fences late real avoidance work after teleport destroy unload and explicit cancellation",
@@ -35,26 +77,7 @@ namespace Horo::Navigation {
             const auto current = fixture.Now(1);
             const auto snapshot = Capture(fixture, current);
             const auto work = Prepare(fixture, snapshot, current);
-            auto provider = CreateRecastDetourCrowdBackend();
-            REQUIRE(provider.HasValue());
-            auto solver = std::shared_ptr<INavigationCrowdBackend>{std::move(provider).Value()};
-            auto fence = std::make_shared<ProviderFence>();
-            fence->held = true;
-            auto result = std::make_shared<std::optional<Result<NavigationAvoidanceOutcome>>>();
-            const auto job = fixture.jobs.Submit({}, [work, snapshot, solver, fence, result](const CancellationToken &) {
-                {
-                    std::unique_lock lock{fence->mutex};
-                    fence->entered = true;
-                    fence->condition.notify_all();
-                    if (!fence->condition.wait_for(lock, std::chrono::seconds{3}, [&] {
-                        return !fence->held;
-                    }))
-                        return;
-                }
-                *result = solver->Solve(snapshot, work.request);
-            });
-            REQUIRE(job.HasValue());
-            REQUIRE(fence->WaitEntered());
+            HeldAvoidanceWork late{fixture.jobs, work, snapshot};
             if (cause == 0) {
                 auto teleported = current;
                 teleported.position = {8, 0, 1};
@@ -69,12 +92,9 @@ namespace Horo::Navigation {
                 REQUIRE(fixture.lifecycle->CancelVelocity(work));
                 REQUIRE_FALSE(fixture.lifecycle->CancelVelocity(work));
             }
-            fence->Release();
-            fixture.jobs.Shutdown(ShutdownPolicy::Drain);
-            REQUIRE(result->has_value());
-            REQUIRE(result->value().HasValue());
+            late.Finish(fixture.jobs);
             if (const auto scene = fixture.scene.ActiveScene(); scene.has_value())
-                REQUIRE(fixture.lifecycle->CommitVelocity(*scene, work, result->value().Value(), snapshot, current).HasError());
+                REQUIRE(fixture.lifecycle->CommitVelocity(*scene, work, late.result->value().Value(), snapshot, current).HasError());
             else
                 REQUIRE(fixture.lifecycle->ReconcileAtSafePoint(std::nullopt).HasError());
             REQUIRE(fixture.coordinator.IsDrained());

@@ -145,6 +145,8 @@ namespace Horo::Navigation {
         void Retire() noexcept;
 
     private:
+        /** @brief Admit a newer owner-thread Character discontinuity without old feedback or mutating history. */
+        [[nodiscard]] Result<void> AdmitDiscontinuity(const NavigationMovementObservation &current, std::uint64_t characterRevision) const;
         /** @brief Release stale avoidance authority and blockage history without changing tick or sequence fences. */
         void ClearMotionHistory() noexcept;
 

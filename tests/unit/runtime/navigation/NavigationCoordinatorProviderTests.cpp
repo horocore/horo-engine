@@ -99,11 +99,7 @@ namespace Horo::Navigation {
         REQUIRE(coordinator.Commit({Activation(), source, callers, 1}) == 1);
         now.path.tick = 1;
         const auto intent = movement->Update(now);
-        REQUIRE(intent.HasValue());
-        REQUIRE(intent.Value().state == NavigationMovementState::Following);
-        REQUIRE(intent.Value().path.IsValid());
-        REQUIRE(intent.Value().desiredVelocity.x > 0);
-        REQUIRE(intent.Value().desiredVelocity.z > 0);
+        RequireFollowingIntent(intent);
         now.position = request.destination;
         now.path.tick = 2;
         now.feedback = NavigationMovementFeedback{accepted.Value().accepted, intent.Value().path, 1, 0};

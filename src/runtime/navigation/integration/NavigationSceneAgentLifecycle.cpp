@@ -9,7 +9,7 @@ namespace Horo::Navigation {
         if (!scene.IsCurrent() || scene.RuntimeId() != entity.runtime)
             return false;
         const auto value = scene.Get(entity);
-        return value.HasValue() && value.Value().components && value.Value().components->navigationAgent &&
+        return value.HasValue() && value.Value().components && value.Value().components->navigationAgent.has_value() &&
                value.Value().components->navigationAgent->enabled;
     }
 

@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include <utility>
 
 namespace Horo::Navigation::SceneLifecycleTestSupport {
     using namespace TestSupport;
@@ -149,6 +150,56 @@ namespace Horo::Navigation::SceneLifecycleTestSupport {
             REQUIRE(lifecycle->Update(*scene.ActiveScene(), Now()).Value().state == NavigationMovementState::Querying);
         }
 
+        /** @brief Accept and issue the same exact live Follow goal; return detached acceptance and observation values. */
+        std::pair<NavigationMovementAcceptance, NavigationMovementObservation> BeginFollow() {
+            auto request = Move();
+            request.mode = NavigationMovementMode::Follow;
+            request.entity = NavigationAgentOwner{binding.scene, target.entity.index, target.entity.generation};
+            auto current = Now();
+            current.target = NavigationMovementTarget{*request.entity, {9, 0, 9}, 1};
+            const auto accepted = lifecycle->Start(*scene.ActiveScene(), request, current);
+            REQUIRE(accepted.HasValue());
+            REQUIRE(lifecycle->Update(*scene.ActiveScene(), current).HasValue());
+            return {accepted.Value(), current};
+        }
+
+        /** @brief Observe the actual worker terminal fence and publish one exact current query result. */
+        void PublishCompletedQuery(const NavigationMovementObservation &current, const std::uint64_t tick) {
+            jobs.Shutdown(ShutdownPolicy::Drain);
+            const std::array callers{caller};
+            REQUIRE(coordinator.Commit({activation, current.path.provenance, callers, tick}) == 1);
+        }
+
+        /** @brief Assert physical pin ownership while the deliberately held provider is still executing. */
+        void RequireRetainedProvider() const {
+            REQUIRE_FALSE(coordinator.IsDrained());
+            REQUIRE(world.RetiredCount() == 1);
+            REQUIRE(fence->destructions == 0);
+        }
+
+        /** @brief Release this fixture's real running provider, then observe terminal work before reading worker-owned result facts. */
+        void FinishHeldProvider() {
+            fence->Release();
+            jobs.Shutdown(ShutdownPolicy::Drain);
+            REQUIRE(fence->reachable);
+        }
+
+        /** @brief Reconcile a still-live dormant owner without Update/Commit, retaining both drain and live-agent assertions. */
+        void ReconcileLiveRetirement() {
+            REQUIRE(lifecycle->ReconcileAtSafePoint(scene.ActiveScene()).HasValue());
+            REQUIRE(coordinator.IsDrained());
+            REQUIRE(registry.Find(agent).HasValue());
+        }
+
+        /** @brief Drain a revoked world through the existing coordinator commit, preserving all physical-release assertions. */
+        void DrainRevokedWorld(const std::uint64_t tick) {
+            REQUIRE(world.Unload(binding.world).HasValue());
+            jobs.Shutdown(ShutdownPolicy::Drain);
+            REQUIRE(coordinator.Commit({.tick = tick}) == 0);
+            REQUIRE(coordinator.IsDrained());
+            REQUIRE(world.CollectRetired() == NavigationWorldLifecycleState::Empty);
+        }
+
         void PublishRoute() {
             StartQuery();
             REQUIRE(coordinator.Dispatch(0) == 1);
@@ -176,22 +227,18 @@ namespace Horo::Navigation::SceneLifecycleTestSupport {
 
         void Reload(const bool replaceWorld = true) {
             const auto next = NavigationAgentSceneBinding{replaceWorld ? World(2) : binding.world, binding.scene, binding.sceneGeneration};
+            const NavigationAgentDescriptor descriptor{.owner = {next.scene, entity.entity.index, entity.entity.generation},
+                                                       .profile = NavigationAgentProfileId::Create(2).Value(),
+                                                       .filter = NavigationFilterId::Create(1).Value(),
+                                                       .radiusOverride = 0.25F};
             if (replaceWorld) {
                 activation = {next.scene, next.sceneGeneration, next.world, Topology(10)};
                 REQUIRE(world.Stage(activation, MakeGroundedProvider(next.world, activation.topology)).HasValue());
                 REQUIRE(world.CommitAtSafePoint(next.scene, next.sceneGeneration).HasValue());
-                const NavigationAgentDescriptor descriptor{.owner = {next.scene, entity.entity.index, entity.entity.generation},
-                                                           .profile = NavigationAgentProfileId::Create(2).Value(),
-                                                           .filter = NavigationFilterId::Create(1).Value(),
-                                                           .radiusOverride = 0.25F};
                 replacement = std::move(registry.PrepareScene(next, std::array{descriptor})).Value();
                 replacement->Publish();
             } else {
                 REQUIRE(registry.UnregisterAtSafePoint(agent).HasValue());
-                const NavigationAgentDescriptor descriptor{.owner = {next.scene, entity.entity.index, entity.entity.generation},
-                                                           .profile = NavigationAgentProfileId::Create(2).Value(),
-                                                           .filter = NavigationFilterId::Create(1).Value(),
-                                                           .radiusOverride = 0.25F};
                 REQUIRE(registry.RegisterAtSafePoint(descriptor).HasValue());
             }
             binding = next;

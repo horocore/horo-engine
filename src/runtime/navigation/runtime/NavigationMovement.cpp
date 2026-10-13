@@ -139,27 +139,41 @@ namespace Horo::Navigation {
         return Return::Success(std::move(acceptance));
     }
 
-    /** @copydoc NavigationMovementController::RebindAtSafePoint */
-    Result<void> NavigationMovementController::RebindAtSafePoint(const CrowdAgentHandle agent, const NavigationPathCaller caller,
-                                                                 const NavigationMovementObservation &current) {
-        using Return = Result<void>;
+    /** @copydoc NavigationMovementController::ValidateRebindCaller */
+    Result<void> NavigationMovementController::ValidateRebindCaller(const NavigationPathCaller caller,
+                                                                    const NavigationMovementObservation &current) const {
         if (shutdown_ || !ValidObservation(current) || current.feedback.has_value() || caller.owner != caller_.owner ||
             caller.generation <= caller_.generation)
-            return Return::Failure(MakeError(NavigationErrors::AgentDescriptorInvalid));
+            return Result<void>::Failure(MakeError(NavigationErrors::AgentDescriptorInvalid));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc NavigationMovementController::AdmitRebindAgent */
+    Result<NavigationAgentRecord> NavigationMovementController::AdmitRebindAgent(const CrowdAgentHandle agent,
+                                                                                 const NavigationMovementObservation &current) const {
         const auto record = registry_.Find(agent);
         const auto binding = registry_.ActiveBinding();
         if (record.HasError() || binding.HasError() || !record.Value().enabled || record.Value().owner != agent_.owner ||
             binding.Value() != current.binding || current.binding.scene != binding_.scene ||
             current.binding.sceneGeneration != binding_.sceneGeneration || current.path.provenance.world != current.binding.world)
-            return Return::Failure(MakeError(NavigationErrors::AgentRegistryStale));
+            return Result<NavigationAgentRecord>::Failure(MakeError(NavigationErrors::AgentRegistryStale));
+        return record;
+    }
+
+    /** @copydoc NavigationMovementController::ValidateRebindTarget */
+    Result<void> NavigationMovementController::ValidateRebindTarget(const NavigationMovementObservation &current) const {
         if (Active(status_.state) && request_.entity.has_value() &&
             (!current.target.has_value() || current.target->owner != *request_.entity || current.target->revision < targetRevision_ ||
              (current.target->revision == targetRevision_ && current.target->position != goal_)))
-            return Return::Failure(MakeError(NavigationErrors::InvalidHandle));
-        const auto lease = world_.Acquire(current.binding.world);
-        if (lease.HasError())
-            return Return::Failure(lease.ErrorValue());
-        const auto &activation = lease.Value().Descriptor();
+            return Result<void>::Failure(MakeError(NavigationErrors::InvalidHandle));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc NavigationMovementController::PrepareRebindPolicy */
+    Result<NavigationPathPolicy> NavigationMovementController::PrepareRebindPolicy(const NavigationMovementObservation &current,
+                                                                                   const NavigationWorldReadLease &lease) const {
+        using Return = Result<NavigationPathPolicy>;
+        const auto &activation = lease.Descriptor();
         if (activation.scene != current.binding.scene || activation.sceneGeneration != current.binding.sceneGeneration ||
             activation.topology != current.path.provenance.topology)
             return Return::Failure(MakeError(NavigationErrors::StaleSnapshot));
@@ -167,13 +181,32 @@ namespace Horo::Navigation {
         auto path = current.path;
         path.goalRevision = goalRevision_;
         if (Active(status_.state)) {
-            if (const auto admitted =
-                    AdmitNavigationQuery(lease.Value().Backend().Capabilities(), request_.capabilityRevision, request_.query);
+            if (const auto admitted = AdmitNavigationQuery(lease.Backend().Capabilities(), request_.capabilityRevision, request_.query);
                 admitted.HasError())
                 return Return::Failure(admitted.ErrorValue());
             if (const auto reset = candidate.ForceRepath(path); reset.HasError())
                 return Return::Failure(reset.ErrorValue());
         }
+        return Return::Success(std::move(candidate));
+    }
+
+    /** @copydoc NavigationMovementController::RebindAtSafePoint */
+    Result<void> NavigationMovementController::RebindAtSafePoint(const CrowdAgentHandle agent, const NavigationPathCaller caller,
+                                                                 const NavigationMovementObservation &current) {
+        if (const auto admitted = ValidateRebindCaller(caller, current); admitted.HasError())
+            return admitted;
+        const auto record = AdmitRebindAgent(agent, current);
+        if (record.HasError())
+            return Result<void>::Failure(record.ErrorValue());
+        if (const auto target = ValidateRebindTarget(current); target.HasError())
+            return target;
+        const auto lease = world_.Acquire(current.binding.world);
+        if (lease.HasError())
+            return Result<void>::Failure(lease.ErrorValue());
+        auto candidate = PrepareRebindPolicy(current, lease.Value());
+        if (candidate.HasError())
+            return Result<void>::Failure(candidate.ErrorValue());
+        // The transaction's only mutation phase: all fallible authority/provider admission has completed.
         if (query_.has_value())
             static_cast<void>(coordinator_.Abandon(*query_));
         query_.reset();
@@ -181,15 +214,15 @@ namespace Horo::Navigation {
             static_cast<void>(coordinator_.Abandon(retired_[index]));
         retiredCount_ = 0;
         agent_ = record.Value();
-        binding_ = binding.Value();
+        binding_ = current.binding;
         caller_ = caller;
-        policy_ = std::move(candidate);
+        policy_ = std::move(candidate).Value();
         status_.id.agent = agent;
         waypoint_ = 0;
         lastIntent_.reset();
         if (Active(status_.state))
             status_.state = NavigationMovementState::Querying;
-        return Return::Success();
+        return Result<void>::Success();
     }
 
     /** @copydoc NavigationMovementController::RetireQuery */

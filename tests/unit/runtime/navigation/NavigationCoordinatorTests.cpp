@@ -146,14 +146,10 @@ namespace Horo::Navigation {
     }
 
     TEST_CASE("Running cancellation holds slot and provider lifetime until worker drain", "[unit][navigation][coordinator]") {
-        JobSystem jobs{{.workerCount = 1}};
-        auto gate = std::make_shared<Gate>();
-        auto world = std::move(NavigationWorldLifecycle::Create(4)).Value();
-        Activate(world, std::make_unique<ControlledBackend>(gate));
-        auto coordinator = std::move(NavigationCoordinator::Create(jobs, Limits())).Value();
-        const auto handle = Admit(coordinator, world);
-        REQUIRE(coordinator.Dispatch(1) == 1);
-        const bool entered = gate->AwaitEntry();
+        HeldConsumerFixture retained;
+        auto &coordinator = retained.owner.coordinator;
+        auto &world = retained.owner.world;
+        const auto handle = retained.handle;
         REQUIRE(coordinator.Cancel(handle));
         const NavigationPathCaller callers[]{Caller()};
         REQUIRE(coordinator.Commit(Current(callers)) == 1);
@@ -163,24 +159,19 @@ namespace Horo::Navigation {
         REQUIRE_FALSE(coordinator.IsDrained());
         REQUIRE(world.Unload(World()).HasValue());
         REQUIRE(world.RetiredCount() == 1);
-        gate->Release();
-        jobs.Shutdown(ShutdownPolicy::Drain);
+        retained.owner.FinishWorker();
         REQUIRE_FALSE(coordinator.Take(handle));
         REQUIRE(coordinator.IsDrained());
         REQUIRE(world.CollectRetired() == NavigationWorldLifecycleState::Empty);
-        REQUIRE(entered);
+        REQUIRE(retained.entered);
     }
 
     TEST_CASE("Abandoned consumers release reservations without publishing or aliasing running work",
               "[unit][navigation][coordinator][lifecycle]") {
-        JobSystem jobs{{.workerCount = 1}};
-        auto gate = std::make_shared<Gate>();
-        auto world = std::move(NavigationWorldLifecycle::Create(4)).Value();
-        Activate(world, std::make_unique<ControlledBackend>(gate));
-        auto coordinator = std::move(NavigationCoordinator::Create(jobs, Limits())).Value();
-        const auto handle = Admit(coordinator, world);
-        REQUIRE(coordinator.Dispatch(1) == 1);
-        const bool entered = gate->AwaitEntry();
+        HeldConsumerFixture retained;
+        auto &coordinator = retained.owner.coordinator;
+        auto &world = retained.owner.world;
+        const auto handle = retained.handle;
         REQUIRE(coordinator.Abandon(handle));
         REQUIRE_FALSE(coordinator.Abandon(handle));
         REQUIRE_FALSE(coordinator.Cancel(handle));
@@ -188,20 +179,18 @@ namespace Horo::Navigation {
         REQUIRE_FALSE(coordinator.IsDrained());
         REQUIRE(world.Unload(World()).HasValue());
         REQUIRE(world.RetiredCount() == 1);
-        gate->Release();
-        jobs.Shutdown(ShutdownPolicy::Drain);
+        retained.owner.FinishWorker();
         REQUIRE(coordinator.Commit({.tick = 2}) == 0);
         REQUIRE(coordinator.IsDrained());
         REQUIRE(world.CollectRetired() == NavigationWorldLifecycleState::Empty);
         REQUIRE_FALSE(coordinator.Take(handle));
-        REQUIRE(entered);
+        REQUIRE(retained.entered);
     }
 
     TEST_CASE("Abandon releases undispatched and published result slots exactly once", "[unit][navigation][coordinator][lifecycle]") {
-        JobSystem jobs{{.workerCount = 0}};
-        auto world = std::move(NavigationWorldLifecycle::Create(4)).Value();
-        Activate(world);
-        auto coordinator = std::move(NavigationCoordinator::Create(jobs, Limits())).Value();
+        ConsumerFixture fixture;
+        auto &coordinator = fixture.coordinator;
+        auto &world = fixture.world;
         for (const bool publish : {false, true}) {
             const auto handle = Admit(coordinator, world);
             if (publish) {
