@@ -83,8 +83,8 @@ namespace Horo::Animation::GraphCompileDetail {
         /** @brief Resolves typed writer policy once and charges immutable dense storage. */
         Result<void> BindComposition(const GraphNodePayload &payload, GraphInstructionOccurrence &occurrence,
                                      GraphMemoryRequirements &memory, const AnimationGraphCompileContext &context) {
-            const auto bound = std::visit([&occurrence, &context](const auto &payload) {
-                using Payload = std::decay_t<decltype(payload)>;
+            if (const auto bound = std::visit(
+                    [&occurrence, &context]<typename Payload>(const Payload &payload) {
                 if constexpr (std::is_same_v<Payload, GraphBlendNode>)
                     return BindMask(payload, occurrence, context);
                 else if constexpr (std::is_same_v<Payload, GraphClipNode>)
@@ -92,7 +92,7 @@ namespace Horo::Animation::GraphCompileDetail {
                 else
                     return Result<void>::Success();
             }, payload);
-            if (bound.HasError())
+                bound.HasError())
                 return bound;
             memory.compositionEntries += occurrence.jointMask.size() + occurrence.clipCoverage.size();
             if (memory.compositionEntries > context.limits.poseTransforms)

@@ -64,8 +64,7 @@ namespace Horo::Animation {
 
         /** @brief Rejects new pose policies mislabeled as a legacy node contract. */
         bool LegacyNode(const GraphNode &node) {
-            const bool defaults = std::visit([](const auto &payload) {
-                using Payload = std::decay_t<decltype(payload)>;
+            const bool defaults = std::visit([]<typename Payload>(const Payload &payload) {
                 if constexpr (std::is_same_v<Payload, GraphClipNode>)
                     return !payload.referencePose;
                 else if constexpr (std::is_same_v<Payload, GraphBlendNode>)
