@@ -52,6 +52,11 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroPlatformTests
     HoroUpdateZipPackageProducerTests
     HoroVfxApiTests
+    HoroVfxRenderExtractionTests
+    HoroVfxApiPublicHeaderConsumer
+    HoroRenderApiPublicHeaderConsumer
+    HoroRenderFrontendPublicHeaderConsumer
+    HoroRuntimeScenePublicHeaderConsumer
     HoroCinematicModelTests
     HoroFractureDocumentTests
     HoroFractureDocumentPublicHeaderConsumer

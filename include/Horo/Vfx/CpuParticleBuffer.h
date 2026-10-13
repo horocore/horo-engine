@@ -26,6 +26,14 @@ namespace Horo::Vfx {
     using ParticleSimulationId =
         Foundation::Detail::NonZeroId64<Detail::ParticleSimulationIdentityTag, VfxErrors::ParticleSimulationIdentityInvalid>;
 
+    /** @brief Allocation-free outcome of an owner-thread particle read. */
+    enum class CpuParticleReadStatus : std::uint8_t {
+        Complete,
+        ShutDown,
+        ThreadViolation,
+        InvalidIndex
+    };
+
     /** @brief Compile-time ceilings that project and product configuration cannot raise. */
     struct CpuParticleBufferHardLimits final {
         static constexpr std::uint32_t Particles = 1'000'000;      /**< Absolute particle-slot ceiling. */
@@ -149,6 +157,27 @@ namespace Horo::Vfx {
          * @return Dense index or a typed thread, malformed, foreign or stale-handle failure.
          */
         [[nodiscard]] Result<std::uint32_t> ResolveDenseIndex(const CpuParticleHandle &handle);
+
+        /** @brief Resolves a packed live index to its stable identity without mutation; failure owns a diagnostic.
+         * @param denseIndex Index in the current live prefix. @return Exact handle or typed state/index failure.
+         * @pre The scene owner serializes this call with simulation mutation.
+         */
+        [[nodiscard]] Result<CpuParticleHandle> HandleAt(std::uint32_t denseIndex) const;
+
+        /** @brief Reads one stable identity without allocation on success or failure.
+         * @param denseIndex Index in the current live prefix.
+         * @param handle Receives the identity on success; cleared on failure.
+         * @return Complete or the exact lifecycle, owner-thread, or index rejection.
+         * @pre The scene owner serializes this call with simulation mutation.
+         */
+        [[nodiscard]] CpuParticleReadStatus TryHandleAt(std::uint32_t denseIndex, CpuParticleHandle &handle) const noexcept;
+
+        /** @brief Reads the packed live prefix without allocation on success or failure.
+         * @param view Receives borrowed spans on success; cleared on failure.
+         * @return Complete or the exact lifecycle or owner-thread rejection.
+         * @pre The scene owner serializes this call with simulation mutation and retains storage while reading.
+         */
+        [[nodiscard]] CpuParticleReadStatus TryReadView(CpuParticleSoAConstView &view) const noexcept;
 
         /**
          * @brief Copies a prepared source generation into this buffer without allocating.

@@ -1534,6 +1534,7 @@ add_library(HoroVfxApi STATIC
         runtime/vfx/api/VfxErrors.cpp
         runtime/vfx/api/VfxIdentity.cpp
         runtime/vfx/api/VfxQualityPolicy.cpp
+        runtime/vfx/api/VfxWorld.cpp
 )
 add_library(HoroEngine::VfxApi ALIAS HoroVfxApi)
 target_compile_features(HoroVfxApi PUBLIC cxx_std_20)
@@ -2225,6 +2226,7 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderParallelWorkInternal.cpp
         runtime/renderer/frontend/RenderParallelWorkErrors.cpp
         runtime/renderer/frontend/RenderFrontend.cpp
+        runtime/renderer/frontend/RenderFrontendVfx.cpp
         runtime/renderer/frontend/LightCullingPreparation.cpp
         runtime/renderer/frontend/LightFrameBufferPool.cpp
         runtime/renderer/frontend/RenderFrontendInspection.cpp
@@ -2305,7 +2307,8 @@ target_link_libraries(HoroCinematicModel PUBLIC HoroEngine::SceneModel)
 
 # RuntimeSceneDefinition exposes PrimitiveMeshDescriptor in its public scene
 # contract, so the owning SceneModel dependency is part of the public edge.
-target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::SceneModel HoroEngine::AudioApi)
+target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::SceneModel HoroEngine::AudioApi HoroEngine::VfxApi)
+target_link_libraries(HoroVfxApi PUBLIC HoroEngine::RenderApi)
 
 add_library(HoroRenderNull STATIC
         runtime/renderer/modules/null/NullRenderBackend.cpp

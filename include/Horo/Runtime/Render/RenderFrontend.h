@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Runtime/Render/RenderGraphInspection.h"
+#include "Horo/Runtime/Render/VfxGraphScheduling.h"
 
 /**
  * @file RenderFrontend.h
@@ -41,6 +42,7 @@ namespace Horo::Runtime::Ui {
 namespace Horo::Render {
 
     namespace Detail {
+        struct VfxSchedulingStorage;
         class RenderResourceRegistry;
         class RenderResourceUploadQueue;
         class RenderFrontendResourceAccess;
@@ -348,6 +350,26 @@ namespace Horo::Render {
          */
         [[nodiscard]] const RenderBackendCapabilities &Capabilities() const noexcept;
 
+        /** @brief Consumes retained live-effect instances into actual typed passes of the host's recipe graph.
+         * @param builder Open host-owned recipe graph. @param snapshot Immutable scene extraction lease.
+         * @param request Exact frozen recipe anchors, view and remaining global budget.
+         * @return Inserted retained workloads and draw accounting or typed failure; no physical execution is claimed.
+         * @details Requires PrepareVfxScheduling before activation. Success and expected capacity/backpressure failures
+         * allocate no scheduling storage. Retained workloads pin their prepared view slot until every reader releases it.
+         * Every failure preserves prior graph records; the appended contribution publishes atomically.
+         * Const access still requires the render owner: scheduling mutates prepared slot storage and the borrowed graph.
+         * Native ExecuteGraph rejects these payloads explicitly until physical encoding is available.
+         */
+        [[nodiscard]] VfxGraphSchedulingOutcome ScheduleVfx(RenderGraphBuilder &builder, const RenderWorldSnapshot &snapshot,
+                                                            const VfxGraphRequest &request) const;
+
+        /** @brief Prepares finite per-view order and radix storage before scene activation.
+         * @param budget Aggregate host-admitted capacity across views and frames in flight.
+         * @return Prepared storage or typed failure. Reconfiguration rejects retained old view leases and preserves old storage on failure.
+         * @pre Call on the render owner before scheduling; no frame-hot resize or automatic growth is permitted.
+         */
+        [[nodiscard]] Result<void> PrepareVfxScheduling(VfxSchedulingBudget budget);
+
         /** @brief Queries actual selected backend/device facts for pipeline cache identity outside an active frame.
          * @return Native-free compatibility facts or typed thread/lifecycle/unsupported failure. */
         [[nodiscard]] Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const;
@@ -638,6 +660,17 @@ namespace Horo::Render {
                        ConstructionKey);
 
     private:
+        /** @brief Resolves one ready, single-layer/mip/sample graph attachment in this frontend's resource namespace. */
+        [[nodiscard]] const RenderTextureDescriptor *VfxAttachment(const RenderGraphBuilder &builder, RenderGraphResourceId resource) const;
+        /** @brief Validates ready scene/workload attachment formats, identities and paired extents. */
+        [[nodiscard]] VfxGraphSchedulingOutcome ValidateVfxAttachments(const RenderGraphBuilder &builder, const VfxGraphRequest &request,
+                                                                       const VfxGraphSchedule &schedule) const;
+        /** @brief Validates exact graph-local ready floating-color/depth recipe resources before append. */
+        [[nodiscard]] VfxGraphSchedulingOutcome ValidateVfxRecipe(const RenderGraphBuilder &builder, const VfxGraphRequest &request,
+                                                                  const VfxGraphSchedule &schedule) const;
+        /** @brief Appends an already admitted contribution; caller owns atomic rollback of append-only records. */
+        [[nodiscard]] Result<void> AppendVfxSchedule(RenderGraphBuilder &builder, VfxGraphSchedule &schedule,
+                                                     const VfxGraphRequest &request) const;
         [[nodiscard]] bool IsLiveTarget(RenderTargetHandle target, FramebufferExtent extent) const noexcept;
         [[nodiscard]] Result<std::uint64_t> BackendInstance(RenderBufferHandle buffer) const;
         [[nodiscard]] Result<std::uint64_t> BackendInstance(RenderMeshHandle mesh) const;
@@ -674,6 +707,8 @@ namespace Horo::Render {
         std::unique_ptr<IRenderBackend> backend_;
         const std::thread::id preparationOwner_{std::this_thread::get_id()};
         std::unique_ptr<RenderMemoryBudget> memoryBudget_;
+        std::shared_ptr<Detail::VfxSchedulingStorage> vfxScheduling_;
+        std::thread::id vfxSchedulingOwner_{std::this_thread::get_id()};
         RenderFrontendMemoryConfig memoryConfig_;
         std::unique_ptr<Detail::RenderResourceRegistry> resourceRegistry_;
         std::unique_ptr<Detail::RenderResourceUploadQueue> resourceUploadQueue_;

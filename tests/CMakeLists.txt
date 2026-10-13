@@ -99,6 +99,7 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 horo_add_public_header_consumer_targets()
 target_sources(HoroPCGPublicHeaderConsumer PRIVATE support/PCGNodeCatalogPublicHeaderConsumer.cpp)
 target_sources(HoroShaderBuildPublicHeaderConsumer PRIVATE support/ShaderBuildPublicHeaderConsumer.cpp)
+target_sources(HoroVfxApiPublicHeaderConsumer PRIVATE support/VfxWorldPublicHeaderConsumer.cpp)
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderGraphWorkloadPublicHeaderConsumer.cpp)
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/ShaderArtifactPublicHeaderConsumer.cpp)
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderGraphInspectionPublicHeaderConsumer.cpp)
@@ -899,6 +900,16 @@ target_include_directories(HoroVfxApiTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(HoroVfxApiTests PRIVATE HORO_VFX_CPU_BASELINE_PATH="${PROJECT_SOURCE_DIR}/tests/fixtures/vfx/cpu_simulation_baseline.json")
 target_link_libraries(HoroVfxApiTests PRIVATE HoroEngine::VfxApi nlohmann_json::nlohmann_json)
 horo_register_catch_test(HoroVfxApiTests LABELS "unit;vfx;headless")
+
+add_executable(HoroVfxRenderExtractionTests
+        support/AllocationProbe.cpp
+        unit/runtime/vfx/VfxRenderExtractionTests.cpp
+        unit/runtime/vfx/VfxSchedulingTests.cpp
+)
+target_compile_features(HoroVfxRenderExtractionTests PRIVATE cxx_std_20)
+target_include_directories(HoroVfxRenderExtractionTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroVfxRenderExtractionTests PRIVATE HoroEngine::VfxApi HoroEngine::RuntimeScene HoroEngine::RenderFrontend HoroEngine::RenderNull)
+horo_register_catch_test(HoroVfxRenderExtractionTests LABELS "unit;vfx;renderer;headless")
 
 add_executable(HoroVfxCpuSimulationBenchmark EXCLUDE_FROM_ALL benchmarks/vfx/CpuSimulationBenchmark.cpp)
 target_compile_features(HoroVfxCpuSimulationBenchmark PRIVATE cxx_std_20)

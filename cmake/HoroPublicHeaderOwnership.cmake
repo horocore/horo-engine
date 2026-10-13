@@ -744,6 +744,7 @@ horo_configure_target_header_boundary(HoroVfxApi PUBLIC_HEADERS
     Horo/Vfx/VfxErrors.h
     Horo/Vfx/VfxIdentity.h
     Horo/Vfx/VfxQualityPolicy.h
+Horo/Vfx/VfxWorld.h
 )
 horo_configure_target_header_boundary(HoroDestructionApi PUBLIC_HEADERS
     Horo/Destruction/DestructibleDescriptor.h
@@ -1025,6 +1026,9 @@ horo_configure_target_header_boundary(HoroPrefabCookHost PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
+Horo/Runtime/Render/RenderWorldSnapshot.h
+Horo/Runtime/Render/VfxGraphWorkload.h
+Horo/Runtime/Render/VfxGraphScheduling.h
     Horo/Runtime/Render/LightCulling.h
     Horo/Runtime/Render/LightCullingKernel.h
     Horo/Runtime/Render/LightFrameLayout.h

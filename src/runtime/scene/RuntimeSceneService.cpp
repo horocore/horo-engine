@@ -110,7 +110,7 @@ namespace Horo::Runtime {
 
     RuntimeSceneService::RuntimeSceneService(Assets::AssetRegistry &registry, Assets::AssetLoadService &loads,
                                              const RuntimeSceneAssetLimits limits)
-        : assetRegistry_(&registry), assetLoads_(&loads), assetLimits_(limits) {}
+        : assetPreparationServices_{&registry, &loads, limits} {}
 
     RuntimeSceneService::~RuntimeSceneService() {
         Shutdown();
@@ -202,7 +202,7 @@ namespace Horo::Runtime {
                     entry.payload = reusable->payload;
             }
             if (entry.payload) {
-                if (entry.payload->size() > assetLimits_.maximumResidentBytes - prep.residentBytes) {
+                if (entry.payload->size() > assetPreparationServices_.limits.maximumResidentBytes - prep.residentBytes) {
                     return Result<void>::Failure(
                         WithAssetContext(MakeError(SceneErrors::AssetBudgetExceeded), definition.Id(), dependency.id));
                 }
@@ -214,7 +214,8 @@ namespace Horo::Runtime {
     }
 
     Result<void> RuntimeSceneService::BeginPreparation(RuntimeSceneDefinition definition, const RuntimeSceneConfig config) {
-        if (const auto validation = ValidatePreparation(definition, config, assetLimits_, nextRuntimeId_); validation.HasError())
+        if (const auto validation = ValidatePreparation(definition, config, assetPreparationServices_.limits, nextRuntimeId_);
+            validation.HasError())
             return validation;
 
         if (definition.AssetDependencies().empty()) {
@@ -223,10 +224,10 @@ namespace Horo::Runtime {
             transition_ = TransitionKind::Activate;
             return Result<void>::Success();
         }
-        if (!assetRegistry_ || !assetLoads_)
+        if (!assetPreparationServices_.registry || !assetPreparationServices_.loads)
             return Result<void>::Failure(MakeError(SceneErrors::AssetServicesUnavailable));
 
-        Assets::AssetRegistrySnapshot snapshot = assetRegistry_->Snapshot();
+        Assets::AssetRegistrySnapshot snapshot = assetPreparationServices_.registry->Snapshot();
         if (const auto checked = CheckDependenciesExist(definition, snapshot); checked.HasError())
             return checked;
 
@@ -257,7 +258,7 @@ namespace Horo::Runtime {
         if (aggregateRestore_)
             aggregateRestore_->Rollback();
         aggregateRestore_.reset();
-        ShutdownCandidates(pending_.candidates);
+        ScenePublicationDetail::ShutdownCandidates(pending_.candidates);
         pending_.scene.reset();
         RetirePublicationReceipt(ScenePublicationStatus::Cancelled);
         publicationCheck_.reset();
@@ -277,7 +278,8 @@ namespace Horo::Runtime {
         if (mutatingLifecycle_ || transition_ != TransitionKind::None || structuralCommands_ || preparation_)
             return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
         const LifecycleMutation mutation{*this};
-        const auto revision = assetRegistry_ ? assetRegistry_->Snapshot().Revision() : Assets::AssetRegistryRevision{};
+        const auto revision = assetPreparationServices_.registry ? assetPreparationServices_.registry->Snapshot().Revision()
+                                                                 : Assets::AssetRegistryRevision{};
         if (auto admission = commands.ValidateAdmission(active_.scene->View().RuntimeId(), revision); admission.HasError())
             return admission;
         if (!commands.Empty())
@@ -361,7 +363,11 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc RuntimeSceneService::OnPhase */
-    Result<void> RuntimeSceneService::OnPhase(const RuntimePhase phase, const FrameContext &) {
+    Result<void> RuntimeSceneService::OnPhase(const RuntimePhase phase, const FrameContext &context) {
+        if (phase == RuntimePhase::RenderExtraction) {
+            vfxFrame_ = {};
+            vfxFrame_ = active_.scene ? active_.scene->CaptureVfx(context.frameNumber) : Vfx::VfxExtractionOutcome{};
+        }
         if (phase == RuntimePhase::CommitDeferredLifecycleChanges) {
             if (mutatingLifecycle_)
                 return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
@@ -403,12 +409,13 @@ namespace Horo::Runtime {
         structuralCommands_.reset();
         structuralResult_.reset();
         operationError_.reset();
-        ShutdownCandidates(pending_.candidates);
+        ScenePublicationDetail::ShutdownCandidates(pending_.candidates);
         pending_.scene.reset();
         RetirePublicationReceipt(ScenePublicationStatus::Cancelled);
         publicationCheck_.reset();
-        ShutdownCandidates(active_.candidates);
+        ScenePublicationDetail::ShutdownCandidates(active_.candidates);
         active_.restore.reset();
+        vfxFrame_ = {};
         active_.scene.reset();
         transition_ = TransitionKind::None;
         started_ = false;
@@ -416,14 +423,15 @@ namespace Horo::Runtime {
     }
 
     Result<void> RuntimeSceneService::SubmitPreparationLoads() {
-        if (!preparation_ || !assetLoads_)
+        if (!preparation_ || !assetPreparationServices_.loads)
             return Result<void>::Success();
         for (Preparation::Entry &entry : preparation_->entries) {
-            if (preparation_->activeLoads >= assetLimits_.maximumConcurrentLoads)
+            if (preparation_->activeLoads >= assetPreparationServices_.limits.maximumConcurrentLoads)
                 break;
             if (entry.payload || entry.load)
                 continue;
-            Result<Assets::AssetLoadHandle> submitted = assetLoads_->LoadAsync(preparation_->snapshot, entry.dependency.id);
+            Result<Assets::AssetLoadHandle> submitted =
+                assetPreparationServices_.loads->LoadAsync(preparation_->snapshot, entry.dependency.id);
             if (submitted.HasError())
                 return Result<void>::Failure(WithAssetContext(submitted.ErrorValue(), preparation_->definition.Id(), entry.dependency.id));
             entry.load = std::move(submitted).Value();
@@ -449,7 +457,7 @@ namespace Horo::Runtime {
             if (result.bytes.empty())
                 return Result<void>::Failure(
                     WithAssetContext(MakeError(SceneErrors::AssetPayloadEmpty), preparation_->definition.Id(), entry.dependency.id));
-            if (result.bytes.size() > assetLimits_.maximumResidentBytes - preparation_->residentBytes)
+            if (result.bytes.size() > assetPreparationServices_.limits.maximumResidentBytes - preparation_->residentBytes)
                 return Result<void>::Failure(
                     WithAssetContext(MakeError(SceneErrors::AssetBudgetExceeded), preparation_->definition.Id(), entry.dependency.id));
             preparation_->residentBytes += result.bytes.size();
@@ -459,7 +467,8 @@ namespace Horo::Runtime {
     }
 
     Result<void> RuntimeSceneService::FinalizePreparation() {
-        if (!assetRegistry_ || assetRegistry_->Snapshot().Revision() != preparation_->snapshot.Revision()) {
+        if (!assetPreparationServices_.registry ||
+            assetPreparationServices_.registry->Snapshot().Revision() != preparation_->snapshot.Revision()) {
             Error error = MakeError(SceneErrors::AssetRevisionStale);
             error.diagnostics.emplace_back(DiagnosticCode{"scene.asset.registry_revision"}, DiagnosticSeverity::Note,
                                            "The authoritative registry revision changed before activation.", SourceLocation{});
@@ -539,18 +548,21 @@ namespace Horo::Runtime {
 
     Result<void> RuntimeSceneService::PrepareParticipants(const RuntimeSceneDefinition &definition) {
         using enum SceneCanonicalDatasetProjection;
-        ShutdownCandidates(pending_.candidates);
+        ScenePublicationDetail::ShutdownCandidates(pending_.candidates);
         pending_.datasets = Absent;
         try {
             pending_.candidates.reserve(participants_.size());
+            for (const auto &participant : participants_)
+                if (auto owned = participant->PrepareOwnedScene(*pending_.scene); owned.HasError())
+                    return owned;
             for (const auto &participant : participants_) {
                 auto prepared = participant->Prepare(definition, pending_.scene->View());
                 if (prepared.HasError()) {
-                    ShutdownCandidates(pending_.candidates);
+                    ScenePublicationDetail::ShutdownCandidates(pending_.candidates);
                     return Result<void>::Failure(prepared.ErrorValue());
                 }
                 if (!prepared.Value()) {
-                    ShutdownCandidates(pending_.candidates);
+                    ScenePublicationDetail::ShutdownCandidates(pending_.candidates);
                     return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Participant returned a null candidate."));
                 }
                 if (const auto datasets = prepared.Value()->CanonicalDatasetProjection(); datasets == PersistentWorld)
@@ -560,17 +572,11 @@ namespace Horo::Runtime {
                 pending_.candidates.push_back(std::move(prepared).Value());
             }
         } catch (const std::bad_alloc &) {
-            ShutdownCandidates(pending_.candidates);
+            ScenePublicationDetail::ShutdownCandidates(pending_.candidates);
             return Result<void>::Failure(
                 MakeError(SceneErrors::InvalidCandidate, "Unable to retain the complete scene activation candidate set."));
         }
         return Result<void>::Success();
-    }
-
-    void RuntimeSceneService::ShutdownCandidates(std::vector<std::unique_ptr<SceneActivationCandidate>> &candidates) noexcept {
-        for (auto candidate = candidates.rbegin(); candidate != candidates.rend(); ++candidate)
-            (*candidate)->Shutdown();
-        candidates.clear();
     }
 
 }  // namespace Horo::Runtime

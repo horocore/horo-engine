@@ -57,7 +57,10 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroCliCommandRegistryTests", "HoroPlatformTests", "HoroUpdateZipPackageProducerTests",
     "HoroCliOutputPublicHeaderConsumer", "HoroCliProductionOutputContract",
     "HoroCliMcpServeTests",
-    "HoroVfxApiTests", "HoroCinematicModelTests", "HoroCinematicRuntimeTests",
+    "HoroVfxApiTests", "HoroVfxRenderExtractionTests",
+    "HoroVfxApiPublicHeaderConsumer", "HoroRenderApiPublicHeaderConsumer",
+    "HoroRenderFrontendPublicHeaderConsumer", "HoroRuntimeScenePublicHeaderConsumer",
+    "HoroCinematicModelTests", "HoroCinematicRuntimeTests",
     "HoroFractureDocumentTests", "HoroFractureDocumentPublicHeaderConsumer",
     "HoroCinematicPropertyIntegrationTests", "HoroCinematicModelPublicHeaderConsumer",
     "HoroCinematicRuntimePublicHeaderConsumer", "HoroEditorServicesPublicHeaderConsumer",
@@ -540,3 +543,18 @@ def test_terrain_render_qualification_has_build_discovery_and_compile_consumer_c
     assert direct_tests is not None
     assert consumer not in direct_tests.group(1).split()
     assert 'if(target IN_LIST HORO_CI_WINDOWS_TARGETS)\n        list(APPEND ARG_LABELS ci-windows)' in SUITES
+
+
+def test_vfx_extraction_has_execution_and_owned_compile_consumer_closure() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    closure = targets("HORO_CI_WINDOWS_TARGETS")
+    assert "HoroVfxRenderExtractionTests" in closure
+    assert 'horo_register_catch_test(HoroVfxRenderExtractionTests LABELS "unit;vfx;renderer;headless")' in tests_cmake
+    assert "unit/runtime/vfx/VfxRenderExtractionTests.cpp" in tests_cmake
+    for consumer in ("HoroVfxApiPublicHeaderConsumer", "HoroRenderApiPublicHeaderConsumer",
+                     "HoroRenderFrontendPublicHeaderConsumer", "HoroRuntimeScenePublicHeaderConsumer"):
+        assert consumer in closure
+    boundaries = (ROOT / "cmake/HoroTargetBoundaries.cmake").read_text(encoding="utf-8")
+    assert 'add_library("${consumer_target}" OBJECT ${generated_sources})' in boundaries
+    assert "support/VfxWorldPublicHeaderConsumer.cpp" in tests_cmake
+    assert "support/RenderGraphWorkloadPublicHeaderConsumer.cpp" in tests_cmake
