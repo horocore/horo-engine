@@ -28,19 +28,17 @@ namespace Horo::Navigation {
          */
         bool ValidOutcome(const NavigationAvoidanceOutcome &outcome, const NavigationAvoidanceRequest &request,
                           const Math::Vec3 capturedVelocity) noexcept {
+            using enum NavigationAvoidanceDisposition;
+            using enum NavigationAvoidanceStopReason;
             if (!Math::IsFinite(outcome.desiredVelocity) || outcome.desiredVelocity.y != 0 ||
                 ComputeMotionMagnitude(outcome.desiredVelocity) > static_cast<double>(request.maximumSpeedMetersPerSecond) + 0.00001 ||
-                (outcome.disposition != NavigationAvoidanceDisposition::Sampled &&
-                 outcome.disposition != NavigationAvoidanceDisposition::CollisionSafeStop) ||
-                outcome.stopReason > NavigationAvoidanceStopReason::NoFeasibleSample ||
-                (outcome.disposition == NavigationAvoidanceDisposition::Sampled &&
-                 outcome.stopReason != NavigationAvoidanceStopReason::None) ||
-                (outcome.disposition == NavigationAvoidanceDisposition::CollisionSafeStop &&
-                 (outcome.desiredVelocity != Math::Vec3{} || outcome.stopReason == NavigationAvoidanceStopReason::None)))
+                (outcome.disposition != Sampled && outcome.disposition != CollisionSafeStop) || outcome.stopReason > NoFeasibleSample ||
+                (outcome.disposition == Sampled && outcome.stopReason != None) ||
+                (outcome.disposition == CollisionSafeStop && (outcome.desiredVelocity != Math::Vec3{} || outcome.stopReason == None)))
                 return false;
-            const auto planarDelta = std::hypot(static_cast<double>(outcome.desiredVelocity.x) - capturedVelocity.x,
-                                                static_cast<double>(outcome.desiredVelocity.z) - capturedVelocity.z);
-            if (outcome.disposition == NavigationAvoidanceDisposition::Sampled &&
+            if (const auto planarDelta = std::hypot(static_cast<double>(outcome.desiredVelocity.x) - capturedVelocity.x,
+                                                    static_cast<double>(outcome.desiredVelocity.z) - capturedVelocity.z);
+                outcome.disposition == Sampled &&
                 planarDelta > static_cast<double>(request.maximumAccelerationMetersPerSecondSquared) * request.stepSeconds + 0.00001)
                 return false;
             return true;
@@ -60,15 +58,15 @@ namespace Horo::Navigation {
             policy.minimumProgressMeters < 0)
             return Return::Failure(MakeError(NavigationErrors::AgentDescriptorInvalid));
         try {
-            return Return::Success(std::unique_ptr<NavigationVelocityPipeline>(
-                new NavigationVelocityPipeline(movement, binding, agent, characterRevision, policy)));
+            return Return::Success(
+                std::make_unique<NavigationVelocityPipeline>(ConstructionKey{}, movement, binding, agent, characterRevision, policy));
         } catch (const std::bad_alloc &) {
             return Return::Failure(MakeError(NavigationErrors::CapacityExceeded));
         }
     }
 
     /** @copydoc NavigationVelocityPipeline::NavigationVelocityPipeline */
-    NavigationVelocityPipeline::NavigationVelocityPipeline(NavigationMovementController &movement,
+    NavigationVelocityPipeline::NavigationVelocityPipeline(ConstructionKey &&, NavigationMovementController &movement,
                                                            const NavigationAgentSceneBinding binding, const CrowdAgentHandle agent,
                                                            const std::uint64_t revision, const NavigationVelocityPolicy policy) noexcept
         : movement_(&movement), binding_(binding), agent_(agent), characterRevision_(revision), policy_(policy),
@@ -104,7 +102,7 @@ namespace Horo::Navigation {
                                  publication_->preferredVelocity != Math::Vec3{};
             nextBlocked = stalled ? std::min(blockedTicks_ + 1, policy_.blockedTicksBeforeRepath) : 0;
             repath = nextBlocked >= policy_.blockedTicksBeforeRepath &&
-                     (!lastRepathTick_ || current.path.tick - *lastRepathTick_ >= policy_.repathCooldownTicks);
+                     (!lastRepathTick_.has_value() || current.path.tick - *lastRepathTick_ >= policy_.repathCooldownTicks);
             observation.feedback = NavigationMovementFeedback{feedback_->operation,
                                                               feedback_->path,
                                                               feedback_->tick,
@@ -128,7 +126,7 @@ namespace Horo::Navigation {
         if (pending_)
             return Return::Failure(MakeError(NavigationErrors::AdmissionRejected));
         if (!snapshot.IsValid() || snapshot.Binding() != binding_ || current.binding != binding_ ||
-            snapshot.CaptureTick() != current.path.tick || (lastTick_ && current.path.tick <= *lastTick_) ||
+            snapshot.CaptureTick() != current.path.tick || (lastTick_.has_value() && current.path.tick <= *lastTick_) ||
             request.agentIndex >= snapshot.Agents().size() || snapshot.Agents()[request.agentIndex].handle != agent_)
             return Return::Failure(MakeError(NavigationErrors::StaleSnapshot));
         if (current.feedback || !ValidEnvelope(request, current.stepSeconds))
@@ -150,8 +148,7 @@ namespace Horo::Navigation {
         if (preferred.Value().desiredVelocity.y != 0)
             return Return::Failure(MakeError(NavigationErrors::OperationUnsupported));
         request.preferredVelocity = preferred.Value().desiredVelocity;
-        const auto speed = ComputeMotionMagnitude(request.preferredVelocity);
-        if (speed > request.maximumSpeedMetersPerSecond)
+        if (const auto speed = ComputeMotionMagnitude(request.preferredVelocity); speed > request.maximumSpeedMetersPerSecond)
             request.preferredVelocity = request.preferredVelocity * static_cast<float>(request.maximumSpeedMetersPerSecond / speed);
         pending_ =
             NavigationVelocityWork{++sequence_, preferred.Value(), request, binding_, snapshot.DynamicRevision(), characterRevision_};

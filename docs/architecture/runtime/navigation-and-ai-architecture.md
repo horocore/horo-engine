@@ -2599,6 +2599,17 @@ orchestration above the provider. Traffic/road lane graphs are a separate future
 navigation domain, not a crowd flag. Products needing only grounded paths do not
 link or allocate DetourCrowd.
 
+Factory admission remains the only external construction path. The exact final
+pipeline type uses `std::make_unique` with a private nested, nonaggregate
+construction key whose default constructor is private and copying is deleted.
+The key is neither issued nor stored; the keyed constructor borrows it only
+during factory construction. Existing `Create` callers do not change. Public
+consumer assertions reject the previous unchecked argument list, inaccessible
+key naming and anonymous `{}` construction, without a derived enabler, custom
+deleter or additional allocation. Explicit optional `has_value()` checks retain
+presence semantics, including an engaged tick zero; this is clarity, not a
+claimed correction to the contained zero value's previous behavior.
+
 ## Asynchronous AI Tasks And Job System Integration
 
 Asynchronous AI workloads—such as NavMesh pathfinding, best-effort crowd batches,

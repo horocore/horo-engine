@@ -82,7 +82,7 @@ namespace Horo::Navigation {
                         .path = {.provenance = Source(), .linkRevision = 1, .goalRevision = 1, .tick = tick}};
             }
 
-            NavigationCrowdSnapshot Capture(const std::uint64_t tick, const Math::Vec3 velocity = {}) {
+            NavigationCrowdSnapshot Capture(const std::uint64_t tick, const Math::Vec3 velocity = {}) const {
                 const std::array motions{NavigationCrowdMotionSample{.handle = agent, .position = position, .velocity = velocity}};
                 const std::array profiles{NavigationCrowdProfileFacts{.profile = NavigationAgentProfileId::Create(1).Value()}};
                 auto snapshot =
@@ -142,6 +142,28 @@ namespace Horo::Navigation {
             }
         };
     }  // namespace
+
+    TEST_CASE("Movement tick zero remains current and velocity rejects repeated admitted publication ticks",
+              "[unit][navigation][velocity]") {
+        VelocityFixture fixture;
+        const auto zero = fixture.movement->Update(fixture.Now(0));
+        REQUIRE(zero.HasValue());
+        CHECK(zero.Value().tick == 0);
+        CHECK(fixture.movement->IsCurrentIntent(zero.Value()));
+        fixture.CommitRoute(1);
+        const auto snapshot = fixture.Capture(1);
+        const auto first = fixture.Publish(snapshot);
+        CHECK(first.intent.tick == 1);
+        CHECK(fixture.movement->IsCurrentIntent(first.intent));
+        const auto repeated = fixture.pipeline->Prepare(fixture.Now(1), snapshot, {.stepSeconds = 0.1F});
+        REQUIRE(repeated.HasError());
+        CHECK(repeated.ErrorValue().code.Value() == NavigationErrors::StaleSnapshot.code.Value());
+        fixture.Feedback(first, false);
+        const auto next = fixture.Publish(fixture.Capture(2));
+        CHECK(next.intent.tick == 2);
+        CHECK(next.intent.state == NavigationMovementState::Following);
+        CHECK(next.intent.desiredVelocity.x == Catch::Approx(1));
+    }
 
     TEST_CASE("Velocity pipeline routes preferred motion through solver publication and exact Character feedback",
               "[unit][navigation][velocity]") {
@@ -309,7 +331,7 @@ namespace Horo::Navigation {
         const auto work = fixture.Prepare(snapshot);
         const auto outcome = fixture.solver.Solve(snapshot, work.request).Value();
         bool rejected = false;
-        std::thread other([&] {
+        std::jthread other([&fixture, &work, &outcome, &snapshot, &rejected] {
             rejected = fixture.pipeline->Commit(work, outcome, snapshot, fixture.Now(snapshot.CaptureTick())).HasError();
         });
         other.join();
@@ -354,7 +376,12 @@ namespace Horo::Navigation {
         auto outcome = fixture.solver.Solve(snapshot, prepared.Value().request).Value();
         CHECK(fixture.pipeline->Commit(prepared.Value(), outcome, snapshot, fixture.Now(1)).HasError());
         outcome.desiredVelocity = {};
+        outcome.disposition = static_cast<NavigationAvoidanceDisposition>(255);
+        CHECK(fixture.pipeline->Commit(prepared.Value(), outcome, snapshot, fixture.Now(1)).HasError());
         outcome.disposition = NavigationAvoidanceDisposition::CollisionSafeStop;
+        outcome.stopReason = static_cast<NavigationAvoidanceStopReason>(255);
+        CHECK(fixture.pipeline->Commit(prepared.Value(), outcome, snapshot, fixture.Now(1)).HasError());
+        outcome.stopReason = NavigationAvoidanceStopReason::None;
         CHECK(fixture.pipeline->Commit(prepared.Value(), outcome, snapshot, fixture.Now(1)).HasError());
         outcome.stopReason = NavigationAvoidanceStopReason::NoFeasibleSample;
         const auto stopped = fixture.pipeline->Commit(prepared.Value(), outcome, snapshot, fixture.Now(1));
@@ -402,9 +429,13 @@ namespace Horo::Navigation {
         CHECK(NavigationVelocityPipeline::Create(*fixture.movement, fixture.binding, fixture.agent, 1, {.blockedTicksBeforeRepath = 0})
                   .HasError());
         fixture.PublishRoute();
-        const auto snapshot = fixture.Capture(1);
-        CHECK(fixture.pipeline->Prepare(fixture.Now(1), snapshot, {.agentIndex = 1, .stepSeconds = 0.1F}).HasError());
-        CHECK(fixture.pipeline->Prepare(fixture.Now(1), snapshot, {.stepSeconds = 0}).HasError());
+        // First corridor adoption consumes the prepared query result. Measure the
+        // subsequent steady owner loop, not query completion/admission storage.
+        const auto initial = fixture.Publish(fixture.Capture(1));
+        fixture.Feedback(initial, false, {0.1F, 0, 0});
+        const auto snapshot = fixture.Capture(2, {1, 0, 0});
+        CHECK(fixture.pipeline->Prepare(fixture.Now(2), snapshot, {.agentIndex = 1, .stepSeconds = 0.1F}).HasError());
+        CHECK(fixture.pipeline->Prepare(fixture.Now(2), snapshot, {.stepSeconds = 0}).HasError());
         std::optional<Result<NavigationVelocityWork>> prepared;
         std::optional<Result<NavigationVelocityPublication>> published;
         std::optional<Result<void>> feedback;
@@ -412,14 +443,14 @@ namespace Horo::Navigation {
         {
             Tests::AllocationProbe::ScopedMeasurement window;
             prepared =
-                fixture.pipeline->Prepare(fixture.Now(1), snapshot, {.maximumAccelerationMetersPerSecondSquared = 20, .stepSeconds = 0.1F});
+                fixture.pipeline->Prepare(fixture.Now(2), snapshot, {.maximumAccelerationMetersPerSecondSquared = 20, .stepSeconds = 0.1F});
             if (prepared->HasValue()) {
                 const auto sampled = fixture.solver.Solve(snapshot, prepared->Value().request);
                 if (sampled.HasValue()) {
-                    published = fixture.pipeline->Commit(prepared->Value(), sampled.Value(), snapshot, fixture.Now(1));
+                    published = fixture.pipeline->Commit(prepared->Value(), sampled.Value(), snapshot, fixture.Now(2));
                     if (published->HasValue())
                         feedback = fixture.pipeline->ObserveFeedback(
-                            {published->Value().intent.operation, published->Value().intent.path, 1, 1, {0.1F, 0, 0}, false});
+                            {published->Value().intent.operation, published->Value().intent.path, 2, 1, {0.1F, 0, 0}, false});
                 }
             }
             measured = window.Snapshot();

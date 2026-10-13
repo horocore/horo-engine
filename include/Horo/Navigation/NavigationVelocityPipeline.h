@@ -56,7 +56,25 @@ namespace Horo::Navigation {
      * Errors authorize no motion. The host must submit zero when a publication is absent or rejected.
      */
     class NavigationVelocityPipeline final {
+        /** @brief Nonaggregate factory-only admission authority, never issued or retained. */
+        class ConstructionKey final {
+            friend class NavigationVelocityPipeline;
+            ConstructionKey() noexcept = default;
+
+        public:
+            ConstructionKey(const ConstructionKey &) = delete;
+            ConstructionKey &operator=(const ConstructionKey &) = delete;
+        };
+
     public:
+        /** @brief Construct only with the private factory's validated admission authority; callers use Create.
+         * @param key Inaccessible factory key borrowed only during exact-type construction.
+         * @param movement Borrowed movement owner that outlives this pipeline.
+         * @param binding Validated Scene/world binding. @param agent Exact registered agent generation.
+         * @param revision Nonzero Character incarnation/reset revision. @param policy Validated bounded feedback policy.
+         */
+        NavigationVelocityPipeline(ConstructionKey &&key, NavigationMovementController &movement, NavigationAgentSceneBinding binding,
+                                   CrowdAgentHandle agent, std::uint64_t revision, NavigationVelocityPolicy policy) noexcept;
         /** @brief Validate bounded policy and initial authority outside fixed-tick work.
          * @param movement Borrowed prepared movement owner.
          * @param binding Exact Scene/world incarnation.
@@ -116,10 +134,6 @@ namespace Horo::Navigation {
         void Retire() noexcept;
 
     private:
-        /** @brief Construct only from validated admission values. */
-        NavigationVelocityPipeline(NavigationMovementController &movement, NavigationAgentSceneBinding binding, CrowdAgentHandle agent,
-                                   std::uint64_t revision, NavigationVelocityPolicy policy) noexcept;
-
         /** @brief Feedback projection staged until real movement advancement succeeds. */
         struct PreparedFeedback {
             NavigationMovementObservation observation;

@@ -27,6 +27,21 @@ static_assert(!std::is_constructible_v<Horo::Navigation::NavigationMovementContr
                                        Horo::Navigation::NavigationPathCaller>);
 static_assert(std::is_final_v<Horo::Navigation::NavigationMovementController>);
 
+template <typename T>
+concept PublicVelocityConstructionKey = requires { typename T::ConstructionKey; };
+template <typename T>
+concept DirectVelocityConstruction =
+    requires(Horo::Navigation::NavigationMovementController &movement, Horo::Navigation::NavigationAgentSceneBinding binding,
+             Horo::Navigation::CrowdAgentHandle agent,
+             Horo::Navigation::NavigationVelocityPolicy policy) { T{{}, movement, binding, agent, std::uint64_t{1}, policy}; };
+static_assert(!PublicVelocityConstructionKey<Horo::Navigation::NavigationVelocityPipeline>);
+static_assert(!DirectVelocityConstruction<Horo::Navigation::NavigationVelocityPipeline>);
+static_assert(std::is_final_v<Horo::Navigation::NavigationVelocityPipeline>);
+static_assert(!std::is_default_constructible_v<Horo::Navigation::NavigationVelocityPipeline>);
+static_assert(!std::is_constructible_v<Horo::Navigation::NavigationVelocityPipeline, Horo::Navigation::NavigationMovementController &,
+                                       Horo::Navigation::NavigationAgentSceneBinding, Horo::Navigation::CrowdAgentHandle, std::uint64_t,
+                                       Horo::Navigation::NavigationVelocityPolicy>);
+
 int main() {
     Horo::JobSystem jobs{{.workerCount = 0}};
     auto coordinator = Horo::Navigation::NavigationCoordinator::Create(jobs, {});
