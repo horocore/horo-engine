@@ -36,8 +36,11 @@ namespace Horo::Animation::GraphSourceDetail {
 
     /** @brief Stable textual transport vocabulary, independent of C++ enum representation. */
     inline constexpr std::array<std::string_view, 5> Types{"pose", "float", "boolean", "integer", "trigger"};
-    inline constexpr std::array<std::string_view, 6> Roles{"value", "firstPose", "secondPose", "weight", "interface", "result"};
+    inline constexpr std::array<std::string_view, 7> Roles{"value",     "firstPose", "secondPose",   "weight",
+                                                           "interface", "result",    "referencePose"};
     inline constexpr std::array<std::string_view, 6> Kinds{"clip", "blend", "parameter", "output", "input", "call"};
+    inline constexpr std::array<std::string_view, 3> BlendModes{"normalized", "additiveLocal", "additiveParent"};
+    inline constexpr std::array<std::string_view, 2> MissingJoints{"skeletonReference", "preserveBase"};
 
     /** @brief Produces the exact canonical typed dependency projection used by the host sink. */
     inline Json Dependencies(const AnimationGraphData &data) {

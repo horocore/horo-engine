@@ -13,9 +13,10 @@ TEST_CASE("Graph source round trips all scalar defaults and canonical identities
     auto data = Blended();
     data.entry = Id<GraphDefinitionId>(std::numeric_limits<std::uint64_t>::max());
     data.definitions.front().id = data.entry;
-    data.parameters.push_back({Id<GraphParameterId>(2), "enabled", GraphValueType::Boolean, true});
-    data.parameters.push_back({Id<GraphParameterId>(3), "mode", GraphValueType::Integer, std::numeric_limits<std::int32_t>::min()});
-    data.parameters.push_back({Id<GraphParameterId>(4), "fire", GraphValueType::Trigger, false});
+    data.parameters.emplace_back(GraphParameter{Id<GraphParameterId>(2), "enabled", GraphValueType::Boolean, true});
+    data.parameters.emplace_back(
+        GraphParameter{Id<GraphParameterId>(3), "mode", GraphValueType::Integer, std::numeric_limits<std::int32_t>::min()});
+    data.parameters.emplace_back(GraphParameter{Id<GraphParameterId>(4), "fire", GraphValueType::Trigger, false});
     const auto encoded = SerializeAnimationGraphSource(data);
     REQUIRE(encoded.HasValue());
     CHECK(encoded.Value().back() == '\n');
@@ -29,11 +30,11 @@ TEST_CASE("Graph source round trips all scalar defaults and canonical identities
     const auto repeated = SerializeAnimationGraphSource(decoded.Value());
     REQUIRE(repeated.HasValue());
     CHECK(encoded.Value() == repeated.Value());
-    std::reverse(data.parameters.begin(), data.parameters.end());
-    std::reverse(data.definitions.front().nodes.begin(), data.definitions.front().nodes.end());
-    std::reverse(data.definitions.front().connections.begin(), data.definitions.front().connections.end());
+    std::ranges::reverse(data.parameters);
+    std::ranges::reverse(data.definitions.front().nodes);
+    std::ranges::reverse(data.definitions.front().connections);
     for (auto &node : data.definitions.front().nodes)
-        std::reverse(node.pins.begin(), node.pins.end());
+        std::ranges::reverse(node.pins);
     const auto shuffled = SerializeAnimationGraphSource(data);
     REQUIRE(shuffled.HasValue());
     CHECK(shuffled.Value() == encoded.Value());
@@ -49,8 +50,8 @@ TEST_CASE("Graph canonical source normalizes signed zero and object field order"
     REQUIRE(positive.HasValue());
     CHECK(negative.Value() == positive.Value());
     auto source = nlohmann::ordered_json::parse(positive.Value());
-    source["contractVersion"] = {{"patch", 0}, {"minor", 0}, {"major", 1}};
-    std::reverse(source["dependencies"].begin(), source["dependencies"].end());
+    source["contractVersion"] = {{"patch", 0}, {"minor", 1}, {"major", 1}};
+    std::ranges::reverse(source["dependencies"]);
     for (auto &dependency : source["dependencies"]) {
         auto reordered = nlohmann::ordered_json::object();
         reordered["assetId"] = dependency["assetId"];
@@ -76,7 +77,7 @@ TEST_CASE("Graph source rejects duplicate keys invalid encoding and trailing doc
         raw = encoded.Value();
         const auto at = raw.find("\"entry\":1");
         REQUIRE(at != std::string::npos);
-        raw.replace(at, 9, "\"entry\":1,\"entry\":1");
+        raw.replace(at, 9, R"("entry":1,"entry":1)");
     }
     SECTION("embedded NUL before trailing data") {
         raw = encoded.Value() + std::string(1, '\0') + "{}";
@@ -202,6 +203,9 @@ TEST_CASE("Graph source version migration is explicit canonical and transactiona
     REQUIRE(current.HasValue());
     auto legacy = nlohmann::ordered_json::parse(current.Value());
     legacy["schemaVersion"] = 1;
+    legacy["contractVersion"]["minor"] = 0;
+    for (auto &node : legacy["payload"]["definitions"][0]["nodes"])
+        node.erase("settings");
     for (auto &edge : legacy["payload"]["definitions"][0]["connections"])
         edge.erase("type");
     CHECK(DeserializeAnimationGraphSource(legacy.dump(), data.id).HasError());

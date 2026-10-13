@@ -11,6 +11,16 @@ namespace Horo::Animation::GraphCompileDetail {
     Error Failure(const ErrorCodeDescriptor &code, GraphSourceLocation location = {});
     /** @brief Checks captured admission/cancellation at bounded compiler checkpoints. */
     Result<void> Admission(const AnimationGraphCompileContext &context);
+    /** @brief Validates exact typed node settings and semantic pin shape. */
+    Result<void> ValidatePins(const GraphNode &node, const GraphDefinition &definition, const AnimationGraphData &data);
+
+    /** @brief Rejects reserved and duplicated identities in canonical collections. */
+    template <typename Collection> bool UniqueIds(const Collection &values) {
+        for (std::size_t index = 0; index < values.size(); ++index)
+            if (!values[index].id.IsValid() || (index != 0 && values[index - 1].id == values[index].id))
+                return false;
+        return true;
+    }
 
     /** @brief Finds a stable id in a canonical collection. */
     template <typename Collection, typename Id> const typename Collection::value_type *Find(const Collection &values, Id id) {

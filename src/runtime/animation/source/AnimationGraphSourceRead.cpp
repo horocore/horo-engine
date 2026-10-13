@@ -66,7 +66,57 @@ namespace Horo::Animation {
             std::size_t connections{};
             std::size_t interfaces{};
             std::size_t parameters{};
+            std::size_t maskEntries{};
         };
+
+        /** @brief Decodes a finite binary32 mask weight before compiler range validation. */
+        float MaskWeight(const Json &value) {
+            if (!value.is_number())
+                Reject(AnimationErrors::GraphMalformed);
+            const auto number = value.get<double>();
+            if (!std::isfinite(number) || number < 0.0 || number > 1.0)
+                Reject(AnimationErrors::GraphMalformed);
+            return static_cast<float>(number);
+        }
+
+        /** @brief Decodes the explicit additive reference identity independently of runtime generation. */
+        void ReadSettings(GraphClipNode &clip, const Json &settings, Budget &, const AnimationGraphCompileContext &) {
+            Keys(settings, {"referencePose"});
+            if (!settings["referencePose"].is_null())
+                clip.referencePose = Id<AnimationReferencePoseId>(settings["referencePose"]);
+        }
+
+        /** @brief Decodes typed layer settings under aggregate sparse-mask storage bounds. */
+        void ReadSettings(GraphBlendNode &blend, const Json &settings, Budget &budget, const AnimationGraphCompileContext &context) {
+            Keys(settings, {"mode", "missingJoint", "mask"});
+            blend.mode = EnumValue<GraphBlendMode>(settings["mode"], BlendModes);
+            blend.missingJoint = EnumValue<GraphMissingJointPolicy>(settings["missingJoint"], MissingJoints);
+            const auto &mask = settings["mask"];
+            Keys(mask, {"defaultWeight", "joints"});
+            blend.mask.defaultWeight = MaskWeight(mask["defaultWeight"]);
+            const auto count =
+                Spend(mask["joints"], budget.maskEntries, context.limits.poseTransforms, AnimationGraphHardLimits::PoseTransforms);
+            if (count > SkeletonAssetHardLimits::Joints)
+                Reject(AnimationErrors::GraphLimitExceeded);
+            blend.mask.joints.reserve(count);
+            for (const auto &entry : mask["joints"]) {
+                CheckAdmission(context);
+                Keys(entry, {"joint", "weight"});
+                blend.mask.joints.push_back({Id<JointId>(entry["joint"]), MaskWeight(entry["weight"])});
+            }
+        }
+
+        /** @brief Rejects settings on opcodes that declare no policy fields. */
+        template <typename Node> void ReadSettings(Node &, const Json &settings, Budget &, const AnimationGraphCompileContext &) {
+            Keys(settings, {});
+        }
+
+        /** @brief Exhaustively visits the typed payload rather than testing variant alternatives. */
+        void Settings(GraphNodePayload &payload, const Json &settings, Budget &budget, const AnimationGraphCompileContext &context) {
+            std::visit([&settings, &budget, &context](auto &value) {
+                ReadSettings(value, settings, budget, context);
+            }, payload);
+        }
 
         /** @brief Decodes a pin's exact shape; semantic validation remains the compiler's authority. */
         GraphPin Pin(const Json &value) {
@@ -100,13 +150,21 @@ namespace Horo::Animation {
         }
 
         /** @brief Decodes a bounded node and stable local pins. */
-        GraphNode Node(const Json &value, Budget &budget, const AnimationGraphCompileContext &context) {
+        GraphNode Node(const Json &value, Budget &budget, const std::uint32_t version, const AnimationGraphCompileContext &context) {
             CheckAdmission(context);
-            Keys(value, {"id", "kind", "reference", "pins"});
+            if (version < 3)
+                Keys(value, {"id", "kind", "reference", "pins"});
+            else
+                Keys(value, {"id", "kind", "reference", "pins", "settings"});
             GraphNode node{Id<GraphNodeId>(value["id"]), Payload(value["kind"], value["reference"]), {}};
+            if (version >= 3)
+                Settings(node.payload, value["settings"], budget, context);
             node.pins.reserve(Spend(value["pins"], budget.pins, context.limits.pins, AnimationGraphHardLimits::Pins));
-            for (const auto &pin : value["pins"])
+            for (const auto &pin : value["pins"]) {
                 node.pins.push_back(Pin(pin));
+                if (version < 3 && node.pins.back().role == GraphPinRole::ReferencePose)
+                    Reject(AnimationErrors::GraphVersionUnsupported);
+            }
             return node;
         }
 
@@ -139,7 +197,7 @@ namespace Horo::Animation {
             }
             definition.nodes.reserve(Spend(value["nodes"], budget.nodes, context.limits.nodes, AnimationGraphHardLimits::Nodes));
             for (const auto &node : value["nodes"])
-                definition.nodes.push_back(Node(node, budget, context));
+                definition.nodes.push_back(Node(node, budget, version, context));
             definition.connections.reserve(
                 Spend(value["connections"], budget.connections, context.limits.connections, AnimationGraphHardLimits::Connections));
             for (const auto &edge : value["connections"]) {
@@ -185,6 +243,20 @@ namespace Horo::Animation {
             return {Id<GraphParameterId>(value["id"]), value["name"].get<std::string>(), type, Default(value["default"], type)};
         }
 
+        /** @brief Admits only the legacy schemas explicitly named by the caller's migration policy. */
+        bool LegacyMigration(const std::uint32_t schema, const AnimationGraphSourceMigration migration) {
+            return (schema == 1 && migration == AnimationGraphSourceMigration::MigrateVersion1) ||
+                   ((schema == 1 || schema == 2) && migration == AnimationGraphSourceMigration::MigrateLegacySchemas);
+        }
+
+        /** @brief Requires the exact unsigned semantic version associated with the admitted schema. */
+        bool ValidContract(const Json &version, const bool legacy) {
+            return version["major"].is_number_unsigned() && version["minor"].is_number_unsigned() &&
+                   version["patch"].is_number_unsigned() && version["major"] == CurrentAnimationGraphContractVersion.major &&
+                   version["minor"] == (legacy ? 0 : CurrentAnimationGraphContractVersion.minor) &&
+                   version["patch"] == CurrentAnimationGraphContractVersion.patch;
+        }
+
         /** @brief Decodes only the current model contract and explicit source-schema migration versions. */
         std::uint32_t Version(const Json &envelope, AnimationGraphSourceMigration migration) {
             Keys(envelope, {"schemaVersion", "assetType", "contractVersion", "dependencies", "payload"});
@@ -193,13 +265,8 @@ namespace Horo::Animation {
             if (!version.is_number_unsigned() || version.get<std::uint64_t>() > std::numeric_limits<std::uint32_t>::max())
                 Reject(AnimationErrors::GraphVersionUnsupported);
             const auto schema = version.get<std::uint32_t>();
-            if ((schema != CurrentAnimationGraphSchemaVersion &&
-                 !(schema == 1 && migration == AnimationGraphSourceMigration::MigrateVersion1)) ||
-                !envelope["contractVersion"]["major"].is_number_unsigned() || !envelope["contractVersion"]["minor"].is_number_unsigned() ||
-                !envelope["contractVersion"]["patch"].is_number_unsigned() ||
-                envelope["contractVersion"]["major"] != CurrentAnimationGraphContractVersion.major ||
-                envelope["contractVersion"]["minor"] != CurrentAnimationGraphContractVersion.minor ||
-                envelope["contractVersion"]["patch"] != CurrentAnimationGraphContractVersion.patch)
+            if (const bool legacy = LegacyMigration(schema, migration);
+                (schema != CurrentAnimationGraphSchemaVersion && !legacy) || !ValidContract(envelope["contractVersion"], legacy))
                 Reject(AnimationErrors::GraphVersionUnsupported);
             if (envelope["assetType"] != "core.animation.graph")
                 Reject(AnimationErrors::GraphTypeMismatch);
@@ -264,11 +331,13 @@ namespace Horo::Animation {
             CheckAdmission(context);
             if (!identity.IsValid())
                 Reject(AnimationErrors::GraphMalformed);
-            if (migration != AnimationGraphSourceMigration::RequireCurrent && migration != AnimationGraphSourceMigration::MigrateVersion1)
+            if (migration != AnimationGraphSourceMigration::RequireCurrent && migration != AnimationGraphSourceMigration::MigrateVersion1 &&
+                migration != AnimationGraphSourceMigration::MigrateLegacySchemas)
                 Reject(AnimationErrors::GraphVersionUnsupported);
             const auto envelope = Parse(source, context, limits);
             AnimationGraphData data;
             data.schemaVersion = Version(envelope, migration);
+            data.contractVersion = data.schemaVersion < 3 ? AnimationGraphContractVersion{1, 0, 0} : CurrentAnimationGraphContractVersion;
             data.id = identity;
             const auto &payload = envelope["payload"];
             Keys(payload, {"skeleton", "entry", "parameters", "definitions"});

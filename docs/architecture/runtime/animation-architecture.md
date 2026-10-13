@@ -462,18 +462,23 @@ prepared runtime owner described below.
 
 #### Versioning And Migration
 
-Version 2 requires explicit connection transport types. The bounded version-1
-migration input uses the same typed nodes and stable identities, with every
-connection type set to `Unspecified`. `MigrateAnimationGraph` derives each edge's
-type from its source pin, then runs complete version-2 validation, including the
-destination type. It never guesses coercions or repairs missing IDs. Version 2
-migration is an idempotent validated canonical copy; any other version fails.
-`Compile` admits only version 2, making migration an explicit host boundary.
+Schema 3/semantic contract 1.1.0 adds explicit pose-layer settings while retaining
+all legacy node/pin/opcode identities and default normalized behavior. Legacy
+schema 1/2 contract 1.0.0 migrates only through `MigrateAnimationGraph` or explicit
+source decode policy. Schema 1 derives Unspecified edge types from the source pin;
+schema 2 keeps explicit types. Both gain unmasked normalized layers with skeleton
+reference completion and absolute-clip defaults. The complete current contract is
+validated before returning. Unknown versions and new semantics mislabeled as
+legacy reject. Current migration is idempotent; Compile admits only current data.
+Affected callers are graph source codec hosts and in-memory authoring producers;
+they must migrate prior bytes/data before compilation. Runtime consumers retain
+the same explicit Create/Evaluate/Commit/Abort/Replace/CopyPose lifecycle. This
+does not change project version 0.1.0 or unrelated module formats.
 The durable UTF-8 JSON codec lives in the dedicated
 `HoroEngine::AnimationGraphSourceCodec` target; its JSON dependency stays private,
 and `AnimationApi` continues to expose only Foundation/Assets usage requirements.
 The [Graph Source Contract](./animation-graph-source-contract.md) defines canonical
-field order, dependency projection, hostile-input ceilings and version-1 migration.
+field order, dependency projection, hostile-input ceilings and legacy migration.
 No pre-existing graph format is grandfathered or claimed. AST graph cook/load
 contributions remain subject to the dependency-content cache-key prerequisite;
 authoring bytes and detached compiled tables do not claim packaged cook support.
@@ -594,9 +599,38 @@ registered diagnostic at a control/presentation boundary. Clip `TraversePrepared
 and `SamplePrepared` expose the same allocation-free status path; existing
 `Traverse`/`Sample` remain diagnostic wrappers over these shared validators and
 kernels. Their success behavior, codes and operation-specific messages are retained.
-No Foundation diagnostic representation changes. Blend uses the compiler-owned
-two-pose/float opcode, clamped finite weight and quaternion slerp; additive clips
-remain unavailable without a graph-authored reference/base contract (ANI-002.5).
+No Foundation diagnostic representation changes. ANI-002.5 extends the existing
+compiler-owned Blend opcode into an ordered typed pose layer. Graph dependencies
+define layer order; neither masks nor zero weights suspend underlying clip cursors.
+Stable JointId masks compile once to dense tables, with an explicit default weight
+for omitted mask entries. Unknown/duplicate joints and invalid weights fail before
+publication. Finite layer Weight clamps to [0,1] and multiplies the mask; normalized
+base/overlay weights sum to one for each joint. Quaternion interpolation uses the
+shortest arc; translation/scale use double-intermediate convex interpolation.
+
+Authored-track coverage is separate from completed pose values. PreserveBase keeps
+the exact base for an absent overlay contribution; SkeletonReference retains the
+legacy complete-pose sampling convention. Zero effective weight preserves the
+base exactly. Coverage propagates with the actual contributing inputs through
+layers and aliases; transform equality is never used to infer a missing joint.
+
+AdditiveLocal applies `base * slerp(identity, inverse(reference) * sample, weight)`.
+AdditiveParent applies `slerp(identity, sample * inverse(reference), weight) * base`.
+Both use local translation differences and weighted reference scale ratios; they
+are distinct rotation-delta spaces, not model-space hierarchy conversion. Every
+additive Blend explicitly supplies ReferencePose; no reference is guessed. An
+additive Clip declares its stable reference identity and requires explicit base
+and reference operands, matching the exact pinned descriptor/reference generation.
+It delegates to the existing clip sampler and preserves untracked base joints.
+
+Composition writes only candidate storage. Non-finite/degenerate results fail the
+entire attempt without publishing pose or cursor changes. Prepared instance storage
+charges one coverage byte per working transform; admission charges dense sampling,
+validation/composition and coverage work before Evaluate. All frame-hot loops are
+bounded by the exact compiled skeleton and instruction limits and allocate nothing.
+Replacement prepares fresh tables and storage before retiring prior handles; failed
+reload retains the last good owner. Existing cancellation, Abort, copied queries
+and idempotent Shutdown contracts apply to every new mode.
 
 ### Graph Parameters
 

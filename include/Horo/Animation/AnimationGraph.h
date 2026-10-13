@@ -16,7 +16,7 @@
 
 namespace Horo::Animation {
     /** @brief Current authoring schema; earlier versions require explicit migration. */
-    inline constexpr std::uint32_t CurrentAnimationGraphSchemaVersion = 2;
+    inline constexpr std::uint32_t CurrentAnimationGraphSchemaVersion = 3;
 
     /** @brief Exact graph semantic contract, independent of source-envelope migration. */
     struct AnimationGraphContractVersion final {
@@ -27,7 +27,7 @@ namespace Horo::Animation {
     };
 
     /** @brief Graph semantic contract implemented by this compiler. */
-    inline constexpr AnimationGraphContractVersion CurrentAnimationGraphContractVersion{1, 0, 0};
+    inline constexpr AnimationGraphContractVersion CurrentAnimationGraphContractVersion{1, 1, 0};
 
     struct GraphDefinitionTag;
     struct GraphNodeTag;
@@ -80,6 +80,7 @@ namespace Horo::Animation {
         Weight,
         Interface,
         Result,
+        ReferencePose,
         Count
     };
 
@@ -96,11 +97,48 @@ namespace Horo::Animation {
     /** @brief Clip sampling reference; the instance owner resolves its skeleton and generation. */
     struct GraphClipNode final {
         AnimationClipId clip{};
+        std::optional<AnimationReferencePoseId> referencePose{}; /**< Additive reference identity supplied by the ReferencePose operand. */
         bool operator==(const GraphClipNode &) const = default;
     };
 
-    /** @brief Two-pose blend opcode without runtime blending policy. */
+    /** @brief Normalized interpolation or reference-relative rotation delta application space. */
+    enum class GraphBlendMode : std::uint8_t {
+        Normalized,
+        AdditiveLocal,
+        AdditiveParent,
+        Count
+    };
+    /** @brief Completion policy for joints without an authored overlay contribution. */
+    enum class GraphMissingJointPolicy : std::uint8_t {
+        SkeletonReference,
+        PreserveBase,
+        Count
+    };
+
+    /** @brief Stable skeleton-local mask entry; weights must be finite in [0,1]. */
+    struct GraphBoneWeight final {
+        JointId joint{};
+        float weight{1.0F};
+        bool operator==(const GraphBoneWeight &) const = default;
+    };
+
+    /** @brief Bounded sparse mask resolved to exact skeleton order during compilation. */
+    struct GraphBoneMask final {
+        float defaultWeight{1.0F}; /**< Applies to joints not explicitly listed. */
+        std::vector<GraphBoneWeight> joints{};
+        bool operator==(const GraphBoneMask &) const = default;
+    };
+
+    /** @brief Ordered pose layer; additive modes require an explicit ReferencePose operand.
+     * @details FirstPose is the base, SecondPose the overlay. Finite Weight is clamped
+     * to [0,1], then multiplied by the mask. Normalized weights sum to one per joint.
+     * AdditiveLocal postmultiplies a reference-relative rotation delta; AdditiveParent
+     * premultiplies it. Translation and scale remain local in both modes.
+     */
     struct GraphBlendNode final {
+        GraphBlendMode mode{GraphBlendMode::Normalized};
+        GraphBoneMask mask{};
+        GraphMissingJointPolicy missingJoint{GraphMissingJointPolicy::SkeletonReference};
         bool operator==(const GraphBlendNode &) const = default;
     };
 
@@ -163,7 +201,7 @@ namespace Horo::Animation {
         bool operator==(const GraphDefinition &) const = default;
     };
 
-    /** @brief Complete detached candidate; version 2 requires explicit connection types. */
+    /** @brief Complete detached schema-3 candidate with explicit connection types and pose-layer policies. */
     struct AnimationGraphData final {
         std::uint32_t schemaVersion{CurrentAnimationGraphSchemaVersion};
         AnimationGraphContractVersion contractVersion{CurrentAnimationGraphContractVersion};
@@ -290,6 +328,8 @@ namespace Horo::Animation {
         std::optional<std::uint32_t> clipPlayer{};
         std::optional<std::uint32_t> clipBindingIndex{};
         std::optional<std::uint32_t> parameterRead{};
+        std::vector<float> jointMask{};           /**< Complete dense blend mask, bound to exact skeleton order. */
+        std::vector<std::uint8_t> clipCoverage{}; /**< Complete dense authored-track coverage for a clip writer. */
         bool operator==(const GraphInstructionOccurrence &) const = default;
     };
 
@@ -309,6 +349,7 @@ namespace Horo::Animation {
         std::uint32_t clipPlayers{};
         std::uint32_t parameters{};
         std::uint32_t callDepth{};
+        std::uint64_t compositionEntries{}; /**< Immutable dense mask/coverage elements; bounded by poseTransforms. */
         bool operator==(const GraphMemoryRequirements &) const = default;
     };
 
@@ -316,7 +357,7 @@ namespace Horo::Animation {
     class AnimationGraphProgram final {
     public:
         /** @brief Compiles a detached candidate without publication or I/O.
-         * @param data Version-2 candidate; migrate version 1 explicitly first.
+         * @param data Current-schema candidate; migrate legacy schemas explicitly first.
          * @param context Captured limits, cancellation, optional replacement identity and exact pinned dependencies.
          * @return Complete immutable program or stable graph failure; never partial publication.
          * @pre The caller pins the supplied skeleton/clip snapshots and generation for this synchronous call.
@@ -401,10 +442,10 @@ namespace Horo::Animation {
         std::uint32_t entry_{};
     };
 
-    /** @brief Migrates version-1 untyped edges by their validated endpoint types, retaining stable IDs.
-     * @param data Detached version-1 or version-2 candidate; input is never changed.
+    /** @brief Explicitly migrates legacy graph schemas and normalized defaults, retaining all stable IDs.
+     * @param data Detached schema-1/2 contract-1.0.0 or current candidate; input is never changed.
      * @param context Captured limits, admission and replacement identity.
-     * @return Validated version-2 candidate or stable failure; unknown versions are rejected.
+     * @return Validated current candidate or stable failure; unknown version pairs and legacy new policies are rejected.
      * @throws std::bad_alloc When detached migration storage cannot be allocated.
      */
     [[nodiscard]] Result<AnimationGraphData> MigrateAnimationGraph(const AnimationGraphData &data,

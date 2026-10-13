@@ -36,6 +36,22 @@ namespace Horo::Animation {
             }, payload);
         }
 
+        /** @brief Writes exact typed settings independently of opcode identity and runtime generations. */
+        Json Settings(const GraphNodePayload &payload) {
+            if (const auto *clip = std::get_if<GraphClipNode>(&payload))
+                return {{"referencePose", clip->referencePose ? Json(clip->referencePose->Value()) : Json(nullptr)}};
+            if (const auto *blend = std::get_if<GraphBlendNode>(&payload)) {
+                Json joints = Json::array();
+                for (const auto &entry : blend->mask.joints)
+                    joints.push_back(Json{{"joint", entry.joint.Value()}, {"weight", entry.weight == 0.0F ? 0.0F : entry.weight}});
+                return {{"mode", BlendModes.at(static_cast<std::size_t>(blend->mode))},
+                        {"missingJoint", MissingJoints.at(static_cast<std::size_t>(blend->missingJoint))},
+                        {"mask", Json{{"defaultWeight", blend->mask.defaultWeight == 0.0F ? 0.0F : blend->mask.defaultWeight},
+                                      {"joints", std::move(joints)}}}};
+            }
+            return Json::object();
+        }
+
         /** @brief Writes canonical nodes without persisting variant indexes or ABI layout. */
         Json Node(const GraphNode &node) {
             Json pins = Json::array();
@@ -44,7 +60,8 @@ namespace Horo::Animation {
             return {{"id", node.id.Value()},
                     {"kind", Kinds.at(node.payload.index())},
                     {"reference", Reference(node.payload)},
-                    {"pins", std::move(pins)}};
+                    {"pins", std::move(pins)},
+                    {"settings", Settings(node.payload)}};
         }
 
         /** @brief Writes exact stable edge endpoints. */
