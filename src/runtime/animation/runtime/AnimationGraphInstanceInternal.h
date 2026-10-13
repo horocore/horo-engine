@@ -21,6 +21,18 @@ namespace Horo::Animation::Detail {
         CancellationToken cancellation{};
     };
 
+    /** @brief Retained immutable curves and their admitted parameter destinations; fixed after preparation. */
+    struct GraphCurveBindings final {
+        std::vector<std::shared_ptr<const AnimationParameterCurve>> publications;
+        std::vector<std::size_t> parameters;
+    };
+
+    /** @brief Prepared scalar workspace and exact type-segment offsets. */
+    struct GraphScalarWorkspace final {
+        std::vector<GraphParameterValue> values;
+        std::array<std::size_t, 5> offsets{};
+    };
+
     /** @brief Owner-thread runtime storage; all arrays are fixed during preparation. */
     struct GraphInstanceState final {
         std::thread::id ownerThread{std::this_thread::get_id()};
@@ -28,12 +40,10 @@ namespace Horo::Animation::Detail {
         std::shared_ptr<const AnimationGraphProgram> program;
         std::shared_ptr<const SkeletonAsset> skeleton;
         std::vector<std::shared_ptr<const AnimationClipAsset>> clips;
-        std::vector<std::shared_ptr<const AnimationParameterCurve>> curves;
-        std::vector<std::size_t> curveParameters;
+        GraphCurveBindings curves;
         AnimationClipLimits clipLimits{};
         std::vector<Math::Transform> workingPoses;
-        std::vector<GraphParameterValue> workingScalars;
-        std::array<std::size_t, 5> scalarOffsets{};
+        GraphScalarWorkspace scalars;
         std::vector<GraphParameterValue> parameters;
         std::vector<std::uint8_t> queuedTriggers;
         std::array<std::vector<GraphParameterValue>, 2> publishedParameters;

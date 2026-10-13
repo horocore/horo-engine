@@ -115,28 +115,29 @@ namespace Horo::Animation {
 
         /** @brief Admits unique float curve bindings and their bounded binary-search work before allocation. */
         GraphInstanceFailure AdmitCurves(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
+            using enum GraphInstanceFailure;
             const auto declarations = assets.program->Parameters();
             if (assets.curves.size() > declarations.size())
-                return GraphInstanceFailure::LimitExceeded;
+                return LimitExceeded;
             std::uint64_t work = 0;
             for (std::size_t index = 0; index < assets.curves.size(); ++index) {
                 const auto &curve = assets.curves[index];
                 if (!curve)
-                    return GraphInstanceFailure::BindingMismatch;
+                    return BindingMismatch;
                 // Moving a prepared value can retain its binding while retiring its key storage.
                 if (curve->Keys().empty())
-                    return GraphInstanceFailure::Malformed;
+                    return Malformed;
                 const auto found = std::ranges::lower_bound(declarations, curve->Parameter(), {}, &GraphParameter::id);
                 if (found == declarations.end() || found->id != curve->Parameter())
-                    return GraphInstanceFailure::BindingMismatch;
+                    return BindingMismatch;
                 if (found->type != GraphValueType::Float)
-                    return GraphInstanceFailure::TypeMismatch;
+                    return TypeMismatch;
                 for (std::size_t earlier = 0; earlier < index; ++earlier)
                     if (assets.curves[earlier]->Parameter() == curve->Parameter())
-                        return GraphInstanceFailure::Malformed;
+                        return Malformed;
                 work += 1 + std::bit_width(curve->Keys().size());
             }
-            return work > context.maximumJointOperations ? GraphInstanceFailure::LimitExceeded : GraphInstanceFailure::None;
+            return work > context.maximumJointOperations ? LimitExceeded : None;
         }
 
         /** @brief Charges every retained workspace and both transaction/publication buffers without overflow. */
@@ -231,10 +232,10 @@ namespace Horo::Animation {
             state->workingPoses.resize(static_cast<std::size_t>(memory.poseTransforms));
             std::size_t scalars = 0;
             for (std::size_t type = 1; type < memory.workingSlots.size(); ++type) {
-                state->scalarOffsets[type] = scalars;
+                state->scalars.offsets[type] = scalars;
                 scalars += memory.workingSlots[type];
             }
-            state->workingScalars.resize(scalars);
+            state->scalars.values.resize(scalars);
             state->players.resize(memory.clipPlayers);
             state->candidate.players.resize(memory.clipPlayers);
             state->parameters.resize(memory.parameters);
@@ -242,12 +243,12 @@ namespace Horo::Animation {
             state->queuedTriggers.resize(memory.parameters);
             for (auto &parameters : state->publishedParameters)
                 parameters.resize(memory.parameters);
-            state->curves.assign(assets.curves.begin(), assets.curves.end());
-            state->curveParameters.reserve(assets.curves.size());
+            state->curves.publications.assign(assets.curves.begin(), assets.curves.end());
+            state->curves.parameters.reserve(assets.curves.size());
             for (const auto &curve : assets.curves) {
                 const auto declarations = state->program->Parameters();
                 const auto found = std::ranges::lower_bound(declarations, curve->Parameter(), {}, &GraphParameter::id);
-                state->curveParameters.push_back(static_cast<std::size_t>(found - declarations.begin()));
+                state->curves.parameters.push_back(static_cast<std::size_t>(found - declarations.begin()));
             }
             for (auto &pose : state->publishedPoses)
                 pose.resize(state->program->SkeletonBinding().joints);

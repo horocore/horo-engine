@@ -23,7 +23,8 @@ namespace Horo::Animation {
         Prepared fixture(Test::Instance::AllScalarTypes());
         auto instance = fixture.Create();
         const auto trigger = Id<GraphParameterId>(4);
-        std::array<GraphParameterInput, 4> first, second;
+        std::array<GraphParameterInput, 4> first;
+        std::array<GraphParameterInput, 4> second;
         const auto before = HoroAnimationTestAllocationCount();
         const auto queued = instance.QueueTrigger(trigger);
         const auto coalesced = instance.QueueTrigger(trigger);
@@ -97,7 +98,7 @@ namespace Horo::Animation {
         REQUIRE(instance.CopyParameters(next.publication.currentPose, output).HasValue());
         CHECK_FALSE(std::get<bool>(output[3].value));
         GraphInstanceOutcome foreign;
-        std::thread thread([&] {
+        std::jthread thread([&foreign, &instance] {
             foreign = instance.QueueTrigger(Id<GraphParameterId>(4));
         });
         thread.join();
@@ -174,8 +175,8 @@ namespace Horo::Animation {
         const auto step = Curve(GraphCurveInterpolation::Step);
         CHECK(step->Sample({99}) == 0.0F);
         CHECK(step->Sample({100}) == 1.0F);
-        const std::array<GraphParameterInput, 1> override{{{Id<GraphParameterId>(1), 0.75F}}};
-        REQUIRE(instance.Evaluate({Id<AnimationTickId>(2), {0}, {}, override, {}, {25}}).HasValue());
+        const std::array<GraphParameterInput, 1> explicitInput{{{Id<GraphParameterId>(1), 0.75F}}};
+        REQUIRE(instance.Evaluate({Id<AnimationTickId>(2), {0}, {}, explicitInput, {}, {25}}).HasValue());
         const auto overridden = instance.Commit(Id<AnimationTickId>(2));
         REQUIRE(overridden.HasValue());
         REQUIRE(instance.CopyParameters(overridden.publication.currentPose, output).HasValue());
