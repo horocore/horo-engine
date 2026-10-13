@@ -98,6 +98,13 @@ namespace Horo::Animation::GraphCompileDetail {
             pins.push_back(Pin(Result, GraphValueType::Pose, true));
             return Shape::Success(std::move(pins));
         }
+
+        /** @brief Admits state control through the same authoritative typed node-shape validation. */
+        Shape NodePins(const GraphStateMachineNode &machine, const ShapeContext &context) {
+            if (auto validated = ValidateStateNode(machine, context.data, context.location); validated.HasError())
+                return Shape::Failure(validated.ErrorValue());
+            return Shape::Success({Pin(Result, GraphValueType::Pose, true)});
+        }
     }  // namespace
 
     /** @copydoc ValidatePins */

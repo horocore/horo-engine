@@ -50,8 +50,10 @@ TEST_CASE("Graph canonical source normalizes signed zero and object field order"
     REQUIRE(positive.HasValue());
     CHECK(negative.Value() == positive.Value());
     auto source = nlohmann::ordered_json::parse(positive.Value());
-    source["contractVersion"] = {{"patch", 0}, {"minor", 1}, {"major", 1}};
-    std::ranges::reverse(source["dependencies"]);
+    source["contractVersion"] = {{"patch", CurrentAnimationGraphContractVersion.patch},
+                                 {"minor", CurrentAnimationGraphContractVersion.minor},
+                                 {"major", CurrentAnimationGraphContractVersion.major}};
+    std::reverse(source["dependencies"].begin(), source["dependencies"].end());
     for (auto &dependency : source["dependencies"]) {
         auto reordered = nlohmann::ordered_json::object();
         reordered["assetId"] = dependency["assetId"];
@@ -203,7 +205,7 @@ TEST_CASE("Graph source version migration is explicit canonical and transactiona
     REQUIRE(current.HasValue());
     auto legacy = nlohmann::ordered_json::parse(current.Value());
     legacy["schemaVersion"] = 1;
-    legacy["contractVersion"]["minor"] = 0;
+    legacy["contractVersion"] = {{"major", 1}, {"minor", 0}, {"patch", 0}};
     for (auto &node : legacy["payload"]["definitions"][0]["nodes"])
         node.erase("settings");
     for (auto &edge : legacy["payload"]["definitions"][0]["connections"])

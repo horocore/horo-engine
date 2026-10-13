@@ -20,6 +20,49 @@ namespace Horo::Animation {
                     {"interface", pin.interfaceId.IsValid() ? Json(pin.interfaceId.Value()) : Json(nullptr)}};
         }
 
+        /** @brief Writes one transition's ordered typed condition block and exact time/policy operands. */
+        Json StateTransition(const GraphStateTransition &transition) {
+            Json conditions = Json::array();
+            for (const auto &condition : transition.conditions)
+                conditions.push_back(Json{{"parameter", condition.parameter.Value()},
+                                          {"predicate", Predicates.at(static_cast<std::size_t>(condition.predicate))},
+                                          {"threshold", std::visit(
+                                                            []<typename Scalar>(const Scalar scalar) -> Json {
+                    if constexpr (std::is_same_v<Scalar, float>)
+                        return scalar == 0.0F ? Json(0.0F) : Json(scalar);
+                    else
+                        return scalar;
+                }, condition.threshold)},
+                                          {"release", condition.releaseThreshold == 0.0F ? 0.0F : condition.releaseThreshold}});
+            return Json{{"id", transition.id.Value()},
+                        {"source", transition.source.Value()},
+                        {"destination", transition.destination.Value()},
+                        {"priority", transition.priority},
+                        {"duration", transition.duration.ticks},
+                        {"exitTime", transition.exitTime ? Json(transition.exitTime->ticks) : Json(nullptr)},
+                        {"interruption", Interruptions.at(static_cast<std::size_t>(transition.interruption))},
+                        {"curve", BlendCurves.at(static_cast<std::size_t>(transition.curve))},
+                        {"conditions", std::move(conditions)}};
+        }
+
+        /** @brief Writes only authored state identities, ordered conditions and policies, never runtime clocks or generations. */
+        Json StateMachineReference(const GraphStateMachineNode &machine) {
+            Json states = Json::array();
+            Json transitions = Json::array();
+            for (const auto &state : machine.states) {
+                const auto *clip = std::get_if<AnimationClipId>(&state.source);
+                states.push_back(
+                    Json{{"id", state.id.Value()},
+                         {"sourceKind", clip ? "clip" : "definition"},
+                         {"reference", clip ? Json(clip->Asset().ToString()) : Json(std::get<GraphDefinitionId>(state.source).Value())},
+                         {"loopPeriod", state.loopPeriod ? Json(state.loopPeriod->ticks) : Json(nullptr)}});
+            }
+            for (const auto &transition : machine.transitions) {
+                transitions.push_back(StateTransition(transition));
+            }
+            return Json{{"initial", machine.initial.Value()}, {"states", std::move(states)}, {"transitions", std::move(transitions)}};
+        }
+
         /** @brief Writes the one reference allowed by each typed opcode. */
         Json Reference(const GraphNodePayload &payload) {
             return std::visit([]<typename T>(const T &value) -> Json {
@@ -31,7 +74,9 @@ namespace Horo::Animation {
                     return value.input.Value();
                 else if constexpr (std::is_same_v<T, GraphCallNode>)
                     return value.definition.Value();
-                else
+                else if constexpr (std::is_same_v<T, GraphStateMachineNode>) {
+                    return StateMachineReference(value);
+                } else
                     return nullptr;
             }, payload);
         }

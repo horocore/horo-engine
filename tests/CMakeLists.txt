@@ -835,6 +835,9 @@ target_compile_definitions(HoroAISightTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<B
 horo_register_catch_test(HoroAISightTests LABELS "unit;ai;sight;headless")
 
 add_executable(HoroAnimationApiTests
+        unit/runtime/animation/AnimationStateMachineTests.cpp
+        unit/runtime/animation/AnimationStateGraphInstanceTests.cpp
+        unit/runtime/animation/AnimationStateGraphCompilerTests.cpp
         unit/runtime/animation/AnimationGraphTests.cpp
         unit/runtime/animation/AnimationGraphBindingTests.cpp
         unit/runtime/animation/AnimationGraphInstanceTests.cpp
@@ -851,6 +854,7 @@ add_executable(HoroAnimationApiTests
 )
 target_compile_features(HoroAnimationApiTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAnimationApiTests PRIVATE HoroEngine::AnimationRuntime HoroEngine::AnimationApi HoroEngine::AnimationGraphSourceCodec nlohmann_json::nlohmann_json)
+target_link_libraries(HoroAnimationApiTests PRIVATE HoroAnimationStateMachineInternal)
 horo_register_catch_test(HoroAnimationApiTests LABELS "unit;animation;headless")
 
 add_executable(HoroPCGTests

@@ -11,6 +11,8 @@ namespace Horo::Animation::GraphCompileDetail {
     Error Failure(const ErrorCodeDescriptor &code, GraphSourceLocation location = {});
     /** @brief Checks captured admission/cancellation at bounded compiler checkpoints. */
     Result<void> Admission(const AnimationGraphCompileContext &context);
+    /** @brief Admits whole-asset identity, structural counts and caller-lowerable budgets before copying any candidate storage. */
+    Result<void> PreflightGraph(const AnimationGraphData &data, const AnimationGraphCompileContext &context);
     /** @brief Validates exact typed node settings and semantic pin shape. */
     Result<void> ValidatePins(const GraphNode &node, const GraphDefinition &definition, const AnimationGraphData &data);
 
@@ -35,8 +37,17 @@ namespace Horo::Animation::GraphCompileDetail {
         std::vector<AnimationClipDescriptor> clips{};
         GraphMemoryRequirements memory{};
         std::vector<GraphInstructionOccurrence> occurrences{};
+        std::vector<GraphStateMachineBinding> stateMachines{};
     };
 
     /** @brief Captures exact dependencies and produces finite occurrence-to-storage/state accesses. */
     Result<BoundPlan> Bind(const AnimationGraphProgram &program, const AnimationGraphCompileContext &context);
+    /** @brief Binds canonical dense clip coverage/layer masks and charges immutable composition storage for either expansion path. */
+    Result<void> BindWriterComposition(const GraphNodePayload &payload, GraphInstructionOccurrence &occurrence,
+                                       GraphMemoryRequirements &memory, const AnimationGraphCompileContext &context);
+    /** @brief Validates typed state sources, identities and transition conditions against exact graph declarations. */
+    Result<void> ValidateStateNode(const GraphStateMachineNode &machine, const AnimationGraphData &data, GraphSourceLocation location);
+    /** @brief Expands actual guarded clip/subgraph branches into the same compiler-owned occurrence plan. */
+    Result<BoundPlan> BindStateNodes(const AnimationGraphProgram &program, const AnimationGraphCompileContext &context,
+                                     const GraphSkeletonBinding &skeleton, std::vector<AnimationClipDescriptor> clips);
 }  // namespace Horo::Animation::GraphCompileDetail

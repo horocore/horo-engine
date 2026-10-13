@@ -16,7 +16,7 @@
 
 namespace Horo::Animation {
     /** @brief Current authoring schema; earlier versions require explicit migration. */
-    inline constexpr std::uint32_t CurrentAnimationGraphSchemaVersion = 3;
+    inline constexpr std::uint32_t CurrentAnimationGraphSchemaVersion = 4;
 
     /** @brief Exact graph semantic contract, independent of source-envelope migration. */
     struct AnimationGraphContractVersion final {
@@ -27,13 +27,15 @@ namespace Horo::Animation {
     };
 
     /** @brief Graph semantic contract implemented by this compiler. */
-    inline constexpr AnimationGraphContractVersion CurrentAnimationGraphContractVersion{1, 1, 0};
+    inline constexpr AnimationGraphContractVersion CurrentAnimationGraphContractVersion{1, 2, 0};
 
     struct GraphDefinitionTag;
     struct GraphNodeTag;
     struct GraphPinTag;
     struct GraphParameterTag;
     struct GraphInterfaceTag;
+    struct GraphStateTag;
+    struct GraphTransitionTag;
     /** @brief Stable graph-local definition identity. */
     using GraphDefinitionId = Foundation::Detail::NonZeroId64<GraphDefinitionTag, AnimationErrors::IdentityInvalid>;
     /** @brief Stable definition-local node identity. */
@@ -44,6 +46,10 @@ namespace Horo::Animation {
     using GraphParameterId = Foundation::Detail::NonZeroId64<GraphParameterTag, AnimationErrors::IdentityInvalid>;
     /** @brief Stable definition-local input identity shared by calls and input nodes. */
     using GraphInterfaceId = Foundation::Detail::NonZeroId64<GraphInterfaceTag, AnimationErrors::IdentityInvalid>;
+    /** @brief Stable state identity local to one state-machine node. */
+    using GraphStateId = Foundation::Detail::NonZeroId64<GraphStateTag, AnimationErrors::IdentityInvalid>;
+    /** @brief Stable transition identity local to one state-machine node. */
+    using GraphTransitionId = Foundation::Detail::NonZeroId64<GraphTransitionTag, AnimationErrors::IdentityInvalid>;
 
     /** @brief Pin transport vocabulary; Unspecified is admitted only by version-1 migration. */
     enum class GraphValueType : std::uint8_t {
@@ -165,9 +171,72 @@ namespace Horo::Animation {
         bool operator==(const GraphCallNode &) const = default;
     };
 
+    /** @brief Typed condition vocabulary; floats use separate enter/release thresholds. */
+    enum class GraphStatePredicate : std::uint8_t {
+        Above,
+        Below,
+        Equal,
+        NotEqual,
+        Trigger
+    };
+    /** @brief Permitted higher-priority interruption origins of an active transition. */
+    enum class GraphStateInterruption : std::uint8_t {
+        None,
+        Source,
+        Destination,
+        Either
+    };
+    /** @brief Finite scalar transition-weight curves; pose composition remains a separate kernel. */
+    enum class GraphStateBlendCurve : std::uint8_t {
+        Linear,
+        SmoothStep,
+        EaseIn,
+        EaseOut
+    };
+
+    /** @brief One parameter condition; immutable authoring data, never a runtime latch. */
+    struct GraphStateCondition final {
+        GraphParameterId parameter{};
+        GraphStatePredicate predicate{};
+        GraphParameterValue threshold{0.0F};
+        float releaseThreshold{};
+        bool operator==(const GraphStateCondition &) const = default;
+    };
+
+    /** @brief A state references an exact clip or an asset-local definition without external interface inputs. */
+    struct GraphState final {
+        GraphStateId id{};
+        std::variant<AnimationClipId, GraphDefinitionId> source{};
+        std::optional<AnimationDeltaTime>
+            loopPeriod{}; /**< Explicit subgraph cycle; direct clips derive their cycle from the clip descriptor. */
+        bool operator==(const GraphState &) const = default;
+    };
+
+    /** @brief Typed transition; stable identity breaks priority ties and survives canonicalization. */
+    struct GraphStateTransition final {
+        GraphTransitionId id{};
+        GraphStateId source{};
+        GraphStateId destination{};
+        std::int32_t priority{};
+        AnimationDeltaTime duration{};
+        std::optional<AnimationTime> exitTime{}; /**< Nonnegative authored elapsed time since entry, including loops. */
+        GraphStateInterruption interruption{GraphStateInterruption::None};
+        GraphStateBlendCurve curve{GraphStateBlendCurve::Linear};
+        std::vector<GraphStateCondition> conditions{};
+        bool operator==(const GraphStateTransition &) const = default;
+    };
+
+    /** @brief Stateful pose writer; all states and transition rules are inert bounded asset data. */
+    struct GraphStateMachineNode final {
+        GraphStateId initial{};
+        std::vector<GraphState> states{};
+        std::vector<GraphStateTransition> transitions{};
+        bool operator==(const GraphStateMachineNode &) const = default;
+    };
+
     /** @brief Supported node semantics; future nodes require a versioned compiler contract. */
-    using GraphNodePayload =
-        std::variant<GraphClipNode, GraphBlendNode, GraphParameterNode, GraphOutputNode, GraphInputNode, GraphCallNode>;
+    using GraphNodePayload = std::variant<GraphClipNode, GraphBlendNode, GraphParameterNode, GraphOutputNode, GraphInputNode, GraphCallNode,
+                                          GraphStateMachineNode>;
 
     /** @brief Authoring node with stable pins and typed semantics. */
     struct GraphNode final {
@@ -201,7 +270,7 @@ namespace Horo::Animation {
         bool operator==(const GraphDefinition &) const = default;
     };
 
-    /** @brief Complete detached schema-3 candidate with explicit connection types and pose-layer policies. */
+    /** @brief Complete detached schema-4 candidate retaining pose-layer policies and adding typed state payloads. */
     struct AnimationGraphData final {
         std::uint32_t schemaVersion{CurrentAnimationGraphSchemaVersion};
         AnimationGraphContractVersion contractVersion{CurrentAnimationGraphContractVersion};
@@ -228,6 +297,11 @@ namespace Horo::Animation {
         static constexpr std::uint32_t ScalarSlots = 4096;
         static constexpr std::uint32_t ClipPlayers = 4096;
         static constexpr std::uint64_t PoseTransforms = 1048576;
+        static constexpr std::uint32_t StateMachines = 1024;
+        static constexpr std::uint32_t States = 256;
+        static constexpr std::uint32_t Transitions = 2048;
+        static constexpr std::uint32_t Conditions = 4096;
+        static constexpr std::uint32_t StateEvents = 262144;
     };
 
     /** @brief Finite compile policy; all counts apply across the whole asset. */
@@ -244,6 +318,11 @@ namespace Horo::Animation {
         std::uint32_t scalarSlots{AnimationGraphHardLimits::ScalarSlots};
         std::uint32_t clipPlayers{AnimationGraphHardLimits::ClipPlayers};
         std::uint64_t poseTransforms{AnimationGraphHardLimits::PoseTransforms};
+        std::uint32_t stateMachines{AnimationGraphHardLimits::StateMachines};
+        std::uint32_t states{AnimationGraphHardLimits::States};
+        std::uint32_t transitions{AnimationGraphHardLimits::Transitions};
+        std::uint32_t conditions{AnimationGraphHardLimits::Conditions};
+        std::uint32_t stateEvents{AnimationGraphHardLimits::StateEvents};
     };
 
     /** @brief Captured synchronous admission state; no work survives the invocation. */
@@ -282,6 +361,7 @@ namespace Horo::Animation {
         std::vector<GraphCompiledInput> inputs{};
         std::optional<std::uint32_t> parameterIndex{};
         std::optional<std::uint32_t> definitionIndex{};
+        std::vector<std::uint32_t> stateDefinitions{}; /**< Definition indexes for state call edges; clips are excluded. */
         bool operator==(const GraphInstruction &) const = default;
     };
 
@@ -293,7 +373,7 @@ namespace Horo::Animation {
         std::uint32_t outputInstruction{};
         std::uint32_t callDepth{};
         std::uint64_t evaluationInstructions{}; /**< Counts repeated subgraph calls, bounded to 65536. */
-        std::uint64_t sourceMapCallEntries{};   /**< Sum of call-path lengths across expanded instruction occurrences. */
+        std::uint64_t sourceMapCallEntries{};   /**< Sum of call-path and typed state-guard entries across expanded occurrences. */
         bool operator==(const GraphCompiledDefinition &) const = default;
     };
 
@@ -314,8 +394,22 @@ namespace Horo::Animation {
         bool operator==(const GraphOccurrenceInput &) const = default;
     };
 
-    /** @brief Completion-ordered access plan; only Clip, Blend and Parameter instructions write working storage.
-     * Input, Output and Call occurrences alias an existing writer. Call completion follows its entire callee.
+    /** @brief One compiler-resolved active-branch guard; lanes distinguish self-transition incarnations. */
+    struct GraphStateGuard final {
+        std::uint32_t machine{};
+        std::uint32_t state{};
+        std::uint8_t lane{};
+        bool operator==(const GraphStateGuard &) const = default;
+    };
+    /** @brief State control precedes guarded children; completion writes the composed pose afterward. */
+    enum class GraphOccurrencePhase : std::uint8_t {
+        Evaluate,
+        StateBegin,
+        StateEnd
+    };
+
+    /** @brief Exact compiler-owned access plan; state control precedes guarded children, pose completion follows them.
+     * Input, Output and Call alias their real writer; inline state clips use their exact clip binding/player access.
      */
     struct GraphInstructionOccurrence final {
         GraphSourceLocation source{};
@@ -328,9 +422,32 @@ namespace Horo::Animation {
         std::optional<std::uint32_t> clipPlayer{};
         std::optional<std::uint32_t> clipBindingIndex{};
         std::optional<std::uint32_t> parameterRead{};
+        std::optional<std::uint32_t> stateMachine{};
+        GraphOccurrencePhase phase{GraphOccurrencePhase::Evaluate};
+        std::vector<GraphStateGuard> guards{};
         std::vector<float> jointMask{};           /**< Complete dense blend mask, bound to exact skeleton order. */
         std::vector<std::uint8_t> clipCoverage{}; /**< Complete dense authored-track coverage for a clip writer. */
         bool operator==(const GraphInstructionOccurrence &) const = default;
+    };
+
+    /** @brief Actual per-lane state execution storage; ranges reset only when that state incarnation enters. */
+    struct GraphStateBranch final {
+        GraphStateId id{};
+        std::array<GraphWorkingSlot, 2> output{};
+        std::array<std::uint32_t, 2> begin{};
+        std::array<std::uint32_t, 2> end{};
+        std::optional<AnimationDeltaTime> loopPeriod{};
+        bool operator==(const GraphStateBranch &) const = default;
+    };
+
+    /** @brief Compiler-owned complete machine occurrence; no runtime pointer or generation is retained. */
+    struct GraphStateMachineBinding final {
+        std::uint32_t beginOccurrence{};
+        std::uint32_t endOccurrence{};
+        std::uint32_t conditionOffset{};
+        std::array<GraphWorkingSlot, 4> poses{}; /**< Committed/candidate composed and committed/candidate frozen source buffers. */
+        std::vector<GraphStateBranch> branches{};
+        bool operator==(const GraphStateMachineBinding &) const = default;
     };
 
     /** @brief Exact immutable dependency compatibility captured without retaining caller-owned views. */
@@ -349,6 +466,9 @@ namespace Horo::Animation {
         std::uint32_t clipPlayers{};
         std::uint32_t parameters{};
         std::uint32_t callDepth{};
+        std::uint32_t stateMachines{};
+        std::uint32_t conditionLatches{};
+        std::uint32_t stateEvents{};
         std::uint64_t compositionEntries{}; /**< Immutable dense mask/coverage elements; bounded by poseTransforms. */
         bool operator==(const GraphMemoryRequirements &) const = default;
     };
@@ -357,7 +477,7 @@ namespace Horo::Animation {
     class AnimationGraphProgram final {
     public:
         /** @brief Compiles a detached candidate without publication or I/O.
-         * @param data Current-schema candidate; migrate legacy schemas explicitly first.
+         * @param data Current schema-4 candidate; migrate supported earlier source contracts explicitly first.
          * @param context Captured limits, cancellation, optional replacement identity and exact pinned dependencies.
          * @return Complete immutable program or stable graph failure; never partial publication.
          * @pre The caller pins the supplied skeleton/clip snapshots and generation for this synchronous call.
@@ -402,6 +522,11 @@ namespace Horo::Animation {
             return occurrences_;
         }
 
+        /** @brief Returns admitted state-machine occurrences and branch ranges. @return Immutable program-owned bindings. */
+        [[nodiscard]] std::span<const GraphStateMachineBinding> StateMachines() const noexcept {
+            return stateMachines_;
+        }
+
         /** @brief Returns the final pose access of the entry plan. @return Stable preallocated Pose slot. */
         [[nodiscard]] GraphWorkingSlot OutputSlot() const noexcept {
             return occurrences_.back().output;
@@ -431,6 +556,7 @@ namespace Horo::Animation {
                                                                          const AnimationGraphCompileContext &context);
         friend Result<AnimationGraphData> MigrateAnimationGraph(const AnimationGraphData &, const AnimationGraphCompileContext &);
         std::vector<GraphInstructionOccurrence> occurrences_{};
+        std::vector<GraphStateMachineBinding> stateMachines_{};
         GraphMemoryRequirements memory_{};
         GraphSkeletonBinding skeletonBinding_{};
         std::vector<AnimationClipDescriptor> clipBindings_{};
@@ -442,10 +568,10 @@ namespace Horo::Animation {
         std::uint32_t entry_{};
     };
 
-    /** @brief Explicitly migrates legacy graph schemas and normalized defaults, retaining all stable IDs.
-     * @param data Detached schema-1/2 contract-1.0.0 or current candidate; input is never changed.
+    /** @brief Explicitly migrates supported source contracts and infers version-1 edge types, retaining stable IDs.
+     * @param data Detached version-1/2/3/current candidate with its exact semantic version; input is never changed.
      * @param context Captured limits, admission and replacement identity.
-     * @return Validated current candidate or stable failure; unknown version pairs and legacy new policies are rejected.
+     * @return Validated current candidate or stable failure; unknown versions, legacy pose policies and legacy state payloads reject.
      * @throws std::bad_alloc When detached migration storage cannot be allocated.
      */
     [[nodiscard]] Result<AnimationGraphData> MigrateAnimationGraph(const AnimationGraphData &data,

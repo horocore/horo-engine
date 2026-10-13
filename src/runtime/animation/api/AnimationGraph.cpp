@@ -39,91 +39,6 @@ namespace Horo::Animation {
         using namespace AnimationErrors;
         using namespace GraphCompileDetail;
 
-        /** @brief Checks caller structural ceilings without traversing candidate storage. */
-        bool ValidStructureLimits(const AnimationGraphLimits &limits) {
-            const AnimationGraphLimits hard{};
-            return limits.definitions > 0 && limits.definitions <= hard.definitions && limits.nodes > 0 && limits.nodes <= hard.nodes &&
-                   limits.pins > 0 && limits.pins <= hard.pins && limits.connections <= hard.connections &&
-                   limits.parameters <= hard.parameters;
-        }
-
-        /** @brief Checks finite expansion policy independently from allocation categories. */
-        bool ValidExpansionLimits(const AnimationGraphLimits &limits) {
-            const AnimationGraphLimits hard{};
-            return limits.callDepth > 0 && limits.callDepth <= hard.callDepth && limits.evaluationInstructions > 0 &&
-                   limits.evaluationInstructions <= hard.evaluationInstructions && limits.sourceMapCallEntries <= hard.sourceMapCallEntries;
-        }
-
-        /** @brief Checks caller-lowerable prepared storage categories. */
-        bool ValidStorageLimits(const AnimationGraphLimits &limits) {
-            const AnimationGraphLimits hard{};
-            return limits.poseSlots <= hard.poseSlots && limits.scalarSlots <= hard.scalarSlots && limits.clipPlayers <= hard.clipPlayers &&
-                   limits.poseTransforms <= hard.poseTransforms;
-        }
-
-        /** @brief Whole-asset storage admission counters before any detached copy. */
-        struct CandidateCounts final {
-            std::uint64_t nodes{};
-            std::uint64_t pins{};
-            std::uint64_t connections{};
-            std::uint64_t interfaces{};
-            std::uint64_t maskEntries{};
-        };
-
-        /** @brief Charges one node's bounded pins and sparse mask storage. */
-        Result<void> CountNode(const GraphNode &node, CandidateCounts &counts, const AnimationGraphLimits &limits) {
-            counts.pins += node.pins.size();
-            if (counts.pins > limits.pins)
-                return Result<void>::Failure(Failure(GraphLimitExceeded));
-            if (const auto *blend = std::get_if<GraphBlendNode>(&node.payload)) {
-                counts.maskEntries += blend->mask.joints.size();
-                if (blend->mask.joints.size() > SkeletonAssetHardLimits::Joints || counts.maskEntries > limits.poseTransforms)
-                    return Result<void>::Failure(Failure(GraphLimitExceeded));
-            }
-            return Result<void>::Success();
-        }
-
-        /** @brief Charges one definition with cancellation checkpoints between nodes. */
-        Result<void> CountDefinition(const GraphDefinition &definition, CandidateCounts &counts,
-                                     const AnimationGraphCompileContext &context) {
-            counts.nodes += definition.nodes.size();
-            counts.connections += definition.connections.size();
-            counts.interfaces += definition.inputs.size();
-            if (counts.nodes > context.limits.nodes || counts.connections > context.limits.connections ||
-                counts.interfaces > context.limits.pins)
-                return Result<void>::Failure(Failure(GraphLimitExceeded));
-            for (const auto &node : definition.nodes) {
-                if (auto state = Admission(context); state.HasError())
-                    return state;
-                if (auto counted = CountNode(node, counts, context.limits); counted.HasError())
-                    return counted;
-            }
-            return Result<void>::Success();
-        }
-
-        /** @brief Preflights all storage counts before making a detached candidate copy. */
-        Result<void> Preflight(const AnimationGraphData &data, const AnimationGraphCompileContext &context) {
-            if (auto state = Admission(context); state.HasError())
-                return state;
-            if (!data.id.IsValid() || !data.skeleton.IsValid() || !data.entry.IsValid() || data.id.Asset() == data.skeleton.Asset())
-                return Result<void>::Failure(Failure(GraphMalformed));
-            if (context.replacing && *context.replacing != data.id)
-                return Result<void>::Failure(Failure(GraphReloadMismatch));
-            const auto &limits = context.limits;
-            if (!ValidStructureLimits(limits) || !ValidExpansionLimits(limits) || !ValidStorageLimits(limits))
-                return Result<void>::Failure(Failure(GraphLimitExceeded));
-            if (data.definitions.empty() || data.definitions.size() > limits.definitions || data.parameters.size() > limits.parameters)
-                return Result<void>::Failure(Failure(GraphLimitExceeded));
-            CandidateCounts counts;
-            for (const auto &definition : data.definitions)
-                if (auto counted = CountDefinition(definition, counts, context); counted.HasError())
-                    return counted;
-            for (const auto &parameter : data.parameters)
-                if (parameter.name.empty() || parameter.name.size() > AnimationGraphHardLimits::ParameterNameBytes)
-                    return Result<void>::Failure(Failure(GraphMalformed));
-            return Result<void>::Success();
-        }
-
         /** @brief Canonicalizes semantically unordered authoring collections by stable identities. */
         void Canonicalize(AnimationGraphData &data) {
             const auto byId = [](const auto &left, const auto &right) {
@@ -137,6 +52,10 @@ namespace Horo::Animation {
                 std::ranges::sort(definition.connections);
                 for (auto &node : definition.nodes) {
                     std::ranges::sort(node.pins, byId);
+                    if (auto *machine = std::get_if<GraphStateMachineNode>(&node.payload)) {
+                        std::ranges::sort(machine->states, byId);
+                        std::ranges::sort(machine->transitions, byId);
+                    }
                     if (auto *blend = std::get_if<GraphBlendNode>(&node.payload))
                         std::ranges::sort(blend->mask.joints, {}, &GraphBoneWeight::joint);
                 }
@@ -322,6 +241,11 @@ namespace Horo::Animation {
             if (const auto *call = std::get_if<GraphCallNode>(&node.payload))
                 instruction.definitionIndex =
                     static_cast<std::uint32_t>(Find(data.definitions, call->definition) - data.definitions.data());
+            if (const auto *machine = std::get_if<GraphStateMachineNode>(&node.payload))
+                for (const auto &state : machine->states)
+                    if (const auto *definitionId = std::get_if<GraphDefinitionId>(&state.source))
+                        instruction.stateDefinitions.push_back(
+                            static_cast<std::uint32_t>(Find(data.definitions, *definitionId) - data.definitions.data()));
             return instruction;
         }
 
@@ -361,6 +285,29 @@ namespace Horo::Animation {
             return Result<GraphCompiledDefinition>::Success(std::move(result));
         }
 
+        /** @brief State branches charge both admitted lanes, control completion and full guarded call provenance. */
+        void AccumulateStateBudget(GraphCompiledDefinition &definition, std::span<const GraphCompiledDefinition> definitions) {
+            for (const auto &instruction : definition.instructions) {
+                const auto *machine = std::get_if<GraphStateMachineNode>(&instruction.payload);
+                if (!machine)
+                    continue;
+                ++definition.evaluationInstructions;  // Control precedes guarded children and pose completion.
+                const auto clipStates = static_cast<std::uint64_t>(std::ranges::count_if(machine->states, [](const GraphState &state) {
+                    return std::holds_alternative<AnimationClipId>(state.source);
+                }));
+                definition.evaluationInstructions += 2 * clipStates;
+                definition.sourceMapCallEntries += 4 * clipStates;
+                if (clipStates != 0)
+                    definition.callDepth = std::max(definition.callDepth, 2U);
+                for (const auto targetIndex : instruction.stateDefinitions) {
+                    const auto &target = definitions[targetIndex];
+                    definition.callDepth = std::max(definition.callDepth, target.callDepth + 1);
+                    definition.evaluationInstructions += 2 * target.evaluationInstructions;
+                    definition.sourceMapCallEntries += 2 * (target.sourceMapCallEntries + 2 * target.evaluationInstructions);
+                }
+            }
+        }
+
         /** @brief Propagates completed callee costs into one definition under exact captured limits. */
         Result<void> AccumulateCallBudget(GraphCompiledDefinition &definition, std::span<const GraphCompiledDefinition> definitions,
                                           const AnimationGraphCompileContext &context) {
@@ -373,6 +320,7 @@ namespace Horo::Animation {
                     definition.evaluationInstructions += target.evaluationInstructions;
                     definition.sourceMapCallEntries += target.sourceMapCallEntries + target.evaluationInstructions;
                 }
+            AccumulateStateBudget(definition, definitions);
             if (definition.callDepth > context.limits.callDepth ||
                 definition.evaluationInstructions > context.limits.evaluationInstructions ||
                 definition.sourceMapCallEntries > context.limits.sourceMapCallEntries)
@@ -380,16 +328,27 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
-        /** @brief Rejects recursive calls and budgets expanded execution without expanding stored programs. */
-        Result<void> BoundCalls(std::vector<GraphCompiledDefinition> &definitions, const AnimationGraphCompileContext &context) {
-            std::vector<std::set<std::size_t>> dependencies(definitions.size());
-            std::vector<std::set<std::size_t>> callers(definitions.size());
+        /** @brief Builds one canonical dependency relation for ordinary calls and every state subgraph. */
+        void IndexCallDependencies(const std::span<const GraphCompiledDefinition> definitions,
+                                   std::vector<std::set<std::size_t>> &dependencies, std::vector<std::set<std::size_t>> &callers) {
             for (std::size_t index = 0; index < definitions.size(); ++index)
-                for (const auto &instruction : definitions[index].instructions)
+                for (const auto &instruction : definitions[index].instructions) {
                     if (instruction.definitionIndex.has_value()) {
                         dependencies[index].insert(*instruction.definitionIndex);
                         callers[*instruction.definitionIndex].insert(index);
                     }
+                    for (const auto target : instruction.stateDefinitions) {
+                        dependencies[index].insert(target);
+                        callers[target].insert(index);
+                    }
+                }
+        }
+
+        /** @brief Rejects recursive calls and budgets expanded execution without expanding stored programs. */
+        Result<void> BoundCalls(std::vector<GraphCompiledDefinition> &definitions, const AnimationGraphCompileContext &context) {
+            std::vector<std::set<std::size_t>> dependencies(definitions.size());
+            std::vector<std::set<std::size_t>> callers(definitions.size());
+            IndexCallDependencies(definitions, dependencies, callers);
             std::set<std::size_t> ready;
             for (std::size_t index = 0; index < definitions.size(); ++index)
                 if (dependencies[index].empty())
@@ -428,6 +387,96 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
+        /** @brief Canonical sorted ID tables reject duplicate persistent declarations. */
+        Result<void> ValidateCanonicalIdentities(const AnimationGraphData &canonical) {
+            if (!UniqueIds(canonical.definitions) || !UniqueIds(canonical.parameters))
+                return Result<void>::Failure(Failure(GraphMalformed));
+            return Result<void>::Success();
+        }
+
+        /** @brief Resolves the one closed entry definition to its canonical stable program index. */
+        Result<std::uint32_t> ResolveEntryIndex(const AnimationGraphData &canonical) {
+            const auto *entry = Find(canonical.definitions, canonical.entry);
+            if (!entry || !entry->inputs.empty())
+                return Result<std::uint32_t>::Failure(Failure(GraphMalformed));
+            return Result<std::uint32_t>::Success(static_cast<std::uint32_t>(entry - canonical.definitions.data()));
+        }
+
+        /** @brief All typed parameter declarations and names are validated before compiling any definition. */
+        Result<void> ValidateCanonicalParameters(const AnimationGraphData &canonical) {
+            std::set<std::string, std::less<>> names;
+            for (const auto &parameter : canonical.parameters)
+                if (!ValidParameter(parameter) || !names.insert(parameter.name).second)
+                    return Result<void>::Failure(Failure(GraphTypeMismatch));
+            return Result<void>::Success();
+        }
+
+        /** @brief Projects one typed opcode's direct clips, including every inactive state source. */
+        void CollectPayloadClips(const GraphNodePayload &opcode, std::set<AnimationClipId> &clips) {
+            std::visit([&clips]<typename Payload>(const Payload &payload) {
+                if constexpr (std::is_same_v<Payload, GraphClipNode>)
+                    clips.insert(payload.clip);
+                else if constexpr (std::is_same_v<Payload, GraphStateMachineNode>)
+                    for (const auto &state : payload.states)
+                        if (const auto *clip = std::get_if<AnimationClipId>(&state.source))
+                            clips.insert(*clip);
+            }, opcode);
+        }
+
+        /** @brief Collects each compiled definition's immutable dependency set without selecting active branches. */
+        void CollectClips(const GraphCompiledDefinition &definition, std::set<AnimationClipId> &clips) {
+            for (const auto &instruction : definition.instructions)
+                CollectPayloadClips(instruction.payload, clips);
+        }
+
+        /** @brief Compiles the complete detached definition set and collects even inactive clip dependencies before publication. */
+        Result<std::vector<GraphCompiledDefinition>> CompileDefinitions(const AnimationGraphData &canonical,
+                                                                        const AnimationGraphCompileContext &context,
+                                                                        std::set<AnimationClipId> &clips) {
+            std::vector<GraphCompiledDefinition> definitions;
+            for (const auto &definition : canonical.definitions) {
+                auto compiled = CompileDefinition(definition, canonical, context);
+                if (compiled.HasError())
+                    return Result<std::vector<GraphCompiledDefinition>>::Failure(compiled.ErrorValue());
+                CollectClips(compiled.Value(), clips);
+                definitions.push_back(std::move(compiled).Value());
+            }
+            return Result<std::vector<GraphCompiledDefinition>>::Success(std::move(definitions));
+        }
+
+        /** @brief State authoring payloads are not valid in any pre-state source schema. */
+        bool HasStatePayload(const AnimationGraphData &data) {
+            for (const auto &definition : data.definitions)
+                for (const auto &node : definition.nodes)
+                    if (std::holds_alternative<GraphStateMachineNode>(node.payload))
+                        return true;
+            return false;
+        }
+
+        /** @brief Exact semantic contract corresponding to an already range-admitted authoring schema. */
+        AnimationGraphContractVersion SourceContract(const std::uint32_t schema) noexcept {
+            if (schema <= 2)
+                return {1, 0, 0};
+            if (schema == 3)
+                return {1, 1, 0};
+            return CurrentAnimationGraphContractVersion;
+        }
+
+        /** @brief Each admitted source schema has exactly one semantic contract; pose policies remain unchanged in schema 3. */
+        bool ValidSourceVersion(const AnimationGraphData &data) {
+            if (data.schemaVersion == 0 || data.schemaVersion > CurrentAnimationGraphSchemaVersion)
+                return false;
+            if (const auto expected = SourceContract(data.schemaVersion); data.contractVersion != expected)
+                return false;
+            return data.schemaVersion >= 4 || !HasStatePayload(data);
+        }
+
+        /** @brief Publishes a complete detached schema or bound program only after the final admission/cancellation fence. */
+        Result<AnimationGraphProgram> PublishProgram(AnimationGraphProgram program, const AnimationGraphCompileContext &context) {
+            if (auto state = Admission(context); state.HasError())
+                return Result<AnimationGraphProgram>::Failure(state.ErrorValue());
+            return Result<AnimationGraphProgram>::Success(std::move(program));
+        }
     }  // namespace
 
     /** @copydoc AnimationGraphProgram::CompileSchema */
@@ -435,40 +484,31 @@ namespace Horo::Animation {
                                                                        const AnimationGraphCompileContext &context) {
         if (data.schemaVersion != CurrentAnimationGraphSchemaVersion || data.contractVersion != CurrentAnimationGraphContractVersion)
             return Result<AnimationGraphProgram>::Failure(Failure(GraphVersionUnsupported));
-        if (auto preflight = Preflight(data, context); preflight.HasError())
+        if (auto preflight = PreflightGraph(data, context); preflight.HasError())
             return Result<AnimationGraphProgram>::Failure(preflight.ErrorValue());
         auto canonical = data;
         Canonicalize(canonical);
-        if (!UniqueIds(canonical.definitions) || !UniqueIds(canonical.parameters))
-            return Result<AnimationGraphProgram>::Failure(Failure(GraphMalformed));
-        const auto *entry = Find(canonical.definitions, canonical.entry);
-        if (!entry || !entry->inputs.empty())
-            return Result<AnimationGraphProgram>::Failure(Failure(GraphMalformed));
-        std::set<std::string, std::less<>> names;
-        for (const auto &parameter : canonical.parameters)
-            if (!ValidParameter(parameter) || !names.insert(parameter.name).second)
-                return Result<AnimationGraphProgram>::Failure(Failure(GraphTypeMismatch));
+        if (auto identities = ValidateCanonicalIdentities(canonical); identities.HasError())
+            return Result<AnimationGraphProgram>::Failure(identities.ErrorValue());
+        const auto entry = ResolveEntryIndex(canonical);
+        if (entry.HasError())
+            return Result<AnimationGraphProgram>::Failure(entry.ErrorValue());
+        if (auto parameters = ValidateCanonicalParameters(canonical); parameters.HasError())
+            return Result<AnimationGraphProgram>::Failure(parameters.ErrorValue());
         AnimationGraphProgram result;
         result.id_ = canonical.id;
         result.skeleton_ = canonical.skeleton;
         result.parameters_ = canonical.parameters;
-        result.entry_ = static_cast<std::uint32_t>(entry - canonical.definitions.data());
+        result.entry_ = entry.Value();
         std::set<AnimationClipId> clips;
-        for (const auto &definition : canonical.definitions) {
-            auto compiled = CompileDefinition(definition, canonical, context);
-            if (compiled.HasError())
-                return Result<AnimationGraphProgram>::Failure(compiled.ErrorValue());
-            for (const auto &instruction : compiled.Value().instructions)
-                if (const auto *clip = std::get_if<GraphClipNode>(&instruction.payload))
-                    clips.insert(clip->clip);
-            result.definitions_.push_back(std::move(compiled).Value());
-        }
+        auto definitions = CompileDefinitions(canonical, context, clips);
+        if (definitions.HasError())
+            return Result<AnimationGraphProgram>::Failure(definitions.ErrorValue());
+        result.definitions_ = std::move(definitions).Value();
         if (auto calls = BoundCalls(result.definitions_, context); calls.HasError())
             return Result<AnimationGraphProgram>::Failure(calls.ErrorValue());
         result.clips_.assign(clips.begin(), clips.end());
-        if (auto state = Admission(context); state.HasError())
-            return Result<AnimationGraphProgram>::Failure(state.ErrorValue());
-        return Result<AnimationGraphProgram>::Success(std::move(result));
+        return PublishProgram(std::move(result), context);
     }
 
     /** @copydoc AnimationGraphProgram::Compile */
@@ -486,18 +526,16 @@ namespace Horo::Animation {
         auto owned = std::move(bound).Value();
         result.clipBindings_ = std::move(owned.clips);
         result.occurrences_ = std::move(owned.occurrences);
-        if (auto state = Admission(context); state.HasError())
-            return Result<AnimationGraphProgram>::Failure(state.ErrorValue());
-        return Result<AnimationGraphProgram>::Success(std::move(result));
+        result.stateMachines_ = std::move(owned.stateMachines);
+        return PublishProgram(std::move(result), context);
     }
 
     /** @copydoc MigrateAnimationGraph */
     Result<AnimationGraphData> MigrateAnimationGraph(const AnimationGraphData &data, const AnimationGraphCompileContext &context) {
         const bool legacy = data.schemaVersion == 1 || data.schemaVersion == 2;
-        if ((!legacy && data.schemaVersion != CurrentAnimationGraphSchemaVersion) ||
-            data.contractVersion != (legacy ? AnimationGraphContractVersion{1, 0, 0} : CurrentAnimationGraphContractVersion))
+        if (!ValidSourceVersion(data))
             return Result<AnimationGraphData>::Failure(Failure(GraphVersionUnsupported));
-        if (auto preflight = Preflight(data, context); preflight.HasError())
+        if (auto preflight = PreflightGraph(data, context); preflight.HasError())
             return Result<AnimationGraphData>::Failure(preflight.ErrorValue());
         auto migrated = data;
         if (legacy && !LegacyDefaults(data))

@@ -76,33 +76,43 @@ namespace Horo::Animation {
             return None;
         }
 
+        /** @brief Charges one prepared writer's complete pose and binary-search work, including state control phases. */
+        std::uint64_t OccurrenceJointCost(const GraphInstanceAssets &assets, const GraphInstructionOccurrence &occurrence) noexcept {
+            const auto &instruction = assets.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex];
+            std::uint64_t cost = 0;
+            if (std::holds_alternative<GraphBlendNode>(instruction.payload))
+                cost = 3ULL * assets.program->SkeletonBinding().joints;
+            if (occurrence.phase == GraphOccurrencePhase::StateBegin)
+                cost = 4ULL * assets.program->SkeletonBinding().joints;
+            if (occurrence.phase == GraphOccurrencePhase::StateEnd)
+                cost = 8ULL * assets.program->SkeletonBinding().joints;
+            if (occurrence.clipBindingIndex.has_value()) {
+                const auto &descriptor = assets.program->ClipBindings()[*occurrence.clipBindingIndex];
+                const auto clip = std::ranges::find_if(assets.clips, [&descriptor](const auto &value) {
+                    return value->Data().descriptor == descriptor;
+                });
+                cost = (descriptor.kind == AnimationClipKind::Additive ? 6ULL : 3ULL) * assets.program->SkeletonBinding().joints;
+                for (const auto &track : (*clip)->Data().tracks)
+                    cost += 1 + std::bit_width(track.keys.size());
+            }
+            return cost;
+        }
+
         /** @brief Charges complete per-tick pose/key-search work after exact clip bindings have been admitted. */
         GraphInstanceFailure AdmitClipWork(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
+            using enum GraphInstanceFailure;
             std::uint64_t operations = 0;
             for (const auto &curve : assets.curves)
                 operations += 1 + std::bit_width(curve->Keys().size());
             if (operations > context.maximumJointOperations)
-                return GraphInstanceFailure::LimitExceeded;
+                return LimitExceeded;
             for (const auto &occurrence : assets.program->Occurrences()) {
-                const auto &instruction =
-                    assets.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex];
-                std::uint64_t cost = 0;
-                if (std::holds_alternative<GraphBlendNode>(instruction.payload))
-                    cost = 3ULL * assets.program->SkeletonBinding().joints;
-                if (occurrence.clipBindingIndex.has_value()) {
-                    const auto &descriptor = assets.program->ClipBindings()[*occurrence.clipBindingIndex];
-                    const auto clip = std::ranges::find_if(assets.clips, [&descriptor](const auto &value) {
-                        return value->Data().descriptor == descriptor;
-                    });
-                    cost = (descriptor.kind == AnimationClipKind::Additive ? 6ULL : 3ULL) * assets.program->SkeletonBinding().joints;
-                    for (const auto &track : (*clip)->Data().tracks)
-                        cost += 1 + std::bit_width(track.keys.size());
-                }
+                const auto cost = OccurrenceJointCost(assets, occurrence);
                 if (cost > context.maximumJointOperations || operations > context.maximumJointOperations - cost)
-                    return GraphInstanceFailure::LimitExceeded;
+                    return LimitExceeded;
                 operations += cost;
             }
-            return GraphInstanceFailure::None;
+            return None;
         }
 
         /** @brief Validates sampling policy against fixed engine bounds before inspecting clip contents. */
@@ -140,27 +150,109 @@ namespace Horo::Animation {
             return work > context.maximumJointOperations ? LimitExceeded : None;
         }
 
-        /** @brief Charges every retained workspace and both transaction/publication buffers without overflow. */
-        GraphInstanceFailure AdmitStorage(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
-            const auto &memory = assets.program->Memory();
-            std::uint64_t bytes = sizeof(Detail::GraphInstanceState);
-            const auto charge = [&bytes, &context](std::uint64_t count, std::uint64_t stride) {
+        /** @brief Load-time checked byte accumulator; a failed charge never wraps or admits an oversized workspace. */
+        struct StorageBudget final {
+            std::uint64_t maximum;
+            std::uint64_t bytes{sizeof(Detail::GraphInstanceState)};
+
+            bool operator()(const std::uint64_t count, const std::uint64_t stride) noexcept {
                 if (count > (std::numeric_limits<std::uint64_t>::max() - bytes) / stride)
                     return false;
                 bytes += count * stride;
-                return bytes <= context.maximumStorageBytes;
-            };
-            if (!charge(memory.poseTransforms + 2ULL * assets.program->SkeletonBinding().joints, sizeof(Math::Transform)) ||
+                return bytes <= maximum;
+            }
+        };
+
+        /** @brief Charges the existing pose/player/parameter and immutable-publication categories in their original order. */
+        bool AdmitBaseStorage(const GraphInstanceAssets &assets, StorageBudget &charge) noexcept {
+            if (const auto &memory = assets.program->Memory();
+                !charge(memory.poseTransforms + 2ULL * assets.program->SkeletonBinding().joints, sizeof(Math::Transform)) ||
                 !charge(memory.poseTransforms, sizeof(std::uint8_t)) ||
                 !charge(memory.clipPlayers, 2ULL * sizeof(Detail::GraphPlayerState)) ||
                 !charge(memory.parameters, 4ULL * sizeof(GraphParameterValue) + sizeof(std::uint8_t)) ||
                 !charge(assets.clips.size(), sizeof(std::shared_ptr<const AnimationClipAsset>)) ||
                 !charge(assets.curves.size(), sizeof(std::shared_ptr<const AnimationParameterCurve>) + sizeof(std::size_t)))
-                return GraphInstanceFailure::LimitExceeded;
+                return false;
+            return true;
+        }
+
+        /** @brief Resolves one immutable state declaration for both storage and control-work admission. */
+        const GraphStateMachineNode &MachineDefinition(const AnimationGraphProgram &program,
+                                                       const GraphStateMachineBinding &binding) noexcept {
+            const auto &occurrence = program.Occurrences()[binding.beginOccurrence];
+            return std::get<GraphStateMachineNode>(
+                program.Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex].payload);
+        }
+
+        /** @brief Charges every retained workspace and both transaction/publication buffers without overflow. */
+        GraphInstanceFailure AdmitStorage(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
+            using enum GraphInstanceFailure;
+            const auto &memory = assets.program->Memory();
+            StorageBudget charge{context.maximumStorageBytes};
+            if (!AdmitBaseStorage(assets, charge))
+                return LimitExceeded;
+            if (!charge(memory.stateMachines, 2ULL * sizeof(Detail::GraphMachineState) + sizeof(Detail::GraphPreparedMachine)) ||
+                !charge(memory.conditionLatches, 3ULL * sizeof(std::uint8_t) + sizeof(Detail::StateMachineCondition)) ||
+                !charge(memory.stateEvents, 3ULL * sizeof(GraphStateEvent)))
+                return LimitExceeded;
+            for (const auto &binding : assets.program->StateMachines()) {
+                const auto &machine = MachineDefinition(*assets.program, binding);
+                if (!charge(machine.states.size(), sizeof(Detail::StateMachineState)) ||
+                    !charge(machine.transitions.size(), sizeof(Detail::StateMachineTransition)))
+                    return LimitExceeded;
+            }
             for (std::size_t type = 1; type < memory.workingSlots.size(); ++type)
                 if (!charge(memory.workingSlots[type], sizeof(GraphParameterValue)))
-                    return GraphInstanceFailure::LimitExceeded;
-            return GraphInstanceFailure::None;
+                    return LimitExceeded;
+            return None;
+        }
+
+        /** @brief The immutable program must exactly pin the supplied skeleton publication. */
+        bool SkeletonMatches(const GraphInstanceAssets &assets) noexcept {
+            const auto &binding = assets.program->SkeletonBinding();
+            const auto &skeleton = assets.skeleton->Data();
+            return binding.id == skeleton.skeleton && binding.generation == assets.skeletonGeneration &&
+                   binding.contractVersion == skeleton.contractVersion && binding.joints == skeleton.joints.size();
+        }
+
+        /** @brief Caller instruction policy must admit the entire prepared stream, not merely its active subset. */
+        bool InstructionsAdmitted(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
+            return context.maximumInstructions != 0 && context.maximumInstructions <= AnimationGraphHardLimits::EvaluationInstructions &&
+                   assets.program->Occurrences().size() <= context.maximumInstructions;
+        }
+
+        /** @brief Checks runtime identity, skeleton publication compatibility and immutable instruction/clip policy. */
+        GraphInstanceFailure AdmitCompatibility(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
+            using enum GraphInstanceFailure;
+            if (!context.instance.IsValid())
+                return HandleMalformed;
+            if (!assets.program || !assets.skeleton || assets.program->Occurrences().empty())
+                return BindingMismatch;
+            if (!SkeletonMatches(assets))
+                return BindingMismatch;
+            if (!InstructionsAdmitted(assets, context))
+                return LimitExceeded;
+            if (assets.clips.size() != assets.program->ClipBindings().size())
+                return BindingMismatch;
+            if (!ValidClipLimits(context.clipLimits))
+                return LimitExceeded;
+            return None;
+        }
+
+        /** @brief Charges the complete bounded control/latch/event stream independently of pose sampling work. */
+        GraphInstanceFailure AdmitControlWork(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
+            using enum GraphInstanceFailure;
+            if (context.maximumControlOperations > 64ULL * 1024ULL * 1024ULL)
+                return LimitExceeded;
+            std::uint64_t control = assets.program->Occurrences().size() * (4ULL * assets.program->Memory().callDepth + 4ULL);
+            control += 3ULL * assets.program->Memory().conditionLatches + 3ULL * assets.program->Memory().stateEvents;
+            for (const auto &binding : assets.program->StateMachines()) {
+                const auto &machine = MachineDefinition(*assets.program, binding);
+                control += 2ULL * machine.transitions.size() + assets.program->Parameters().size();
+            }
+            if (control > context.maximumControlOperations)
+                return LimitExceeded;
+            return None;
         }
 
         /** @brief Checks identity, immutable compatibility and complete storage before any runtime allocation. */
@@ -168,29 +260,49 @@ namespace Horo::Animation {
             using enum GraphInstanceFailure;
             if (context.cancellation.IsCancellationRequested())
                 return Cancelled;
-            if (!context.instance.IsValid())
-                return HandleMalformed;
-            if (!assets.program || !assets.skeleton || assets.program->Occurrences().empty())
-                return BindingMismatch;
-            const auto &binding = assets.program->SkeletonBinding();
-            if (const auto &skeleton = assets.skeleton->Data();
-                binding.id != skeleton.skeleton || binding.generation != assets.skeletonGeneration ||
-                binding.contractVersion != skeleton.contractVersion || binding.joints != skeleton.joints.size())
-                return BindingMismatch;
-            if (context.maximumInstructions == 0 || context.maximumInstructions > AnimationGraphHardLimits::EvaluationInstructions ||
-                assets.program->Occurrences().size() > context.maximumInstructions)
-                return LimitExceeded;
-            if (assets.clips.size() != assets.program->ClipBindings().size())
-                return BindingMismatch;
-            if (!ValidClipLimits(context.clipLimits))
-                return LimitExceeded;
+            if (const auto failure = AdmitCompatibility(assets, context); failure != None)
+                return failure;
             if (const auto failure = AdmitStorage(assets, context); failure != None)
                 return failure;
             if (const auto failure = AdmitClipBindings(assets, context.clipLimits); failure != None)
                 return failure;
             if (const auto failure = AdmitCurves(assets, context); failure != None)
                 return failure;
+            if (const auto failure = AdmitControlWork(assets, context); failure != None)
+                return failure;
             return AdmitClipWork(assets, context);
+        }
+
+        /** @brief Allocates all scalar, pose, control and publication workspaces before the instance can execute. */
+        GraphInstanceFailure PrepareWorkspace(Detail::GraphInstanceState &state, const GraphInstanceAssets &assets) {
+            const auto &memory = state.program->Memory();
+            state.poses.transforms.resize(static_cast<std::size_t>(memory.poseTransforms));
+            state.poses.coverage.resize(static_cast<std::size_t>(memory.poseTransforms));
+            std::size_t scalars = 0;
+            for (std::size_t type = 1; type < memory.workingSlots.size(); ++type) {
+                state.scalars.offsets[type] = scalars;
+                scalars += memory.workingSlots[type];
+            }
+            state.scalars.values.resize(scalars);
+            state.players.resize(memory.clipPlayers);
+            state.candidate.players.resize(memory.clipPlayers);
+            if (const auto failure = Detail::PrepareGraphStateMachines(state); failure != GraphInstanceFailure::None)
+                return failure;
+            state.parameters.resize(memory.parameters);
+            state.candidate.parameters.resize(memory.parameters);
+            state.queuedTriggers.resize(memory.parameters);
+            for (auto &parameters : state.published.parameters)
+                parameters.resize(memory.parameters);
+            state.curves.publications.assign(assets.curves.begin(), assets.curves.end());
+            state.curves.parameters.reserve(assets.curves.size());
+            for (const auto &curve : assets.curves) {
+                const auto declarations = state.program->Parameters();
+                const auto found = std::ranges::lower_bound(declarations, curve->Parameter(), {}, &GraphParameter::id);
+                state.curves.parameters.push_back(static_cast<std::size_t>(found - declarations.begin()));
+            }
+            for (auto &pose : state.published.poses)
+                pose.resize(state.program->SkeletonBinding().joints);
+            return GraphInstanceFailure::None;
         }
 
         /** @brief Owner-thread gate does not inspect mutable runtime state from another thread. */
@@ -199,6 +311,18 @@ namespace Horo::Animation {
                 return {GraphInstanceFailure::AdmissionRejected};
             if (state->ownerThread != std::this_thread::get_id())
                 return {GraphInstanceFailure::ThreadViolation};
+            return {};
+        }
+
+        /** @brief Fences all copied publications before reading mutable handle metadata or caller outputs. */
+        GraphInstanceOutcome ResidentPublication(const Detail::GraphInstanceState *state, const PoseHandle &publication) noexcept {
+            if (const auto owner = Owner(state); owner.HasError())
+                return owner;
+            if (!publication.IsValid())
+                return {GraphInstanceFailure::HandleMalformed};
+            if (publication.instance != state->identity || publication.slot.index >= state->published.handles.size() ||
+                publication != state->published.handles[publication.slot.index])
+                return {GraphInstanceFailure::HandleStale};
             return {};
         }
     }  // namespace
@@ -229,31 +353,8 @@ namespace Horo::Animation {
                 });
                 state->clips.push_back(*found);
             }
-            const auto &memory = state->program->Memory();
-            state->poses.transforms.resize(static_cast<std::size_t>(memory.poseTransforms));
-            state->poses.coverage.resize(static_cast<std::size_t>(memory.poseTransforms));
-            std::size_t scalars = 0;
-            for (std::size_t type = 1; type < memory.workingSlots.size(); ++type) {
-                state->scalars.offsets[type] = scalars;
-                scalars += memory.workingSlots[type];
-            }
-            state->scalars.values.resize(scalars);
-            state->players.resize(memory.clipPlayers);
-            state->candidate.players.resize(memory.clipPlayers);
-            state->parameters.resize(memory.parameters);
-            state->candidate.parameters.resize(memory.parameters);
-            state->queuedTriggers.resize(memory.parameters);
-            for (auto &parameters : state->publishedParameters)
-                parameters.resize(memory.parameters);
-            state->curves.publications.assign(assets.curves.begin(), assets.curves.end());
-            state->curves.parameters.reserve(assets.curves.size());
-            for (const auto &curve : assets.curves) {
-                const auto declarations = state->program->Parameters();
-                const auto found = std::ranges::lower_bound(declarations, curve->Parameter(), {}, &GraphParameter::id);
-                state->curves.parameters.push_back(static_cast<std::size_t>(found - declarations.begin()));
-            }
-            for (auto &pose : state->publishedPoses)
-                pose.resize(state->program->SkeletonBinding().joints);
+            if (const auto failure = PrepareWorkspace(*state, assets); failure != GraphInstanceFailure::None)
+                return Result<AnimationGraphInstance>::Failure(DescribeGraphInstanceFailure({failure}));
             if (context.cancellation.IsCancellationRequested())
                 return Result<AnimationGraphInstance>::Failure(DescribeGraphInstanceFailure({GraphInstanceFailure::Cancelled}));
             return Result<AnimationGraphInstance>::Success(AnimationGraphInstance{std::move(state)});
@@ -299,9 +400,9 @@ namespace Horo::Animation {
             return {GraphInstanceFailure::Cancelled};
         if (state_->candidate.tick.IsValid())
             return {GraphInstanceFailure::StateInvalid};
-        if (!input.tick.IsValid() || input.tick <= state_->publication.tick)
+        if (!input.tick.IsValid() || input.tick <= state_->published.publication.tick)
             return {GraphInstanceFailure::TickStale};
-        if (state_->nextPoseGeneration == 0 || state_->nextPoseGeneration > std::numeric_limits<std::uint32_t>::max())
+        if (state_->published.nextGeneration == 0 || state_->published.nextGeneration > std::numeric_limits<std::uint32_t>::max())
             return {GraphInstanceFailure::LimitExceeded};
         if (const auto executed = Detail::ExecuteGraph(*state_, input); executed.HasError())
             return executed;
@@ -322,22 +423,35 @@ namespace Horo::Animation {
             state_->candidate.tick = {};
             return {GraphInstanceFailure::Cancelled};
         }
-        const auto generation = state_->nextPoseGeneration;
+        const auto generation = state_->published.nextGeneration;
         const auto slot = static_cast<std::uint32_t>((generation - 1) % 2);
         const PoseHandle handle{state_->identity,
                                 {slot, static_cast<std::uint32_t>(generation)},
                                 PoseGeneration::Create(generation).Value()};
-        std::ranges::copy(state_->Pose(state_->program->OutputSlot()), state_->publishedPoses[slot].begin());
-        std::ranges::copy(state_->candidate.parameters, state_->publishedParameters[slot].begin());
+        std::ranges::copy(state_->Pose(state_->program->OutputSlot()), state_->published.poses[slot].begin());
+        std::ranges::copy(state_->candidate.parameters, state_->published.parameters[slot].begin());
         std::ranges::fill(state_->queuedTriggers, 0);
-        state_->publishedHandles[slot] = handle;
+        state_->published.handles[slot] = handle;
         state_->players.swap(state_->candidate.players);
+        state_->machines.swap(state_->candidate.machines);
+        state_->latches.swap(state_->candidate.latches);
+        state_->published.eventCounts[slot] = state_->candidate.eventCount;
+        std::copy_n(state_->candidate.events.begin(), state_->candidate.eventCount, state_->published.events[slot].begin());
+        for (std::size_t index = 0; index < state_->machines.size(); ++index) {
+            if (!state_->machines[index].visited)
+                continue;
+            const auto &binding = state_->program->StateMachines()[index];
+            std::ranges::copy(state_->Pose(binding.poses[1]), state_->Pose(binding.poses[0]).begin());
+            std::ranges::copy(state_->Pose(binding.poses[3]), state_->Pose(binding.poses[2]).begin());
+            std::ranges::copy(state_->Coverage(binding.poses[1]), state_->Coverage(binding.poses[0]).begin());
+            std::ranges::copy(state_->Coverage(binding.poses[3]), state_->Coverage(binding.poses[2]).begin());
+        }
         state_->parameters.swap(state_->candidate.parameters);
-        state_->publication = {tick, state_->publication.currentPose, handle};
-        state_->nextPoseGeneration = generation == std::numeric_limits<std::uint64_t>::max() ? 0 : generation + 1;
+        state_->published.publication = {tick, state_->published.publication.currentPose, handle};
+        state_->published.nextGeneration = generation == std::numeric_limits<std::uint64_t>::max() ? 0 : generation + 1;
         state_->candidate.tick = {};
         state_->candidate.cancellation = {};
-        return {GraphInstanceFailure::None, {}, state_->publication};
+        return {GraphInstanceFailure::None, {}, state_->published.publication};
     }
 
     /** @copydoc AnimationGraphInstance::Abort */
@@ -346,6 +460,7 @@ namespace Horo::Animation {
             return owner;
         state_->candidate.tick = {};
         state_->candidate.cancellation = {};
+        state_->candidate.eventCount = 0;
         return {};
     }
 
@@ -372,33 +487,36 @@ namespace Horo::Animation {
     /** @copydoc AnimationGraphInstance::CopyParameters */
     GraphInstanceOutcome AnimationGraphInstance::CopyParameters(const PoseHandle &publication,
                                                                 const std::span<GraphParameterInput> output) const {
-        if (const auto owner = Owner(state_.get()); owner.HasError())
-            return owner;
-        if (!publication.IsValid())
-            return {GraphInstanceFailure::HandleMalformed};
-        if (publication.instance != state_->identity || publication.slot.index >= state_->publishedHandles.size() ||
-            publication != state_->publishedHandles[publication.slot.index])
-            return {GraphInstanceFailure::HandleStale};
+        if (const auto resident = ResidentPublication(state_.get(), publication); resident.HasError())
+            return resident;
         const auto declarations = state_->program->Parameters();
         if (output.size() != declarations.size())
             return {GraphInstanceFailure::LimitExceeded};
         for (std::size_t index = 0; index < output.size(); ++index)
-            output[index] = {declarations[index].id, state_->publishedParameters[publication.slot.index][index]};
+            output[index] = {declarations[index].id, state_->published.parameters[publication.slot.index][index]};
+        return {};
+    }
+
+    /** @copydoc AnimationGraphInstance::CopyStateEvents */
+    GraphInstanceOutcome AnimationGraphInstance::CopyStateEvents(const PoseHandle &publication, const std::span<GraphStateEvent> output,
+                                                                 std::uint32_t &written) const {
+        if (const auto resident = ResidentPublication(state_.get(), publication); resident.HasError())
+            return resident;
+        const auto count = state_->published.eventCounts[publication.slot.index];
+        if (output.size() < count)
+            return {GraphInstanceFailure::LimitExceeded};
+        std::copy_n(state_->published.events[publication.slot.index].begin(), count, output.begin());
+        written = count;
         return {};
     }
 
     /** @copydoc AnimationGraphInstance::CopyPose */
     GraphInstanceOutcome AnimationGraphInstance::CopyPose(const PoseHandle &pose, const std::span<Math::Transform> output) const {
-        if (const auto owner = Owner(state_.get()); owner.HasError())
-            return owner;
-        if (!pose.IsValid())
-            return {GraphInstanceFailure::HandleMalformed};
-        if (pose.instance != state_->identity || pose.slot.index >= state_->publishedHandles.size() ||
-            pose != state_->publishedHandles[pose.slot.index])
-            return {GraphInstanceFailure::HandleStale};
+        if (const auto resident = ResidentPublication(state_.get(), pose); resident.HasError())
+            return resident;
         if (output.size() != state_->program->SkeletonBinding().joints)
             return {GraphInstanceFailure::LimitExceeded};
-        std::ranges::copy(state_->publishedPoses[pose.slot.index], output.begin());
+        std::ranges::copy(state_->published.poses[pose.slot.index], output.begin());
         return {};
     }
 
@@ -406,7 +524,7 @@ namespace Horo::Animation {
     GraphInstancePublication AnimationGraphInstance::Publication() const noexcept {
         if (!state_ || state_->ownerThread != std::this_thread::get_id())
             return {};
-        return state_->publication;
+        return state_->published.publication;
     }
 
     /** @copydoc AnimationGraphInstance::Shutdown */
@@ -417,6 +535,7 @@ namespace Horo::Animation {
         std::ranges::fill(state_->queuedTriggers, 0);
         state_->candidate.tick = {};
         state_->candidate.cancellation = {};
+        state_->candidate.eventCount = 0;
         return {};
     }
 }  // namespace Horo::Animation

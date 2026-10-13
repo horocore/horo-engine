@@ -41,6 +41,8 @@ namespace Horo::Animation {
         std::uint64_t maximumJointOperations{64ULL * 1024ULL * 1024ULL}; /**< Per-tick joint writes and bounded key-search visits. */
         AnimationClipLimits clipLimits{};
         CancellationToken cancellation{};
+        std::uint64_t maximumControlOperations{8ULL * 1024ULL *
+                                               1024ULL}; /**< Whole-plan guard/reset/condition/event work before allocation. */
     };
 
     /** @brief One attempted fixed tick; caller views are copied before execution and never retained. */
@@ -58,6 +60,31 @@ namespace Horo::Animation {
         AnimationTickId tick{};
         PoseHandle previousPose{};
         PoseHandle currentPose{};
+    };
+    /** @brief Committed state lifecycle records; clip notifies remain their separate Animation responsibility. */
+    enum class GraphStateEventKind : std::uint8_t {
+        Entered,
+        Exited,
+        TransitionStarted,
+        TransitionInterrupted,
+        TransitionCompleted,
+        Loop
+    };
+
+    /** @brief Copied immutable lifecycle occurrence, fenced by instance, compiled occurrence, tick and entry generation. */
+    struct GraphStateEvent final {
+        AnimationInstanceHandle instance{};
+        AnimationTickId tick{};
+        GraphSourceLocation source{};
+        std::uint32_t occurrence{};
+        std::uint32_t ordinal{};
+        GraphStateEventKind kind{};
+        GraphStateId state{};
+        GraphTransitionId transition{};
+        std::uint64_t activation{};
+        std::uint64_t loopOrdinal{};
+        AnimationTraversalDirection direction{AnimationTraversalDirection::Held};
+        bool operator==(const GraphStateEvent &) const = default;
     };
 
     /** @brief Allocation-free graph runtime failure vocabulary, independent of diagnostic string ownership. */
@@ -165,6 +192,14 @@ namespace Horo::Animation {
          * publication only; the next successful tick clears them unless another event is queued or explicitly supplied.
          */
         [[nodiscard]] GraphInstanceOutcome CopyParameters(const PoseHandle &publication, std::span<GraphParameterInput> output) const;
+        /** @brief Copies the complete state lifecycle event block for an exact resident committed publication.
+         * @param publication Exact pose publication returned by Commit; both retained publications are readable after Shutdown.
+         * @param output Caller-owned capacity for the complete event block; larger spans are permitted.
+         * @param written Receives copied count on success; unchanged together with output on failure.
+         * @return Typed owner, stale/size/lifecycle outcome before any partial write. No allocation or callback occurs.
+         */
+        [[nodiscard]] GraphInstanceOutcome CopyStateEvents(const PoseHandle &publication, std::span<GraphStateEvent> output,
+                                                           std::uint32_t &written) const;
         /** @brief Copies an exact resident immutable committed local pose.
          * @param pose Exact instance, recyclable slot and semantic generation.
          * @param output Caller-owned complete skeleton pose storage.

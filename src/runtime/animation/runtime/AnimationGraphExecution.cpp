@@ -11,24 +11,28 @@ namespace Horo::Animation::Detail {
         constexpr std::int64_t RatePrecision = 1'000'000;
         constexpr std::int32_t MaximumRate = 16'000'000;
 
-        /** @brief Checks signed arithmetic before retaining the exact per-player rate residual. */
-        AnimationClipOutcome<AnimationTimeDelta> ScaleDelta(const GraphEvaluationInput &input, GraphPlayerState &player) noexcept {
-            const auto rate = static_cast<std::int64_t>(input.rate.millionths);
-            const auto quotient = input.delta.ticks / RatePrecision;
-            if ((rate > 0 && quotient > std::numeric_limits<std::int64_t>::max() / rate) ||
-                (rate < 0 && quotient > std::numeric_limits<std::int64_t>::max() / -rate))
-                return AnimationClipOutcome<AnimationTimeDelta>::Failure(
-                    {AnimationClipFailure::TimeOverflow, "The player rate overflows exact time."});
-            const auto integral = quotient * rate;
-            const auto residual = (input.delta.ticks % RatePrecision) * rate + player.remainder;
-            const auto carry = residual / RatePrecision;
-            if ((carry > 0 && integral > std::numeric_limits<std::int64_t>::max() - carry) ||
-                (carry < 0 && integral < std::numeric_limits<std::int64_t>::min() - carry))
-                return AnimationClipOutcome<AnimationTimeDelta>::Failure(
-                    {AnimationClipFailure::TimeOverflow, "The player residual overflows exact time."});
-            player.remainder = residual % RatePrecision;
-            return AnimationClipOutcome<AnimationTimeDelta>::Success({integral + carry});
-        }
+    }  // namespace
+
+    /** @copydoc ScaleGraphDelta */
+    AnimationClipOutcome<AnimationTimeDelta> ScaleGraphDelta(const GraphEvaluationInput &input, GraphPlayerState &player) noexcept {
+        const auto rate = static_cast<std::int64_t>(input.rate.millionths);
+        const auto quotient = input.delta.ticks / RatePrecision;
+        if ((rate > 0 && quotient > std::numeric_limits<std::int64_t>::max() / rate) ||
+            (rate < 0 && quotient > std::numeric_limits<std::int64_t>::max() / -rate))
+            return AnimationClipOutcome<AnimationTimeDelta>::Failure(
+                {AnimationClipFailure::TimeOverflow, "The player rate overflows exact time."});
+        const auto integral = quotient * rate;
+        const auto residual = (input.delta.ticks % RatePrecision) * rate + player.remainder;
+        const auto carry = residual / RatePrecision;
+        if ((carry > 0 && integral > std::numeric_limits<std::int64_t>::max() - carry) ||
+            (carry < 0 && integral < std::numeric_limits<std::int64_t>::min() - carry))
+            return AnimationClipOutcome<AnimationTimeDelta>::Failure(
+                {AnimationClipFailure::TimeOverflow, "The player residual overflows exact time."});
+        player.remainder = residual % RatePrecision;
+        return AnimationClipOutcome<AnimationTimeDelta>::Success({integral + carry});
+    }
+
+    namespace {
 
         /** @brief Validates one scalar override's variant and value before storing the candidate snapshot. */
         GraphInstanceFailure ValidateParameterValue(const GraphParameter &declaration, const GraphParameterInput &parameter) noexcept {
@@ -81,7 +85,7 @@ namespace Horo::Animation::Detail {
         GraphInstanceOutcome SampleClip(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
                                         const GraphInstruction &instruction, const GraphEvaluationInput &input) {
             auto &player = state.candidate.players[*occurrence.clipPlayer];
-            const auto delta = ScaleDelta(input, player);
+            const auto delta = ScaleGraphDelta(input, player);
             if (delta.HasError())
                 return {GraphInstanceFailure::ClipFailure, delta.ErrorValue()};
             const auto &clip = *state.clips[*occurrence.clipBindingIndex];
@@ -174,6 +178,47 @@ namespace Horo::Animation::Detail {
                 }
             }, instruction.payload);
         }
+
+        /** @brief Starts a tick transaction in already allocated candidate storage; committed state is untouched. */
+        void PrepareCandidate(GraphInstanceState &state) {
+            std::ranges::copy(state.players, state.candidate.players.begin());
+            std::ranges::copy(state.machines, state.candidate.machines.begin());
+            std::ranges::copy(state.latches, state.candidate.latches.begin());
+            state.candidate.eventCount = 0;
+            for (auto &machine : state.candidate.machines) {
+                machine.visited = false;
+                machine.retiring = false;
+                machine.held = {};
+            }
+        }
+
+        /** @brief Executes one active guarded phase using the sole prepared clip/pose dispatch path. */
+        GraphInstanceOutcome ExecuteGuardedOccurrence(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
+                                                      const GraphEvaluationInput &input) {
+            const auto &instruction = state.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex];
+            auto branchInput = input;
+            if (!StateBranchInput(state, occurrence, branchInput))
+                return {};
+            if (occurrence.phase == GraphOccurrencePhase::StateBegin)
+                return BeginGraphStateMachine(state, occurrence, branchInput);
+            if (occurrence.phase == GraphOccurrencePhase::StateEnd)
+                return EndGraphStateMachine(state, occurrence);
+            if (occurrence.clipBindingIndex.has_value())
+                return SampleClip(state, occurrence, instruction, branchInput);
+            return ExecuteOccurrence(state, occurrence, instruction, branchInput);
+        }
+
+        /** @brief Either invocation or owner cancellation aborts the candidate before publication. */
+        bool Cancelled(const GraphInstanceState &state, const GraphEvaluationInput &input) noexcept {
+            return input.cancellation.IsCancellationRequested() || state.ownerCancellation.IsCancellationRequested();
+        }
+
+        /** @brief Completes retirement only after the full occurrence stream and final cancellation fence succeed. */
+        void CompleteRetirement(GraphInstanceState &state) {
+            for (std::size_t index = 0; index < state.candidate.machines.size(); ++index)
+                if (state.candidate.machines[index].retiring)
+                    ResetGraphStateControl(state, static_cast<std::uint32_t>(index));
+        }
     }  // namespace
 
     /** @copydoc ExecuteGraph */
@@ -182,16 +227,17 @@ namespace Horo::Animation::Detail {
             return {GraphInstanceFailure::Malformed};
         if (const auto captured = CaptureParameters(state, input); captured.HasError())
             return captured;
-        std::ranges::copy(state.players, state.candidate.players.begin());
+        PrepareCandidate(state);
         for (const auto &occurrence : state.program->Occurrences()) {
-            if (input.cancellation.IsCancellationRequested() || state.ownerCancellation.IsCancellationRequested())
+            if (Cancelled(state, input))
                 return {GraphInstanceFailure::Cancelled};
-            const auto &instruction = state.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex];
-            if (const auto executed = ExecuteOccurrence(state, occurrence, instruction, input); executed.HasError())
+            if (const auto executed = ExecuteGuardedOccurrence(state, occurrence, input); executed.HasError())
                 return executed;
+            // Input, Call and Output alias the actual earlier writer, as established by the compiled access plan.
         }
-        if (input.cancellation.IsCancellationRequested() || state.ownerCancellation.IsCancellationRequested())
+        if (Cancelled(state, input))
             return {GraphInstanceFailure::Cancelled};
+        CompleteRetirement(state);
         return {};
     }
 }  // namespace Horo::Animation::Detail

@@ -392,13 +392,14 @@ interface input IDs are definition-local. Vector positions and names are never
 persisted identity. Names are bounded ASCII binding identifiers, not localized
 editor labels.
 
-The initial compiler supports typed Clip, Blend, Parameter, Output, Input and Call
-nodes. Each node has exactly the compiler-owned pin-role shape. Clip and Call
+The baseline compiler supports typed Clip, Blend, Parameter, Output, Input and Call
+nodes; schema 4 / graph contract 1.2.0 additionally admits typed StateMachine
+writers. Each node has exactly the compiler-owned pin-role shape. Clip and Call
 produce a pose; Blend takes two poses and one float weight; Parameter reads its
 exact declared scalar type; Input reads its definition's typed interface; Output
 consumes one pose. The compiler does not sample clips, blend poses, consume
 triggers, resolve skeleton publications, select a backend, or discover external
-subgraphs. Blend trees, state machines, IK and other nodes require their own
+subgraphs. Blend trees, IK and other future nodes require their own
 versioned semantic contract before admission; illustrative node lists below do
 not imply that those runtime implementations exist.
 
@@ -462,18 +463,20 @@ prepared runtime owner described below.
 
 #### Versioning And Migration
 
-Schema 3/semantic contract 1.1.0 adds explicit pose-layer settings while retaining
-all legacy node/pin/opcode identities and default normalized behavior. Legacy
-schema 1/2 contract 1.0.0 migrates only through `MigrateAnimationGraph` or explicit
-source decode policy. Schema 1 derives Unspecified edge types from the source pin;
-schema 2 keeps explicit types. Both gain unmasked normalized layers with skeleton
-reference completion and absolute-clip defaults. The complete current contract is
-validated before returning. Unknown versions and new semantics mislabeled as
-legacy reject. Current migration is idempotent; Compile admits only current data.
-Affected callers are graph source codec hosts and in-memory authoring producers;
-they must migrate prior bytes/data before compilation. Runtime consumers retain
-the same explicit Create/Evaluate/Commit/Abort/Replace/CopyPose lifecycle. This
-does not change project version 0.1.0 or unrelated module formats.
+Historical version 2 introduced explicit connection transport types. The bounded version-1
+migration input uses the same typed nodes and stable identities, with every
+connection type set to `Unspecified`. `MigrateAnimationGraph` derives each edge's
+type from its source pin, then runs complete current validation, including the
+destination type. It never guesses coercions or repairs missing IDs. Schemas 1/2
+carry graph contract 1.0.0; the pose parent owns schema 3 / contract 1.1.0, and
+state nodes extend it in schema 4 / contract 1.2.0. `Compile` admits only the current
+exact pair. Earlier pairs require explicit migration; unknown/mismatched pairs fail.
+Schema 3 pose settings, additive reference identities/operands, masks and missing-joint
+policies are retained exactly by schema-4 migration. Schemas 1/2 acquire only normalized,
+unmasked, skeleton-reference completion and absolute-clip defaults; new pose policies
+mislabeled as those legacy versions reject. No project version or unrelated module
+format changes. Affected source-codec/in-memory authoring callers explicitly migrate
+before compilation; the prepared runtime lifecycle remains the feature boundary.
 The durable UTF-8 JSON codec lives in the dedicated
 `HoroEngine::AnimationGraphSourceCodec` target; its JSON dependency stays private,
 and `AnimationApi` continues to expose only Foundation/Assets usage requirements.
@@ -667,6 +670,30 @@ graph instance.
 ### State Machine
 
 A state machine node contains states and transitions.
+
+ANI-002.4 implements these as a real schema-4 graph opcode consumed by the
+prepared `AnimationGraphInstance`. The compiler emits control before guarded
+children and pose completion afterward, with two lanes for independently entered
+source/destination incarnations. Actual clip/subgraph players advance only in
+active branches. Instance preparation admits complete state, latches, composed
+and frozen poses, and event storage/work before allocation. Evaluation stages
+them privately; successful tick Commit publishes clocks, cursors, poses,
+parameters and lifecycle events together. Abort/cancellation/failure publishes
+nothing. `CopyStateEvents` uses the same two-publication generation fence as
+pose/parameter copies and performs no allocation or callbacks.
+
+Priority ties use the lower stable transition ID. At most one new transition
+starts per attempted tick; zero-duration and self transitions are supported.
+Interruption uses the active rule's typed source/destination policy and requires
+higher priority. It begins from the last committed composed pose through the
+same pose-composition kernel used by the graph, with no alternate joint blend.
+Exact state clocks retain fixed-point residuals; direct clip cycles derive from
+their immutable wrap descriptors, while subgraphs may declare a bounded explicit
+cycle. Nested re-entry retains non-reused entry generations. Details, migration,
+event order and copied-query/reload/shutdown guarantees are defined in the
+[state-machine migration guide](../../guides/animation-state-machine-migration.md)
+and [graph source contract](./animation-graph-source-contract.md). Scene activation
+and application composition remain ANI-004.5/#486.
 
 - each state references a sub-graph or clip
 - transitions have duration, curve, and trigger conditions

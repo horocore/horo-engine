@@ -81,8 +81,8 @@ namespace Horo::Animation::GraphCompileDetail {
         }
 
         /** @brief Resolves typed writer policy once and charges immutable dense storage. */
-        Result<void> BindComposition(const GraphInstruction &instruction, GraphInstructionOccurrence &occurrence, OccurrencePlan &plan,
-                                     const AnimationGraphCompileContext &context) {
+        Result<void> BindComposition(const GraphNodePayload &payload, GraphInstructionOccurrence &occurrence,
+                                     GraphMemoryRequirements &memory, const AnimationGraphCompileContext &context) {
             if (const auto bound = std::visit(
                     [&occurrence, &context]<typename Payload>(const Payload &payload) {
                 if constexpr (std::is_same_v<Payload, GraphBlendNode>)
@@ -91,11 +91,11 @@ namespace Horo::Animation::GraphCompileDetail {
                     return BindClipCoverage(payload, occurrence, context);
                 else
                     return Result<void>::Success();
-            }, instruction.payload);
+            }, payload);
                 bound.HasError())
                 return bound;
-            plan.memory.compositionEntries += occurrence.jointMask.size() + occurrence.clipCoverage.size();
-            if (plan.memory.compositionEntries > context.limits.poseTransforms)
+            memory.compositionEntries += occurrence.jointMask.size() + occurrence.clipCoverage.size();
+            if (memory.compositionEntries > context.limits.poseTransforms)
                 return Result<void>::Failure(Failure(GraphLimitExceeded));
             return Result<void>::Success();
         }
@@ -185,7 +185,7 @@ namespace Horo::Animation::GraphCompileDetail {
                 occurrence.clipPlayer = plan.memory.clipPlayers++;
                 occurrence.clipBindingIndex = static_cast<std::uint32_t>(Find(dependencies.clips, clip->clip) - dependencies.clips.data());
             }
-            return BindComposition(instruction, occurrence, plan, context);
+            return BindWriterComposition(instruction.payload, occurrence, plan.memory, context);
         }
 
         /** @brief Creates the callee's interface bindings and stable path from the exact caller operands. */
@@ -251,11 +251,21 @@ namespace Horo::Animation::GraphCompileDetail {
         }
     }  // namespace
 
+    /** @copydoc BindWriterComposition */
+    Result<void> BindWriterComposition(const GraphNodePayload &payload, GraphInstructionOccurrence &occurrence,
+                                       GraphMemoryRequirements &memory, const AnimationGraphCompileContext &context) {
+        return BindComposition(payload, occurrence, memory, context);
+    }
+
     /** @copydoc Bind */
     Result<BoundPlan> Bind(const AnimationGraphProgram &program, const AnimationGraphCompileContext &context) {
         auto dependencies = ValidateDependencies(program, context);
         if (dependencies.HasError())
             return Result<BoundPlan>::Failure(dependencies.ErrorValue());
+        for (const auto &definition : program.Definitions())
+            for (const auto &instruction : definition.instructions)
+                if (std::holds_alternative<GraphStateMachineNode>(instruction.payload))
+                    return BindStateNodes(program, context, dependencies.Value().skeleton, std::move(dependencies).Value().clips);
         auto plan = BuildOccurrencePlan(program, dependencies.Value(), context);
         if (plan.HasError())
             return Result<BoundPlan>::Failure(plan.ErrorValue());
