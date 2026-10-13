@@ -149,7 +149,7 @@ namespace Horo::PCG {
 
     /** @copydoc EncodePCGPointTransformationSettings(const PCGPointTransformSettings&) */
     Result<std::vector<std::uint8_t>> EncodePCGPointTransformationSettings(const PCGPointTransformSettings &s) {
-        return Encode(Valid(s), 85, [&](std::span<std::uint8_t> b) {
+        return Encode(Valid(s), 85, [&s](std::span<std::uint8_t> b) {
             b[4] = static_cast<std::uint8_t>(s.space);
             Vector(b.subspan(5, 24), s.delta.translation);
             Number(b.subspan(29, 8), s.delta.rotation.x);
@@ -162,14 +162,14 @@ namespace Horo::PCG {
 
     /** @copydoc EncodePCGPointTransformationSettings(const PCGPointAlignmentSettings&) */
     Result<std::vector<std::uint8_t>> EncodePCGPointTransformationSettings(const PCGPointAlignmentSettings &s) {
-        return Encode(Valid(s), 12, [&](std::span<std::uint8_t> b) {
+        return Encode(Valid(s), 12, [&s](std::span<std::uint8_t> b) {
             Number(b.subspan(4, 8), s.maximumVerticalDistance);
         });
     }
 
     /** @copydoc EncodePCGPointTransformationSettings(const PCGPointRandomOffsetSettings&) */
     Result<std::vector<std::uint8_t>> EncodePCGPointTransformationSettings(const PCGPointRandomOffsetSettings &s) {
-        return Encode(Valid(s), 37, [&](std::span<std::uint8_t> b) {
+        return Encode(Valid(s), 37, [&s](std::span<std::uint8_t> b) {
             b[4] = static_cast<std::uint8_t>(s.space);
             Vector(b.subspan(5, 24), s.halfExtent);
             Word(b.subspan(29, 8), s.salt);
@@ -178,7 +178,7 @@ namespace Horo::PCG {
 
     /** @copydoc EncodePCGPointTransformationSettings(const PCGPointNoiseSettings&) */
     Result<std::vector<std::uint8_t>> EncodePCGPointTransformationSettings(const PCGPointNoiseSettings &s) {
-        return Encode(Valid(s), 51 + s.attribute.Value().size(), [&](std::span<std::uint8_t> b) {
+        return Encode(Valid(s), 51 + s.attribute.Value().size(), [&s](std::span<std::uint8_t> b) {
             b[4] = static_cast<std::uint8_t>(s.type);
             b[5] = static_cast<std::uint8_t>(s.normalization);
             Word(b.subspan(6, 4), s.octaves);
@@ -257,18 +257,16 @@ namespace Horo::PCG {
                 return Invalid<void>();
             const auto *noise = std::get_if<PCGPointNoiseSettings>(&s);
             for (const auto &field : input.schema->Attributes()) {
-                const auto *target = output.schema->Find(field.key.Value());
-                if (target == nullptr || target->type != field.type)
+                if (const auto *target = output.schema->Find(field.key.Value()); target == nullptr || target->type != field.type)
                     return Invalid<void>();
             }
             if (noise == nullptr)
                 return std::ranges::equal(input.schema->Attributes(), output.schema->Attributes()) ? Result<void>::Success()
                                                                                                    : Invalid<void>();
-            const auto *target = output.schema->Find(noise->attribute.Value());
-            if (target == nullptr || target->type != noise->type)
+            if (const auto *target = output.schema->Find(noise->attribute.Value()); target == nullptr || target->type != noise->type)
                 return Invalid<void>();
-            const bool existed = input.schema->Find(noise->attribute.Value()) != nullptr;
-            if (output.schema->Attributes().size() != input.schema->Attributes().size() + (existed ? 0 : 1))
+            if (const bool existed = input.schema->Find(noise->attribute.Value()) != nullptr;
+                output.schema->Attributes().size() != input.schema->Attributes().size() + (existed ? 0 : 1))
                 return Invalid<void>();
             return Result<void>::Success();
         }

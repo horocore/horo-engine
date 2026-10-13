@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <type_traits>
 
 namespace Horo::PCG::detail {
     namespace {
@@ -28,14 +27,20 @@ namespace Horo::PCG::detail {
             for (const auto &t : spatial.Surfaces()) {
                 if (cancellation.IsCancellationRequested())
                     return Reject<Math::Vec3>(PCGErrors::CpuEvaluationClosed);
-                const auto a = t.vertices[0], b = t.vertices[1], c = t.vertices[2];
-                const double bx = static_cast<double>(b.x) - a.x, bz = static_cast<double>(b.z) - a.z;
-                const double cx = static_cast<double>(c.x) - a.x, cz = static_cast<double>(c.z) - a.z;
-                const double px = static_cast<double>(point.x) - a.x, pz = static_cast<double>(point.z) - a.z;
+                const auto a = t.vertices[0];
+                const auto b = t.vertices[1];
+                const auto c = t.vertices[2];
+                const double bx = static_cast<double>(b.x) - a.x;
+                const double bz = static_cast<double>(b.z) - a.z;
+                const double cx = static_cast<double>(c.x) - a.x;
+                const double cz = static_cast<double>(c.z) - a.z;
+                const double px = static_cast<double>(point.x) - a.x;
+                const double pz = static_cast<double>(point.z) - a.z;
                 const double determinant = bx * cz - cx * bz;
                 if (determinant == 0)
                     continue;
-                const double u = (px * cz - cx * pz) / determinant, v = (bx * pz - px * bz) / determinant;
+                const double u = (px * cz - cx * pz) / determinant;
+                const double v = (bx * pz - px * bz) / determinant;
                 if (u < 0 || v < 0 || u + v > 1)
                     continue;
                 const double height = a.y + u * (static_cast<double>(b.y) - a.y) + v * (static_cast<double>(c.y) - a.y);
@@ -84,7 +89,7 @@ namespace Horo::PCG::detail {
         }
 
         /** @brief Performs checked displacement in the declared frame without scaling a local offset. */
-        Result<Math::Vec3> Displace(Math::Transform source, Math::Vec3 offset, PCGPointCoordinateSpace space) {
+        Result<Math::Vec3> Displace(const Math::Transform &source, Math::Vec3 offset, PCGPointCoordinateSpace space) {
             if (space == PCGPointCoordinateSpace::PointLocal) {
                 const auto rotated = source.rotation.TryRotate(offset);
                 if (rotated.HasError())
@@ -106,7 +111,8 @@ namespace Horo::PCG::detail {
             const auto position = Displace(source, s.delta.translation, s.space);
             if (position.HasError())
                 return Result<Math::Transform>::Failure(position.ErrorValue());
-            const auto delta = s.delta.rotation.TryNormalized(), original = source.rotation.TryNormalized();
+            const auto delta = s.delta.rotation.TryNormalized();
+            const auto original = source.rotation.TryNormalized();
             if (delta.HasError() || original.HasError())
                 return Reject<Math::Transform>(PCGErrors::PointDataInvalid);
             const auto composed =
@@ -119,19 +125,20 @@ namespace Horo::PCG::detail {
             source.scale = {source.scale.x * s.delta.scale.x, source.scale.y * s.delta.scale.y, source.scale.z * s.delta.scale.z};
             return Result<Math::Transform>::Success(source);
         }
-    }  // namespace
 
-    /** @copydoc TransformPoint */
-    Result<Math::Transform> TransformPoint(const PointTransformationSettings &settings, const PCGSpatialSnapshot &spatial,
-                                           const Math::Transform &source, std::uint64_t seed, CancellationToken cancellation) {
-        if (cancellation.IsCancellationRequested())
-            return Reject<Math::Transform>(PCGErrors::CpuEvaluationClosed);
-        auto result = std::visit([&](const auto &s) -> Result<Math::Transform> {
-            using T = std::decay_t<decltype(s)>;
-            if constexpr (std::is_same_v<T, PCGPointTransformSettings>)
-                return Components(s, source);
-            else if constexpr (std::is_same_v<T, PCGPointAlignmentSettings>) {
-                const auto normal = SurfaceNormal(s, source.translation, spatial, cancellation);
+        /** @brief Synchronous closed-settings visitor; borrows remain inside TransformPoint and never reach a worker. */
+        struct PointTransformer {
+            const PCGSpatialSnapshot &spatial;
+            const Math::Transform &source;
+            std::uint64_t seed;
+            CancellationToken cancellation;
+
+            Result<Math::Transform> operator()(const PCGPointTransformSettings &settings) const {
+                return Components(settings, source);
+            }
+
+            Result<Math::Transform> operator()(const PCGPointAlignmentSettings &settings) const {
+                const auto normal = SurfaceNormal(settings, source.translation, spatial, cancellation);
                 if (normal.HasError())
                     return Result<Math::Transform>::Failure(normal.ErrorValue());
                 const auto rotation = Align(source.rotation, normal.Value());
@@ -140,24 +147,36 @@ namespace Horo::PCG::detail {
                 auto value = source;
                 value.rotation = rotation.Value();
                 return Result<Math::Transform>::Success(value);
-            } else if constexpr (std::is_same_v<T, PCGPointRandomOffsetSettings>) {
-                auto state = seed ^ s.salt;
-                const Math::Vec3 offset{static_cast<float>((2 * Draw(state) - 1) * s.halfExtent.x),
-                                        static_cast<float>((2 * Draw(state) - 1) * s.halfExtent.y),
-                                        static_cast<float>((2 * Draw(state) - 1) * s.halfExtent.z)};
-                const auto position = Displace(source, offset, s.space);
+            }
+
+            Result<Math::Transform> operator()(const PCGPointRandomOffsetSettings &settings) const {
+                auto state = seed ^ settings.salt;
+                const Math::Vec3 offset{static_cast<float>((2 * Draw(state) - 1) * settings.halfExtent.x),
+                                        static_cast<float>((2 * Draw(state) - 1) * settings.halfExtent.y),
+                                        static_cast<float>((2 * Draw(state) - 1) * settings.halfExtent.z)};
+                const auto position = Displace(source, offset, settings.space);
                 if (position.HasError())
                     return Result<Math::Transform>::Failure(position.ErrorValue());
                 auto value = source;
                 value.translation = position.Value();
                 return Result<Math::Transform>::Success(value);
-            } else
+            }
+
+            Result<Math::Transform> operator()(const PCGPointNoiseSettings &) const {
                 return Result<Math::Transform>::Success(source);
-        }, settings);
+            }
+        };
+    }  // namespace
+
+    /** @copydoc TransformPoint */
+    Result<Math::Transform> TransformPoint(const PointTransformationSettings &settings, const PCGSpatialSnapshot &spatial,
+                                           const Math::Transform &source, std::uint64_t seed, CancellationToken cancellation) {
+        if (cancellation.IsCancellationRequested())
+            return Reject<Math::Transform>(PCGErrors::CpuEvaluationClosed);
+        auto result = std::visit(PointTransformer{spatial, source, seed, cancellation}, settings);
         if (result.HasError())
             return result;
-        const auto matrix = result.Value().TryToMatrix();
-        if (matrix.HasError() || !Math::IsFinite(matrix.Value()))
+        if (const auto matrix = result.Value().TryToMatrix(); matrix.HasError() || !Math::IsFinite(matrix.Value()))
             return Reject<Math::Transform>(PCGErrors::PointDataInvalid);
         return result;
     }

@@ -295,6 +295,25 @@ namespace Horo::PCG {
             return Result<std::size_t>::Success(total);
         }
 
+        /** @brief Validates one transformation's routed source and preservation schema before any workspace allocation. */
+        [[nodiscard]] Result<void> ValidateTransformationBound(const PCGCookedPlan &plan, const std::span<const PCGPointOutputBound> bounds,
+                                                               const PCGPointOutputBound &bound) {
+            const auto settings = detail::DecodePointTransformation(plan.Nodes()[bound.node]);
+            if (settings.HasError())
+                return Result<void>::Failure(settings.ErrorValue());
+            const auto route = std::ranges::find_if(plan.Routes(), [&bound](const auto &candidate) {
+                return candidate.targetNode == bound.node;
+            });
+            if (route == plan.Routes().end())
+                return Reject<void>(PCGErrors::CpuEvaluationInvalid);
+            const auto source = std::ranges::find_if(bounds, [&route](const auto &candidate) {
+                return candidate.node == route->sourceNode && candidate.pin == route->sourcePin;
+            });
+            if (source == bounds.end())
+                return Reject<void>(PCGErrors::CpuEvaluationInvalid);
+            return detail::ValidatePointTransformation(settings.Value(), *source, bound);
+        }
+
         /** @brief Proves complete semantic schemas and exact source feasibility before allocating point columns. */
         [[nodiscard]] Result<void> ValidateGenerationBounds(const PCGCookedPlan &plan, const PCGSpatialSnapshot &spatial,
                                                             const std::span<const PCGPointOutputBound> bounds) {
@@ -306,20 +325,7 @@ namespace Horo::PCG {
                 if (descriptor.HasError())
                     return Result<void>::Failure(descriptor.ErrorValue());
                 if (detail::IsPointTransformation(descriptor.Value()->kind)) {
-                    const auto settings = detail::DecodePointTransformation(node);
-                    if (settings.HasError())
-                        return Result<void>::Failure(settings.ErrorValue());
-                    const auto route = std::ranges::find_if(plan.Routes(), [&](const auto &r) {
-                        return r.targetNode == bound.node;
-                    });
-                    if (route == plan.Routes().end())
-                        return Reject<void>(PCGErrors::CpuEvaluationInvalid);
-                    const auto source = std::ranges::find_if(bounds, [&](const auto &b) {
-                        return b.node == route->sourceNode && b.pin == route->sourcePin;
-                    });
-                    if (source == bounds.end())
-                        return Reject<void>(PCGErrors::CpuEvaluationInvalid);
-                    if (const auto valid = detail::ValidatePointTransformation(settings.Value(), *source, bound); valid.HasError())
+                    if (const auto valid = ValidateTransformationBound(plan, bounds, bound); valid.HasError())
                         return valid;
                 } else if (descriptor.Value()->settings != PCGNodeSettingsSchema::None) {
                     const auto settings = detail::DecodePointGeneration(node);

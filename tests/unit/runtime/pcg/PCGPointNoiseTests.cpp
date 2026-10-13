@@ -1,6 +1,8 @@
 #include "PCGPointTransformationTestSupport.h"
 
 namespace Horo::PCG {
+    using namespace PointTransformationTestSupport;
+
     namespace {
         /** @brief One immutable point and its independent four-channel Perlin/Simplex oracle. */
         struct NoiseReference {
@@ -60,12 +62,25 @@ namespace Horo::PCG {
              {{0.1875F, 0.125F, 0.0625F},
               {-0.2708053481931375, -0.030160445300347713, -0.08069443638895198, -0.11404649129540385},
               {-0.8858902568737665, -0.15828643588225047, -0.1567161187609037, -0.1988463595867157}}}};
+
+        /** @brief Checks every scalar output against the authored unit-interval normalization. */
+        void CheckUnitInterval(const PCGScalarColumn &values) {
+            for (auto value : values)
+                CHECK((value >= 0 && value <= 1));
+        }
+
+        /** @brief Checks every requested channel against the unchanged independent rational tolerance. */
+        void CheckReferenceChannels(const std::array<double, 4> &actual, const std::array<double, 4> &expected, unsigned channels) {
+            for (unsigned channel = 0; channel < channels; ++channel)
+                CHECK(actual[channel] == Catch::Approx(expected[channel]).margin(1e-9));
+        }
     }  // namespace
 
     TEST_CASE("Typed Perlin and Simplex outputs preserve all input identity columns", "[unit][pcg][transformation]") {
+        using enum PCGAttributeType;
         JobSystem jobs{JobSystemConfig{.workerCount = 2, .maxQueuedJobs = 8}};
         for (auto kind : {PCGCpuNodeKind::PerlinNoise, PCGCpuNodeKind::SimplexNoise})
-            for (auto type : {PCGAttributeType::Scalar, PCGAttributeType::Vector2, PCGAttributeType::Vector3, PCGAttributeType::Vector4}) {
+            for (auto type : {Scalar, Vector2, Vector3, Vector4}) {
                 PCGPointNoiseSettings s{PCGAttributeKey::Create("test.noise").Value()};
                 s.type = type;
                 s.octaves = 3;
@@ -78,28 +93,27 @@ namespace Horo::PCG {
                 ValidIdentity(Points(candidate));
                 CHECK(Points(candidate).Schema().Find(s.attribute.Value())->type == type);
                 switch (type) {
-                    case PCGAttributeType::Scalar:
+                    case Scalar:
                         CHECK(*Points(candidate).FindColumn<PCGScalarColumn>(s.attribute.Value()) ==
                               *Points(parallel).FindColumn<PCGScalarColumn>(s.attribute.Value()));
                         break;
-                    case PCGAttributeType::Vector2:
+                    case Vector2:
                         CHECK(*Points(candidate).FindColumn<PCGVector2Column>(s.attribute.Value()) ==
                               *Points(parallel).FindColumn<PCGVector2Column>(s.attribute.Value()));
                         break;
-                    case PCGAttributeType::Vector3:
+                    case Vector3:
                         CHECK(*Points(candidate).FindColumn<PCGVector3Column>(s.attribute.Value()) ==
                               *Points(parallel).FindColumn<PCGVector3Column>(s.attribute.Value()));
                         break;
-                    case PCGAttributeType::Vector4:
+                    case Vector4:
                         CHECK(*Points(candidate).FindColumn<PCGVector4Column>(s.attribute.Value()) ==
                               *Points(parallel).FindColumn<PCGVector4Column>(s.attribute.Value()));
                         break;
                     default:
                         FAIL("Unexpected floating type");
                 }
-                if (type == PCGAttributeType::Scalar)
-                    for (auto value : *Points(candidate).FindColumn<PCGScalarColumn>(s.attribute.Value()))
-                        CHECK((value >= 0 && value <= 1));
+                if (type == Scalar)
+                    CheckUnitInterval(*Points(candidate).FindColumn<PCGScalarColumn>(s.attribute.Value()));
             }
     }
 
@@ -125,13 +139,33 @@ namespace Horo::PCG {
               detail::PointNoise(s, PCGCpuNodeKind::SimplexNoise, {0.25F, 0.5F, 0.75F}, 123, {}).Value()[0]);
     }
 
+    TEST_CASE("Perlin interpolation remains finite and repeatable beside signed lattice boundaries", "[unit][pcg][transformation]") {
+        PCGPointNoiseSettings settings{PCGAttributeKey::Create("test.noise").Value()};
+        settings.type = PCGAttributeType::Vector4;
+        for (const float boundary : {-1.0F, 0.0F, 1.0F})
+            for (const float coordinate : {std::nextafter(boundary, -2.0F), boundary, std::nextafter(boundary, 2.0F)}) {
+                const Math::Vec3 point{coordinate, 0.5F, -0.25F};
+                const auto first = detail::PointNoise(settings, PCGCpuNodeKind::PerlinNoise, point, 123, {});
+                const auto repeated = detail::PointNoise(settings, PCGCpuNodeKind::PerlinNoise, point, 123, {});
+                REQUIRE(first.HasValue());
+                REQUIRE(repeated.HasValue());
+                CHECK(first.Value() == repeated.Value());
+                for (const double channel : first.Value()) {
+                    CHECK(std::isfinite(channel));
+                    CHECK(channel >= -1.0);
+                    CHECK(channel <= 1.0);
+                }
+            }
+    }
+
     TEST_CASE("Noise schema errors and coordinate overflow cannot publish candidates", "[unit][pcg][transformation]") {
+        using enum PCGAttributeType;
         PCGPointNoiseSettings s{PCGAttributeKey::Create("test.noise").Value()};
-        for (auto bad : {PCGAttributeType::Boolean, PCGAttributeType::SignedInteger, PCGAttributeType::UnsignedInteger}) {
+        for (auto bad : {Boolean, SignedInteger, UnsignedInteger}) {
             s.type = bad;
             CHECK(EncodePCGPointTransformationSettings(s).HasError());
         }
-        s.type = PCGAttributeType::Scalar;
+        s.type = Scalar;
         s.attribute = PCGAttributeKey::Create(PCGSourceSampleAttribute).Value();
         CHECK(EncodePCGPointTransformationSettings(s).HasError());
         s.attribute = PCGAttributeKey::Create("test.noise").Value();
@@ -167,18 +201,17 @@ namespace Horo::PCG {
 
     TEST_CASE("Gradient noise fixed rational corpus covers channel order ties negatives and domain boundaries",
               "[unit][pcg][transformation]") {
+        using enum PCGAttributeType;
         PCGPointNoiseSettings settings{PCGAttributeKey::Create("test.noise").Value()};
         for (const auto &reference : NoiseReferenceCorpus)
             for (const auto kind : {PCGCpuNodeKind::PerlinNoise, PCGCpuNodeKind::SimplexNoise})
-                for (const auto type :
-                     {PCGAttributeType::Scalar, PCGAttributeType::Vector2, PCGAttributeType::Vector3, PCGAttributeType::Vector4}) {
+                for (const auto type : {Scalar, Vector2, Vector3, Vector4}) {
                     settings.type = type;
                     const auto actual = detail::PointNoise(settings, kind, reference.point, 123, {});
                     REQUIRE(actual.HasValue());
                     const auto &expected = kind == PCGCpuNodeKind::PerlinNoise ? reference.perlin : reference.simplex;
-                    const auto channels = static_cast<unsigned>(type) - static_cast<unsigned>(PCGAttributeType::Scalar) + 1;
-                    for (unsigned channel = 0; channel < channels; ++channel)
-                        CHECK(actual.Value()[channel] == Catch::Approx(expected[channel]).margin(1e-9));
+                    const auto channels = static_cast<unsigned>(type) - static_cast<unsigned>(Scalar) + 1;
+                    CheckReferenceChannels(actual.Value(), expected, channels);
                 }
         CHECK(detail::PointNoise(settings, PCGCpuNodeKind::PerlinNoise, {1048576.125F, 0, 0}, 123, {}).HasError());
         CHECK(detail::PointNoise(settings, PCGCpuNodeKind::SimplexNoise, {-1048576.125F, 0, 0}, 123, {}).HasError());

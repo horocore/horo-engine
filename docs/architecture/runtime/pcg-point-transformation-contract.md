@@ -69,6 +69,14 @@ stored values. Cross-profile floating-point bit identity is not promised;
 reference fixtures specify their tolerance. Portable legacy nodes keep their
 existing determinism declarations.
 
+Perlin's x/y/z interpolation uses C++20 `std::lerp`. Numeric profile certification
+includes the kernel implementation, compiler and standard library: the earlier
+unmerged handwritten interpolation is not bit-compatible evidence for this
+implementation. A host upgrading that implementation must requalify its numeric
+profile and issue a different `numericProfile` fingerprint (or its versioned
+numeric policy) before reusing cached results. Settings bytes and node identities
+do not change; the independent rational fixtures retain their original tolerances.
+
 ## Admission and lifecycle
 
 Before workspace allocation, schemas and capacities are checked, and checked

@@ -1,26 +1,27 @@
 #include "PCGPointTransformationTestSupport.h"
 
 namespace Horo::PCG {
+    using namespace PointTransformationTestSupport;
+
     TEST_CASE("Point transformation catalog preserves sparse and legacy identities", "[unit][pcg][transformation]") {
+        using enum PCGCpuNodeKind;
         auto created = PCGNodeCatalog::Create(ProjectPCGCapabilities(PCGHostProfile::Interactive, Grant()).Value());
         REQUIRE(created.HasValue());
         auto owner = std::move(created).Value();
-        for (auto kind :
-             {PCGCpuNodeKind::SnapshotGrid, PCGCpuNodeKind::DensityFilter, PCGCpuNodeKind::Merge, PCGCpuNodeKind::Forward,
-              PCGCpuNodeKind::GridJitter, PCGCpuNodeKind::Stratified, PCGCpuNodeKind::PoissonScatter, PCGCpuNodeKind::Transform,
-              PCGCpuNodeKind::SurfaceAlignment, PCGCpuNodeKind::RandomOffset, PCGCpuNodeKind::PerlinNoise, PCGCpuNodeKind::SimplexNoise})
+        for (auto kind : {SnapshotGrid, DensityFilter, Merge, Forward, GridJitter, Stratified, PoissonScatter, Transform, SurfaceAlignment,
+                          RandomOffset, PerlinNoise, SimplexNoise})
             REQUIRE(owner.Register(kind).HasValue());
         const auto root = owner.Snapshot().Value();
         CHECK(root.Nodes().size() == 12);
-        CHECK(PCGCpuNodeType(PCGCpuNodeKind::SnapshotGrid).Value().Value() == 0x5043470206000001ULL);
-        CHECK(PCGCpuNodeType(PCGCpuNodeKind::Transform).Value().Value() == 0x504347020600000dULL);
+        CHECK(PCGCpuNodeType(SnapshotGrid).Value().Value() == 0x5043470206000001ULL);
+        CHECK(PCGCpuNodeType(Transform).Value().Value() == 0x504347020600000dULL);
         for (unsigned value = 7; value < 12; ++value) {
             CHECK(PCGCpuNodeType(static_cast<PCGCpuNodeKind>(value)).HasError());
             CHECK(owner.Register(static_cast<PCGCpuNodeKind>(value)).HasError());
         }
-        CHECK(root.Find(PCGCpuNodeType(PCGCpuNodeKind::PerlinNoise).Value()).Value()->settings == PCGNodeSettingsSchema::PerlinNoiseV1);
+        CHECK(root.Find(PCGCpuNodeType(PerlinNoise).Value()).Value()->settings == PCGNodeSettingsSchema::PerlinNoiseV1);
         REQUIRE(owner.Close().HasValue());
-        CHECK(root.Find(PCGCpuNodeType(PCGCpuNodeKind::Transform).Value()).HasValue());
+        CHECK(root.Find(PCGCpuNodeType(Transform).Value()).HasValue());
     }
 
     TEST_CASE("Point transformation settings reject malformed versions lengths frames and finite values", "[unit][pcg][transformation]") {
@@ -83,17 +84,18 @@ namespace Horo::PCG {
     }
 
     TEST_CASE("Surface alignment covers boundaries antiparallel normals and missing coverage", "[unit][pcg][transformation]") {
-        const auto aligned = Evaluate(Plan(PCGCpuNodeKind::SurfaceAlignment, PCGPointAlignmentSettings{0}), Spatial({}, true, true));
+        using enum PCGCpuNodeKind;
+        const auto aligned = Evaluate(Plan(SurfaceAlignment, PCGPointAlignmentSettings{0}), Spatial({}, true, true));
         for (const auto &transform : Points(aligned).Transforms()) {
             const auto up = transform.rotation.Rotate({0, 1, 0});
             CHECK(up.y == Catch::Approx(-1));
             CHECK(transform.translation.y == 0);
         }
-        const auto plan = Plan(PCGCpuNodeKind::SurfaceAlignment, PCGPointAlignmentSettings{0});
+        const auto plan = Plan(SurfaceAlignment, PCGPointAlignmentSettings{0});
         const auto bounds = Bounds();
         CHECK(EvaluatePCGCpu(plan, Spatial({}, false), bounds, {}, Limits(plan)).HasError());
         CHECK(EvaluatePCGCpu(plan, Spatial({0, 0.1F, 0}), bounds, {}, Limits(plan)).HasError());
-        const auto tilted = Evaluate(Plan(PCGCpuNodeKind::SurfaceAlignment, PCGPointAlignmentSettings{1}), Spatial({}, true, false, true));
+        const auto tilted = Evaluate(Plan(SurfaceAlignment, PCGPointAlignmentSettings{1}), Spatial({}, true, false, true));
         for (const auto &transform : Points(tilted).Transforms()) {
             const auto up = transform.rotation.Rotate({0, 1, 0});
             CHECK(up.y == Catch::Approx(std::sqrt(0.5)).margin(1e-6));
@@ -144,10 +146,11 @@ namespace Horo::PCG {
     }
 
     TEST_CASE("Transformation finite failure and cancellation retain the last complete candidate", "[unit][pcg][transformation]") {
+        using enum PCGCpuNodeKind;
         PCGPointTransformSettings s;
         s.delta.translation = {std::numeric_limits<float>::max(), 0, 0};
-        const auto plan = Plan(PCGCpuNodeKind::Transform, s);
-        const auto retained = Evaluate(Plan(PCGCpuNodeKind::Transform, PCGPointTransformSettings{}), Spatial());
+        const auto plan = Plan(Transform, s);
+        const auto retained = Evaluate(Plan(Transform, PCGPointTransformSettings{}), Spatial());
         const auto bounds = Bounds();
         Math::Transform overflowing;
         overflowing.translation = {std::numeric_limits<float>::max(), 0, 0};
@@ -158,7 +161,7 @@ namespace Horo::PCG {
         auto limits = Limits(plan);
         limits.retainedBytes = retained.ReservedBytes();
         CHECK(EvaluatePCGCpu(plan, Spatial(), bounds, {}, limits, PCGCpuAdmission::Accepting, cancellation.Token()).HasError());
-        const auto recovered = Evaluate(Plan(PCGCpuNodeKind::RandomOffset, PCGPointRandomOffsetSettings{}), Spatial());
+        const auto recovered = Evaluate(Plan(RandomOffset, PCGPointRandomOffsetSettings{}), Spatial());
         CHECK(Points(recovered).PointCount() == 4);
     }
 

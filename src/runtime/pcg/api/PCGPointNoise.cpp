@@ -18,7 +18,7 @@ namespace Horo::PCG::detail {
         }
 
         /** @brief Selects one of twelve fixed diagonal gradients without a mutable permutation table. */
-        double Gradient(const Cell &cell, Coordinate offset, std::uint64_t seed) {
+        double Gradient(const Cell &cell, const Coordinate &offset, std::uint64_t seed) {
             constexpr std::array<std::array<int, 3>, 12> gradients{{{1, 1, 0},
                                                                     {-1, 1, 0},
                                                                     {1, -1, 0},
@@ -43,14 +43,11 @@ namespace Horo::PCG::detail {
             return t * t * t * (t * (t * 6 - 15) + 10);
         }
 
-        double Lerp(double a, double b, double t) {
-            return a + (b - a) * t;
-        }
-
         /** @brief Three-dimensional Perlin interpolation over eight fixed lattice corners. */
         double Perlin(const Coordinate &p, std::uint64_t seed) {
             Cell base{};
-            Coordinate fraction{}, fade{};
+            Coordinate fraction{};
+            Coordinate fade{};
             for (std::size_t axis = 0; axis < 3; ++axis) {
                 base[axis] = static_cast<std::int64_t>(std::floor(p[axis]));
                 fraction[axis] = p[axis] - static_cast<double>(base[axis]);
@@ -67,13 +64,13 @@ namespace Horo::PCG::detail {
                 }
                 corners[i] = Gradient(cell, offset, seed);
             }
-            const double low = Lerp(Lerp(corners[0], corners[1], fade[0]), Lerp(corners[2], corners[3], fade[0]), fade[1]);
-            const double high = Lerp(Lerp(corners[4], corners[5], fade[0]), Lerp(corners[6], corners[7], fade[0]), fade[1]);
-            return Lerp(low, high, fade[2]);
+            const double low = std::lerp(std::lerp(corners[0], corners[1], fade[0]), std::lerp(corners[2], corners[3], fade[0]), fade[1]);
+            const double high = std::lerp(std::lerp(corners[4], corners[5], fade[0]), std::lerp(corners[6], corners[7], fade[0]), fade[1]);
+            return std::lerp(low, high, fade[2]);
         }
 
         /** @brief Three-dimensional Simplex contribution, zero beyond the compact spherical support. */
-        double Contribution(const Cell &cell, Coordinate offset, std::uint64_t seed) {
+        double Contribution(const Cell &cell, const Coordinate &offset, std::uint64_t seed) {
             double attenuation = 0.6;
             for (auto value : offset)
                 attenuation -= value * value;
@@ -128,7 +125,7 @@ namespace Horo::PCG::detail {
         }
 
         /** @brief Bounds every octave coordinate before floor or signed integer conversion. */
-        bool Domain(Coordinate p) {
+        bool Domain(const Coordinate &p) {
             return std::ranges::all_of(p, [](double value) {
                 return std::isfinite(value) && std::abs(value) <= 1048576;
             });
@@ -144,7 +141,10 @@ namespace Horo::PCG::detail {
         std::array<double, 4> result{};
         const std::size_t channels = static_cast<std::size_t>(s.type) - static_cast<std::size_t>(PCGAttributeType::Scalar) + 1;
         for (std::size_t channel = 0; channel < channels; ++channel) {
-            double frequency = s.frequency, weight = 1, total{}, denominator{};
+            double frequency = s.frequency;
+            double weight = 1;
+            double total{};
+            double denominator{};
             const auto seed = Mix(fieldSeed ^ s.salt ^ Mix(channel + 0x9e3779b97f4a7c15ULL));
             for (std::uint32_t octave = 0; octave < s.octaves; ++octave) {
                 if (cancellation.IsCancellationRequested())
@@ -169,16 +169,17 @@ namespace Horo::PCG::detail {
     Result<void> WritePointNoise(const PCGPointNoiseSettings &s, const PCGPointWriteView &writer, std::size_t index,
                                  const std::array<double, 4> &v) {
         switch (s.type) {
-            case PCGAttributeType::Scalar:
+            using enum PCGAttributeType;
+            case Scalar:
                 return writer.SetColumnValue<PCGScalarColumn>(s.attribute.Value(), index, v[0]);
-            case PCGAttributeType::Vector2:
+            case Vector2:
                 return writer.SetColumnValue<PCGVector2Column>(s.attribute.Value(), index,
                                                                {static_cast<float>(v[0]), static_cast<float>(v[1])});
-            case PCGAttributeType::Vector3:
+            case Vector3:
                 return writer.SetColumnValue<PCGVector3Column>(s.attribute.Value(), index,
                                                                {static_cast<float>(v[0]), static_cast<float>(v[1]),
                                                                 static_cast<float>(v[2])});
-            case PCGAttributeType::Vector4:
+            case Vector4:
                 return writer.SetColumnValue<PCGVector4Column>(s.attribute.Value(), index,
                                                                {static_cast<float>(v[0]), static_cast<float>(v[1]),
                                                                 static_cast<float>(v[2]), static_cast<float>(v[3])});
