@@ -20,6 +20,8 @@
 
 namespace Horo::PCG {
     namespace {
+        using detail::PartitionEnd;
+
         template <typename T> [[nodiscard]] Result<T> Reject(const ErrorCodeDescriptor &error) {
             return Result<T>::Failure(MakeError(error));
         }
@@ -188,13 +190,6 @@ namespace Horo::PCG {
             return Result<std::size_t>::Success(bytes);
         }
 
-        [[nodiscard]] std::size_t PartitionEnd(const std::size_t count, const std::uint32_t workers,
-                                               const std::uint32_t partition) noexcept {
-            const std::size_t block = count / workers;
-            const std::size_t extra = count % workers;
-            return block * (partition + 1U) + std::min<std::size_t>(extra, partition + 1U);
-        }
-
         [[nodiscard]] Result<void> CheckCancellation(const CancellationToken &cancellation) {
             return cancellation.IsCancellationRequested() ? Reject<void>(PCGErrors::CpuEvaluationClosed) : Result<void>::Success();
         }
@@ -218,51 +213,6 @@ namespace Horo::PCG {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<std::size_t> CountPartition(const std::span<const float> densities, const double threshold,
-                                                         const std::size_t begin, const std::size_t end,
-                                                         const CancellationToken &cancellation) {
-            std::size_t selected{};
-            for (std::size_t index = begin; index < end; ++index) {
-                if ((index - begin) % 256 == 0 && cancellation.IsCancellationRequested())
-                    return Reject<std::size_t>(PCGErrors::CpuEvaluationClosed);
-                selected += densities[index] >= threshold ? 1U : 0U;
-            }
-            return Result<std::size_t>::Success(selected);
-        }
-
-        [[nodiscard]] Result<std::size_t> CountSelected(const PCGPointReadView &source, const double threshold, const std::uint32_t workers,
-                                                        JobSystem *jobs, const CancellationToken &cancellation) {
-            const auto densities = source.Densities();
-            if (workers == 1)
-                return CountPartition(densities, threshold, 0, densities.size(), cancellation);
-            std::array<std::size_t, 8> counts{};
-            // Each child owns one disjoint count slot and reads immutable input only.
-            // The group drains before counts or the borrowed workspace input leave this call.
-            TaskGroup group(*jobs, TaskGroupFailurePolicy::FailFast, cancellation);
-            for (std::uint32_t partition = 0; partition < workers; ++partition) {
-                const std::size_t begin = partition == 0 ? 0 : PartitionEnd(densities.size(), workers, partition - 1);
-                const std::size_t end = PartitionEnd(densities.size(), workers, partition);
-                auto submitted = group.Spawn({}, [densities, threshold, begin, end, partition, &counts](const CancellationToken &child) {
-                    const auto selected = CountPartition(densities, threshold, begin, end, child);
-                    if (selected.HasError())
-                        return Result<void>::Failure(selected.ErrorValue());
-                    counts[partition] = selected.Value();
-                    return Result<void>::Success();
-                });
-                if (submitted.HasError()) {
-                    group.RequestCancel();
-                    static_cast<void>(group.Join());
-                    return Result<std::size_t>::Failure(submitted.ErrorValue());
-                }
-            }
-            if (const auto joined = group.Join(); joined.HasError())
-                return Result<std::size_t>::Failure(joined.ErrorValue());
-            std::size_t total{};
-            for (std::uint32_t partition = 0; partition < workers; ++partition)
-                total += counts[partition];
-            return Result<std::size_t>::Success(total);
-        }
-
         [[nodiscard]] const PCGPointOutputBound *SourceBound(const detail::NodeExecutionContext &context, const std::uint32_t node,
                                                              const PinId pin) {
             for (const auto &route : context.plan.Routes())
@@ -280,7 +230,7 @@ namespace Horo::PCG {
             const auto threshold = ScalarInput(context.plan, context.inputs, node, scalarPin->id);
             if (threshold.HasError())
                 return Reject<void>(PCGErrors::CpuEvaluationInvalid);
-            const auto selected = CountSelected(source, threshold.Value(), context.workers, context.jobs, context.cancellation);
+            const auto selected = detail::CountSelected(source, threshold.Value(), context.workers, context.jobs, context.cancellation);
             if (selected.HasError())
                 return Result<void>::Failure(selected.ErrorValue());
             auto opened = context.workspace.BeginOutput(node, output, selected.Value());

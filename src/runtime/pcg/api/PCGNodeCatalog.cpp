@@ -66,6 +66,17 @@ namespace Horo::PCG {
             }
         }
 
+        /** @brief Adds the descriptor fixed work to the already bounded typed-filter charge. */
+        Result<PCGNodeCost> FilterCost(const PCGBuiltInNodeDescriptor &descriptor, std::size_t points, std::size_t elements) {
+            const auto charge = detail::ChargePointFilter(descriptor.kind, points, elements);
+            if (charge.HasError())
+                return Result<PCGNodeCost>::Failure(charge.ErrorValue());
+            const auto total = CheckedPCGAdd(charge.Value().pointVisits, descriptor.fixedWork);
+            if (total.HasError())
+                return Result<PCGNodeCost>::Failure(total.ErrorValue());
+            return Result<PCGNodeCost>::Success({total.Value(), charge.Value().snapshotElementVisits, charge.Value().scratchBytes});
+        }
+
         Result<PCGBuiltInNodeDescriptor> Describe(PCGCpuNodeKind kind) {
             using enum PCGCpuNodeKind;
             const auto index = static_cast<std::size_t>(kind);
@@ -196,15 +207,8 @@ namespace Horo::PCG {
                 return Result<PCGNodeCost>::Failure(settings.ErrorValue());
             return detail::ChargePointTransformation(settings.Value(), maximumPoints, maximumSnapshotElements);
         }
-        if (detail::IsPointFilter(descriptor.Value()->kind)) {
-            const auto charge = detail::ChargePointFilter(descriptor.Value()->kind, maximumPoints, maximumSnapshotElements);
-            if (charge.HasError())
-                return Result<PCGNodeCost>::Failure(charge.ErrorValue());
-            const auto total = CheckedPCGAdd(charge.Value().pointVisits, descriptor.Value()->fixedWork);
-            if (total.HasError())
-                return Result<PCGNodeCost>::Failure(total.ErrorValue());
-            return Result<PCGNodeCost>::Success({total.Value(), charge.Value().snapshotElementVisits, charge.Value().scratchBytes});
-        }
+        if (detail::IsPointFilter(descriptor.Value()->kind))
+            return FilterCost(*descriptor.Value(), maximumPoints, maximumSnapshotElements);
         if (descriptor.Value()->settings != PCGNodeSettingsSchema::None) {
             const auto settings = detail::DecodePointGeneration(node);
             if (settings.HasError())

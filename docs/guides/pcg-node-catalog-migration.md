@@ -129,6 +129,7 @@ for coordinate composition, normal selection, gradient algorithms, seed streams,
 finite boundaries and complete work admission. EditorServices and PCGDocument
 consumers retain the same target boundaries and compile against the updated PCG
 public dependency; no editor/runtime scheduling behavior changes.
+
 ## Point filtering extension (HORO-2018)
 
 The filtering extension originally grew catalog capacity from seven to twelve;
