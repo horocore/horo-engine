@@ -75,6 +75,17 @@ namespace Horo::Animation::Detail {
         std::vector<std::uint8_t> coverage;
     };
 
+    /** @brief Complete double-buffered owner publication, with its resident handles and nonwrapping generation fence. */
+    struct GraphPublicationStorage final {
+        std::array<std::vector<GraphParameterValue>, 2> parameters;
+        std::array<std::vector<GraphStateEvent>, 2> events;
+        std::array<std::uint32_t, 2> eventCounts{};
+        std::array<std::vector<Math::Transform>, 2> poses;
+        std::array<PoseHandle, 2> handles{};
+        GraphInstancePublication publication{};
+        std::uint64_t nextGeneration{1};
+    };
+
     /** @brief Owner-thread runtime storage; all arrays are fixed during preparation. */
     struct GraphInstanceState final {
         std::thread::id ownerThread{std::this_thread::get_id()};
@@ -88,20 +99,14 @@ namespace Horo::Animation::Detail {
         GraphScalarWorkspace scalars;
         std::vector<GraphParameterValue> parameters;
         std::vector<std::uint8_t> queuedTriggers;
-        std::array<std::vector<GraphParameterValue>, 2> publishedParameters;
         std::vector<GraphPlayerState> players;
         std::vector<GraphPreparedMachine> preparedMachines;
         std::vector<std::uint8_t> latchScratch;
         std::vector<GraphMachineState> machines;
         std::vector<std::uint8_t> latches;
-        std::array<std::vector<GraphStateEvent>, 2> publishedEvents;
-        std::array<std::uint32_t, 2> publishedEventCounts{};
-        std::array<std::vector<Math::Transform>, 2> publishedPoses;
-        std::array<PoseHandle, 2> publishedHandles{};
-        GraphInstancePublication publication{};
         GraphCandidateState candidate;
+        GraphPublicationStorage published;
         CancellationToken ownerCancellation{};
-        std::uint64_t nextPoseGeneration{1};
         bool closed{};
 
         [[nodiscard]] std::span<Math::Transform> Pose(GraphWorkingSlot slot) noexcept {

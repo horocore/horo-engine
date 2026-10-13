@@ -23,7 +23,7 @@ namespace Horo::Animation::Detail {
         /** @brief Admits interruptions only from the current transition's declared source/destination policy. */
         bool EligibleSource(const StateMachinePlan &plan, const StateMachineRuntime &runtime,
                             const StateMachineTransition &transition) noexcept {
-            if (!runtime.transition)
+            if (!runtime.transition.has_value())
                 return transition.source == runtime.source.state;
             const auto &active = plan.transitions[*runtime.transition];
             if (transition.priority <= active.priority)
@@ -47,9 +47,9 @@ namespace Horo::Animation::Detail {
                              const StateMachineStepInput &input) noexcept {
             if (!transition.exitTime)
                 return true;
-            const bool destination =
-                runtime.transition && (plan.transitions[*runtime.transition].interruption == StateMachineInterruption::Destination ||
-                                       transition.source != runtime.source.state);
+            const bool destination = runtime.transition.has_value() &&
+                                     (plan.transitions[*runtime.transition].interruption == StateMachineInterruption::Destination ||
+                                      transition.source != runtime.source.state);
             const auto slot = destination ? 1U : 0U;
             // Before the first entry, authored elapsed time is exactly zero.
             return slot < input.playback.size() ? input.playback[slot].elapsed.ticks >= transition.exitTime->ticks
@@ -88,7 +88,7 @@ namespace Horo::Animation::Detail {
                 continue;
             if (!ConditionsSatisfied(transition, latches))
                 continue;
-            if (!selected || PreferredTransition(transition, plan.transitions[*selected]))
+            if (!selected.has_value() || PreferredTransition(transition, plan.transitions[*selected]))
                 selected = index;
         }
         return selected;

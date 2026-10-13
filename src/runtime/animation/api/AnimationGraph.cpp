@@ -288,20 +288,22 @@ namespace Horo::Animation {
         /** @brief State branches charge both admitted lanes, control completion and full guarded call provenance. */
         void AccumulateStateBudget(GraphCompiledDefinition &definition, std::span<const GraphCompiledDefinition> definitions) {
             for (const auto &instruction : definition.instructions) {
-                if (const auto *machine = std::get_if<GraphStateMachineNode>(&instruction.payload)) {
-                    ++definition.evaluationInstructions;  // The control occurrence precedes guarded children and pose completion.
-                    for (const auto &state : machine->states)
-                        if (std::holds_alternative<AnimationClipId>(state.source)) {
-                            definition.evaluationInstructions += 2;
-                            definition.sourceMapCallEntries += 4;
-                            definition.callDepth = std::max(definition.callDepth, 2U);
-                        }
-                    for (const auto targetIndex : instruction.stateDefinitions) {
-                        const auto &target = definitions[targetIndex];
-                        definition.callDepth = std::max(definition.callDepth, target.callDepth + 1);
-                        definition.evaluationInstructions += 2 * target.evaluationInstructions;
-                        definition.sourceMapCallEntries += 2 * (target.sourceMapCallEntries + 2 * target.evaluationInstructions);
-                    }
+                const auto *machine = std::get_if<GraphStateMachineNode>(&instruction.payload);
+                if (!machine)
+                    continue;
+                ++definition.evaluationInstructions;  // Control precedes guarded children and pose completion.
+                const auto clipStates = static_cast<std::uint64_t>(std::ranges::count_if(machine->states, [](const GraphState &state) {
+                    return std::holds_alternative<AnimationClipId>(state.source);
+                }));
+                definition.evaluationInstructions += 2 * clipStates;
+                definition.sourceMapCallEntries += 4 * clipStates;
+                if (clipStates != 0)
+                    definition.callDepth = std::max(definition.callDepth, 2U);
+                for (const auto targetIndex : instruction.stateDefinitions) {
+                    const auto &target = definitions[targetIndex];
+                    definition.callDepth = std::max(definition.callDepth, target.callDepth + 1);
+                    definition.evaluationInstructions += 2 * target.evaluationInstructions;
+                    definition.sourceMapCallEntries += 2 * (target.sourceMapCallEntries + 2 * target.evaluationInstructions);
                 }
             }
         }
@@ -412,12 +414,14 @@ namespace Horo::Animation {
         /** @brief Collects the complete immutable clip dependency set, including inactive state branches. */
         void CollectClips(const GraphCompiledDefinition &definition, std::set<AnimationClipId> &clips) {
             for (const auto &instruction : definition.instructions)
-                if (const auto *clip = std::get_if<GraphClipNode>(&instruction.payload))
-                    clips.insert(clip->clip);
-                else if (const auto *machine = std::get_if<GraphStateMachineNode>(&instruction.payload))
-                    for (const auto &state : machine->states)
-                        if (const auto *stateClip = std::get_if<AnimationClipId>(&state.source))
-                            clips.insert(*stateClip);
+                std::visit([&clips]<typename Payload>(const Payload &payload) {
+                    if constexpr (std::is_same_v<Payload, GraphClipNode>)
+                        clips.insert(payload.clip);
+                    else if constexpr (std::is_same_v<Payload, GraphStateMachineNode>)
+                        for (const auto &state : payload.states)
+                            if (const auto *clip = std::get_if<AnimationClipId>(&state.source))
+                                clips.insert(*clip);
+                }, instruction.payload);
         }
 
         /** @brief Compiles the complete detached definition set and collects even inactive clip dependencies before publication. */
@@ -444,14 +448,20 @@ namespace Horo::Animation {
             return false;
         }
 
+        /** @brief Exact semantic contract corresponding to an already range-admitted authoring schema. */
+        AnimationGraphContractVersion SourceContract(const std::uint32_t schema) noexcept {
+            if (schema <= 2)
+                return {1, 0, 0};
+            if (schema == 3)
+                return {1, 1, 0};
+            return CurrentAnimationGraphContractVersion;
+        }
+
         /** @brief Each admitted source schema has exactly one semantic contract; pose policies remain unchanged in schema 3. */
         bool ValidSourceVersion(const AnimationGraphData &data) {
             if (data.schemaVersion == 0 || data.schemaVersion > CurrentAnimationGraphSchemaVersion)
                 return false;
-            const AnimationGraphContractVersion expected = data.schemaVersion <= 2   ? AnimationGraphContractVersion{1, 0, 0}
-                                                           : data.schemaVersion == 3 ? AnimationGraphContractVersion{1, 1, 0}
-                                                                                     : CurrentAnimationGraphContractVersion;
-            if (data.contractVersion != expected)
+            if (const auto expected = SourceContract(data.schemaVersion); data.contractVersion != expected)
                 return false;
             return data.schemaVersion >= 4 || !HasStatePayload(data);
         }

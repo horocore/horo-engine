@@ -49,6 +49,14 @@ namespace Horo::Animation::Detail {
             return {};
         }
 
+        /** @brief Projects exact signed clock movement to its typed traversal direction. */
+        AnimationTraversalDirection TraversalDirection(const AnimationTimeDelta delta) noexcept {
+            using enum AnimationTraversalDirection;
+            if (delta.ticks == 0)
+                return Held;
+            return delta.ticks > 0 ? Forward : Reverse;
+        }
+
         /** @brief Advances only the admitted state clock; actual pose players retain their sole independent cursors. */
         GraphInstanceOutcome AdvanceClock(GraphStateClock &clock, const GraphEvaluationInput &input,
                                           const std::optional<AnimationDeltaTime> period, const StateMachineActivation activation,
@@ -61,10 +69,7 @@ namespace Horo::Animation::Detail {
             if (!ClockDeltaFits(previous, delta.ticks))
                 return {GraphInstanceFailure::LimitExceeded};
             clock.elapsed.ticks += delta.ticks;
-            observation = {activation, clock.elapsed, 0, 0,
-                           delta.ticks == 0  ? AnimationTraversalDirection::Held
-                           : delta.ticks > 0 ? AnimationTraversalDirection::Forward
-                                             : AnimationTraversalDirection::Reverse};
+            observation = {activation, clock.elapsed, 0, 0, TraversalDirection(delta)};
             if (period)
                 return ObserveLoops(clock, previous, *period, observation);
             return {};
@@ -73,7 +78,7 @@ namespace Horo::Animation::Detail {
         /** @brief Resets exactly the compiler's newly entered branch, including nested candidate machines and clip players. */
         void ResetBranch(GraphInstanceState &state, const GraphStateBranch &branch, const std::uint8_t lane) {
             for (const auto &occurrence : GraphStateBranchOccurrences(state, branch, lane)) {
-                if (occurrence.clipPlayer)
+                if (occurrence.clipPlayer.has_value())
                     state.candidate.players[*occurrence.clipPlayer] = {};
                 if (occurrence.phase == GraphOccurrencePhase::StateBegin) {
                     ResetGraphStateControl(state, *occurrence.stateMachine);
@@ -86,6 +91,13 @@ namespace Horo::Animation::Detail {
             std::array<StateMachinePlayback, 2> playback;
             std::size_t observations{};
             AnimationTimeDelta advance{};
+        };
+
+        /** @brief Detached old semantic authority used after candidate mutation; never aliases the new runtime/lanes. */
+        struct ControlBaseline final {
+            StateMachineRuntime runtime;
+            std::uint8_t sourceLane{};
+            std::uint8_t destinationLane{};
         };
 
         /** @brief Invocation-scoped references into pinned program tables and fixed-size candidate storage; never retained. */
@@ -111,7 +123,7 @@ namespace Horo::Animation::Detail {
 
         /** @brief Proves the old active clip ranges remain admissible even if this tick cuts them away. */
         GraphInstanceOutcome PreflightControl(const ControlContext &control, const GraphEvaluationInput &input,
-                                              const GraphMachineState &baseline) {
+                                              const ControlBaseline &baseline) {
             const auto sourceState = baseline.runtime.initialized ? baseline.runtime.source.state : control.prepared.initial;
             const auto sourceLane = baseline.runtime.initialized ? baseline.sourceLane : 0U;
             if (const auto preflight = TraverseGraphStateBranch(control.state, control.index, control.binding.branches[sourceState],
@@ -129,7 +141,7 @@ namespace Horo::Animation::Detail {
 
         /** @brief Captures exact source/destination authored clocks before transition selection. */
         GraphInstanceOutcome ObserveControl(const ControlContext &control, const GraphEvaluationInput &input,
-                                            const GraphMachineState &baseline, ControlObservation &observation) {
+                                            const ControlBaseline &baseline, ControlObservation &observation) {
             auto &playback = observation.playback;
             auto &observations = observation.observations;
             auto &advance = observation.advance;
@@ -163,8 +175,8 @@ namespace Horo::Animation::Detail {
         }
 
         /** @brief Stages latches/control and copies the complete bounded lifecycle block into the tick candidate. */
-        GraphInstanceOutcome StepControl(const ControlContext &control, const GraphEvaluationInput &input,
-                                         const GraphMachineState &baseline, const ControlObservation &observation) {
+        GraphInstanceOutcome StepControl(const ControlContext &control, const GraphEvaluationInput &input, const ControlBaseline &baseline,
+                                         const ControlObservation &observation) {
             const auto &playback = observation.playback;
             const auto observations = observation.observations;
             const auto advance = observation.advance;
@@ -196,9 +208,9 @@ namespace Horo::Animation::Detail {
 
         /** @brief Retires only semantic incarnations absent from the newly staged source/destination pair. */
         GraphInstanceOutcome RetireControl(const ControlContext &control, const GraphEvaluationInput &input,
-                                           const GraphMachineState &baseline) {
-            const auto oldSource = baseline.runtime.initialized ? baseline.runtime.source.generation : baseline.runtime.nextActivation;
-            if (!RetainsActivation(control.candidate.runtime, oldSource))
+                                           const ControlBaseline &baseline) {
+            if (const auto oldSource = baseline.runtime.initialized ? baseline.runtime.source.generation : baseline.runtime.nextActivation;
+                !RetainsActivation(control.candidate.runtime, oldSource))
                 if (const auto retired =
                         RetireGraphStateBranch(control.state, control.index,
                                                control.binding.branches[baseline.runtime.initialized ? baseline.runtime.source.state
@@ -216,7 +228,7 @@ namespace Horo::Animation::Detail {
         }
 
         /** @brief Applies entry resets and committed-source capture after old subtree retirement succeeds. */
-        void ActivateControl(const ControlContext &control, const GraphMachineState &baseline) {
+        void ActivateControl(const ControlContext &control, const ControlBaseline &baseline) {
             std::ranges::copy(control.state.Pose(control.binding.poses[2]), control.state.Pose(control.binding.poses[3]).begin());
             std::ranges::copy(control.state.Coverage(control.binding.poses[2]), control.state.Coverage(control.binding.poses[3]).begin());
             if (!baseline.runtime.initialized) {
@@ -238,9 +250,9 @@ namespace Horo::Animation::Detail {
                     std::ranges::copy(control.state.Coverage(control.binding.poses[0]),
                                       control.state.Coverage(control.binding.poses[3]).begin());
                 }
-                if (!control.candidate.runtime.transition)
+                if (!control.candidate.runtime.transition.has_value())
                     control.candidate.sourceLane = lane;
-            } else if (baseline.runtime.destination && !control.candidate.runtime.transition) {
+            } else if (baseline.runtime.destination && !control.candidate.runtime.transition.has_value()) {
                 control.candidate.sourceLane = baseline.destinationLane;
                 control.candidate.destinationLane = static_cast<std::uint8_t>(1U - control.candidate.sourceLane);
             }
@@ -280,7 +292,7 @@ namespace Horo::Animation::Detail {
         state.latchScratch.resize(memory.conditionLatches);
         state.candidate.latches.resize(memory.conditionLatches);
         state.candidate.events.resize(memory.stateEvents);
-        for (auto &events : state.publishedEvents)
+        for (auto &events : state.published.events)
             events.resize(memory.stateEvents);
         state.preparedMachines.reserve(memory.stateMachines);
         for (std::uint32_t index = 0; index < memory.stateMachines; ++index) {
@@ -361,7 +373,7 @@ namespace Horo::Animation::Detail {
     GraphInstanceOutcome BeginGraphStateMachine(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
                                                 const GraphEvaluationInput &input) {
         const auto control = Control(state, occurrence);
-        const auto baseline = control.candidate;
+        const ControlBaseline baseline{control.candidate.runtime, control.candidate.sourceLane, control.candidate.destinationLane};
         if (const auto outcome = PreflightControl(control, input, baseline); outcome.HasError())
             return outcome;
         ControlObservation observation;

@@ -24,7 +24,7 @@ namespace Horo::Animation::GraphCompileDetail {
         class Builder final {
         public:
             /** @brief Captures immutable dependency compatibility for this detached compilation. */
-            Builder(const AnimationGraphProgram &program, const AnimationGraphCompileContext &context, GraphSkeletonBinding skeleton,
+            Builder(const AnimationGraphProgram &program, const AnimationGraphCompileContext &context, const GraphSkeletonBinding &skeleton,
                     std::vector<AnimationClipDescriptor> clips)
                 : program_(program), context_(context) {
                 plan_.skeleton = skeleton;
@@ -170,16 +170,16 @@ namespace Horo::Animation::GraphCompileDetail {
             Access OutputAccess(const GraphInstruction &instruction, GraphInstructionOccurrence &occurrence,
                                 const std::map<GraphInterfaceId, Access> &interfaceInputs) {
                 Access output;
-                if (instruction.definitionIndex) {
+                if (instruction.definitionIndex.has_value()) {
                     std::map<GraphInterfaceId, Access> inputs;
                     for (const auto &input : occurrence.inputs)
-                        inputs.emplace(Find(instruction.pins, input.destination)->interfaceId, Access{input.slot, input.sourceOccurrence});
+                        inputs.try_emplace(Find(instruction.pins, input.destination)->interfaceId, input.slot, input.sourceOccurrence);
                     auto childPath = occurrence.callPath;
                     childPath.push_back(instruction.source);
                     output = Expand(*instruction.definitionIndex, childPath, occurrence.guards, inputs);
                 } else if (const auto *input = std::get_if<GraphInputNode>(&instruction.payload)) {
                     output = interfaceInputs.at(input->input);
-                    occurrence.inputs.push_back({instruction.pins.front().id, output.slot, output.producer});
+                    occurrence.inputs.emplace_back(instruction.pins.front().id, output.slot, output.producer);
                 } else if (std::holds_alternative<GraphOutputNode>(instruction.payload)) {
                     output = {occurrence.inputs.front().slot, occurrence.inputs.front().sourceOccurrence};
                 } else {
@@ -209,8 +209,8 @@ namespace Horo::Animation::GraphCompileDetail {
                     occurrence.instructionIndex = instructionIndex;
                     occurrence.parameterRead = instruction.parameterIndex;
                     for (const auto &input : instruction.inputs)
-                        occurrence.inputs.push_back(
-                            {input.destination, outputs[input.instruction].slot, outputs[input.instruction].producer});
+                        occurrence.inputs.emplace_back(input.destination, outputs[input.instruction].slot,
+                                                       outputs[input.instruction].producer);
                     if (const auto *clip = std::get_if<GraphClipNode>(&instruction.payload)) {
                         outputs[instructionIndex] = Clip(*clip, std::move(occurrence));
                         continue;
@@ -239,7 +239,7 @@ namespace Horo::Animation::GraphCompileDetail {
 
     /** @copydoc BindStateNodes */
     Result<BoundPlan> BindStateNodes(const AnimationGraphProgram &program, const AnimationGraphCompileContext &context,
-                                     const GraphSkeletonBinding skeleton, std::vector<AnimationClipDescriptor> clips) {
+                                     const GraphSkeletonBinding &skeleton, std::vector<AnimationClipDescriptor> clips) {
         try {
             return Result<BoundPlan>::Success(Builder{program, context, skeleton, std::move(clips)}.Build());
         } catch (const Rejection &rejection) {

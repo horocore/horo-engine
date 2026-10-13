@@ -27,8 +27,8 @@ namespace Horo::Animation {
                 conditions.push_back(Json{{"parameter", condition.parameter.Value()},
                                           {"predicate", Predicates.at(static_cast<std::size_t>(condition.predicate))},
                                           {"threshold", std::visit(
-                                                            [](const auto scalar) -> Json {
-                    if constexpr (std::is_same_v<std::remove_cv_t<decltype(scalar)>, float>)
+                                                            []<typename Scalar>(const Scalar scalar) -> Json {
+                    if constexpr (std::is_same_v<Scalar, float>)
                         return scalar == 0.0F ? Json(0.0F) : Json(scalar);
                     else
                         return scalar;

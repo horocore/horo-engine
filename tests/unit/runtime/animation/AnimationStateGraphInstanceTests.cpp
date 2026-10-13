@@ -208,13 +208,9 @@ namespace Horo::Animation::Test {
                                GraphStateInterruption::None,
                                GraphStateBlendCurve::Linear,
                                {{Id<GraphParameterId>(2), GraphStatePredicate::Trigger, true}}}};
-        auto childNode = Graph::Clip(4);
-        childNode.payload = child;
-        graph.definitions.push_back({Id<GraphDefinitionId>(2), {}, {childNode, Graph::Output(2)}, {Graph::Edge(4, 1, 2, 1)}});
-        Prepared fixture(graph);
-        auto instance = fixture.Create();
-        Tick first(instance, 1, 10);
-        REQUIRE(first.count == 2);
+        StateGraph::NestedFixture fixture{std::move(graph), child};
+        auto &instance = fixture.instance;
+        const auto &first = fixture.entered;
         const auto childOccurrence = first.events[1].occurrence;
         REQUIRE(instance.QueueTrigger(Id<GraphParameterId>(2)).HasValue());
         Tick second(instance, 2, 10);
@@ -234,6 +230,35 @@ namespace Horo::Animation::Test {
                 CHECK(event.activation == first.events[1].activation);
             }
         CHECK(exited);
+    }
+
+    TEST_CASE("Animation state cut retires the detached old subtree after candidate runtime changes", "[animation][state_graph]") {
+        auto graph = StateGraph::Data();
+        const auto child = StateGraph::Machine(graph);
+        StateGraph::Machine(graph).states[0].source = Id<GraphDefinitionId>(2);
+        StateGraph::Machine(graph).transitions[0].duration = {0};
+        StateGraph::NestedFixture fixture{std::move(graph), child};
+        auto &instance = fixture.instance;
+        const auto &first = fixture.entered;
+        const auto oldChild = first.events[1];
+        REQUIRE(oldChild.kind == GraphStateEventKind::Entered);
+        const std::array<GraphParameterInput, 1> speed{{{Id<GraphParameterId>(1), 2.0F}}};
+        Tick cut(instance, 2, 10, speed);
+        std::size_t childExits = 0;
+        for (const auto &event : std::span{cut.events}.first(cut.count)) {
+            if (event.occurrence != oldChild.occurrence)
+                continue;
+            CHECK(event.kind == GraphStateEventKind::Exited);
+            CHECK(event.state == oldChild.state);
+            CHECK(event.activation == oldChild.activation);
+            ++childExits;
+        }
+        CHECK(childExits == 1);
+        CHECK(cut.pose[0].translation.x == 100.0F);
+        Tick next(instance, 3, 10);
+        CHECK(next.pose[0].translation.x == 110.0F);
+        for (const auto &event : std::span{next.events}.first(next.count))
+            CHECK(event.occurrence != oldChild.occurrence);
     }
 
     TEST_CASE("Animation state graph exact exit-time gates retain hysteresis and include initial traversal", "[animation][state_graph]") {

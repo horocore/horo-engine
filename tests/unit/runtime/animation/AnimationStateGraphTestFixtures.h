@@ -40,6 +40,14 @@ namespace Horo::Animation::Test::StateGraph {
         return std::get<GraphStateMachineNode>(graph.definitions.front().nodes.front().payload);
     }
 
+    /** @brief Install the exact nested machine definition used by reentry and old-subtree retirement regressions. */
+    inline AnimationGraphData AddNestedMachine(AnimationGraphData graph, const GraphStateMachineNode &child) {
+        auto node = Graph::Clip(4);
+        node.payload = child;
+        graph.definitions.push_back({Id<GraphDefinitionId>(2), {}, {node, Graph::Output(2)}, {Graph::Edge(4, 1, 2, 1)}});
+        return graph;
+    }
+
     /** @brief Executes actual Evaluate/Commit and copies the resulting pose and event block into caller-owned storage. */
     struct Tick final {
         GraphInstanceOutcome outcome;
@@ -54,6 +62,18 @@ namespace Horo::Animation::Test::StateGraph {
             REQUIRE(outcome.HasValue());
             REQUIRE(instance.CopyPose(outcome.publication.currentPose, pose).HasValue());
             REQUIRE(instance.CopyStateEvents(outcome.publication.currentPose, events, count).HasValue());
+        }
+    };
+
+    /** @brief Owns the prepared nested graph, live instance and its committed two-owner initial entry together. */
+    struct NestedFixture final {
+        Instance::Prepared prepared;
+        AnimationGraphInstance instance;
+        Tick entered;
+
+        NestedFixture(AnimationGraphData graph, const GraphStateMachineNode &child)
+            : prepared(AddNestedMachine(std::move(graph), child)), instance(prepared.Create()), entered(instance, 1, 10) {
+            REQUIRE(entered.count == 2);
         }
     };
 }  // namespace Horo::Animation::Test::StateGraph

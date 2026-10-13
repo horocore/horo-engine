@@ -38,8 +38,8 @@ namespace Horo::Animation::GraphCompileDetail {
                 if (!clip->IsValid() || clip->Asset() == data.id.Asset() || clip->Asset() == data.skeleton.Asset() || state.loopPeriod)
                     return Result<void>::Failure(Failure(AnimationErrors::GraphBindingMismatch, location));
             } else {
-                const auto *definition = Find(data.definitions, std::get<GraphDefinitionId>(state.source));
-                if (!definition || !definition->inputs.empty())
+                if (const auto *definition = Find(data.definitions, std::get<GraphDefinitionId>(state.source));
+                    !definition || !definition->inputs.empty())
                     return Result<void>::Failure(Failure(AnimationErrors::GraphBindingMismatch, location));
                 if (state.loopPeriod && state.loopPeriod->ticks <= 0)
                     return Result<void>::Failure(Failure(AnimationErrors::GraphMalformed, location));

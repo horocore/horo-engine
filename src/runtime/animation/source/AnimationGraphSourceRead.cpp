@@ -66,7 +66,9 @@ namespace Horo::Animation {
             std::size_t connections{};
             std::size_t interfaces{};
             std::size_t parameters{};
-            std::size_t states{}, transitions{}, conditions{};
+            std::size_t states{};
+            std::size_t transitions{};
+            std::size_t conditions{};
             std::size_t maskEntries{};
         };
 
@@ -330,14 +332,15 @@ namespace Horo::Animation {
         bool AdmittedSchema(const std::uint32_t schema, const AnimationGraphSourceMigration migration) {
             if (schema == CurrentAnimationGraphSchemaVersion)
                 return true;
+            using enum AnimationGraphSourceMigration;
             switch (migration) {
-                case AnimationGraphSourceMigration::RequireCurrent:
+                case RequireCurrent:
                     return false;
-                case AnimationGraphSourceMigration::MigrateVersion1:
+                case MigrateVersion1:
                     return schema == 1;
-                case AnimationGraphSourceMigration::MigrateLegacySchemas:
+                case MigrateLegacySchemas:
                     return schema >= 1 && schema <= 2;
-                case AnimationGraphSourceMigration::MigrateSupported:
+                case MigrateSupported:
                     return schema >= 1 && schema <= 3;
             }
             return false;
@@ -357,10 +360,8 @@ namespace Horo::Animation {
             if (!version.is_number_unsigned() || version.get<std::uint64_t>() > std::numeric_limits<std::uint32_t>::max())
                 Reject(AnimationErrors::GraphVersionUnsupported);
             const auto schema = version.get<std::uint32_t>();
-            const auto expected = schema <= 2   ? AnimationGraphContractVersion{1, 0, 0}
-                                  : schema == 3 ? AnimationGraphContractVersion{1, 1, 0}
-                                                : CurrentAnimationGraphContractVersion;
-            if (!AdmittedSchema(schema, migration) || !ContractMatches(envelope["contractVersion"], expected))
+            if (const auto expected = SourceContract(schema);
+                !AdmittedSchema(schema, migration) || !ContractMatches(envelope["contractVersion"], expected))
                 Reject(AnimationErrors::GraphVersionUnsupported);
             if (envelope["assetType"] != "core.animation.graph")
                 Reject(AnimationErrors::GraphTypeMismatch);
@@ -430,9 +431,7 @@ namespace Horo::Animation {
             const auto envelope = Parse(source, context, limits);
             AnimationGraphData data;
             data.schemaVersion = Version(envelope, migration);
-            data.contractVersion = data.schemaVersion <= 2   ? AnimationGraphContractVersion{1, 0, 0}
-                                   : data.schemaVersion == 3 ? AnimationGraphContractVersion{1, 1, 0}
-                                                             : CurrentAnimationGraphContractVersion;
+            data.contractVersion = SourceContract(data.schemaVersion);
             data.id = identity;
             const auto &payload = envelope["payload"];
             Keys(payload, {"skeleton", "entry", "parameters", "definitions"});
