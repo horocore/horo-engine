@@ -71,6 +71,8 @@ namespace Horo::Navigation {
         PathId path;
         std::uint64_t tick{}; /**< Exact tick stamped on the acknowledged intent. */
         float achievedSpeedMetersPerSecond{};
+        Math::Vec3 achievedDisplacement{}; /**< Optional exact-step Character displacement for the velocity pipeline. */
+        bool requestRepath{};              /**< Bounded pipeline hysteresis decision for this exact acknowledged intent. */
     };
 
     /** @brief One committed owner-phase observation; all borrowed data expires at the end of the call. */
@@ -161,6 +163,11 @@ namespace Horo::Navigation {
          * @return Intent or descriptor error; on error the host must submit zero desired motion.
          */
         [[nodiscard]] Result<NavigationMovementIntent> Update(const NavigationMovementObservation &current);
+        /** @brief Invalidate motion/corridor history after teleport or Character incarnation replacement.
+         * @param current Fresh committed observation without old feedback.
+         * @return Success or descriptor/stale error; active requests retain their goal and finite query ceiling.
+         */
+        [[nodiscard]] Result<void> ResetMotionAtSafePoint(const NavigationMovementObservation &current);
         /** @brief Cancel only the exact active operation. @param id Accepted movement identity.
          * @return True only when that nonterminal operation was cancelled.
          */
@@ -171,6 +178,29 @@ namespace Horo::Navigation {
         [[nodiscard]] bool IsDrained() const noexcept;
         /** @brief Return owned status of the latest accepted operation. */
         [[nodiscard]] const NavigationMovementStatus &Status() const noexcept;
+
+        /** @brief Return the exact bound logical agent. @return Prepared registration handle. */
+        [[nodiscard]] CrowdAgentHandle Agent() const noexcept {
+            return agent_.handle;
+        }
+
+        /** @brief Return the exact bound Scene/world incarnation. @return Prepared owner binding. */
+        [[nodiscard]] NavigationAgentSceneBinding Binding() const noexcept {
+            return binding_;
+        }
+
+        /** @brief Check latest owner-issued intent before publishing asynchronous safe motion.
+         * @param intent Exact returned operation/path/tick/state identity.
+         * @return True only while that identity remains the controller's latest non-retired owner output.
+         */
+        [[nodiscard]] bool IsCurrentIntent(const NavigationMovementIntent &intent) const noexcept;
+        /** @brief Revalidate live agent/world and held corridor immediately before safe-motion publication.
+         * @param intent Exact latest owner output.
+         * @param current Fresh same-tick combined-world observation, without feedback.
+         * @return Success or stale/descriptor failure; revoked authority is retired through the normal lifecycle.
+         */
+        [[nodiscard]] Result<void> ValidateIntentAtSafePoint(const NavigationMovementIntent &intent,
+                                                             const NavigationMovementObservation &current);
 
     private:
         /** @brief Check complete observation shape before changing state. */
