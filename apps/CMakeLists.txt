@@ -247,6 +247,11 @@ if(HORO_BUILD_EDITOR_GUI)
 
     target_compile_features(HoroEditor PRIVATE cxx_std_20)
 
+    if(BUILD_TESTING AND HORO_ENABLE_GPU_SMOKE_TESTS AND HORO_BUILD_RENDER_OPENGL)
+        target_sources(HoroEditor PRIVATE HoroEditor/app/EditorSurfaceLifecycleQualification.cpp)
+        target_compile_definitions(HoroEditor PRIVATE HORO_EDITOR_SURFACE_QUALIFICATION=1)
+    endif()
+
     target_include_directories(HoroEditor
         PRIVATE
             ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app
@@ -275,6 +280,7 @@ if(HORO_BUILD_EDITOR_GUI)
             HoroEngine::EditorServices
             HoroEngine::EditorRenderExtraction
             HoroEngine::RenderFrontend
+            HoroEditorPresentationSurfaceInternal
             HoroEngine::Runtime
             HoroEngine::RuntimeScene
             HoroEngine::PhysicsSceneIntegration

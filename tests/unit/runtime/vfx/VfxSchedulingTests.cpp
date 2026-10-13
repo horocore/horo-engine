@@ -17,6 +17,7 @@ TEST_CASE("Prepared per-view scheduling and draw rejection allocate no frame-hot
         Populate(*world, binding);
     const auto snapshot = world->Extract(1, {}, 1).snapshot;
     auto frontend = Frontend();
+    const RenderFrontend &scheduler = *frontend;
     for (std::uint64_t view = 1; view <= 128; ++view) {
         auto builder = Builder();
         auto request = Request(*frontend, builder);
@@ -25,7 +26,7 @@ TEST_CASE("Prepared per-view scheduling and draw rejection allocate no frame-hot
         std::size_t requests{};
         {
             Tests::AllocationProbe::ScopedMeasurement measurement;
-            scheduled = frontend->ScheduleVfx(builder, snapshot, request);
+            scheduled = scheduler.ScheduleVfx(builder, snapshot, request);
             requests = measurement.Snapshot().requests;
         }
         REQUIRE(scheduled.HasValue());
@@ -39,7 +40,7 @@ TEST_CASE("Prepared per-view scheduling and draw rejection allocate no frame-hot
     std::size_t requests{};
     {
         Tests::AllocationProbe::ScopedMeasurement measurement;
-        rejected = frontend->ScheduleVfx(rejectedBuilder, snapshot, request);
+        rejected = scheduler.ScheduleVfx(rejectedBuilder, snapshot, request);
         requests = measurement.Snapshot().requests;
     }
     CHECK(requests == 0);

@@ -30,4 +30,6 @@ namespace Horo::Render::OpenGLBackendErrors {
     extern const ErrorCodeDescriptor UnsupportedResourceOperation;
     extern const ErrorCodeDescriptor ResourceCreationFailed;
     extern const ErrorCodeDescriptor ResourceIdentityInvalid;
+    extern const ErrorCodeDescriptor ShaderCompileFailed;
+    extern const ErrorCodeDescriptor PipelineLinkFailed;
 }  // namespace Horo::Render::OpenGLBackendErrors

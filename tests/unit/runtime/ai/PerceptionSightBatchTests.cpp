@@ -1,3 +1,4 @@
+#include "Horo/AI/AIScenePerceptionSource.h"
 #include "PerceptionSightTestSupport.h"
 
 namespace Horo::AI {
@@ -172,8 +173,72 @@ namespace Horo::AI {
             const auto stale = sight.Poll(scene.scene->View(), spatialRevision, publication);
             REQUIRE(stale.HasValue());
             CHECK_FALSE(stale.Value().pending);
-            CHECK(stale.Value().observations[0].evidence == PerceptionSightEvidence::Stale);
-            CHECK_FALSE(stale.Value().observations[0].visible);
+            CHECK(stale.Value().count == 0);
+            CHECK_FALSE(stale.Value().observations[0].source.IsValid());
+        }
+
+        TEST_CASE("Sight hidden sources consume no rays and policy replacement removes pending payloads",
+                  "[unit][ai][sight][canonical][filter]") {
+            SightScene scene;
+            SightWorld physics;
+            PerceptionSight sight;
+            const auto frame = physics.CompletePending(sight, scene);
+            scene.visibility = PerceptionGameplayVisibility::Hidden;
+            scene.Publish();
+            const auto revoked = sight.Poll(scene.scene->View(), scene.revision, Publication(physics.capability, frame));
+            REQUIRE(revoked.HasValue());
+            CHECK(revoked.Value().count == 0);
+            CHECK_FALSE(revoked.Value().observations[0].source.IsValid());
+            physics.Advance();
+            PerceptionSightBudget budget{physics.tick, 10};
+            const auto filtered =
+                sight.Begin(scene.scene->View(), *scene.spatial, physics.capability, physics.CurrentFrame(scene.listener), {}, budget);
+            REQUIRE(filtered.HasValue());
+            CHECK(filtered.Value().count == 0);
+            CHECK_FALSE(filtered.Value().pending);
+            CHECK(budget.remainingRaycasts == 10);
+        }
+
+        TEST_CASE("Current sight staging reaches memory and rejects policy-revoked observations", "[unit][ai][sight][canonical][filter]") {
+            SightScene scene;
+            SightWorld physics;
+            PerceptionSight sight;
+            const AgentHandle agent{AiRuntimeIncarnation::Create(9).Value(), {1, 1}};
+            auto memory = std::move(AIPerceptionMemory::Create(77, agent)).Value();
+            const auto result = physics.Sample(sight, scene);
+            const auto listenerType = PerceptionListenerTypeId::Create(1).Value();
+            REQUIRE(StagePerceptionSightAtSensePoll(scene.scene->View(), *scene.spatial, result, listenerType, memory).HasValue());
+            CHECK(memory.StoredCount() == 1);
+            auto miss = result;
+            miss.simulationTick = result.simulationTick + 1;
+            miss.observations[0].evidence = PerceptionSightEvidence::OutsideCone;
+            miss.observations[0].sourcePosition = Math::WorldCoordinate64::FromMillimeters(1000, 0, 0);
+            REQUIRE(StagePerceptionSightAtSensePoll(scene.scene->View(), *scene.spatial, miss, listenerType, memory).HasValue());
+            const auto remembered = memory.Snapshot(miss.simulationTick, PerceptionSceneLiveness(*scene.scene));
+            REQUIRE(remembered.HasValue());
+            CHECK(remembered.Value().entries[0].lastKnownPosition == result.observations[0].sourcePosition);
+            CHECK(remembered.Value().entries[0].lastSensedTick == result.simulationTick);
+            scene.visibility = PerceptionGameplayVisibility::Hidden;
+            scene.Publish();
+            CHECK(StagePerceptionSightAtSensePoll(scene.scene->View(), *scene.spatial, result, listenerType, memory).HasError());
+            auto replay = result;
+            replay.spatialRevision = scene.revision;
+            CHECK(StagePerceptionSightAtSensePoll(scene.scene->View(), *scene.spatial, replay, listenerType, memory).HasError());
+        }
+
+        TEST_CASE("Empty sight results from a revoked policy cannot advance memory", "[unit][ai][sight][canonical][filter]") {
+            SightScene scene;
+            const auto revoked = scene.spatial;
+            const AgentHandle agent{AiRuntimeIncarnation::Create(9).Value(), {1, 1}};
+            auto memory = std::move(AIPerceptionMemory::Create(77, agent)).Value();
+            const PerceptionSightResult empty{.simulationTick = 10, .spatialRevision = revoked->Revision(), .listener = scene.listener};
+            scene.Publish();
+            const auto staged =
+                StagePerceptionSightAtSensePoll(scene.scene->View(), *revoked, empty, PerceptionListenerTypeId::Create(1).Value(), memory);
+            REQUIRE(staged.HasError());
+            CHECK(staged.ErrorValue().code.Value() == AIErrors::PerceptionSpatialStale.code.Value());
+            CHECK(memory.StoredCount() == 0);
+            CHECK(memory.AdvanceTo(1).HasValue());
         }
 
         TEST_CASE("Sight reset destruction revocation and world teardown close pending work", "[unit][ai][sight][canonical]") {

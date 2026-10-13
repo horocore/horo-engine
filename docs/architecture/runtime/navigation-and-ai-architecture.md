@@ -1237,6 +1237,96 @@ broadphase callers remain source-compatible; the additive `ListenerPosition`
 accessor removes a competing host-supplied listener-position authority. Generated
 AI/Scene/sight public-header consumers and `HoroAISightTests` cover this boundary.
 
+### Typed Perception Filtering And Authorized Publication
+
+`Horo/AI/PerceptionFiltering.h` defines bounded Gameplay-owned team identities,
+directional Friendly/Neutral/Hostile/Custom relationships, exact custom-affiliation
+allowlists, listener/source layers and mutual masks, and Everyone/TeamOnly/Hidden
+Gameplay disclosure. Zero teams are unaligned; two unaligned endpoints are never
+same-team. Default relationships are Friendly for the same non-zero team, Neutral
+when either endpoint is unaligned, and Hostile otherwise. Up to 64 unique ordered
+team-pair overrides supply Gameplay's explicit relationship policy. Custom
+relationships require a non-zero exact identity admitted by the listener; they do
+not inherit ordinary affiliation permission. TeamOnly requires the same non-zero
+team. Gameplay visibility is simulation truth, independent of render culling.
+
+The Scene owner publishes complete endpoint facts and relationship policy through
+`PerceptionSpatialBroadphase::Publish` at the sensing/structural safe point. Source
+`layers` remains the canonical source layer field; listener typed filter facts own
+listener layers and mask. Existing query `visibleLayers` and Same/Different legacy
+affiliation restrictions are additional narrowing predicates, never permission
+that bypasses typed policy. Validation rejects unknown enums, duplicate identities,
+malformed custom relationships and excessive capacities before replacing Current.
+One successful publication carries one increasing revision; failed publication
+preserves the complete previous snapshot. Policy changes close outstanding sensing
+windows before new dispatch. Historical snapshot leases are not current permission. Replaced spatial queries return typed stale rather than new candidates.
+
+The actual sight broadphase filters before range/cone/LOS work and budget admission.
+`Poll` discards the entire copied observation payload when its candidate publication
+is revoked. `StagePerceptionSightAtSensePoll` validates the current revision,
+source generations and the same typed policy before staging confirmed sight facts
+into memory. Unknown sight evidence never creates a new observation or confirmed
+loss. Gameplay event capture now requires the live broadphase owner; replacement
+revokes retained windows. Delivery checks subject and, for Team events, sender
+policy independently, in addition to the producer's explicit delivery permission,
+network authority, descriptor and generation admission.
+
+`PerceptionPublication` in `HoroAISceneIntegration` supplies the bounded
+BlackboardSync boundary for staged memory. It revalidates every remembered subject
+and provenance against the latest policy before constructing source and last-known
+position collections, commits both keys in one existing blackboard transaction,
+and exposes the matching revisioned debug value. No live target position is read.
+Denied entries leave no source or position in either output, including inactive
+array tails. The current collection contract supports at most 16 admitted records;
+larger allowed sets or insufficient schema capacity fail without partial publication.
+Derived collection writes carry the exact spatial publication's process-local
+`BlackboardValueAuthorization`. Only after every proposed policy and endpoint is
+validated and its complete storage built, the owner permanently revokes the old
+lease before its non-failing Current replacement. Every ordinary blackboard
+Snapshot.Read, including retained snapshots, checks that key's lease and returns
+typed stale after revocation. Accepted policy changes followed by capacity/type/
+write failure therefore cannot expose old denied facts through ordinary readers.
+Other unleased keys retain their usual read behavior. Rejected policy proposals
+never revoke the old lease, preserving the genuinely valid old publication.
+Hosts choose a memory profile of at most 16 for this projection. General multi-sense
+scheduler/batch orchestration remains the separate GAI-002.9 owner.
+
+Debug reads require current Scene, filter and blackboard fences. After policy
+replacement, entity recycling, blackboard replacement/teardown or another blackboard
+commit, an old debug publication is stale. Repeated identical tick/filter commits
+are idempotent. A changed policy at the same tick publishes one new result and
+replaces both collections, including clearing previously allowed values. Reset
+revokes stored debug state at disable/unload. Read copies remain historical values.
+The publisher does not borrow a Scene or blackboard beyond a synchronous call.
+The policy owner revokes on destruction as well as replacement. Permission cells
+retain no Scene/blackboard/publisher pointer. Owner-thread revocation is monotonic;
+worker checks use an atomic acquire read paired with owner release revocation.
+The atomic protects permission only, never value mutation. Reads linearize at the
+permission check; hosts still close/join old sensing windows at the safe point.
+
+Read-authorized derived values are deliberately not canonical/save input.
+`CaptureCanonical` fails before producing any raw value collection while any key
+has a process-local authorization. This prevents serializing an allowed value and
+restoring it later without its policy lease. Derived perception keys are recomputed
+from authorized memory after restore. Before saving this blackboard, the host stages
+lease-free writes of schema defaults for only the derived projection keys in one
+BlackboardSync transaction. This preserves unrelated durable values; the whole-board
+Reset operation is not selective save preparation. Canonical capture rejects remaining
+authorized keys with a typed error explaining this recovery, propagated unchanged by
+the Scene aggregate capture boundary. Schema replacement carries matching
+key leases so it cannot remove a revoked permission; reset clears derived values
+and their leases together. Ordinary unleased blackboards preserve existing save
+semantics.
+
+Migration: Gameplay event hosts pass their Scene's filter owner to Capture and
+project all declared event listeners, subjects and provenance senders with enabled
+sense sets. Sight hosts stage completed observations with the current publication,
+then invoke PublishAtBlackboardSync after all senses have staged, using distinct
+writable EntityReference and WorldCoordinate collection keys. Both keys need the
+admitted profile capacity. Generated public-header consumers and AI/sight regressions
+cover the added core policy and integration boundary; no native/backend dependency
+is added to HoroAI.
+
 Every built-in sense has an explicit authority, timing owner, and underlying
 query seam:
 
@@ -1895,7 +1985,7 @@ Repeated staging of one key coalesces in place with deterministic last-write-win
 semantics and counts once against the unique-key limit. Unknown, read-only,
 type-invalid, or stale writes reject the whole batch.
 Changed-key facts are emitted in stable `BlackboardKeyId` order and the monotonic
-revision advances only when stored values change.
+revision advances only when stored values or their derived-value read authorization change.
 
 Each instance owns a fixed-capacity observer registry scoped to its exact agent and
 instance generation. Registrations bind one stable key and one generation-checked
@@ -1913,7 +2003,9 @@ invalidate all registrations before releasing their borrowed contexts.
 
 `BlackboardSnapshot` owns an immutable value copy rather than a pointer to mutable
 instance storage, so workers cannot mutate or retain the Scene-owned store. Ordinary
-commits do not change an existing snapshot. Schema/instance replacement allocates and
+commits do not change an existing snapshot's values. Derived-value authorization
+revocation expires reads of that key even in retained snapshots, without affecting
+unleased keys. Schema/instance replacement allocates and
 validates its complete default/migration candidate before publication, then expires
 the old generation lease; failed replacement leaves the old binding, values, revision,
 and snapshots active. Teardown similarly expires retained snapshots and rejects stale

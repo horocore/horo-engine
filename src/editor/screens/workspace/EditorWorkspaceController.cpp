@@ -70,6 +70,8 @@ namespace Horo::Editor {
                                                          const Assets::AssetRegistrySnapshot &assetRegistry,
                                                          const EditorWorkspaceDependencies &dependencies)
         : m_runtimeScene(runtimeScene), m_assetRegistry(assetRegistry), m_sourceOpenService(projectRoot, m_documentRegistry),
+          m_pcgDocuments(m_sourceOpenService.ProjectRoot(), dependencies.documentSessionOwner, dependencies.pcgCatalog,
+                         dependencies.mutations, dependencies.durableFiles, dependencies.pcgMigrator),
           m_mutableAssetRegistry(dependencies.mutableAssetRegistry), m_mutations(dependencies.mutations),
           m_durableFiles(dependencies.durableFiles), m_importerCatalog(dependencies.importerCatalog),
           m_assetPreviews(dependencies.jobs != nullptr ? std::make_unique<Assets::AssetPreviewService>(*dependencies.jobs) : nullptr),

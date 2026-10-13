@@ -6,6 +6,7 @@
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorEngineEventBridge.h"
 #include "Horo/Editor/NotificationService.h"
+#include "Horo/Editor/PCGGraphDocumentService.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Editor/UiCanvasDocument.h"
 #include "editor/document/EditorAssetMeshCache.h"
@@ -53,6 +54,9 @@ namespace Horo::Editor {
         const ILocalizationService *localization{};
         EngineDataBus *engineEvents{};
         Application::NetworkDebuggerService *networkDebugger{};
+        Assets::AssetId documentSessionOwner;              /**< Host-issued never-reused workspace incarnation; no ambient generation. */
+        const PCG::IPCGGraphSourceMigrator *pcgMigrator{}; /**< Explicit host-owned compatible schema converter. */
+        PCGDocumentCatalog pcgCatalog{.revision = 1};      /**< Empty support preserves graph nodes inert until a catalog is composed. */
     };
 
     class EditorWorkspaceController {  // NOSONAR(cpp:S1820, cpp:S1448) Authoritative workspace controller
@@ -101,6 +105,32 @@ namespace Horo::Editor {
         [[nodiscard]] const std::optional<Result<bool>> &SourceCloseOutcome() const noexcept {
             return m_sourceCloseOutcome;
         }
+
+        /** @brief Queries workspace-owned PCG source without lending mutable roots. @return Owner-thread immutable query service. */
+        [[nodiscard]] const PCGGraphDocumentService &PCGDocuments() const noexcept {
+            return m_pcgDocuments;
+        }
+
+        /** @brief Submits the shared typed graph command and reconciles presentation dirty state.
+         * @param instance Exact persistent route. @param command Exact semantic intent. @return Typed mutation result. */
+        [[nodiscard]] Result<void> ExecutePCGDocument(DocumentInstanceId instance, const PCGDocumentCommand &command);
+        /** @brief Replays exact semantic history and reconciles the tab projection.
+         * @param instance Exact route. @param command Exact fence. @param redo Direction. @return Typed result. */
+        [[nodiscard]] Result<void> ReplayPCGDocument(DocumentInstanceId instance, const PCGDocumentCommand &command, bool redo);
+        /** @brief Saves through Assets authority and projects actual saved/dirty state.
+         * @param instance Exact route. @param command Exact live fence. @return Durable/reconciliation outcome. */
+        [[nodiscard]] Result<Assets::AssetSourcePublication> SavePCGDocument(DocumentInstanceId instance,
+                                                                             const PCGDocumentCommand &command);
+        /** @brief Closes graph authority only after an explicit save/discard/cancel decision.
+         * @param instance Exact route. @param discardDirty Explicit loss decision. @return Typed lifecycle result. */
+        [[nodiscard]] Result<void> ClosePCGDocument(DocumentInstanceId instance, bool discardDirty = false);
+        /** @brief Includes graph documents in the shared leave guard. @return True if any graph has unsaved semantics. */
+        [[nodiscard]] bool HasDirtyPCGDocuments() const;
+        /** @brief Saves every dirty graph through its one document service. @return Success only for durable publications. */
+        [[nodiscard]] Result<void> SavePCGDocuments();
+        /** @brief Drains graph ownership after explicit save/discard/recovery policy.
+         * @param discardDirty Explicit leave decision. @return Success or retryable incomplete ownership result. */
+        [[nodiscard]] Result<void> ShutdownPCGDocuments(bool discardDirty = false);
 
         [[nodiscard]] EditorDataBus &DataBus() noexcept {
             return m_dataBus;
@@ -188,6 +218,7 @@ namespace Horo::Editor {
         std::optional<Result<std::vector<SourceSaveAllItem>>> m_sourceSaveAllOutcome;
         std::optional<Result<bool>> m_sourceCloseOutcome;
         SourceFileOpenService m_sourceOpenService;
+        PCGGraphDocumentService m_pcgDocuments;
         Assets::AssetRegistry *m_mutableAssetRegistry{};
         ProjectMutationCoordinator *m_mutations{};
         DurableFileSystem *m_durableFiles{};
@@ -254,6 +285,10 @@ namespace Horo::Editor {
 
         std::vector<PendingContentBrowserPreview> m_pendingContentBrowserPreviews;
         std::vector<UiCanvasDocument> m_uiCanvasDocuments;
+        float m_pcgAutosaveElapsedSeconds{};
+        float m_pcgAutosaveRetrySeconds{};
+        bool m_pcgAutosaveErrorPresented{};
+        bool m_pcgDocumentsShutdown{};
         float m_autosaveElapsedSeconds{0.0F};
         float m_autosaveRetryDelaySeconds{0.0F};
         float m_sceneFileWatchElapsedSeconds{0.0F};
@@ -448,6 +483,9 @@ namespace Horo::Editor {
         void ReimportContentBrowserAsset(const std::filesystem::path &absolutePath);
         void RevealContentBrowserEntry(const std::filesystem::path &absolutePath);
         /** @brief Admits a sequence source into the persistent workspace document host. */
+        void OpenEmbeddedPCGSource(const SourceOpenResult &result);
+        void UpdatePCGAutosave(float elapsedSeconds, int intervalMinutes);
+        void RefreshPCGDocumentProjection(DocumentInstanceId instance);
         void OpenEmbeddedSequenceSource(const SourceOpenResult &result);
         /** @brief Dispatches one command to the explicit owning workspace subsystem. */
         void DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &cmd);

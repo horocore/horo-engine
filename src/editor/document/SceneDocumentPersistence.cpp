@@ -1,3 +1,4 @@
+#include "Horo/Editor/DocumentRecoveryService.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Runtime/Scene/PrimitiveCatalog.h"
 #include "editor/document/SceneDocumentPersistenceInternal.h"
@@ -147,18 +148,24 @@ namespace Horo::Editor {
 
         [[nodiscard]] Result<void> WriteRecoveryPayload(const std::filesystem::path &absoluteProjectRoot, const std::string &serialized,
                                                         DurableFileSystem &files) {
-            const std::filesystem::path destination = RecoveryPath(absoluteProjectRoot);
-            std::filesystem::path prepared = destination;
-            prepared += ".tmp";
-            const std::vector<std::byte> bytes = Bytes(serialized);
-            if (Result<void> write = files.WriteDurable(prepared, bytes); write.HasError()) {
-                static_cast<void>(files.RemoveDurable(prepared));
-                return write;
-            }
-            if (Result<void> replace = files.AtomicReplace(prepared, destination); replace.HasError()) {
-                static_cast<void>(files.RemoveDurable(prepared));
-                return replace;
-            }
+            // Scene callers may hold an absolute project alias; exact native writer leases require its canonical physical root.
+            std::error_code error;
+            const auto publicationRoot = std::filesystem::canonical(absoluteProjectRoot, error);
+            if (error)
+                return Result<void>::Failure(
+                    PersistenceError(ScenePathInvalid, std::format("Unable to resolve the recovery project root: {}:{} {}",
+                                                                   error.category().name(), error.value(), error.message())));
+            const std::filesystem::path destination = RecoveryPath(publicationRoot);
+            const auto previous = Assets::CaptureAssetSource(publicationRoot, destination, kMaximumRecoveryBytes);
+            if (previous.HasError())
+                return Result<void>::Failure(previous.ErrorValue());
+            const auto bytes = Bytes(serialized);
+            auto publication = PublishDocumentRecovery(publicationRoot, destination, bytes, previous.Value().identity, files,
+                                                       {.maximumRecordBytes = kMaximumRecoveryBytes});
+            if (publication.HasError())
+                return Result<void>::Failure(publication.ErrorValue());
+            if (publication.Value().durabilityError)
+                return Result<void>::Failure(*publication.Value().durabilityError);
             return Result<void>::Success();
         }
     }  // namespace
@@ -339,7 +346,7 @@ namespace Horo::Editor {
         if (!IsSafeProjectRelativePath(relativeScene))
             return Result<void>::Failure(PersistenceError(ScenePathInvalid, "Default scene path is not a safe project-relative path."));
 
-        if (const auto lease = mutations.TryAcquire(ProjectMutationRequest{
+        if (auto lease = mutations.TryAcquire(ProjectMutationRequest{
                 .projectRoot = projectRoot,
                 .owner = ProjectMutationOwner::Save,
                 .operationId = "set-project-default-scene",
@@ -388,14 +395,15 @@ namespace Horo::Editor {
                 PersistenceError(ScenePathInvalid, "Recovery destination must describe an absolute project scene."));
         }
 
-        if (auto lease = mutations.TryAcquire(ProjectMutationRequest{
-                .projectRoot = absoluteProjectRoot,
-                .owner = ProjectMutationOwner::Autosave,
-                .operationId = std::format("scene-autosave-{}", snapshot.revision.value),
-            });
-            lease.HasError()) {
+        auto lease = mutations.TryAcquire(ProjectMutationRequest{
+            .projectRoot = absoluteProjectRoot,
+            .owner = ProjectMutationOwner::Autosave,
+            .operationId = std::format("scene-autosave-{}", snapshot.revision.value),
+        });
+        if (lease.HasError()) {
             return Result<void>::Failure(lease.ErrorValue());
         }
+        const auto heldLease = std::move(lease).Value();
 
         const std::string serialized = SerializeRecoveryRecord(absoluteScenePath, snapshot, savedRevision, savedState);
         if (serialized.size() > kMaximumRecoveryBytes) {
@@ -452,14 +460,15 @@ namespace Horo::Editor {
             }
             return Result<void>::Success();
         }
-        if (auto lease = mutations.TryAcquire(ProjectMutationRequest{
-                .projectRoot = absoluteProjectRoot,
-                .owner = ProjectMutationOwner::Autosave,
-                .operationId = "scene-recovery-discard",
-            });
-            lease.HasError()) {
+        auto lease = mutations.TryAcquire(ProjectMutationRequest{
+            .projectRoot = absoluteProjectRoot,
+            .owner = ProjectMutationOwner::Autosave,
+            .operationId = "scene-recovery-discard",
+        });
+        if (lease.HasError()) {
             return Result<void>::Failure(lease.ErrorValue());
         }
+        const auto heldLease = std::move(lease).Value();
         return files.RemoveDurable(recoveryPath);
     }
 }  // namespace Horo::Editor

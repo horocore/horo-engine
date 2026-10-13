@@ -16,3 +16,7 @@ using NativePreparation = Horo::Result<void> (Horo::Render::RenderFrameScope::*)
                                                                                  const Horo::CancellationToken &) noexcept;
 static_assert(std::is_same_v<decltype(&Horo::Render::RenderFrameScope::PrepareParallelExecution), CpuPreparation>);
 static_assert(std::is_same_v<decltype(&Horo::Render::RenderFrameScope::PrepareParallelGraphExecution), NativePreparation>);
+
+using VfxScheduling = Horo::Render::VfxGraphSchedulingOutcome (Horo::Render::RenderFrontend::*)(
+    Horo::Render::RenderGraphBuilder &, const Horo::Render::RenderWorldSnapshot &, const Horo::Render::VfxGraphRequest &) const;
+static_assert(std::is_same_v<decltype(&Horo::Render::RenderFrontend::ScheduleVfx), VfxScheduling>);

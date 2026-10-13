@@ -67,6 +67,7 @@ namespace Horo::Editor {
         Custom,
         UiCanvas,
         Sequence,
+        PCGGraph,
     };
 
     /** @brief Returns the canonical persisted name of a document kind, or empty for None. */

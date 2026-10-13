@@ -41,8 +41,12 @@ namespace Horo::Editor::PersistenceTestSupport {
                                                                     std::string_view ownerMetadata) override;
         [[nodiscard]] Result<std::uint64_t> AvailableBytes(const std::filesystem::path &path) const override;
         [[nodiscard]] Result<void> WriteDurable(const std::filesystem::path &path, std::span<const std::byte> bytes) override;
+        [[nodiscard]] Result<void> WritePrivateDurable(const std::filesystem::path &path, std::span<const std::byte> bytes, bool &created,
+                                                       std::filesystem::perms permissions = std::filesystem::perms::unknown) override;
         [[nodiscard]] Result<void> CopyDurable(const std::filesystem::path &source, const std::filesystem::path &destination) override;
         [[nodiscard]] Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override;
+        [[nodiscard]] Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
+                                                        AtomicFileReplacementReceipt &receipt) override;
         [[nodiscard]] Result<void> RemoveDurable(const std::filesystem::path &path) override;
         [[nodiscard]] Result<void> SyncDirectory(const std::filesystem::path &path) override;
 
@@ -52,6 +56,8 @@ namespace Horo::Editor::PersistenceTestSupport {
 
     class ReplaceFailingFileSystem final : public NativeBackedFileSystem {
     public:
+        [[nodiscard]] Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
+                                                        AtomicFileReplacementReceipt &receipt) override;
         [[nodiscard]] Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override;
     };
 

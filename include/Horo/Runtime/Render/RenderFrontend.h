@@ -12,6 +12,7 @@
 #include "Horo/Runtime/Render/RenderGraphTransientResources.h"
 #include "Horo/Runtime/Render/RenderMemoryBudget.h"
 #include "Horo/Runtime/Render/RenderParallelWork.h"
+#include "Horo/Runtime/Render/RenderShaderResources.h"
 
 #include <memory>
 #include <span>
@@ -20,6 +21,7 @@
 
 namespace Horo::Render {
     class RenderFrontend;
+    struct RenderMaterialPass;
     class CompiledRenderGraphExecution;
     class RenderGraphLifetimePlan;
     struct RenderGraphPassWorkload;
@@ -153,6 +155,13 @@ namespace Horo::Render {
          * or a translated backend exception.
          */
         [[nodiscard]] Result<void> Execute(std::span<const RenderPassDescriptor> orderedPasses);
+        /** @brief Consumes one bounded prepared material pass, retaining exact generations until native completion.
+         * @param pass Ready target/meshes and immutable material leases, borrowed only during this call.
+         * @return Success or typed stage, identity, unsupported or native failure. No frame-hot preparation occurs.
+         * @details Native exceptions unwind leases and abort the frame before translation to FrameException.
+         * @throws std::bad_alloc If owned error construction cannot allocate, after exception cleanup has completed.
+         * @throws std::length_error If owned error construction exceeds its representation limits. */
+        [[nodiscard]] Result<void> ExecuteMaterialPass(const RenderMaterialPass &pass);
 
         /**
          * @brief Resolves resident resources and executes one compiled graph exactly once.
@@ -261,6 +270,14 @@ namespace Horo::Render {
         [[nodiscard]] Result<void> ExecuteGraphInternal(const CompiledRenderGraphExecution &graph,
                                                         std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission *ui,
                                                         RenderGraphTransientResourcesHandle transientResources = {});
+        /** @brief Transfers one acquired material lease to backend completion; failures retain frontend rollback authority. */
+        [[nodiscard]] Result<void> ExecuteMaterialRequest(RenderMaterialExecutionRequest request);
+        struct MaterialExecutionOutcome;
+        struct MaterialExecutionInstances;
+        /** @brief Resolves bounded draw identities without acquiring or transferring completion ownership. */
+        [[nodiscard]] Result<void> ResolveMaterialDraws(const RenderMaterialPass &pass, MaterialExecutionInstances &instances) const;
+        /** @brief Contains admission/execution exceptions and completes rollback before allocation-free outcome transport. */
+        [[nodiscard]] MaterialExecutionOutcome ExecuteMaterialPassBoundary(const RenderMaterialPass &pass) noexcept;
         void Abort() noexcept;
         void Release() noexcept;
         /** @brief Enforces the one-shot frame admission gate shared by synchronous and worker routes. */
@@ -294,7 +311,8 @@ namespace Horo::Render {
      * All methods and destruction must run serially on one host-declared render-capable
      * thread. The frontend and its frame scope are not thread-safe.
      */
-    class RenderFrontend final {  // NOSONAR(cpp:S1448) Cohesive public facade for one renderer frontend lifetime.
+    class RenderFrontend final
+        : public IMaterialBindingBackend {  // NOSONAR(cpp:S1448) Cohesive public facade for one renderer frontend lifetime.
     public:
         /**
          * @brief Creates and initializes the selected backend from a sealed registry.
@@ -339,10 +357,11 @@ namespace Horo::Render {
          * @details Requires PrepareVfxScheduling before activation. Success and expected capacity/backpressure failures
          * allocate no scheduling storage. Retained workloads pin their prepared view slot until every reader releases it.
          * Every failure preserves prior graph records; the appended contribution publishes atomically.
+         * Const access still requires the render owner: scheduling mutates prepared slot storage and the borrowed graph.
          * Native ExecuteGraph rejects these payloads explicitly until physical encoding is available.
          */
         [[nodiscard]] VfxGraphSchedulingOutcome ScheduleVfx(RenderGraphBuilder &builder, const RenderWorldSnapshot &snapshot,
-                                                            const VfxGraphRequest &request);
+                                                            const VfxGraphRequest &request) const;
 
         /** @brief Prepares finite per-view order and radix storage before scene activation.
          * @param budget Aggregate host-admitted capacity across views and frames in flight.
@@ -350,6 +369,49 @@ namespace Horo::Render {
          * @pre Call on the render owner before scheduling; no frame-hot resize or automatic growth is permitted.
          */
         [[nodiscard]] Result<void> PrepareVfxScheduling(VfxSchedulingBudget budget);
+
+        /** @brief Queries actual selected backend/device facts for pipeline cache identity outside an active frame.
+         * @return Native-free compatibility facts or typed thread/lifecycle/unsupported failure. */
+        [[nodiscard]] Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const;
+        /** @copydoc IMaterialBindingBackend::Realize */
+        [[nodiscard]] Result<std::unique_ptr<IResidentMaterialBinding>> Realize(const MaterialBindingDescriptor &descriptor) override;
+
+        /** @brief Synchronously prepares an exact cooked stage on the render owner, outside an active frame.
+         * @param descriptor Validated target, stage, authored entry and original artifact/interface identity.
+         * @param cookedPackage Entire immutable HOROSHDR package borrowed only during this call.
+         * @return Ready generation and completed operation, or typed failure with no partial publication.
+         * @details Admits backing before native compilation. No job, source cooker, fallback or borrowed byte retention occurs.
+         * Host cancellation/shutdown is serialized before/after this bounded loading operation. */
+        [[nodiscard]] Result<ResourceCreation<RenderShaderModuleHandle>> CreateShaderModule(const RenderShaderModuleDescriptor &descriptor,
+                                                                                            std::span<const std::uint8_t> cookedPackage);
+        /** @brief Synchronously prepares an exact graphics pipeline during render-owner loading.
+         * @param descriptor Cooked manifest/reflection, exact shader generations and immutable state/cache identity.
+         * @return Ready pipeline generation and completed operation, or original typed failure.
+         * @details Retains both shader dependencies until pipeline retirement; active-frame creation is rejected. */
+        [[nodiscard]] Result<ResourceCreation<RenderPipelineHandle>> CreateGraphicsPipeline(
+            const RenderGraphicsPipelineDescriptor &descriptor);
+        /** @brief Synchronously prepares one admitted immutable sampler outside an active frame.
+         * @param descriptor Exact filtering, addressing and comparison policy.
+         * @return Ready sampler generation and completed operation, or typed failure without policy substitution. */
+        [[nodiscard]] Result<ResourceCreation<RenderSamplerHandle>> CreateSampler(const RenderSamplerDescriptor &descriptor);
+        /** @brief Retires an exact shader generation once pipeline and submission pins drain.
+         * @param handle Exact frontend-owned generation. @return Success or typed identity/lifecycle failure.
+         * @details Owner-thread preparation operation; resource changes during an active frame are rejected. */
+        [[nodiscard]] Result<void> ReleaseShaderModule(RenderShaderModuleHandle handle);
+        /** @brief Retires an exact pipeline generation once its consumer and submission pins drain.
+         * @param handle Exact frontend-owned generation. @return Success or typed identity/lifecycle failure.
+         * @details Owner-thread preparation operation; resource changes during an active frame are rejected. */
+        [[nodiscard]] Result<void> ReleaseGraphicsPipeline(RenderPipelineHandle handle);
+        /** @brief Retires an exact sampler generation once material and submission pins drain.
+         * @param handle Exact frontend-owned generation. @return Success or typed identity/lifecycle failure.
+         * @details Owner-thread preparation operation; resource changes during an active frame are rejected. */
+        [[nodiscard]] Result<void> ReleaseSampler(RenderSamplerHandle handle);
+        /** @brief Queries one exact shader generation. @param handle Exact identity. @return State or typed identity failure. */
+        [[nodiscard]] Result<RenderResourceState> ResourceState(RenderShaderModuleHandle handle) const;
+        /** @brief Queries one exact pipeline generation. @param handle Exact identity. @return State or typed identity failure. */
+        [[nodiscard]] Result<RenderResourceState> ResourceState(RenderPipelineHandle handle) const;
+        /** @brief Queries one exact sampler generation. @param handle Exact identity. @return State or typed identity failure. */
+        [[nodiscard]] Result<RenderResourceState> ResourceState(RenderSamplerHandle handle) const;
 
         /**
          * @brief Realizes one cooked light-culling kernel before frame admission on the render owner thread.
@@ -614,6 +676,8 @@ namespace Horo::Render {
         [[nodiscard]] Result<std::uint64_t> BackendInstance(RenderMeshHandle mesh) const;
         [[nodiscard]] Result<std::uint64_t> BackendInstance(RenderTextureViewHandle view) const;
         [[nodiscard]] Result<std::uint64_t> BackendInstance(RenderTargetHandle target) const;
+        [[nodiscard]] Result<std::uint64_t> BackendInstance(RenderPipelineHandle pipeline) const;
+        [[nodiscard]] Result<std::uint64_t> BackendInstance(RenderSamplerHandle sampler) const;
         [[nodiscard]] Result<void> ValidateMeshDependencies(const RenderMeshDescriptor &descriptor) const;
         [[nodiscard]] bool IsMeshBufferLayoutCompatible(const RenderMeshDescriptor &descriptor) const noexcept;
         [[nodiscard]] Result<void> ValidateTextureViewDependency(const RenderTextureViewDescriptor &descriptor) const;
@@ -641,6 +705,7 @@ namespace Horo::Render {
         };
 
         std::unique_ptr<IRenderBackend> backend_;
+        const std::thread::id preparationOwner_{std::this_thread::get_id()};
         std::unique_ptr<RenderMemoryBudget> memoryBudget_;
         std::shared_ptr<Detail::VfxSchedulingStorage> vfxScheduling_;
         std::thread::id vfxSchedulingOwner_{std::this_thread::get_id()};

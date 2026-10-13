@@ -988,6 +988,7 @@ add_library(HoroAssets STATIC
         runtime/assets/cooker/AssetCookInputSnapshot.cpp
         runtime/assets/cooker/AssetCookTransaction.cpp
         runtime/assets/importer/AssetImporterCatalog.cpp
+        runtime/assets/AssetSourcePublication.cpp
         runtime/assets/importer/AssetImportMetadata.cpp
         runtime/assets/importer/AssetImportOperation.cpp
         runtime/assets/importer/AssetImportFileFacts.cpp
@@ -1378,6 +1379,7 @@ add_library(HoroAI STATIC
         runtime/ai/api/PerceptionDescriptorRegistry.cpp
         runtime/ai/api/PerceptionEventRouting.cpp
         runtime/ai/api/PerceptionErrors.cpp
+        runtime/ai/api/PerceptionFiltering.cpp
         runtime/ai/api/PerceptionMemory.cpp
 )
 add_library(HoroEngine::AI ALIAS HoroAI)
@@ -2102,6 +2104,9 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderResourceDescriptorErrors.cpp
         runtime/renderer/api/RenderResourceAdmission.cpp
         runtime/renderer/api/RenderResourceDescriptors.cpp
+        runtime/renderer/api/ShaderArtifact.cpp
+        runtime/renderer/api/RenderShaderResources.cpp
+        runtime/renderer/api/RenderShaderResourceErrors.cpp
         runtime/renderer/api/ShaderCompilerPipeline.cpp
         runtime/renderer/api/ShaderCompilerPipelineErrors.cpp
         runtime/renderer/api/ShaderManifest.cpp
@@ -2168,6 +2173,7 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderFrameInputInternal.cpp
         runtime/renderer/frontend/RenderFrameParallelExecution.cpp
         runtime/renderer/frontend/RenderFrameGraphResources.cpp
+        runtime/renderer/frontend/RenderFrameMaterialExecution.cpp
         runtime/renderer/frontend/RenderGraphTransientResourcePool.cpp
         runtime/renderer/frontend/RenderParallelWorkInternal.cpp
         runtime/renderer/frontend/RenderParallelWorkErrors.cpp
@@ -2179,6 +2185,7 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderFrontendResourceAccess.cpp
         runtime/renderer/frontend/RenderFrontendResourceValidation.cpp
         runtime/renderer/frontend/RenderFrontendResources.cpp
+        runtime/renderer/frontend/RenderFrontendShaderResources.cpp
         runtime/renderer/frontend/RenderFrontendErrors.cpp
         runtime/renderer/frontend/RenderMemoryBudget.cpp
         runtime/renderer/frontend/RenderMemoryBudgetErrors.cpp
@@ -2274,9 +2281,19 @@ target_link_libraries(HoroRenderNull
 )
 
 if (HORO_BUILD_RENDER_OPENGL)
+    # One-header host contract; never installed or exposed by RenderOpenGL.
+    add_library(HoroOpenGLHostAdmissionInternal INTERFACE)
+    target_compile_features(HoroOpenGLHostAdmissionInternal INTERFACE cxx_std_20)
+    target_include_directories(HoroOpenGLHostAdmissionInternal INTERFACE
+            ${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/opengl_host/include)
+
     add_library(HoroRenderOpenGL STATIC
             runtime/renderer/modules/opengl/OpenGLBackendModule.cpp
             runtime/renderer/modules/opengl/OpenGLCommandFunctions.cpp
+            runtime/renderer/modules/opengl/OpenGLShaderRealization.cpp
+            runtime/renderer/modules/opengl/OpenGLPipelineRealization.cpp
+            runtime/renderer/modules/opengl/OpenGLMaterialExecution.cpp
+            runtime/renderer/modules/opengl/OpenGLSamplerRealization.cpp
             runtime/renderer/modules/opengl/OpenGLContextAdmission.cpp
             runtime/renderer/modules/opengl/OpenGLExecutionState.cpp
         runtime/renderer/modules/opengl/OpenGLExecutionAdapter.cpp
@@ -2545,6 +2562,10 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_METAL)
 endif ()
 
 add_library(HoroEditorServices STATIC
+        editor/pcg/PCGDocumentErrors.cpp
+        editor/pcg/PCGGraphDocument.cpp
+        editor/pcg/PCGGraphDocumentService.cpp
+        editor/document/DocumentRecoveryService.cpp
         editor/audio/AudioEditorDocument.cpp
         editor/audio/MixerAssetDocument.cpp
         editor/audio/MixerDocumentCommands.cpp
@@ -2616,6 +2637,8 @@ target_link_libraries(HoroEditorServices
         PUBLIC
         HoroEngine::AudioFrontend
         HoroEngine::AudioApi
+        HoroEngine::PCG
+        HoroEngine::Assets
         HoroEngine::Foundation
         HoroEngine::HostErrors
         HoroEngine::CinematicRuntime
@@ -2631,7 +2654,6 @@ target_link_libraries(HoroEditorServices
         HoroEngine::Input
         HoroEngine::ProjectMigrations
         PRIVATE
-        HoroEngine::Assets
         HoroSceneSourceCodecInternal
         nlohmann_json::nlohmann_json
 )
@@ -2640,13 +2662,46 @@ if (TARGET HoroBuildInfo)
     add_dependencies(HoroEditorServices HoroBuildInfo)
 endif ()
 
+add_library(HoroEditorPresentationSurfaceInternal STATIC
+        editor/renderer/surface/EditorPresentationSurface.cpp
+)
+target_compile_features(HoroEditorPresentationSurfaceInternal PUBLIC cxx_std_20)
+# Deliberately non-installed host/test seam; no repository-wide source visibility.
+target_include_directories(HoroEditorPresentationSurfaceInternal PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/editor/renderer/surface)
+target_link_libraries(HoroEditorPresentationSurfaceInternal PUBLIC HoroEngine::RenderApi)
+
+if (HORO_BUILD_RENDER_OPENGL AND (HORO_BUILD_EDITOR_GUI OR HORO_ENABLE_GPU_SMOKE_TESTS))
+    # Only the deliberately shared presentation contracts are visible across these
+    # non-installed targets. Backend implementation headers remain private.
+    set(opengl_presentation_internal_root "${CMAKE_CURRENT_BINARY_DIR}/internal/opengl-presentation")
+    file(MAKE_DIRECTORY "${opengl_presentation_internal_root}")
+    configure_file(runtime/renderer/modules/opengl/OpenGLBackendModule.h
+            "${opengl_presentation_internal_root}/OpenGLBackendModule.h" COPYONLY)
+    add_library(HoroOpenGLPresentationContractInternal INTERFACE)
+    target_include_directories(HoroOpenGLPresentationContractInternal INTERFACE "${opengl_presentation_internal_root}")
+    target_link_libraries(HoroOpenGLPresentationContractInternal INTERFACE HoroEngine::RenderBackendRegistry)
+
+    set(sdl_presentation_internal_root "${CMAKE_CURRENT_BINARY_DIR}/internal/sdl-presentation")
+    file(MAKE_DIRECTORY "${sdl_presentation_internal_root}")
+    # Forward only this deliberate internal contract. Compiling the canonical
+    # header keeps template coverage attached to its source, not a staged copy.
+    file(GENERATE OUTPUT "${sdl_presentation_internal_root}/SdlOpenGLPresentationPort.h"
+            CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/editor/renderer/opengl/SdlOpenGLPresentationPort.h\"\n")
+    add_library(HoroSdlOpenGLPresentationInternal STATIC editor/renderer/opengl/SdlOpenGLPresentationPort.cpp)
+    target_compile_features(HoroSdlOpenGLPresentationInternal PUBLIC cxx_std_20)
+    target_include_directories(HoroSdlOpenGLPresentationInternal PUBLIC "${sdl_presentation_internal_root}")
+    target_link_libraries(HoroSdlOpenGLPresentationInternal
+            PUBLIC HoroOpenGLPresentationContractInternal ${HORO_SDL3_TARGET}
+            PRIVATE HoroThirdParty::Glad HoroOpenGLHostAdmissionInternal)
+endif ()
+
 if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_OPENGL)
     add_library(HoroEditorViewportOpenGL STATIC
             editor/renderer/opengl/EditorGuiRendererOpenGL.cpp
             editor/renderer/opengl/OpenGLViewportResourceBridge.cpp
             editor/renderer/opengl/OpenGLStateSnapshot.cpp
             editor/renderer/opengl/EditorViewportRendererOpenGL.cpp
-            editor/renderer/opengl/SdlOpenGLPresentationPort.cpp
     )
     add_library(HoroEngine::EditorViewportOpenGL ALIAS HoroEditorViewportOpenGL)
 
@@ -2664,6 +2719,7 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_OPENGL)
             HoroEngine::EditorViewportResources
             HoroEngine::RenderOpenGL
             HoroEngine::RenderFrontend
+            HoroSdlOpenGLPresentationInternal
             ${HORO_SDL3_TARGET}
             PRIVATE
             HoroThirdParty::Glad
@@ -2773,6 +2829,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserAssetOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
+            editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
             editor/screens/workspace/EditorWorkspaceViewSequence.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
             editor/screens/workspace/ExtensionActivityView.cpp

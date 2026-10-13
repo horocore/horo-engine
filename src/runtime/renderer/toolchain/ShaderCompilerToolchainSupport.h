@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Platform/ExternalProcess.h"
+#include "Horo/Runtime/Render/ShaderArtifact.h"
 #include "ShaderCompilerToolchain.h"
 
 #include <filesystem>
@@ -10,11 +11,7 @@
 #include <vector>
 
 namespace Horo::Render::ShaderCompilerToolchainDetail {
-    struct ToolArtifactRecord final {
-        ShaderStage stage{ShaderStage::Vertex};
-        std::string entryPoint;
-        std::vector<std::uint8_t> bytes;
-    };
+    using ToolArtifactRecord = ShaderArtifactStage;
 
     [[nodiscard]] Result<std::vector<std::uint8_t>> ReadBoundedFile(const std::filesystem::path &path, std::size_t maximumBytes,
                                                                     const ErrorCodeDescriptor &failure);

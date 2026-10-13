@@ -1,5 +1,6 @@
 #include "Horo/Editor/MixerAssetDocument.h"
 
+#include "Horo/Editor/SemanticDocumentHistory.h"
 #include "MixerDocumentCommands.h"
 
 #include <algorithm>
@@ -119,8 +120,7 @@ namespace Horo::Editor {
         DocumentIdentity identity;
         Audio::MixerAssetSchema asset;
         Audio::MixerAssetSchemaLimits limits;
-        std::vector<HistoryEntry> history;
-        std::size_t cursor{};
+        SemanticDocumentHistory<HistoryEntry> history{{MaximumMixerDocumentHistoryEntries, MaximumMixerDocumentHistoryBytes}};
         std::uint64_t revision{1};
         std::uint64_t currentState{1};
         std::uint64_t savedState{1};
@@ -175,12 +175,12 @@ namespace Horo::Editor {
 
     /** @copydoc MixerAssetDocument::CanUndo */
     bool MixerAssetDocument::CanUndo() const noexcept {
-        return state_ && state_->cursor != 0;
+        return state_ && state_->history.UndoCount() != 0;
     }
 
     /** @copydoc MixerAssetDocument::CanRedo */
     bool MixerAssetDocument::CanRedo() const noexcept {
-        return state_ && state_->cursor < state_->history.size();
+        return state_ && state_->history.RedoCount() != 0;
     }
 
     /** @copydoc MixerAssetDocument::CheckRevision */
@@ -217,19 +217,10 @@ namespace Horo::Editor {
         entry.afterState = state_->nextState;
         if (entry.bytes > MaximumMixerDocumentHistoryBytes)
             return Result<void>::Failure(MakeError(MixerDocumentErrors::HistoryLimit));
-        // Allocate the new history before touching redo or any authoritative state.
-        auto history = state_->history;
-        history.resize(state_->cursor);
-        history.push_back(std::move(entry));
-        std::size_t bytes = 0;
-        for (const auto &retained : history)
-            bytes += retained.bytes;
-        while (history.size() > MaximumMixerDocumentHistoryEntries || bytes > MaximumMixerDocumentHistoryBytes) {
-            bytes -= history.front().bytes;
-            history.erase(history.begin());
-        }
-        state_->history.swap(history);
-        state_->cursor = state_->history.size();
+        auto history = state_->history.Prepare(std::move(entry));
+        if (!history)
+            return Result<void>::Failure(MakeError(MixerDocumentErrors::HistoryLimit));
+        state_->history.Commit(*history);
         std::swap(state_->asset, candidate);
         state_->currentState = state_->nextState++;
         ++state_->revision;
@@ -242,7 +233,7 @@ namespace Horo::Editor {
             return checked;
         if (undo ? !CanUndo() : !CanRedo())
             return Result<void>::Failure(MakeError(MixerDocumentErrors::HistoryUnavailable));
-        const auto &entry = state_->history[undo ? state_->cursor - 1 : state_->cursor];
+        const auto &entry = *state_->history.Next(!undo);
         auto candidate = state_->asset;
         ApplyChanges(candidate.buses, entry.buses, undo);
         ApplyChanges(candidate.routes, entry.routes, undo);
@@ -250,10 +241,7 @@ namespace Horo::Editor {
             return validated;
         std::swap(state_->asset, candidate);
         state_->currentState = undo ? entry.beforeState : entry.afterState;
-        if (undo)
-            --state_->cursor;
-        else
-            ++state_->cursor;
+        state_->history.DidReplay(!undo);
         ++state_->revision;
         return Result<void>::Success();
     }
@@ -294,8 +282,7 @@ namespace Horo::Editor {
             return Result<void>::Failure(std::move(migrated).ErrorValue());
         auto candidate = std::move(migrated).Value();
         std::swap(state_->asset, candidate);
-        state_->history.clear();
-        state_->cursor = 0;
+        state_->history.Clear();
         state_->currentState = state_->nextState++;
         state_->firstState = state_->currentState;
         state_->savedState = source.version == Audio::CurrentMixerAssetSchemaVersion ? state_->currentState : 0;

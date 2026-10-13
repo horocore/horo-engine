@@ -33,6 +33,13 @@ namespace Horo::AI {
     Result<BlackboardCanonicalState> BlackboardInstance::CaptureCanonical() const {
         if (!active_)
             return Result<BlackboardCanonicalState>::Failure(MakeError(AIErrors::BlackboardInstanceStale));
+        for (const auto &authorization : authorizations_)
+            if (authorization)
+                return Result<BlackboardCanonicalState>::Failure(MakeError(AIErrors::BlackboardInstanceStale,
+                                                                           "Canonical capture cannot persist read-authorized derived "
+                                                                           "values. Reset only the derived keys to schema defaults "
+                                                                           "with lease-free writes at BlackboardSync, preserving unrelated "
+                                                                           "values; recompute derived perception after restore."));
         try {
             BlackboardCanonicalState state{.schema = schema_->Identity(), .schemaVersion = schema_->Version()};
             state.entries.reserve(values_.size());

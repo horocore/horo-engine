@@ -22,6 +22,12 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroLightFramePoolTests
     HoroAITaskSchedulerTests
     HoroAITaskSchedulerPublicConsumer
+    HoroAITests
+    HoroAISightTests
+    HoroAIPublicHeaderConsumer
+    HoroAISceneIntegrationPublicHeaderConsumer
+    HoroAISightIntegrationPublicHeaderConsumer
+    HoroGameplayPerceptionIntegrationPublicHeaderConsumer
     HoroMaterialBindingTests
     HoroMaterialBindingPublicHeaderConsumer
     HoroD3D12InitializationTests
@@ -35,6 +41,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroPCGTerrainAdapterTests
     HoroPCGPublicHeaderConsumer
     HoroPCGTerrainAdapterPublicHeaderConsumer
+    HoroPCGDocumentTests
+    HoroPCGDocumentPublicHeaderConsumer
     HoroMixerDocumentTests
     ${HORO_CI_AUDIO_TARGETS}
     HoroCliCommandRegistryTests

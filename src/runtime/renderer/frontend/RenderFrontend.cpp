@@ -89,6 +89,12 @@ namespace Horo::Render {
                 backend.DestroyTextureView(backendInstance);
             else if (resourceClass == RenderTarget)
                 backend.DestroyRenderTarget(backendInstance);
+            else if (resourceClass == ShaderModule)
+                backend.DestroyShaderModule(backendInstance);
+            else if (resourceClass == Pipeline)
+                backend.DestroyGraphicsPipeline(backendInstance);
+            else if (resourceClass == Sampler)
+                backend.DestroySampler(backendInstance);
         }
 
         /** @brief Applies backend-release disposition and retires admitted memory when it remains valid. */

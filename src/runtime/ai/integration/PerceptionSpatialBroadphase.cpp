@@ -56,6 +56,30 @@ namespace Horo::AI {
             return Result<void>::Success();
         }
 
+        /** @brief Validates copied endpoints and sorts only active sense prefixes, preserving spatial error precedence. */
+        [[nodiscard]] Result<void> ValidateEndpoints(const Runtime::RuntimeSceneView &scene,
+                                                     const std::span<PerceptionSpatialListener> listeners,
+                                                     const std::span<PerceptionSpatialSource> sources) {
+            for (auto &listener : listeners) {
+                if (const auto valid = ValidatePerceptionParticipant(listener.filtering, listener.admission); valid.HasError())
+                    return valid;
+                if (const auto valid = ValidateRecord(scene, listener); valid.HasError())
+                    return valid;
+                std::sort(listener.senses.begin(), listener.senses.begin() + listener.senseCount);
+            }
+            for (auto &source : sources) {
+                if (const auto valid = ValidateRecord(scene, source); valid.HasError())
+                    return valid;
+                if (source.layers == 0)
+                    return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialInvalid));
+                if (const auto valid = ValidatePerceptionParticipant({source.team, source.layers, source.listenerMask, source.visibility});
+                    valid.HasError())
+                    return valid;
+                std::sort(source.senses.begin(), source.senses.begin() + source.senseCount);
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Tests a sorted active sense prefix without retaining a descriptor or callback. */
         template <typename Record> [[nodiscard]] bool Supports(const Record &record, const SenseTypeId sense) noexcept {
             return std::binary_search(record.senses.begin(), record.senses.begin() + record.senseCount, sense);
@@ -63,7 +87,7 @@ namespace Horo::AI {
 
         /** @brief Filters a source before the exact range check. */
         [[nodiscard]] bool Matches(const PerceptionSpatialSource &source, const PerceptionSpatialListener &listener,
-                                   const PerceptionSpatialQuery &query) noexcept {
+                                   const PerceptionSpatialQuery &query, const PerceptionFilteringPolicy &filtering) noexcept {
             if (!query.includeSelf && source.entity == listener.entity)
                 return false;
             if ((source.layers & query.visibleLayers) == 0 || !Supports(source, query.sense))
@@ -71,6 +95,10 @@ namespace Horo::AI {
             if (query.affiliationFilter == PerceptionAffiliationFilter::Same && source.affiliation != query.affiliation)
                 return false;
             if (query.affiliationFilter == PerceptionAffiliationFilter::Different && source.affiliation == query.affiliation)
+                return false;
+            if (!AllowsPerception(filtering, listener.filtering,
+                                  PerceptionParticipantFilter{source.team, source.layers, source.listenerMask, source.visibility},
+                                  listener.admission))
                 return false;
             return WithinRadius(source.position.Millimeters(), listener.position.Millimeters(), query.radiusMillimeters);
         }
@@ -108,6 +136,17 @@ namespace Horo::AI {
     /** @copydoc PerceptionSpatialSnapshot::Revision */
     std::uint64_t PerceptionSpatialSnapshot::Revision() const noexcept {
         return revision_;
+    }
+
+    /** @copydoc PerceptionSpatialSnapshot::ReadAuthorization */
+    std::shared_ptr<const BlackboardValueAuthorization> PerceptionSpatialSnapshot::ReadAuthorization() const noexcept {
+        return authorization_;
+    }
+
+    /** @copydoc PerceptionSpatialBroadphase::~PerceptionSpatialBroadphase */
+    PerceptionSpatialBroadphase::~PerceptionSpatialBroadphase() {
+        if (current_)
+            current_->authorization_->Revoke();
     }
 
     /** @copydoc PerceptionSpatialSnapshot::SourceCount */
@@ -179,7 +218,7 @@ namespace Horo::AI {
         }
         for (std::size_t source = node.begin; source < node.end; ++source) {
             ++result.examinedSources;
-            if (Matches(sources_[source], listener, query))
+            if (Matches(sources_[source], listener, query, filtering_))
                 InsertCandidate(sources_[source], query.maximumCandidates, result);
         }
     }
@@ -196,6 +235,8 @@ namespace Horo::AI {
 
     /** @copydoc PerceptionSpatialSnapshot::Query */
     Result<PerceptionSpatialResult> PerceptionSpatialSnapshot::Query(const PerceptionSpatialQuery &query) const {
+        if (!authorization_->IsCurrent())
+            return Result<PerceptionSpatialResult>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
         if (!query.listener.IsValid() || query.listener.runtime != scene_ || !query.sense.IsValid() || query.visibleLayers == 0 ||
             query.radiusMillimeters > PerceptionSpatialLimits::RadiusMillimeters || query.maximumCandidates == 0 ||
             query.maximumCandidates > PerceptionSpatialLimits::CandidatesPerQuery ||
@@ -212,10 +253,26 @@ namespace Horo::AI {
         return Result<PerceptionSpatialResult>::Success(std::move(result));
     }
 
+    /** @copydoc PerceptionSpatialSnapshot::Allows */
+    bool PerceptionSpatialSnapshot::Allows(const Runtime::EntityRef listener, const Runtime::EntityRef source,
+                                           const SenseTypeId sense) const noexcept {
+        if (!authorization_->IsCurrent())
+            return false;
+        const auto endpoint = std::ranges::lower_bound(listeners_, listener, {}, &PerceptionSpatialListener::entity);
+        if (endpoint == listeners_.end() || endpoint->entity != listener || !Supports(*endpoint, sense))
+            return false;
+        const auto candidate = std::ranges::find(sources_, source, &PerceptionSpatialSource::entity);
+        return candidate != sources_.end() && Supports(*candidate, sense) &&
+               AllowsPerception(filtering_, endpoint->filtering,
+                                PerceptionParticipantFilter{candidate->team, candidate->layers, candidate->listenerMask,
+                                                            candidate->visibility},
+                                endpoint->admission);
+    }
+
     /** @copydoc PerceptionSpatialBroadphase::Publish */
     Result<std::shared_ptr<const PerceptionSpatialSnapshot>> PerceptionSpatialBroadphase::Publish(
         const Runtime::RuntimeSceneView &scene, const std::uint64_t revision, const std::span<const PerceptionSpatialListener> listeners,
-        const std::span<const PerceptionSpatialSource> sources) {
+        const std::span<const PerceptionSpatialSource> sources, const PerceptionFilteringPolicy &filtering) {
         using SnapshotResult = Result<std::shared_ptr<const PerceptionSpatialSnapshot>>;
         if (!scene.IsCurrent() || !scene.RuntimeId().IsValid())
             return SnapshotResult::Failure(MakeError(AIErrors::PerceptionSpatialStale));
@@ -226,23 +283,16 @@ namespace Horo::AI {
         if (listeners.size() > PerceptionSpatialLimits::Listeners || sources.size() > PerceptionSpatialLimits::Sources)
             return SnapshotResult::Failure(MakeError(AIErrors::PerceptionSpatialLimitExceeded));
 
+        if (const auto valid = ValidatePerceptionFiltering(filtering); valid.HasError())
+            return SnapshotResult::Failure(valid.ErrorValue());
         auto next = std::make_shared<PerceptionSpatialSnapshot>();
+        next->filtering_ = filtering;
         next->scene_ = scene.RuntimeId();
         next->revision_ = revision;
         next->listeners_.assign(listeners.begin(), listeners.end());
         next->sources_.assign(sources.begin(), sources.end());
-        for (auto &listener : next->listeners_) {
-            if (const auto valid = ValidateRecord(scene, listener); valid.HasError())
-                return SnapshotResult::Failure(valid.ErrorValue());
-            std::sort(listener.senses.begin(), listener.senses.begin() + listener.senseCount);
-        }
-        for (auto &source : next->sources_) {
-            if (const auto valid = ValidateRecord(scene, source); valid.HasError())
-                return SnapshotResult::Failure(valid.ErrorValue());
-            if (source.layers == 0)
-                return SnapshotResult::Failure(MakeError(AIErrors::PerceptionSpatialInvalid));
-            std::sort(source.senses.begin(), source.senses.begin() + source.senseCount);
-        }
+        if (const auto valid = ValidateEndpoints(scene, next->listeners_, next->sources_); valid.HasError())
+            return SnapshotResult::Failure(valid.ErrorValue());
         std::ranges::sort(next->listeners_, {}, &PerceptionSpatialListener::entity);
         std::ranges::sort(next->sources_, {}, &PerceptionSpatialSource::entity);
         if (std::ranges::adjacent_find(next->listeners_,
@@ -259,6 +309,8 @@ namespace Horo::AI {
         }
         if (!scene.IsCurrent())
             return SnapshotResult::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+        if (current_)
+            current_->authorization_->Revoke();
         current_ = std::move(next);
         return SnapshotResult::Success(current_);
     }

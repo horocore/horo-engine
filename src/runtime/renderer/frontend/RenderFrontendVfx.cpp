@@ -327,7 +327,7 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::ScheduleVfx */
     VfxGraphSchedulingOutcome RenderFrontend::ScheduleVfx(RenderGraphBuilder &builder, const RenderWorldSnapshot &snapshot,
-                                                          const VfxGraphRequest &request) {
+                                                          const VfxGraphRequest &request) const {
         if (vfxSchedulingOwner_ != std::this_thread::get_id())
             return VfxGraphSchedulingOutcome::Failure(RenderGraphExecutionErrors::InvalidGraph,
                                                       "VFX scheduling requires its render owner.");

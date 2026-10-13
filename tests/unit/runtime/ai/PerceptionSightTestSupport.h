@@ -56,6 +56,7 @@ namespace Horo::AI {
             PerceptionSpatialBroadphase broadphase;
             std::shared_ptr<const PerceptionSpatialSnapshot> spatial;
             std::uint64_t revision{};
+            PerceptionGameplayVisibility visibility{PerceptionGameplayVisibility::Everyone};
 
             explicit SightScene(const std::uint64_t incarnation = 77) {
                 Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
@@ -77,6 +78,7 @@ namespace Horo::AI {
                 declared.senseCount = 1;
                 std::array<PerceptionSpatialSource, 2> sources{};
                 sources[0] = {.entity = target, .position = position, .layers = 1};
+                sources[0].visibility = visibility;
                 sources[0].senses[0] = SenseTypeIds::Sight;
                 sources[0].senseCount = 1;
                 sources[1] = sources[0];

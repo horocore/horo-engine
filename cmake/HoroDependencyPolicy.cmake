@@ -180,6 +180,7 @@ horo_allow_target_dependencies(TARGET HoroRenderFrontend
 horo_allow_target_dependencies(TARGET HoroSceneModel DEPENDENCIES HoroFoundation HoroGameplayApi HoroRuntimeUi HoroAudioApi)
 horo_allow_target_dependencies(TARGET HoroRenderNull DEPENDENCIES HoroRenderApi)
 horo_allow_target_dependencies(TARGET HoroRenderOpenGL)
+horo_allow_target_dependencies(TARGET HoroOpenGLHostAdmissionInternal)
 horo_allow_target_dependencies(TARGET HoroRenderMetal)
 horo_allow_target_dependencies(TARGET HoroRenderVulkan)
 horo_allow_target_dependencies(TARGET HoroRenderD3D12 DEPENDENCIES HoroRenderApi)
@@ -198,10 +199,13 @@ horo_allow_target_dependencies(TARGET HoroEditorModel
 horo_allow_target_dependencies(TARGET HoroEditorViewportScene DEPENDENCIES HoroEditorModel)
 horo_allow_target_dependencies(TARGET HoroEditorViewportResources
     DEPENDENCIES HoroEditorViewportScene HoroRenderFrontend)
+horo_allow_target_dependencies(TARGET HoroEditorPresentationSurfaceInternal DEPENDENCIES HoroRenderApi)
+horo_allow_target_dependencies(TARGET HoroOpenGLPresentationContractInternal DEPENDENCIES HoroRenderBackendRegistry)
+horo_allow_target_dependencies(TARGET HoroSdlOpenGLPresentationInternal DEPENDENCIES HoroOpenGLPresentationContractInternal HoroOpenGLHostAdmissionInternal)
 horo_allow_target_dependencies(TARGET HoroEditorRenderExtraction
     DEPENDENCIES HoroEditorModel HoroEditorViewportScene)
 horo_allow_target_dependencies(TARGET HoroEditorServices
-    DEPENDENCIES HoroAudioApi HoroAudioFrontend
+    DEPENDENCIES HoroPCG HoroAudioApi HoroAudioFrontend
         HoroFoundation HoroHostErrors HoroCinematicRuntime
         HoroNetworkApi
         HoroNetworkDebuggerApplication
@@ -216,7 +220,7 @@ horo_allow_target_dependencies(TARGET HoroEditorServices
         HoroSceneSourceCodecInternal
         HoroAssets)
 horo_allow_target_dependencies(TARGET HoroEditorViewportOpenGL
-    DEPENDENCIES HoroEditorViewportScene HoroEditorViewportResources HoroRenderOpenGL HoroRenderFrontend)
+    DEPENDENCIES HoroEditorViewportScene HoroEditorViewportResources HoroRenderOpenGL HoroRenderFrontend HoroSdlOpenGLPresentationInternal)
 horo_allow_target_dependencies(TARGET HoroEditorViewportMetal
     DEPENDENCIES HoroEditorViewportScene HoroEditorViewportResources HoroRenderMetal HoroRenderFrontend)
 horo_allow_target_dependencies(TARGET HoroGui
@@ -247,6 +251,7 @@ horo_allow_target_dependencies(TARGET HoroEditor
         HoroGui
         HoroEditorServices
         HoroEditorRenderExtraction
+        HoroEditorPresentationSurfaceInternal
         HoroRenderFrontend
         HoroRuntime
         HoroRuntimeScene

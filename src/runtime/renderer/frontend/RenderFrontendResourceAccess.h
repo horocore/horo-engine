@@ -11,6 +11,10 @@ namespace Horo::Render::Detail {
         [[nodiscard]] static Result<std::uint64_t> BackendInstance(const RenderFrontend &frontend, RenderMeshHandle mesh);
         [[nodiscard]] static Result<std::uint64_t> BackendInstance(const RenderFrontend &frontend, RenderTextureViewHandle view);
         [[nodiscard]] static Result<std::uint64_t> BackendInstance(const RenderFrontend &frontend, RenderTargetHandle target);
+        /** @brief Borrows an exact ready pipeline for selected-backend integrations and native qualification only. */
+        [[nodiscard]] static Result<std::uint64_t> BackendInstance(const RenderFrontend &frontend, RenderPipelineHandle pipeline);
+        /** @brief Borrows an exact ready sampler for selected-backend integrations and native qualification only. */
+        [[nodiscard]] static Result<std::uint64_t> BackendInstance(const RenderFrontend &frontend, RenderSamplerHandle sampler);
         /** @brief Retains a buffer generation until one accepted queue completion. */
         [[nodiscard]] static Result<void> TrackSubmission(RenderFrontend &frontend, RenderBufferHandle buffer,
                                                           RenderTimelinePoint completion);

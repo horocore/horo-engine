@@ -258,8 +258,8 @@ namespace Horo::Vfx {
             report.status = VfxExtractionStatus::InvalidParticleData;
             return false;
         }
-        data.batches_.push_back({BatchId(binding), binding.material, binding.mesh, binding.blend, binding.topology,
-                                 binding.deferredCompatible, binding.shadowCaster, first, count});
+        data.batches_.emplace_back(BatchId(binding), binding.material, binding.mesh, binding.blend, binding.topology,
+                                   binding.deferredCompatible, binding.shadowCaster, first, count);
         ++report.admittedBatches;
         report.admittedInstances += count;
         report.reservedDrawCalls += draws;

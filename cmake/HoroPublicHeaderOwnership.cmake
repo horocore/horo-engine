@@ -503,6 +503,7 @@ horo_configure_target_header_boundary(HoroAssets PUBLIC_HEADERS
     Horo/Assets/AssetCookInputSnapshot.h
     Horo/Assets/AssetCookTransaction.h
     Horo/Assets/AssetId.h
+    Horo/Assets/AssetSourcePublication.h
     Horo/Assets/AssetImportMetadata.h
     Horo/Assets/AssetImportOperation.h
     Horo/Assets/AssetImporter.h
@@ -670,6 +671,7 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/NullAIRuntime.h
     Horo/AI/PerceptionDescriptorRegistry.h
     Horo/AI/PerceptionEventRouting.h
+    Horo/AI/PerceptionFiltering.h
     Horo/AI/PerceptionMemory.h
 )
 horo_configure_target_header_boundary(HoroAISceneIntegration PUBLIC_HEADERS
@@ -1057,7 +1059,10 @@ Horo/Runtime/Render/VfxGraphScheduling.h
     Horo/Runtime/Render/RenderMemoryTypes.h
     Horo/Runtime/Render/RenderResourceDescriptorErrors.h
     Horo/Runtime/Render/RenderResourceDescriptors.h
+    Horo/Runtime/Render/RenderShaderResources.h
+    Horo/Runtime/Render/RenderShaderResourceErrors.h
     Horo/Runtime/Render/RenderSubmission.h
+    Horo/Runtime/Render/ShaderArtifact.h
     Horo/Runtime/Render/ShaderCompilerPipeline.h
     Horo/Runtime/Render/ShaderCompilerPipelineErrors.h
     Horo/Runtime/Render/ShaderManifest.h
@@ -1160,6 +1165,10 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/RecentProjectInspectionService.h
     Horo/Editor/SourceFileOpenService.h
     Horo/Editor/SourceDocumentService.h
+    Horo/Editor/SemanticDocumentHistory.h
+    Horo/Editor/DocumentRecoveryService.h
+    Horo/Editor/PCGGraphDocument.h
+    Horo/Editor/PCGGraphDocumentService.h
     Horo/Editor/SequenceDocument.h
     Horo/Editor/UiCanvasDocument.h
     Horo/Editor/WelcomeController.h
@@ -1170,6 +1179,8 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroEditorViewportOpenGL)
+horo_configure_target_header_boundary(HoroEditorPresentationSurfaceInternal)
+horo_configure_target_header_boundary(HoroSdlOpenGLPresentationInternal)
 horo_configure_target_header_boundary(HoroEditorViewportMetal)
 horo_configure_target_header_boundary(HoroInputSdl)
 horo_configure_target_header_boundary(HoroRuntimeUiInput PUBLIC_HEADERS

@@ -32,6 +32,7 @@ namespace Horo::Editor {
         Unsupported,
         UiCanvas,
         Sequence,
+        PCGGraph,
     };
 
     /** @brief Caller that requested one source-open operation. */
@@ -67,11 +68,12 @@ namespace Horo::Editor {
         bool embeddedEditorAvailable{true};              /**< Embedded workspace route is installed. */
         bool externalEditorAvailable{true};              /**< External fallback route is installed. */
         std::vector<std::string> uiCanvasExtensions;     /**< Runtime UI canvas document suffixes. */
+        std::vector<std::string> pcgGraphExtensions;     /**< Binary PCG source suffixes; bypass text admission. */
         std::vector<std::string> sequenceExtensions;     /**< Versioned cinematic sequence source suffixes. */
 
         /**
          * @brief Returns the default source and authored-document opening policy.
-         * @return A value containing native source, Horo Script, project-text, UI Canvas, and cinematic sequence extensions.
+         * @return A value containing native source, Horo Script, project-text, UI Canvas, cinematic sequence and binary PCG extensions.
          */
         [[nodiscard]] static SourceFilePolicy Default();
     };

@@ -519,7 +519,7 @@ TEST_CASE("Failed Atomic Recovery Replace Leaves No Partial Recovery", "[unit][e
                                        mutations, files)
                  .HasError()));
     REQUIRE((!std::filesystem::exists(project.RecoveryPath())));
-    REQUIRE((!std::filesystem::exists(project.RecoveryPath().string() + ".tmp")));
+    REQUIRE((!std::filesystem::exists(project.RecoveryPath().string() + ".source-publication.tmp")));
 }
 
 TEST_CASE("Scene File Watch Inspects Canonical Bytes Off The Owner Thread", "[unit][editor][persistence][watch]") {

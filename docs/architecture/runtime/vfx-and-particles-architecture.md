@@ -1346,6 +1346,12 @@ are the newly introduced VFX scene/frontend contract and its regression/public-h
 consumers. These renderer-neutral declarations remain owned by `HoroRenderApi` and
 `HoroRenderFrontend`; OpenGL, Metal and headless compositions consume the same contract.
 
+`RenderFrontend::ScheduleVfx` is const: it does not replace frontend state, but
+still mutates prepared view slots and the caller's graph on the declared render
+owner. Const access does not permit concurrent scheduling. Ordinary calls remain
+source-compatible; callers storing a member-function pointer must add the const
+qualifier to that pointer type. Consumers must rebuild for the changed symbol.
+
 Regression coverage measures success over 128 prepared view admissions and typed
 draw-budget, instance-capacity and retained-slot failures, with assertions outside
 the allocation window. It also verifies opposite-view ordering, copied-lease
