@@ -28,7 +28,7 @@ namespace Horo::Animation::Detail {
     GraphInstanceOutcome TraverseGraphStateBranch(GraphInstanceState &state, const std::uint32_t machine, const GraphStateBranch &branch,
                                                   const std::uint8_t lane, const GraphEvaluationInput &input, const bool stageCursors) {
         for (const auto &occurrence : GraphStateBranchOccurrences(state, branch, lane)) {
-            if (!occurrence.clipPlayer)
+            if (!occurrence.clipPlayer.has_value())
                 continue;
             auto localInput = input;
             if (!ActiveBeforeControl(state, machine, occurrence, localInput))
@@ -57,8 +57,7 @@ namespace Horo::Animation::Detail {
         for (const auto &occurrence : GraphStateBranchOccurrences(state, branch, lane)) {
             if (occurrence.phase != GraphOccurrencePhase::StateBegin)
                 continue;
-            auto localInput = input;
-            if (!ActiveBeforeControl(state, machine, occurrence, localInput))
+            if (auto localInput = input; !ActiveBeforeControl(state, machine, occurrence, localInput))
                 continue;
             auto &nested = state.candidate.machines[*occurrence.stateMachine];
             if (!nested.runtime.initialized || nested.retiring)
@@ -67,7 +66,7 @@ namespace Horo::Animation::Detail {
             std::array<StateMachineEvent, 3> events;
             std::size_t count = 0;
             StateMachineTransitionId transition{};
-            if (nested.runtime.transition) {
+            if (nested.runtime.transition.has_value()) {
                 transition = prepared.transitions[*nested.runtime.transition].id;
                 events[count++] = {StateMachineEventKind::TransitionInterrupted, prepared.states[nested.runtime.source.state].id,
                                    transition, nested.runtime.source.generation};

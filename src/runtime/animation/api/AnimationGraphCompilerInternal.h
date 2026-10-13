@@ -49,5 +49,5 @@ namespace Horo::Animation::GraphCompileDetail {
     Result<void> ValidateStateNode(const GraphStateMachineNode &machine, const AnimationGraphData &data, GraphSourceLocation location);
     /** @brief Expands actual guarded clip/subgraph branches into the same compiler-owned occurrence plan. */
     Result<BoundPlan> BindStateNodes(const AnimationGraphProgram &program, const AnimationGraphCompileContext &context,
-                                     GraphSkeletonBinding skeleton, std::vector<AnimationClipDescriptor> clips);
+                                     const GraphSkeletonBinding &skeleton, std::vector<AnimationClipDescriptor> clips);
 }  // namespace Horo::Animation::GraphCompileDetail

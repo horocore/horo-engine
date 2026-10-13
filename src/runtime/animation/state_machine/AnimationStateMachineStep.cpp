@@ -8,14 +8,15 @@ namespace Horo::Animation::Detail {
     namespace {
         /** @brief An unentered machine retains its next incarnation counter but no active transition. */
         bool ValidColdRuntime(const StateMachineRuntime &runtime) noexcept {
-            return runtime.source.generation == 0 && !runtime.destination && !runtime.transition && runtime.elapsed.ticks == 0 &&
-                   runtime.nextActivation != 0 && !runtime.frozenSource;
+            return runtime.source.generation == 0 && !runtime.destination.has_value() && !runtime.transition.has_value() &&
+                   runtime.elapsed.ticks == 0 && runtime.nextActivation != 0 && !runtime.frozenSource;
         }
 
         /** @brief An active transition pins two distinct previously issued incarnations and unfinished time. */
         bool ValidTransitionRuntime(const StateMachinePlan &plan, const StateMachineRuntime &runtime) noexcept {
-            if (*runtime.transition >= plan.transitions.size() || !runtime.destination || runtime.destination->generation == 0 ||
-                runtime.destination->generation >= runtime.nextActivation || runtime.destination->generation == runtime.source.generation)
+            if (*runtime.transition >= plan.transitions.size() || !runtime.destination.has_value() ||
+                runtime.destination->generation == 0 || runtime.destination->generation >= runtime.nextActivation ||
+                runtime.destination->generation == runtime.source.generation)
                 return false;
             const auto &active = plan.transitions[*runtime.transition];
             return active.source == runtime.source.state && active.destination == runtime.destination->state &&
@@ -29,8 +30,8 @@ namespace Horo::Animation::Detail {
             if (runtime.source.state >= plan.states.size() || runtime.source.generation == 0 ||
                 runtime.source.generation >= runtime.nextActivation || runtime.elapsed.ticks < 0)
                 return false;
-            if (!runtime.transition)
-                return !runtime.destination && runtime.elapsed.ticks == 0 && !runtime.frozenSource;
+            if (!runtime.transition.has_value())
+                return !runtime.destination.has_value() && runtime.elapsed.ticks == 0 && !runtime.frozenSource;
             return ValidTransitionRuntime(plan, runtime);
         }
 
@@ -75,14 +76,14 @@ namespace Horo::Animation::Detail {
         GraphInstanceFailure ValidatePlayback(const StateMachinePlan &plan, const StateMachineRuntime &runtime,
                                               const StateMachineStepInput &input) noexcept {
             using enum GraphInstanceFailure;
-            const auto expected = runtime.initialized ? (runtime.destination ? 2U : 1U) : input.playback.size();
-            if (input.playback.size() != expected || (!runtime.initialized && expected > 1))
+            if (const auto expected =
+                    runtime.initialized ? 1U + static_cast<unsigned>(runtime.destination.has_value()) : input.playback.size();
+                input.playback.size() != expected || (!runtime.initialized && expected > 1))
                 return BindingMismatch;
             std::uint64_t loops = 0;
             for (std::size_t index = 0; index < input.playback.size(); ++index) {
                 const auto &playback = input.playback[index];
-                const auto activation = ExpectedActivation(plan, runtime, index);
-                if (playback.activation != activation)
+                if (const auto activation = ExpectedActivation(plan, runtime, index); playback.activation != activation)
                     return HandleStale;
                 if (const auto failure = ValidatePlaybackLoops(playback); failure != None)
                     return failure;
@@ -119,7 +120,7 @@ namespace Horo::Animation::Detail {
 
         /** @brief Projects exact integer blend time through one admitted finite scalar curve. */
         float Weight(const StateMachinePlan &plan, const StateMachineRuntime &runtime) noexcept {
-            if (!runtime.transition)
+            if (!runtime.transition.has_value())
                 return 0.0F;
             const auto &transition = plan.transitions[*runtime.transition];
             const auto fraction = static_cast<double>(runtime.elapsed.ticks) / static_cast<double>(transition.duration.ticks);
@@ -153,28 +154,35 @@ namespace Horo::Animation::Detail {
             }
 
             void Loops(const StateMachinePlayback &playback) noexcept {
+                using enum StateMachineEventKind;
                 for (std::uint32_t loop = 0; loop < playback.loops; ++loop)
-                    output[count++] = {StateMachineEventKind::Loop,    plan.states[playback.activation.state].id, {},
-                                       playback.activation.generation, playback.firstLoopOrdinal + loop,          playback.direction};
+                    output[count++] = {Loop,
+                                       plan.states[playback.activation.state].id,
+                                       {},
+                                       playback.activation.generation,
+                                       playback.firstLoopOrdinal + loop,
+                                       playback.direction};
             }
         };
 
         /** @brief Uses destination-first only when the active policy requires that semantic incarnation. */
         bool UsesDestination(const StateMachinePlan &plan, const StateMachineRuntime &runtime,
                              const StateMachineTransition &selected) noexcept {
-            return runtime.transition && (plan.transitions[*runtime.transition].interruption == StateMachineInterruption::Destination ||
-                                          selected.source != runtime.source.state);
+            return runtime.transition.has_value() &&
+                   (plan.transitions[*runtime.transition].interruption == StateMachineInterruption::Destination ||
+                    selected.source != runtime.source.state);
         }
 
         /** @brief Retires the old transition and begins one bounded new semantic entry. */
         void StartTransition(const StateMachinePlan &plan, StateMachineRuntime &runtime, const std::uint32_t selected,
                              EventWriter &writer) noexcept {
+            using enum StateMachineEventKind;
             const auto &next = plan.transitions[selected];
-            if (runtime.transition) {
+            if (runtime.transition.has_value()) {
                 const auto activeId = plan.transitions[*runtime.transition].id;
-                writer.State(StateMachineEventKind::TransitionInterrupted, runtime.source, activeId);
+                writer.State(TransitionInterrupted, runtime.source, activeId);
                 const bool fromDestination = UsesDestination(plan, runtime, next);
-                writer.State(StateMachineEventKind::Exited, fromDestination ? runtime.source : *runtime.destination, activeId);
+                writer.State(Exited, fromDestination ? runtime.source : *runtime.destination, activeId);
                 if (fromDestination)
                     runtime.source = *runtime.destination;
                 runtime.frozenSource = true;
@@ -182,8 +190,8 @@ namespace Horo::Animation::Detail {
             runtime.destination = StateMachineActivation{next.destination, runtime.nextActivation++};
             runtime.transition = selected;
             runtime.elapsed = {};
-            writer.State(StateMachineEventKind::TransitionStarted, runtime.source, next.id);
-            writer.State(StateMachineEventKind::Entered, *runtime.destination, next.id);
+            writer.State(TransitionStarted, runtime.source, next.id);
+            writer.State(Entered, *runtime.destination, next.id);
         }
 
         /** @brief Completes a transition once; the destination's active player survives without reset. */
@@ -204,8 +212,8 @@ namespace Horo::Animation::Detail {
             std::uint64_t count = entering ? 1U : 0U;
             for (const auto &playback : input.playback)
                 count += playback.loops;
-            if (selected)
-                count += (runtime.transition ? 4U : 2U) + (plan.transitions[*selected].duration.ticks == 0 ? 2U : 0U);
+            if (selected.has_value())
+                count += (runtime.transition.has_value() ? 4U : 2U) + (plan.transitions[*selected].duration.ticks == 0 ? 2U : 0U);
             else if (completing)
                 count += 2;
             return count;
@@ -229,7 +237,8 @@ namespace Horo::Animation::Detail {
         /** @brief Remaining-duration comparison both detects completion and proves subsequent elapsed addition cannot overflow. */
         bool TransitionCompleting(const StateMachinePlan &plan, const StateMachineRuntime &runtime,
                                   const AnimationTimeDelta advance) noexcept {
-            return runtime.transition && advance.ticks >= plan.transitions[*runtime.transition].duration.ticks - runtime.elapsed.ticks;
+            return runtime.transition.has_value() &&
+                   advance.ticks >= plan.transitions[*runtime.transition].duration.ticks - runtime.elapsed.ticks;
         }
 
         /** @brief Establishes a cold machine's first candidate incarnation, retaining all previously issued counters. */
@@ -246,13 +255,13 @@ namespace Horo::Animation::Detail {
         /** @brief Mutates only admitted candidate transition state after its entire event block has been reserved. */
         void AdvanceTransition(const StateMachinePlan &plan, StateMachineRuntime &candidate, const StateMachineStepInput &input,
                                const std::optional<std::uint32_t> selected, const bool completing, EventWriter &writer) noexcept {
-            if (selected) {
+            if (selected.has_value()) {
                 StartTransition(plan, candidate, *selected, writer);
                 if (plan.transitions[*selected].duration.ticks == 0)
                     CompleteTransition(plan, candidate, writer);
             } else if (completing) {
                 CompleteTransition(plan, candidate, writer);
-            } else if (candidate.transition) {
+            } else if (candidate.transition.has_value()) {
                 // The remaining-duration comparison proves this sum cannot overflow.
                 candidate.elapsed.ticks += input.advance.ticks;
             }
@@ -264,32 +273,32 @@ namespace Horo::Animation::Detail {
                                              const std::span<const std::uint8_t> committedLatches, const StateMachineStepInput &input,
                                              StateMachineRuntime &candidate, const std::span<std::uint8_t> candidateLatches,
                                              const std::span<StateMachineEvent> events) noexcept {
+        using enum GraphInstanceFailure;
         if (&committed == &candidate)
-            return {GraphInstanceFailure::StateInvalid};
+            return {StateInvalid};
         if (input.cancellation.IsCancellationRequested())
-            return {GraphInstanceFailure::Cancelled};
-        if (const auto failure = ValidateStep(plan, committed, input, committedLatches, candidateLatches);
-            failure != GraphInstanceFailure::None)
+            return {Cancelled};
+        if (const auto failure = ValidateStep(plan, committed, input, committedLatches, candidateLatches); failure != None)
             return {failure};
         candidate = committed;
         std::ranges::copy(committedLatches, candidateLatches.begin());
         const bool entering = !candidate.initialized;
         if (!EnterMachine(plan, candidate))
-            return {GraphInstanceFailure::LimitExceeded};
+            return {LimitExceeded};
         const auto selected = SelectStateMachineTransition(plan, candidate, input, candidateLatches);
         const bool completing = TransitionCompleting(plan, candidate, input.advance);
         // An initial entry and new destination consume two generations, counted from the original empty state.
         if (!FitsOutputs(plan, candidate, input, selected, completing, events.size(), entering))
-            return {GraphInstanceFailure::LimitExceeded};
+            return {LimitExceeded};
         EventWriter writer{plan, events};
         if (entering)
             writer.State(StateMachineEventKind::Entered, candidate.source);
         for (const auto &playback : input.playback)
             writer.Loops(playback);
-        const bool interrupting = selected && candidate.transition.has_value();
+        const bool interrupting = selected.has_value() && candidate.transition.has_value();
         AdvanceTransition(plan, candidate, input, selected, completing, writer);
         if (input.cancellation.IsCancellationRequested())
-            return {GraphInstanceFailure::Cancelled};
-        return {GraphInstanceFailure::None, writer.count, Weight(plan, candidate), interrupting, selected.has_value()};
+            return {Cancelled};
+        return {None, writer.count, Weight(plan, candidate), interrupting, selected.has_value()};
     }
 }  // namespace Horo::Animation::Detail

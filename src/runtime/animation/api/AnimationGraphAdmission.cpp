@@ -33,7 +33,10 @@ namespace Horo::Animation::GraphCompileDetail {
             std::uint64_t connections{};
             std::uint64_t interfaces{};
             std::uint64_t maskEntries{};
-            std::uint64_t machines{}, states{}, transitions{}, conditions{};
+            std::uint64_t machines{};
+            std::uint64_t states{};
+            std::uint64_t transitions{};
+            std::uint64_t conditions{};
         };
 
         /** @brief Charges the complete inert state table independently of node pins and pose masks. */

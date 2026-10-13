@@ -28,14 +28,15 @@ namespace Horo::Animation::Detail {
         GraphInstanceFailure ValidateCondition(const StateMachineCondition &condition,
                                                const std::span<const GraphParameter> parameters) noexcept {
             using enum GraphInstanceFailure;
+            using enum StateMachinePredicate;
             if (condition.parameter >= parameters.size())
                 return BindingMismatch;
             const auto &parameter = parameters[condition.parameter];
-            if (condition.predicate > StateMachinePredicate::Trigger)
+            if (condition.predicate > Trigger)
                 return Malformed;
-            if (condition.predicate == StateMachinePredicate::Above || condition.predicate == StateMachinePredicate::Below)
+            if (condition.predicate == Above || condition.predicate == Below)
                 return ValidateFloatCondition(condition, parameter);
-            if (condition.predicate == StateMachinePredicate::Trigger)
+            if (condition.predicate == Trigger)
                 return ValidateTriggerCondition(condition, parameter);
             if (parameter.type != GraphValueType::Integer && parameter.type != GraphValueType::Boolean)
                 return TypeMismatch;
@@ -88,13 +89,14 @@ namespace Horo::Animation::Detail {
 
         /** @brief Walks the exact contiguous condition partition, admitting every range before advancing it. */
         GraphInstanceFailure ValidateTransitions(const StateMachinePlan &plan) noexcept {
+            using enum GraphInstanceFailure;
             std::size_t nextCondition = 0;
             for (std::size_t index = 0; index < plan.transitions.size(); ++index) {
-                if (const auto failure = ValidateTransition(plan, index, nextCondition); failure != GraphInstanceFailure::None)
+                if (const auto failure = ValidateTransition(plan, index, nextCondition); failure != None)
                     return failure;
                 nextCondition += plan.transitions[index].conditions;
             }
-            return nextCondition == plan.conditions.size() ? GraphInstanceFailure::None : GraphInstanceFailure::Malformed;
+            return nextCondition == plan.conditions.size() ? None : Malformed;
         }
     }  // namespace
 

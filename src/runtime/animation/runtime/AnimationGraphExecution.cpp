@@ -203,7 +203,7 @@ namespace Horo::Animation::Detail {
                 return BeginGraphStateMachine(state, occurrence, branchInput);
             if (occurrence.phase == GraphOccurrencePhase::StateEnd)
                 return EndGraphStateMachine(state, occurrence);
-            if (occurrence.clipBindingIndex)
+            if (occurrence.clipBindingIndex.has_value())
                 return SampleClip(state, occurrence, instruction, branchInput);
             return ExecuteOccurrence(state, occurrence, instruction, branchInput);
         }

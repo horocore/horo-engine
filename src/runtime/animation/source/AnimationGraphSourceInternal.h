@@ -45,22 +45,52 @@ namespace Horo::Animation::GraphSourceDetail {
     inline constexpr std::array<std::string_view, 4> Interruptions{"none", "source", "destination", "either"};
     inline constexpr std::array<std::string_view, 4> BlendCurves{"linear", "smoothStep", "easeIn", "easeOut"};
 
+    /** @brief Owns source-envelope clip dependencies while visiting opcodes and state references by their exact types. */
+    struct DependencyProjection final {
+        std::set<AnimationClipId> clips;
+
+        /** @brief Retain the canonical clip identity; no source/provider state escapes the projection. */
+        void operator()(const AnimationClipId clip) {
+            clips.insert(clip);
+        }
+
+        /** @brief Project an ordinary clip opcode through the same stable dependency set. */
+        void operator()(const GraphClipNode &clip) {
+            (*this)(clip.clip);
+        }
+
+        /** @brief Include inactive state clips; definition references are traversed by the outer complete definition walk. */
+        void operator()(const GraphStateMachineNode &machine) {
+            for (const auto &state : machine.states)
+                std::visit(*this, state.source);
+        }
+
+        /** @brief Non-clip references and scalar/composition opcodes add no direct clip dependency. */
+        template <typename Payload> void operator()(const Payload &) const noexcept {
+            // Scalar/composition metadata has no direct clip. Definition references are covered by the complete outer walk.
+        }
+    };
+
     /** @brief Produces the exact canonical typed dependency projection used by the host sink. */
     inline Json Dependencies(const AnimationGraphData &data) {
-        std::set<AnimationClipId> clips;
+        DependencyProjection projection;
         for (const auto &definition : data.definitions)
             for (const auto &node : definition.nodes)
-                if (const auto *clip = std::get_if<GraphClipNode>(&node.payload))
-                    clips.insert(clip->clip);
-                else if (const auto *machine = std::get_if<GraphStateMachineNode>(&node.payload))
-                    for (const auto &state : machine->states)
-                        if (const auto *stateClip = std::get_if<AnimationClipId>(&state.source))
-                            clips.insert(*stateClip);
+                std::visit(projection, node.payload);
         Json values = Json::array();
-        for (const auto clip : clips)
+        for (const auto clip : projection.clips)
             values.push_back(Json{{"assetType", "core.animation.clip"}, {"assetId", clip.Asset().ToString()}});
         values.push_back(Json{{"assetType", "core.animation.skeleton"}, {"assetId", data.skeleton.Asset().ToString()}});
         return values;
+    }
+
+    /** @brief Source schemas retain one exact semantic contract through explicit migration. */
+    inline AnimationGraphContractVersion SourceContract(const std::uint32_t schema) noexcept {
+        if (schema <= 2)
+            return {1, 0, 0};
+        if (schema == 3)
+            return {1, 1, 0};
+        return CurrentAnimationGraphContractVersion;
     }
 
     /** @brief Rejects unknown or missing object fields before typed decoding. */
