@@ -33,6 +33,12 @@ namespace Horo::Animation::Detail {
         std::array<std::size_t, 5> offsets{};
     };
 
+    /** @brief Equal-sized prepared pose values and authored-contribution coverage. */
+    struct GraphPoseWorkspace final {
+        std::vector<Math::Transform> transforms;
+        std::vector<std::uint8_t> coverage;
+    };
+
     /** @brief Owner-thread runtime storage; all arrays are fixed during preparation. */
     struct GraphInstanceState final {
         std::thread::id ownerThread{std::this_thread::get_id()};
@@ -42,7 +48,7 @@ namespace Horo::Animation::Detail {
         std::vector<std::shared_ptr<const AnimationClipAsset>> clips;
         GraphCurveBindings curves;
         AnimationClipLimits clipLimits{};
-        std::vector<Math::Transform> workingPoses;
+        GraphPoseWorkspace poses;
         GraphScalarWorkspace scalars;
         std::vector<GraphParameterValue> parameters;
         std::vector<std::uint8_t> queuedTriggers;
@@ -58,7 +64,13 @@ namespace Horo::Animation::Detail {
 
         [[nodiscard]] std::span<Math::Transform> Pose(GraphWorkingSlot slot) noexcept {
             const auto joints = program->SkeletonBinding().joints;
-            return std::span{workingPoses}.subspan(static_cast<std::size_t>(slot.index) * joints, joints);
+            return std::span{poses.transforms}.subspan(static_cast<std::size_t>(slot.index) * joints, joints);
+        }
+
+        /** @brief Returns authored-contribution coverage for the same exact pose writer slot. */
+        [[nodiscard]] std::span<std::uint8_t> Coverage(GraphWorkingSlot slot) noexcept {
+            const auto joints = program->SkeletonBinding().joints;
+            return std::span{poses.coverage}.subspan(static_cast<std::size_t>(slot.index) * joints, joints);
         }
     };
 

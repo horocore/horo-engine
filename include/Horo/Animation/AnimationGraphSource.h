@@ -21,10 +21,11 @@ namespace Horo::Animation {
         std::size_t jsonValues{AnimationGraphSourceHardLimits::JsonValues};
         std::size_t depth{AnimationGraphSourceHardLimits::Depth};
     };
-    /** @brief Explicit permission to upgrade legacy untyped connections during source decode. */
+    /** @brief Explicit permission to migrate old source envelopes and normalized pose defaults. */
     enum class AnimationGraphSourceMigration : std::uint8_t {
         RequireCurrent,
-        MigrateVersion1
+        MigrateVersion1,
+        MigrateLegacySchemas
     };
     /** @brief Serializes a valid current-schema candidate as canonical UTF-8 JSON with one trailing newline.
      * @param data Current typed source; stable asset identity is supplied by the sidecar and is not duplicated in bytes.
@@ -41,7 +42,7 @@ namespace Horo::Animation {
      * @param identity Exact sidecar-owned graph identity injected into the detached candidate.
      * @param context Captured authoring validation, cancellation and replacement identity.
      * @param limits Byte, nesting and parser-value limits applied before/between parsing work.
-     * @param migration Explicit policy for version-1 connection type migration.
+     * @param migration Explicit policy for schema-1 or schema-1/2 migration into the current contract.
      * @return Fully validated canonical current-schema candidate or stable failure; no partial result or publication.
      * @throws std::bad_alloc When bounded load/tool-boundary storage cannot be allocated.
      */
