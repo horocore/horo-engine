@@ -33,9 +33,14 @@ namespace Horo::Animation::Test::Instance {
             }
             bool secondClip{};
             for (const auto &definition : graph.definitions)
-                for (const auto &node : definition.nodes)
+                for (const auto &node : definition.nodes) {
                     if (const auto *clip = std::get_if<GraphClipNode>(&node.payload); clip && clip->clip == Asset<AnimationClipId>(4))
                         secondClip = true;
+                    if (const auto *machine = std::get_if<GraphStateMachineNode>(&node.payload))
+                        for (const auto &state : machine->states)
+                            if (const auto *clip = std::get_if<AnimationClipId>(&state.source); clip && *clip == Asset<AnimationClipId>(4))
+                                secondClip = true;
+                }
             if (!secondClip)
                 compileClips.erase(compileClips.begin() + 1);
             for (const auto &clip : compileClips)

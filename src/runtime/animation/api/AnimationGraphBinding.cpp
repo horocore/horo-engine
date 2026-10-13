@@ -199,6 +199,10 @@ namespace Horo::Animation::GraphCompileDetail {
         auto dependencies = ValidateDependencies(program, context);
         if (dependencies.HasError())
             return Result<BoundPlan>::Failure(dependencies.ErrorValue());
+        for (const auto &definition : program.Definitions())
+            for (const auto &instruction : definition.instructions)
+                if (std::holds_alternative<GraphStateMachineNode>(instruction.payload))
+                    return BindStateNodes(program, context, dependencies.Value().skeleton, std::move(dependencies).Value().clips);
         auto plan = BuildOccurrencePlan(program, dependencies.Value(), context);
         if (plan.HasError())
             return Result<BoundPlan>::Failure(plan.ErrorValue());

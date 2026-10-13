@@ -37,7 +37,10 @@ namespace Horo::Animation::GraphSourceDetail {
     /** @brief Stable textual transport vocabulary, independent of C++ enum representation. */
     inline constexpr std::array<std::string_view, 5> Types{"pose", "float", "boolean", "integer", "trigger"};
     inline constexpr std::array<std::string_view, 6> Roles{"value", "firstPose", "secondPose", "weight", "interface", "result"};
-    inline constexpr std::array<std::string_view, 6> Kinds{"clip", "blend", "parameter", "output", "input", "call"};
+    inline constexpr std::array<std::string_view, 7> Kinds{"clip", "blend", "parameter", "output", "input", "call", "stateMachine"};
+    inline constexpr std::array<std::string_view, 5> Predicates{"above", "below", "equal", "notEqual", "trigger"};
+    inline constexpr std::array<std::string_view, 4> Interruptions{"none", "source", "destination", "either"};
+    inline constexpr std::array<std::string_view, 4> BlendCurves{"linear", "smoothStep", "easeIn", "easeOut"};
 
     /** @brief Produces the exact canonical typed dependency projection used by the host sink. */
     inline Json Dependencies(const AnimationGraphData &data) {
@@ -46,6 +49,10 @@ namespace Horo::Animation::GraphSourceDetail {
             for (const auto &node : definition.nodes)
                 if (const auto *clip = std::get_if<GraphClipNode>(&node.payload))
                     clips.insert(clip->clip);
+                else if (const auto *machine = std::get_if<GraphStateMachineNode>(&node.payload))
+                    for (const auto &state : machine->states)
+                        if (const auto *stateClip = std::get_if<AnimationClipId>(&state.source))
+                            clips.insert(*stateClip);
         Json values = Json::array();
         for (const auto clip : clips)
             values.push_back(Json{{"assetType", "core.animation.clip"}, {"assetId", clip.Asset().ToString()}});

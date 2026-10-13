@@ -287,13 +287,14 @@ TEST_CASE("Graph explicit migration infers edge types atomically and preserves i
     const auto current = CompileGraph(data);
     REQUIRE(current.HasValue());
     data.schemaVersion = 1;
+    data.contractVersion = {1, 0, 0};
     for (auto &edge : data.definitions.front().connections)
         edge.type = GraphValueType::Unspecified;
     const auto original = data;
     Fails(data, AnimationErrors::GraphVersionUnsupported);
     const auto migrated = MigrateAnimationGraph(data);
     REQUIRE(migrated.HasValue());
-    CHECK(migrated.Value().schemaVersion == 2);
+    CHECK(migrated.Value().schemaVersion == CurrentAnimationGraphSchemaVersion);
     CHECK(migrated.Value().id == original.id);
     CHECK(data == original);
     const auto compiled = CompileGraph(migrated.Value());

@@ -89,6 +89,10 @@ namespace Horo::Animation {
                 std::uint64_t cost = 0;
                 if (std::holds_alternative<GraphBlendNode>(instruction.payload))
                     cost = assets.program->SkeletonBinding().joints;
+                if (occurrence.phase == GraphOccurrencePhase::StateBegin)
+                    cost = 2ULL * assets.program->SkeletonBinding().joints;
+                if (occurrence.phase == GraphOccurrencePhase::StateEnd)
+                    cost = 4ULL * assets.program->SkeletonBinding().joints;
                 if (occurrence.clipBindingIndex.has_value()) {
                     const auto &descriptor = assets.program->ClipBindings()[*occurrence.clipBindingIndex];
                     const auto clip = std::ranges::find_if(assets.clips, [&descriptor](const auto &value) {
@@ -156,6 +160,18 @@ namespace Horo::Animation {
                 !charge(assets.clips.size(), sizeof(std::shared_ptr<const AnimationClipAsset>)) ||
                 !charge(assets.curves.size(), sizeof(std::shared_ptr<const AnimationParameterCurve>) + sizeof(std::size_t)))
                 return GraphInstanceFailure::LimitExceeded;
+            if (!charge(memory.stateMachines, 2ULL * sizeof(Detail::GraphMachineState) + sizeof(Detail::GraphPreparedMachine)) ||
+                !charge(memory.conditionLatches, 3ULL * sizeof(std::uint8_t) + sizeof(Detail::StateMachineCondition)) ||
+                !charge(memory.stateEvents, 3ULL * sizeof(GraphStateEvent)))
+                return GraphInstanceFailure::LimitExceeded;
+            for (const auto &binding : assets.program->StateMachines()) {
+                const auto &occurrence = assets.program->Occurrences()[binding.beginOccurrence];
+                const auto &machine = std::get<GraphStateMachineNode>(
+                    assets.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex].payload);
+                if (!charge(machine.states.size(), sizeof(Detail::StateMachineState)) ||
+                    !charge(machine.transitions.size(), sizeof(Detail::StateMachineTransition)))
+                    return GraphInstanceFailure::LimitExceeded;
+            }
             for (std::size_t type = 1; type < memory.workingSlots.size(); ++type)
                 if (!charge(memory.workingSlots[type], sizeof(GraphParameterValue)))
                     return GraphInstanceFailure::LimitExceeded;
@@ -189,6 +205,18 @@ namespace Horo::Animation {
                 return failure;
             if (const auto failure = AdmitCurves(assets, context); failure != None)
                 return failure;
+            if (context.maximumControlOperations > 64ULL * 1024ULL * 1024ULL)
+                return LimitExceeded;
+            std::uint64_t control = assets.program->Occurrences().size() * (4ULL * assets.program->Memory().callDepth + 4ULL);
+            control += 3ULL * assets.program->Memory().conditionLatches + 3ULL * assets.program->Memory().stateEvents;
+            for (const auto &binding : assets.program->StateMachines()) {
+                const auto &occurrence = assets.program->Occurrences()[binding.beginOccurrence];
+                const auto &machine = std::get<GraphStateMachineNode>(
+                    assets.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex].payload);
+                control += 2ULL * machine.transitions.size() + assets.program->Parameters().size();
+            }
+            if (control > context.maximumControlOperations)
+                return LimitExceeded;
             return AdmitClipWork(assets, context);
         }
 
@@ -238,6 +266,8 @@ namespace Horo::Animation {
             state->scalars.values.resize(scalars);
             state->players.resize(memory.clipPlayers);
             state->candidate.players.resize(memory.clipPlayers);
+            if (const auto failure = Detail::PrepareGraphStateMachines(*state); failure != GraphInstanceFailure::None)
+                return Result<AnimationGraphInstance>::Failure(DescribeGraphInstanceFailure({failure}));
             state->parameters.resize(memory.parameters);
             state->candidate.parameters.resize(memory.parameters);
             state->queuedTriggers.resize(memory.parameters);
@@ -330,6 +360,17 @@ namespace Horo::Animation {
         std::ranges::fill(state_->queuedTriggers, 0);
         state_->publishedHandles[slot] = handle;
         state_->players.swap(state_->candidate.players);
+        state_->machines.swap(state_->candidate.machines);
+        state_->latches.swap(state_->candidate.latches);
+        state_->publishedEventCounts[slot] = state_->candidate.eventCount;
+        std::copy_n(state_->candidate.events.begin(), state_->candidate.eventCount, state_->publishedEvents[slot].begin());
+        for (std::size_t index = 0; index < state_->machines.size(); ++index) {
+            if (!state_->machines[index].visited)
+                continue;
+            const auto &binding = state_->program->StateMachines()[index];
+            std::ranges::copy(state_->Pose(binding.poses[1]), state_->Pose(binding.poses[0]).begin());
+            std::ranges::copy(state_->Pose(binding.poses[3]), state_->Pose(binding.poses[2]).begin());
+        }
         state_->parameters.swap(state_->candidate.parameters);
         state_->publication = {tick, state_->publication.currentPose, handle};
         state_->nextPoseGeneration = generation == std::numeric_limits<std::uint64_t>::max() ? 0 : generation + 1;
@@ -344,6 +385,7 @@ namespace Horo::Animation {
             return owner;
         state_->candidate.tick = {};
         state_->candidate.cancellation = {};
+        state_->candidate.eventCount = 0;
         return {};
     }
 
@@ -385,6 +427,24 @@ namespace Horo::Animation {
         return {};
     }
 
+    /** @copydoc AnimationGraphInstance::CopyStateEvents */
+    GraphInstanceOutcome AnimationGraphInstance::CopyStateEvents(const PoseHandle &publication, const std::span<GraphStateEvent> output,
+                                                                 std::uint32_t &written) const {
+        if (const auto owner = Owner(state_.get()); owner.HasError())
+            return owner;
+        if (!publication.IsValid())
+            return {GraphInstanceFailure::HandleMalformed};
+        if (publication.instance != state_->identity || publication.slot.index >= state_->publishedHandles.size() ||
+            publication != state_->publishedHandles[publication.slot.index])
+            return {GraphInstanceFailure::HandleStale};
+        const auto count = state_->publishedEventCounts[publication.slot.index];
+        if (output.size() < count)
+            return {GraphInstanceFailure::LimitExceeded};
+        std::copy_n(state_->publishedEvents[publication.slot.index].begin(), count, output.begin());
+        written = count;
+        return {};
+    }
+
     /** @copydoc AnimationGraphInstance::CopyPose */
     GraphInstanceOutcome AnimationGraphInstance::CopyPose(const PoseHandle &pose, const std::span<Math::Transform> output) const {
         if (const auto owner = Owner(state_.get()); owner.HasError())
@@ -415,6 +475,7 @@ namespace Horo::Animation {
         std::ranges::fill(state_->queuedTriggers, 0);
         state_->candidate.tick = {};
         state_->candidate.cancellation = {};
+        state_->candidate.eventCount = 0;
         return {};
     }
 }  // namespace Horo::Animation

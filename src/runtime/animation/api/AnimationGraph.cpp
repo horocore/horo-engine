@@ -62,6 +62,11 @@ namespace Horo::Animation {
             std::uint64_t pins{};
             std::uint64_t connections{};
             std::uint64_t interfaces{};
+            std::uint64_t machines{}, states{}, transitions{}, conditions{};
+            if (limits.stateMachines > AnimationGraphHardLimits::StateMachines || limits.states > AnimationGraphHardLimits::States ||
+                limits.transitions > AnimationGraphHardLimits::Transitions || limits.conditions > AnimationGraphHardLimits::Conditions ||
+                limits.stateEvents > AnimationGraphHardLimits::StateEvents)
+                return Result<void>::Failure(Failure(GraphLimitExceeded));
             for (const auto &definition : data.definitions) {
                 nodes += definition.nodes.size();
                 connections += definition.connections.size();
@@ -74,6 +79,16 @@ namespace Horo::Animation {
                     pins += node.pins.size();
                     if (pins > limits.pins)
                         return Result<void>::Failure(Failure(GraphLimitExceeded));
+                    if (const auto *machine = std::get_if<GraphStateMachineNode>(&node.payload)) {
+                        ++machines;
+                        states += machine->states.size();
+                        transitions += machine->transitions.size();
+                        for (const auto &transition : machine->transitions)
+                            conditions += transition.conditions.size();
+                        if (machines > limits.stateMachines || states > limits.states || transitions > limits.transitions ||
+                            conditions > limits.conditions)
+                            return Result<void>::Failure(Failure(GraphLimitExceeded));
+                    }
                 }
             }
             for (const auto &parameter : data.parameters)
@@ -93,8 +108,13 @@ namespace Horo::Animation {
                 std::ranges::sort(definition.inputs, byId);
                 std::ranges::sort(definition.nodes, byId);
                 std::ranges::sort(definition.connections);
-                for (auto &node : definition.nodes)
+                for (auto &node : definition.nodes) {
                     std::ranges::sort(node.pins, byId);
+                    if (auto *machine = std::get_if<GraphStateMachineNode>(&node.payload)) {
+                        std::ranges::sort(machine->states, byId);
+                        std::ranges::sort(machine->transitions, byId);
+                    }
+                }
             }
         }
 
@@ -165,6 +185,10 @@ namespace Horo::Animation {
                     return Result<std::vector<GraphPin>>::Failure(Failure(GraphMalformed, location));
                 for (const auto &definitionInput : target->inputs)
                     add(GraphPinRole::Interface, definitionInput.type, false, definitionInput.id);
+                add(GraphPinRole::Result, GraphValueType::Pose, true);
+            } else if (const auto *machine = std::get_if<GraphStateMachineNode>(&node.payload)) {
+                if (auto validated = ValidateStateNode(*machine, data, location); validated.HasError())
+                    return Result<std::vector<GraphPin>>::Failure(validated.ErrorValue());
                 add(GraphPinRole::Result, GraphValueType::Pose, true);
             } else {
                 return Result<std::vector<GraphPin>>::Failure(Failure(GraphMalformed, location));
@@ -325,6 +349,11 @@ namespace Horo::Animation {
             if (const auto *call = std::get_if<GraphCallNode>(&node.payload))
                 instruction.definitionIndex =
                     static_cast<std::uint32_t>(Find(data.definitions, call->definition) - data.definitions.data());
+            if (const auto *machine = std::get_if<GraphStateMachineNode>(&node.payload))
+                for (const auto &state : machine->states)
+                    if (const auto *definitionId = std::get_if<GraphDefinitionId>(&state.source))
+                        instruction.stateDefinitions.push_back(
+                            static_cast<std::uint32_t>(Find(data.definitions, *definitionId) - data.definitions.data()));
             return instruction;
         }
 
@@ -376,6 +405,23 @@ namespace Horo::Animation {
                     definition.evaluationInstructions += target.evaluationInstructions;
                     definition.sourceMapCallEntries += target.sourceMapCallEntries + target.evaluationInstructions;
                 }
+            for (const auto &instruction : definition.instructions) {
+                if (const auto *machine = std::get_if<GraphStateMachineNode>(&instruction.payload)) {
+                    ++definition.evaluationInstructions;  // The control occurrence precedes guarded children and pose completion.
+                    for (const auto &state : machine->states)
+                        if (std::holds_alternative<AnimationClipId>(state.source)) {
+                            definition.evaluationInstructions += 2;
+                            definition.sourceMapCallEntries += 4;
+                            definition.callDepth = std::max(definition.callDepth, 2U);
+                        }
+                    for (const auto targetIndex : instruction.stateDefinitions) {
+                        const auto &target = definitions[targetIndex];
+                        definition.callDepth = std::max(definition.callDepth, target.callDepth + 1);
+                        definition.evaluationInstructions += 2 * target.evaluationInstructions;
+                        definition.sourceMapCallEntries += 2 * (target.sourceMapCallEntries + 2 * target.evaluationInstructions);
+                    }
+                }
+            }
             if (definition.callDepth > context.limits.callDepth ||
                 definition.evaluationInstructions > context.limits.evaluationInstructions ||
                 definition.sourceMapCallEntries > context.limits.sourceMapCallEntries)
@@ -388,11 +434,16 @@ namespace Horo::Animation {
             std::vector<std::set<std::size_t>> dependencies(definitions.size());
             std::vector<std::set<std::size_t>> callers(definitions.size());
             for (std::size_t index = 0; index < definitions.size(); ++index)
-                for (const auto &instruction : definitions[index].instructions)
+                for (const auto &instruction : definitions[index].instructions) {
                     if (instruction.definitionIndex.has_value()) {
                         dependencies[index].insert(*instruction.definitionIndex);
                         callers[*instruction.definitionIndex].insert(index);
                     }
+                    for (const auto target : instruction.stateDefinitions) {
+                        dependencies[index].insert(target);
+                        callers[target].insert(index);
+                    }
+                }
             std::set<std::size_t> ready;
             for (std::size_t index = 0; index < definitions.size(); ++index)
                 if (dependencies[index].empty())
@@ -464,6 +515,10 @@ namespace Horo::Animation {
             for (const auto &instruction : compiled.Value().instructions)
                 if (const auto *clip = std::get_if<GraphClipNode>(&instruction.payload))
                     clips.insert(clip->clip);
+                else if (const auto *machine = std::get_if<GraphStateMachineNode>(&instruction.payload))
+                    for (const auto &state : machine->states)
+                        if (const auto *stateClip = std::get_if<AnimationClipId>(&state.source))
+                            clips.insert(*stateClip);
             result.definitions_.push_back(std::move(compiled).Value());
         }
         if (auto calls = BoundCalls(result.definitions_, context); calls.HasError())
@@ -489,6 +544,7 @@ namespace Horo::Animation {
         auto owned = std::move(bound).Value();
         result.clipBindings_ = std::move(owned.clips);
         result.occurrences_ = std::move(owned.occurrences);
+        result.stateMachines_ = std::move(owned.stateMachines);
         if (auto state = Admission(context); state.HasError())
             return Result<AnimationGraphProgram>::Failure(state.ErrorValue());
         return Result<AnimationGraphProgram>::Success(std::move(result));
@@ -496,8 +552,18 @@ namespace Horo::Animation {
 
     /** @copydoc MigrateAnimationGraph */
     Result<AnimationGraphData> MigrateAnimationGraph(const AnimationGraphData &data, const AnimationGraphCompileContext &context) {
-        if (data.schemaVersion != 1 && data.schemaVersion != CurrentAnimationGraphSchemaVersion)
+        if (data.schemaVersion == 0 || data.schemaVersion > CurrentAnimationGraphSchemaVersion)
             return Result<AnimationGraphData>::Failure(Failure(GraphVersionUnsupported));
+        const AnimationGraphContractVersion expected = data.schemaVersion <= 2   ? AnimationGraphContractVersion{1, 0, 0}
+                                                       : data.schemaVersion == 3 ? AnimationGraphContractVersion{1, 1, 0}
+                                                                                 : CurrentAnimationGraphContractVersion;
+        if (data.contractVersion != expected)
+            return Result<AnimationGraphData>::Failure(Failure(GraphVersionUnsupported));
+        if (data.schemaVersion < 4)
+            for (const auto &definition : data.definitions)
+                for (const auto &node : definition.nodes)
+                    if (std::holds_alternative<GraphStateMachineNode>(node.payload))
+                        return Result<AnimationGraphData>::Failure(Failure(GraphVersionUnsupported));
         if (auto preflight = Preflight(data, context); preflight.HasError())
             return Result<AnimationGraphData>::Failure(preflight.ErrorValue());
         auto migrated = data;
@@ -506,8 +572,9 @@ namespace Horo::Animation {
             for (auto &definition : migrated.definitions)
                 if (auto connections = MigrateConnections(definition, context); connections.HasError())
                     return Result<AnimationGraphData>::Failure(connections.ErrorValue());
-            migrated.schemaVersion = CurrentAnimationGraphSchemaVersion;
         }
+        migrated.schemaVersion = CurrentAnimationGraphSchemaVersion;
+        migrated.contractVersion = CurrentAnimationGraphContractVersion;
         if (auto checked = AnimationGraphProgram::CompileSchema(migrated, context); checked.HasError())
             return Result<AnimationGraphData>::Failure(checked.ErrorValue());
         return Result<AnimationGraphData>::Success(std::move(migrated));

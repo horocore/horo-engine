@@ -17,11 +17,13 @@ Canonical output is UTF-8, has no BOM, insignificant whitespace or escaped ASCII
 identifiers, and ends in exactly one newline. The top-level field order is:
 
 ```json
-{"schemaVersion":2,"assetType":"core.animation.graph","contractVersion":{"major":1,"minor":0,"patch":0},"dependencies":[],"payload":{}}
+{"schemaVersion":4,"assetType":"core.animation.graph","contractVersion":{"major":1,"minor":2,"patch":0},"dependencies":[],"payload":{}}
 ```
 
-The version-1 Animation graph semantic contract is exact `1.0.0`. The independent
-source schema version is `2`; any unknown semantic or source version fails.
+The current Animation graph semantic contract is exact `1.2.0`, with independent
+source schema `4`. Source schemas `1`/`2` have exact contract `1.0.0`; schema `3`
+belongs to the pose-composition contract `1.1.0`. Unknown or mismatched source and
+semantic versions fail. Migration is an explicit load/tool operation.
 The graph's own identity is injected from the sidecar by the decoder and is never
 repeated in payload bytes. Runtime generations, pointers, registry revisions,
 source paths, native handles and ABI-dependent object layouts are not persisted.
@@ -58,6 +60,32 @@ Kinds/references are:
 | `output` | JSON null |
 | `input` | Stable definition-interface input ID |
 | `call` | Stable asset-local definition ID |
+| `stateMachine` | Typed reference object with `initial`, `states`, `transitions` |
+
+Schema 4 adds state-machine records without persisting runtime clocks, latches,
+lanes, entry generations or event cursors. States and transitions are sorted by
+their distinct stable non-zero node-local IDs. A state contains `id`, `sourceKind`,
+`reference`, `loopPeriod`. Sources are `clip` (canonical clip AssetId) or
+`definition` (asset-local definition ID, with no external interface inputs).
+Direct clips require null `loopPeriod`; their immutable wrap descriptor owns
+cycle length. Subgraphs may declare a positive exact nanosecond cycle explicitly,
+or null to have no state-loop events. State clip references participate in the
+exact dependency projection, including otherwise inactive states.
+
+A transition contains `id`, `source`, `destination`, `priority`, `duration`,
+`exitTime`, `interruption`, `curve`, `conditions`. Priority is signed 32-bit;
+duration is a nonnegative signed-64-bit-range nanosecond integer. Optional exit
+time is nonnegative authored elapsed time since entry, including completed cycles.
+Interruption is `none`, `source`, `destination`, `either`; curves are `linear`,
+`smoothStep`, `easeIn`, `easeOut`. Conditions contain `parameter`, `predicate`,
+`threshold`, `release`. Predicates are `above`, `below`, `equal`, `notEqual`,
+`trigger`; the referenced declaration determines the threshold scalar type.
+Float conditions require finite enter/release thresholds with the appropriate
+hysteresis order. Integer/boolean conditions admit equal/notEqual; triggers
+require true. Conditions are an ordered conjunction; empty conjunctions are
+unconditional. Higher priority wins, then the smaller stable transition ID,
+independent of source transition-vector order. Zero-duration and self transitions
+have distinct entry generations.
 
 Pins are sorted by stable ID and contain `id`, `role`, `type`, `output`,
 `interface`. Roles are `value`, `firstPose`, `secondPose`, `weight`, `interface`,
@@ -74,14 +102,17 @@ definitions, unbound interfaces and unreachable nodes all fail.
 
 ## Migration And Hostile Input
 
-Schema 1 has the same envelope, typed nodes/pins and stable IDs, but connection
+Schema 1 has the legacy envelope, typed nodes/pins and stable IDs, but connection
 objects omit `type`. `DeserializeAnimationGraphSource` admits it only with the
 explicit `MigrateVersion1` policy. Migration derives each type from its source pin
 and validates the complete destination/node/call/parameter contract. It neither
 repairs IDs nor changes persistent identity. The result is a detached canonical
-schema-2 candidate. `SerializeAnimationGraphSource` requires schema 2; callers
-must explicitly migrate older in-memory data first. Current-schema migration is
-an idempotent validated canonical copy.
+current candidate. `MigrateSupported` additionally admits schemas 2 and 3 with
+their exact semantic contracts; `MigrateVersion1` stays restricted to schema 1.
+Earlier schemas reject state-machine payloads. Serialization requires schema 4;
+callers must explicitly migrate older in-memory data first. Current migration is
+an idempotent validated canonical copy. The pose parent owns schema 3; the state
+extension never reassigns that version to a different format.
 
 Parsing rejects duplicate keys at any depth, unknown/missing fields, malformed
 UTF-8, BOM, embedded NUL, trailing non-whitespace data, invalid enums, non-canonical
@@ -124,8 +155,17 @@ The plan exposes exact counts for five working storage types, joint transforms,
 clip players, parameters and call depth. Expanded instruction work, call-path entries
 and each storage category have hard and caller-lowerable budgets. Budget failure
 rejects the entire detached program before an instance can allocate it. This
-compiler provides the access/allocation plan; ANI-002.2/3/4 still own evaluation,
-parameter/trigger policy and state-machine execution.
+compiler provides the access/allocation plan. ANI-002.4 adds control/completion
+occurrences and guarded two-lane clip/subgraph ranges. States have independent
+source/destination incarnations even in a self-transition. State call edges
+participate in the same recursion and expanded-work validation as ordinary calls.
+Runtime dispatch consumes this exact plan.
+
+Whole-asset policy bounds states to 256, transitions to 2048 and conditions to
+4096. Expanded machine occurrences, condition latches, composed/frozen pose
+storage and lifecycle-event capacity are admitted before instance preparation.
+The hard event-storage ceiling is 262144 records. Policies can lower ceilings;
+capacity failure rejects the complete candidate.
 
 ## Assets Cooking Prerequisite
 

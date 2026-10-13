@@ -25,8 +25,14 @@ namespace Horo::Animation::GraphCompileDetail {
         std::vector<AnimationClipDescriptor> clips{};
         GraphMemoryRequirements memory{};
         std::vector<GraphInstructionOccurrence> occurrences{};
+        std::vector<GraphStateMachineBinding> stateMachines{};
     };
 
     /** @brief Captures exact dependencies and produces finite occurrence-to-storage/state accesses. */
     Result<BoundPlan> Bind(const AnimationGraphProgram &program, const AnimationGraphCompileContext &context);
+    /** @brief Validates typed state sources, identities and transition conditions against exact graph declarations. */
+    Result<void> ValidateStateNode(const GraphStateMachineNode &machine, const AnimationGraphData &data, GraphSourceLocation location);
+    /** @brief Expands actual guarded clip/subgraph branches into the same compiler-owned occurrence plan. */
+    Result<BoundPlan> BindStateNodes(const AnimationGraphProgram &program, const AnimationGraphCompileContext &context,
+                                     GraphSkeletonBinding skeleton, std::vector<AnimationClipDescriptor> clips);
 }  // namespace Horo::Animation::GraphCompileDetail

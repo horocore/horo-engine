@@ -66,7 +66,77 @@ namespace Horo::Animation {
             std::size_t connections{};
             std::size_t interfaces{};
             std::size_t parameters{};
+            std::size_t states{}, transitions{}, conditions{};
         };
+
+        /** @brief Decodes one exact finite scalar using the same parameter transport rules. */
+        GraphParameterValue Default(const Json &value, GraphValueType type);
+
+        /** @brief Reads exact nonnegative nanosecond integers without floating-time coercion or narrowing. */
+        std::int64_t Time(const Json &value) {
+            if (!value.is_number_integer() ||
+                (value.is_number_unsigned() &&
+                 value.get<std::uint64_t>() > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())))
+                Reject(AnimationErrors::GraphMalformed);
+            const auto ticks = value.get<std::int64_t>();
+            if (ticks < 0)
+                Reject(AnimationErrors::GraphMalformed);
+            return ticks;
+        }
+
+        /** @brief Decodes bounded state tables; every retained field still undergoes authoritative compiler validation. */
+        GraphStateMachineNode StateMachine(const Json &value, Budget &budget, const AnimationGraphCompileContext &context,
+                                           const std::span<const GraphParameter> parameters) {
+            Keys(value, {"initial", "states", "transitions"});
+            GraphStateMachineNode machine;
+            machine.initial = Id<GraphStateId>(value["initial"]);
+            machine.states.reserve(Spend(value["states"], budget.states, context.limits.states, AnimationGraphHardLimits::States));
+            for (const auto &entry : value["states"]) {
+                CheckAdmission(context);
+                Keys(entry, {"id", "sourceKind", "reference", "loopPeriod"});
+                GraphState state;
+                state.id = Id<GraphStateId>(entry["id"]);
+                if (entry["sourceKind"] == "clip")
+                    state.source = AssetIdentity<AnimationClipId>(entry["reference"]);
+                else if (entry["sourceKind"] == "definition")
+                    state.source = Id<GraphDefinitionId>(entry["reference"]);
+                else
+                    Reject(AnimationErrors::GraphTypeMismatch);
+                if (!entry["loopPeriod"].is_null())
+                    state.loopPeriod = AnimationDeltaTime{Time(entry["loopPeriod"])};
+                machine.states.push_back(state);
+            }
+            machine.transitions.reserve(
+                Spend(value["transitions"], budget.transitions, context.limits.transitions, AnimationGraphHardLimits::Transitions));
+            for (const auto &entry : value["transitions"]) {
+                CheckAdmission(context);
+                Keys(entry, {"id", "source", "destination", "priority", "duration", "exitTime", "interruption", "curve", "conditions"});
+                GraphStateTransition transition;
+                transition.id = Id<GraphTransitionId>(entry["id"]);
+                transition.source = Id<GraphStateId>(entry["source"]);
+                transition.destination = Id<GraphStateId>(entry["destination"]);
+                transition.priority = std::get<std::int32_t>(Default(entry["priority"], GraphValueType::Integer));
+                transition.duration = {Time(entry["duration"])};
+                if (!entry["exitTime"].is_null())
+                    transition.exitTime = AnimationTime{Time(entry["exitTime"])};
+                transition.interruption = EnumValue<GraphStateInterruption>(entry["interruption"], Interruptions);
+                transition.curve = EnumValue<GraphStateBlendCurve>(entry["curve"], BlendCurves);
+                transition.conditions.reserve(
+                    Spend(entry["conditions"], budget.conditions, context.limits.conditions, AnimationGraphHardLimits::Conditions));
+                for (const auto &condition : entry["conditions"]) {
+                    Keys(condition, {"parameter", "predicate", "threshold", "release"});
+                    const auto parameterId = Id<GraphParameterId>(condition["parameter"]);
+                    const auto parameter = std::ranges::find(parameters, parameterId, &GraphParameter::id);
+                    if (parameter == parameters.end())
+                        Reject(AnimationErrors::GraphBindingMismatch);
+                    transition.conditions.push_back({parameterId, EnumValue<GraphStatePredicate>(condition["predicate"], Predicates),
+                                                     Default(condition["threshold"], parameter->type),
+                                                     std::get<float>(Default(condition["release"], GraphValueType::Float))});
+                }
+                machine.transitions.push_back(std::move(transition));
+            }
+            return machine;
+        }
 
         /** @brief Decodes a pin's exact shape; semantic validation remains the compiler's authority. */
         GraphPin Pin(const Json &value) {
@@ -79,7 +149,8 @@ namespace Horo::Animation {
         }
 
         /** @brief Decodes typed semantics without preserving unknown opaque node payloads. */
-        GraphNodePayload Payload(const Json &kind, const Json &reference) {
+        GraphNodePayload Payload(const Json &kind, const Json &reference, Budget &budget, const AnimationGraphCompileContext &context,
+                                 const std::span<const GraphParameter> parameters, const std::uint32_t version) {
             const auto value = EnumValue<std::uint8_t>(kind, Kinds);
             switch (value) {
                 case 0:
@@ -90,6 +161,10 @@ namespace Horo::Animation {
                     return GraphInputNode{Id<GraphInterfaceId>(reference)};
                 case 5:
                     return GraphCallNode{Id<GraphDefinitionId>(reference)};
+                case 6:
+                    if (version < 4)
+                        Reject(AnimationErrors::GraphVersionUnsupported);
+                    return StateMachine(reference, budget, context, parameters);
                 default:
                     if (!reference.is_null())
                         Reject(AnimationErrors::GraphMalformed);
@@ -100,10 +175,13 @@ namespace Horo::Animation {
         }
 
         /** @brief Decodes a bounded node and stable local pins. */
-        GraphNode Node(const Json &value, Budget &budget, const AnimationGraphCompileContext &context) {
+        GraphNode Node(const Json &value, Budget &budget, const AnimationGraphCompileContext &context,
+                       const std::span<const GraphParameter> parameters, const std::uint32_t version) {
             CheckAdmission(context);
             Keys(value, {"id", "kind", "reference", "pins"});
-            GraphNode node{Id<GraphNodeId>(value["id"]), Payload(value["kind"], value["reference"]), {}};
+            GraphNode node{Id<GraphNodeId>(value["id"]),
+                           Payload(value["kind"], value["reference"], budget, context, parameters, version),
+                           {}};
             node.pins.reserve(Spend(value["pins"], budget.pins, context.limits.pins, AnimationGraphHardLimits::Pins));
             for (const auto &pin : value["pins"])
                 node.pins.push_back(Pin(pin));
@@ -127,7 +205,8 @@ namespace Horo::Animation {
         }
 
         /** @brief Decodes bounded subgraphs independently of authored array order. */
-        GraphDefinition Definition(const Json &value, Budget &budget, std::uint32_t version, const AnimationGraphCompileContext &context) {
+        GraphDefinition Definition(const Json &value, Budget &budget, std::uint32_t version, const AnimationGraphCompileContext &context,
+                                   const std::span<const GraphParameter> parameters) {
             CheckAdmission(context);
             Keys(value, {"id", "inputs", "nodes", "connections"});
             GraphDefinition definition;
@@ -139,7 +218,7 @@ namespace Horo::Animation {
             }
             definition.nodes.reserve(Spend(value["nodes"], budget.nodes, context.limits.nodes, AnimationGraphHardLimits::Nodes));
             for (const auto &node : value["nodes"])
-                definition.nodes.push_back(Node(node, budget, context));
+                definition.nodes.push_back(Node(node, budget, context, parameters, version));
             definition.connections.reserve(
                 Spend(value["connections"], budget.connections, context.limits.connections, AnimationGraphHardLimits::Connections));
             for (const auto &edge : value["connections"]) {
@@ -193,13 +272,15 @@ namespace Horo::Animation {
             if (!version.is_number_unsigned() || version.get<std::uint64_t>() > std::numeric_limits<std::uint32_t>::max())
                 Reject(AnimationErrors::GraphVersionUnsupported);
             const auto schema = version.get<std::uint32_t>();
+            const auto expected = schema <= 2   ? AnimationGraphContractVersion{1, 0, 0}
+                                  : schema == 3 ? AnimationGraphContractVersion{1, 1, 0}
+                                                : CurrentAnimationGraphContractVersion;
             if ((schema != CurrentAnimationGraphSchemaVersion &&
-                 !(schema == 1 && migration == AnimationGraphSourceMigration::MigrateVersion1)) ||
+                 !(schema == 1 && migration == AnimationGraphSourceMigration::MigrateVersion1) &&
+                 !(schema >= 1 && schema <= 3 && migration == AnimationGraphSourceMigration::MigrateSupported)) ||
                 !envelope["contractVersion"]["major"].is_number_unsigned() || !envelope["contractVersion"]["minor"].is_number_unsigned() ||
-                !envelope["contractVersion"]["patch"].is_number_unsigned() ||
-                envelope["contractVersion"]["major"] != CurrentAnimationGraphContractVersion.major ||
-                envelope["contractVersion"]["minor"] != CurrentAnimationGraphContractVersion.minor ||
-                envelope["contractVersion"]["patch"] != CurrentAnimationGraphContractVersion.patch)
+                !envelope["contractVersion"]["patch"].is_number_unsigned() || envelope["contractVersion"]["major"] != expected.major ||
+                envelope["contractVersion"]["minor"] != expected.minor || envelope["contractVersion"]["patch"] != expected.patch)
                 Reject(AnimationErrors::GraphVersionUnsupported);
             if (envelope["assetType"] != "core.animation.graph")
                 Reject(AnimationErrors::GraphTypeMismatch);
@@ -208,7 +289,7 @@ namespace Horo::Animation {
 
         /** @brief Requires the exact dependency set; field/collection order is canonicalized, duplicates are rejected. */
         void ValidateDependencies(const Json &values, const AnimationGraphData &data) {
-            if (!values.is_array() || values.size() > AnimationGraphHardLimits::Nodes + 1U)
+            if (!values.is_array() || values.size() > AnimationGraphHardLimits::Nodes + AnimationGraphHardLimits::States + 1U)
                 Reject(AnimationErrors::GraphLimitExceeded);
             std::set<std::pair<std::string, Assets::AssetId>> actual;
             std::set<std::pair<std::string, Assets::AssetId>> expected;
@@ -264,11 +345,14 @@ namespace Horo::Animation {
             CheckAdmission(context);
             if (!identity.IsValid())
                 Reject(AnimationErrors::GraphMalformed);
-            if (migration != AnimationGraphSourceMigration::RequireCurrent && migration != AnimationGraphSourceMigration::MigrateVersion1)
+            if (migration > AnimationGraphSourceMigration::MigrateSupported)
                 Reject(AnimationErrors::GraphVersionUnsupported);
             const auto envelope = Parse(source, context, limits);
             AnimationGraphData data;
             data.schemaVersion = Version(envelope, migration);
+            data.contractVersion = data.schemaVersion <= 2   ? AnimationGraphContractVersion{1, 0, 0}
+                                   : data.schemaVersion == 3 ? AnimationGraphContractVersion{1, 1, 0}
+                                                             : CurrentAnimationGraphContractVersion;
             data.id = identity;
             const auto &payload = envelope["payload"];
             Keys(payload, {"skeleton", "entry", "parameters", "definitions"});
@@ -284,7 +368,7 @@ namespace Horo::Animation {
             data.definitions.reserve(
                 Spend(payload["definitions"], budget.definitions, context.limits.definitions, AnimationGraphHardLimits::Definitions));
             for (const auto &definition : payload["definitions"])
-                data.definitions.push_back(Definition(definition, budget, data.schemaVersion, context));
+                data.definitions.push_back(Definition(definition, budget, data.schemaVersion, context, data.parameters));
             ValidateDependencies(envelope["dependencies"], data);
             return MigrateAnimationGraph(data, context);
         } catch (const Rejection &failure) {

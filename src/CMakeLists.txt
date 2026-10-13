@@ -1458,6 +1458,8 @@ target_compile_features(HoroGameplayPerceptionIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroGameplayPerceptionIntegration PUBLIC HoroEngine::AISceneIntegration HoroEngine::NetworkRuntime)
 
 add_library(HoroAnimationApi STATIC
+        runtime/animation/api/AnimationGraphStateValidation.cpp
+        runtime/animation/api/AnimationGraphStateBinding.cpp
         runtime/animation/api/AnimationGraph.cpp
         runtime/animation/api/AnimationGraphBinding.cpp
         runtime/animation/api/AnimationCompression.cpp
@@ -1474,13 +1476,23 @@ add_library(HoroEngine::AnimationApi ALIAS HoroAnimationApi)
 target_compile_features(HoroAnimationApi PUBLIC cxx_std_20)
 target_link_libraries(HoroAnimationApi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
 
+add_library(HoroAnimationStateMachineInternal INTERFACE)
+target_include_directories(HoroAnimationStateMachineInternal INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/animation/state_machine)
+
 add_library(HoroAnimationRuntime STATIC
+        runtime/animation/runtime/AnimationGraphStateExecution.cpp
+        runtime/animation/runtime/AnimationGraphStateBranches.cpp
+        runtime/animation/state_machine/AnimationStateMachineValidation.cpp
+        runtime/animation/state_machine/AnimationStateMachineSelection.cpp
+        runtime/animation/state_machine/AnimationStateMachineStep.cpp
         runtime/animation/runtime/AnimationParameterCurve.cpp
         runtime/animation/runtime/AnimationGraphInstance.cpp
         runtime/animation/runtime/AnimationGraphExecution.cpp)
 add_library(HoroEngine::AnimationRuntime ALIAS HoroAnimationRuntime)
 target_compile_features(HoroAnimationRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroAnimationRuntime PUBLIC HoroEngine::AnimationApi)
+target_link_libraries(HoroAnimationRuntime PRIVATE HoroAnimationStateMachineInternal)
 
 add_library(HoroAnimationGraphSourceCodec STATIC
         runtime/animation/source/AnimationGraphSourceRead.cpp

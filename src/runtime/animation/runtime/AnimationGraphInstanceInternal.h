@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AnimationStateMachineInternal.h"
 #include "Horo/Animation/AnimationGraphInstance.h"
 
 #include <array>
@@ -13,10 +14,45 @@ namespace Horo::Animation::Detail {
         std::int64_t remainder{};
     };
 
+    /** @brief Exact per-entry authored clock and residual; no clip cursor is duplicated here. */
+    struct GraphStateClock final {
+        GraphPlayerState rate{};
+        AnimationTime elapsed{};
+        std::uint64_t loopOrdinal{};
+    };
+
+    /** @brief One complete committed/candidate machine incarnation, with no owning views or heap work. */
+    struct GraphMachineState final {
+        StateMachineRuntime runtime{};
+        std::array<GraphStateClock, 2> clocks{};
+        std::uint8_t sourceLane{};
+        std::uint8_t destinationLane{1};
+        std::array<bool, 2> held{};
+        StateMachineStepOutcome outcome{};
+        bool visited{};
+        bool retiring{};
+    };
+
+    /** @brief Prepared immutable control tables for one exact compiled machine occurrence. */
+    struct GraphPreparedMachine final {
+        std::vector<StateMachineState> states;
+        std::vector<StateMachineTransition> transitions;
+        std::vector<StateMachineCondition> conditions;
+        std::uint32_t initial{};
+
+        [[nodiscard]] StateMachinePlan Plan() const noexcept {
+            return {states, transitions, conditions, initial};
+        }
+    };
+
     /** @brief Preallocated transaction buffers and the exact tick/cancellation fence for their publication. */
     struct GraphCandidateState final {
         std::vector<GraphParameterValue> parameters;
         std::vector<GraphPlayerState> players;
+        std::vector<GraphMachineState> machines;
+        std::vector<std::uint8_t> latches;
+        std::vector<GraphStateEvent> events;
+        std::uint32_t eventCount{};
         AnimationTickId tick{};
         CancellationToken cancellation{};
     };
@@ -48,6 +84,12 @@ namespace Horo::Animation::Detail {
         std::vector<std::uint8_t> queuedTriggers;
         std::array<std::vector<GraphParameterValue>, 2> publishedParameters;
         std::vector<GraphPlayerState> players;
+        std::vector<GraphPreparedMachine> preparedMachines;
+        std::vector<std::uint8_t> latchScratch;
+        std::vector<GraphMachineState> machines;
+        std::vector<std::uint8_t> latches;
+        std::array<std::vector<GraphStateEvent>, 2> publishedEvents;
+        std::array<std::uint32_t, 2> publishedEventCounts{};
         std::array<std::vector<Math::Transform>, 2> publishedPoses;
         std::array<PoseHandle, 2> publishedHandles{};
         GraphInstancePublication publication{};
@@ -64,4 +106,31 @@ namespace Horo::Animation::Detail {
 
     /** @brief Performs only bounded execution in previously admitted storage; failure never publishes state. */
     [[nodiscard]] GraphInstanceOutcome ExecuteGraph(GraphInstanceState &state, const GraphEvaluationInput &input);
+    /** @brief Shared exact rate scaling for clip players and state clocks, retaining their separate admitted residuals. */
+    [[nodiscard]] AnimationClipOutcome<AnimationTimeDelta> ScaleGraphDelta(const GraphEvaluationInput &input,
+                                                                           GraphPlayerState &player) noexcept;
+    /** @brief Resolves compiled branch guards and supplies entry-zero delta for newly activated destination branches. */
+    [[nodiscard]] bool StateBranchInput(const GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
+                                        GraphEvaluationInput &input) noexcept;
+    /** @brief Stages control state and events before the compiler's guarded child occurrences. */
+    [[nodiscard]] GraphInstanceOutcome BeginGraphStateMachine(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
+                                                              const GraphEvaluationInput &input);
+    /** @brief Composes the compiled machine output through the existing shared pose composition seam. */
+    [[nodiscard]] GraphInstanceOutcome EndGraphStateMachine(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence);
+    /** @brief Existing normalized pose kernel, also consumed by state-transition composition; parent 466 extends this seam. */
+    [[nodiscard]] GraphInstanceOutcome ComposeGraphPoses(std::span<const Math::Transform> first, std::span<const Math::Transform> second,
+                                                         float weight, std::span<Math::Transform> output);
+    /** @brief Allocates and resolves immutable machine control tables only at instance preparation. */
+    [[nodiscard]] GraphInstanceFailure PrepareGraphStateMachines(GraphInstanceState &state);
+    /** @brief Preflights the exact shared clip traversals for a complete active state branch, optionally staging retired cursors. */
+    [[nodiscard]] GraphInstanceOutcome TraverseGraphStateBranch(GraphInstanceState &state, std::uint32_t machine,
+                                                                const GraphStateBranch &branch, std::uint8_t lane,
+                                                                const GraphEvaluationInput &input, bool stageCursors);
+    /** @brief Retires active nested control owners with complete staged exit/interruption records, before branch storage reuse. */
+    [[nodiscard]] GraphInstanceOutcome RetireGraphStateBranch(GraphInstanceState &state, std::uint32_t machine,
+                                                              const GraphStateBranch &branch, std::uint8_t lane,
+                                                              const GraphEvaluationInput &input);
+    /** @brief Appends bounded private lifecycle records to the actual instance tick candidate. */
+    [[nodiscard]] GraphInstanceOutcome AppendGraphStateEvents(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
+                                                              const GraphEvaluationInput &input, std::span<const StateMachineEvent> events);
 }  // namespace Horo::Animation::Detail

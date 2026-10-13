@@ -31,7 +31,42 @@ namespace Horo::Animation {
                     return value.input.Value();
                 else if constexpr (std::is_same_v<T, GraphCallNode>)
                     return value.definition.Value();
-                else
+                else if constexpr (std::is_same_v<T, GraphStateMachineNode>) {
+                    Json states = Json::array();
+                    Json transitions = Json::array();
+                    for (const auto &state : value.states) {
+                        const auto *clip = std::get_if<AnimationClipId>(&state.source);
+                        states.push_back(Json{{"id", state.id.Value()},
+                                              {"sourceKind", clip ? "clip" : "definition"},
+                                              {"reference", clip ? Json(clip->Asset().ToString())
+                                                                 : Json(std::get<GraphDefinitionId>(state.source).Value())},
+                                              {"loopPeriod", state.loopPeriod ? Json(state.loopPeriod->ticks) : Json(nullptr)}});
+                    }
+                    for (const auto &transition : value.transitions) {
+                        Json conditions = Json::array();
+                        for (const auto &condition : transition.conditions)
+                            conditions.push_back(Json{{"parameter", condition.parameter.Value()},
+                                                      {"predicate", Predicates.at(static_cast<std::size_t>(condition.predicate))},
+                                                      {"threshold", std::visit(
+                                                                        [](const auto scalar) -> Json {
+                                if constexpr (std::is_same_v<std::remove_cv_t<decltype(scalar)>, float>)
+                                    return scalar == 0.0F ? Json(0.0F) : Json(scalar);
+                                else
+                                    return scalar;
+                            }, condition.threshold)},
+                                                      {"release", condition.releaseThreshold == 0.0F ? 0.0F : condition.releaseThreshold}});
+                        transitions.push_back(Json{{"id", transition.id.Value()},
+                                                   {"source", transition.source.Value()},
+                                                   {"destination", transition.destination.Value()},
+                                                   {"priority", transition.priority},
+                                                   {"duration", transition.duration.ticks},
+                                                   {"exitTime", transition.exitTime ? Json(transition.exitTime->ticks) : Json(nullptr)},
+                                                   {"interruption", Interruptions.at(static_cast<std::size_t>(transition.interruption))},
+                                                   {"curve", BlendCurves.at(static_cast<std::size_t>(transition.curve))},
+                                                   {"conditions", std::move(conditions)}});
+                    }
+                    return Json{{"initial", value.initial.Value()}, {"states", std::move(states)}, {"transitions", std::move(transitions)}};
+                } else
                     return nullptr;
             }, payload);
         }

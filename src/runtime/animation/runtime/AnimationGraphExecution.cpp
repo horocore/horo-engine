@@ -9,24 +9,28 @@ namespace Horo::Animation::Detail {
         constexpr std::int64_t RatePrecision = 1'000'000;
         constexpr std::int32_t MaximumRate = 16'000'000;
 
-        /** @brief Checks signed arithmetic before retaining the exact per-player rate residual. */
-        AnimationClipOutcome<AnimationTimeDelta> ScaleDelta(const GraphEvaluationInput &input, GraphPlayerState &player) noexcept {
-            const auto rate = static_cast<std::int64_t>(input.rate.millionths);
-            const auto quotient = input.delta.ticks / RatePrecision;
-            if ((rate > 0 && quotient > std::numeric_limits<std::int64_t>::max() / rate) ||
-                (rate < 0 && quotient > std::numeric_limits<std::int64_t>::max() / -rate))
-                return AnimationClipOutcome<AnimationTimeDelta>::Failure(
-                    {AnimationClipFailure::TimeOverflow, "The player rate overflows exact time."});
-            const auto integral = quotient * rate;
-            const auto residual = (input.delta.ticks % RatePrecision) * rate + player.remainder;
-            const auto carry = residual / RatePrecision;
-            if ((carry > 0 && integral > std::numeric_limits<std::int64_t>::max() - carry) ||
-                (carry < 0 && integral < std::numeric_limits<std::int64_t>::min() - carry))
-                return AnimationClipOutcome<AnimationTimeDelta>::Failure(
-                    {AnimationClipFailure::TimeOverflow, "The player residual overflows exact time."});
-            player.remainder = residual % RatePrecision;
-            return AnimationClipOutcome<AnimationTimeDelta>::Success({integral + carry});
-        }
+    }  // namespace
+
+    /** @copydoc ScaleGraphDelta */
+    AnimationClipOutcome<AnimationTimeDelta> ScaleGraphDelta(const GraphEvaluationInput &input, GraphPlayerState &player) noexcept {
+        const auto rate = static_cast<std::int64_t>(input.rate.millionths);
+        const auto quotient = input.delta.ticks / RatePrecision;
+        if ((rate > 0 && quotient > std::numeric_limits<std::int64_t>::max() / rate) ||
+            (rate < 0 && quotient > std::numeric_limits<std::int64_t>::max() / -rate))
+            return AnimationClipOutcome<AnimationTimeDelta>::Failure(
+                {AnimationClipFailure::TimeOverflow, "The player rate overflows exact time."});
+        const auto integral = quotient * rate;
+        const auto residual = (input.delta.ticks % RatePrecision) * rate + player.remainder;
+        const auto carry = residual / RatePrecision;
+        if ((carry > 0 && integral > std::numeric_limits<std::int64_t>::max() - carry) ||
+            (carry < 0 && integral < std::numeric_limits<std::int64_t>::min() - carry))
+            return AnimationClipOutcome<AnimationTimeDelta>::Failure(
+                {AnimationClipFailure::TimeOverflow, "The player residual overflows exact time."});
+        player.remainder = residual % RatePrecision;
+        return AnimationClipOutcome<AnimationTimeDelta>::Success({integral + carry});
+    }
+
+    namespace {
 
         /** @brief Validates one scalar override's variant and value before storing the candidate snapshot. */
         GraphInstanceFailure ValidateParameterValue(const GraphParameter &declaration, const GraphParameterInput &parameter) noexcept {
@@ -98,7 +102,7 @@ namespace Horo::Animation::Detail {
         GraphInstanceOutcome SampleClip(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
                                         const GraphEvaluationInput &input) {
             auto &player = state.candidate.players[*occurrence.clipPlayer];
-            const auto delta = ScaleDelta(input, player);
+            const auto delta = ScaleGraphDelta(input, player);
             if (delta.HasError())
                 return {GraphInstanceFailure::ClipFailure, delta.ErrorValue()};
             const auto &clip = *state.clips[*occurrence.clipBindingIndex];
@@ -130,17 +134,24 @@ namespace Horo::Animation::Detail {
                 std::clamp(std::get<float>(
                                state.scalars.values[state.scalars.offsets[static_cast<std::size_t>(weightSlot.type)] + weightSlot.index]),
                            0.0F, 1.0F);
-            const auto output = state.Pose(occurrence.output);
-            for (std::size_t joint = 0; joint < output.size(); ++joint) {
-                output[joint] = {BlendVector(first[joint].translation, second[joint].translation, weight),
-                                 Math::Slerp(first[joint].rotation, second[joint].rotation, weight),
-                                 BlendVector(first[joint].scale, second[joint].scale, weight)};
-                if (!ValidTransform(output[joint]))
-                    return {GraphInstanceFailure::Malformed};
-            }
-            return {};
+            return ComposeGraphPoses(first, second, weight, state.Pose(occurrence.output));
         }
     }  // namespace
+
+    /** @copydoc ComposeGraphPoses */
+    GraphInstanceOutcome ComposeGraphPoses(const std::span<const Math::Transform> first, const std::span<const Math::Transform> second,
+                                           const float weight, const std::span<Math::Transform> output) {
+        if (first.size() != output.size() || second.size() != output.size() || !std::isfinite(weight) || weight < 0.0F || weight > 1.0F)
+            return {GraphInstanceFailure::Malformed};
+        for (std::size_t joint = 0; joint < output.size(); ++joint) {
+            output[joint] = {BlendVector(first[joint].translation, second[joint].translation, weight),
+                             Math::Slerp(first[joint].rotation, second[joint].rotation, weight),
+                             BlendVector(first[joint].scale, second[joint].scale, weight)};
+            if (!ValidTransform(output[joint]))
+                return {GraphInstanceFailure::Malformed};
+        }
+        return {};
+    }
 
     /** @copydoc ExecuteGraph */
     GraphInstanceOutcome ExecuteGraph(GraphInstanceState &state, const GraphEvaluationInput &input) {
@@ -149,12 +160,29 @@ namespace Horo::Animation::Detail {
         if (const auto captured = CaptureParameters(state, input); captured.HasError())
             return captured;
         std::ranges::copy(state.players, state.candidate.players.begin());
+        std::ranges::copy(state.machines, state.candidate.machines.begin());
+        std::ranges::copy(state.latches, state.candidate.latches.begin());
+        state.candidate.eventCount = 0;
+        for (auto &machine : state.candidate.machines) {
+            machine.visited = false;
+            machine.retiring = false;
+            machine.held = {};
+        }
         for (const auto &occurrence : state.program->Occurrences()) {
             if (input.cancellation.IsCancellationRequested() || state.ownerCancellation.IsCancellationRequested())
                 return {GraphInstanceFailure::Cancelled};
             const auto &instruction = state.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex];
-            if (std::holds_alternative<GraphClipNode>(instruction.payload)) {
-                if (const auto sampled = SampleClip(state, occurrence, input); sampled.HasError())
+            auto branchInput = input;
+            if (!StateBranchInput(state, occurrence, branchInput))
+                continue;
+            if (occurrence.phase == GraphOccurrencePhase::StateBegin) {
+                if (const auto begun = BeginGraphStateMachine(state, occurrence, branchInput); begun.HasError())
+                    return begun;
+            } else if (occurrence.phase == GraphOccurrencePhase::StateEnd) {
+                if (const auto ended = EndGraphStateMachine(state, occurrence); ended.HasError())
+                    return ended;
+            } else if (occurrence.clipBindingIndex) {
+                if (const auto sampled = SampleClip(state, occurrence, branchInput); sampled.HasError())
                     return sampled;
             } else if (std::holds_alternative<GraphParameterNode>(instruction.payload)) {
                 state.scalars.values[state.scalars.offsets[static_cast<std::size_t>(occurrence.output.type)] + occurrence.output.index] =
@@ -167,6 +195,18 @@ namespace Horo::Animation::Detail {
         }
         if (input.cancellation.IsCancellationRequested() || state.ownerCancellation.IsCancellationRequested())
             return {GraphInstanceFailure::Cancelled};
+        for (std::size_t index = 0; index < state.candidate.machines.size(); ++index) {
+            auto &machine = state.candidate.machines[index];
+            if (!machine.retiring)
+                continue;
+            const auto nextActivation = machine.runtime.nextActivation;
+            machine = {};
+            machine.runtime.nextActivation = nextActivation;
+            const auto &binding = state.program->StateMachines()[index];
+            std::ranges::fill(std::span{state.candidate.latches}.subspan(binding.conditionOffset,
+                                                                         state.preparedMachines[index].conditions.size()),
+                              0);
+        }
         return {};
     }
 }  // namespace Horo::Animation::Detail
