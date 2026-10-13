@@ -137,6 +137,17 @@ namespace Horo::Runtime::Ui {
             Prepared &operator=(const Prepared &) = delete;
             /** @brief Returns semantic preservation counts without granting mutable candidate access. @return Counts. */
             [[nodiscard]] const UiReloadReconciliation &Reconciliation() const noexcept;
+            /**
+             * @brief Borrows the actual reconciled replacement without granting mutation or publication.
+             * @return Const candidate while unconsumed; nullptr after move or successful consumption.
+             * @pre Serialized Runtime UI owner-thread operation; the caller keeps this candidate alive.
+             * @details The borrow ends on consumption, move or destruction. Failed commit, including cancellation,
+             * leaves the unconsumed candidate inspectable but grants no active input/render admission. Copy any
+             * derived evidence into owned storage before publication; never retain this bare borrow.
+             * Only inspection is permitted: logically const canvas-owner commands are still mutations and must
+             * not be invoked through this borrow.
+             */
+            [[nodiscard]] const UiReloadGeneration *Candidate() const noexcept;
 
         private:
             struct Storage;

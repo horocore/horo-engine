@@ -47,7 +47,15 @@ namespace Horo::Runtime::Ui::ReloadTests {
             CHECK(prepared.Reconciliation().preservedFocus == 1);
             CHECK(prepared.Reconciliation().preservedRoutes == 1);
             CHECK(prepared.Reconciliation().preservedScrolls == 1);
+            {
+                REQUIRE(prepared.Candidate());
+                const auto &reconciled = prepared.Candidate()->Canvases().front();
+                CHECK(reconciled.focus->CurrentFocus().Value()->id == old.focus->CurrentFocus().Value()->id);
+            }
+            CHECK(publisher.Commit(prepared, static_cast<UiStructuralCommitPoint>(255)).HasError());
+            CHECK(prepared.Candidate() != nullptr);
             Publish(publisher, prepared);
+            CHECK(prepared.Candidate() == nullptr);
             auto &current = Canvas(publisher);
             CHECK(State(current).text.View() == "base draft");
             CHECK(State(current).editing);
@@ -237,12 +245,19 @@ namespace Horo::Runtime::Ui::ReloadTests {
             auto cancelled = publisher.Prepare(Generation(allocator, 2), cancellation.Token());
             REQUIRE(cancelled.HasValue());
             auto cancelledCandidate = std::move(cancelled).Value();
+            REQUIRE(cancelledCandidate.Candidate());
+            const auto cancelledRevision = cancelledCandidate.Candidate()->Instance().DocumentRevision();
             cancellation.RequestCancellation();
             CHECK(publisher.Commit(cancelledCandidate, UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands).HasError());
+            REQUIRE(cancelledCandidate.Candidate());
+            CHECK(cancelledCandidate.Candidate()->Instance().DocumentRevision() == cancelledRevision);
+            CHECK(cancelledCandidate.Candidate()->Instance().State() == UiRuntimeInstanceState::Prepared);
             auto first = Prepare(publisher, allocator, 3);
             auto second = Prepare(publisher, allocator, 4);
             Publish(publisher, first);
+            CHECK(first.Candidate() == nullptr);
             CHECK(publisher.Commit(second, UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands).HasError());
+            CHECK(second.Candidate() != nullptr);
             publisher.Shutdown();
             CHECK(publisher.Acquire().HasError());
             CHECK_FALSE(publisher.IsCurrent(old));
@@ -258,7 +273,10 @@ namespace Horo::Runtime::Ui::ReloadTests {
                 std::optional<UiHotReload::Prepared> retained;
                 {
                     auto original = Prepare(publisher, allocator, 2);
+                    REQUIRE(original.Candidate());
                     retained.emplace(std::move(original));
+                    CHECK(original.Candidate() == nullptr);
+                    CHECK(retained->Candidate() != nullptr);
                 }
                 const auto full = publisher.Prepare(Generation(allocator, 3));
                 REQUIRE(full.HasError());
@@ -274,6 +292,9 @@ namespace Horo::Runtime::Ui::ReloadTests {
                     auto original = Prepare(publisher, allocator, 2);
                     auto replacement = Prepare(publisher, allocator, 3);
                     original = std::move(replacement);
+                    CHECK(replacement.Candidate() == nullptr);
+                    REQUIRE(original.Candidate());
+                    CHECK(original.Candidate()->Instance().DocumentRevision().Value() == 3);
                     retained.emplace(std::move(original));
                 }
                 auto next = publisher.Prepare(Generation(allocator, 4));

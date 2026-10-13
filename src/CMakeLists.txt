@@ -790,6 +790,54 @@ add_library(HoroEngine::UiTemplateGraph ALIAS HoroUiTemplateGraph)
 target_compile_features(HoroUiTemplateGraph PUBLIC cxx_std_20)
 target_link_libraries(HoroUiTemplateGraph PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::Packages)
 
+# Non-installed narrow source codec contract; no repository-wide src/include usage requirement is exposed.
+add_library(HoroFoundationJsonInternal INTERFACE)
+target_include_directories(HoroFoundationJsonInternal INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/foundation/json>)
+target_link_libraries(HoroFoundationJsonInternal INTERFACE nlohmann_json::nlohmann_json)
+
+add_library(HoroUiTemplateInstances STATIC
+        ui_templates/UiTemplateModel.cpp
+        ui_templates/UiTemplateCatalog.cpp
+        ui_templates/UiTemplateBudget.cpp
+        ui_templates/UiTemplateExpansion.cpp
+        ui_templates/UiTemplateParameterValidation.cpp
+        ui_templates/UiTemplateDocumentOwner.cpp
+        ui_templates/UiTemplateDocumentPublication.cpp
+        ui_templates/UiTemplateDocumentProjection.cpp
+        ui_templates/UiTemplateArtifact.cpp
+        ui_templates/UiTemplateSource.cpp
+        ui_templates/UiTemplateValueCodec.cpp
+        ui_templates/UiTemplateStyleCodec.cpp
+        ui_templates/UiTemplateLocalizationCodec.cpp
+        ui_templates/UiTemplateBindingCodec.cpp
+        ui_templates/UiTemplateRecordCodec.cpp
+        ui_templates/UiTemplateRichCodec.cpp
+        ui_templates/UiTemplateDocumentPersistence.cpp
+        ui_templates/UiTemplateSchemaCodec.cpp
+)
+add_library(HoroEngine::UiTemplateInstances ALIAS HoroUiTemplateInstances)
+target_compile_features(HoroUiTemplateInstances PUBLIC cxx_std_20)
+target_link_libraries(HoroUiTemplateInstances PUBLIC HoroEngine::UiTemplateGraph HoroEngine::RuntimeUi
+        PRIVATE HoroFoundationJsonInternal nlohmann_json::nlohmann_json)
+
+add_library(HoroProjectMutationGuard STATIC editor/project_model/ProjectMutation.cpp)
+add_library(HoroEngine::ProjectMutationGuard ALIAS HoroProjectMutationGuard)
+target_compile_features(HoroProjectMutationGuard PUBLIC cxx_std_20)
+target_link_libraries(HoroProjectMutationGuard PUBLIC HoroEngine::Foundation)
+
+add_library(HoroUiTemplateHost STATIC
+        application/ui/UiTemplateCaptureControls.cpp
+        application/ui/UiTemplateInputLease.cpp
+        application/ui/UiTemplateHostCook.cpp
+        application/ui/UiTemplateHostComposition.cpp
+        application/ui/UiTemplateHostSemantics.cpp
+        application/ui/UiTemplateHost.cpp)
+add_library(HoroEngine::UiTemplateHost ALIAS HoroUiTemplateHost)
+target_compile_features(HoroUiTemplateHost PUBLIC cxx_std_20)
+target_link_libraries(HoroUiTemplateHost PUBLIC HoroEngine::UiTemplateInstances HoroEngine::RuntimeUi
+        HoroEngine::Assets HoroEngine::PackageSecurity HoroEngine::ProjectMutationGuard)
+
 add_library(HoroGameplayApi STATIC
         gameplay/api/PersistenceRegistration.cpp
         gameplay/api/GameEventRegistry.cpp
@@ -2593,7 +2641,6 @@ add_library(HoroEditorServices STATIC
         editor/modals/gameplay_behavior/GameplayBehaviorFilenameModalState.cpp
         editor/modals/build_release/BuildReleaseModalSession.cpp
         editor/project_model/ProjectCreationService.cpp
-        editor/project_model/ProjectMutation.cpp
         editor/project_model/ProjectMigrationTransaction.cpp
         editor/project_model/ProjectOpenService.cpp
         editor/project_model/ProjectIntegrityValidatorService.cpp
@@ -2632,6 +2679,7 @@ target_include_directories(HoroEditorServices
 
 target_link_libraries(HoroEditorServices
         PUBLIC
+        HoroEngine::ProjectMutationGuard
         HoroEngine::AudioFrontend
         HoroEngine::AudioApi
         HoroEngine::PCG

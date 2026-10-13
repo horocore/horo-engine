@@ -366,6 +366,21 @@ horo_configure_target_header_boundary(HoroUiTemplateGraph PUBLIC_HEADERS
     Horo/UiTemplates/UiTemplateDependencyGraph.h
     Horo/UiTemplates/UiTemplateErrors.h
 )
+horo_configure_target_header_boundary(HoroUiTemplateInstances PUBLIC_HEADERS
+    Horo/UiTemplates/UiTemplateArtifact.h
+    Horo/UiTemplates/UiTemplateSource.h
+    Horo/UiTemplates/UiTemplateModel.h
+    Horo/UiTemplates/UiTemplateCatalog.h
+    Horo/UiTemplates/UiTemplateExpansion.h
+    Horo/UiTemplates/UiTemplateDocumentOwner.h
+)
+
+horo_configure_target_header_boundary(HoroProjectMutationGuard PUBLIC_HEADERS
+    Horo/Editor/ProjectMutation.h
+)
+horo_configure_target_header_boundary(HoroUiTemplateHost PUBLIC_HEADERS
+    Horo/Application/UiTemplateHost.h
+)
 horo_configure_target_header_boundary(HoroPlayTopologyApplication PUBLIC_HEADERS
     Horo/Application/PlayTopology.h
 )
@@ -1154,7 +1169,6 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/ProjectCreationService.h
     Horo/Editor/ProjectIntegrityValidatorService.h
     Horo/Editor/ProjectMigrationTransaction.h
-    Horo/Editor/ProjectMutation.h
     Horo/Editor/ProjectOpenService.h
     Horo/Editor/ProjectSession.h
     Horo/Editor/RecentProject.h
