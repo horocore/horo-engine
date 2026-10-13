@@ -24,7 +24,12 @@ namespace Horo::PCG {
         Forward = 3,
         GridJitter = 4,
         Stratified = 5,
-        PoissonScatter = 6
+        PoissonScatter = 6,
+        DensityRangeFilter = 7,
+        BoundsFilter = 8,
+        SlopeFilter = 9,
+        DistanceFilter = 10,
+        AttributeFilter = 11
     };
     /** @brief Returns a stable semantic type ID for one supported built-in node.
      * @param kind Exact closed built-in operation.
@@ -37,7 +42,12 @@ namespace Horo::PCG {
         SpatialGridIdentity,
         GridJitterV1,
         StratifiedV1,
-        PoissonScatterV1
+        PoissonScatterV1,
+        DensityRangeFilterV1,
+        BoundsFilterV1,
+        SlopeFilterV1,
+        DistanceFilterV1,
+        AttributeFilterV1
     };
 
     /** @brief One semantic pin slot; authored pin identities remain graph-owned. */
@@ -117,8 +127,8 @@ namespace Horo::PCG {
         PCGNodeCatalog(const PCGNodeCatalog &) = delete;
         PCGNodeCatalog &operator=(const PCGNodeCatalog &) = delete;
         /** @brief Creates an empty explicit product composition. @param capabilities Validated exact host grant.
-         * @param maximumNodes Lowered built-in capacity, 1 through 7. @return Owner or typed invalid failure. */
-        [[nodiscard]] static Result<PCGNodeCatalog> Create(PCGCapabilityProjection capabilities, std::size_t maximumNodes = 7);
+         * @param maximumNodes Lowered built-in capacity, 1 through 12. @return Owner or typed invalid failure. */
+        [[nodiscard]] static Result<PCGNodeCatalog> Create(PCGCapabilityProjection capabilities, std::size_t maximumNodes = 12);
         /** @brief Registers or explicitly replaces one built-in. @param kind Repository-built implementation.
          * @param replace True only when replacing an existing entry. @return New generation or typed duplicate/unavailable failure. */
         [[nodiscard]] Result<std::uint64_t> Register(PCGCpuNodeKind kind, bool replace = false);

@@ -3,6 +3,7 @@
 #include "Horo/PCG/PCGErrors.h"
 #include "PCGCpuEvaluatorInternal.h"
 #include "PCGNodeCatalogInternal.h"
+#include "PCGPointFilteringInternal.h"
 #include "PCGPointGenerationInternal.h"
 #include "PCGPointIdentityInternal.h"
 
@@ -304,6 +305,28 @@ namespace Horo::PCG {
             return context.workspace.SealOutput(node, output);
         }
 
+        /** @brief Compacts admitted selected indices on the owner thread, preserving every core and typed column. */
+        [[nodiscard]] Result<void> ExecuteTypedFilter(const detail::NodeExecutionContext &context, std::uint32_t node, PinId output,
+                                                      const PCGPointReadView &source, const PCGPointOutputBound &bound) {
+            const auto settings = detail::DecodePointFilter(context.plan.Nodes()[node]);
+            if (settings.HasError())
+                return Result<void>::Failure(settings.ErrorValue());
+            const auto selected = detail::SelectPointFilter(settings.Value(), source, context.spatial, context.cancellation);
+            if (selected.HasError())
+                return Result<void>::Failure(selected.ErrorValue());
+            auto opened = context.workspace.BeginOutput(node, output, selected.Value().size());
+            if (opened.HasError())
+                return Result<void>::Failure(opened.ErrorValue());
+            std::size_t destination{};
+            for (const auto index : selected.Value()) {
+                if (context.cancellation.IsCancellationRequested())
+                    return Reject<void>(PCGErrors::CpuEvaluationClosed);
+                if (const auto copied = CopyPoint(source, *bound.schema, opened.Value(), index, destination++); copied.HasError())
+                    return copied;
+            }
+            return context.workspace.SealOutput(node, output);
+        }
+
         [[nodiscard]] Result<void> ExecuteForward(const detail::NodeExecutionContext &context, const std::uint32_t node, const PinId output,
                                                   const PCGPointReadView &source, const PCGPointOutputBound &outputBound) {
             auto opened = context.workspace.BeginOutput(node, output, source.PointCount());
@@ -366,6 +389,8 @@ namespace Horo::PCG {
             if (const auto *sourceBound = SourceBound(context, node, pointPins.values[0].id);
                 sourceBound == nullptr || !SameSchema(*sourceBound->schema, *outputBound->schema))
                 return Reject<void>(PCGErrors::CpuEvaluationInvalid);
+            if (detail::IsPointFilter(kind))
+                return ExecuteTypedFilter(context, node, output, first.Value(), *outputBound);
             if (kind == PCGCpuNodeKind::DensityFilter)
                 return ExecuteFilter(context, node, output, inputs, first.Value(), *outputBound);
             if (kind == PCGCpuNodeKind::Forward)
@@ -423,6 +448,16 @@ namespace Horo::PCG {
                     return &InvokeBuiltIn<Stratified>;
                 case PoissonScatter:
                     return &InvokeBuiltIn<PoissonScatter>;
+                case DensityRangeFilter:
+                    return &InvokeBuiltIn<DensityRangeFilter>;
+                case BoundsFilter:
+                    return &InvokeBuiltIn<BoundsFilter>;
+                case SlopeFilter:
+                    return &InvokeBuiltIn<SlopeFilter>;
+                case DistanceFilter:
+                    return &InvokeBuiltIn<DistanceFilter>;
+                case AttributeFilter:
+                    return &InvokeBuiltIn<AttributeFilter>;
             }
             return nullptr;
         }

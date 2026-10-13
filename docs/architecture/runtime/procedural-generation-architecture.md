@@ -720,3 +720,10 @@ incoming edge to the same input is rejected as ambiguous routing.
 
 The generation settings, semantic point identity and bounded scatter admission contract
 is owned by [Point Generation Contract](pcg-point-generation-contract.md).
+
+### Typed point filtering contract
+
+The detailed [point filtering contract](pcg-point-filtering-contract.md) specifies
+HORO-2018's explicitly registered density-range, bounds, terrain slope, stable
+separation and exact typed attribute operations, including canonical settings,
+complete admission costs, stable column compaction, and failure/lifecycle policy.
