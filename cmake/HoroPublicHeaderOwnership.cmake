@@ -703,6 +703,7 @@ horo_configure_target_header_boundary(HoroAnimationGraphSourceCodec PUBLIC_HEADE
 )
 horo_configure_target_header_boundary(HoroAnimationRuntime PUBLIC_HEADERS
     Horo/Animation/AnimationGraphInstance.h
+    Horo/Animation/AnimationParameterCurve.h
 )
 horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
     Horo/Animation/AnimationGraph.h
