@@ -158,8 +158,8 @@ namespace Horo::Animation::Detail {
         /** @brief Executes one compiler occurrence with exhaustive typed opcode dispatch. */
         GraphInstanceOutcome ExecuteOccurrence(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
                                                const GraphInstruction &instruction, const GraphEvaluationInput &input) {
-            return std::visit([&state, &occurrence, &instruction, &input](const auto &payload) -> GraphInstanceOutcome {
-                using Payload = std::decay_t<decltype(payload)>;
+            return std::
+                visit([&state, &occurrence, &instruction, &input]<typename Payload>(const Payload &payload) -> GraphInstanceOutcome {
                 if constexpr (std::is_same_v<Payload, GraphClipNode>) {
                     return SampleClip(state, occurrence, instruction, input);
                 } else if constexpr (std::is_same_v<Payload, GraphParameterNode>) {
