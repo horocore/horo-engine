@@ -36,7 +36,7 @@ namespace Horo::PCG::detail {
                 return ValuesEqual(actual, expected);
             if (op == NotEqual)
                 return !ValuesEqual(actual, expected);
-            if constexpr (std::is_arithmetic_v<V>) {
+            if constexpr (std::is_arithmetic_v<V> && !std::is_same_v<V, bool>) {
                 switch (op) {
                     case Less:
                         return actual < expected;
@@ -85,8 +85,7 @@ namespace Horo::PCG::detail {
 
         /** @brief Compares the exact typed source column after schema admission, retaining integer precision. */
         Result<bool> AttributeMatch(const PCGAttributeFilterSettings &settings, const PCGPointReadView &source, std::size_t index) {
-            return std::visit([&](const auto &expected) -> Result<bool> {
-                using V = std::decay_t<decltype(expected)>;
+            return std::visit([&]<class V>(const V &expected) -> Result<bool> {
                 const auto values = source.FindColumn<typename ColumnFor<V>::Type>(settings.key.Value());
                 if (values.size() != source.PointCount())
                     return Reject<bool>(PCGErrors::CpuEvaluationInvalid);
@@ -142,11 +141,22 @@ namespace Horo::PCG::detail {
             return std::hypot(x, y, z);
         }
 
+        /** @brief Tests separation against earlier accepted points in stable order with bounded cancellation checkpoints. */
+        Result<bool> DistanceMatch(const PCGDistanceFilterSettings &settings, const PCGPointReadView &source, Math::Vec3 point,
+                                   std::span<const std::size_t> accepted, CancellationToken cancellation) {
+            for (const auto prior : accepted) {
+                if (cancellation.IsCancellationRequested())
+                    return Reject<bool>(PCGErrors::CpuEvaluationClosed);
+                if (Distance(point, source.Transforms()[prior].translation) < settings.minimumDistance)
+                    return Result<bool>::Success(false);
+            }
+            return Result<bool>::Success(true);
+        }
+
         /** @brief Tests one point against admitted immutable inputs and previously accepted indices. */
         Result<bool> Selected(const PCGPointFilterSettings &settings, const PCGPointReadView &source, const PCGSpatialSnapshot &spatial,
                               std::size_t index, std::span<const std::size_t> accepted, CancellationToken cancellation) {
-            return std::visit([&](const auto &s) -> Result<bool> {
-                using T = std::decay_t<decltype(s)>;
+            return std::visit([&]<class T>(const T &s) -> Result<bool> {
                 const auto point = source.Transforms()[index].translation;
                 if constexpr (std::is_same_v<T, PCGDensityRangeFilterSettings>)
                     return Result<bool>::Success(source.Densities()[index] >= s.minimum && source.Densities()[index] <= s.maximum);
@@ -158,15 +168,8 @@ namespace Horo::PCG::detail {
                     return SlopeMatch(s, point, spatial, cancellation);
                 else if constexpr (std::is_same_v<T, PCGAttributeFilterSettings>)
                     return AttributeMatch(s, source, index);
-                else {
-                    for (const auto prior : accepted) {
-                        if (cancellation.IsCancellationRequested())
-                            return Reject<bool>(PCGErrors::CpuEvaluationClosed);
-                        if (Distance(point, source.Transforms()[prior].translation) < s.minimumDistance)
-                            return Result<bool>::Success(false);
-                    }
-                    return Result<bool>::Success(true);
-                }
+                else
+                    return DistanceMatch(s, source, point, accepted, cancellation);
             }, settings);
         }
     }  // namespace

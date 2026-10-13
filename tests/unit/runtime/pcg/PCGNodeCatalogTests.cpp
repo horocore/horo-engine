@@ -123,12 +123,12 @@ namespace Horo::PCG {
     }  // namespace
 
     TEST_CASE("PCG built-in catalog composition is explicit bounded and typed", "[unit][pcg][catalog]") {
+        using enum PCGCpuNodeKind;
         auto catalog = Catalog();
         const auto empty = catalog.Snapshot();
         REQUIRE(empty.HasValue());
         CHECK(empty.Value().Nodes().empty());
-        for (const auto kind :
-             {PCGCpuNodeKind::Forward, PCGCpuNodeKind::Merge, PCGCpuNodeKind::SnapshotGrid, PCGCpuNodeKind::DensityFilter})
+        for (const auto kind : {Forward, Merge, SnapshotGrid, DensityFilter})
             REQUIRE(catalog.Register(kind).HasValue());
         const auto root = catalog.Snapshot();
         REQUIRE(root.HasValue());
@@ -145,14 +145,14 @@ namespace Horo::PCG {
         CHECK(root.Value().Nodes().front().settings == PCGNodeSettingsSchema::SpatialGridIdentity);
         CHECK(root.Value().ResidentBytes() > sizeof(PCGBuiltInNodeDescriptor) * 4);
         CHECK(empty.Value().Nodes().empty());
-        CheckError(catalog.Register(PCGCpuNodeKind::Forward), PCGErrors::RegistryDuplicate);
+        CheckError(catalog.Register(Forward), PCGErrors::RegistryDuplicate);
         CheckError(catalog.Register(static_cast<PCGCpuNodeKind>(99)), PCGErrors::CpuEvaluationUnsupported);
         CheckError(PCGNodeCatalog::Create(root.Value().Capabilities(), 0), PCGErrors::RegistryCapacityExceeded);
         CheckError(PCGNodeCatalog::Create(root.Value().Capabilities(), 13), PCGErrors::RegistryCapacityExceeded);
         auto small = Catalog(1);
-        REQUIRE(small.Register(PCGCpuNodeKind::Forward).HasValue());
-        CheckError(small.Register(PCGCpuNodeKind::Merge), PCGErrors::RegistryCapacityExceeded);
-        CheckError(small.Register(PCGCpuNodeKind::Merge, true), PCGErrors::RuntimeUnavailable);
+        REQUIRE(small.Register(Forward).HasValue());
+        CheckError(small.Register(Merge), PCGErrors::RegistryCapacityExceeded);
+        CheckError(small.Register(Merge, true), PCGErrors::RuntimeUnavailable);
     }
 
     TEST_CASE("PCG catalog replacement withdrawal and shutdown preserve exact historical execution", "[unit][pcg][catalog]") {
@@ -205,6 +205,7 @@ namespace Horo::PCG {
     }
 
     TEST_CASE("PCG generation catalog explicitly registers seven stable builtins with exact new schemas", "[unit][pcg][catalog]") {
+        using enum PCGCpuNodeKind;
         auto created = PCGNodeCatalog::Create(ProjectPCGCapabilities(PCGHostProfile::Headless, Grants()).Value());
         REQUIRE(created.HasValue());
         auto owner = std::move(created).Value();
@@ -225,10 +226,9 @@ namespace Horo::PCG {
         }
         CHECK(PCGCpuNodeType(static_cast<PCGCpuNodeKind>(12)).HasError());
         auto lowered = Catalog(4);
-        for (const auto kind :
-             {PCGCpuNodeKind::SnapshotGrid, PCGCpuNodeKind::GridJitter, PCGCpuNodeKind::Stratified, PCGCpuNodeKind::PoissonScatter})
+        for (const auto kind : {SnapshotGrid, GridJitter, Stratified, PoissonScatter})
             REQUIRE(lowered.Register(kind).HasValue());
-        CheckError(lowered.Register(PCGCpuNodeKind::Forward), PCGErrors::RegistryCapacityExceeded);
+        CheckError(lowered.Register(Forward), PCGErrors::RegistryCapacityExceeded);
     }
 
     TEST_CASE("PCG catalog work cost is checked before executable allocation admission", "[unit][pcg][catalog]") {
@@ -298,7 +298,7 @@ namespace Horo::PCG {
         const auto root = catalog.Snapshot().Value();
         bool mutationRejected{};
         bool rootReadable{};
-        std::jthread reader([&] {
+        std::jthread reader([&catalog, &root, &mutationRejected, &rootReadable] {
             mutationRejected = catalog.Register(PCGCpuNodeKind::Merge).HasError();
             rootReadable = root.Find(PCGCpuNodeType(PCGCpuNodeKind::Forward).Value()).HasValue();
         });

@@ -854,6 +854,7 @@ add_executable(HoroPCGTests
         unit/runtime/pcg/PCGPointGenerationSettingsTests.cpp
         unit/runtime/pcg/PCGPointGenerationTests.cpp
         unit/runtime/pcg/PCGPointFilteringTests.cpp
+        unit/runtime/pcg/PCGPointFilterCodecTests.cpp
         unit/runtime/pcg/PCGCpuEvaluatorTests.cpp
         unit/runtime/pcg/PCGCookedPlanTests.cpp
         unit/runtime/pcg/PCGPointCloudWorkspaceTests.cpp

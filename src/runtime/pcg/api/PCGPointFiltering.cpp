@@ -32,10 +32,34 @@ namespace Horo::PCG {
             return valid;
         }
 
+        /** @brief Admits ordering only for exact numeric values and equality for finite Boolean/vector values. */
+        template <class V> bool ValidAttributeValue(const V &value, PCGAttributeComparison comparison) {
+            if constexpr (std::is_same_v<V, double>)
+                return std::isfinite(value);
+            else if constexpr (std::is_same_v<V, std::int64_t> || std::is_same_v<V, std::uint64_t>)
+                return true;
+            else {
+                if (comparison != PCGAttributeComparison::Equal && comparison != PCGAttributeComparison::NotEqual)
+                    return false;
+                if constexpr (std::is_same_v<V, bool>)
+                    return true;
+                else
+                    return FiniteVector(value);
+            }
+        }
+
+        /** @brief Checks the attribute key and closed comparison vocabulary before visiting its exact value. */
+        bool ValidAttribute(const PCGAttributeFilterSettings &settings) {
+            if (settings.key.Value().empty() || settings.comparison > PCGAttributeComparison::GreaterEqual)
+                return false;
+            return std::visit([&]<class V>(const V &value) {
+                return ValidAttributeValue(value, settings.comparison);
+            }, settings.value);
+        }
+
         /** @brief Validates the closed typed settings vocabulary before canonical encoding. */
         bool Valid(const PCGPointFilterSettings &settings) {
-            return std::visit([](const auto &s) {
-                using T = std::decay_t<decltype(s)>;
+            return std::visit([]<class T>(const T &s) {
                 if constexpr (std::is_same_v<T, PCGDensityRangeFilterSettings>)
                     return Range(s.minimum, s.maximum, 1.0);
                 else if constexpr (std::is_same_v<T, PCGSlopeFilterSettings>)
@@ -45,25 +69,8 @@ namespace Horo::PCG {
                 else if constexpr (std::is_same_v<T, PCGBoundsFilterSettings>)
                     return FiniteVector(s.bounds.minimum) && FiniteVector(s.bounds.maximum) && s.bounds.minimum.x <= s.bounds.maximum.x &&
                            s.bounds.minimum.y <= s.bounds.maximum.y && s.bounds.minimum.z <= s.bounds.maximum.z;
-                else {
-                    if (s.key.Value().empty() || s.comparison > PCGAttributeComparison::GreaterEqual)
-                        return false;
-                    return std::visit([&](const auto &value) {
-                        using V = std::decay_t<decltype(value)>;
-                        if constexpr (std::is_same_v<V, double>)
-                            return std::isfinite(value);
-                        else if constexpr (std::is_same_v<V, std::int64_t> || std::is_same_v<V, std::uint64_t>)
-                            return true;
-                        else {
-                            if (s.comparison != PCGAttributeComparison::Equal && s.comparison != PCGAttributeComparison::NotEqual)
-                                return false;
-                            if constexpr (std::is_same_v<V, bool>)
-                                return true;
-                            else
-                                return FiniteVector(value);
-                        }
-                    }, s.value);
-                }
+                else
+                    return ValidAttribute(s);
             }, settings);
         }
 
@@ -91,6 +98,49 @@ namespace Horo::PCG {
                 Component(bytes, v.z);
             if constexpr (requires { v.w; })
                 Component(bytes, v.w);
+        }
+
+        /** @brief Encodes exact attribute words without coercion or changing the canonical value tag. */
+        template <class V> void AppendAttributeValue(std::vector<std::uint8_t> &bytes, const V &value) {
+            if constexpr (std::is_same_v<V, bool>)
+                Word(bytes, value ? 1 : 0, 1);
+            else if constexpr (std::is_same_v<V, std::int64_t>)
+                Word(bytes, std::bit_cast<std::uint64_t>(value));
+            else if constexpr (std::is_same_v<V, std::uint64_t>)
+                Word(bytes, value);
+            else if constexpr (std::is_same_v<V, double>)
+                Number(bytes, value);
+            else
+                Vector(bytes, value);
+        }
+
+        /** @brief Writes the bounded key, comparison and exact value in version-one field order. */
+        void AppendAttribute(std::vector<std::uint8_t> &bytes, const PCGAttributeFilterSettings &settings) {
+            Word(bytes, settings.key.Value().size(), 1);
+            for (const char ch : settings.key.Value())
+                bytes.push_back(std::bit_cast<std::uint8_t>(ch));
+            Word(bytes, static_cast<std::uint8_t>(settings.comparison), 1);
+            Word(bytes, settings.value.index(), 1);
+            std::visit([&]<class V>(const V &value) {
+                AppendAttributeValue(bytes, value);
+            }, settings.value);
+        }
+
+        /** @brief Writes each admitted filter's canonical fields into the caller-owned payload. */
+        template <class T> void AppendSettings(std::vector<std::uint8_t> &bytes, const T &settings) {
+            if constexpr (std::is_same_v<T, PCGDensityRangeFilterSettings>) {
+                Number(bytes, settings.minimum);
+                Number(bytes, settings.maximum);
+            } else if constexpr (std::is_same_v<T, PCGSlopeFilterSettings>) {
+                Number(bytes, settings.minimumDegrees);
+                Number(bytes, settings.maximumDegrees);
+            } else if constexpr (std::is_same_v<T, PCGDistanceFilterSettings>)
+                Number(bytes, settings.minimumDistance);
+            else if constexpr (std::is_same_v<T, PCGBoundsFilterSettings>) {
+                Vector(bytes, settings.bounds.minimum);
+                Vector(bytes, settings.bounds.maximum);
+            } else
+                AppendAttribute(bytes, settings);
         }
 
         /** @brief Reads only checked fixed-width fields; truncated envelopes remain invalid. */
@@ -198,39 +248,8 @@ namespace Horo::PCG {
             std::vector<std::uint8_t> bytes;
             bytes.reserve(128);
             Word(bytes, 1, 4);
-            std::visit([&](const auto &s) {
-                using T = std::decay_t<decltype(s)>;
-                if constexpr (std::is_same_v<T, PCGDensityRangeFilterSettings>) {
-                    Number(bytes, s.minimum);
-                    Number(bytes, s.maximum);
-                } else if constexpr (std::is_same_v<T, PCGSlopeFilterSettings>) {
-                    Number(bytes, s.minimumDegrees);
-                    Number(bytes, s.maximumDegrees);
-                } else if constexpr (std::is_same_v<T, PCGDistanceFilterSettings>)
-                    Number(bytes, s.minimumDistance);
-                else if constexpr (std::is_same_v<T, PCGBoundsFilterSettings>) {
-                    Vector(bytes, s.bounds.minimum);
-                    Vector(bytes, s.bounds.maximum);
-                } else {
-                    Word(bytes, s.key.Value().size(), 1);
-                    for (const char ch : s.key.Value())
-                        bytes.push_back(std::bit_cast<std::uint8_t>(ch));
-                    Word(bytes, static_cast<std::uint8_t>(s.comparison), 1);
-                    Word(bytes, s.value.index(), 1);
-                    std::visit([&](const auto &value) {
-                        using V = std::decay_t<decltype(value)>;
-                        if constexpr (std::is_same_v<V, bool>)
-                            Word(bytes, value ? 1 : 0, 1);
-                        else if constexpr (std::is_same_v<V, std::int64_t>)
-                            Word(bytes, std::bit_cast<std::uint64_t>(value));
-                        else if constexpr (std::is_same_v<V, std::uint64_t>)
-                            Word(bytes, value);
-                        else if constexpr (std::is_same_v<V, double>)
-                            Number(bytes, value);
-                        else
-                            Vector(bytes, value);
-                    }, s.value);
-                }
+            std::visit([&]<class T>(const T &s) {
+                AppendSettings(bytes, s);
             }, settings);
             return Result<std::vector<std::uint8_t>>::Success(std::move(bytes));
         } catch (const std::bad_alloc &) {
@@ -251,10 +270,9 @@ namespace Horo::PCG {
                 if (reader.Word(4) != 1)
                     return Invalid<PCGPointFilterSettings>();
                 PCGPointFilterSettings settings;
-                const auto type = [&](PCGCpuNodeKind kind) {
+                if (const auto type = [&](PCGCpuNodeKind kind) {
                     return node.type == PCGCpuNodeType(kind).Value();
-                };
-                if (type(PCGCpuNodeKind::DensityRangeFilter)) {
+                }; type(PCGCpuNodeKind::DensityRangeFilter)) {
                     const double low = reader.Number();
                     const double high = reader.Number();
                     settings = PCGDensityRangeFilterSettings{low, high};

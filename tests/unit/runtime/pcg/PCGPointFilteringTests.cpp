@@ -121,7 +121,7 @@ namespace Horo::PCG {
                 constexpr std::array names{"test.boolean", "test.signed", "test.unsigned", "test.scalar",
                                            "test.vec2",    "test.vec3",   "test.vec4"};
                 for (std::size_t i = 0; i < names.size(); ++i)
-                    fields.push_back({PCGAttributeKey::Create(names[i]).Value(), static_cast<PCGAttributeType>(i)});
+                    fields.emplace_back(PCGAttributeKey::Create(names[i]).Value(), static_cast<PCGAttributeType>(i));
             }
             const auto schema = PCGPointSchema::Capture({PCGOperationalTier::Baseline, fields});
             REQUIRE(schema.HasValue());
@@ -144,16 +144,16 @@ namespace Horo::PCG {
 
         struct Fixture final {
             PCGCookedPlan plan;
-            PCGSpatialSnapshot spatial;
+            PCGSpatialSnapshot spatial{Spatial()};
             std::array<PCGPointOutputBound, 2> bounds;
             std::unique_ptr<PCGPointCloudWorkspace> workspace;
 
-            Fixture(PCGCpuNodeKind kind, PCGPointFilterSettings settings, std::size_t count = 4, float step = 1.0F)
+            Fixture(PCGCpuNodeKind kind, const PCGPointFilterSettings &settings, std::size_t count = 4, float step = 1.0F)
                 : plan([&] {
                       auto owner = Owner(kind);
                       return Plan(owner.Snapshot().Value(), kind, settings);
                   }()),
-                  spatial(Spatial()), bounds(Bounds(Schema(), count)) {
+                  bounds(Bounds(Schema(), count)) {
                 auto created = PCGPointCloudWorkspace::Create(plan, bounds, Limits().maximumScratchBytes);
                 REQUIRE(created.HasValue());
                 workspace = std::move(created).Value();
@@ -186,7 +186,7 @@ namespace Horo::PCG {
                 return detail::ExecuteNode(context, 1);
             }
 
-            PCGPointReadView Output() {
+            PCGPointReadView Output() const {
                 const auto output = workspace->ReadFinal(1, Id<PinId>(202));
                 REQUIRE(output.HasValue());
                 return output.Value();
@@ -219,95 +219,90 @@ namespace Horo::PCG {
     }  // namespace
 
     TEST_CASE("PCG density intervals and bounds compact complete rows in stable order", "[unit][pcg][filters]") {
+        using enum PCGCpuNodeKind;
         SECTION("inclusive density endpoints") {
-            Fixture f(PCGCpuNodeKind::DensityRangeFilter, PCGDensityRangeFilterSettings{0, 1});
+            Fixture f(DensityRangeFilter, PCGDensityRangeFilterSettings{0, 1});
             REQUIRE(f.Execute().HasValue());
             CheckRows(f.Output(), {0, 1, 2, 3});
         }
         SECTION("density interior") {
-            Fixture f(PCGCpuNodeKind::DensityRangeFilter, PCGDensityRangeFilterSettings{0.3, 0.7});
+            Fixture f(DensityRangeFilter, PCGDensityRangeFilterSettings{0.3, 0.7});
             REQUIRE(f.Execute().HasValue());
             CheckRows(f.Output(), {1, 2});
         }
         SECTION("inclusive position bounds") {
-            Fixture f(PCGCpuNodeKind::BoundsFilter, PCGBoundsFilterSettings{{{1, 0, 0}, {2, 0, 0}}});
+            Fixture f(BoundsFilter, PCGBoundsFilterSettings{{{1, 0, 0}, {2, 0, 0}}});
             REQUIRE(f.Execute().HasValue());
             CheckRows(f.Output(), {1, 2});
         }
         SECTION("empty result") {
-            Fixture f(PCGCpuNodeKind::BoundsFilter, PCGBoundsFilterSettings{{{9, 0, 0}, {9, 0, 0}}});
+            Fixture f(BoundsFilter, PCGBoundsFilterSettings{{{9, 0, 0}, {9, 0, 0}}});
             REQUIRE(f.Execute().HasValue());
             CheckRows(f.Output(), {});
         }
         SECTION("empty input") {
-            Fixture f(PCGCpuNodeKind::DensityRangeFilter, PCGDensityRangeFilterSettings{}, 0);
+            Fixture f(DensityRangeFilter, PCGDensityRangeFilterSettings{}, 0);
             REQUIRE(f.Execute().HasValue());
             CheckRows(f.Output(), {});
         }
     }
 
     TEST_CASE("PCG separation greedily retains stable prior accepted points with exact boundary", "[unit][pcg][filters]") {
+        using enum PCGCpuNodeKind;
         SECTION("equality accepted") {
-            Fixture f(PCGCpuNodeKind::DistanceFilter, PCGDistanceFilterSettings{1});
+            Fixture f(DistanceFilter, PCGDistanceFilterSettings{1});
             REQUIRE(f.Execute().HasValue());
             CheckRows(f.Output(), {0, 1, 2, 3});
         }
         SECTION("rejected points do not constrain later ones") {
-            Fixture f(PCGCpuNodeKind::DistanceFilter, PCGDistanceFilterSettings{1.1});
+            Fixture f(DistanceFilter, PCGDistanceFilterSettings{1.1});
             REQUIRE(f.Execute().HasValue());
             CheckRows(f.Output(), {0, 2});
         }
         SECTION("zero threshold") {
-            Fixture f(PCGCpuNodeKind::DistanceFilter, PCGDistanceFilterSettings{0});
+            Fixture f(DistanceFilter, PCGDistanceFilterSettings{0});
             REQUIRE(f.Execute().HasValue());
             CheckRows(f.Output(), {0, 1, 2, 3});
         }
         SECTION("positive subnormal threshold rejects coincident positions") {
-            Fixture f(PCGCpuNodeKind::DistanceFilter, PCGDistanceFilterSettings{std::numeric_limits<double>::denorm_min()}, 4, 0);
+            Fixture f(DistanceFilter, PCGDistanceFilterSettings{std::numeric_limits<double>::denorm_min()}, 4, 0);
             REQUIRE(f.Execute().HasValue());
             CHECK(f.Output().PointCount() == 1);
         }
         SECTION("large finite threshold") {
-            Fixture f(PCGCpuNodeKind::DistanceFilter, PCGDistanceFilterSettings{std::numeric_limits<double>::max()});
+            Fixture f(DistanceFilter, PCGDistanceFilterSettings{std::numeric_limits<double>::max()});
             REQUIRE(f.Execute().HasValue());
             CheckRows(f.Output(), {0});
         }
     }
 
     TEST_CASE("PCG exact attribute filters preserve all seven types without coercion", "[unit][pcg][filters]") {
+        using enum PCGAttributeComparison;
         const std::array<PCGAttributeFilterSettings, 7> predicates{
-            {{PCGAttributeKey::Create("test.boolean").Value(), PCGAttributeComparison::Equal, true},
-             {PCGAttributeKey::Create("test.signed").Value(), PCGAttributeComparison::Equal, std::numeric_limits<std::int64_t>::min() + 1},
-             {PCGAttributeKey::Create("test.unsigned").Value(), PCGAttributeComparison::Equal,
-              std::numeric_limits<std::uint64_t>::max() - 1},
-             {PCGAttributeKey::Create("test.scalar").Value(), PCGAttributeComparison::Equal, 1.0},
-             {PCGAttributeKey::Create("test.vec2").Value(), PCGAttributeComparison::Equal, Math::Vec2{1, 2}},
-             {PCGAttributeKey::Create("test.vec3").Value(), PCGAttributeComparison::Equal, Math::Vec3{1, 2, 3}},
-             {PCGAttributeKey::Create("test.vec4").Value(), PCGAttributeComparison::Equal, Math::Vec4{1, 2, 3, 4}}}};
+            {{PCGAttributeKey::Create("test.boolean").Value(), Equal, true},
+             {PCGAttributeKey::Create("test.signed").Value(), Equal, std::numeric_limits<std::int64_t>::min() + 1},
+             {PCGAttributeKey::Create("test.unsigned").Value(), Equal, std::numeric_limits<std::uint64_t>::max() - 1},
+             {PCGAttributeKey::Create("test.scalar").Value(), Equal, 1.0},
+             {PCGAttributeKey::Create("test.vec2").Value(), Equal, Math::Vec2{1, 2}},
+             {PCGAttributeKey::Create("test.vec3").Value(), Equal, Math::Vec3{1, 2, 3}},
+             {PCGAttributeKey::Create("test.vec4").Value(), Equal, Math::Vec4{1, 2, 3, 4}}}};
         for (std::size_t i = 0; i < predicates.size(); ++i) {
             Fixture f(PCGCpuNodeKind::AttributeFilter, predicates[i]);
             REQUIRE(f.Execute().HasValue());
             CheckRows(f.Output(), i == 0 ? std::vector<std::size_t>{1, 3} : std::vector<std::size_t>{1});
         }
-        for (const auto op : {PCGAttributeComparison::Less, PCGAttributeComparison::LessEqual, PCGAttributeComparison::Greater,
-                              PCGAttributeComparison::GreaterEqual, PCGAttributeComparison::NotEqual}) {
-            Fixture f(PCGCpuNodeKind::AttributeFilter, PCGAttributeFilterSettings{PCGAttributeKey::Create("test.scalar").Value(), op, 1.0});
+        constexpr std::array comparisons{Less, LessEqual, Greater, GreaterEqual, NotEqual};
+        const std::array<std::vector<std::size_t>, 5> rows{{{0}, {0, 1}, {2, 3}, {1, 2, 3}, {0, 2, 3}}};
+        for (std::size_t index = 0; index < comparisons.size(); ++index) {
+            Fixture f(PCGCpuNodeKind::AttributeFilter,
+                      PCGAttributeFilterSettings{PCGAttributeKey::Create("test.scalar").Value(), comparisons[index], 1.0});
             REQUIRE(f.Execute().HasValue());
-            if (op == PCGAttributeComparison::Less)
-                CheckRows(f.Output(), {0});
-            if (op == PCGAttributeComparison::LessEqual)
-                CheckRows(f.Output(), {0, 1});
-            if (op == PCGAttributeComparison::Greater)
-                CheckRows(f.Output(), {2, 3});
-            if (op == PCGAttributeComparison::GreaterEqual)
-                CheckRows(f.Output(), {1, 2, 3});
-            if (op == PCGAttributeComparison::NotEqual)
-                CheckRows(f.Output(), {0, 2, 3});
+            CheckRows(f.Output(), rows[index]);
         }
     }
 
     TEST_CASE("PCG filters reject invalid ranges nonfinite values and noncanonical payloads", "[unit][pcg][filters]") {
-        for (const auto settings :
+        for (const auto &settings :
              {PCGPointFilterSettings{PCGDensityRangeFilterSettings{0.8, 0.2}}, PCGPointFilterSettings{PCGDensityRangeFilterSettings{-1, 1}},
               PCGPointFilterSettings{PCGSlopeFilterSettings{0, 181}}, PCGPointFilterSettings{PCGDistanceFilterSettings{-1}},
               PCGPointFilterSettings{PCGBoundsFilterSettings{{{2, 0, 0}, {1, 1, 1}}}},
@@ -331,9 +326,63 @@ namespace Horo::PCG {
         CHECK(detail::DecodePointFilter(node).HasError());
     }
 
+    TEST_CASE("PCG Boolean and vector predicates retain equality and reject every ordering comparison", "[unit][pcg][filters]") {
+        using enum PCGAttributeComparison;
+        const std::array<PCGAttributeFilterSettings, 4> predicates{
+            {{PCGAttributeKey::Create("test.boolean").Value(), Equal, true},
+             {PCGAttributeKey::Create("test.vec2").Value(), Equal, Math::Vec2{1, 2}},
+             {PCGAttributeKey::Create("test.vec3").Value(), Equal, Math::Vec3{1, 2, 3}},
+             {PCGAttributeKey::Create("test.vec4").Value(), Equal, Math::Vec4{1, 2, 3, 4}}}};
+        for (auto predicate : predicates) {
+            predicate.comparison = NotEqual;
+            Fixture fixture(PCGCpuNodeKind::AttributeFilter, predicate);
+            REQUIRE(fixture.Execute().HasValue());
+            CheckRows(fixture.Output(), predicate.value.index() == 0 ? std::vector<std::size_t>{0, 2} : std::vector<std::size_t>{0, 2, 3});
+            for (const auto comparison : {Less, LessEqual, Greater, GreaterEqual}) {
+                predicate.comparison = comparison;
+                CheckError(EncodePCGPointFilterSettings(predicate), PCGErrors::CpuEvaluationInvalid);
+            }
+        }
+    }
+
+    TEST_CASE("PCG integer ordering keeps full signed and unsigned precision at the storage extremes", "[unit][pcg][filters]") {
+        using enum PCGAttributeComparison;
+        const std::array<PCGAttributeFilterSettings, 2> predicates{
+            {{PCGAttributeKey::Create("test.signed").Value(), Equal, std::numeric_limits<std::int64_t>::min() + 1},
+             {PCGAttributeKey::Create("test.unsigned").Value(), Equal, std::numeric_limits<std::uint64_t>::max() - 1}}};
+        constexpr std::array comparisons{Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual};
+        const std::array<std::vector<std::size_t>, 6> signedRows{{{1}, {0, 2, 3}, {0}, {0, 1}, {2, 3}, {1, 2, 3}}};
+        const std::array<std::vector<std::size_t>, 6> unsignedRows{{{1}, {0, 2, 3}, {2, 3}, {1, 2, 3}, {0}, {0, 1}}};
+        for (auto predicate : predicates) {
+            const auto &rows = predicate.value.index() == 1 ? signedRows : unsignedRows;
+            for (std::size_t index = 0; index < comparisons.size(); ++index) {
+                predicate.comparison = comparisons[index];
+                Fixture fixture(PCGCpuNodeKind::AttributeFilter, predicate);
+                REQUIRE(fixture.Execute().HasValue());
+                CheckRows(fixture.Output(), rows[index]);
+            }
+        }
+    }
+
+    TEST_CASE("PCG filter admission rejects routed schema changes even for empty retained outputs", "[unit][pcg][filters]") {
+        auto owner = Owner(PCGCpuNodeKind::DensityRangeFilter);
+        for (const double maximum : {0.0, 1.0}) {
+            const auto plan = Plan(owner.Snapshot().Value(), PCGCpuNodeKind::DensityRangeFilter, PCGDensityRangeFilterSettings{0, maximum});
+            const auto valid = EvaluatePCGCpu(plan, Spatial(), Bounds(Schema()), {}, Limits());
+            REQUIRE(valid.HasValue());
+            CHECK(valid.Value().Outputs().back().points->PointCount() == (maximum == 0.0 ? 0 : 4));
+            auto bounds = Bounds(Schema());
+            bounds[0].schema = Schema(false);
+            CheckError(EvaluatePCGCpu(plan, Spatial(), bounds, {}, Limits()), PCGErrors::CpuEvaluationInvalid);
+            bounds = Bounds(Schema(false));
+            bounds[0].schema = Schema();
+            CheckError(EvaluatePCGCpu(plan, Spatial(), bounds, {}, Limits()), PCGErrors::CpuEvaluationInvalid);
+        }
+    }
+
     TEST_CASE("PCG filter admission rejects missing and mismatched typed attributes before allocation", "[unit][pcg][filters]") {
         const auto key = PCGAttributeKey::Create("test.signed").Value();
-        for (const auto value : {PCGAttributePredicateValue{std::int64_t{0}}, PCGAttributePredicateValue{std::uint64_t{0}}}) {
+        for (const auto &value : {PCGAttributePredicateValue{std::int64_t{0}}, PCGAttributePredicateValue{std::uint64_t{0}}}) {
             auto owner = Owner(PCGCpuNodeKind::AttributeFilter);
             const auto plan = Plan(owner.Snapshot().Value(), PCGCpuNodeKind::AttributeFilter,
                                    PCGAttributeFilterSettings{key, PCGAttributeComparison::Equal, value});
@@ -344,51 +393,53 @@ namespace Horo::PCG {
     }
 
     TEST_CASE("PCG slope samples captured terrain and rejects uncovered input", "[unit][pcg][filters]") {
+        using enum PCGCpuNodeKind;
         SECTION("zero slope endpoints") {
-            Fixture f(PCGCpuNodeKind::SlopeFilter, PCGSlopeFilterSettings{0, 0}, 3);
+            Fixture f(SlopeFilter, PCGSlopeFilterSettings{0, 0}, 3);
             REQUIRE(f.Execute().HasValue());
             CheckRows(f.Output(), {0, 1, 2});
         }
         SECTION("outside range") {
-            Fixture f(PCGCpuNodeKind::SlopeFilter, PCGSlopeFilterSettings{1, 90}, 3);
+            Fixture f(SlopeFilter, PCGSlopeFilterSettings{1, 90}, 3);
             REQUIRE(f.Execute().HasValue());
             CheckRows(f.Output(), {});
         }
         SECTION("nearest terrain and stable identity tie") {
-            Fixture f(PCGCpuNodeKind::SlopeFilter, PCGSlopeFilterSettings{44, 46}, 3);
+            Fixture f(SlopeFilter, PCGSlopeFilterSettings{44, 46}, 3);
             f.spatial = Spatial(true, 1, 1);
             REQUIRE(f.Execute().HasValue());
             CheckRows(f.Output(), {0, 1});
-            Fixture reversed(PCGCpuNodeKind::SlopeFilter, PCGSlopeFilterSettings{44, 46}, 3);
+            Fixture reversed(SlopeFilter, PCGSlopeFilterSettings{44, 46}, 3);
             reversed.spatial = Spatial(true, 1, 2);
             REQUIRE(reversed.Execute().HasValue());
             CheckRows(reversed.Output(), {0, 1, 2});
         }
         SECTION("missing projected surface") {
-            Fixture f(PCGCpuNodeKind::SlopeFilter, PCGSlopeFilterSettings{0, 180});
+            Fixture f(SlopeFilter, PCGSlopeFilterSettings{0, 180});
             CheckError(f.Execute(), PCGErrors::SpatialCoverageUnavailable);
             CHECK(f.workspace->ReadFinal(1, Id<PinId>(202)).HasError());
         }
         SECTION("missing snapshot surfaces") {
-            auto owner = Owner(PCGCpuNodeKind::SlopeFilter);
-            const auto plan = Plan(owner.Snapshot().Value(), PCGCpuNodeKind::SlopeFilter, PCGSlopeFilterSettings{});
+            auto owner = Owner(SlopeFilter);
+            const auto plan = Plan(owner.Snapshot().Value(), SlopeFilter, PCGSlopeFilterSettings{});
             CheckError(EvaluatePCGCpu(plan, Spatial(false), Bounds(Schema()), {}, Limits()), PCGErrors::SpatialCoverageUnavailable);
         }
     }
 
     TEST_CASE("PCG filter checked work includes quadratic separation surface visits and bounded selection scratch",
               "[unit][pcg][filters]") {
-        const auto distance = detail::ChargePointFilter(PCGCpuNodeKind::DistanceFilter, 4, 7);
+        using enum PCGCpuNodeKind;
+        const auto distance = detail::ChargePointFilter(DistanceFilter, 4, 7);
         REQUIRE(distance.HasValue());
         CHECK(distance.Value().pointVisits == 24);
         CHECK(distance.Value().scratchBytes >= 4 * sizeof(std::size_t));
-        const auto slope = detail::ChargePointFilter(PCGCpuNodeKind::SlopeFilter, 4, 7);
+        const auto slope = detail::ChargePointFilter(SlopeFilter, 4, 7);
         REQUIRE(slope.HasValue());
         CHECK(slope.Value().snapshotElementVisits == 28);
-        CHECK(detail::ChargePointFilter(PCGCpuNodeKind::DistanceFilter, std::numeric_limits<std::size_t>::max(), 1).HasError());
-        CHECK(detail::ChargePointFilter(PCGCpuNodeKind::SlopeFilter, 2, std::numeric_limits<std::size_t>::max()).HasError());
-        auto owner = Owner(PCGCpuNodeKind::DistanceFilter);
-        const auto plan = Plan(owner.Snapshot().Value(), PCGCpuNodeKind::DistanceFilter, PCGDistanceFilterSettings{});
+        CHECK(detail::ChargePointFilter(DistanceFilter, std::numeric_limits<std::size_t>::max(), 1).HasError());
+        CHECK(detail::ChargePointFilter(SlopeFilter, 2, std::numeric_limits<std::size_t>::max()).HasError());
+        auto owner = Owner(DistanceFilter);
+        const auto plan = Plan(owner.Snapshot().Value(), DistanceFilter, PCGDistanceFilterSettings{});
         auto limits = Limits();
         limits.maximumPointVisits = 1;
         CheckError(EvaluatePCGCpu(plan, Spatial(), Bounds(Schema()), {}, limits), PCGErrors::CpuEvaluationCapacityExceeded);
@@ -396,11 +447,12 @@ namespace Horo::PCG {
 
     TEST_CASE("PCG filter plans retain exact historical catalog and spatial lifetime through replacement and close",
               "[unit][pcg][filters]") {
-        auto owner = Owner(PCGCpuNodeKind::BoundsFilter);
+        using enum PCGCpuNodeKind;
+        auto owner = Owner(BoundsFilter);
         const auto root = owner.Snapshot().Value();
-        const auto plan = Plan(root, PCGCpuNodeKind::BoundsFilter, PCGBoundsFilterSettings{{{1, 0, 0}, {2, 0, 0}}});
-        REQUIRE(owner.Register(PCGCpuNodeKind::BoundsFilter, true).HasValue());
-        REQUIRE(owner.Remove(PCGCpuNodeType(PCGCpuNodeKind::BoundsFilter).Value()).HasValue());
+        const auto plan = Plan(root, BoundsFilter, PCGBoundsFilterSettings{{{1, 0, 0}, {2, 0, 0}}});
+        REQUIRE(owner.Register(BoundsFilter, true).HasValue());
+        REQUIRE(owner.Remove(PCGCpuNodeType(BoundsFilter).Value()).HasValue());
         REQUIRE(owner.Close().HasValue());
         const auto oldSpatial = Spatial();
         const auto newer = Spatial(true, 2);
@@ -464,13 +516,14 @@ namespace Horo::PCG {
 
 namespace Horo::PCG {
     TEST_CASE("PCG terrain admission does not charge unrelated surfaces to legacy grid lookup", "[unit][pcg][filters]") {
-        auto owner = Owner(PCGCpuNodeKind::DensityRangeFilter);
-        const auto plan = Plan(owner.Snapshot().Value(), PCGCpuNodeKind::DensityRangeFilter, PCGDensityRangeFilterSettings{});
+        using enum PCGCpuNodeKind;
+        auto owner = Owner(DensityRangeFilter);
+        const auto plan = Plan(owner.Snapshot().Value(), DensityRangeFilter, PCGDensityRangeFilterSettings{});
         auto limits = Limits();
         limits.maximumSnapshotElementVisits = 2;
         REQUIRE(EvaluatePCGCpu(plan, Spatial(), Bounds(Schema()), {}, limits).HasValue());
-        auto slopeOwner = Owner(PCGCpuNodeKind::SlopeFilter);
-        const auto slopePlan = Plan(slopeOwner.Snapshot().Value(), PCGCpuNodeKind::SlopeFilter, PCGSlopeFilterSettings{});
+        auto slopeOwner = Owner(SlopeFilter);
+        const auto slopePlan = Plan(slopeOwner.Snapshot().Value(), SlopeFilter, PCGSlopeFilterSettings{});
         limits.maximumSnapshotElementVisits = 9;
         CheckError(EvaluatePCGCpu(slopePlan, Spatial(), Bounds(Schema()), {}, limits), PCGErrors::CpuEvaluationCapacityExceeded);
     }
