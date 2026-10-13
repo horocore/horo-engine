@@ -114,7 +114,8 @@ namespace Horo::Navigation {
      * Character adapter. No provider work, waits, callbacks, Scene pointers or Transform writes occur here. Up to eight
      * accepted query handles (including retired requests) are retained; pressure rejects replacement without changing
      * the old operation. BeginShutdown closes acceptance; continue Update after coordinator Commit until IsDrained
-     * before destroying this controller during normal retirement. Destruction cancels remaining work without waiting;
+     * before destroying this controller during normal retirement. Destruction cancels and relinquishes remaining result
+     * reservations to the surviving coordinator without waiting;
      * final host teardown must also shut down the coordinator/JobSystem before unloading provider code.
      */
     class NavigationMovementController final {
@@ -148,7 +149,7 @@ namespace Horo::Navigation {
                                                                                           NavigationPathCaller caller);
         NavigationMovementController(const NavigationMovementController &) = delete;
         NavigationMovementController &operator=(const NavigationMovementController &) = delete;
-        /** @brief Cancel outstanding queries without joining; normal retirement first drains them. */
+        /** @brief Cancel and relinquish outstanding queries without joining; coordinator reclaims after worker drain. */
         ~NavigationMovementController();
 
         /** @brief Accept a fully validated request and explicitly supersede the prior active request.
@@ -168,13 +169,35 @@ namespace Horo::Navigation {
          * @return Success or descriptor/stale error; active requests retain their goal and finite query ceiling.
          */
         [[nodiscard]] Result<void> ResetMotionAtSafePoint(const NavigationMovementObservation &current);
+        /** @brief Rebind compatible registration/topology at the owner safe point without restarting operation budgets.
+         * @param agent Fresh enabled registration for the same exact Scene/entity owner; never a replacement entity.
+         * @param caller Same logical caller with a strictly newer incarnation.
+         * @param current Fresh committed replacement binding/root, with no feedback or stale target evidence.
+         * @return Success or typed failure preserving the previous controller state.
+         * @details A successful rebind withdraws corridor and old request authority, updates the operation's agent
+         * identity, and preserves its semantic goal, exclusive deadline and total accepted-query count. The new
+         * provider must admit the existing bounded query policy. Terminal operations stay terminal. Old requests
+         * are relinquished to the coordinator; workers retain only their immutable old-world leases until drained.
+         */
+        [[nodiscard]] Result<void> RebindAtSafePoint(CrowdAgentHandle agent, NavigationPathCaller caller,
+                                                     const NavigationMovementObservation &current);
         /** @brief Cancel only the exact active operation. @param id Accepted movement identity.
          * @return True only when that nonterminal operation was cancelled.
          */
         [[nodiscard]] bool Cancel(NavigationMovementId id) noexcept;
         /** @brief Permanently close acceptance and cancel the active operation without waiting. */
         void BeginShutdown() noexcept;
-        /** @brief Return true after all retained accepted query results have been consumed. */
+        /** @brief Relinquish obsolete requests and collect coordinator fences independently of movement updates.
+         * @details The owner calls this at every lifecycle safe point, including Idle/TargetLost/terminal states.
+         * At most the fixed retired-request capacity is handed off. Running workers retain coordinator-owned slots
+         * and provider leases until exact terminal fences; no result is installed, no movement tick advances, and
+         * no goal/deadline/query budget changes. The borrowed coordinator must outlive this controller.
+         */
+        void CollectRetiredAtSafePoint();
+        /** @brief Report no query or retirement receipt retained by this movement owner.
+         * @return True after results are consumed or handed to coordinator retirement. The coordinator may still
+         * retain running worker/provider pins; its IsDrained reports physical request/partition quiescence.
+         */
         [[nodiscard]] bool IsDrained() const noexcept;
         /** @brief Return owned status of the latest accepted operation. */
         [[nodiscard]] const NavigationMovementStatus &Status() const noexcept;

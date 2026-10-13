@@ -124,6 +124,22 @@ namespace Horo::Navigation {
         };
     }  // namespace
 
+    TEST_CASE("Destroying movement transfers queued request retirement to its coordinator", "[unit][navigation][movement][lifecycle]") {
+        for (const bool dispatch : {false, true}) {
+            Fixture fixture;
+            static_cast<void>(fixture.Start(fixture.Move(), fixture.Now()));
+            REQUIRE(fixture.Update(fixture.Now()).state == NavigationMovementState::Querying);
+            if (dispatch)
+                REQUIRE(fixture.coordinator.Dispatch(0) == 1);
+            fixture.movement.reset();
+            REQUIRE(fixture.world.Unload(World()).HasValue());
+            fixture.jobs.Shutdown(ShutdownPolicy::Drain);
+            REQUIRE(fixture.coordinator.Commit({.tick = 1}) == 0);
+            REQUIRE(fixture.coordinator.IsDrained());
+            REQUIRE(fixture.world.CollectRetired() == NavigationWorldLifecycleState::Empty);
+        }
+    }
+
     TEST_CASE("Movement repath feedback requires the latest exact operation path and tick", "[unit][navigation][movement]") {
         Fixture fixture;
         const auto id = fixture.Start(fixture.Move(), fixture.Now());

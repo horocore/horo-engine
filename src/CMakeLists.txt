@@ -1746,6 +1746,7 @@ target_link_libraries(HoroNavigationRuntime PUBLIC HoroEngine::NavigationApi)
 
 add_library(HoroNavigationSceneIntegration STATIC
         runtime/navigation/integration/NavigationSceneActivation.cpp
+        runtime/navigation/integration/NavigationSceneAgentLifecycle.cpp
         runtime/navigation/integration/NavigationSceneLinkCapture.cpp
 )
 add_library(HoroEngine::NavigationSceneIntegration ALIAS HoroNavigationSceneIntegration)

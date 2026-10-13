@@ -57,6 +57,9 @@ namespace Horo::Navigation {
     /** @copydoc NavigationMovementController::~NavigationMovementController */
     NavigationMovementController::~NavigationMovementController() {
         BeginShutdown();
+        // The controller will no longer poll terminal results. Transfer retirement to the surviving coordinator.
+        for (std::size_t index = 0; index < retiredCount_; ++index)
+            static_cast<void>(coordinator_.Abandon(retired_[index]));
     }
 
     /** @copydoc NavigationMovementController::ValidObservation */
@@ -136,6 +139,59 @@ namespace Horo::Navigation {
         return Return::Success(std::move(acceptance));
     }
 
+    /** @copydoc NavigationMovementController::RebindAtSafePoint */
+    Result<void> NavigationMovementController::RebindAtSafePoint(const CrowdAgentHandle agent, const NavigationPathCaller caller,
+                                                                 const NavigationMovementObservation &current) {
+        using Return = Result<void>;
+        if (shutdown_ || !ValidObservation(current) || current.feedback.has_value() || caller.owner != caller_.owner ||
+            caller.generation <= caller_.generation)
+            return Return::Failure(MakeError(NavigationErrors::AgentDescriptorInvalid));
+        const auto record = registry_.Find(agent);
+        const auto binding = registry_.ActiveBinding();
+        if (record.HasError() || binding.HasError() || !record.Value().enabled || record.Value().owner != agent_.owner ||
+            binding.Value() != current.binding || current.binding.scene != binding_.scene ||
+            current.binding.sceneGeneration != binding_.sceneGeneration || current.path.provenance.world != current.binding.world)
+            return Return::Failure(MakeError(NavigationErrors::AgentRegistryStale));
+        if (Active(status_.state) && request_.entity.has_value() &&
+            (!current.target.has_value() || current.target->owner != *request_.entity || current.target->revision < targetRevision_ ||
+             (current.target->revision == targetRevision_ && current.target->position != goal_)))
+            return Return::Failure(MakeError(NavigationErrors::InvalidHandle));
+        const auto lease = world_.Acquire(current.binding.world);
+        if (lease.HasError())
+            return Return::Failure(lease.ErrorValue());
+        const auto &activation = lease.Value().Descriptor();
+        if (activation.scene != current.binding.scene || activation.sceneGeneration != current.binding.sceneGeneration ||
+            activation.topology != current.path.provenance.topology)
+            return Return::Failure(MakeError(NavigationErrors::StaleSnapshot));
+        auto candidate = NavigationPathPolicy{request_.repath};
+        auto path = current.path;
+        path.goalRevision = goalRevision_;
+        if (Active(status_.state)) {
+            if (const auto admitted =
+                    AdmitNavigationQuery(lease.Value().Backend().Capabilities(), request_.capabilityRevision, request_.query);
+                admitted.HasError())
+                return Return::Failure(admitted.ErrorValue());
+            if (const auto reset = candidate.ForceRepath(path); reset.HasError())
+                return Return::Failure(reset.ErrorValue());
+        }
+        if (query_.has_value())
+            static_cast<void>(coordinator_.Abandon(*query_));
+        query_.reset();
+        for (std::size_t index = 0; index < retiredCount_; ++index)
+            static_cast<void>(coordinator_.Abandon(retired_[index]));
+        retiredCount_ = 0;
+        agent_ = record.Value();
+        binding_ = binding.Value();
+        caller_ = caller;
+        policy_ = std::move(candidate);
+        status_.id.agent = agent;
+        waypoint_ = 0;
+        lastIntent_.reset();
+        if (Active(status_.state))
+            status_.state = NavigationMovementState::Querying;
+        return Return::Success();
+    }
+
     /** @copydoc NavigationMovementController::RetireQuery */
     void NavigationMovementController::RetireQuery() noexcept {
         if (!query_)
@@ -177,6 +233,21 @@ namespace Horo::Navigation {
         shutdown_ = true;
         if (Active(status_.state))
             Finish(NavigationMovementState::Cancelled);
+    }
+
+    /** @copydoc NavigationMovementController::CollectRetiredAtSafePoint */
+    void NavigationMovementController::CollectRetiredAtSafePoint() {
+        if (retiredCount_ == 0)
+            return;
+        for (std::size_t index = 0; index < retiredCount_; ++index)
+            static_cast<void>(coordinator_.Abandon(retired_[index]));
+        coordinator_.CollectRetiredAtSafePoint();
+        for (std::size_t index = 0; index < retiredCount_;) {
+            if (!coordinator_.IsRetained(retired_[index]))
+                retired_[index] = retired_[--retiredCount_];
+            else
+                ++index;
+        }
     }
 
     /** @copydoc NavigationMovementController::IsDrained */
