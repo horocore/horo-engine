@@ -193,6 +193,33 @@ namespace Horo::Navigation {
         return result;
     }
 
+    /** @copydoc NavigationCoordinator::Abandon */
+    bool NavigationCoordinator::Abandon(const NavRequestHandle handle) noexcept {
+        const auto &state = MutableState();
+        auto *entry = state ? state->Find(handle) : nullptr;
+        if (!entry || entry->taken)
+            return false;
+        entry->cancellation.RequestCancellation();
+        // Close owner publication before releasing results. Workers access only their immutable batch copy.
+        entry->published = true;
+        entry->taken = true;
+        entry->candidate.reset();
+        entry->terminal.reset();
+        State::Retire(state->slots[handle.slot.index]);
+        return true;
+    }
+
+    /** @copydoc NavigationCoordinator::CollectRetiredAtSafePoint */
+    void NavigationCoordinator::CollectRetiredAtSafePoint() {
+        if (const auto &state = MutableState(); state)
+            state->Collect();
+    }
+
+    /** @copydoc NavigationCoordinator::IsRetained */
+    bool NavigationCoordinator::IsRetained(const NavRequestHandle handle) const noexcept {
+        return state_ && state_->Find(handle) != nullptr;
+    }
+
     /** @copydoc NavigationCoordinator::BeginShutdown */
     void NavigationCoordinator::BeginShutdown() noexcept {
         const auto &state = MutableState();

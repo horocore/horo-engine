@@ -130,10 +130,26 @@ namespace Horo::Navigation {
          * @return Success or failure preserving pipeline state.
          */
         [[nodiscard]] Result<void> Reset(const NavigationMovementObservation &current, std::uint64_t characterRevision);
+        /** @brief Rebind the real movement owner and withdraw all old avoidance authority at one safe point.
+         * @param agent Compatible fresh registered agent for the same exact entity.
+         * @param caller Strictly newer logical caller incarnation.
+         * @param current Fresh committed replacement world/root without feedback.
+         * @param characterRevision Strictly newer host reset revision.
+         * @return Success or failure preserving both pipeline and movement state.
+         * @details Movement retains operation deadlines/query ceilings. Old captures, work and feedback cannot
+         * authorize motion after success. The host captures a new crowd snapshot from committed motion values.
+         */
+        [[nodiscard]] Result<void> Rebind(CrowdAgentHandle agent, NavigationPathCaller caller, const NavigationMovementObservation &current,
+                                          std::uint64_t characterRevision);
         /** @brief Permanently reject work/feedback and discard retained history; movement retirement remains host-owned. */
         void Retire() noexcept;
 
     private:
+        /** @brief Admit a newer owner-thread Character discontinuity without old feedback or mutating history. */
+        [[nodiscard]] Result<void> AdmitDiscontinuity(const NavigationMovementObservation &current, std::uint64_t characterRevision) const;
+        /** @brief Release stale avoidance authority and blockage history without changing tick or sequence fences. */
+        void ClearMotionHistory() noexcept;
+
         /** @brief Feedback projection staged until real movement advancement succeeds. */
         struct PreparedFeedback {
             NavigationMovementObservation observation;

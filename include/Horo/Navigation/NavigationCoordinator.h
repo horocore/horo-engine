@@ -111,6 +111,14 @@ namespace Horo::Navigation {
          * @return False for invalid/consumed/terminal identity; true for a pending cancellation request.
          */
         [[nodiscard]] bool Cancel(NavRequestHandle handle) noexcept;
+        /** @brief Relinquish the consumer's result reservation and request cancellation without waiting.
+         * @param handle Exact admitted identity, pending or published.
+         * @return True once for a retained unconsumed request; false for stale or already relinquished identities.
+         * @details No result can subsequently be taken. Queued/running partitions retain their immutable leases and
+         * slot generation until the owner observes their terminal fence through Dispatch, Commit or Take. Unlike
+         * Cancel, this explicitly discards even an already published result. Use when its consumer is destroyed.
+         */
+        [[nodiscard]] bool Abandon(NavRequestHandle handle) noexcept;
         /** @brief Dispatch one bounded tick slice without waiting; repeated calls cannot reset quotas.
          * @param tick Monotonic simulation tick. @return Number of queries accepted by Foundation this call.
          */
@@ -127,6 +135,17 @@ namespace Horo::Navigation {
          * @details A consumed slot is reclaimed only after its partition is quiescent; late workers cannot alias reuse.
          */
         [[nodiscard]] std::optional<NavigationPathCompletion> Take(NavRequestHandle handle);
+        /** @brief Collect transport and exact terminal job fences without publishing or consuming active results.
+         * @details Call at the owner lifecycle safe point even with no active movement or Scene. Work is bounded by
+         * configured completion slots, jobs and partition sizes. Abandoned slots/pins remain retained until their
+         * workers terminate; this call never joins, advances publication ticks, or authorizes motion.
+         */
+        void CollectRetiredAtSafePoint();
+        /** @brief Inspect one exact retained reservation without polling jobs or advancing publication.
+         * @param handle Exact admitted identity, including world and slot generation.
+         * @return True while that generation remains reserved, including abandoned but executing work.
+         */
+        [[nodiscard]] bool IsRetained(NavRequestHandle handle) const noexcept;
         /** @brief Permanently close admission and cooperatively cancel unpublished requests without waiting. */
         void BeginShutdown() noexcept;
         /** @brief Report no retained request or worker partitions. @return True after terminal results are consumed. */

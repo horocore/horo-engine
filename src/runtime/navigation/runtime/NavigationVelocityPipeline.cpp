@@ -235,22 +235,51 @@ namespace Horo::Navigation {
         return Result<void>::Success();
     }
 
-    /** @copydoc NavigationVelocityPipeline::Reset */
-    Result<void> NavigationVelocityPipeline::Reset(const NavigationMovementObservation &current, const std::uint64_t characterRevision) {
+    /** @copydoc NavigationVelocityPipeline::AdmitDiscontinuity */
+    Result<void> NavigationVelocityPipeline::AdmitDiscontinuity(const NavigationMovementObservation &current,
+                                                                const std::uint64_t characterRevision) const {
         if (std::this_thread::get_id() != ownerThread_)
             return Result<void>::Failure(MakeError(NavigationErrors::AgentDescriptorInvalid));
-        if (retired_ || characterRevision <= characterRevision_ || current.binding != binding_ || current.feedback)
+        if (retired_ || characterRevision <= characterRevision_ || current.feedback.has_value())
+            return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc NavigationVelocityPipeline::Reset */
+    Result<void> NavigationVelocityPipeline::Reset(const NavigationMovementObservation &current, const std::uint64_t characterRevision) {
+        if (const auto admitted = AdmitDiscontinuity(current, characterRevision); admitted.HasError())
+            return admitted;
+        if (current.binding != binding_)
             return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
         if (const auto reset = movement_->ResetMotionAtSafePoint(current); reset.HasError())
             return Result<void>::Failure(reset.ErrorValue());
         characterRevision_ = characterRevision;
+        ClearMotionHistory();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc NavigationVelocityPipeline::Rebind */
+    Result<void> NavigationVelocityPipeline::Rebind(const CrowdAgentHandle agent, const NavigationPathCaller caller,
+                                                    const NavigationMovementObservation &current, const std::uint64_t characterRevision) {
+        if (const auto admitted = AdmitDiscontinuity(current, characterRevision); admitted.HasError())
+            return admitted;
+        if (const auto rebound = movement_->RebindAtSafePoint(agent, caller, current); rebound.HasError())
+            return Result<void>::Failure(rebound.ErrorValue());
+        agent_ = agent;
+        binding_ = current.binding;
+        characterRevision_ = characterRevision;
+        ClearMotionHistory();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc NavigationVelocityPipeline::ClearMotionHistory */
+    void NavigationVelocityPipeline::ClearMotionHistory() noexcept {
         pending_.reset();
         pendingCapture_.reset();
         publication_.reset();
         feedback_.reset();
         blockedTicks_ = 0;
         lastRepathTick_.reset();
-        return Result<void>::Success();
     }
 
     /** @copydoc NavigationVelocityPipeline::Retire */
@@ -258,10 +287,6 @@ namespace Horo::Navigation {
         if (std::this_thread::get_id() != ownerThread_)
             return;
         retired_ = true;
-        pending_.reset();
-        pendingCapture_.reset();
-        publication_.reset();
-        feedback_.reset();
-        blockedTicks_ = 0;
+        ClearMotionHistory();
     }
 }  // namespace Horo::Navigation

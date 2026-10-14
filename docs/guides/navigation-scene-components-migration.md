@@ -63,3 +63,9 @@ stale-generation, or shutdown admission leaves the active scene and registry
 unchanged. Prefab expansion recognizes the canonical provider-neutral
 `game.horo.navigation_agent` serialized component envelope; other opaque payloads
 retain the existing typed-projection failure behavior.
+
+Runtime movement consumers should follow
+[Navigation Agent Lifecycle Migration](./navigation-agent-lifecycle-migration.md)
+for explicit Scene-owner reconciliation, compatible rebind, teleport history
+reset and terminal-fenced retirement. Authored components do not store those
+runtime owners or provider leases.

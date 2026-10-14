@@ -69,6 +69,9 @@ workflows.
 - [Grounded Navigation Provider Composition](./grounded-navigation-provider-composition.md):
   compose the pinned Detour runtime provider from neutral topology with explicit
   capacity, world-generation, cancellation, and teardown behavior.
+- [Navigation Agent Lifecycle Migration](./navigation-agent-lifecycle-migration.md):
+  reconcile exact Scene owners, reset teleport/avoidance history, preserve compatible
+  reload budgets, and drain abandoned work only after its terminal JobSystem fence.
 - [XR View and External Render-Target Contract Migration](./xr-view-render-plan-migration.md):
   publish bounded runtime-ordered views and generation-fenced Horo external target
   requirements without fixed stereo arrays or native image types.

@@ -1151,6 +1151,10 @@ add_executable(HoroNavigationCoordinatorPublicConsumer support/NavigationCoordin
 target_link_libraries(HoroNavigationCoordinatorPublicConsumer PRIVATE HoroEngine::NavigationRuntime)
 add_test(NAME HoroNavigationCoordinatorPublicConsumer COMMAND HoroNavigationCoordinatorPublicConsumer)
 
+add_executable(HoroNavigationSceneAgentLifecyclePublicConsumer support/NavigationSceneAgentLifecyclePublicConsumer.cpp)
+target_link_libraries(HoroNavigationSceneAgentLifecyclePublicConsumer PRIVATE HoroEngine::NavigationSceneIntegration)
+add_test(NAME HoroNavigationSceneAgentLifecyclePublicConsumer COMMAND HoroNavigationSceneAgentLifecyclePublicConsumer)
+
 add_executable(HoroNavigationBakeDiagnosticsPublicConsumer support/NavigationBakeDiagnosticsPublicConsumer.cpp)
 target_link_libraries(HoroNavigationBakeDiagnosticsPublicConsumer PRIVATE HoroEngine::NavigationBakeService)
 add_test(NAME HoroNavigationBakeDiagnosticsPublicConsumer COMMAND HoroNavigationBakeDiagnosticsPublicConsumer)
@@ -1176,6 +1180,15 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_include_directories(HoroNavigationRecastDetourTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
     target_link_libraries(HoroNavigationRecastDetourTests PRIVATE HoroEngine::NavigationRecastDetour HoroEngine::NavigationRuntime)
     horo_register_catch_test(HoroNavigationRecastDetourTests LABELS "unit;navigation;headless;provider")
+    add_executable(HoroNavigationSceneAgentLifecycleTests
+            support/AllocationProbe.cpp
+            unit/runtime/navigation/NavigationSceneAgentAvoidanceLifecycleTests.cpp
+            unit/runtime/navigation/NavigationSceneAgentLifecycleTests.cpp)
+    target_compile_features(HoroNavigationSceneAgentLifecycleTests PRIVATE cxx_std_20)
+    target_include_directories(HoroNavigationSceneAgentLifecycleTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+    target_link_libraries(HoroNavigationSceneAgentLifecycleTests PRIVATE
+            HoroEngine::NavigationSceneIntegration HoroEngine::NavigationRecastDetour HoroEngine::NavigationCrowdDetour)
+    horo_register_catch_test(HoroNavigationSceneAgentLifecycleTests LABELS "unit;navigation;headless;scene;lifecycle;provider")
     add_executable(HoroNavigationNativeContentTests unit/application/navigation/NavigationNativeContentTests.cpp)
     target_compile_features(HoroNavigationNativeContentTests PRIVATE cxx_std_20)
     target_include_directories(HoroNavigationNativeContentTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)

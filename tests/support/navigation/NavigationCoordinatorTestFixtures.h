@@ -131,4 +131,43 @@ namespace Horo::Navigation::CoordinatorTestSupport {
         bool throwFailure_{};
         bool partial_{};
     };
+
+    /** @brief Own the coordinator's borrowed services and release a controlled worker before joining during teardown. */
+    struct ConsumerFixture final {
+        JobSystem jobs;
+        std::shared_ptr<Gate> gate;
+        NavigationWorldLifecycle world{std::move(NavigationWorldLifecycle::Create(4)).Value()};
+        NavigationCoordinator coordinator{std::move(NavigationCoordinator::Create(jobs, Limits())).Value()};
+
+        explicit ConsumerFixture(const std::uint32_t workers = 0, std::shared_ptr<Gate> held = {})
+            : jobs{{.workerCount = workers}}, gate(std::move(held)) {
+            if (gate)
+                Activate(world, std::make_unique<ControlledBackend>(gate));
+            else
+                Activate(world);
+        }
+
+        void FinishWorker() {
+            if (gate)
+                gate->Release();
+            jobs.Shutdown(ShutdownPolicy::Drain);
+        }
+
+        ~ConsumerFixture() {
+            FinishWorker();
+        }
+    };
+
+    /** @brief Admit one exact request and observe the deliberately held provider without hiding its terminal assertions. */
+    struct HeldConsumerFixture final {
+        ConsumerFixture owner{1, std::make_shared<Gate>()};
+        NavRequestHandle handle;
+        bool entered{};
+
+        HeldConsumerFixture() {
+            handle = Admit(owner.coordinator, owner.world);
+            REQUIRE(owner.coordinator.Dispatch(1) == 1);
+            entered = owner.gate->AwaitEntry();
+        }
+    };
 }  // namespace Horo::Navigation::CoordinatorTestSupport
