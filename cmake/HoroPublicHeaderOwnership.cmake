@@ -1270,5 +1270,9 @@ horo_configure_target_header_boundary(HoroHostErrors PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroUiAnimationRuntimeIntegration PUBLIC_HEADERS
     Horo/Runtime/UiAnimationRuntimeParticipant.h)
 
+horo_configure_target_header_boundary(HoroPCGSceneAdapter PUBLIC_HEADERS
+    Horo/PCGScene/SceneOutputAdapter.h
+)
+
 horo_verify_public_header_inventory()
 message(STATUS "Target-specific public header inventory is complete")

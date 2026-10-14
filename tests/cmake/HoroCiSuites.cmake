@@ -39,6 +39,9 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroTerrainAuthoringPublicHeaderConsumer
     HoroPCGTests
     HoroPCGTerrainAdapterTests
+    HoroPCGSceneAdapterTests
+    HoroPCGSceneAdapterPublicHeaderConsumer
+    HoroPCGSceneOutputContractConsumer
     HoroPCGPublicHeaderConsumer
     HoroPCGTerrainAdapterPublicHeaderConsumer
     HoroPCGDocumentTests

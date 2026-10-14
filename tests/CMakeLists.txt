@@ -4656,6 +4656,17 @@ target_link_libraries(HoroPCGDocumentPublicHeaderConsumer PRIVATE HoroEngine::Ed
 add_test(NAME HoroPCGDocumentPublicHeaderConsumer COMMAND HoroPCGDocumentPublicHeaderConsumer)
 set_tests_properties(HoroPCGDocumentPublicHeaderConsumer PROPERTIES LABELS "unit;editor;pcg;headless;public_headers;ci-windows")
 
+add_executable(HoroPCGSceneAdapterTests unit/runtime/pcg/SceneOutputAdapterTests.cpp)
+target_compile_features(HoroPCGSceneAdapterTests PRIVATE cxx_std_20)
+target_link_libraries(HoroPCGSceneAdapterTests PRIVATE HoroEngine::PCGSceneAdapter)
+horo_register_catch_test(HoroPCGSceneAdapterTests LABELS "unit;pcg;scene;headless;ci-windows;sonar-coverage")
+
+add_executable(HoroPCGSceneOutputContractConsumer support/PCGSceneAdapterPublicHeaderConsumer.cpp)
+target_compile_features(HoroPCGSceneOutputContractConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPCGSceneOutputContractConsumer PRIVATE HoroEngine::PCGSceneAdapter)
+add_test(NAME HoroPCGSceneOutputContractConsumer COMMAND HoroPCGSceneOutputContractConsumer)
+set_tests_properties(HoroPCGSceneOutputContractConsumer PROPERTIES LABELS "unit;pcg;headless;public_headers;ci-windows")
+
 horo_finalize_ci_suites()
 
 add_library(HoroXRProjectSettingsConsumer OBJECT public_headers/XRProjectSettingsConsumer.cpp)
