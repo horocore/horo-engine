@@ -47,6 +47,7 @@ namespace {
         NavigationCoordinator coordinator{std::move(NavigationCoordinator::Create(jobs, Limits())).Value()};
         NavigationAgentRegistry registry{std::move(NavigationAgentRegistry::Create({.maximumAgents = 1})).Value()};
         NavigationAgentSceneBinding binding{World(), Activation().scene, Activation().sceneGeneration};
+        std::unique_ptr<NavigationAgentSceneCandidate> candidate;
         std::unique_ptr<NavigationMovementController> movement;
         std::shared_ptr<GameplayNavigationContext> context;
 
@@ -55,7 +56,7 @@ namespace {
             const std::array descriptors{NavigationAgentDescriptor{.owner = {binding.scene, 0, 1},
                                                                    .profile = NavigationAgentProfileId::Create(1).Value(),
                                                                    .filter = Request().filter}};
-            auto candidate = std::move(registry.PrepareScene(binding, descriptors)).Value();
+            candidate = std::move(registry.PrepareScene(binding, descriptors)).Value();
             candidate->Publish();
             auto made = NavigationMovementController::Create(registry, world, coordinator,
                                                              registry.Snapshot().Value().Agents().front().handle, Caller());
@@ -122,14 +123,15 @@ TEST_CASE("Loaded native module reload and shutdown revoke pending navigation de
                                              Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)};
     auto loaded = host.Load(HORO_TEST_GAME_MODULE_PATH, expected);
     REQUIRE(loaded.HasValue());
-    REQUIRE(loaded.Value()->NavigationContext() == fixture.context);
-    auto request = loaded.Value()->NavigationContext()->Submit({.start = {1, 0, 1}, .destination = {9, 0, 9}});
+    std::unique_ptr<LoadedGameModule> module = std::move(loaded).Value();
+    REQUIRE(module->NavigationContext() == fixture.context);
+    auto request = module->NavigationContext()->Submit({.start = {1, 0, 1}, .destination = {9, 0, 9}});
     REQUIRE(request.HasValue());
     SECTION("reload") {
-        REQUIRE(loaded.Value()->PrepareReload().HasValue());
+        REQUIRE(module->PrepareReload().HasValue());
     }
     SECTION("shutdown") {
-        loaded.Value().reset();
+        module.reset();
     }
     auto result = request.Value().Poll();
     REQUIRE(result.HasError());
