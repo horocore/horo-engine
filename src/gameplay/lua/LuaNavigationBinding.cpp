@@ -74,17 +74,8 @@ namespace Horo::Gameplay::Detail {
             Number(state, "polygon_index", value.polygonIndex);
         }
 
-        /** @brief Retain path completion meaning and every owned corridor/portal/waypoint proof. */
-        void Path(lua_State *state, const Navigation::NavigationPath &path) {
-            lua_newtable(state);
-            Number(state, "status", path.status);
-            Number(state, "stop_reason", path.stopReason);
-            Number(state, "stop_polygon_index", path.stopPolygonIndex);
-            Number(state, "cost", path.cost);
-            Number(state, "length_meters", path.lengthMeters);
-            Identity(state, "source_generation", path.sourceGeneration.Value());
-            Vector(state, path.stopPosition);
-            lua_setfield(state, -2, "stop_position");
+        /** @brief Copy bounded owned corridor evidence into the script result. */
+        void Corridor(lua_State *state, const Navigation::NavigationPath &path) {
             lua_createtable(state, static_cast<int>(path.corridor.size()), 0);
             for (std::size_t i = 0; i < path.corridor.size(); ++i) {
                 lua_newtable(state);
@@ -93,7 +84,10 @@ namespace Horo::Gameplay::Detail {
                 Identity(state, "area", path.corridor[i].area.Value());
                 lua_rawseti(state, -2, static_cast<lua_Integer>(i + 1));
             }
-            lua_setfield(state, -2, "corridor");
+        }
+
+        /** @brief Copy bounded owned portals evidence into the script result. */
+        void Portals(lua_State *state, const Navigation::NavigationPath &path) {
             lua_createtable(state, static_cast<int>(path.portals.size()), 0);
             for (std::size_t i = 0; i < path.portals.size(); ++i) {
                 const auto &portal = path.portals[i];
@@ -111,7 +105,10 @@ namespace Horo::Gameplay::Detail {
                 lua_setfield(state, -2, "right");
                 lua_rawseti(state, -2, static_cast<lua_Integer>(i + 1));
             }
-            lua_setfield(state, -2, "portals");
+        }
+
+        /** @brief Copy bounded owned waypoints evidence into the script result. */
+        void Waypoints(lua_State *state, const Navigation::NavigationPath &path) {
             lua_createtable(state, static_cast<int>(path.waypoints.size()), 0);
             for (std::size_t i = 0; i < path.waypoints.size(); ++i) {
                 const auto &point = path.waypoints[i];
@@ -128,6 +125,24 @@ namespace Horo::Gameplay::Detail {
                 lua_setfield(state, -2, "provenance");
                 lua_rawseti(state, -2, static_cast<lua_Integer>(i + 1));
             }
+        }
+
+        /** @brief Retain path completion meaning and every owned corridor/portal/waypoint proof. */
+        void Path(lua_State *state, const Navigation::NavigationPath &path) {
+            lua_newtable(state);
+            Number(state, "status", path.status);
+            Number(state, "stop_reason", path.stopReason);
+            Number(state, "stop_polygon_index", path.stopPolygonIndex);
+            Number(state, "cost", path.cost);
+            Number(state, "length_meters", path.lengthMeters);
+            Identity(state, "source_generation", path.sourceGeneration.Value());
+            Vector(state, path.stopPosition);
+            lua_setfield(state, -2, "stop_position");
+            Corridor(state, path);
+            lua_setfield(state, -2, "corridor");
+            Portals(state, path);
+            lua_setfield(state, -2, "portals");
+            Waypoints(state, path);
             lua_setfield(state, -2, "waypoints");
             lua_createtable(state, static_cast<int>(path.points.size()), 0);
             for (std::size_t i = 0; i < path.points.size(); ++i) {

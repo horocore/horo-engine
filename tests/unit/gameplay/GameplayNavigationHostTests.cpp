@@ -96,7 +96,7 @@ namespace {
         return BehaviorTypeId::Parse("game.tests.navigation").Value();
     }
 
-    std::string Lua(std::string callback) {
+    std::string Lua(const std::string &callback) {
         return "local retained; return horo.behavior "
                "{type_id='game.tests.navigation',display_name='Navigation',on_fixed_update=function(ctx,dt) " +
                callback + " end}";

@@ -48,6 +48,65 @@ namespace Horo::Gameplay {
             return Result<void>::Success();
         }
 
+        /** @brief Validate operation admission in the same order for native and script callers. */
+        Result<void> ValidateRequest(const GameplayNavigationRequest &request) const {
+            if (auto check = Check(); check.HasError())
+                return check;
+            auto failure = [](const ErrorCodeDescriptor &error) {
+                return Result<void>::Failure(MakeError(error));
+            };
+            if (request.operation >= GameplayNavigationOperation::Count || !Math::IsFinite(request.start) ||
+                !Math::IsFinite(request.destination))
+                return failure(Navigation::NavigationErrors::CapabilityDescriptorInvalid);
+            const bool query = request.operation == GameplayNavigationOperation::Path;
+            if (!(query ? binding.queryGranted : binding.movementGranted))
+                return failure(NavigationCapabilityErrors::PermissionDenied);
+            if (!coordinator || (!query && !movement))
+                return failure(Navigation::NavigationErrors::CapabilityUnavailable);
+            if (!current)
+                return failure(Navigation::NavigationErrors::StaleSnapshot);
+            if (records.size() >= maximum)
+                return failure(Navigation::NavigationErrors::AdmissionRejected);
+            if (request.cancellation.IsCancellationRequested())
+                return failure(Navigation::NavigationErrors::QueryCancelled);
+            return Result<void>::Success();
+        }
+
+        /** @brief Forward host query policy and exact copied caller context to the canonical coordinator. */
+        Result<Navigation::NavRequestHandle> SubmitPath(GameplayNavigationRequest &request, CancellationToken cancellation) {
+            auto submission = policy;
+            if (submission.deadlineTick <= submission.targetTick ||
+                current->path.tick > std::numeric_limits<std::uint64_t>::max() - submission.deadlineTick)
+                return Result<Navigation::NavRequestHandle>::Failure(MakeError(Navigation::NavigationErrors::CapabilityDescriptorInvalid));
+            submission.targetTick += current->path.tick;
+            submission.deadlineTick += current->path.tick;
+            submission.source = current->path.provenance;
+            submission.request.world = current->binding.world;
+            submission.request.topology = current->path.provenance.topology;
+            submission.request.start = request.start;
+            submission.request.destination = request.destination;
+            submission.cancellation = std::move(cancellation);
+            submission.operation = std::move(request.context);
+            return coordinator->Submit(*world, std::move(submission), current->path.tick);
+        }
+
+        /** @brief Forward the same owner observation and request lifetime into canonical movement. */
+        Result<Navigation::NavigationMovementId> SubmitMovement(GameplayNavigationRequest &request, CancellationToken cancellation) {
+            Navigation::NavigationMovementRequest move{.mode = request.operation == GameplayNavigationOperation::MoveTo
+                                                                   ? Navigation::NavigationMovementMode::MoveTo
+                                                                   : Navigation::NavigationMovementMode::Follow,
+                                                       .destination = request.destination,
+                                                       .entity = request.target,
+                                                       .query = policy.request.requirement,
+                                                       .capabilityRevision = policy.capabilityRevision,
+                                                       .cancellation = std::move(cancellation),
+                                                       .operation = std::move(request.context)};
+            auto accepted = movement->Start(std::move(move), *current);
+            if (accepted.HasError())
+                return Result<Navigation::NavigationMovementId>::Failure(accepted.ErrorValue());
+            return Result<Navigation::NavigationMovementId>::Success(accepted.Value().accepted);
+        }
+
         /** @brief Transfer canonical owner-published records, preserving terminal errors and replacement identities. */
         void Poll(GameplayNavigationRecord &record) {
             if (record.completed || record.error)
@@ -112,36 +171,36 @@ namespace Horo::Gameplay {
     GameplayNavigationContext::GameplayNavigationContext(std::shared_ptr<GameplayNavigationState> state) : state_(std::move(state)) {}
 
     /** @copydoc GameplayNavigationContext::Create */
-    Result<std::shared_ptr<GameplayNavigationContext>> GameplayNavigationContext::Create(GameplayNavigationBinding binding,
-                                                                                         Navigation::NavigationWorldLifecycle *world,
-                                                                                         Navigation::NavigationCoordinator *coordinator,
-                                                                                         Navigation::NavigationMovementController *movement,
-                                                                                         Navigation::NavigationPathSubmission policy,
-                                                                                         const std::size_t maximumPending) try {
-        if (!binding.moduleId.starts_with("game.") || maximumPending == 0 || maximumPending > 64 ||
-            (world == nullptr) != (coordinator == nullptr) || (movement && (movement->Binding() != binding.scene || !coordinator)))
-            return Result<std::shared_ptr<GameplayNavigationContext>>::Failure(
-                MakeError(Navigation::NavigationErrors::CapabilityDescriptorInvalid));
-        if (world) {
-            auto lease = world->Acquire(binding.scene.world);
-            if (lease.HasError())
-                return Result<std::shared_ptr<GameplayNavigationContext>>::Failure(lease.ErrorValue());
-            if (lease.Value().Descriptor().scene != binding.scene.scene ||
-                lease.Value().Descriptor().sceneGeneration != binding.scene.sceneGeneration)
-                return Result<std::shared_ptr<GameplayNavigationContext>>::Failure(MakeError(Navigation::NavigationErrors::InvalidWorld));
+    Result<std::shared_ptr<GameplayNavigationContext>> GameplayNavigationContext::Create(
+        GameplayNavigationBinding binding, Navigation::NavigationWorldLifecycle *world, Navigation::NavigationCoordinator *coordinator,
+        Navigation::NavigationMovementController *movement, Navigation::NavigationPathSubmission policy, const std::size_t maximumPending) {
+        try {
+            if (!binding.moduleId.starts_with("game.") || maximumPending == 0 || maximumPending > 64 ||
+                (world == nullptr) != (coordinator == nullptr) || (movement && (movement->Binding() != binding.scene || !coordinator)))
+                return Result<std::shared_ptr<GameplayNavigationContext>>::Failure(
+                    MakeError(Navigation::NavigationErrors::CapabilityDescriptorInvalid));
+            if (world) {
+                auto lease = world->Acquire(binding.scene.world);
+                if (lease.HasError())
+                    return Result<std::shared_ptr<GameplayNavigationContext>>::Failure(lease.ErrorValue());
+                if (lease.Value().Descriptor().scene != binding.scene.scene ||
+                    lease.Value().Descriptor().sceneGeneration != binding.scene.sceneGeneration)
+                    return Result<std::shared_ptr<GameplayNavigationContext>>::Failure(
+                        MakeError(Navigation::NavigationErrors::InvalidWorld));
+            }
+            auto state = std::make_shared<GameplayNavigationState>();
+            state->binding = std::move(binding);
+            state->world = world;
+            state->coordinator = coordinator;
+            state->movement = movement;
+            state->policy = std::move(policy);
+            state->maximum = maximumPending;
+            state->records.reserve(maximumPending);
+            return Result<std::shared_ptr<GameplayNavigationContext>>::Success(
+                std::shared_ptr<GameplayNavigationContext>{new GameplayNavigationContext{std::move(state)}});
+        } catch (const std::bad_alloc &) {
+            return Result<std::shared_ptr<GameplayNavigationContext>>::Failure(MakeError(Navigation::NavigationErrors::CapacityExceeded));
         }
-        auto state = std::make_shared<GameplayNavigationState>();
-        state->binding = std::move(binding);
-        state->world = world;
-        state->coordinator = coordinator;
-        state->movement = movement;
-        state->policy = std::move(policy);
-        state->maximum = maximumPending;
-        state->records.reserve(maximumPending);
-        return Result<std::shared_ptr<GameplayNavigationContext>>::Success(
-            std::shared_ptr<GameplayNavigationContext>{new GameplayNavigationContext{std::move(state)}});
-    } catch (const std::bad_alloc &) {
-        return Result<std::shared_ptr<GameplayNavigationContext>>::Failure(MakeError(Navigation::NavigationErrors::CapacityExceeded));
     }
 
     GameplayNavigationContext::~GameplayNavigationContext() {
@@ -189,67 +248,28 @@ namespace Horo::Gameplay {
     }
 
     /** @copydoc GameplayNavigationContext::Submit */
-    Result<GameplayNavigationHandle> GameplayNavigationContext::Submit(GameplayNavigationRequest request) const try {
-        using Navigation::NavigationErrors::CapabilityDescriptorInvalid;
-        auto failure = [](const ErrorCodeDescriptor &error) {
-            return Result<GameplayNavigationHandle>::Failure(MakeError(error));
-        };
-        if (auto check = state_->Check(); check.HasError())
-            return Result<GameplayNavigationHandle>::Failure(check.ErrorValue());
-        if (request.operation >= GameplayNavigationOperation::Count || !Math::IsFinite(request.start) ||
-            !Math::IsFinite(request.destination))
-            return failure(CapabilityDescriptorInvalid);
-        const bool query = request.operation == GameplayNavigationOperation::Path;
-        if (!(query ? state_->binding.queryGranted : state_->binding.movementGranted))
-            return failure(NavigationCapabilityErrors::PermissionDenied);
-        if (!state_->coordinator || (!query && !state_->movement))
-            return failure(Navigation::NavigationErrors::CapabilityUnavailable);
-        if (!state_->current)
-            return failure(Navigation::NavigationErrors::StaleSnapshot);
-        if (state_->records.size() >= state_->maximum)
-            return failure(Navigation::NavigationErrors::AdmissionRejected);
-        if (request.cancellation.IsCancellationRequested())
-            return failure(Navigation::NavigationErrors::QueryCancelled);
-        auto record = std::make_shared<GameplayNavigationRecord>();
-        record->cancellation = CancellationSource{request.cancellation};
-        const auto &current = *state_->current;
-        if (query) {
-            auto submission = state_->policy;
-            if (submission.deadlineTick <= submission.targetTick ||
-                current.path.tick > std::numeric_limits<std::uint64_t>::max() - submission.deadlineTick)
-                return failure(CapabilityDescriptorInvalid);
-            submission.targetTick += current.path.tick;
-            submission.deadlineTick += current.path.tick;
-            submission.source = current.path.provenance;
-            submission.request.world = current.binding.world;
-            submission.request.topology = current.path.provenance.topology;
-            submission.request.start = request.start;
-            submission.request.destination = request.destination;
-            submission.cancellation = record->cancellation.Token();
-            submission.operation = std::move(request.context);
-            auto result = state_->coordinator->Submit(*state_->world, std::move(submission), current.path.tick);
-            if (result.HasError())
-                return Result<GameplayNavigationHandle>::Failure(result.ErrorValue());
-            record->query = result.Value();
-        } else {
-            Navigation::NavigationMovementRequest move{.mode = request.operation == GameplayNavigationOperation::MoveTo
-                                                                   ? Navigation::NavigationMovementMode::MoveTo
-                                                                   : Navigation::NavigationMovementMode::Follow,
-                                                       .destination = request.destination,
-                                                       .entity = request.target,
-                                                       .query = state_->policy.request.requirement,
-                                                       .capabilityRevision = state_->policy.capabilityRevision,
-                                                       .cancellation = record->cancellation.Token(),
-                                                       .operation = std::move(request.context)};
-            auto result = state_->movement->Start(std::move(move), current);
-            if (result.HasError())
-                return Result<GameplayNavigationHandle>::Failure(result.ErrorValue());
-            record->movement = result.Value().accepted;
+    Result<GameplayNavigationHandle> GameplayNavigationContext::Submit(GameplayNavigationRequest request) const {
+        try {
+            if (auto admission = state_->ValidateRequest(request); admission.HasError())
+                return Result<GameplayNavigationHandle>::Failure(admission.ErrorValue());
+            auto record = std::make_shared<GameplayNavigationRecord>();
+            record->cancellation = CancellationSource{request.cancellation};
+            if (request.operation == GameplayNavigationOperation::Path) {
+                auto accepted = state_->SubmitPath(request, record->cancellation.Token());
+                if (accepted.HasError())
+                    return Result<GameplayNavigationHandle>::Failure(accepted.ErrorValue());
+                record->query = accepted.Value();
+            } else {
+                auto accepted = state_->SubmitMovement(request, record->cancellation.Token());
+                if (accepted.HasError())
+                    return Result<GameplayNavigationHandle>::Failure(accepted.ErrorValue());
+                record->movement = accepted.Value();
+            }
+            state_->records.push_back(record);
+            return Result<GameplayNavigationHandle>::Success(GameplayNavigationHandle{state_, std::move(record)});
+        } catch (const std::bad_alloc &) {
+            return Result<GameplayNavigationHandle>::Failure(MakeError(Navigation::NavigationErrors::CapacityExceeded));
         }
-        state_->records.push_back(record);
-        return Result<GameplayNavigationHandle>::Success(GameplayNavigationHandle{state_, std::move(record)});
-    } catch (const std::bad_alloc &) {
-        return Result<GameplayNavigationHandle>::Failure(MakeError(Navigation::NavigationErrors::CapacityExceeded));
     }
 
     /** @copydoc GameplayNavigationContext::IsUsable */
