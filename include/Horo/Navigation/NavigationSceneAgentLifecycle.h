@@ -8,6 +8,14 @@
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
 namespace Horo::Navigation {
+    /** @brief Exact host-published identity used to admit one Scene navigation lifecycle owner. */
+    struct NavigationSceneAgentLifecycleDescriptor final {
+        Runtime::EntityRef entity;       /**< Exact live Scene entity. */
+        CrowdAgentHandle agent;          /**< Its enabled logical registration. */
+        NavigationPathCaller caller;     /**< Unique host caller incarnation. */
+        std::uint64_t characterRevision; /**< Nonzero Character reset incarnation. */
+    };
+
     /** @brief Explicit host-composed navigation owner for one exact live Scene entity.
      * @details Registry, world and coordinator outlive this owner. All calls run on the Scene/navigation owner thread
      * after CommitDeferredLifecycleChanges and before Character locomotion. Scene views are borrowed only for calls;
@@ -18,18 +26,32 @@ namespace Horo::Navigation {
      * remains the sole transform/velocity authority. No callback, provider discovery or extra worker pool is installed.
      */
     class NavigationSceneAgentLifecycle final {
+        struct ConstructionKey {
+        private:
+            friend class NavigationSceneAgentLifecycle;
+            ConstructionKey() = default;
+        };
+
     public:
+        /** @brief Factory-only construction after Scene and movement admission.
+         * @param registry Borrowed logical registration authority.
+         * @param entity Validated exact Scene entity.
+         * @param movement Owned admitted movement controller.
+         * @param velocity Owned admitted avoidance pipeline.
+         * @param revision Validated Character reset incarnation.
+         */
+        NavigationSceneAgentLifecycle(ConstructionKey, NavigationAgentRegistry &registry, Runtime::EntityRef entity,
+                                      std::unique_ptr<NavigationMovementController> movement,
+                                      std::unique_ptr<NavigationVelocityPipeline> velocity, std::uint64_t revision) noexcept;
         /** @brief Validate the exact Scene entity and compose real movement/pipeline owners outside fixed-tick work.
          * @param registry Logical registration authority. @param world Committed navigation world owner.
          * @param coordinator Canonical query/JobSystem owner. @param scene Current committed Scene view.
-         * @param entity Exact live entity reference. @param agent Its enabled registration.
-         * @param caller Unique host caller incarnation. @param characterRevision Nonzero Character reset incarnation.
+         * @param descriptor Exact entity, registration, caller and Character reset identity.
          * @return Owned lifecycle or typed descriptor/currentness failure; no registry mutation on failure.
          */
         [[nodiscard]] static Result<std::unique_ptr<NavigationSceneAgentLifecycle>> Create(
             NavigationAgentRegistry &registry, NavigationWorldLifecycle &world, NavigationCoordinator &coordinator,
-            Runtime::RuntimeSceneView scene, Runtime::EntityRef entity, CrowdAgentHandle agent, NavigationPathCaller caller,
-            std::uint64_t characterRevision);
+            Runtime::RuntimeSceneView scene, const NavigationSceneAgentLifecycleDescriptor &descriptor);
         NavigationSceneAgentLifecycle(const NavigationSceneAgentLifecycle &) = delete;
         NavigationSceneAgentLifecycle &operator=(const NavigationSceneAgentLifecycle &) = delete;
         /** @brief Retire logical registration and transfer remaining query retirement without waiting. */
@@ -87,7 +109,7 @@ namespace Horo::Navigation {
         [[nodiscard]] Result<NavigationVelocityWork> PrepareVelocity(Runtime::RuntimeSceneView scene,
                                                                      const NavigationMovementObservation &current,
                                                                      const NavigationCrowdSnapshot &snapshot,
-                                                                     NavigationAvoidanceRequest request);
+                                                                     const NavigationAvoidanceRequest &request);
         /** @brief Recheck Scene lifecycle and pipeline currency immediately before publishing a worker result.
          * @param scene Fresh view. @param work Exact owner-issued input. @param outcome Worker result.
          * @param snapshot Fresh complete capture. @param current Same-tick observation.
@@ -114,9 +136,6 @@ namespace Horo::Navigation {
     private:
         /** @brief Validate live authority without globally polling coordinator partitions. */
         [[nodiscard]] Result<void> ValidateSceneAuthority(std::optional<Runtime::RuntimeSceneView> scene);
-        NavigationSceneAgentLifecycle(NavigationAgentRegistry &registry, Runtime::EntityRef entity,
-                                      std::unique_ptr<NavigationMovementController> movement,
-                                      std::unique_ptr<NavigationVelocityPipeline> velocity, std::uint64_t revision) noexcept;
         /** @brief Validate exact live Scene entity/component without retaining its borrowed storage. */
         [[nodiscard]] static bool LiveEntity(Runtime::RuntimeSceneView scene, Runtime::EntityRef entity);
         /** @brief Validate the accepted goal entity against committed Scene storage, independently of host target facts. */
@@ -127,7 +146,7 @@ namespace Horo::Navigation {
         /** @brief Install a zero post-discontinuity motion sample while preserving publication tick fences. */
         void ResetMotionSample(const NavigationMovementObservation &current, std::uint64_t revision) noexcept;
         /** @brief Compare the solver's captured position/velocity to the current owner-supplied Character sample. */
-        [[nodiscard]] bool MatchesMotion(const NavigationCrowdSnapshot &snapshot, std::uint32_t index, std::uint64_t tick) const noexcept;
+        [[nodiscard]] bool MatchesMotion(const NavigationCrowdSnapshot &snapshot, std::size_t index, std::uint64_t tick) const noexcept;
         NavigationAgentRegistry &registry_;
         Runtime::EntityRef entity_;
         std::optional<NavigationAgentOwner> target_;

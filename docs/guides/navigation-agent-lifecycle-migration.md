@@ -31,7 +31,16 @@ reservation or avoidance history owned by a disappearing consumer.
 Create one lifecycle owner outside fixed-tick work for each enabled exact Scene
 entity and published registration. `Create` validates the entity and composes
 the actual movement controller and velocity pipeline. Failed creation does not
-mutate the registry. Scene views are borrowed only for each call; do not retain
+mutate the registry. Pass the exact host-published entity, registration, caller
+and Character revision together as `NavigationSceneAgentLifecycleDescriptor`:
+
+```cpp
+auto owner = NavigationSceneAgentLifecycle::Create(
+    registry, world, coordinator, scene, {entity, agent, caller, characterRevision});
+```
+
+The descriptor is inert admission metadata; it owns no services or Scene storage.
+The borrowed authorities remain explicit factory parameters. Scene views are borrowed only for each call; do not retain
 their pointers in worker captures.
 
 After `CommitDeferredLifecycleChanges`, invoke `ReconcileAtSafePoint` for every

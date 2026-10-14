@@ -113,7 +113,7 @@ namespace Horo::Navigation::SceneLifecycleTestSupport {
             REQUIRE(world.Stage(activation, std::make_unique<FencedProvider>(MakeGroundedProvider(binding.world), fence)).HasValue());
             REQUIRE(world.CommitAtSafePoint(binding.scene, binding.sceneGeneration).HasValue());
             auto created =
-                NavigationSceneAgentLifecycle::Create(registry, world, coordinator, *scene.ActiveScene(), entity, agent, caller, 1);
+                NavigationSceneAgentLifecycle::Create(registry, world, coordinator, *scene.ActiveScene(), {entity, agent, caller, 1});
             REQUIRE(created.HasValue());
             lifecycle = std::move(created).Value();
         }

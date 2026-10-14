@@ -2,6 +2,8 @@
 #include "Horo/Navigation/Backends/RecastDetourCrowdProvider.h"
 #include "navigation/NavigationSceneLifecycleFixture.h"
 
+#include <limits>
+
 namespace Horo::Navigation {
     namespace {
         using namespace SceneLifecycleTestSupport;
@@ -98,6 +100,30 @@ namespace Horo::Navigation {
             else
                 REQUIRE(fixture.lifecycle->ReconcileAtSafePoint(std::nullopt).HasError());
             REQUIRE(fixture.coordinator.IsDrained());
+        }
+    }
+
+    TEST_CASE("Scene lifecycle rejects out-of-range avoidance indices without narrowing to a live agent",
+              "[unit][navigation][scene][lifecycle][avoidance]") {
+        Fixture fixture{1};
+        fixture.PublishRoute();
+        const auto current = fixture.Now(1);
+        const auto snapshot = Capture(fixture, current);
+        NavigationAvoidanceRequest request{.maximumAccelerationMetersPerSecondSquared = 20, .stepSeconds = 0.1F};
+        const auto scene = *fixture.scene.ActiveScene();
+        const auto rejected = fixture.lifecycle->PrepareVelocity(scene, current, snapshot, {.agentIndex = snapshot.Agents().size()});
+        REQUIRE(rejected.HasError());
+        REQUIRE(rejected.ErrorValue().code.Value() == NavigationErrors::StaleSnapshot.code.Value());
+        if constexpr (std::numeric_limits<std::size_t>::max() > std::numeric_limits<std::uint32_t>::max()) {
+            request.agentIndex = static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) + 1;
+            const auto work = Prepare(fixture, snapshot, current);
+            const auto oversized = fixture.lifecycle->PrepareVelocity(scene, current, snapshot, request);
+            REQUIRE(oversized.HasError());
+            REQUIRE(oversized.ErrorValue().code.Value() == NavigationErrors::StaleSnapshot.code.Value());
+            auto late = work;
+            late.request.agentIndex = request.agentIndex;
+            REQUIRE(fixture.lifecycle->CommitVelocity(scene, late, {}, snapshot, current).HasError());
+            REQUIRE(fixture.lifecycle->CancelVelocity(work));
         }
     }
 

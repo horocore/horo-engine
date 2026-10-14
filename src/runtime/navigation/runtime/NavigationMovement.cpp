@@ -152,8 +152,8 @@ namespace Horo::Navigation {
     Result<NavigationAgentRecord> NavigationMovementController::AdmitRebindAgent(const CrowdAgentHandle agent,
                                                                                  const NavigationMovementObservation &current) const {
         const auto record = registry_.Find(agent);
-        const auto binding = registry_.ActiveBinding();
-        if (record.HasError() || binding.HasError() || !record.Value().enabled || record.Value().owner != agent_.owner ||
+        if (const auto binding = registry_.ActiveBinding();
+            record.HasError() || binding.HasError() || !record.Value().enabled || record.Value().owner != agent_.owner ||
             binding.Value() != current.binding || current.binding.scene != binding_.scene ||
             current.binding.sceneGeneration != binding_.sceneGeneration || current.path.provenance.world != current.binding.world)
             return Result<NavigationAgentRecord>::Failure(MakeError(NavigationErrors::AgentRegistryStale));
@@ -173,9 +173,9 @@ namespace Horo::Navigation {
     Result<NavigationPathPolicy> NavigationMovementController::PrepareRebindPolicy(const NavigationMovementObservation &current,
                                                                                    const NavigationWorldReadLease &lease) const {
         using Return = Result<NavigationPathPolicy>;
-        const auto &activation = lease.Descriptor();
-        if (activation.scene != current.binding.scene || activation.sceneGeneration != current.binding.sceneGeneration ||
-            activation.topology != current.path.provenance.topology)
+        if (const auto &activation = lease.Descriptor(); activation.scene != current.binding.scene ||
+                                                         activation.sceneGeneration != current.binding.sceneGeneration ||
+                                                         activation.topology != current.path.provenance.topology)
             return Return::Failure(MakeError(NavigationErrors::StaleSnapshot));
         auto candidate = NavigationPathPolicy{request_.repath};
         auto path = current.path;

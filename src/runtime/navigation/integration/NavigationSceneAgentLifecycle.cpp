@@ -16,11 +16,14 @@ namespace Horo::Navigation {
     /** @copydoc NavigationSceneAgentLifecycle::Create */
     Result<std::unique_ptr<NavigationSceneAgentLifecycle>> NavigationSceneAgentLifecycle::Create(
         NavigationAgentRegistry &registry, NavigationWorldLifecycle &world, NavigationCoordinator &coordinator,
-        const Runtime::RuntimeSceneView scene, const Runtime::EntityRef entity, const CrowdAgentHandle agent,
-        const NavigationPathCaller caller, const std::uint64_t characterRevision) {
+        const Runtime::RuntimeSceneView scene, const NavigationSceneAgentLifecycleDescriptor &descriptor) {
+        const auto &entity = descriptor.entity;
+        const auto &agent = descriptor.agent;
+        const auto &caller = descriptor.caller;
+        const auto characterRevision = descriptor.characterRevision;
         using Return = Result<std::unique_ptr<NavigationSceneAgentLifecycle>>;
-        const auto record = registry.Find(agent);
-        if (!LiveEntity(scene, entity) || record.HasError() || record.Value().owner.scene.Value() != entity.runtime.value ||
+        if (const auto record = registry.Find(agent);
+            !LiveEntity(scene, entity) || record.HasError() || record.Value().owner.scene.Value() != entity.runtime.value ||
             record.Value().owner.entityIndex != entity.entity.index || record.Value().owner.entityGeneration != entity.entity.generation)
             return Return::Failure(MakeError(NavigationErrors::AgentRegistryStale));
         auto movement = NavigationMovementController::Create(registry, world, coordinator, agent, caller);
@@ -30,16 +33,17 @@ namespace Horo::Navigation {
         if (velocity.HasError())
             return Return::Failure(velocity.ErrorValue());
         try {
-            return Return::Success(std::unique_ptr<NavigationSceneAgentLifecycle>(
-                new NavigationSceneAgentLifecycle{registry, entity, std::move(movement).Value(), std::move(velocity).Value(),
-                                                  characterRevision}));
+            return Return::Success(std::make_unique<NavigationSceneAgentLifecycle>(ConstructionKey{}, registry, entity,
+                                                                                   std::move(movement).Value(), std::move(velocity).Value(),
+                                                                                   characterRevision));
         } catch (const std::bad_alloc &) {
             return Return::Failure(MakeError(NavigationErrors::CapacityExceeded));
         }
     }
 
     /** @copydoc NavigationSceneAgentLifecycle::NavigationSceneAgentLifecycle */
-    NavigationSceneAgentLifecycle::NavigationSceneAgentLifecycle(NavigationAgentRegistry &registry, const Runtime::EntityRef entity,
+    NavigationSceneAgentLifecycle::NavigationSceneAgentLifecycle(ConstructionKey, NavigationAgentRegistry &registry,
+                                                                 const Runtime::EntityRef entity,
                                                                  std::unique_ptr<NavigationMovementController> movement,
                                                                  std::unique_ptr<NavigationVelocityPipeline> velocity,
                                                                  const std::uint64_t revision) noexcept
@@ -65,9 +69,9 @@ namespace Horo::Navigation {
         if (scene.has_value() && !scene->IsCurrent())
             return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
         const auto record = registry_.Find(movement_->Agent());
-        const auto binding = registry_.ActiveBinding();
-        if (!scene.has_value() || !LiveEntity(*scene, entity_) || record.HasError() || !record.Value().enabled || binding.HasError() ||
-            binding.Value() != movement_->Binding()) {
+        if (const auto binding = registry_.ActiveBinding(); !scene.has_value() || !LiveEntity(*scene, entity_) || record.HasError() ||
+                                                            !record.Value().enabled || binding.HasError() ||
+                                                            binding.Value() != movement_->Binding()) {
             DisableAtSafePoint();
             return Result<void>::Failure(MakeError(NavigationErrors::AgentRegistryStale));
         }
@@ -172,7 +176,7 @@ namespace Horo::Navigation {
     }
 
     /** @copydoc NavigationSceneAgentLifecycle::MatchesMotion */
-    bool NavigationSceneAgentLifecycle::MatchesMotion(const NavigationCrowdSnapshot &snapshot, const std::uint32_t index,
+    bool NavigationSceneAgentLifecycle::MatchesMotion(const NavigationCrowdSnapshot &snapshot, const std::size_t index,
                                                       const std::uint64_t tick) const noexcept {
         if (!motionTick_.has_value() || *motionTick_ != tick || index >= snapshot.Agents().size())
             return false;
@@ -184,7 +188,7 @@ namespace Horo::Navigation {
     Result<NavigationVelocityWork> NavigationSceneAgentLifecycle::PrepareVelocity(const Runtime::RuntimeSceneView scene,
                                                                                   const NavigationMovementObservation &current,
                                                                                   const NavigationCrowdSnapshot &snapshot,
-                                                                                  const NavigationAvoidanceRequest request) {
+                                                                                  const NavigationAvoidanceRequest &request) {
         if (const auto live = ValidateSceneAuthority(scene); live.HasError())
             return Result<NavigationVelocityWork>::Failure(live.ErrorValue());
         if (!MatchesMotion(snapshot, request.agentIndex, current.path.tick))
