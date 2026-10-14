@@ -179,6 +179,92 @@ namespace Horo::PCG {
             }
             return Result<void>::Success();
         }
+
+        /** @brief Validate and own one desired payload while preserving exact owner mapping and byte admission. */
+        Result<void> StageDesired(PCGSceneOutputCommand &command, const PCGSceneOutputIntent &intent, const PCGSceneOutputMapping *mapping,
+                                  const PCGGenerationPlan &plan, const PCGSceneOutputContext &context, std::size_t &bytes) {
+            const auto &delta = command.delta;
+            command.object = intent.desired.id;
+            const bool occupied = std::ranges::binary_search(context.occupiedObjects, command.object);
+            if ((delta.kind == PCGOutputDeltaKind::Create && (occupied || mapping)) ||
+                (delta.kind == PCGOutputDeltaKind::Update && (!mapping || mapping->object != command.object)))
+                return Reject<void>(PCGErrors::GenerationOwnershipMismatch);
+            if (!ValidMesh(intent, delta, plan))
+                return Reject<void>(PCGErrors::GenerationPlanInvalid);
+            auto encoded = Encode(intent.desired, context.maximumPayloadBytes);
+            if (encoded.HasError())
+                return Result<void>::Failure(encoded.ErrorValue());
+            if (ComputeSha256(std::as_bytes(std::span{encoded.Value().data(), encoded.Value().size()})) != delta.desiredContent)
+                return Reject<void>(PCGErrors::GenerationPlanStale);
+            const auto payloadBytes = OwnedBytes(intent.desired);
+            const auto preparationBytes = encoded.Value().size();
+            if (payloadBytes > context.maximumRetainedBytes - bytes ||
+                preparationBytes > context.maximumRetainedBytes - bytes - payloadBytes)
+                return Reject<void>(PCGErrors::GenerationPlanCapacityExceeded);
+            bytes += payloadBytes + preparationBytes;
+            command.desired = intent.desired;
+            command.mesh = intent.mesh;
+            return Result<void>::Success();
+        }
+
+        /** @brief Translate exactly one create/update/remove and account for its dependency storage. */
+        Result<PCGSceneOutputCommand> TranslateDelta(const PCGOutputDelta &delta, const PCGGenerationPlan &plan,
+                                                     const std::span<const PCGSceneOutputIntent> intents,
+                                                     const PCGSceneOutputContext &context, std::size_t &bytes, std::size_t &usedIntents) {
+            const auto found = std::ranges::find(context.currentMappings, delta.provenance.logicalOutput, &PCGSceneOutputMapping::logical);
+            const auto *mapping = found == context.currentMappings.end() ? nullptr : &*found;
+            PCGSceneOutputCommand command{delta, {}, {}, {}};
+            if (delta.kind == PCGOutputDeltaKind::Remove) {
+                if (!mapping)
+                    return Reject<PCGSceneOutputCommand>(PCGErrors::GenerationOwnershipMismatch);
+                command.object = mapping->object;
+            } else {
+                const auto intent = std::ranges::find(intents, delta.provenance.logicalOutput, &PCGSceneOutputIntent::logical);
+                if (intent == intents.end() || std::ranges::count(intents, intent->logical, &PCGSceneOutputIntent::logical) != 1)
+                    return Reject<PCGSceneOutputCommand>(PCGErrors::GenerationPlanInvalid);
+                ++usedIntents;
+                auto staged = StageDesired(command, *intent, mapping, plan, context, bytes);
+                if (staged.HasError())
+                    return Result<PCGSceneOutputCommand>::Failure(staged.ErrorValue());
+            }
+            const auto dependencyBytes = delta.dependencies.size() * sizeof(GenerationDependencyId);
+            if (dependencyBytes > context.maximumRetainedBytes - bytes)
+                return Reject<PCGSceneOutputCommand>(PCGErrors::GenerationPlanCapacityExceeded);
+            bytes += dependencyBytes;
+            return Result<PCGSceneOutputCommand>::Success(std::move(command));
+        }
+
+        /** @brief Build the canonical detached batch and validate its complete staged hierarchy under a finite charge. */
+        Result<std::vector<PCGSceneOutputCommand>> TranslateCommands(const PCGGenerationPlan &plan,
+                                                                     const std::span<const PCGSceneOutputIntent> intents,
+                                                                     const PCGSceneOutputContext &context, std::size_t &bytes) {
+            using Commands = std::vector<PCGSceneOutputCommand>;
+            Commands commands;
+            commands.reserve(plan.Outputs().size());
+            bytes = sizeof(PCGSceneOutputBatch) + plan.Outputs().size() * sizeof(PCGSceneOutputCommand);
+            if (bytes > context.maximumRetainedBytes)
+                return Reject<Commands>(PCGErrors::GenerationPlanCapacityExceeded);
+            std::size_t usedIntents{};
+            for (const auto &delta : plan.Outputs()) {
+                auto command = TranslateDelta(delta, plan, intents, context, bytes, usedIntents);
+                if (command.HasError())
+                    return Result<Commands>::Failure(command.ErrorValue());
+                if (std::ranges::find(commands, command.Value().object, &PCGSceneOutputCommand::object) != commands.end())
+                    return Reject<Commands>(PCGErrors::GenerationOwnershipMismatch);
+                commands.push_back(std::move(command).Value());
+            }
+            if (usedIntents != intents.size())
+                return Reject<Commands>(PCGErrors::GenerationPlanInvalid);
+            const auto hierarchyBytes =
+                commands.size() * (sizeof(const PCGSceneOutputCommand *) + sizeof(std::size_t) + sizeof(std::uint8_t));
+            if (hierarchyBytes > context.maximumRetainedBytes - bytes)
+                return Reject<Commands>(PCGErrors::GenerationPlanCapacityExceeded);
+            bytes += hierarchyBytes;
+            auto parents = ValidateParents(commands, context.occupiedObjects);
+            if (parents.HasError())
+                return Result<Commands>::Failure(parents.ErrorValue());
+            return Result<Commands>::Success(std::move(commands));
+        }
     }  // namespace
 
     /** @copydoc FingerprintPCGSceneOutput */
@@ -213,66 +299,11 @@ namespace Horo::PCG {
             auto checked = Revalidate(plan, context.generation);
             if (checked.HasError())
                 return Result<PCGSceneOutputBatch>::Failure(checked.ErrorValue());
-            std::vector<PCGSceneOutputCommand> commands;
-            commands.reserve(plan.Outputs().size());
-            std::size_t bytes = sizeof(PCGSceneOutputBatch) + plan.Outputs().size() * sizeof(PCGSceneOutputCommand);
-            if (bytes > context.maximumRetainedBytes)
-                return Reject<PCGSceneOutputBatch>(PCGErrors::GenerationPlanCapacityExceeded);
-            std::size_t usedIntents{};
-            for (const auto &delta : plan.Outputs()) {
-                const auto mapping =
-                    std::ranges::find(context.currentMappings, delta.provenance.logicalOutput, &PCGSceneOutputMapping::logical);
-                PCGSceneOutputCommand command{delta, {}, {}, {}};
-                if (delta.kind == PCGOutputDeltaKind::Remove) {
-                    if (mapping == context.currentMappings.end())
-                        return Reject<PCGSceneOutputBatch>(PCGErrors::GenerationOwnershipMismatch);
-                    command.object = mapping->object;
-                } else {
-                    const auto intent = std::ranges::find(intents, delta.provenance.logicalOutput, &PCGSceneOutputIntent::logical);
-                    if (intent == intents.end() || std::ranges::count(intents, intent->logical, &PCGSceneOutputIntent::logical) != 1)
-                        return Reject<PCGSceneOutputBatch>(PCGErrors::GenerationPlanInvalid);
-                    ++usedIntents;
-                    command.object = intent->desired.id;
-                    const bool occupied = std::ranges::binary_search(context.occupiedObjects, command.object);
-                    if ((delta.kind == PCGOutputDeltaKind::Create && (occupied || mapping != context.currentMappings.end())) ||
-                        (delta.kind == PCGOutputDeltaKind::Update &&
-                         (mapping == context.currentMappings.end() || mapping->object != command.object)))
-                        return Reject<PCGSceneOutputBatch>(PCGErrors::GenerationOwnershipMismatch);
-                    if (!ValidMesh(*intent, delta, plan))
-                        return Reject<PCGSceneOutputBatch>(PCGErrors::GenerationPlanInvalid);
-                    auto encoded = Encode(intent->desired, context.maximumPayloadBytes);
-                    if (encoded.HasError())
-                        return Result<PCGSceneOutputBatch>::Failure(encoded.ErrorValue());
-                    if (ComputeSha256(std::as_bytes(std::span{encoded.Value().data(), encoded.Value().size()})) != delta.desiredContent)
-                        return Reject<PCGSceneOutputBatch>(PCGErrors::GenerationPlanStale);
-                    const auto payloadBytes = OwnedBytes(intent->desired);
-                    const auto preparationBytes = encoded.Value().size();
-                    if (payloadBytes > context.maximumRetainedBytes - bytes ||
-                        preparationBytes > context.maximumRetainedBytes - bytes - payloadBytes)
-                        return Reject<PCGSceneOutputBatch>(PCGErrors::GenerationPlanCapacityExceeded);
-                    bytes += payloadBytes + preparationBytes;
-                    command.desired = intent->desired;
-                    command.mesh = intent->mesh;
-                }
-                const auto dependencyBytes = delta.dependencies.size() * sizeof(GenerationDependencyId);
-                if (dependencyBytes > context.maximumRetainedBytes - bytes)
-                    return Reject<PCGSceneOutputBatch>(PCGErrors::GenerationPlanCapacityExceeded);
-                bytes += dependencyBytes;
-                if (std::ranges::find(commands, command.object, &PCGSceneOutputCommand::object) != commands.end())
-                    return Reject<PCGSceneOutputBatch>(PCGErrors::GenerationOwnershipMismatch);
-                commands.push_back(std::move(command));
-            }
-            if (usedIntents != intents.size())
-                return Reject<PCGSceneOutputBatch>(PCGErrors::GenerationPlanInvalid);
-            const auto hierarchyBytes =
-                commands.size() * (sizeof(const PCGSceneOutputCommand *) + sizeof(std::size_t) + sizeof(std::uint8_t));
-            if (hierarchyBytes > context.maximumRetainedBytes - bytes)
-                return Reject<PCGSceneOutputBatch>(PCGErrors::GenerationPlanCapacityExceeded);
-            bytes += hierarchyBytes;
-            auto parents = ValidateParents(commands, context.occupiedObjects);
-            if (parents.HasError())
-                return Result<PCGSceneOutputBatch>::Failure(parents.ErrorValue());
-            return Result<PCGSceneOutputBatch>::Success(PCGSceneOutputBatch{plan, std::move(commands), bytes});
+            std::size_t bytes{};
+            auto commands = TranslateCommands(plan, intents, context, bytes);
+            if (commands.HasError())
+                return Result<PCGSceneOutputBatch>::Failure(commands.ErrorValue());
+            return Result<PCGSceneOutputBatch>::Success(PCGSceneOutputBatch{plan, std::move(commands).Value(), bytes});
         } catch (const std::bad_alloc &) {
             return Reject<PCGSceneOutputBatch>(PCGErrors::GenerationPlanCapacityExceeded);
         } catch (const std::exception &) {
