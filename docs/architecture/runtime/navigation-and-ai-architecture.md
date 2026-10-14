@@ -238,6 +238,16 @@ Visual terrain or a committed hole/deformation cannot mutate live NavMesh state 
 imply navigation readiness. ADR-108 conservative exclusion plus explicit recook/rebuild
 governs topology change, and aggregate scene/cell activation checks exact generations.
 
+## Gameplay And Script Capability
+
+`HoroEngine::GameplayNavigationIntegration` is a host adapter above NavigationRuntime.
+It admits an explicit module/Scene principal and independent path/movement grants,
+uses canonical coordinator/controller operations, and exposes owned opaque pollable
+results to native and Lua behaviors. Module and VM retirement suppress delivery and
+propagate cancellation before callbacks/code unload. Host safe-point retirement drains
+canonical records before borrowed navigation services retire; no navigation target
+depends on Gameplay or Lua. See [the capability migration guide](../../guides/gameplay-navigation-capability-migration.md).
+
 ## Navigation Integration Contracts
 
 ### Submission, Jobs, And Publication

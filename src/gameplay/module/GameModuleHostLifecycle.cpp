@@ -1,5 +1,6 @@
 #include "GameModuleHostDetail.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
 
 #include <algorithm>
@@ -112,6 +113,7 @@ namespace Horo::Gameplay {
         projectServices = std::move(activated).Value();
         runtimeContext = {projectServices->Cancellation(), projectServices->ActiveServices(), projectServices->Capabilities()};
         runtimeContext.physics = physics;
+        runtimeContext.navigation = navigation;
         startAttempted = true;
         return InvokeStart(*gameplayModule, runtimeContext);
     }
@@ -120,6 +122,8 @@ namespace Horo::Gameplay {
         if (reloadPrepared || gameplayModule == nullptr || projectServices == nullptr)
             return Result<GameModuleReloadSnapshot>::Failure(MakeError(GameplayErrors::GameplayReloadRestartRequired));
         projectServices->RequestCancellation();
+        if (navigation)
+            navigation->Revoke();
         if (physics)
             physics->Revoke();
         auto snapshot = InvokePrepareReload(*gameplayModule, runtimeContext);
@@ -148,6 +152,8 @@ namespace Horo::Gameplay {
         if (shutdown)
             return;
         shutdown = true;
+        if (navigation)
+            navigation->Revoke();
         if (physics)
             physics->Revoke();
         if (projectServices)

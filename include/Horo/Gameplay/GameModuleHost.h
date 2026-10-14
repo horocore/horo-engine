@@ -79,6 +79,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] CancellationToken Cancellation() const noexcept;
         /** @brief Returns this module generation's explicit Physics binding, if composed by the host. */
         [[nodiscard]] std::shared_ptr<const GameplayPhysicsContext> PhysicsContext() const noexcept;
+        /** @brief Returns this module generation navigation grant. @return Revocable host context. */
+        [[nodiscard]] std::shared_ptr<const GameplayNavigationContext> NavigationContext() const noexcept;
         /**
          * @brief Cancels and quiesces module-owned work, captures state, and stops callbacks before unload.
          * @return Bounded module snapshot only when the generation proves it is safe to unload.
@@ -111,6 +113,12 @@ namespace Horo::Gameplay {
          * @param physics Exact per-module binding, revoked before module shutdown; cannot be reused after retirement.
          */
         GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics);
+        /** @brief Bind an explicit navigation principal to the next module generation.
+         * @param hostCapabilities Immutable host grants. @param physics Optional Physics binding.
+         * @param navigation Exact module/Scene navigation binding; revoked before module reload callbacks.
+         */
+        GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics,
+                       std::shared_ptr<GameplayNavigationContext> navigation);
         /**
          * @brief Loads and starts one gameplay candidate after complete compatibility validation.
          * @param libraryPath Absolute dynamic-library artifact path.
@@ -137,5 +145,6 @@ namespace Horo::Gameplay {
     private:
         std::vector<GameplayCapabilityId> hostCapabilities_;
         std::shared_ptr<GameplayPhysicsContext> physics_;
+        std::shared_ptr<GameplayNavigationContext> navigation_;
     };
 }  // namespace Horo::Gameplay

@@ -2,6 +2,7 @@
 
 #include "GameModuleHostDetail.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
 
 #include <cstring>
@@ -106,6 +107,18 @@ namespace Horo::Gameplay {
         if (physics.HasError())
             return Result<std::unique_ptr<LoadedGameModule>>::Failure(physics.ErrorValue());
         impl->physics = std::move(physics).Value();
+        if (navigation_ && navigation_->Binding().moduleId != impl->moduleId)
+            return Result<std::unique_ptr<LoadedGameModule>>::Failure(MakeError(NavigationCapabilityErrors::PermissionDenied));
+        if (navigation_ && !navigation_->IsUsable())
+            return Result<std::unique_ptr<LoadedGameModule>>::Failure(MakeError(NavigationCapabilityErrors::ScopeRevoked));
+        impl->navigation = navigation_;
+        if (!impl->navigation) {
+            auto absent = GameplayNavigationContext::Create({.moduleId = impl->moduleId, .queryGranted = true, .movementGranted = true},
+                                                            nullptr, nullptr, nullptr, {});
+            if (absent.HasError())
+                return Result<std::unique_ptr<LoadedGameModule>>::Failure(absent.ErrorValue());
+            impl->navigation = std::move(absent).Value();
+        }
 
         auto registry = BuildRegistry(*validated.bundle);
         if (registry.HasError())

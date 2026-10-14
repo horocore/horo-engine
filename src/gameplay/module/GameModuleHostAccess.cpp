@@ -1,5 +1,6 @@
 #include "GameModuleHostDetail.h"
 #include "Horo/Gameplay/GameModuleHost.h"
+#include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 
@@ -9,6 +10,11 @@ namespace Horo::Gameplay {
     LoadedGameModule::LoadedGameModule(std::shared_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
     LoadedGameModule::~LoadedGameModule() = default;
+
+    /** @copydoc LoadedGameModule::NavigationContext */
+    std::shared_ptr<const GameplayNavigationContext> LoadedGameModule::NavigationContext() const noexcept {
+        return impl_->navigation;
+    }
 
     /** @copydoc LoadedGameModule::ModuleId */
     const std::string &LoadedGameModule::ModuleId() const noexcept {
@@ -141,6 +147,11 @@ namespace Horo::Gameplay {
         const GameModuleReloadSnapshot &snapshot) {
         return impl_->RestoreReload(snapshot);
     }
+
+    /** @copydoc GameModuleHost::GameModuleHost */
+    GameModuleHost::GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics,
+                                   std::shared_ptr<GameplayNavigationContext> navigation)
+        : hostCapabilities_(std::move(hostCapabilities)), physics_(std::move(physics)), navigation_(std::move(navigation)) {}
 
     /** @copydoc GameModuleHost::GameModuleHost */
     GameModuleHost::GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities) : hostCapabilities_(std::move(hostCapabilities)) {}

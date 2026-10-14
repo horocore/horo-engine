@@ -480,4 +480,20 @@ namespace Horo::Navigation {
         now.feedback = NavigationMovementFeedback{id, intent.path, 3, 0};
         REQUIRE(fixture.Update(now).state == NavigationMovementState::Arrived);
     }
+
+    TEST_CASE("Movement parent cancellation retires pending repath without authorizing motion", "[unit][navigation][movement]") {
+        Fixture fixture;
+        CancellationSource parent;
+        auto request = fixture.Move();
+        request.cancellation = parent.Token();
+        request.operation = {.operationId = 123, .parentOperationId = 45};
+        const auto id = fixture.Start(std::move(request), fixture.Now());
+        REQUIRE(fixture.Update(fixture.Now()).state == NavigationMovementState::Querying);
+        parent.RequestCancellation();
+        auto now = fixture.Now(1);
+        const auto intent = fixture.Update(now);
+        CHECK(intent.operation == id);
+        CHECK(intent.state == NavigationMovementState::Cancelled);
+        CHECK(intent.desiredVelocity == Math::Vec3{});
+    }
 }  // namespace Horo::Navigation
