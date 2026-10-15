@@ -99,6 +99,8 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroRuntimeSaveRestoreTransactionTests", "HoroSaveGameplayCheckpointPublicHeaderConsumer",
     "HoroNavigationRuntimeTests", "HoroNavigationBakeServiceTests",
     "HoroNavigationTransportReservationTests", "HoroNavigationCoordinatorPublicConsumer",
+    "HoroNavigationCharacterAdapterTests", "HoroNavigationCharacterAdapterPublicConsumer",
+    "HoroNavigationCharacterIntegrationPublicHeaderConsumer",
 })
 
 
@@ -558,3 +560,29 @@ def test_vfx_extraction_has_execution_and_owned_compile_consumer_closure() -> No
     assert 'add_library("${consumer_target}" OBJECT ${generated_sources})' in boundaries
     assert "support/VfxWorldPublicHeaderConsumer.cpp" in tests_cmake
     assert "support/RenderGraphWorkloadPublicHeaderConsumer.cpp" in tests_cmake
+
+
+def test_navigation_character_bridge_has_platform_build_and_execution_closure() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    ownership = (ROOT / "cmake/HoroPublicHeaderOwnership.cmake").read_text(encoding="utf-8")
+    target_source = (ROOT / "src/CMakeLists.txt").read_text(encoding="utf-8")
+    bridge_targets = {
+        "HoroNavigationCharacterAdapterTests",
+        "HoroNavigationCharacterAdapterPublicConsumer",
+        "HoroNavigationCharacterIntegrationPublicHeaderConsumer",
+    }
+    assert bridge_targets <= targets("HORO_CI_WINDOWS_TARGETS")
+    assert bridge_targets <= targets("HORO_CI_NAVIGATION_TARGETS")
+    for executable in bridge_targets - {"HoroNavigationCharacterIntegrationPublicHeaderConsumer"}:
+        declaration = f"add_executable({executable} "
+        assert declaration in tests_cmake
+        assert not cmake_conditions_at(tests_cmake, tests_cmake.index(declaration)), "Bridge tests must also exist in Null compositions"
+    assert 'horo_register_catch_test(HoroNavigationCharacterAdapterTests LABELS "unit;navigation;character;headless;ci-navigation")' in tests_cmake
+    assert "if(target IN_LIST HORO_CI_WINDOWS_TARGETS)" in SUITES
+    assert "add_test(NAME HoroNavigationCharacterAdapterPublicConsumer COMMAND HoroNavigationCharacterAdapterPublicConsumer)" in tests_cmake
+    for label in ("ci-windows", "ci-navigation"):
+        direct_tests = re.findall(rf"set_property\(TEST\s+([^)]*?)\s+APPEND PROPERTY LABELS {label}\)", SUITES, re.S)
+        assert any("HoroNavigationCharacterAdapterPublicConsumer" in block.split() for block in direct_tests)
+    assert "horo_configure_target_header_boundary(HoroNavigationCharacterIntegration PUBLIC_HEADERS" in ownership
+    assert "Horo/Navigation/NavigationCharacterAdapter.h" in ownership
+    assert "target_link_libraries(HoroNavigationCharacterIntegration PUBLIC HoroEngine::NavigationRuntime HoroEngine::CharacterInput)" in target_source

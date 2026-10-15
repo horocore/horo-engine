@@ -858,6 +858,9 @@ horo_configure_target_header_boundary(HoroNavigationBakeService PUBLIC_HEADERS
     Horo/Application/NavigationBakeDiagnostics.h
     Horo/Application/NavigationBakeSourceAuthority.h
 )
+horo_configure_target_header_boundary(HoroNavigationCharacterIntegration PUBLIC_HEADERS
+    Horo/Navigation/NavigationCharacterAdapter.h
+)
 horo_configure_target_header_boundary(HoroNavigationSceneIntegration PUBLIC_HEADERS
     Horo/Navigation/NavigationSceneActivation.h
     Horo/Navigation/NavigationSceneAgentLifecycle.h

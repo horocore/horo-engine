@@ -1147,6 +1147,17 @@ target_include_directories(HoroNavigationTransportReservationTests PRIVATE
 target_link_libraries(HoroNavigationTransportReservationTests PRIVATE HoroEngine::NavigationRuntime)
 horo_register_catch_test(HoroNavigationTransportReservationTests LABELS "unit;navigation;headless;concurrency;ci-windows")
 
+add_executable(HoroNavigationCharacterAdapterTests unit/runtime/navigation/NavigationCharacterAdapterTests.cpp)
+target_include_directories(HoroNavigationCharacterAdapterTests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/support"
+        "${PROJECT_SOURCE_DIR}/src/physics")
+target_link_libraries(HoroNavigationCharacterAdapterTests PRIVATE HoroEngine::NavigationCharacterIntegration)
+horo_register_catch_test(HoroNavigationCharacterAdapterTests LABELS "unit;navigation;character;headless;ci-navigation")
+
+add_executable(HoroNavigationCharacterAdapterPublicConsumer support/NavigationCharacterAdapterPublicConsumer.cpp)
+target_link_libraries(HoroNavigationCharacterAdapterPublicConsumer PRIVATE HoroEngine::NavigationCharacterIntegration)
+add_test(NAME HoroNavigationCharacterAdapterPublicConsumer COMMAND HoroNavigationCharacterAdapterPublicConsumer)
+
 add_executable(HoroNavigationCoordinatorPublicConsumer support/NavigationCoordinatorPublicConsumer.cpp)
 target_link_libraries(HoroNavigationCoordinatorPublicConsumer PRIVATE HoroEngine::NavigationRuntime)
 add_test(NAME HoroNavigationCoordinatorPublicConsumer COMMAND HoroNavigationCoordinatorPublicConsumer)

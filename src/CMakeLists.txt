@@ -1744,6 +1744,13 @@ add_library(HoroEngine::NavigationRuntime ALIAS HoroNavigationRuntime)
 target_compile_features(HoroNavigationRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroNavigationRuntime PUBLIC HoroEngine::NavigationApi)
 
+add_library(HoroNavigationCharacterIntegration STATIC
+        runtime/navigation/integration/NavigationCharacterAdapter.cpp
+)
+add_library(HoroEngine::NavigationCharacterIntegration ALIAS HoroNavigationCharacterIntegration)
+target_compile_features(HoroNavigationCharacterIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroNavigationCharacterIntegration PUBLIC HoroEngine::NavigationRuntime HoroEngine::CharacterInput)
+
 add_library(HoroNavigationSceneIntegration STATIC
         runtime/navigation/integration/NavigationSceneActivation.cpp
         runtime/navigation/integration/NavigationSceneAgentLifecycle.cpp
