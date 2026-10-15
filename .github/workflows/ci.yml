@@ -377,6 +377,11 @@ jobs:
           --no-tests=error --timeout 90 -R '^HoroRuntimeSaveRestoreTransactionTests::'
           --output-junit build/ci-audio-release/restore-ctest.xml
 
+      - name: Install Windows Scene allocation verifier dependency
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
+        run: >-
+          python -m pip install --no-cache-dir --only-binary=:all: --no-deps defusedxml==0.7.1
+
       - name: Test Windows Release Scene allocation qualification
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
         shell: pwsh

@@ -79,6 +79,15 @@ def test_release_step_is_independent_of_debug_test_outcome():
     assert "steps.mcp_release_build.outcome == 'success'" in block
     assert "debug" not in block.lower()
     assert "run_scene_allocation_qualification.py" in block
+    install = workflow.split("- name: Install Windows Scene allocation verifier dependency", 1)[1]
+    install = install.split("\n      - name:", 1)[0]
+    assert "!cancelled()" in install
+    assert "steps.mcp_release_build.outcome == 'success'" in install
+    assert "defusedxml==0.7.1" in install
+    assert "--no-deps" in install
+    assert workflow.index("Install Windows Scene allocation verifier dependency") < workflow.index(
+        "Test Windows Release Scene allocation qualification"
+    )
 
 
 def test_unexpected_template_instantiation_is_not_silently_omitted():
