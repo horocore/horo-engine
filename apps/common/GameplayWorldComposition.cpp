@@ -1,5 +1,6 @@
 #include "GameplayWorldComposition.h"
 
+#include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsWorld.h"
 
 namespace Horo::Application::Internal {
@@ -15,6 +16,28 @@ namespace Horo::Application::Internal {
                 return Result<std::shared_ptr<GameplayPhysicsContext>>::Success(
                     GameplayPhysicsContext::Withheld(binding, GameplayPhysicsDenial::PermissionDenied));
             return GameplayPhysicsContext::Create(binding, world);
+        }
+
+        /** @brief Resolves Character only from the explicitly paired host world, with independent permission. */
+        Result<std::shared_ptr<Gameplay::GameplayCharacterContext>> ResolveCharacter(const GameplayWorldSelection &selection,
+                                                                                     const Gameplay::GameplayPhysicsContext &physics,
+                                                                                     Character::CharacterWorld *world) {
+            using namespace Gameplay;
+            const auto &owner = physics.Binding();
+            const GameplayCharacterBinding binding{selection.moduleId,
+                                                   owner.scene,
+                                                   owner.sceneGeneration,
+                                                   world ? world->Descriptor().identity : Character::CharacterWorldId{},
+                                                   owner.world,
+                                                   selection.enabled,
+                                                   selection.characterPermission == GameplayCharacterPermission::Granted};
+            if (!world)
+                return Result<std::shared_ptr<GameplayCharacterContext>>::Success(
+                    GameplayCharacterContext::Withheld(binding, GameplayCharacterDenial::Unavailable));
+            if (!binding.permissionGranted)
+                return Result<std::shared_ptr<GameplayCharacterContext>>::Success(
+                    GameplayCharacterContext::Withheld(binding, GameplayCharacterDenial::PermissionDenied));
+            return GameplayCharacterContext::Create(binding, world, &physics);
         }
 
         /** @brief Explicit host slot, not a backend locator; the active module runner owns every constructed attachment. */
@@ -45,7 +68,8 @@ namespace Horo::Application::Internal {
     Result<std::unique_ptr<GameplayWorldComposition>> GameplayWorldComposition::Create(Runtime::RuntimeScene &scene,
                                                                                        Physics::PhysicsWorld *world,
                                                                                        const std::uint64_t sceneGeneration,
-                                                                                       const GameplayWorldSelection &selection) {
+                                                                                       const GameplayWorldSelection &selection,
+                                                                                       Character::CharacterWorld *character) {
         using namespace Gameplay;
         if (!selection.enabled || selection.prefabPermission == GameplayPrefabPermission::Granted)
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(MakeError(GameplayErrors::PhysicsUnavailable));
@@ -62,6 +86,10 @@ namespace Horo::Application::Internal {
         if (admitted.HasError())
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(admitted.ErrorValue());
         composition->physics_ = std::move(admitted).Value();
+        auto selectedCharacter = ResolveCharacter(selection, *composition->physics_, character);
+        if (selectedCharacter.HasError())
+            return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(selectedCharacter.ErrorValue());
+        composition->character_ = std::move(selectedCharacter).Value();
         if (auto activated = composition->Activate(scene, selection); activated.HasError())
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(activated.ErrorValue());
         return Result<std::unique_ptr<GameplayWorldComposition>>::Success(std::move(composition));
@@ -71,7 +99,7 @@ namespace Horo::Application::Internal {
     Result<void> GameplayWorldComposition::Activate(Runtime::RuntimeScene &scene, const GameplayWorldSelection &selection) {
         if (auto registered = RegisterModule(selection); registered.HasError())
             return registered;
-        auto runtime = Gameplay::BehaviorRuntime::Create(scene, registry_, {}, physics_);
+        auto runtime = Gameplay::BehaviorRuntime::Create(scene, registry_, {}, physics_, {}, CharacterContext());
         if (runtime.HasError())
             return Result<void>::Failure(runtime.ErrorValue());
         behaviors_ = std::move(runtime).Value();
@@ -82,7 +110,7 @@ namespace Horo::Application::Internal {
     Result<void> GameplayWorldComposition::RegisterModule(const GameplayWorldSelection &selection) {
         using namespace Gameplay;
         if (!selection.nativeArtifact.empty()) {
-            GameModuleHost loader{{}, physics_};
+            GameModuleHost loader{GameModuleHostOptions{{}, {.physics = physics_, .character = character_}}};
             auto loaded = loader.Load(selection.nativeArtifact,
                                       {selection.moduleId, CurrentGameplayBuildFingerprint(), selection.descriptorRevision});
             if (loaded.HasError())
@@ -108,7 +136,8 @@ namespace Horo::Application::Internal {
     /** @copydoc GameplayWorldComposition::Create */
     Result<std::unique_ptr<GameplayWorldComposition>> GameplayWorldComposition::Create(
         Runtime::RuntimeSceneService &scenes, Prefab::PrefabTemplateProvider &templates, Physics::PhysicsWorld *world,
-        const std::uint64_t sceneGeneration, const GameplayWorldSelection &selection, const Gameplay::ComponentRegistry *components) {
+        const std::uint64_t sceneGeneration, const GameplayWorldSelection &selection, const Gameplay::ComponentRegistry *components,
+        Character::CharacterWorld *character) {
         const auto active = scenes.ActiveScene();
         if (!active || !selection.enabled || selection.moduleId.empty() || sceneGeneration == 0 ||
             (selection.nativeArtifact.empty() == selection.scriptSource.empty()))
@@ -126,6 +155,10 @@ namespace Horo::Application::Internal {
         if (physics.HasError())
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(physics.ErrorValue());
         composition->physics_ = std::move(physics).Value();
+        auto selectedCharacter = ResolveCharacter(selection, *composition->physics_, character);
+        if (selectedCharacter.HasError())
+            return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(selectedCharacter.ErrorValue());
+        composition->character_ = std::move(selectedCharacter).Value();
         if (selection.prefabPermission == GameplayPrefabPermission::Granted) {
             composition->prefabs_ = std::make_unique<Prefab::PrefabSpawnService>(templates, scenes, components);
             auto admitted = composition->prefabs_->Acquire({selection.moduleId, active->RuntimeId(), true, true});
@@ -135,8 +168,8 @@ namespace Horo::Application::Internal {
         }
         if (auto registered = composition->RegisterModule(selection); registered.HasError())
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(registered.ErrorValue());
-        auto runtime =
-            Gameplay::BehaviorRuntime::Create(scenes, composition->registry_, {}, composition->physics_, composition->prefabContext_);
+        auto runtime = Gameplay::BehaviorRuntime::Create(scenes, composition->registry_, {}, composition->physics_,
+                                                         composition->prefabContext_, {}, composition->CharacterContext());
         if (runtime.HasError())
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(runtime.ErrorValue());
         composition->behaviors_ = std::move(runtime).Value();
@@ -192,6 +225,8 @@ namespace Horo::Application::Internal {
             prefabContext_->Revoke();
         if (prefabs_)
             prefabs_->Shutdown();
+        if (character_)
+            character_->Revoke();
         if (physics_)
             physics_->Revoke();
         if (behaviors_)
@@ -208,6 +243,11 @@ namespace Horo::Application::Internal {
     /** @copydoc GameplayWorldComposition::PhysicsContext */
     std::shared_ptr<const Gameplay::GameplayPhysicsContext> GameplayWorldComposition::PhysicsContext() const noexcept {
         return physics_;
+    }
+
+    /** @copydoc GameplayWorldComposition::CharacterContext */
+    std::shared_ptr<const Gameplay::GameplayCharacterContext> GameplayWorldComposition::CharacterContext() const noexcept {
+        return native_ ? native_->CharacterContext() : character_;
     }
 
     /** @copydoc GameplayWorldComposition::MakeStructuralParticipant */

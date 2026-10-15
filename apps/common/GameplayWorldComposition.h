@@ -6,6 +6,7 @@
 
 #include "Horo/Gameplay/BehaviorRuntime.h"
 #include "Horo/Gameplay/GameModuleHost.h"
+#include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
 #include "Horo/Gameplay/LuaBehavior.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
@@ -22,6 +23,12 @@ namespace Horo::Application::Internal {
         Granted
     };
 
+    /** @brief Explicit permission to the already selected Character world; never constructs a consumer. */
+    enum class GameplayCharacterPermission {
+        Denied,
+        Granted
+    };
+
     /** @brief One explicitly selected native module or script and its host-resolved permission. */
     struct GameplayWorldSelection final {
         std::string moduleId;
@@ -32,6 +39,7 @@ namespace Horo::Application::Internal {
         GameplayPhysicsPermission physicsPermission{GameplayPhysicsPermission::Denied};
         bool enabled{true}; /**< Trusted host enablement; disabled modules never execute a callback. */
         GameplayPrefabPermission prefabPermission{GameplayPrefabPermission::Denied};
+        GameplayCharacterPermission characterPermission{GameplayCharacterPermission::Denied};
     };
 
     /** @brief Owner-thread gameplay lifetime borrowing an explicit world and Scene.
@@ -46,12 +54,14 @@ namespace Horo::Application::Internal {
          * @param world Explicitly selected world; null means unavailable, never fallback.
          * @param sceneGeneration Non-zero host activation epoch used by Physics ticks.
          * @param selection Trusted resolved artifact identity and permission policy.
+         * @param character Explicit paired active Character world, or no available consumer; borrowed only during admission.
          * @return Active composition or typed activation failure with complete rollback.
          */
         [[nodiscard]] static Result<std::unique_ptr<GameplayWorldComposition>> Create(Runtime::RuntimeScene &scene,
                                                                                       Physics::PhysicsWorld *world,
                                                                                       std::uint64_t sceneGeneration,
-                                                                                      const GameplayWorldSelection &selection);
+                                                                                      const GameplayWorldSelection &selection,
+                                                                                      Character::CharacterWorld *character = nullptr);
         /** @brief Activates the production cooked-prefab path against the actual Scene transaction authority.
          * @param scenes Active host Scene service, outliving this composition.
          * @param templates Cooked runtime provider, outliving this composition and borrowing the same Scene service.
@@ -59,13 +69,14 @@ namespace Horo::Application::Internal {
          * @param sceneGeneration Exact non-zero host activation epoch.
          * @param selection Selected module/script and independent trusted prefab/Physics permissions.
          * @param components Frozen optional custom component registry, outliving this composition.
+         * @param character Explicit paired active Character world; no consumer is selected implicitly.
          * @return Active Gameplay/Prefab owner or typed admission/activation failure with rollback.
          * @pre MakeGameplayStructuralParticipant was registered against this host's active composition slot before Scene startup.
          */
         [[nodiscard]] static Result<std::unique_ptr<GameplayWorldComposition>> Create(
             Runtime::RuntimeSceneService &scenes, Prefab::PrefabTemplateProvider &templates, Physics::PhysicsWorld *world,
-            std::uint64_t sceneGeneration, const GameplayWorldSelection &selection,
-            const Gameplay::ComponentRegistry *components = nullptr);
+            std::uint64_t sceneGeneration, const GameplayWorldSelection &selection, const Gameplay::ComponentRegistry *components = nullptr,
+            Character::CharacterWorld *character = nullptr);
         ~GameplayWorldComposition();
         GameplayWorldComposition() = default;
         GameplayWorldComposition(const GameplayWorldComposition &) = delete;
@@ -87,6 +98,8 @@ namespace Horo::Application::Internal {
         void UnloadModule() noexcept;
         /** @brief Borrow the immutable Physics execution context for integrated host diagnostics. */
         [[nodiscard]] std::shared_ptr<const Gameplay::GameplayPhysicsContext> PhysicsContext() const noexcept;
+        /** @brief Reads the selected module Character scope, including typed unavailable diagnostics. @return Owned holder. */
+        [[nodiscard]] std::shared_ptr<const Gameplay::GameplayCharacterContext> CharacterContext() const noexcept;
         /** @brief Borrows this active runner for an aggregate Scene group transaction.
          * @return Gameplay participant or null when the selected module is not active.
          * @pre This composition outlives the returned adapter and its prepared candidates.
@@ -99,6 +112,7 @@ namespace Horo::Application::Internal {
         /** @brief Loads the explicitly selected module/script and freezes its registry before any callback. */
         [[nodiscard]] Result<void> RegisterModule(const GameplayWorldSelection &selection);
         std::shared_ptr<Gameplay::GameplayPhysicsContext> physics_;
+        std::shared_ptr<Gameplay::GameplayCharacterContext> character_;
         std::unique_ptr<Gameplay::LoadedGameModule> native_;
         std::unique_ptr<Gameplay::LuaBehaviorProgram> script_;
         Gameplay::BehaviorRegistry registry_;

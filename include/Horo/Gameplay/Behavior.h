@@ -16,6 +16,7 @@
 
 namespace Horo::Gameplay {
     class GameplayPhysicsContext;
+    class GameplayCharacterContext;
     class GameplayNavigationContext;
     class GameplayPrefabContext;
     inline constexpr std::size_t MaximumBehaviorReloadStateBytes = 1024U * 1024U;
@@ -125,6 +126,11 @@ namespace Horo::Gameplay {
                 return {};
             }
 
+            /** @brief Returns the host-selected Character scope; an omitted grant exposes no world or controller. */
+            [[nodiscard]] virtual std::shared_ptr<const GameplayCharacterContext> CharacterContext() const noexcept {
+                return {};
+            }
+
             /** @brief Returns the explicitly granted cooked-prefab module scope, or no grant. */
             [[nodiscard]] virtual std::shared_ptr<const GameplayPrefabContext> PrefabContext() const noexcept {
                 return {};
@@ -173,6 +179,11 @@ namespace Horo::Gameplay {
         /** @brief Returns the same host Physics binding for native and script callbacks; no world discovery. */
         [[nodiscard]] std::shared_ptr<const GameplayPhysicsContext> PhysicsContext() const noexcept {
             return backend_->PhysicsContext();
+        }
+
+        /** @brief Returns the same exact Character scope to native and script callbacks. @return Holder or no admitted grant. */
+        [[nodiscard]] std::shared_ptr<const GameplayCharacterContext> CharacterContext() const noexcept {
+            return backend_->CharacterContext();
         }
 
         /** @brief Returns the revocable Scene-scoped prefab capability composed by the host. @return Null without explicit permission. */
