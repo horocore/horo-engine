@@ -125,6 +125,9 @@ namespace Horo::Runtime {
 
     TEST_CASE("Retention allocation failure after selection preserves publication and binding ownership",
               "[runtime][save][retention][failure]") {
+#if defined(_MSC_VER) && _ITERATOR_DEBUG_LEVEL != 0
+        SKIP("Unsupported MSVC Debug Error transport under global allocation injection; required in Windows Release qualification");
+#endif
         const bool syncFailure = GENERATE(false, true);
         if (syncFailure)
             SaveAllocationPhase("[save-allocation] retention-sync-failure\n");
