@@ -984,12 +984,23 @@ target_compile_features(HoroChunkMeshCookTests PRIVATE cxx_std_20)
 target_link_libraries(HoroChunkMeshCookTests PRIVATE HoroEngine::DestructionPhysicsCook)
 horo_register_catch_test(HoroChunkMeshCookTests LABELS "unit;destruction;headless")
 
+add_executable(HoroDestructionSaveTests unit/runtime/destruction/DestructionSaveTests.cpp)
+target_compile_features(HoroDestructionSaveTests PRIVATE cxx_std_20)
+target_include_directories(HoroDestructionSaveTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroDestructionSaveTests PRIVATE HoroEngine::DestructionSaveIntegration)
+horo_register_catch_test(HoroDestructionSaveTests LABELS "unit;destruction;save;headless;ci-windows;sonar-coverage")
+add_executable(HoroDestructionSavePublicConsumer support/DestructionSavePublicConsumer.cpp)
+target_compile_features(HoroDestructionSavePublicConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroDestructionSavePublicConsumer PRIVATE HoroEngine::DestructionSaveIntegration)
+add_test(NAME HoroDestructionSavePublicConsumer COMMAND HoroDestructionSavePublicConsumer)
+set_tests_properties(HoroDestructionSavePublicConsumer PROPERTIES LABELS "unit;destruction;save;headless;public_headers;ci-windows")
+
 add_executable(HoroDestructionReplicationTests
         unit/runtime/destruction/DestructionReplicationTests.cpp
 )
 target_compile_features(HoroDestructionReplicationTests PRIVATE cxx_std_20)
 target_link_libraries(HoroDestructionReplicationTests PRIVATE HoroEngine::DestructionReplication)
-horo_register_catch_test(HoroDestructionReplicationTests LABELS "unit;destruction;network;headless")
+horo_register_catch_test(HoroDestructionReplicationTests LABELS "unit;destruction;network;headless;ci-windows")
 
 add_executable(HoroFractureDocumentTests
         unit/editor/fracture/FractureAssetDocumentTests.cpp

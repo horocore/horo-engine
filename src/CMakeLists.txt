@@ -1589,6 +1589,7 @@ target_link_libraries(HoroVfxApi
 )
 
 add_library(HoroDestructionApi STATIC
+        runtime/destruction/api/DestructionCanonicalState.cpp
         runtime/destruction/api/DestructionCommand.cpp
         runtime/destruction/api/DestructionComposition.cpp
         runtime/destruction/api/DestructionErrors.cpp
@@ -1636,6 +1637,14 @@ add_library(HoroDestructionRuntime STATIC
 add_library(HoroEngine::DestructionRuntime ALIAS HoroDestructionRuntime)
 target_compile_features(HoroDestructionRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroDestructionRuntime PUBLIC HoroEngine::DestructionApi)
+
+add_library(HoroDestructionSaveIntegration STATIC
+        runtime/destruction/save/DestructionSaveCapture.cpp
+        runtime/destruction/save/DestructionSaveCodec.cpp
+        runtime/destruction/save/DestructionSaveAdapter.cpp)
+add_library(HoroEngine::DestructionSaveIntegration ALIAS HoroDestructionSaveIntegration)
+target_compile_features(HoroDestructionSaveIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroDestructionSaveIntegration PUBLIC HoroEngine::DestructionRuntime HoroEngine::Runtime)
 
 add_library(HoroDestructionApplication STATIC application/destruction/DestructionEventDispatcher.cpp)
 add_library(HoroEngine::DestructionApplication ALIAS HoroDestructionApplication)

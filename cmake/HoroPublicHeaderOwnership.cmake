@@ -756,6 +756,7 @@ horo_configure_target_header_boundary(HoroVfxApi PUBLIC_HEADERS
 Horo/Vfx/VfxWorld.h
 )
 horo_configure_target_header_boundary(HoroDestructionApi PUBLIC_HEADERS
+    Horo/Destruction/DestructionCanonicalState.h
     Horo/Destruction/DestructibleDescriptor.h
     Horo/Destruction/DestructionCommand.h
     Horo/Destruction/DestructionComposition.h
@@ -782,6 +783,8 @@ horo_configure_target_header_boundary(HoroDestructionRuntime PUBLIC_HEADERS
     Horo/Destruction/DestructionDamageRuntime.h
     Horo/Destruction/DestructionEventStream.h
 )
+horo_configure_target_header_boundary(HoroDestructionSaveIntegration PUBLIC_HEADERS
+    Horo/Destruction/DestructionSaveCapture.h)
 horo_configure_target_header_boundary(HoroDestructionApplication PUBLIC_HEADERS
     Horo/Destruction/DestructionEventDispatcher.h
 )
