@@ -60,6 +60,16 @@ def verify_junit(path):
                 raise ValueError(f"Scene allocation suite has nonzero {field}")
 
 
+def write_regex(path):
+    """Write only resolved workspace evidence, including for direct non-CLI callers."""
+    path = Path(path).resolve()
+    if not path.is_relative_to(Path.cwd().resolve()):
+        raise ValueError("Qualification evidence must remain inside the current workspace")
+    # CTest uses POSIX extended syntax: noncapturing Python groups are not supported.
+    pattern = "^(" + "|".join(re.escape(name) for name in sorted(CASES)) + ")$"
+    path.write_text(pattern, encoding="utf-8")
+
+
 def workspace_path(value):
     """Reject CLI traversal and symlink escapes before reading or writing workspace evidence."""
     root = Path.cwd().resolve()
@@ -83,9 +93,7 @@ def main():
         if args.regex_output is None:
             parser.error("--discovery requires --regex-output")
         verify_discovery(json.loads(args.discovery.read_text(encoding="utf-8-sig")))
-        # CTest uses POSIX extended syntax: noncapturing Python groups are not supported.
-        pattern = "^(" + "|".join(re.escape(name) for name in sorted(CASES)) + ")$"
-        args.regex_output.write_text(pattern, encoding="utf-8")
+        write_regex(args.regex_output)
     else:
         verify_junit(args.output_junit)
         print(f"Scene allocation qualification: {len(CASES)} cases passed; zero failures, errors or skips.")

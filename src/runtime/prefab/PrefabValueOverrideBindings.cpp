@@ -67,7 +67,7 @@ namespace Horo::Prefab::ValueDetail {
         Result<void> CaptureComponent(ResolutionState &state, const std::size_t object, const std::size_t component) {
             const auto &source = state.objects[object];
             const auto &payload = source.object.components[component];
-            Json *json{};
+            const Json *json{};
             const auto schemas = state.schemas->Properties();
             const auto first =
                 std::ranges::lower_bound(schemas, std::string_view(payload.component.typeId.Value()), {}, [](const auto &schema) {
