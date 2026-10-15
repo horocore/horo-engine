@@ -19,6 +19,11 @@ on:
         type: boolean
         required: false
         default: false
+      source_allocation_diagnostics:
+        description: Run bounded Windows source edit allocation stack diagnostics
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -361,6 +366,15 @@ jobs:
             timeoutSeconds = 90
           } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $diagnosticDirectory 'provenance.json')
 
+      - name: Diagnose Windows source edit allocation boundary
+        if: ${{ !cancelled() && ((github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-224_source_edit_allocation_recovery') || (github.event_name == 'workflow_dispatch' && inputs.source_allocation_diagnostics == true)) && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
+        timeout-minutes: 3
+        shell: pwsh
+        run: >-
+          ./.github/scripts/diagnose_character_input_windows.ps1 -BuildDirectory build/ci
+          -BinaryName HoroSourceFileOpenServiceTests.exe -EvidenceName source-edit-stack
+          -TestCase 'HoroSourceFileOpenServiceTests::Cancelled and allocation-failed source operations do not publish partial roots' -CaptureSymbolEvidence
+
       - name: Test Debug
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
         run: ctest --preset "${{ matrix.preset }}"
@@ -413,6 +427,19 @@ jobs:
       - name: Test OpenXR rollback replacement and shutdown
         if: ${{ !cancelled() && steps.xr_build.outcome == 'success' }}
         run: ctest --preset ci-xr-openxr
+
+      - name: Upload Windows source edit allocation stack evidence
+        if: ${{ always() && ((github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-224_source_edit_allocation_recovery') || (github.event_name == 'workflow_dispatch' && inputs.source_allocation_diagnostics == true)) && runner.os == 'Windows' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: source-edit-stack-Windows-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            build/ci/source-edit-stack/status.txt
+            build/ci/source-edit-stack/threads.txt
+            build/ci/source-edit-stack/ctest.xml
+            build/ci/source-edit-stack/provenance.json
+          if-no-files-found: warn
+          retention-days: 3
 
       - name: Upload Windows Save allocation stack evidence
         if: ${{ always() && ((github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture') || (github.event_name == 'workflow_dispatch' && inputs.save_allocation_diagnostics == true)) && runner.os == 'Windows' }}
