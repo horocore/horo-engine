@@ -79,6 +79,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] CancellationToken Cancellation() const noexcept;
         /** @brief Returns this module generation's explicit Physics binding, if composed by the host. */
         [[nodiscard]] std::shared_ptr<const GameplayPhysicsContext> PhysicsContext() const noexcept;
+        /** @brief Returns this module generation navigation grant. @return Revocable host context. */
+        [[nodiscard]] std::shared_ptr<const GameplayNavigationContext> NavigationContext() const noexcept;
         /**
          * @brief Cancels and quiesces module-owned work, captures state, and stops callbacks before unload.
          * @return Bounded module snapshot only when the generation proves it is safe to unload.
@@ -128,6 +130,12 @@ namespace Horo::Gameplay {
          * @param physics Exact per-module binding, revoked before module shutdown; cannot be reused after retirement.
          */
         GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics);
+        /** @brief Bind an explicit navigation principal to the next module generation.
+         * @param hostCapabilities Immutable host grants. @param physics Optional Physics binding.
+         * @param navigation Exact module/Scene navigation binding; revoked before module reload callbacks.
+         */
+        GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics,
+                       std::shared_ptr<GameplayNavigationContext> navigation);
         /** @brief Checks native exports and exact SDK/generated identity without invoking module factories or lifecycle.
          * @param libraryPath Absolute candidate artifact. @param expectation Exact host-selected compatibility identity.
          * @return Success or the original load/descriptor failure. No initialized module or callback owner is produced.
@@ -157,7 +165,15 @@ namespace Horo::Gameplay {
                                                                      const GameModuleLoadExpectation &expectation) const;
 
     private:
+        /** @brief Load one validated artifact with explicit host-owned shadow cleanup from the first code-image lease.
+         * @param libraryPath Absolute prepared artifact. @param expectation Exact module compatibility.
+         * @param ownedShadow True only for the unique canonical artifact created by LoadShadowCopy.
+         * @return Owned candidate, including failed initialization, or early failure with deferred native image cleanup.
+         */
+        [[nodiscard]] Result<GameModuleLoadCandidate> LoadArtifact(const std::filesystem::path &libraryPath,
+                                                                   const GameModuleLoadExpectation &expectation, bool ownedShadow) const;
         std::vector<GameplayCapabilityId> hostCapabilities_;
         std::shared_ptr<GameplayPhysicsContext> physics_;
+        std::shared_ptr<GameplayNavigationContext> navigation_;
     };
 }  // namespace Horo::Gameplay

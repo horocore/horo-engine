@@ -51,7 +51,8 @@ namespace Horo::Character::Detail {
                                                  descriptor.collisionProfile,
                                                  descriptor.queryChannel,
                                                  iteration,
-                                                 descriptor.selectors};
+                                                 descriptor.selectors,
+                                                 input.query.bodyPoseFrame};
         if (const auto budget = ReserveTickQuery(impl); budget.HasError())
             return Result<CharacterSweepProbeResult>::Failure(budget.ErrorValue());
         if (input.metrics != nullptr) {
@@ -204,7 +205,8 @@ namespace Horo::Character::Detail {
                                                      descriptor.collisionProfile,
                                                      descriptor.queryChannel,
                                                      motion.iteration,
-                                                     descriptor.selectors};
+                                                     descriptor.selectors,
+                                                     input.query.bodyPoseFrame};
         if (const auto budget = ReserveTickQuery(impl); budget.HasError())
             return Result<bool>::Failure(budget.ErrorValue());
         if (input.metrics != nullptr)

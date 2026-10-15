@@ -66,7 +66,8 @@ namespace Horo::Character::Detail {
                                                         authored.collisionProfile,
                                                         authored.queryChannel,
                                                         0,
-                                                        authored.selectors};
+                                                        authored.selectors,
+                                                        input.query.bodyPoseFrame};
         if (input.metrics != nullptr)
             ++input.metrics->snapshot.queries;
         const auto probe = input.query.overlap(input.query.context, probeRequest);

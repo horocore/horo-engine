@@ -71,13 +71,6 @@ namespace Horo::Gameplay {
         if (const Result<void> copied = CopyShadowArtifact(libraryPath, shadowPath.Value()); copied.HasError())
             return Result<GameModuleLoadCandidate>::Failure(copied.ErrorValue());
 
-        Result<GameModuleLoadCandidate> loaded = Load(shadowPath.Value(), expectation);
-        if (loaded.HasError()) {
-            std::error_code ignored;
-            std::filesystem::remove(shadowPath.Value(), ignored);  // NOSONAR
-            return loaded;
-        }
-        loaded.Value().owner->impl_->removeArtifactOnUnload = true;
-        return loaded;
+        return LoadArtifact(shadowPath.Value(), expectation, true);
     }
 }  // namespace Horo::Gameplay

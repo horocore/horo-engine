@@ -16,6 +16,12 @@ set(HORO_CI_AUDIO_TARGETS
 # The full Windows suite remains disabled. Preserve all existing focused checks
 # in one headless Debug build, including their public-header compile consumers.
 set(HORO_CI_WINDOWS_TARGETS
+    HoroDestructionSaveTests
+    HoroDestructionSavePublicConsumer
+    HoroDestructionSaveIntegrationPublicHeaderConsumer
+    HoroDestructionApiPublicHeaderConsumer
+    HoroDestructionReplicationTests
+    HoroDestructionReplicationPublicHeaderConsumer
     HoroAnimationApiTests
     HoroAnimationGraphPublicHeaderConsumer
     HoroLightCullingTests
@@ -44,6 +50,10 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroPCGSceneOutputContractConsumer
     HoroPCGPublicHeaderConsumer
     HoroPCGTerrainAdapterPublicHeaderConsumer
+    HoroPCGSceneBakeTests
+    HoroPCGSceneBakeContractConsumer
+    HoroPCGSceneBakePublicHeaderConsumer
+    HoroEditorModelPublicHeaderConsumer
     HoroPCGDocumentTests
     HoroPCGDocumentPublicHeaderConsumer
     HoroMixerDocumentTests
@@ -77,6 +87,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroPrefabSceneExpansionContractConsumer
     HoroAssetRegistryTests
     HoroInputTests
+    HoroAndroidInputTests
+    HoroAndroidInputIntegrationPublicHeaderConsumer
     HoroCharacterInputTests
     HoroCharacterInputPublicHeaderConsumer
     HoroInputSdlTests
@@ -143,21 +155,42 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroTerrainRenderIntegrationPublicHeaderConsumer
     HoroNavigationRuntimeTests
     HoroNavigationTransportReservationTests
+    HoroNavigationCharacterAdapterTests
+    HoroNavigationCharacterAdapterPublicConsumer
+    HoroNavigationCharacterIntegrationPublicHeaderConsumer
     HoroNavigationCoordinatorPublicConsumer
+    HoroGameplayNavigationIntegrationPublicHeaderConsumer
+    HoroGameplayApiPublicHeaderConsumer
+    HoroGameplayRuntimePublicHeaderConsumer
+    HoroGameplayModuleHostPublicHeaderConsumer
+    HoroGameplayLuaPublicHeaderConsumer
+    HoroNavigationRuntimePublicHeaderConsumer
+    HoroGameplayNavigationTests
+    HoroGameplayNavigationPublicConsumer
     HoroNavigationBakeServiceTests
 )
 
 set(HORO_CI_NAVIGATION_TARGETS
+    HoroGameplayNavigationIntegrationPublicHeaderConsumer
+    HoroGameplayApiPublicHeaderConsumer
+    HoroGameplayRuntimePublicHeaderConsumer
+    HoroGameplayModuleHostPublicHeaderConsumer
+    HoroGameplayLuaPublicHeaderConsumer
+    HoroNavigationRuntimePublicHeaderConsumer
+    HoroGameplayNavigationTests
+    HoroGameplayNavigationPublicConsumer
     HoroNavigationRuntime
     HoroNavigationNull
     HoroNavigationRecastDetour
     HoroNavigationApiPublicHeaderConsumer
-    HoroNavigationRuntimePublicHeaderConsumer
     HoroNavigationCoordinatorPublicConsumer
     HoroNavigationNullPublicHeaderConsumer
     HoroNavigationRecastDetourPublicHeaderConsumer
     HoroNavigationBakeServicePublicHeaderConsumer
     HoroNavigationBakeDiagnosticsPublicConsumer
+    HoroNavigationCharacterAdapterTests
+    HoroNavigationCharacterAdapterPublicConsumer
+    HoroNavigationCharacterIntegrationPublicHeaderConsumer
 )
 
 set(HORO_CI_NETWORK_TARGETS
@@ -227,12 +260,14 @@ function(horo_finalize_ci_suites)
         HoroRuntimeUiScreenTransitionPublicHeaderConsumer
         HoroExtensionManagerTests
         HoroNavigationCoordinatorPublicConsumer
+        HoroNavigationCharacterAdapterPublicConsumer
         HoroExtensionAbiConformanceCliSupported
         HoroExtensionAbiConformanceCliIncompatible
         HoroExtensionAbiConformanceCliRequiresModule
         APPEND PROPERTY LABELS ci-windows)
     set_property(TEST HoroNavigationBakeDiagnosticsPublicConsumer HoroNavigationCoordinatorPublicConsumer
         APPEND PROPERTY LABELS ci-navigation)
+    set_property(TEST HoroNavigationCharacterAdapterPublicConsumer APPEND PROPERTY LABELS ci-navigation)
 
     # Catch tests receive coverage labels during registration. Direct CTest
     # contracts use the same former gui/editor exclusion. Python tooling runs

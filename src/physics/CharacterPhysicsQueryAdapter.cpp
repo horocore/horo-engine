@@ -31,7 +31,8 @@ namespace Horo::Character {
                     .geometry = geometry,
                     .filter = MovementFilter(request.queryChannel, request.selectors),
                     .collection = Physics::PhysicsQueryCollection::All,
-                    .maximumHitCount = MaximumCharacterSweepHits};
+                    .maximumHitCount = MaximumCharacterSweepHits,
+                    .bodyPoseFrame = request.bodyPoseFrame};
         }
     }  // namespace
 
@@ -60,7 +61,8 @@ namespace Horo::Character {
                 expected.tick,
                 expected.physicsSnapshotRevision,
                 sweep,
-                platformBody};
+                platformBody,
+                CharacterQueryFrameCapability::PredictedBodyPose};
     }
 
     /** @copydoc CharacterPhysicsQueryAdapter::PlatformBody */
@@ -84,7 +86,8 @@ namespace Horo::Character {
         if (evidence.Value().observedShape != shape)
             return Result<std::optional<CharacterPlatformBodyEvidence>>::Success(std::nullopt);
         return Result<std::optional<CharacterPlatformBodyEvidence>>::Success(
-            CharacterPlatformBodyEvidence{body, shape, evidence.Value().observedMotion, evidence.Value().state.pose});
+            CharacterPlatformBodyEvidence{body, shape, evidence.Value().observedMotion, evidence.Value().state.pose,
+                                          evidence.Value().state.linearVelocity, evidence.Value().state.angularVelocity});
     }
 
     /** @copydoc CharacterPhysicsQueryAdapter::Overlap */

@@ -1,3 +1,4 @@
+#include "Horo/Editor/SceneDocumentTransaction.h"
 #include "Horo/Runtime/Scene/PrimitiveCatalog.h"
 #include "SceneDocumentTestSupport.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
@@ -503,3 +504,23 @@ namespace {
     }
 
 }  // namespace
+
+TEST_CASE("Scene transaction borrows expire on canonical document replacement even when revision and state repeat",
+          "[unit][editor][scene][transaction]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    SceneDocument document;
+    EditorHistory history;
+    std::array<std::uint8_t, 16> bytes{};
+    bytes[15] = 1;
+    auto bound = SceneDocumentTransactions::Bind(document, history, {Assets::AssetId::FromBytes(bytes), 1});
+    REQUIRE(bound.HasValue());
+    auto port = std::move(bound).Value();
+    const auto before = port.Snapshot().Value();
+    REQUIRE(document.LoadSaved({{{1}, {}, "replacement"}}).HasValue());
+    CHECK(document.Revision().value == before.revision);
+    CHECK(document.State().value == before.state);
+    CHECK(port.Snapshot().HasError());
+    CHECK(port.Replay({before.session, before.revision, before.state, true, {}}, false).HasError());
+    CHECK(document.Objects()[0].name == "replacement");
+}

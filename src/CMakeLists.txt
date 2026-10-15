@@ -953,6 +953,11 @@ add_library(HoroEngine::NetworkDebuggerApplication ALIAS HoroNetworkDebuggerAppl
 target_compile_features(HoroNetworkDebuggerApplication PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkDebuggerApplication PUBLIC HoroEngine::NetworkApi)
 
+add_library(HoroGameplayNavigationIntegration STATIC gameplay/runtime/GameplayNavigationContext.cpp)
+add_library(HoroEngine::GameplayNavigationIntegration ALIAS HoroGameplayNavigationIntegration)
+target_compile_features(HoroGameplayNavigationIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroGameplayNavigationIntegration PUBLIC HoroEngine::NavigationRuntime)
+
 add_library(HoroGameplayRuntime STATIC
         gameplay/runtime/BehaviorRegistry.cpp
         gameplay/runtime/BehaviorRuntime.cpp
@@ -970,7 +975,7 @@ add_library(HoroGameplayRuntime STATIC
 add_library(HoroEngine::GameplayRuntime ALIAS HoroGameplayRuntime)
 target_compile_features(HoroGameplayRuntime PUBLIC cxx_std_20)
 target_include_directories(HoroGameplayRuntime PUBLIC ${PROJECT_SOURCE_DIR}/include)
-target_link_libraries(HoroGameplayRuntime PUBLIC HoroEngine::GameplayApi HoroEngine::RuntimeScene HoroEngine::Runtime)
+target_link_libraries(HoroGameplayRuntime PUBLIC HoroEngine::GameplayApi HoroEngine::RuntimeScene HoroEngine::Runtime PRIVATE HoroEngine::GameplayNavigationIntegration)
 
 add_library(HoroGameplayModuleHost STATIC
     gameplay/module/GameModuleRetirement.cpp
@@ -983,13 +988,14 @@ add_library(HoroGameplayModuleHost STATIC
 add_library(HoroEngine::GameplayModuleHost ALIAS HoroGameplayModuleHost)
 target_compile_features(HoroGameplayModuleHost PUBLIC cxx_std_20)
 target_include_directories(HoroGameplayModuleHost PUBLIC ${PROJECT_SOURCE_DIR}/include)
-target_link_libraries(HoroGameplayModuleHost PUBLIC HoroEngine::GameplayRuntime PRIVATE HoroEngine::Platform)
+target_link_libraries(HoroGameplayModuleHost PUBLIC HoroEngine::GameplayRuntime PRIVATE HoroEngine::Platform HoroEngine::GameplayNavigationIntegration)
 
 add_library(HoroGameplayLua STATIC
         gameplay/lua/LuaBehavior.cpp
         gameplay/lua/LuaBehaviorMetadata.cpp
         gameplay/lua/LuaReplicationDeclaration.cpp
         gameplay/lua/LuaPhysicsBinding.cpp
+        gameplay/lua/LuaNavigationBinding.cpp
 )
 
 add_library(HoroGameplayBuild STATIC
@@ -1007,6 +1013,7 @@ target_link_libraries(HoroGameplayBuild
 add_library(HoroEngine::GameplayLua ALIAS HoroGameplayLua)
 target_compile_features(HoroGameplayLua PUBLIC cxx_std_20)
 target_include_directories(HoroGameplayLua PUBLIC ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(HoroGameplayLua PRIVATE HoroEngine::GameplayNavigationIntegration)
 target_link_libraries(HoroGameplayLua
         PUBLIC HoroEngine::GameplayRuntime
         PRIVATE HoroThirdParty::Lua nlohmann_json::nlohmann_json
@@ -1265,6 +1272,7 @@ target_link_libraries(HoroAudioMetrics PUBLIC HoroEngine::AudioCommands HoroEngi
 add_library(HoroPhysics STATIC
         physics/CharacterClearanceQuery.cpp
         physics/CharacterControllerContracts.cpp
+        physics/CharacterQueryContext.cpp
         physics/CharacterDebugSnapshot.cpp
         physics/CharacterDebugStorageInternal.h
         physics/CharacterPhysicsQueryAdapter.cpp
@@ -1284,6 +1292,7 @@ add_library(HoroPhysics STATIC
         physics/CharacterWorldSweepInternal.h
         physics/CharacterWorldStepInternal.h
         physics/CharacterWorldPlatformInternal.h
+        physics/CharacterWorldCarryInternal.h
         physics/CharacterSweepPlanesInternal.h
         physics/CharacterWorldInternal.h
         physics/CharacterWorldPlacementInternal.h
@@ -1325,6 +1334,7 @@ add_library(HoroPhysics STATIC
         physics/PhysicsTransformAuthority.cpp
         physics/PhysicsTransformContracts.cpp
         physics/PhysicsWorld.cpp
+        physics/PhysicsWorldQuery.cpp
         physics/PhysicsQueryEventCapability.cpp
         physics/PhysicsWorldInternal.h
         physics/PhysicsWorldScene.cpp
@@ -1355,6 +1365,9 @@ if(HORO_BUILD_PHYSICS_NATIVE)
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
         physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
+        physics/CanonicalPhysicsRuntimeQueryFrame.cpp
+        physics/CanonicalPhysicsRuntimeQueryResident.cpp
+        physics/CanonicalPhysicsRuntimeQueryAuthority.cpp
         physics/CanonicalPhysicsRuntimeQueryBridge.cpp
         physics/CanonicalPhysicsRuntimeReadback.cpp
         physics/CanonicalPhysicsRuntimeScene.cpp
@@ -1371,6 +1384,9 @@ if(HORO_BUILD_PHYSICS_NATIVE)
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
         physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
+        physics/CanonicalPhysicsRuntimeQueryFrame.cpp
+        physics/CanonicalPhysicsRuntimeQueryResident.cpp
+        physics/CanonicalPhysicsRuntimeQueryAuthority.cpp
         physics/CanonicalPhysicsRuntimeQueryBridge.cpp
         physics/CanonicalPhysicsRuntimeReadback.cpp
         physics/CanonicalPhysicsRuntimeScene.cpp
@@ -1574,6 +1590,7 @@ target_link_libraries(HoroVfxApi
 )
 
 add_library(HoroDestructionApi STATIC
+        runtime/destruction/api/DestructionCanonicalState.cpp
         runtime/destruction/api/DestructionCommand.cpp
         runtime/destruction/api/DestructionComposition.cpp
         runtime/destruction/api/DestructionErrors.cpp
@@ -1621,6 +1638,14 @@ add_library(HoroDestructionRuntime STATIC
 add_library(HoroEngine::DestructionRuntime ALIAS HoroDestructionRuntime)
 target_compile_features(HoroDestructionRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroDestructionRuntime PUBLIC HoroEngine::DestructionApi)
+
+add_library(HoroDestructionSaveIntegration STATIC
+        runtime/destruction/save/DestructionSaveCapture.cpp
+        runtime/destruction/save/DestructionSaveCodec.cpp
+        runtime/destruction/save/DestructionSaveAdapter.cpp)
+add_library(HoroEngine::DestructionSaveIntegration ALIAS HoroDestructionSaveIntegration)
+target_compile_features(HoroDestructionSaveIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroDestructionSaveIntegration PUBLIC HoroEngine::DestructionRuntime HoroEngine::Runtime)
 
 add_library(HoroDestructionApplication STATIC application/destruction/DestructionEventDispatcher.cpp)
 add_library(HoroEngine::DestructionApplication ALIAS HoroDestructionApplication)
@@ -1752,6 +1777,13 @@ add_library(HoroNavigationRuntime STATIC
 add_library(HoroEngine::NavigationRuntime ALIAS HoroNavigationRuntime)
 target_compile_features(HoroNavigationRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroNavigationRuntime PUBLIC HoroEngine::NavigationApi)
+
+add_library(HoroNavigationCharacterIntegration STATIC
+        runtime/navigation/integration/NavigationCharacterAdapter.cpp
+)
+add_library(HoroEngine::NavigationCharacterIntegration ALIAS HoroNavigationCharacterIntegration)
+target_compile_features(HoroNavigationCharacterIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroNavigationCharacterIntegration PUBLIC HoroEngine::NavigationRuntime HoroEngine::CharacterInput)
 
 add_library(HoroNavigationSceneIntegration STATIC
         runtime/navigation/integration/NavigationSceneActivation.cpp
@@ -2119,6 +2151,7 @@ target_compile_features(HoroPrefabSceneExpansion PUBLIC cxx_std_20)
 target_link_libraries(HoroPrefabSceneExpansion PUBLIC HoroEngine::PrefabAuthoring HoroEngine::RuntimeScene)
 
 add_library(HoroInput STATIC
+        runtime/input/RawInputCollector.cpp
         runtime/input/Input.cpp
         runtime/input/InputPresentation.cpp
         runtime/input/InputErrors.cpp
@@ -2127,6 +2160,11 @@ add_library(HoroEngine::Input ALIAS HoroInput)
 target_compile_features(HoroInput PUBLIC cxx_std_20)
 target_include_directories(HoroInput PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(HoroInput PUBLIC HoroEngine::Foundation PRIVATE nlohmann_json::nlohmann_json)
+
+add_library(HoroAndroidInputIntegration STATIC platform/android/AndroidInput.cpp)
+add_library(HoroEngine::AndroidInputIntegration ALIAS HoroAndroidInputIntegration)
+target_compile_features(HoroAndroidInputIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroAndroidInputIntegration PUBLIC HoroEngine::Input)
 
 # Host-facing bridge: Input remains independent of Runtime UI, and Runtime UI
 # retains its Foundation/Assets-only contract.
@@ -2486,6 +2524,7 @@ add_library(HoroSceneSource STATIC
         scene/source/SceneSourceNavigationParsing.cpp
         scene/source/SceneSourcePhysicsParsing.cpp
         scene/source/SceneSourceScene.cpp
+        scene/source/SceneSourceGenerated.cpp
         scene/source/NavigationAgentJson.cpp
 )
 add_library(HoroEngine::SceneSource ALIAS HoroSceneSource)
@@ -2528,6 +2567,7 @@ add_library(HoroEditorModel STATIC
         editor/data_bus/EditorDataBus.cpp
         editor/update/UpdateExperienceSession.cpp
         editor/document/SceneDocument.cpp
+        editor/document/SceneDocumentTransaction.cpp
         editor/document/SceneDocumentCommands.cpp
         editor/document/SceneDocumentObjectCommands.cpp
         editor/document/RuntimeSceneConversion.cpp
@@ -2700,6 +2740,11 @@ add_library(HoroEditorServices STATIC
         editor/screens/workspace/ActivityBarLayout.cpp
         editor/screens/workspace/WorkspaceSplitterInteraction.cpp
 )
+
+add_library(HoroPCGSceneBake STATIC editor/pcg/PCGSceneBake.cpp)
+add_library(HoroEngine::PCGSceneBake ALIAS HoroPCGSceneBake)
+target_compile_features(HoroPCGSceneBake PUBLIC cxx_std_20)
+target_link_libraries(HoroPCGSceneBake PUBLIC HoroEngine::PCGSceneAdapter HoroEngine::EditorServices HoroEngine::EditorModel)
 
 add_library(HoroEngine::EditorServices ALIAS HoroEditorServices)
 

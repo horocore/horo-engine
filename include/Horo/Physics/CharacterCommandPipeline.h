@@ -8,9 +8,11 @@
 #include "Horo/Foundation/Time.h"
 #include "Horo/Physics/CharacterControllerContracts.h"
 #include "Horo/Physics/CharacterMetrics.h"
+#include "Horo/Physics/PhysicsTransformAuthority.h"
 
 #include <compare>
 #include <cstdint>
+#include <span>
 
 namespace Horo::Character {
     /** @brief Non-blocking ownership outcome for one copied movement command. */
@@ -57,6 +59,9 @@ namespace Horo::Character {
         CharacterTickObserver observer;     /**< Optional synchronous observation. */
         CharacterPhysicsQueryContext query; /**< Optional read-only Physics snapshot for Horo movement resolution. */
         CharacterMetricCapture *metrics{};  /**< Optional caller-owned attempt capture, written synchronously only. */
+        std::span<const Physics::PhysicsKinematicTargetCommand> platformTargets{}; /**< Host-admitted stage-3 targets for this exact tick;
+                                                                                  borrowed only until AdvanceFixedTick returns. Absence
+                                                                                  for a body means no new target, never extrapolation. */
     };
 
     /** @brief Coherent publication marker for the last successfully scheduled Character tick. */

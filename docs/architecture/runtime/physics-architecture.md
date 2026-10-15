@@ -169,8 +169,7 @@ point; a batch does not schedule itself or require a worker/job service.
 Simulation filters remain closed until the validated collision-
 profile table is installed; scene activation still validates authored profiles and
 materials and publishes complete body/shape/constraint bindings, but does not claim
-contact filtering support from the closed native filter. Immediate-query fixtures
-remain a separate narrow analytic path and do not replace scene activation.
+contact filtering support from the closed native filter. Immediate queries admit resident scene bodies only through their explicit retained collision bindings and the installed Project schema. Analytic query fixtures remain a separate admission path and do not replace scene activation.
 
 `BodyMutation` is available only for a live canonical solver world. A resident scene
 body can receive one owned `Change/Body` payload per exact future tick. The order
@@ -878,21 +877,62 @@ publishing another snapshot. Revision zero is never reused for an active world.
 Immediate and queued batch queries execute on the physics owner thread outside a
 step. The current native solver path does not publish an immutable broadphase or
 shape lease set, so parallel solver reads and off-thread query execution remain
-unsupported. Existing immediate callers do not need migration. Consumers needing
+unsupported. Immediate callers must account for the resident-body admission and Project-table authority rules below. Consumers needing
 non-blocking completion may submit the batch through their existing world-bound
 capability, arrange one owner-thread `ProcessQueryBatch` safe point, and poll the
 returned handle from any thread. Result handles own copied hits and never keep the
 world or native solver alive.
 
-CanonicalV1 currently admits bounded analytic query fixtures (box, sphere, capsule
-and static plane) through the active world solely to exercise this query contract
-until authored scene conversion publishes resident bodies and shapes. Fixture
-creation and retirement are owner-thread operations outside a fixed step. The Horo
-channel/profile/layer/trigger selectors are applied by the native body filter before
-collector callbacks; collectors retain at most `1024` hits and project only copied
-generation-checked evidence. Callbacks cannot mutate world structure. A world records
-the scene generation at the last completed fixed tick, so queries before the first
-publication or against a different scene generation fail with `QuerySnapshotStale`.
+CanonicalV1 owner-thread queries admit both bounded analytic query fixtures (box,
+sphere, capsule, plane and qualified compounds) and resident scene bodies. Resident
+admission requires an explicit retained collision binding, an installed normalized
+Project schema, an enabled channel and the exact bound profile with querying enabled.
+No default profile is substituted. Missing bindings or unavailable query responses
+exclude a body; unknown required selectors reject the operation without partial hits.
+Sensors yield Overlap and obey trigger and blocking-only selectors. A resident hit
+copies stable body, shape, profile, layer and schema generation. Exactly one retained
+collider supplies its optional authored subshape; exactly one material on that collider
+supplies material evidence. Multiple colliders or materials remain explicit absence,
+never a native subshape path reinterpreted as authored identity. Character's declared
+material fallback remains authoritative when hit material is absent.
+
+Fixture creation and retirement remain owner-thread operations outside a fixed step.
+The native body filter applies selectors before callbacks; fixed collectors retain at
+most 1024 total hits across all passes. Queries fail on overflow, without publishing
+partial output. The scene generation must match the last completed publication.
+
+`PhysicsQueryDescriptor::bodyPoseFrame` optionally owns one generation-checked body
+and shape, its captured source pose, predicted pose, source publication revision and
+next consuming tick. It is supported only for capsule overlap and sweep queries.
+Both poses must be finite, normalized and within the Physics local-origin envelope.
+The source must match the exact live resident body and current publication; selectors
+must admit that body. Stale identities, publication, tick or source pose fail closed;
+unsupported geometry or unavailable framed body reports a typed failure. Null and
+native-omitted compositions retain their unavailable capability behavior.
+
+The canonical adapter first queries all other bodies at captured poses, then rigidly
+maps the capsule into the framed body's source coordinates and queries only that
+body. It transforms copied contact points and normals back before shared bounded
+projection. The typed `CoMovingCarry` participation is capsule-sweep-only: it validates
+the same exact frame but omits that support from its own transport sweep. This avoids
+an upward support's predicted pose penetrating the capsule's pre-transport start;
+unrelated body filters remain unchanged. Ordinary intent, clearance and grounding use
+`PredictedPose` participation and still collide with that support at its predicted pose.
+No native body pose, solver publication, resident binding or shared shape
+is mutated, and no shape is allocated. This is one synchronous owner-thread query,
+not an immutable solver snapshot or general predicted world.
+
+Migration for CHR-003.4: unframed queries now include explicitly bound resident scene
+bodies, so callers must not combine duplicate resident and fixture representations of
+the same obstacle. Installed Project tables now govern legacy fixture admission and
+responses as well; qualification callers without a table retain their explicit fixture
+metadata. `CharacterPhysicsQueryAdapter` advertises `PredictedBodyPose`; custom
+Character providers must opt in and honor the optional owned frame on every overlap
+and sweep request. The clearance-only provider remains `CapturedOnly` and rejects a
+frame. Character forwards one prepared frame through carry, transported shape clearance,
+intent, step and ground queries. A simultaneous shape change additionally checks its
+captured start before the transported endpoint; this unframed start check retains
+existing captured-obstacle clearance. Callbacks cannot retain borrowed storage.
 
 ## Layers And Filtering
 
@@ -967,8 +1007,7 @@ For an installed Project table, mixed Scene and legacy fixture queries must vali
 the required channel and contributor profile against that one authority before
 collection; unknown IDs reject the operation without partial results. The deliberately
 uninstalled fixture composition retains explicit fixture metadata for its existing
-qualification seam, without claiming Project-table authority. The current canonical query collector remains fixture-only; Scene query projection
-is a separate consumer of this foundation, not claimed by CCD qualification. The body's retained `sensor` flag
+qualification seam, without claiming Project-table authority. Resident projection follows the immediate-query contract above; CCD qualification alone does not prove it. The body's retained `sensor` flag
 means actual body sensor intent; a pair-specific Overlap response does not manufacture
 a permanent sensor property or authored child/material identity.
 

@@ -2,6 +2,7 @@
 
 #include "GameModuleHostDetail.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
 
 #include <cstring>
@@ -63,6 +64,19 @@ namespace Horo::Gameplay {
             return Result<std::unique_ptr<BehaviorRegistry>>::Success(std::move(registry));
         }
 
+        /** @brief Establish code-image ownership and shadow cleanup before opening native code or resolving exports. */
+        [[nodiscard]] Result<std::shared_ptr<Detail::GameModuleCodeImage>> OpenCodeImage(const std::filesystem::path &libraryPath,
+                                                                                         const bool ownedShadow) {
+            auto image = std::make_shared<Detail::GameModuleCodeImage>(std::unique_ptr<Platform::DynamicLibrary>{});
+            if (ownedShadow)
+                image->shadowArtifact = libraryPath;
+            auto loaded = Platform::LoadDynamicLibrary(libraryPath.string());
+            if (loaded.HasError())
+                return Result<std::shared_ptr<Detail::GameModuleCodeImage>>::Failure(loaded.ErrorValue());
+            image->library = std::move(loaded).Value();
+            return Result<std::shared_ptr<Detail::GameModuleCodeImage>>::Success(std::move(image));
+        }
+
         /** @brief Check the host-bound principal before factories; unavailable/denied optional access does not disable the module. */
         Result<std::shared_ptr<GameplayPhysicsContext>> ResolvePhysicsContext(const std::shared_ptr<GameplayPhysicsContext> &physics,
                                                                               const std::string &moduleId) {
@@ -77,6 +91,19 @@ namespace Horo::Gameplay {
                 admission.ErrorValue().code.Value() != GameplayErrors::PhysicsUnavailable.code.Value())
                 return Result<std::shared_ptr<GameplayPhysicsContext>>::Failure(admission.ErrorValue());
             return Result<std::shared_ptr<GameplayPhysicsContext>>::Success(physics);
+        }
+
+        /** @brief Resolve only the selected principal, preserving an explicit unavailable context for omitted navigation. */
+        Result<std::shared_ptr<GameplayNavigationContext>> ResolveNavigationContext(
+            const std::shared_ptr<GameplayNavigationContext> &navigation, const std::string &moduleId) {
+            if (navigation && navigation->Binding().moduleId != moduleId)
+                return Result<std::shared_ptr<GameplayNavigationContext>>::Failure(MakeError(NavigationCapabilityErrors::PermissionDenied));
+            if (navigation && !navigation->IsUsable())
+                return Result<std::shared_ptr<GameplayNavigationContext>>::Failure(MakeError(NavigationCapabilityErrors::ScopeRevoked));
+            if (navigation)
+                return Result<std::shared_ptr<GameplayNavigationContext>>::Success(navigation);
+            return GameplayNavigationContext::Create({.moduleId = moduleId, .queryGranted = true, .movementGranted = true}, nullptr,
+                                                     nullptr, nullptr, {});
         }
     }  // namespace
 
@@ -97,18 +124,25 @@ namespace Horo::Gameplay {
     /** @copydoc GameModuleHost::Load */
     Result<GameModuleLoadCandidate> GameModuleHost::Load(const std::filesystem::path &libraryPath,
                                                          const GameModuleLoadExpectation &expectation) const {
+        return LoadArtifact(libraryPath, expectation, false);
+    }
+
+    /** @copydoc GameModuleHost::LoadArtifact */
+    Result<GameModuleLoadCandidate> GameModuleHost::LoadArtifact(const std::filesystem::path &libraryPath,
+                                                                 const GameModuleLoadExpectation &expectation,
+                                                                 const bool ownedShadow) const {
         if (!libraryPath.is_absolute())
             return Result<GameModuleLoadCandidate>::Failure(
                 MakeError(GameplayErrors::InvalidGameModuleDescriptor, "Gameplay module path must be absolute."));
 
-        auto loaded = Platform::LoadDynamicLibrary(libraryPath.string());
-        if (loaded.HasError())
-            return Result<GameModuleLoadCandidate>::Failure(loaded.ErrorValue());
+        auto image = OpenCodeImage(libraryPath, ownedShadow);
+        if (image.HasError())
+            return Result<GameModuleLoadCandidate>::Failure(image.ErrorValue());
         auto impl = std::make_shared<LoadedGameModule::Impl>();
-        impl->library = std::move(loaded).Value();
+        impl->codeImage = std::move(image).Value();
         impl->loadedArtifactPath = libraryPath;
 
-        auto exports = ReadValidatedExports(*impl->library, expectation);
+        auto exports = ReadValidatedExports(*impl->codeImage->library, expectation);
         if (exports.HasError())
             return Result<GameModuleLoadCandidate>::Failure(exports.ErrorValue());
         const ValidatedModuleExports validated = exports.Value();
@@ -119,6 +153,12 @@ namespace Horo::Gameplay {
         auto physics = ResolvePhysicsContext(physics_, impl->moduleId);
         if (physics.HasError())
             return Result<GameModuleLoadCandidate>::Failure(physics.ErrorValue());
+        auto navigation = ResolveNavigationContext(navigation_, impl->moduleId);
+        if (navigation.HasError())
+            return Result<GameModuleLoadCandidate>::Failure(navigation.ErrorValue());
+        if (auto pinned = navigation.Value()->RetainCodeImage(impl->codeImage); pinned.HasError())
+            return Result<GameModuleLoadCandidate>::Failure(pinned.ErrorValue());
+        impl->navigation = std::move(navigation).Value();
         impl->physics = std::move(physics).Value();
 
         auto registry = BuildRegistry(*validated.bundle);

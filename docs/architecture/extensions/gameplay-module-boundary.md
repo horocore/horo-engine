@@ -621,10 +621,10 @@ The last application owner must retain the drain handle until Close succeeds;
 queue destruction while busy is an explicit fatal lifetime violation, following
 `BackendServiceRegistry::QuarantineForRestart`, never normal cancellation.
 
-Ordinary retirement revokes admission/Physics and requests project-service
+Ordinary retirement revokes admission, Physics and Navigation and requests project-service
 cancellation, waits for exact runtime leases, then calls Stop and destroys on the
 owner lane. It does not invoke PrepareReload or require a valid state snapshot.
-Impl retains project services, runtimeContext and the guarded Physics context.
+Impl retains project services, runtimeContext and the guarded Physics and Navigation contexts.
 The Physics context owns a revocable generation capability rather than a raw world
 pointer, so applications revoke it before retiring the world. No optional future
 borrowed-context ownership channel is introduced.
@@ -643,3 +643,22 @@ closing the injected queue. A remaining generation lease at that final process
 boundary violates the module ownership contract and takes the documented fatal
 final-owner path explicitly. General headless application roots may retain their
 injected queue after a typed busy Close and drain it when external callbacks finish.
+
+## Navigation SDK Record Retirement
+
+`GameplayNavigationContext` is bound by the module host to a private independent
+code-image lease before native startup. A native SDK call can instantiate
+shared-record or cancellation-state deleter code in that image. Logical module
+retirement therefore revokes navigation admission and delivery before module
+callbacks stop, while retained opaque records/handles pin the code required for
+late destruction. The lease does not retain the module instance or reference the
+context, so it cannot form an instance/context ownership cycle.
+
+The host continues canonical publication and `DrainRetired` until the coordinator
+is quiescent; a cancelled published result alone does not prove the worker
+partition has retired. Only then may borrowed navigation services be destroyed.
+Mapped native code may outlive logical retirement while revoked handles remain
+retained. A host-created shadow artifact is removed by its code-image owner only
+after the final library lease unloads, including partial startup failure and
+Windows mapped-file behavior. No provider/Scene pointer or native library lease
+is exposed to scripts.

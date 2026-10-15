@@ -13,13 +13,18 @@ namespace Horo::Gameplay {
     /** @copydoc BehaviorRuntime::Create */
     Result<std::unique_ptr<BehaviorRuntime>> BehaviorRuntime::Create(Runtime::RuntimeScene &scene, const BehaviorRegistry &registry,
                                                                      const BehaviorRuntimeLimits limits,
-                                                                     std::shared_ptr<const GameplayPhysicsContext> physics) {
+                                                                     std::shared_ptr<const GameplayPhysicsContext> physics,
+                                                                     std::shared_ptr<const GameplayNavigationContext> navigation) {
         if (physics && physics->Binding().scene != scene.View().RuntimeId().value)
             return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Physics::PhysicsErrors::HandleWorldMismatch));
         auto generationLease = registry.AcquireGenerationLease();
         if (generationLease.HasError())
             return Result<std::unique_ptr<BehaviorRuntime>>::Failure(generationLease.ErrorValue());
         auto impl = std::make_shared<Impl>(scene, registry, limits, std::move(generationLease).Value());
+        if (navigation && navigation->Binding().scene.scene.IsValid() &&
+            navigation->Binding().scene.scene.Value() != impl->sceneIdentity.value)
+            return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Navigation::NavigationErrors::InvalidWorld));
+        impl->navigation = std::move(navigation);
         impl->physics = std::move(physics);
         return ActivateImpl(std::move(impl));
     }
@@ -28,7 +33,8 @@ namespace Horo::Gameplay {
     Result<std::unique_ptr<BehaviorRuntime>> BehaviorRuntime::Create(Runtime::RuntimeSceneService &scenes, const BehaviorRegistry &registry,
                                                                      const BehaviorRuntimeLimits limits,
                                                                      std::shared_ptr<const GameplayPhysicsContext> physics,
-                                                                     std::shared_ptr<const GameplayPrefabContext> prefabs) {
+                                                                     std::shared_ptr<const GameplayPrefabContext> prefabs,
+                                                                     std::shared_ptr<const GameplayNavigationContext> navigation) {
         if (const auto active = scenes.ActiveScene(); !active || (prefabs && prefabs->Binding().scene != active->RuntimeId()) ||
                                                       (physics && physics->Binding().scene != active->RuntimeId().value))
             return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Prefab::PrefabErrors::SceneUnavailable));
@@ -36,6 +42,10 @@ namespace Horo::Gameplay {
         if (generationLease.HasError())
             return Result<std::unique_ptr<BehaviorRuntime>>::Failure(generationLease.ErrorValue());
         auto impl = std::make_shared<Impl>(scenes, registry, limits, std::move(generationLease).Value());
+        if (navigation && navigation->Binding().scene.scene.IsValid() &&
+            navigation->Binding().scene.scene.Value() != impl->sceneIdentity.value)
+            return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Navigation::NavigationErrors::InvalidWorld));
+        impl->navigation = std::move(navigation);
         impl->physics = std::move(physics);
         impl->prefabs = std::move(prefabs);
         return ActivateImpl(std::move(impl));
@@ -44,6 +54,8 @@ namespace Horo::Gameplay {
     /** @copydoc BehaviorRuntime::ActivateImpl */
     Result<std::unique_ptr<BehaviorRuntime>> BehaviorRuntime::ActivateImpl(std::shared_ptr<Impl> impl) {
         if (Result<void> built = impl->BuildInstances(); built.HasError()) {
+            if (impl->navigation)
+                impl->navigation->Revoke();
             if (impl->physics)
                 impl->physics->Revoke();
             if (impl->prefabs)

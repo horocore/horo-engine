@@ -123,3 +123,32 @@ def test_save_capture_keeps_both_exact_cases_and_local_symbol_identity() -> None
     for kind in cases:
         for artifact in ('status.txt', 'threads.txt', 'ctest.xml', 'provenance.json'):
             assert f'build/ci/save-{kind}-stack/{artifact}' in upload
+
+
+def test_save_stack_dispatch_is_explicit_default_off_and_reaches_both_cases_and_artifact() -> None:
+    dispatch = WORKFLOW.split('  workflow_dispatch:', 1)[1].split('\npermissions:', 1)[0]
+    setting = dispatch.split('      save_allocation_diagnostics:', 1)[1]
+    assert 'type: boolean' in setting
+    assert 'required: false' in setting
+    assert 'default: false' in setting
+    selection = (
+        "((github.event_name == 'pull_request' && "
+        "github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture') || "
+        "(github.event_name == 'workflow_dispatch' && inputs.save_allocation_diagnostics == true))"
+    )
+    steps = (
+        'Diagnose Windows Save lifecycle allocation boundary',
+        'Diagnose Windows Save retention allocation boundary',
+        'Upload Windows Save allocation stack evidence',
+    )
+    for name in steps:
+        step = WORKFLOW.split(f'      - name: {name}', 1)[1].split('      - name:', 1)[0]
+        condition = next(line.strip() for line in step.splitlines() if line.strip().startswith('if:'))
+        assert selection in condition
+        assert "runner.os == 'Windows'" in condition
+        if name.startswith('Diagnose'):
+            assert '!cancelled()' in condition
+            assert "steps.debug_build.outcome == 'success'" in condition
+        else:
+            assert 'always()' in condition
+    assert WORKFLOW.count('inputs.save_allocation_diagnostics == true') == len(steps)
