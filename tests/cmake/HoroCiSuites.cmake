@@ -230,6 +230,7 @@ function(horo_finalize_ci_suites)
     endif()
 
     set_property(TEST
+        HoroCharacterAllocationJunitPathContract
         HoroRuntimeUiSceneReconciliationPublicHeaderConsumer
         HoroRuntimeUiHotReloadPublicHeaderConsumer
         HoroSceneIdentityContractConsumer

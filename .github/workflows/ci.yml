@@ -392,9 +392,9 @@ jobs:
           if (Test-Path -LiteralPath "$root/character-allocation-ctest.xml") {
             Remove-Item -LiteralPath "$root/character-allocation-ctest.xml" -ErrorAction Stop
           }
-          ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 -R $pattern --output-junit "$root/character-allocation-ctest.xml"
+          ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 -R $pattern --output-junit "character-allocation-ctest.xml"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_character_allocation_qualification.py --output-junit "$root/character-allocation-ctest.xml"
+          python scripts/ci/run_character_allocation_qualification.py --output-junit "character-allocation-ctest.xml"
 
       - name: Test navigation without Recast Detour
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.navigation_build.outcome == 'success' }}
