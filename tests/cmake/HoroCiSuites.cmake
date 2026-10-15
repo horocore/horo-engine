@@ -46,6 +46,13 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroLightFramePoolTests
     HoroAITaskSchedulerTests
     HoroAITaskSchedulerPublicConsumer
+    HoroGameplayAiTests
+    HoroGameplayAiContractConsumer
+    HoroGameplayAiIntegrationPublicHeaderConsumer
+    HoroGameplayAiScriptBridgePublicHeaderConsumer
+    HoroGameplayApiPublicHeaderConsumer
+    HoroGameplayModuleHostPublicHeaderConsumer
+    HoroExtensionsPublicHeaderConsumer
     HoroAITests
     HoroAISightTests
     HoroAIPublicHeaderConsumer
@@ -143,7 +150,6 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroInputPublicHeaderConsumer
     HoroExtensionManagerTests
     HoroEditorActivityBoundaryTests
-    HoroExtensionsPublicHeaderConsumer
 
     HoroPackageLifecycleTests
     HoroPackageLifecyclePublicHeaderConsumer
