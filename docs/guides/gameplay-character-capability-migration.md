@@ -76,7 +76,7 @@ The Windows runner uses MSVC14.44 (VS17.14). Microsoft's pinned
 [VS17.14 vector implementation](https://github.com/microsoft/STL/blob/vs-2022-17.14/stl/inc/vector#L759-L765)
 allocates a container proxy in its noexcept move constructor. The actual prepare
 path moves CharacterControllerRegistry into CharacterWorld::Impl, moving
-GenerationalSlotStorage::entries_ inside two noexcept constructors. Injecting a
+`GenerationalSlotStorage::entries_` inside two noexcept constructors. Injecting a
 bad_alloc at that proxy allocation terminates rather than reaching Prepare's
 catch. No iterator setting, production allocator or deadline is weakened.
 

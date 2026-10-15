@@ -30,6 +30,10 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroGameplayLuaPublicHeaderConsumer
     HoroGameplayPhysicsPublicHeaderConsumer
     HoroGameplayPhysicsSdkHostConsumer
+
+    HoroWorldStreamingTests
+    HoroWorldStreamingPublicHeaderConsumer
+    HoroStreamingSourcePlannerBenchmark
     HoroDestructionSaveTests
     HoroDestructionSavePublicConsumer
     HoroDestructionSaveIntegrationPublicHeaderConsumer
@@ -147,6 +151,7 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroProjectCodeQueryPublicHeaderConsumer
     HoroMcpProjectCodeQueryPublicHeaderConsumer
     HoroSourceDocumentCodeQueryPublicHeaderConsumer
+    HoroRuntimeSaveIdentityTests
     HoroRuntimeSaveRootResolverTests
     HoroRuntimeSaveStorageQualificationTests
     HoroSaveStorageUserStateQualificationTests

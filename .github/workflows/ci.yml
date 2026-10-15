@@ -218,7 +218,7 @@ jobs:
       - name: Build Windows Release MCP restore and Character allocation qualification
         id: mcp_release_build
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.release_build.outcome == 'success' }}
-        run: cmake --build --preset ci-audio-release --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests
+        run: cmake --build --preset ci-audio-release --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroRuntimeSaveSlotLifecycleTests
 
       - name: Configure navigation without Recast Detour
         if: runner.os == 'Linux'
@@ -407,6 +407,25 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/ci/run_character_allocation_qualification.py --output-junit "$root/character-allocation-ctest.xml"
 
+      - name: Test Windows Release Save lifecycle allocation qualification
+        id: save_allocation_release_tests
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
+        run: >-
+          ctest --test-dir build/ci-audio-release --parallel 1 --output-on-failure
+          --no-tests=error --timeout 90
+          -R '^HoroRuntimeSaveSlotLifecycleTests::(Lifecycle allocation failure after visibility preserves publication knowledge|Retention allocation failure after selection preserves publication and binding ownership)$'
+          --test-output-size-passed 16384
+          --output-junit save-allocation-ctest.xml
+
+      - name: Install Windows Save qualification XML parser
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.save_allocation_release_tests.outcome == 'success' }}
+        run: >-
+          python -m pip install --no-cache-dir --only-binary=:all: defusedxml==0.7.1
+
+      - name: Verify Windows Release Save allocation variants
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.save_allocation_release_tests.outcome == 'success' }}
+        run: python scripts/verify_save_allocation_qualification.py build/ci-audio-release/save-allocation-ctest.xml
+
       - name: Test navigation without Recast Detour
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.navigation_build.outcome == 'success' }}
         run: ctest --preset ci-navigation-null
@@ -459,5 +478,6 @@ jobs:
             build/ci*/ctest.xml
             build/ci-audio-release/mcp-ctest.xml
             build/ci-audio-release/restore-ctest.xml
+            build/ci-audio-release/save-allocation-ctest.xml
           if-no-files-found: warn
           retention-days: 14

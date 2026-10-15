@@ -217,3 +217,52 @@ def test_native_reader_reuses_the_installed_parser_interpreter():
     configure = workflow.split("- name: Configure Debug", 1)[1].split("\n      - name:", 1)[0]
     assert '-DPython3_EXECUTABLE="$HORO_QUALIFICATION_PYTHON"' in configure
     assert workflow.index("Install native Character allocation verifier dependency") < workflow.index("- name: Configure Debug")
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+def test_direct_regex_writer_accepts_workspace_paths_with_spaces(tmp_path, absolute):
+    folder = tmp_path / "regex evidence with spaces"
+    folder.mkdir()
+    destination = folder / "selection.txt"
+    QUALIFICATION.write_regex(destination if absolute else destination.relative_to(tmp_path))
+    pattern = destination.read_text(encoding="utf-8")
+    for name in QUALIFICATION.CASES:
+        assert QUALIFICATION.re.fullmatch(pattern, name)
+    assert not QUALIFICATION.re.fullmatch(pattern, "unexpected allocation test")
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+def test_direct_regex_writer_rejects_outside_paths_without_mutation(tmp_path, absolute):
+    destination = tmp_path.parent / (tmp_path.name + "-outside.txt")
+    destination.write_text("retained evidence", encoding="utf-8")
+    argument = destination if absolute else Path("..") / destination.name
+    with pytest.raises(ValueError, match="inside the current workspace"):
+        QUALIFICATION.write_regex(argument)
+    assert destination.read_text(encoding="utf-8") == "retained evidence"
+
+
+def test_direct_regex_writer_rejects_symlink_escape_without_mutation(tmp_path):
+    destination = tmp_path.parent / (tmp_path.name + "-outside.txt")
+    destination.write_text("retained evidence", encoding="utf-8")
+    link = tmp_path / "escaped selection.txt"
+    try:
+        link.symlink_to(destination)
+    except OSError:
+        pytest.skip("Host does not permit test symlink creation")
+    with pytest.raises(ValueError, match="inside the current workspace"):
+        QUALIFICATION.write_regex(link)
+    assert destination.read_text(encoding="utf-8") == "retained evidence"
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+def test_actual_discovery_cli_writes_exact_workspace_regex(tmp_path, monkeypatch, absolute):
+    folder = tmp_path / "discovery evidence with spaces"
+    folder.mkdir()
+    source = folder / "discovery.json"
+    source.write_text(QUALIFICATION.json.dumps(discovery()), encoding="utf-8")
+    destination = folder / "selection.txt"
+    arguments = [source, destination] if absolute else [source.relative_to(tmp_path), destination.relative_to(tmp_path)]
+    monkeypatch.setattr("sys.argv", ["qualification", "--discovery", str(arguments[0]), "--regex-output", str(arguments[1])])
+    QUALIFICATION.main()
+    pattern = destination.read_text(encoding="utf-8")
+    assert all(QUALIFICATION.re.fullmatch(pattern, name) for name in QUALIFICATION.CASES)

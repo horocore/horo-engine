@@ -2067,6 +2067,10 @@ add_library(HoroWorldStreaming STATIC
         runtime/world_streaming/StreamingEvictionPolicyErrors.cpp
         runtime/world_streaming/StreamingFairQueue.cpp
         runtime/world_streaming/StreamingFairQueueErrors.cpp
+        runtime/world_streaming/StreamingSourcePlanner.cpp
+        runtime/world_streaming/StreamingSourceRegistration.cpp
+        runtime/world_streaming/StreamingSourcePlannerGeometry.cpp
+        runtime/world_streaming/StreamingTravelReadiness.cpp
         runtime/world_streaming/StreamingSourceDescriptor.cpp
         runtime/world_streaming/StreamingSourcePrefetch.cpp
         runtime/world_streaming/StreamingSourceRange.cpp

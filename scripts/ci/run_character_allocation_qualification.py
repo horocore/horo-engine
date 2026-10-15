@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import re
 import sys
-from defusedxml import ElementTree as ET
+from defusedxml import ElementTree as element_tree
 from defusedxml.common import DefusedXmlException
 
 PREFIX = "HoroPhysicsTests::"
@@ -34,7 +34,7 @@ def verify_junit(path):
     path = Path(path).resolve()
     if not path.is_relative_to(Path.cwd().resolve()):
         raise ValueError("Qualification evidence must remain inside the current workspace")
-    root = ET.parse(path).getroot()
+    root = element_tree.parse(path).getroot()
     cases = list(root.iter("testcase"))
     names = [case.get("name") for case in cases]
     if len(cases) != len(CASES) or set(names) != CASES:
@@ -47,6 +47,16 @@ def verify_junit(path):
         for field in ("failures", "errors", "skipped", "disabled"):
             if int(suite.get(field, "0")):
                 raise ValueError(f"Character allocation suite has nonzero {field}")
+
+
+def write_regex(path):
+    """Write only resolved workspace evidence, including for direct non-CLI callers."""
+    path = Path(path).resolve()
+    if not path.is_relative_to(Path.cwd().resolve()):
+        raise ValueError("Qualification evidence must remain inside the current workspace")
+    # CTest uses POSIX extended syntax: noncapturing Python groups are not supported.
+    pattern = "^(" + "|".join(re.escape(name) for name in sorted(CASES)) + ")$"
+    path.write_text(pattern, encoding="utf-8")
 
 
 def workspace_path(value):
@@ -72,9 +82,7 @@ def main():
         if args.regex_output is None:
             parser.error("--discovery requires --regex-output")
         verify_discovery(json.loads(args.discovery.read_text(encoding="utf-8-sig")))
-        # CTest uses POSIX extended syntax: noncapturing Python groups are not supported.
-        pattern = "^(" + "|".join(re.escape(name) for name in sorted(CASES)) + ")$"
-        args.regex_output.write_text(pattern, encoding="utf-8")
+        write_regex(args.regex_output)
     else:
         verify_junit(args.output_junit)
         print(f"Character allocation qualification: {len(CASES)} cases passed; zero failures, errors or skips.")
@@ -83,6 +91,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, OSError, ET.ParseError, DefusedXmlException) as error:
+    except (ValueError, OSError, element_tree.ParseError, DefusedXmlException) as error:
         print(f"Character allocation qualification failed: {error}", file=sys.stderr)
         sys.exit(1)
