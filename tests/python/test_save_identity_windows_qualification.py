@@ -17,20 +17,26 @@ def test_windows_save_identity_allocation_has_build_and_discovery_closure() -> N
     assert registration and target in registration.group(1).split()
 
 
-def test_recovery_branch_captures_exact_windows_binary_stacks_without_weakening_tests() -> None:
+def test_release_save_qualification_is_mandatory_and_debug_skips_are_explicit() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    names = ("Diagnose Windows Save lifecycle allocation boundary",
-             "Diagnose Windows Save retention allocation boundary",
-             "Upload Windows Save allocation stack evidence")
-    for name in names:
-        step = workflow.split(f"      - name: {name}", 1)[1].split("      - name:", 1)[0]
-        gate = next(line for line in step.splitlines() if line.strip().startswith("if:"))
-        assert "github.event_name == 'pull_request'" in gate
-        assert "runner.os == 'Windows'" in gate
-        assert "(github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture' || " in gate
-        assert "github.head_ref == 'fix/HORO-2421_windows_save_allocation_recovery')" in gate
-        assert "continue-on-error" not in step
-        if name.startswith("Diagnose"):
-            assert "steps.debug_build.outcome == 'success'" in gate
-            assert "timeout-minutes: 3" in step
-            assert "-CaptureSymbolEvidence" in step
+    build = workflow.split("      - name: Build Windows Release MCP and restore allocation qualification", 1)[1].split("      - name:", 1)[0]
+    assert "--target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroRuntimeSaveSlotLifecycleTests" in build
+    step = workflow.split("      - name: Test Windows Release Save lifecycle allocation qualification", 1)[1].split("      - name:", 1)[0]
+    assert "runner.os == 'Windows'" in step
+    assert "steps.mcp_release_build.outcome == 'success'" in step
+    assert "--no-tests=error --timeout 90" in step
+    assert "Lifecycle allocation failure after visibility preserves publication knowledge" in step
+    assert "Retention allocation failure after selection preserves publication and binding ownership" in step
+    assert "--output-junit build/ci-audio-release/save-allocation-ctest.xml" in step
+    verifier = workflow.split("      - name: Verify Windows Release Save allocation variants", 1)[1].split("      - name:", 1)[0]
+    assert "steps.save_allocation_release_tests.outcome == 'success'" in verifier
+    assert "python scripts/verify_save_allocation_qualification.py build/ci-audio-release/save-allocation-ctest.xml" in verifier
+    assert "continue-on-error" not in step + verifier
+    assert "github.head_ref == 'fix/HORO-2421_windows_save_allocation_recovery'" not in workflow
+    assert workflow.count("github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture'") == 3
+    reason = "Unsupported MSVC Debug Error transport under global allocation injection"
+    for filename in ("SaveSlotLifecycleAllocationTests.cpp", "SaveSlotRetentionFailureTests.cpp"):
+        source = (ROOT / "tests/unit/runtime/save" / filename).read_text(encoding="utf-8")
+        assert "#if defined(_MSC_VER) && _ITERATOR_DEBUG_LEVEL != 0" in source
+        assert f'SKIP("{reason}; required in Windows Release qualification");' in source
+        assert "GENERATE(false, true)" in source

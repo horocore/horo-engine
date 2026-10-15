@@ -76,3 +76,42 @@ variants, their publication/lease/reopen/reconcile assertions and 90-second limi
 Final-head Windows execution of both existing cases is required to demonstrate
 recovery on the affected platform. Local macOS execution, when available, is
 separate evidence and cannot establish the Windows fix by itself.
+
+## Second matched capture and supported qualification
+
+[Run 38725539810](https://github.com/horocore/horo-engine/actions/runs/38725539810)
+built recovery head `35d82a375038c1be0e663821234e44af1be212aa` through merge
+`122a1e6f2893d1da45896e7cf2c828dff7eaa067`. Its
+[stack artifact 11970117596](https://github.com/horocore/horo-engine/actions/runs/38725539810/artifacts/11970117596)
+and [binaries 11969453372](https://github.com/horocore/horo-engine/actions/runs/38725539810/artifacts/11969453372)
+match GUID `d1c5d2ee-1f1a-41a2-8f5a-0c645497c732`, age 2. EXE SHA-256 is
+`13dbfe00259b8b4de7733b4c718c3abaf8c38d33e0b0e71bf2071b6af7f39372`;
+PDB SHA-256 is
+`888b9c3df9c83f6d383735097f89ae469d4a045755332aa10ef98c51a4bbca8d`.
+Both captures used exact private symbols and CDB exited zero.
+
+Both sync-success variants now return, reopen, reconcile and exit their fixture
+scopes. Both sync-failure variants subsequently stop in the injected failure's
+`std::string` construction inside `ErrorCode::ErrorCode` / `Error::Error`, reached
+from the fixture's `Failure(std::move(syncError))` transport. `FormatUuid` is absent
+from these stacks. This verifies the formatter correction's recovery edge; it
+does not demonstrate complete Debug qualification or a production cleanup lock.
+The precise STL move/noexcept mapping remains a source-family inference because
+the installed runner header hash was not captured.
+
+MSVC with iterator debugging cannot faithfully exercise this global allocation
+probe through the existing Error transport. The two cases explicitly `SKIP` in
+that configuration, before their generators or fixture allocations. Pinned Catch
+returns code 4 for an entirely skipped case, and its CMake discovery registers
+`SKIP_RETURN_CODE 4`, preserving an actual CTest/JUnit skip. No skip counts as a
+passing recovery test. Debug formatter, provider and direct I/O tests still run.
+
+Windows Release qualification builds the same lifecycle test target and runs
+exactly the two existing cases with the unchanged 90-second timeout. Their complete
+bodies, `GENERATE(false, true)`, assertions and allocation predicates remain intact
+in supported configurations. The mandatory JUnit verifier rejects missing cases,
+skips, failures and errors, and requires ordered markers for both sync variants,
+reopen/reconcile and both completed fixture scopes. Fresh-head Windows Release
+evidence is required before claiming these allocation cases qualified. Temporary
+recovery-branch Debug capture gates are retired; the original diagnostic branch
+gates and historical artifacts remain available.

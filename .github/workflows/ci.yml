@@ -206,7 +206,7 @@ jobs:
       - name: Build Windows Release MCP and restore allocation qualification
         id: mcp_release_build
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.release_build.outcome == 'success' }}
-        run: cmake --build --preset ci-audio-release --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests
+        run: cmake --build --preset ci-audio-release --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroRuntimeSaveSlotLifecycleTests
 
       - name: Configure navigation without Recast Detour
         if: runner.os == 'Linux'
@@ -308,7 +308,7 @@ jobs:
           retention-days: 3
 
       - name: Diagnose Windows Save lifecycle allocation boundary
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && (github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture' || github.head_ref == 'fix/HORO-2421_windows_save_allocation_recovery') && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture' && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
         timeout-minutes: 3
         shell: pwsh
         run: >-
@@ -317,7 +317,7 @@ jobs:
           -TestCase 'HoroRuntimeSaveSlotLifecycleTests::Lifecycle allocation failure after visibility preserves publication knowledge' -CaptureSymbolEvidence
 
       - name: Diagnose Windows Save retention allocation boundary
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && (github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture' || github.head_ref == 'fix/HORO-2421_windows_save_allocation_recovery') && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture' && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
         timeout-minutes: 3
         shell: pwsh
         run: >-
@@ -377,6 +377,24 @@ jobs:
           --no-tests=error --timeout 90 -R '^HoroRuntimeSaveRestoreTransactionTests::'
           --output-junit build/ci-audio-release/restore-ctest.xml
 
+      - name: Test Windows Release Save lifecycle allocation qualification
+        id: save_allocation_release_tests
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
+        run: >-
+          ctest --test-dir build/ci-audio-release --parallel 1 --output-on-failure
+          --no-tests=error --timeout 90
+          -R '^HoroRuntimeSaveSlotLifecycleTests::(Lifecycle allocation failure after visibility preserves publication knowledge|Retention allocation failure after selection preserves publication and binding ownership)$'
+          --output-junit build/ci-audio-release/save-allocation-ctest.xml
+
+      - name: Install Windows Save qualification XML parser
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.save_allocation_release_tests.outcome == 'success' }}
+        run: >-
+          python -m pip install --no-cache-dir --only-binary=:all: defusedxml==0.7.1
+
+      - name: Verify Windows Release Save allocation variants
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.save_allocation_release_tests.outcome == 'success' }}
+        run: python scripts/verify_save_allocation_qualification.py build/ci-audio-release/save-allocation-ctest.xml
+
       - name: Test navigation without Recast Detour
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.navigation_build.outcome == 'success' }}
         run: ctest --preset ci-navigation-null
@@ -390,7 +408,7 @@ jobs:
         run: ctest --preset ci-xr-openxr
 
       - name: Upload Windows Save allocation stack evidence
-        if: ${{ always() && github.event_name == 'pull_request' && (github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture' || github.head_ref == 'fix/HORO-2421_windows_save_allocation_recovery') && runner.os == 'Windows' }}
+        if: ${{ always() && github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture' && runner.os == 'Windows' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: save-allocation-stack-Windows-${{ github.sha }}-${{ github.run_attempt }}
@@ -429,5 +447,6 @@ jobs:
             build/ci*/ctest.xml
             build/ci-audio-release/mcp-ctest.xml
             build/ci-audio-release/restore-ctest.xml
+            build/ci-audio-release/save-allocation-ctest.xml
           if-no-files-found: warn
           retention-days: 14
