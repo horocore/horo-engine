@@ -46,8 +46,14 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroDestructionSaveTests", "HoroDestructionSavePublicConsumer",
     "HoroDestructionSaveIntegrationPublicHeaderConsumer", "HoroDestructionApiPublicHeaderConsumer",
     "HoroDestructionReplicationTests", "HoroDestructionReplicationPublicHeaderConsumer",
+    "HoroRuntimeSceneCellPayloadTests", "HoroSceneCellPayloadPublicHeaderConsumer",
+    "HoroWorldCookIntegrationTests",
+    "HoroWorldCookIntegrationConsumer",
+    "HoroWorldCookIntegrationPublicHeaderConsumer", "HoroWorldStreamingPublicHeaderConsumer",
+    "HoroWorldArtifactCodecTests", "HoroWorldArtifactCodecConsumer",
     "HoroLightCullingTests", "HoroLightFramePoolTests",
     "HoroAITaskSchedulerTests", "HoroAITaskSchedulerPublicConsumer",
+    "HoroAIFoundationQualificationTests",
     "HoroGameplayAiTests", "HoroGameplayAiContractConsumer",
     "HoroGameplayAiIntegrationPublicHeaderConsumer", "HoroGameplayAiScriptBridgePublicHeaderConsumer",
     "HoroGameplayApiPublicHeaderConsumer", "HoroGameplayModuleHostPublicHeaderConsumer",
@@ -79,6 +85,9 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroEditorSurfaceIdentityTests", "HoroSourceFileOpenServiceTests",
     "HoroCameraCutRuntimeTests", "HoroCameraCutPublicHeaderConsumer",
     "HoroPrefabTests", "HoroPrefabSceneExpansionTests", "HoroPrefabSceneExpansionContractConsumer",
+    "HoroPrefabOverrideModelPublicHeaderConsumer", "HoroPrefabAuthoringPublicHeaderConsumer",
+    "HoroSceneSourceModelPublicHeaderConsumer", "HoroSceneSourcePublicHeaderConsumer",
+    "HoroSceneRuntimeConversionPublicHeaderConsumer", "HoroSceneRuntimeConversionTests", "HoroSceneDocumentTests",
     "HoroAssetRegistryTests", "HoroInputTests", "HoroAndroidInputTests", "HoroAndroidInputIntegrationPublicHeaderConsumer",
     "HoroInputSdlTests", "HoroRuntimeUiInputTests",
     "HoroRuntimeUiAnimationIntegrationTests", "HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer",
@@ -92,6 +101,9 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroProjectCodeQueryPublicHeaderConsumer", "HoroMcpProjectCodeQueryPublicHeaderConsumer",
     "HoroSourceDocumentCodeQueryPublicHeaderConsumer",
     "HoroPackageLifecycleTests", "HoroPackageLifecyclePublicHeaderConsumer",
+    "HoroPackageApplicationTests", "HoroPackageApplicationPublicHeaderConsumer",
+    "HoroCliPackageAdaptersPublicHeaderConsumer", "HoroMcpPackageAdaptersPublicHeaderConsumer",
+    "HoroEditorPackageAdaptersPublicHeaderConsumer",
     "HoroMcpSessionPublicHeaderConsumer", "HoroRuntimeSaveIdentityTests", "HoroRuntimeSaveRootResolverTests",
     "HoroRuntimeSaveStorageQualificationTests", "HoroSaveStorageUserStateQualificationTests",
     "HoroRuntimeSaveFilesystemLockTests", "HoroRuntimeSaveSlotCommitTransactionTests",
@@ -199,6 +211,19 @@ def test_ai_scheduler_qualification_has_build_discovery_and_single_source_owners
     assert 'horo_register_catch_test(HoroAITaskSchedulerTests LABELS "unit;ai;headless")' in tests_cmake
     assert 'add_test(NAME HoroAITaskSchedulerPublicConsumer COMMAND HoroAITaskSchedulerPublicConsumer)' in tests_cmake
     assert 'set_tests_properties(HoroAITaskSchedulerPublicConsumer PROPERTIES LABELS "unit;ai;headless;ci-windows")' in tests_cmake
+
+
+def test_ai_foundation_qualification_keeps_its_owner_header_private() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    assert "HoroAIFoundationQualificationTests" in targets("HORO_CI_WINDOWS_TARGETS")
+    assert "add_library(HoroAISceneQualificationInternal INTERFACE)" in tests_cmake
+    assert '"${horo_ai_qualification_internal_dir}/AISceneRuntimeDetail.h" COPYONLY)' in tests_cmake
+    assert '"$<BUILD_INTERFACE:${horo_ai_qualification_internal_dir}>"' in tests_cmake
+    assert "target_link_libraries(HoroAISceneQualificationInternal INTERFACE HoroEngine::AISceneIntegration)" in tests_cmake
+    assert "target_link_libraries(HoroAIFoundationQualificationTests PRIVATE HoroAISceneQualificationInternal)" in tests_cmake
+    for source in ("AIFoundationLifecycleQualificationTests.cpp", "AIFoundationObserverQualificationTests.cpp"):
+        assert tests_cmake.count(f"unit/runtime/ai/{source}") == 1
+    assert 'horo_register_catch_test(HoroAIFoundationQualificationTests LABELS "unit;ai;headless;qualification")' in tests_cmake
 
 
 def test_windows_manifest_tests_and_consumer_share_the_build_closure() -> None:
@@ -412,7 +437,7 @@ def test_instrumented_render_graph_pane_keeps_sonar_coverage() -> None:
 
 
 def test_windows_restore_allocation_sweep_has_mandatory_release_coverage() -> None:
-    build = re.search(r"      - name: Build Windows Release MCP restore and Character allocation qualification\n(.*?)(?=\n      - name:|\Z)", WORKFLOW, re.S)
+    build = re.search(r"        id: mcp_release_build\n(.*?)(?=\n      - name:|\Z)", WORKFLOW, re.S)
     assert build
     assert "--target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests" in build.group(1)
     test = re.search(r"      - name: Test Windows Release restore allocation qualification\n(.*?)(?=\n      - name:|\Z)", WORKFLOW, re.S)

@@ -12,6 +12,7 @@
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Prefab/PrefabIdentity.h"
+#include "Horo/Prefab/PrefabValueOverrides.h"
 #include "Horo/Runtime/Scene/NavigationSceneComponents.h"
 #include "Horo/Runtime/Scene/PhysicsSceneComponents.h"
 #include "Horo/Runtime/Scene/PrimitiveMeshDescriptor.h"
@@ -171,6 +172,7 @@ namespace Horo::Editor {
         PrefabInstanceReparented,
         PrefabInstanceDuplicated,
         PrefabInstanceDeleted,
+        PrefabInstanceValuesChanged,
     };
 
     /** @brief Typed request to create one authored scene object. */
@@ -373,6 +375,16 @@ namespace Horo::Editor {
         Math::Transform rootTransform;
     };
 
+    /** @brief Revision-fenced semantic instance value edit, prepared against explicit source/schema owners. */
+    struct EditScenePrefabValueCommand final {
+        Prefab::PrefabInstanceId instance;
+        DocumentRevision expectedRevision;
+        Prefab::PrefabResolutionRevision expectedSource; /**< Exact registry and reachable source graph captured for the edit. */
+        Sha256Digest expectedSchema;
+        Prefab::PrefabValueEdit edit;
+        std::uint64_t expectedReplacementEpoch{}; /**< Exact owner-local opening generation; never portable between document owners. */
+    };
+
     /** @brief Typed request to duplicate a placement with a fresh scene-local instance identity. */
     struct DuplicateScenePrefabInstanceCommand final {
         Prefab::PrefabInstanceId source;
@@ -426,6 +438,7 @@ namespace Horo::Editor {
 
     private:
         friend class SceneDocumentCommandExecutor;
+        friend class SceneDocumentPrefabValueCommands;
         friend class SceneDocumentTransactions;
         friend class SceneDocumentHistoryReplay;
         struct Impl;
@@ -440,6 +453,10 @@ namespace Horo::Editor {
 
         /** @brief Returns whether committed state differs from the last marked saved revision. */
         [[nodiscard]] bool IsDirty() const noexcept;
+
+        /** @brief Read the owner-local successful-load generation. @return Nonzero epoch invalidating captured edit intent on replacement.
+         */
+        [[nodiscard]] std::uint64_t ReplacementEpoch() const noexcept;
 
         /** @brief Returns an immutable value snapshot of the committed document. */
         [[nodiscard]] SceneDocumentSnapshot Snapshot() const;
@@ -500,6 +517,7 @@ namespace Horo::Editor {
 
     private:
         friend class SceneDocumentCommandExecutor;
+        friend class SceneDocumentPrefabValueCommands;
         friend class SceneDocumentTransactions;
         friend class SceneDocumentHistoryReplay;
 
@@ -519,6 +537,38 @@ namespace Horo::Editor {
         std::uint64_t m_nextNavigationModifierId{1};
         std::uint64_t m_nextNavigationLinkId{1};
         std::uint64_t m_nextAiAgentId{1};
+    };
+
+    /** @brief Synchronous Prefab value command adapter borrowing the document's existing canonical history.
+     * @details Owns no roots, state identities or history stacks. Execute prepares complete values before publication;
+     * Undo/Redo continue through SceneDocumentCommandExecutor and the same EditorHistory entries.
+     */
+    class SceneDocumentPrefabValueCommands final {
+    public:
+        /** @brief Borrows the explicit canonical owners for one application command scope.
+         * @param document Canonical document outliving this adapter. @param history Its sole history owner, also outliving this adapter.
+         */
+        SceneDocumentPrefabValueCommands(SceneDocument &document, EditorHistory &history) noexcept;
+        /** @brief Resolve and atomically commit one instance-local assignment, revert or rebase.
+         * @param command Typed intent with exact document/source/schema fences.
+         * @param sources Immutable source context explicitly composed by the application.
+         * @param schemas Owned schema metadata; null preserves unavailable properties as orphans.
+         * @param limits Captured resource policy. @param cancellation Cooperative preparation cancellation.
+         * @return One semantic history transition, no-op, or typed error without mutation. */
+        [[nodiscard]] Result<SceneCommandResult> Execute(const EditScenePrefabValueCommand &command,
+                                                         const Prefab::PrefabSourceResolverSnapshot &sources,
+                                                         const Prefab::PrefabValueSchemaSnapshot *schemas,
+                                                         const Prefab::PrefabLimitProfile &limits,
+                                                         const CancellationToken &cancellation = {});
+
+    private:
+        friend class SceneDocumentCommandExecutor;
+        /** @brief Prepare one value-history replay completely before its no-throw publication.
+         * @param undo True for undo, false for redo. @return Canonical history result preserving the current opening fence.
+         */
+        [[nodiscard]] Result<SceneCommandResult> Replay(bool undo);
+        SceneDocument &m_document;
+        EditorHistory &m_history;
     };
 
     /** @brief Sole mutation boundary for the minimum typed scene command set. */

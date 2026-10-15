@@ -40,11 +40,20 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroDestructionApiPublicHeaderConsumer
     HoroDestructionReplicationTests
     HoroDestructionReplicationPublicHeaderConsumer
+    HoroRuntimeSceneCellPayloadTests
+    HoroSceneCellPayloadPublicHeaderConsumer
+    HoroWorldCookIntegrationTests
+    HoroWorldCookIntegrationConsumer
+    HoroWorldCookIntegrationPublicHeaderConsumer
+    HoroWorldStreamingPublicHeaderConsumer
+    HoroWorldArtifactCodecTests
+    HoroWorldArtifactCodecConsumer
     HoroAnimationApiTests
     HoroAnimationGraphPublicHeaderConsumer
     HoroLightCullingTests
     HoroLightFramePoolTests
     HoroAITaskSchedulerTests
+    HoroAIFoundationQualificationTests
     HoroAITaskSchedulerPublicConsumer
     HoroGameplayAiTests
     HoroGameplayAiContractConsumer
@@ -108,6 +117,13 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroEditorSurfaceIdentityTests
     HoroSourceFileOpenServiceTests
     HoroPrefabTests
+    HoroPrefabOverrideModelPublicHeaderConsumer
+    HoroPrefabAuthoringPublicHeaderConsumer
+    HoroSceneSourceModelPublicHeaderConsumer
+    HoroSceneSourcePublicHeaderConsumer
+    HoroSceneRuntimeConversionPublicHeaderConsumer
+    HoroSceneRuntimeConversionTests
+    HoroSceneDocumentTests
     HoroPrefabSceneExpansionTests
     HoroPrefabSceneExpansionContractConsumer
     HoroAssetRegistryTests
@@ -145,6 +161,11 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroEditorActivityBoundaryTests
 
     HoroPackageLifecycleTests
+    HoroPackageApplicationTests
+    HoroPackageApplicationPublicHeaderConsumer
+    HoroCliPackageAdaptersPublicHeaderConsumer
+    HoroMcpPackageAdaptersPublicHeaderConsumer
+    HoroEditorPackageAdaptersPublicHeaderConsumer
     HoroPackageLifecyclePublicHeaderConsumer
     HoroMcpSessionTests
     HoroMcpSessionPublicHeaderConsumer
@@ -225,6 +246,7 @@ set(HORO_CI_NETWORK_TARGETS
 
 # These editor-labelled suites were explicitly run by the coverage workflow.
 set(HORO_SONAR_EDITOR_TARGETS
+    HoroPackageApplicationTests
     HoroFractureDocumentTests
     HoroTerrainAuthoringTests
     HoroMixerDocumentTests
@@ -274,6 +296,7 @@ function(horo_finalize_ci_suites)
     endif()
 
     set_property(TEST
+        HoroSceneAllocationJunitPathContract
         HoroCharacterAllocationJunitPathContract
         HoroRuntimeUiSceneReconciliationPublicHeaderConsumer
         HoroRuntimeUiHotReloadPublicHeaderConsumer

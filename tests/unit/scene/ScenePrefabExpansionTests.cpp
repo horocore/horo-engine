@@ -1,5 +1,6 @@
 #include "AllocationProbe.h"
 #include "CanonicalJsonWriter.h"
+#include "SceneAllocationQualification.h"
 #include "ScenePrefabExpansionTestSupport.h"
 
 #include <algorithm>
@@ -125,6 +126,8 @@ TEST_CASE("Expansion cache finite capacity cancellation and malformed inputs pre
 }
 
 TEST_CASE("Expansion allocation failure never evicts the prior exact immutable candidate", "[native][prefab][cache][allocation]") {
+    Tests::RequireSupportedSceneAllocationInjection();
+
     ExpansionFixture fixture;
     const auto resolver = fixture.Resolver();
     const auto firstInstance = PrefabInstanceId::Create(4).Value();
@@ -197,6 +200,8 @@ TEST_CASE("Every captured project policy field changes the exact expansion key",
 }
 
 TEST_CASE("Canonical serialization survives every production allocation failure", "[native][prefab][allocation]") {
+    Tests::RequireSupportedSceneAllocationInjection();
+
     ExpansionFixture fixture;
     const auto name =
         GENERATE("Root", "Long owned source text with UTF-8: İstanbul, a quote \" and escaped newline\n and backslash \\ end");
@@ -226,6 +231,8 @@ TEST_CASE("Canonical serialization survives every production allocation failure"
 
 TEST_CASE("Resolver admission computes actual immutable evidence transactionally under every allocation failure",
           "[native][prefab][allocation]") {
+    Tests::RequireSupportedSceneAllocationInjection();
+
     ExpansionFixture fixture;
     const auto resolver = fixture.Resolver();
     const auto registry = fixture.registry.Snapshot();
@@ -381,10 +388,21 @@ namespace {
         CHECK(Tests::AllocationProbe::FreeCount() > freedBefore);
         CHECK(source.dump(2) == sourceBytes);
     }
+
+    /** @brief Proves a failed copy leaves both destinations usable for subsequent ordinary copies. */
+    template <typename Wire>
+    void RequireCopyRecovery(const Wire &source, const std::string &sourceBytes, std::optional<Wire> &constructed, Wire &destination) {
+        constructed.emplace(source);
+        CHECK(constructed->dump(2) == sourceBytes);
+        destination = source;
+        CHECK(destination.dump(2) == sourceBytes);
+    }
 }  // namespace
 
 TEMPLATE_TEST_CASE("Canonical moves retire every wire alternative without allocation", "[native][prefab][wire][allocation]",
                    OrderedWireValue, SortedWireValue) {
+    Tests::RequireSupportedSceneAllocationInjection();
+
     using Wire = TestType;
     const unsigned alternative = GENERATE(0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U);
     const Wire source = [alternative] {
@@ -413,6 +431,8 @@ TEMPLATE_TEST_CASE("Canonical moves retire every wire alternative without alloca
 
 TEMPLATE_TEST_CASE("Recursive canonical copies preserve source and destination at every allocation failure",
                    "[native][prefab][wire][allocation]", OrderedWireValue, SortedWireValue) {
+    Tests::RequireSupportedSceneAllocationInjection();
+
     using Wire = TestType;
     const bool arrayRoot = GENERATE(false, true);
     const bool assignment = GENERATE(false, true);
@@ -455,9 +475,6 @@ TEMPLATE_TEST_CASE("Recursive canonical copies preserve source and destination a
         CHECK_FALSE(constructed.has_value());
         CHECK(destination.dump(2) == previousBytes);
         CHECK(source.dump(2) == sourceBytes);
-        constructed.emplace(source);
-        CHECK(constructed->dump(2) == sourceBytes);
-        destination = source;
-        CHECK(destination.dump(2) == sourceBytes);
+        RequireCopyRecovery(source, sourceBytes, constructed, destination);
     }
 }

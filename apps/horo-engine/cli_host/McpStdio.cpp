@@ -2,6 +2,7 @@
 #include "Horo/Cli/CliDispatcher.h"
 #include "Horo/Cli/CliErrors.h"
 #include "Horo/Mcp/McpErrors.h"
+#include "Horo/Mcp/PackageTools.h"
 #include "Horo/Platform/SecureRandom.h"
 #include "McpServe.h"
 
@@ -245,11 +246,13 @@ namespace Horo::Application::Internal {
 
         /** @brief Authenticates the already admitted CLI invocation entirely within its private host composition. */
         Result<Mcp::McpSessionAdmission> LocalAdmission(const std::shared_ptr<Mcp::McpAuthorization> &authorization,
-                                                        const std::vector<std::string> &capabilities, const std::uint64_t revision) {
-            if (const auto trusted = authorization->SetTrust({}, 1, true); trusted.HasError())
+                                                        const std::vector<std::string> &capabilities, const std::uint64_t revision,
+                                                        const std::optional<std::string> &project = {}) {
+            if (const auto trusted = authorization->SetTrust(project, 1, true); trusted.HasError())
                 return Result<Mcp::McpSessionAdmission>::Failure(trusted.ErrorValue());
             Mcp::McpSessionAdmission admission{.clientIdentity = "horo.cli.local",
                                                .capabilities = capabilities,
+                                               .projectIdentity = project,
                                                .registryRevision = revision};
             auto credential = authorization->IssueCredential(admission, std::chrono::hours{24});
             if (credential.HasError())
@@ -260,34 +263,58 @@ namespace Horo::Application::Internal {
             admission.authority = std::move(principal).Value();
             return Result<Mcp::McpSessionAdmission>::Success(std::move(admission));
         }
+
+        /** @brief Builds inert tool registrations after host capability admission, without invoking package policy. */
+        Result<std::vector<Mcp::McpToolRegistration>> HostTools(std::shared_ptr<HostObservabilitySession> session,
+                                                                const McpPackageBinding &packages) {
+            std::vector<Mcp::McpToolRegistration> registrations{
+                {.descriptor = {.id = {"observability.smoke"},
+                                .description = "Run the application's headless observability smoke operation.",
+                                .inputSchema = {{"type", "object"}, {"additionalProperties", false}},
+                                .outputSchema = {{"type", "object"},
+                                                 {"properties", {{"completed", {{"type", "boolean"}}}}},
+                                                 {"required", {"completed"}},
+                                                 {"additionalProperties", false}},
+                                .effect = Mcp::McpToolEffect::Mutation,
+                                .requiredCapabilities = {"horo.observability.smoke"}},
+                 .adapter = std::make_shared<ObservabilitySmokeTool>(std::move(session)),
+                 .owner = Mcp::McpOwnerContext::Build}};
+            if (packages.application) {
+                auto tools = Mcp::MakePackageTools(packages.application, packages.projectIdentity, packages.generation,
+                                                   packages.currentGeneration, Mcp::McpOwnerContext::Runtime);
+                if (tools.HasError())
+                    return Result<std::vector<Mcp::McpToolRegistration>>::Failure(tools.ErrorValue());
+                registrations.insert(registrations.end(), std::make_move_iterator(tools.Value().begin()),
+                                     std::make_move_iterator(tools.Value().end()));
+            }
+            return Result<std::vector<Mcp::McpToolRegistration>>::Success(std::move(registrations));
+        }
     }  // namespace
 
     /** @copydoc ServeNativeMcp */
-    Result<void> ServeNativeMcp(const Cli::CliExecutionContext &context, std::shared_ptr<HostObservabilitySession> session) {
+    Result<void> ServeNativeMcp(const Cli::CliExecutionContext &context, std::shared_ptr<HostObservabilitySession> session,
+                                McpPackageBinding packages) {
         Stdio stdio;
         if (const auto started = stdio.Start(); started.HasError())
             return started;
         if (!session || !context.HasCapability(Cli::CliCapabilityId{"horo.observability.smoke"}))
             return Result<void>::Failure(MakeError(Cli::CliErrors::CommandUnavailable));
-        const std::vector<std::string> capabilities{"horo.observability.smoke"};
+        std::vector<std::string> capabilities{"horo.observability.smoke"};
+        if (packages.application) {
+            if (!context.HasCapability(Cli::CliCapabilityId{"horo.package.manage"}))
+                return Result<void>::Failure(MakeError(Cli::CliErrors::CapabilityUnauthorized));
+            capabilities.emplace_back("horo.package.manage");
+        }
         auto authorization = std::make_shared<Mcp::McpAuthorization>(Platform::CreateNativeSecureRandomSource());
         auto registry = std::make_shared<Mcp::McpToolRegistry>(authorization);
-        const auto published =
-            registry->Publish({{.descriptor = {.id = {"observability.smoke"},
-                                               .description = "Run the application's headless observability smoke operation.",
-                                               .inputSchema = {{"type", "object"}, {"additionalProperties", false}},
-                                               .outputSchema = {{"type", "object"},
-                                                                {"properties", {{"completed", {{"type", "boolean"}}}}},
-                                                                {"required", {"completed"}},
-                                                                {"additionalProperties", false}},
-                                               .effect = Mcp::McpToolEffect::Mutation,
-                                               .requiredCapabilities = capabilities},
-                                .adapter = std::make_shared<ObservabilitySmokeTool>(std::move(session)),
-                                .owner = Mcp::McpOwnerContext::Build}},
-                              capabilities);
+        auto registrations = HostTools(std::move(session), packages);
+        if (registrations.HasError())
+            return Result<void>::Failure(registrations.ErrorValue());
+        const auto published = registry->Publish(std::move(registrations).Value(), capabilities);
         if (published.HasError())
             return Result<void>::Failure(published.ErrorValue());
-        auto admission = LocalAdmission(authorization, capabilities, published.Value());
+        auto admission = LocalAdmission(authorization, capabilities, published.Value(),
+                                        packages.application ? std::optional{packages.projectIdentity} : std::nullopt);
         if (admission.HasError())
             return Result<void>::Failure(admission.ErrorValue());
         return ServeMcp(std::move(registry),
@@ -302,7 +329,8 @@ namespace Horo::Application::Internal {
                          .stopped =
                              [&stdio, &context] {
             return stdio.Stopped() || context.IsStopRequested();
-        }},
+        },
+                         .pumpApplication = packages.pump},
                         {std::move(authorization), std::move(admission).Value()});
     }
 }  // namespace Horo::Application::Internal

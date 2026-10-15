@@ -63,6 +63,10 @@ namespace Horo::Application::Internal {
                     return Result<void>::Failure(read.ErrorValue());
                 if (read.Value().disconnected)
                     break;
+                if (channel.pumpApplication) {
+                    if (auto pumped = channel.pumpApplication(); pumped.HasError())
+                        return pumped;
+                }
                 // Feed limits are MCP-owned. A native chunk has at most 64 bytes/newlines.
                 auto replies = lifetime.transport->Feed(read.Value().bytes);
                 if (replies.HasError())

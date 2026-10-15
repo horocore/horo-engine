@@ -115,6 +115,10 @@ namespace Horo::Packages {
          */
         [[nodiscard]] Result<void> Activate(std::span<const EnabledPackageExtension> enabled, PackageActivationBoundary boundary,
                                             const CancellationToken &cancellation);
+        /** @brief Checks exact injected availability authority without reading mutable package state.
+         * @param install Expected stable service instance. @return Whether this lifecycle borrows that exact authority. */
+        [[nodiscard]] bool UsesInstallService(const PackageInstallService &install) const noexcept;
+
         /** @brief Returns the last fully published composition. @return Owning immutable snapshot or empty. */
         [[nodiscard]] std::shared_ptr<const PackageActivationSnapshot> Active() const;
         /** @brief Returns the attempt journal and drain state. @return Owner-lane inspection copy. */
