@@ -40,6 +40,7 @@ namespace Horo::Editor {
             SceneDocument document;
             EditorHistory history;
             SceneDocumentCommandExecutor commands{document, history};
+            SceneDocumentPrefabValueCommands values{document, history};
             const auto instance = Prefab::PrefabInstanceId::Create(9).Value();
             std::vector<ScenePrefabInstance> placements{{instance, Prefab::PrefabAssetReference::Create(Asset()).Value(), {}, {}}};
             REQUIRE(document.LoadSaved({}, placements).HasValue());
@@ -52,11 +53,11 @@ namespace Horo::Editor {
                                             schemas.Revision(),
                                             {Prefab::PrefabValueEditKind::Assign, Property(), false},
                                             document.ReplacementEpoch()};
-            REQUIRE(commands.Execute(old, sources, &schemas, Limits()).HasValue());
+            REQUIRE(values.Execute(old, sources, &schemas, Limits()).HasValue());
             REQUIRE(document.LoadSaved({}, placements).HasValue());
             CHECK(document.Revision() == old.expectedRevision);
             CHECK(document.ReplacementEpoch() != old.expectedReplacementEpoch);
-            CHECK(commands.Execute(old, sources, &schemas, Limits()).HasError());
+            CHECK(values.Execute(old, sources, &schemas, Limits()).HasError());
             CHECK(commands.Undo().HasError());
             CHECK_FALSE(document.PrefabInstances()[0].valueOverrides);
             const auto epoch = document.ReplacementEpoch();
@@ -65,7 +66,7 @@ namespace Horo::Editor {
             CHECK(document.LoadSaved({}, invalid).HasError());
             CHECK(document.ReplacementEpoch() == epoch);
             old.expectedReplacementEpoch = epoch;
-            REQUIRE(commands.Execute(old, sources, &schemas, Limits()).HasValue());
+            REQUIRE(values.Execute(old, sources, &schemas, Limits()).HasValue());
             REQUIRE(document.PrefabInstances()[0].valueOverrides);
         }
 
@@ -73,6 +74,7 @@ namespace Horo::Editor {
             SceneDocument document;
             EditorHistory history;
             SceneDocumentCommandExecutor commands{document, history};
+            SceneDocumentPrefabValueCommands values{document, history};
             const auto created =
                 commands.Execute(CreateScenePrefabInstanceCommand{Prefab::PrefabAssetReference::Create(Asset()).Value(), {}, {}});
             REQUIRE(created.HasValue());
@@ -87,7 +89,7 @@ namespace Horo::Editor {
                                                 {Prefab::PrefabValueEditKind::Assign, Property(), false},
                                                 document.ReplacementEpoch()};
             const auto before = document.Revision();
-            auto assigned = commands.Execute(command, sources, &schemas, Limits());
+            auto assigned = values.Execute(command, sources, &schemas, Limits());
             REQUIRE(assigned.HasValue());
             REQUIRE(assigned.Value().committed);
             CHECK(document.Revision().value == before.value + 1);
@@ -98,11 +100,11 @@ namespace Horo::Editor {
             CHECK_FALSE(document.PrefabInstances()[0].valueOverrides);
             REQUIRE(commands.Redo().HasValue());
             CHECK(document.PrefabInstances()[0].valueOverrides == retained);
-            CHECK(commands.Execute(command, sources, &schemas, Limits()).HasError());
+            CHECK(values.Execute(command, sources, &schemas, Limits()).HasError());
             CHECK(document.PrefabInstances()[0].valueOverrides == retained);
             command.expectedRevision = document.Revision();
             command.edit.kind = Prefab::PrefabValueEditKind::Revert;
-            REQUIRE(commands.Execute(command, sources, &schemas, Limits()).HasValue());
+            REQUIRE(values.Execute(command, sources, &schemas, Limits()).HasValue());
             CHECK_FALSE(document.PrefabInstances()[0].valueOverrides);
             REQUIRE(commands.Undo().HasValue());
             CHECK(document.PrefabInstances()[0].valueOverrides == retained);
@@ -110,12 +112,12 @@ namespace Horo::Editor {
             command.expectedRevision = unchanged;
             command.edit.kind = Prefab::PrefabValueEditKind::Assign;
             command.edit.value = 11.0;
-            CHECK(commands.Execute(command, Sources(2.0, 2), &schemas, Limits()).HasError());
-            CheckRejectedEdit(document, commands.Execute(command, sources, &schemas, Limits()), unchanged, retained);
+            CHECK(values.Execute(command, Sources(2.0, 2), &schemas, Limits()).HasError());
+            CheckRejectedEdit(document, values.Execute(command, sources, &schemas, Limits()), unchanged, retained);
             CancellationSource cancelled;
             cancelled.RequestCancellation();
             command.edit.value = 3.0;
-            CheckRejectedEdit(document, commands.Execute(command, sources, &schemas, Limits(), cancelled.Token()), unchanged, retained);
+            CheckRejectedEdit(document, values.Execute(command, sources, &schemas, Limits(), cancelled.Token()), unchanged, retained);
         }
     }  // namespace
 }  // namespace Horo::Editor

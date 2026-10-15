@@ -438,6 +438,9 @@ namespace Horo::Editor {
 
     private:
         friend class SceneDocumentCommandExecutor;
+        friend class SceneDocumentPrefabValueCommands;
+        friend class SceneDocumentTransactions;
+        friend class SceneDocumentHistoryReplay;
         struct Impl;
         std::unique_ptr<Impl> m_impl;
     };
@@ -514,6 +517,9 @@ namespace Horo::Editor {
 
     private:
         friend class SceneDocumentCommandExecutor;
+        friend class SceneDocumentPrefabValueCommands;
+        friend class SceneDocumentTransactions;
+        friend class SceneDocumentHistoryReplay;
 
         std::vector<SceneObjectSnapshot> m_objects;
         std::vector<ScenePrefabInstance> m_prefabInstances;
@@ -531,6 +537,38 @@ namespace Horo::Editor {
         std::uint64_t m_nextNavigationModifierId{1};
         std::uint64_t m_nextNavigationLinkId{1};
         std::uint64_t m_nextAiAgentId{1};
+    };
+
+    /** @brief Synchronous Prefab value command adapter borrowing the document's existing canonical history.
+     * @details Owns no roots, state identities or history stacks. Execute prepares complete values before publication;
+     * Undo/Redo continue through SceneDocumentCommandExecutor and the same EditorHistory entries.
+     */
+    class SceneDocumentPrefabValueCommands final {
+    public:
+        /** @brief Borrows the explicit canonical owners for one application command scope.
+         * @param document Canonical document outliving this adapter. @param history Its sole history owner, also outliving this adapter.
+         */
+        SceneDocumentPrefabValueCommands(SceneDocument &document, EditorHistory &history) noexcept;
+        /** @brief Resolve and atomically commit one instance-local assignment, revert or rebase.
+         * @param command Typed intent with exact document/source/schema fences.
+         * @param sources Immutable source context explicitly composed by the application.
+         * @param schemas Owned schema metadata; null preserves unavailable properties as orphans.
+         * @param limits Captured resource policy. @param cancellation Cooperative preparation cancellation.
+         * @return One semantic history transition, no-op, or typed error without mutation. */
+        [[nodiscard]] Result<SceneCommandResult> Execute(const EditScenePrefabValueCommand &command,
+                                                         const Prefab::PrefabSourceResolverSnapshot &sources,
+                                                         const Prefab::PrefabValueSchemaSnapshot *schemas,
+                                                         const Prefab::PrefabLimitProfile &limits,
+                                                         const CancellationToken &cancellation = {});
+
+    private:
+        friend class SceneDocumentCommandExecutor;
+        /** @brief Prepare one value-history replay completely before its no-throw publication.
+         * @param undo True for undo, false for redo. @return Canonical history result preserving the current opening fence.
+         */
+        [[nodiscard]] Result<SceneCommandResult> Replay(bool undo);
+        SceneDocument &m_document;
+        EditorHistory &m_history;
     };
 
     /** @brief Sole mutation boundary for the minimum typed scene command set. */
@@ -608,18 +646,6 @@ namespace Horo::Editor {
         /** @brief Validates and atomically replaces one prefab root placement transform. */
         [[nodiscard]] Result<SceneCommandResult> Execute(const SetScenePrefabInstanceRootTransformCommand &command);
 
-        /** @brief Resolve and atomically commit one instance-local assignment, revert or rebase.
-         * @param command Typed intent with exact document/source/schema fences.
-         * @param sources Immutable source context explicitly composed by the application.
-         * @param schemas Owned schema metadata; null preserves unavailable properties as orphans.
-         * @param limits Captured resource policy. @param cancellation Cooperative preparation cancellation.
-         * @return One semantic history transition, no-op, or typed error without mutation. */
-        [[nodiscard]] Result<SceneCommandResult> Execute(const EditScenePrefabValueCommand &command,
-                                                         const Prefab::PrefabSourceResolverSnapshot &sources,
-                                                         const Prefab::PrefabValueSchemaSnapshot *schemas,
-                                                         const Prefab::PrefabLimitProfile &limits,
-                                                         const CancellationToken &cancellation = {});
-
         /** @brief Atomically duplicates a prefab reference under a fresh instance identity. */
         [[nodiscard]] Result<SceneCommandResult> Execute(const DuplicateScenePrefabInstanceCommand &command);
 
@@ -638,8 +664,6 @@ namespace Horo::Editor {
     private:
         struct PrefabCommitContext;
         struct ObjectCommitContext;
-        /** @brief Prepare one value-history replay completely before its no-throw publication. */
-        [[nodiscard]] Result<SceneCommandResult> ReplayPrefabValues(bool undo);
         [[nodiscard]] Result<SceneCommandResult> CommitObject(ObjectCommitContext context);
         [[nodiscard]] Result<SceneCommandResult> CommitNavigationComponents(
             SceneObjectId object, const std::optional<Runtime::NavigationSurfaceComponent> *surface,

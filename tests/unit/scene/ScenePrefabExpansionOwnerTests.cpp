@@ -79,6 +79,12 @@ TEST_CASE("Owned completion rejects every authored object field changed under th
     SECTION("editor-only authored state cannot hide behind runtime revision") {
         request.document.objects.front().editorState.locked = true;
     }
+    SECTION("generated ownership cannot hide behind runtime revision") {
+        SceneGeneratedOwnership generated{{completed.fixture.asset, 1, 1, 1, 1, 1, 1, 0}, 1, 1, 1, 1, 1, 1, 1, {}};
+        generated.content.bytes.front() = 1;
+        REQUIRE(IsValidSceneGeneratedOwnership(generated));
+        request.document.objects.front().generated = generated;
+    }
     SECTION("component values cannot hide behind runtime revision") {
         request.document.objects.front().components.camera = Runtime::CameraComponent{};
     }

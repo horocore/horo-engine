@@ -37,6 +37,21 @@ namespace Horo::SceneSource {
             CHECK(unsupported.ErrorValue().code.Value() == "scene_conversion.prefab_component_projection_unsupported");
         }
 
+        /** @brief The cached public conversion uses the same explicit schema and cancellation policy as the canonical projection. */
+        void CheckCachedConversion(const SceneSourceDocument &document, const Prefab::PrefabSourceResolverSnapshot &sources,
+                                   const Prefab::PrefabValueSchemaSnapshot &schemas, Prefab::PrefabExpansionCache &cache) {
+            const auto converted = ConvertSceneSourceToRuntime({document.objects, document.prefabInstances}, {19}, {1}, sources, Limits(),
+                                                               cache, {.schemas = &schemas});
+            REQUIRE(converted.HasValue());
+            REQUIRE(converted.Value().Entities().size() == 1);
+            CHECK_FALSE(converted.Value().Entities()[0].components.navigationAgent);
+            CancellationSource cancelled;
+            cancelled.RequestCancellation();
+            CHECK(ConvertSceneSourceToRuntime({document.objects, document.prefabInstances}, {19}, {1}, sources, Limits(), cache,
+                                              {cancelled.Token(), &schemas})
+                      .HasError());
+        }
+
         TEST_CASE("Fresh cached and actual worker Scene conversion apply identical typed instance overrides",
                   "[unit][scene][prefab][override]") {
             const auto sources = Sources();
@@ -57,6 +72,7 @@ namespace Horo::SceneSource {
             auto cached = BuildScenePrefabProjection({document.objects, document.prefabInstances}, sources, Limits(), cache, {}, &schemas);
             REQUIRE(cached.HasValue());
             REQUIRE(cached.Value().instances[0].expanded);
+            CheckCachedConversion(document, sources, schemas, cache);
             CHECK(cached.Value().instances[0].expanded->Objects()[0] == fresh.Value().instances[0].expanded->Objects()[0]);
             auto runtime =
                 ConvertSceneSourceToRuntime({document.objects, document.prefabInstances}, {19}, {1}, sources, Limits(), &schemas);

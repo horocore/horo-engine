@@ -8,7 +8,7 @@ namespace Horo::Prefab {
     class PrefabValueOverrideResolver final {
     public:
         static EffectivePrefabCandidate Publish(const EffectivePrefabCandidate &source, std::vector<ResolvedPrefabObject> objects,
-                                                const Sha256Digest digest) {
+                                                const Sha256Digest &digest) {
             return EffectivePrefabCandidate{source.RootAsset(), source.Revision(), std::move(objects), digest};
         }
     };
@@ -28,11 +28,11 @@ namespace Horo::Prefab {
             std::vector<Intent> records;
             records.reserve(set.records.size() + set.conflicts.size() + set.orphans.size());
             for (const auto &record : set.records)
-                records.push_back({&record, &set.authoredAgainst, set.schemaRevision});
+                records.emplace_back(&record, &set.authoredAgainst, set.schemaRevision);
             for (const auto &conflict : set.conflicts)
-                records.push_back({&conflict.original, &conflict.authoredAgainst, conflict.schemaRevision});
+                records.emplace_back(&conflict.original, &conflict.authoredAgainst, conflict.schemaRevision);
             for (const auto &orphan : set.orphans)
-                records.push_back({&orphan.original, &orphan.authoredAgainst, orphan.schemaRevision});
+                records.emplace_back(&orphan.original, &orphan.authoredAgainst, orphan.schemaRevision);
             std::ranges::sort(records, [](const Intent &a, const Intent &b) {
                 return TargetLess(a.record->target, b.record->target);
             });
@@ -41,12 +41,13 @@ namespace Horo::Prefab {
 
         /** @brief Explain unavailability without guessing a replacement property or component occurrence. */
         PrefabValueOverrideIssue MissingReason(const ResolutionState &state, const Intent &intent) {
+            using enum PrefabValueOverrideIssue;
             const auto *property = std::get_if<PrefabPropertyAddress>(&intent.record->target);
             if (!property)
-                return PrefabValueOverrideIssue::TargetRemoved;
+                return TargetRemoved;
             if (!state.schemas || !state.schemas->Find(*property))
-                return PrefabValueOverrideIssue::SchemaUnavailable;
-            return PrefabValueOverrideIssue::TargetRemoved;
+                return SchemaUnavailable;
+            return TargetRemoved;
         }
 
         /** @brief Resolve one immutable precondition before writing operation-owned component data. */
@@ -58,12 +59,12 @@ namespace Horo::Prefab {
             const auto &record = *intent.record;
             auto *binding = FindBinding(state, record.target);
             if (!binding) {
-                result.rebased.orphans.push_back({record, *intent.source, intent.schema, MissingReason(state, intent)});
+                result.rebased.orphans.emplace_back(record, *intent.source, intent.schema, MissingReason(state, intent));
                 return Result<void>::Success();
             }
             if (binding->schema &&
                 (intent.schema != state.schemas->Revision() || record.componentSchemaVersion != binding->schema->componentSchemaVersion)) {
-                result.rebased.orphans.push_back({record, *intent.source, intent.schema, PrefabValueOverrideIssue::SchemaChanged});
+                result.rebased.orphans.emplace_back(record, *intent.source, intent.schema, PrefabValueOverrideIssue::SchemaChanged);
                 return Result<void>::Success();
             }
             if (auto valid = ValidateValue(record.value, binding->schema); valid.HasError())
@@ -74,12 +75,12 @@ namespace Horo::Prefab {
                 return Result<void>::Success();
             }
             if (record.expectedSourceValue != digest) {
-                result.rebased.conflicts.push_back({record, *intent.source, intent.schema, digest, state.source.Revision().rootSource});
+                result.rebased.conflicts.emplace_back(record, *intent.source, intent.schema, digest, state.source.Revision().rootSource);
                 return Result<void>::Success();
             }
             if (auto applied = WriteBinding(state, *binding, record.value); applied.HasError())
                 return applied;
-            result.rebased.records.push_back(record);
+            result.rebased.records.emplace_back(record);
             return Result<void>::Success();
         }
 
@@ -158,7 +159,10 @@ namespace Horo::Prefab {
                                                {},
                                                {},
                                                {}};
-            auto inspected = Resolve(source, current ? *current : empty, schemas, limits, cancellation);
+            const auto *input = &empty;
+            if (current.has_value())
+                input = &current.value();
+            auto inspected = Resolve(source, *input, schemas, limits, cancellation);
             if (inspected.HasError() || edit.kind == PrefabValueEditKind::Rebase)
                 return inspected;
             if (edit.kind != PrefabValueEditKind::Assign && edit.kind != PrefabValueEditKind::Revert)
@@ -178,8 +182,8 @@ namespace Horo::Prefab {
                     return Result<PrefabValueOverrideResolution>::Failure(valid.ErrorValue());
                 if (std::holds_alternative<PrefabObjectAddress>(edit.target) != std::holds_alternative<Math::Transform>(edit.value))
                     return ValueDetail::Invalid<PrefabValueOverrideResolution>();
-                next.records.push_back(
-                    {edit.target, schema ? schema->componentSchemaVersion : 0, ValueDetail::ValueDigest(binding->sourceValue), edit.value});
+                next.records.emplace_back(edit.target, schema ? schema->componentSchemaVersion : 0,
+                                          ValueDetail::ValueDigest(binding->sourceValue), edit.value);
             }
             return Resolve(source, next, schemas, limits, cancellation);
         } catch (const std::bad_alloc &) {

@@ -19,6 +19,8 @@ namespace Horo::SceneSource::Detail {
             };
             value["primitiveMesh"] = object.primitiveMesh.has_value() ? PrimitiveJson(*object.primitiveMesh) : WireJson(nullptr);
             value["meshAsset"] = object.meshAsset.has_value() ? WireJson(object.meshAsset->ToString()) : WireJson(nullptr);
+            if (object.generated)
+                value["generated"] = SceneGeneratedOwnershipJson(*object.generated);
             objects.push_back(std::move(value));
         }
         WireJson prefabInstances = WireJson::array();
@@ -102,6 +104,7 @@ namespace Horo::SceneSource::Detail {
         auto primitive = ParseSceneObjectPrimitive(value);
         auto meshAsset = ParseSceneObjectMeshAsset(value);
         auto editorState = ParseSceneObjectEditorState(value);
+        auto generated = ParseSceneGeneratedOwnership(value);
         if (parent.HasError())
             return Result<SceneObjectSnapshot>::Failure(parent.ErrorValue());
         if (primitive.HasError())
@@ -110,6 +113,8 @@ namespace Horo::SceneSource::Detail {
             return Result<SceneObjectSnapshot>::Failure(meshAsset.ErrorValue());
         if (editorState.HasError())
             return Result<SceneObjectSnapshot>::Failure(editorState.ErrorValue());
+        if (generated.HasError())
+            return Result<SceneObjectSnapshot>::Failure(generated.ErrorValue());
         return Result<SceneObjectSnapshot>::Success(SceneObjectSnapshot{
             .id = SceneObjectId{value["id"].get<std::uint64_t>()},
             .parent = parent.Value(),
@@ -119,6 +124,7 @@ namespace Horo::SceneSource::Detail {
             .components = components.Value(),
             .meshAsset = meshAsset.Value(),
             .editorState = editorState.Value(),
+            .generated = std::move(generated).Value(),
         });
     }
 

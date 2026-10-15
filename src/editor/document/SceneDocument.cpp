@@ -13,6 +13,7 @@
 #include <limits>
 #include <memory>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <unordered_set>
 #include <utility>
@@ -246,8 +247,31 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    namespace {
+        /** @brief Require one authored object per exact owner/scope/lineage/set/logical identity. */
+        Result<void> ValidateGeneratedOwners(const std::span<const SceneObjectSnapshot> objects) {
+            std::vector<std::tuple<std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t>> keys;
+            for (const auto &object : objects) {
+                if (!object.generated)
+                    continue;
+                const auto &v = *object.generated;
+                if (!SceneSource::IsValidSceneGeneratedOwnership(v))
+                    return Result<void>::Failure(
+                        MakeDocumentError(SceneDocumentErrors::InvalidSavedState, "Generated ownership evidence is malformed."));
+                keys.emplace_back(v.owner, v.scope, v.lineage, v.set, v.output);
+            }
+            std::ranges::sort(keys);
+            if (std::ranges::adjacent_find(keys) != keys.end())
+                return Result<void>::Failure(
+                    MakeDocumentError(SceneDocumentErrors::InvalidSavedState, "Generated logical output ownership is duplicated."));
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     /** @copydoc SceneDocument::LoadSaved */
     Result<void> SceneDocument::LoadSaved(std::vector<SceneObjectSnapshot> objects, std::vector<ScenePrefabInstance> prefabInstances) {
+        if (auto generated = ValidateGeneratedOwners(objects); generated.HasError())
+            return generated;
         auto metadata = CollectLoadedSceneMetadata(objects);
         if (metadata.HasError())
             return Result<void>::Failure(metadata.ErrorValue());

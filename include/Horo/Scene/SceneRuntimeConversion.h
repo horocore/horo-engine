@@ -124,17 +124,23 @@ namespace Horo::SceneSource {
         const Prefab::PrefabSourceResolverSnapshot &resolver, const Prefab::PrefabLimitProfile &limits,
         const Prefab::PrefabValueSchemaSnapshot *schemas = nullptr);
 
+    /** @brief Explicit synchronous preparation policy for cached Prefab value conversion; never retained by the cache. */
+    struct ScenePrefabCachedConversionOptions final {
+        CancellationToken cancellation;                     /**< Cooperative preparation fence. */
+        const Prefab::PrefabValueSchemaSnapshot *schemas{}; /**< Borrowed immutable property schema for this conversion only. */
+    };
+
     /**
      * @brief Converts actual cached expansion through the same all-or-nothing SceneSource transaction.
      * @param document Coherent authored objects and placement values, including current transforms and parents.
      * @param sceneId Stable logical scene identity. @param revision Exact containing document revision.
      * @param resolver Immutable source publication. @param limits Complete captured policy.
-     * @param schemas Explicit current immutable property schema context.
-     * @param cache Explicit owner-thread memoization authority. @param cancellation Cooperative operation cancellation.
+     * @param options Explicit synchronous schema and cooperative preparation policy.
+     * @param cache Explicit owner-thread memoization authority.
      * @return Complete source-free runtime definition, or typed failure; no partial definition escapes.
      */
     [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> ConvertSceneSourceToRuntime(
         const SceneSourceView &document, Runtime::SceneDefinitionId sceneId, Runtime::SceneDefinitionRevision revision,
         const Prefab::PrefabSourceResolverSnapshot &resolver, const Prefab::PrefabLimitProfile &limits, Prefab::PrefabExpansionCache &cache,
-        const CancellationToken &cancellation = {}, const Prefab::PrefabValueSchemaSnapshot *schemas = nullptr);
+        const ScenePrefabCachedConversionOptions &options = {});
 }  // namespace Horo::SceneSource

@@ -978,7 +978,8 @@ separate inspection evidence; an absent source property is never filled from a
 future registry default. Assignment applies only to an existing exact property.
 The source value remains authoritative for redundant assignment comparison.
 
-`PreparePrefabValueEdit` produces a detached owned result. The document command
+`PreparePrefabValueEdit` produces a detached owned result. The synchronous `SceneDocumentPrefabValueCommands` adapter borrows the existing
+`SceneDocument` and `EditorHistory`; it owns no additional state or history. Its
 `EditScenePrefabValueCommand` fences document revision, complete registry/reachable-source revision and schema
 identity plus the successful-load replacement epoch before preparing one semantic history entry.
 The owner-local epoch increments only after successful canonical load validation;
@@ -1019,8 +1020,13 @@ copy optional immutable schema metadata, and completion rejects schema retiremen
 replacement. Runtime definitions contain only resolved component/transform values,
 never source override records, conflicts or schema service pointers.
 
-Migration: existing callers remain source compatible through appended/defaulted
-fields and optional schema arguments. Callers resolving property overrides must
+Migration: value-edit callers construct `SceneDocumentPrefabValueCommands` with
+their existing document/history pair and call its typed `Execute`; ordinary
+commands and Undo/Redo continue through `SceneDocumentCommandExecutor`. Cached
+conversion callers pass `ScenePrefabCachedConversionOptions{cancellation, schemas}`
+for explicit cancellation/schema context. Existing six-argument cached conversion
+calls retain their defaults. Other callers remain source compatible through
+appended/defaulted fields and optional schema arguments. Callers resolving property overrides must
 explicitly supply the owned schema snapshot to conversion and retained publication;
 omitting it produces typed repairable unavailability. Transform-only overrides need
 no project schema. No SDK ABI or native capability layout changes in this delivery.

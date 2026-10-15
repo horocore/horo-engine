@@ -39,7 +39,7 @@ namespace Horo::Prefab {
 
     private:
         /** @brief Publish completely validated owned inert metadata. */
-        PrefabValueSchemaSnapshot(std::vector<PrefabValuePropertySchema> properties, Sha256Digest revision) noexcept;
+        PrefabValueSchemaSnapshot(std::vector<PrefabValuePropertySchema> properties, const Sha256Digest &revision) noexcept;
         std::vector<PrefabValuePropertySchema> properties_;
         Sha256Digest revision_;
     };

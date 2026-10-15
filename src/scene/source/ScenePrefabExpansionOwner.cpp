@@ -142,7 +142,8 @@ namespace Horo::SceneSource {
         bool SameAuthoredObject(const SceneObjectSnapshot &left, const SceneObjectSnapshot &right) noexcept {
             return left.id == right.id && left.parent == right.parent && left.name == right.name &&
                    left.localTransform == right.localTransform && left.primitiveMesh == right.primitiveMesh &&
-                   left.components == right.components && left.meshAsset == right.meshAsset && left.editorState == right.editorState;
+                   left.components == right.components && left.meshAsset == right.meshAsset && left.editorState == right.editorState &&
+                   left.generated == right.generated;
         }
 
         /** @brief Checks complete ordered authored input without rebuilding a JSON tree under completion allocation pressure. */

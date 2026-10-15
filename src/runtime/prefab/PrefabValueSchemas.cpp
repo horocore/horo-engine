@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <new>
 #include <set>
 
@@ -21,8 +22,8 @@ namespace Horo::Prefab {
                         {"payloadProperty", schema.payloadProperty.Value()},
                         {"componentSchemaVersion", schema.componentSchemaVersion},
                         {"default", EncodeValue(schema.defaultValue)},
-                        {"minimum", schema.minimum ? Wire(*schema.minimum) : Wire(nullptr)},
-                        {"maximum", schema.maximum ? Wire(*schema.maximum) : Wire(nullptr)},
+                        {"minimum", schema.minimum.has_value() ? Wire(*schema.minimum) : Wire(nullptr)},
+                        {"maximum", schema.maximum.has_value() ? Wire(*schema.maximum) : Wire(nullptr)},
                         {"maximumStringBytes", schema.maximumStringBytes},
                         {"required", schema.required}};
         }
@@ -31,10 +32,11 @@ namespace Horo::Prefab {
         Result<void> ValidateSchema(const PrefabValuePropertySchema &schema) {
             if (!schema.componentType.IsValid() || !schema.property.IsValid() || !schema.payloadProperty.IsValid() ||
                 ((schema.kind == Gameplay::ComponentPropertyKind::Boolean || schema.kind == Gameplay::ComponentPropertyKind::String) &&
-                 (schema.minimum || schema.maximum)) ||
+                 (schema.minimum.has_value() || schema.maximum.has_value())) ||
                 schema.componentSchemaVersion == 0 || schema.maximumStringBytes > PrefabHardLimits::OverrideValueBytes ||
-                (schema.minimum && !std::isfinite(*schema.minimum)) || (schema.maximum && !std::isfinite(*schema.maximum)) ||
-                (schema.minimum && schema.maximum && *schema.minimum > *schema.maximum))
+                (schema.minimum.has_value() && !std::isfinite(*schema.minimum)) ||
+                (schema.maximum.has_value() && !std::isfinite(*schema.maximum)) ||
+                (schema.minimum.has_value() && schema.maximum.has_value() && *schema.minimum > *schema.maximum))
                 return Invalid<void>("Prefab property schema metadata is invalid.");
             return ValidateValue(schema.defaultValue, &schema);
         }
@@ -69,7 +71,7 @@ namespace Horo::Prefab {
 
     /** @copydoc PrefabValueSchemaSnapshot::PrefabValueSchemaSnapshot */
     PrefabValueSchemaSnapshot::PrefabValueSchemaSnapshot(std::vector<PrefabValuePropertySchema> properties,
-                                                         const Sha256Digest revision) noexcept
+                                                         const Sha256Digest &revision) noexcept
         : properties_(std::move(properties)), revision_(revision) {}
 
     /** @copydoc PrefabValueSchemaSnapshot::Create */
@@ -99,6 +101,6 @@ namespace Horo::Prefab {
     const PrefabValuePropertySchema *PrefabValueSchemaSnapshot::Find(const PrefabPropertyAddress &target) const noexcept {
         const auto key = std::pair{std::string_view(target.ComponentType().Value()), target.Property().Value()};
         const auto found = std::ranges::lower_bound(properties_, key, {}, Key);
-        return found != properties_.end() && Key(*found) == key ? &*found : nullptr;
+        return found != properties_.end() && Key(*found) == key ? std::to_address(found) : nullptr;
     }
 }  // namespace Horo::Prefab

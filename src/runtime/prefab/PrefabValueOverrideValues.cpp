@@ -9,8 +9,8 @@ namespace Horo::Prefab::ValueDetail {
     namespace {
         /** @brief Applies declared inclusive numeric constraints without losing integer precision. */
         bool NumberValid(const long double value, const PrefabValuePropertySchema *schema) {
-            return std::isfinite(value) &&
-                   (!schema || ((!schema->minimum || value >= *schema->minimum) && (!schema->maximum || value <= *schema->maximum)));
+            return std::isfinite(value) && (!schema || ((!schema->minimum.has_value() || value >= *schema->minimum) &&
+                                                        (!schema->maximum.has_value() || value <= *schema->maximum)));
         }
 
         /** @brief Preserves exact finite components; only signed zero has one wire representation. */

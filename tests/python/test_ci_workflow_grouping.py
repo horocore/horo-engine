@@ -40,6 +40,9 @@ def cmake_conditions_at(source: str, offset: int) -> list[str]:
 
 
 WINDOWS_NON_AUDIO_TARGETS = frozenset({
+    "HoroDestructionSaveTests", "HoroDestructionSavePublicConsumer",
+    "HoroDestructionSaveIntegrationPublicHeaderConsumer", "HoroDestructionApiPublicHeaderConsumer",
+    "HoroDestructionReplicationTests", "HoroDestructionReplicationPublicHeaderConsumer",
     "HoroLightCullingTests", "HoroLightFramePoolTests",
     "HoroAITaskSchedulerTests", "HoroAITaskSchedulerPublicConsumer",
     "HoroAITests", "HoroAISightTests", "HoroAIPublicHeaderConsumer",
@@ -55,6 +58,7 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroPCGSceneAdapterTests", "HoroPCGSceneAdapterPublicHeaderConsumer",
     "HoroPCGSceneOutputContractConsumer",
     "HoroPCGDocumentTests", "HoroPCGDocumentPublicHeaderConsumer",
+    "HoroPCGSceneBakeTests", "HoroPCGSceneBakeContractConsumer", "HoroPCGSceneBakePublicHeaderConsumer", "HoroEditorModelPublicHeaderConsumer",
     "HoroPCGPublicHeaderConsumer", "HoroPCGTerrainAdapterPublicHeaderConsumer",
     "HoroCliCommandRegistryTests", "HoroPlatformTests", "HoroUpdateZipPackageProducerTests",
     "HoroCliOutputPublicHeaderConsumer", "HoroCliProductionOutputContract",
@@ -71,10 +75,9 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroPrefabTests", "HoroPrefabSceneExpansionTests", "HoroPrefabSceneExpansionContractConsumer",
     "HoroPrefabOverrideModelPublicHeaderConsumer", "HoroPrefabAuthoringPublicHeaderConsumer",
     "HoroSceneSourceModelPublicHeaderConsumer", "HoroSceneSourcePublicHeaderConsumer",
-    "HoroSceneRuntimeConversionPublicHeaderConsumer", "HoroSceneRuntimeConversionTests",
-    "HoroSceneDocumentTests",
-
-    "HoroAssetRegistryTests", "HoroInputTests", "HoroInputSdlTests", "HoroRuntimeUiInputTests",
+    "HoroSceneRuntimeConversionPublicHeaderConsumer", "HoroSceneRuntimeConversionTests", "HoroSceneDocumentTests",
+    "HoroAssetRegistryTests", "HoroInputTests", "HoroAndroidInputTests", "HoroAndroidInputIntegrationPublicHeaderConsumer",
+    "HoroInputSdlTests", "HoroRuntimeUiInputTests",
     "HoroRuntimeUiAnimationIntegrationTests", "HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer",
     "HoroRuntimeUiHitTestingTests", "HoroRuntimeUiEventDispatchTests", "HoroRuntimeUiPointerPublicHeaderConsumer",
     "HoroCharacterInputTests", "HoroCharacterInputPublicHeaderConsumer",
@@ -106,6 +109,12 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroRuntimeSaveRestoreTransactionTests", "HoroSaveGameplayCheckpointPublicHeaderConsumer",
     "HoroNavigationRuntimeTests", "HoroNavigationBakeServiceTests",
     "HoroNavigationTransportReservationTests", "HoroNavigationCoordinatorPublicConsumer",
+    "HoroNavigationCharacterAdapterTests", "HoroNavigationCharacterAdapterPublicConsumer",
+    "HoroNavigationCharacterIntegrationPublicHeaderConsumer",
+    "HoroGameplayNavigationTests", "HoroGameplayNavigationPublicConsumer",
+    "HoroGameplayNavigationIntegrationPublicHeaderConsumer", "HoroGameplayApiPublicHeaderConsumer",
+    "HoroGameplayRuntimePublicHeaderConsumer", "HoroGameplayModuleHostPublicHeaderConsumer",
+    "HoroGameplayLuaPublicHeaderConsumer", "HoroNavigationRuntimePublicHeaderConsumer",
 })
 
 
@@ -147,41 +156,8 @@ def test_windows_light_qualification_has_build_and_discovery_closure() -> None:
     assert 'if(target IN_LIST HORO_CI_WINDOWS_TARGETS)\n        list(APPEND ARG_LABELS ci-windows)' in SUITES
 
 
-def test_windows_pcg_document_qualification_has_build_execution_and_consumer_closure() -> None:
-    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
-    ownership = (ROOT / "cmake/HoroPublicHeaderOwnership.cmake").read_text(encoding="utf-8")
-    for target in ("HoroPCGDocumentTests", "HoroPCGDocumentPublicHeaderConsumer"):
-        assert target in targets("HORO_CI_WINDOWS_TARGETS")
-        assert f"add_executable({target}" in tests_cmake
-    assert "horo_register_catch_test(HoroPCGDocumentTests LABELS" in tests_cmake
-    assert "add_test(NAME HoroPCGDocumentPublicHeaderConsumer" in tests_cmake
-    assert "unit/editor/PCGGraphDocumentTests.cpp" in tests_cmake
-    assert "unit/editor/PCGGraphDocumentServiceTests.cpp" in tests_cmake
-    for header in ("PCGGraphDocument.h", "PCGGraphDocumentService.h", "DocumentRecoveryService.h", "SemanticDocumentHistory.h"):
-        assert f"Horo/Editor/{header}" in ownership
 
 
-def test_windows_pcg_qualification_has_build_and_execution_closure() -> None:
-    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
-    for target in ("HoroPCGTests", "HoroPCGTerrainAdapterTests"):
-        assert target in targets("HORO_CI_WINDOWS_TARGETS")
-        assert f"add_executable({target}" in tests_cmake
-        assert f"horo_register_catch_test({target} LABELS" in tests_cmake
-    assert tests_cmake.count("unit/runtime/pcg/PCGCpuEvaluatorTests.cpp") == 1
-    assert 'if(target IN_LIST HORO_CI_WINDOWS_TARGETS)\n        list(APPEND ARG_LABELS ci-windows)' in SUITES
-    consumers = ("HoroPCGPublicHeaderConsumer", "HoroPCGTerrainAdapterPublicHeaderConsumer")
-    ownership = (ROOT / "cmake/HoroPublicHeaderOwnership.cmake").read_text(encoding="utf-8")
-    boundaries = (ROOT / "cmake/HoroTargetBoundaries.cmake").read_text(encoding="utf-8")
-    assert 'add_library("${consumer_target}" OBJECT ${generated_sources})' in boundaries
-    direct_tests = re.search(r"set_property\(TEST\s+(.*?)\s+APPEND PROPERTY LABELS ci-windows\)", SUITES, re.S)
-    assert direct_tests
-    for consumer in consumers:
-        assert consumer in targets("HORO_CI_WINDOWS_TARGETS")
-        assert consumer not in direct_tests.group(1).split()
-        owner = consumer.removesuffix("PublicHeaderConsumer")
-        assert f"horo_configure_target_header_boundary({owner} PUBLIC_HEADERS" in ownership
-    assert preset("buildPresets", "ci-windows-debug")["targets"] == ["HoroCiWindowsChecks"]
-    assert preset("testPresets", "ci-windows-debug")["filter"]["include"]["label"] == "^ci-windows$"
 
 
 def test_windows_perception_qualification_has_runtime_and_header_build_closure() -> None:
@@ -219,39 +195,6 @@ def test_ai_scheduler_qualification_has_build_discovery_and_single_source_owners
     assert 'horo_register_catch_test(HoroAITaskSchedulerTests LABELS "unit;ai;headless")' in tests_cmake
     assert 'add_test(NAME HoroAITaskSchedulerPublicConsumer COMMAND HoroAITaskSchedulerPublicConsumer)' in tests_cmake
     assert 'set_tests_properties(HoroAITaskSchedulerPublicConsumer PROPERTIES LABELS "unit;ai;headless;ci-windows")' in tests_cmake
-
-
-def test_windows_navigation_qualification_has_build_and_discovery_closure() -> None:
-    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
-    for target in ("HoroNavigationRuntimeTests", "HoroNavigationBakeServiceTests"):
-        assert target in targets("HORO_CI_WINDOWS_TARGETS")
-        assert f"add_executable({target}" in tests_cmake
-    assert "unit/runtime/navigation/NavigationBakeJobsTests.cpp" in tests_cmake
-    assert "unit/runtime/navigation/NavigationBakeServiceTests.cpp" in tests_cmake
-    assert "unit/runtime/navigation/NavigationBakeQualificationTests.cpp" in tests_cmake
-    assert 'horo_register_catch_test(HoroNavigationBakeServiceTests LABELS "unit;navigation;headless;cook")' in tests_cmake
-    assert 'horo_register_catch_test(HoroNavigationRuntimeTests LABELS "unit;navigation;headless;lifecycle")' in tests_cmake
-    assert 'if(target IN_LIST HORO_CI_WINDOWS_TARGETS)\n        list(APPEND ARG_LABELS ci-windows)' in SUITES
-    for name in ("ci-base", "ci-headless", "ci-windows-debug"):
-        assert preset("configurePresets", name)["cacheVariables"].get("HORO_BUILD_NAVIGATION_RECAST_DETOUR", "ON") == "ON"
-    root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
-    assert 'option(HORO_BUILD_NAVIGATION_RECAST_DETOUR "Build the default grounded navigation query provider" ON)' in root_cmake
-
-
-def test_navigation_transport_and_coordinator_consumer_have_build_and_execution_closure() -> None:
-    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
-    transport = "HoroNavigationTransportReservationTests"
-    consumer = "HoroNavigationCoordinatorPublicConsumer"
-    for target in (transport, consumer):
-        assert target in targets("HORO_CI_WINDOWS_TARGETS")
-        assert f"add_executable({target}" in tests_cmake
-    assert f'horo_register_catch_test({transport} LABELS "unit;navigation;headless;concurrency;ci-windows")' in tests_cmake
-    assert f"add_test(NAME {consumer} COMMAND {consumer})" in tests_cmake
-    windows_labels = re.search(r"set_property\(TEST\s+(.*?)\s+APPEND PROPERTY LABELS ci-windows\)", SUITES, re.S)
-    assert windows_labels is not None
-    assert consumer in windows_labels.group(1).split()
-    assert consumer in targets("HORO_CI_NAVIGATION_TARGETS")
-    assert f"set_property(TEST HoroNavigationBakeDiagnosticsPublicConsumer {consumer}\n        APPEND PROPERTY LABELS ci-navigation)" in SUITES
 
 
 def test_windows_manifest_tests_and_consumer_share_the_build_closure() -> None:

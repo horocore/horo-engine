@@ -49,8 +49,8 @@ namespace Horo::Prefab {
 
         /** @brief Reject target/type confusion even when no live component schema is available. */
         Result<void> ValidateRecord(const PrefabValueOverrideRecord &record) {
-            const bool transform = std::holds_alternative<PrefabObjectAddress>(record.target);
-            if (transform != std::holds_alternative<Math::Transform>(record.value) ||
+            if (const bool transform = std::holds_alternative<PrefabObjectAddress>(record.target);
+                transform != std::holds_alternative<Math::Transform>(record.value) ||
                 (transform ? record.componentSchemaVersion != 0 : record.componentSchemaVersion == 0))
                 return Invalid<void>("Override target, schema version and value kind disagree.");
             return ValidateValue(record.value);
@@ -78,15 +78,22 @@ namespace Horo::Prefab {
             return Result<void>::Success();
         }
 
-        /** @brief Admit every preserved record before encoding the whole authoring set. */
-        Result<void> ValidateSet(const PrefabValueOverrideSet &set, const PrefabLimitProfile &limits) {
-            const auto &policy = limits.Policy();
+        /** @brief Check complete header identity and count bounds before any retained-record storage allocation. */
+        Result<void> ValidateSetShape(const PrefabValueOverrideSet &set, const PrefabProjectPolicy &policy) {
             if (!set.sourcePrefab.IsValid() || !Detail::IsCanonicalProjectVersion(set.authoredAgainst.projectVersion))
                 return Invalid<void>();
             if (set.records.size() > policy.maximumOverrideRecords || set.conflicts.size() > policy.maximumConflictAndOrphanRecords ||
                 set.orphans.size() > policy.maximumConflictAndOrphanRecords - set.conflicts.size() ||
                 set.conflicts.size() + set.orphans.size() > policy.maximumOverrideRecords - set.records.size())
                 return Result<void>::Failure(MakeError(PrefabErrors::WorkBudgetExceeded));
+            return Result<void>::Success();
+        }
+
+        /** @brief Admit every preserved record before encoding the whole authoring set. */
+        Result<void> ValidateSet(const PrefabValueOverrideSet &set, const PrefabLimitProfile &limits) {
+            const auto &policy = limits.Policy();
+            if (auto shape = ValidateSetShape(set, policy); shape.HasError())
+                return shape;
             std::vector<const PrefabValueOverrideRecord *> all;
             all.reserve(set.records.size() + set.conflicts.size() + set.orphans.size());
             std::size_t bytes = EncodeSet(set).dump(0).size();
@@ -131,8 +138,7 @@ namespace Horo::Prefab {
                                                       "orphans"}) ||
                 !value["sourcePrefab"].is_string() || !value["schemaRevision"].is_string())
                 return Invalid<PrefabValueOverrideSet>();
-            const auto version = Detail::ReadUnsigned<std::uint32_t>(value["schema"]);
-            if (version.HasError() || version.Value() != 1)
+            if (const auto version = Detail::ReadUnsigned<std::uint32_t>(value["schema"]); version.HasError() || version.Value() != 1)
                 return Invalid<PrefabValueOverrideSet>("Unsupported value override schema.");
             for (const char *field : {"records", "conflicts", "orphans"})
                 if (!value[field].is_array() || value[field].size() > policy.maximumOverrideRecords)
@@ -159,8 +165,8 @@ namespace Horo::Prefab {
                 auto schema = ParseSha256(entry["schemaRevision"].get_ref<const std::string &>());
                 if (record.HasError() || source.HasError() || digest.HasError() || authored.HasError() || schema.HasError())
                     return Invalid<void>();
-                set.conflicts.push_back(
-                    {std::move(record).Value(), std::move(authored).Value(), schema.Value(), digest.Value(), std::move(source).Value()});
+                set.conflicts.emplace_back(std::move(record).Value(), std::move(authored).Value(), schema.Value(), digest.Value(),
+                                           std::move(source).Value());
             }
             for (const auto &entry : value["orphans"]) {
                 if (!Foundation::HasAllowedFields(entry, {"record", "authoredAgainst", "schemaRevision", "reason"}) ||
@@ -175,8 +181,8 @@ namespace Horo::Prefab {
                 auto schema = ParseSha256(entry["schemaRevision"].get_ref<const std::string &>());
                 if (authored.HasError() || schema.HasError())
                     return Invalid<void>();
-                set.orphans.push_back({std::move(record).Value(), std::move(authored).Value(), schema.Value(),
-                                       static_cast<PrefabValueOverrideIssue>(reason.Value())});
+                set.orphans.emplace_back(std::move(record).Value(), std::move(authored).Value(), schema.Value(),
+                                         static_cast<PrefabValueOverrideIssue>(reason.Value()));
             }
             return Result<void>::Success();
         }

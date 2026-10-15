@@ -10,6 +10,7 @@
 
 #include "Horo/AI/AISceneComponents.h"
 #include "Horo/Assets/AssetId.h"
+#include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/BehaviorTypes.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Math/SceneMath.h"
@@ -66,6 +67,46 @@ namespace Horo::SceneSource {
         [[nodiscard]] bool operator==(const SceneObjectComponentSet &) const noexcept = default;
     };
 
+    /** @brief Durable derivation evidence copied from an explicitly composed generator, never executable authority. */
+    struct SceneGenerationSource final {
+        Assets::AssetId asset;
+        std::uint64_t identity{};
+        std::uint64_t revision{};
+        std::uint64_t execution{};
+        std::uint64_t node{};
+        std::uint64_t pin{};
+        std::uint64_t sample{};
+        std::uint32_t ordinal{};
+        [[nodiscard]] auto operator<=>(const SceneGenerationSource &) const noexcept = default;
+    };
+
+    /** @brief Target-owned exact generation provenance; names, folders and hierarchy never authorize cleanup.
+     * @details Scene stores generic stable producer evidence. Downstream adapters translate their typed identities;
+     * Scene never interprets a graph, invokes a generator or selects a provider. Content excludes this ownership tag.
+     */
+    struct SceneGeneratedOwnership final {
+        SceneGenerationSource source;
+        std::uint64_t owner{};
+        std::uint64_t scope{};
+        std::uint64_t lineage{};
+        std::uint64_t set{};
+        std::uint64_t output{};
+        std::uint64_t revision{};
+        std::uint64_t ownershipGeneration{};
+        Sha256Digest content{};
+        [[nodiscard]] auto operator<=>(const SceneGeneratedOwnership &) const noexcept = default;
+    };
+
+    /** @brief Check complete inert generation evidence without interpreting or executing its producer.
+     * @param value Target-owned provenance. @return Whether every stable identity and content stamp is nonzero.
+     */
+    [[nodiscard]] inline bool IsValidSceneGeneratedOwnership(const SceneGeneratedOwnership &value) noexcept {
+        const auto &source = value.source;
+        return source.asset.IsValid() && source.identity && source.revision && source.execution && source.node && source.pin &&
+               source.sample && value.owner && value.scope && value.lineage && value.set && value.output && value.revision &&
+               value.ownershipGeneration && value.content != Sha256Digest{};
+    }
+
     /** @brief Immutable value snapshot of one authored scene object. */
     struct SceneObjectSnapshot {
         SceneObjectId id;
@@ -76,6 +117,7 @@ namespace Horo::SceneSource {
         SceneObjectComponentSet components;
         std::optional<Assets::AssetId> meshAsset; /**< Stable imported core.mesh identity. */
         SceneObjectEditorState editorState;
+        std::optional<SceneGeneratedOwnership> generated; /**< Persisted inert target-owned cleanup and replay evidence. */
     };
 
     /** @brief Lightweight authored placement of one prefab asset in a containing scene. */

@@ -59,10 +59,7 @@ namespace Horo::Character::Detail {
         if (query.overlap == nullptr)
             return Result<void>::Failure(
                 MakeError(CharacterErrors::OperationUnsupported, "Character placement requires a Physics overlap probe."));
-        const CharacterPhysicsQueryExpectations expected{impl.descriptor.sceneGeneration,        impl.descriptor.identity,
-                                                         impl.descriptor.physicsWorld,           impl.descriptor.collisionFilterGeneration,
-                                                         impl.descriptor.originGeneration,       expectedTick,
-                                                         impl.descriptor.physicsSnapshotRevision};
+        const auto expected = QueryExpectations(impl, expectedTick);
         return ValidateCharacterPhysicsQueryContext(query, expected);
     }
 

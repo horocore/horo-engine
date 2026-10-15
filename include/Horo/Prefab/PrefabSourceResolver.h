@@ -59,7 +59,7 @@ namespace Horo::Prefab {
         friend class PrefabExpansionCache;
 
         EffectivePrefabCandidate(Assets::AssetId rootAsset, PrefabResolutionRevision revision, std::vector<ResolvedPrefabObject> objects,
-                                 Sha256Digest valueOverrides = {}) noexcept;
+                                 const Sha256Digest &valueOverrides = {}) noexcept;
 
         Assets::AssetId rootAsset_{};
         PrefabResolutionRevision revision_{};

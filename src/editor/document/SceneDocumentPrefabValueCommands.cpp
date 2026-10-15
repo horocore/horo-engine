@@ -38,13 +38,18 @@ namespace Horo::Editor {
         }
     }  // namespace
 
-    /** @copydoc SceneDocumentCommandExecutor::Execute(const EditScenePrefabValueCommand&,const Prefab::PrefabSourceResolverSnapshot&,const
-     * Prefab::PrefabValueSchemaSnapshot*,const Prefab::PrefabLimitProfile&,const CancellationToken&) */
-    Result<SceneCommandResult> SceneDocumentCommandExecutor::Execute(const EditScenePrefabValueCommand &command,
-                                                                     const Prefab::PrefabSourceResolverSnapshot &sources,
-                                                                     const Prefab::PrefabValueSchemaSnapshot *schemas,
-                                                                     const Prefab::PrefabLimitProfile &limits,
-                                                                     const CancellationToken &cancellation) {
+    /** @copydoc SceneDocumentPrefabValueCommands::SceneDocumentPrefabValueCommands */
+    SceneDocumentPrefabValueCommands::SceneDocumentPrefabValueCommands(SceneDocument &document, EditorHistory &history) noexcept
+        : m_document(document), m_history(history) {}
+
+    /** @copydoc SceneDocumentPrefabValueCommands::Execute(const EditScenePrefabValueCommand&,const
+     * Prefab::PrefabSourceResolverSnapshot&,const Prefab::PrefabValueSchemaSnapshot*,const Prefab::PrefabLimitProfile&,const
+     * CancellationToken&) */
+    Result<SceneCommandResult> SceneDocumentPrefabValueCommands::Execute(const EditScenePrefabValueCommand &command,
+                                                                         const Prefab::PrefabSourceResolverSnapshot &sources,
+                                                                         const Prefab::PrefabValueSchemaSnapshot *schemas,
+                                                                         const Prefab::PrefabLimitProfile &limits,
+                                                                         const CancellationToken &cancellation) {
         try {
             if (command.expectedReplacementEpoch != m_document.m_replacementEpoch || command.expectedRevision != m_document.m_revision)
                 return Result<SceneCommandResult>::Failure(
@@ -55,7 +60,8 @@ namespace Horo::Editor {
             auto prepared = PrepareInstanceValues(*instance.Value(), command, sources, schemas, limits, cancellation);
             if (prepared.HasError())
                 return Result<SceneCommandResult>::Failure(prepared.ErrorValue());
-            auto &set = prepared.Value().rebased;
+            auto resolution = std::move(prepared).Value();
+            auto &set = resolution.rebased;
             std::optional<Prefab::PrefabValueOverrideSet> after;
             if (!set.records.empty() || !set.conflicts.empty() || !set.orphans.empty())
                 after = std::move(set);
@@ -91,8 +97,8 @@ namespace Horo::Editor {
         }
     }
 
-    /** @copydoc SceneDocumentCommandExecutor::ReplayPrefabValues */
-    Result<SceneCommandResult> SceneDocumentCommandExecutor::ReplayPrefabValues(const bool undo) {
+    /** @copydoc SceneDocumentPrefabValueCommands::Replay */
+    Result<SceneCommandResult> SceneDocumentPrefabValueCommands::Replay(const bool undo) {
         try {
             auto &from = undo ? m_history.m_impl->undo : m_history.m_impl->redo;
             auto &to = undo ? m_history.m_impl->redo : m_history.m_impl->undo;

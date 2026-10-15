@@ -201,7 +201,7 @@ namespace Horo::Prefab {
     /** @copydoc EffectivePrefabCandidate::EffectivePrefabCandidate */
     EffectivePrefabCandidate::EffectivePrefabCandidate(Assets::AssetId rootAsset, PrefabResolutionRevision revision,
                                                        std::vector<ResolvedPrefabObject> objects,
-                                                       const Sha256Digest valueOverrides) noexcept
+                                                       const Sha256Digest &valueOverrides) noexcept
         : rootAsset_(rootAsset), revision_(std::move(revision)), objects_(std::move(objects)), valueOverrides_(valueOverrides) {}
 
     /** @copydoc EffectivePrefabCandidate::RootAsset */

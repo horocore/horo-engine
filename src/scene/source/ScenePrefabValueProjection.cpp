@@ -7,8 +7,9 @@ namespace Horo::SceneSource::Detail {
         if (!entry.authored.valueOverrides || !entry.expanded)
             return;
         entry.schemaRevision = schemas ? schemas->Revision() : Sha256Digest{};
-        auto resolved = Prefab::ResolvePrefabValueOverrides(*entry.expanded, *entry.authored.valueOverrides, schemas, limits, cancellation);
-        if (resolved.HasError()) {
+        if (auto resolved =
+                Prefab::ResolvePrefabValueOverrides(*entry.expanded, *entry.authored.valueOverrides, schemas, limits, cancellation);
+            resolved.HasError()) {
             entry.failure = resolved.ErrorValue();
             entry.expanded.reset();
         } else {
