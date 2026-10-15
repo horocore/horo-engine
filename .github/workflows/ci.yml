@@ -155,8 +155,10 @@ jobs:
           PYTHON
 
       - name: Install native Scene allocation verifier dependency
-        run: >-
-          python -m pip install --no-cache-dir --only-binary=:all: --no-deps defusedxml==0.7.1
+        run: |
+          verifier_python="$(python -c 'from pathlib import Path; import sys; print(Path(sys.executable).resolve().as_posix())')"
+          echo "HORO_QUALIFICATION_PYTHON=$verifier_python" >> "$GITHUB_ENV"
+          "$verifier_python" -m pip install --no-cache-dir --only-binary=:all: --no-deps defusedxml==0.7.1
 
       - name: Restore dependency and compiler caches
         id: cache
@@ -170,7 +172,7 @@ jobs:
           max-size: 2G
 
       - name: Configure Debug
-        run: cmake --preset "${{ matrix.preset }}"
+        run: cmake --preset "${{ matrix.preset }}" -DPython3_EXECUTABLE="$HORO_QUALIFICATION_PYTHON"
 
       - name: Build Debug
         id: debug_build

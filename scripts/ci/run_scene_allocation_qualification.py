@@ -42,6 +42,9 @@ def verify_discovery(document):
 
 def verify_junit(path):
     """Count actual cases rather than assertions and reject every skipped or failed execution."""
+    path = Path(path).resolve()
+    if not path.is_relative_to(Path.cwd().resolve()):
+        raise ValueError("Qualification evidence must remain inside the current workspace")
     root = ET.parse(path).getroot()
     cases = list(root.iter("testcase"))
     names = [case.get("name") for case in cases]
