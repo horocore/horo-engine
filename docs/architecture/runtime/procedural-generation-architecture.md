@@ -759,3 +759,27 @@ The detailed [point filtering contract](pcg-point-filtering-contract.md) specifi
 HORO-2018's explicitly registered density-range, bounds, terrain slope, stable
 separation and exact typed attribute operations, including canonical settings,
 complete admission costs, stable column compaction, and failure/lifecycle policy.
+
+### Offline Scene bake document ownership
+
+`HoroEngine::PCGSceneBake` is the headless downstream integration of the PCG graph
+and canonical Scene document owners. PCG core and `PCGSceneAdapter` remain detached
+planning/translation layers. The integration validates the exact working graph
+snapshot, graph-input dependency, target opening/revision/state, capability,
+current asset evidence and generated ownership before admitting a bake.
+
+`SceneDocumentTransactions` belongs to `HoroEditorModel`. It either owns the same
+canonical `SceneDocument`/`EditorHistory` types for a headless host or borrows the
+existing editor pair. A host admits one port per opening and keeps borrowed owners
+alive through shutdown. A document replacement invalidates existing ports even if
+its revision counter restarts. The port prepares complete values and one semantic
+history entry before publishing the authored root and history together. Failure,
+cancellation and budget rejection preserve objects, provenance, revision and dirty
+state. Undo/redo restores stored authored/generated values without graph execution.
+The graph document's save/dirty state is independent of the baked Scene state.
+
+Generated Scene ownership is inert persisted data, separate from canonical payload
+content. Cleanup matches complete ownership and content; hand-authored, adopted,
+foreign-scope and subsequently changed objects are never inferred as removable.
+Repeated exact committed output is a no-op. See the HORO-2027 migration note for
+public layout and serialization changes.

@@ -158,12 +158,23 @@ namespace Horo::Editor::SceneDocumentDetail {
         std::vector<IndexedPrefabInstance> prefabInstances;
     };
 
+    /** @brief Exact indexed authored replacements retained by one aggregate history entry. */
+    struct SceneObjectReplacementDelta final {
+        SceneObjectId object;
+        std::optional<IndexedSceneObject> before;
+        std::optional<IndexedSceneObject> after;
+    };
+
+    struct SceneObjectsReplacedDelta final {
+        std::vector<SceneObjectReplacementDelta> objects;
+    };
+
     using SceneCommandDelta =
         std::variant<CreatedObjectDelta, RenamedObjectDelta, TransformedObjectDelta, TransformedObjectsDelta, CameraChangedDelta,
                      LightChangedDelta, TriggerVolumeChangedDelta, AudioSourceChangedDelta, NavigationComponentsChangedDelta,
                      EditorStateChangedDelta, ComponentAddedDelta, ComponentRemovedDelta, BehaviorsChangedDelta,
                      GameplayComponentsChangedDelta, DeletedObjectsDelta, CreatedPrefabInstanceDelta, PrefabInstanceTransformDelta,
-                     PrefabInstanceReparentDelta, DeletedPrefabInstancesDelta>;
+                     PrefabInstanceReparentDelta, DeletedPrefabInstancesDelta, SceneObjectsReplacedDelta>;
 
     struct HistoryRecord {
         DocumentStateId beforeState;

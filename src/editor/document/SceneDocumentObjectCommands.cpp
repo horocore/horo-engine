@@ -473,6 +473,8 @@ namespace Horo::Editor {
 
     /** @copydoc SceneDocumentCommandExecutor::Undo */
     Result<SceneCommandResult> SceneDocumentCommandExecutor::Undo() {
+        if (!m_history.m_impl->undo.empty() && std::holds_alternative<SceneObjectsReplacedDelta>(m_history.m_impl->undo.back().delta))
+            return ReplayHistory(false);
         if (m_history.m_impl->undo.empty()) {
             return Result<SceneCommandResult>::Failure(
                 MakeDocumentError(SceneDocumentErrors::NothingToUndo, "No committed scene command is available to undo."));
@@ -489,6 +491,8 @@ namespace Horo::Editor {
 
     /** @copydoc SceneDocumentCommandExecutor::Redo */
     Result<SceneCommandResult> SceneDocumentCommandExecutor::Redo() {
+        if (!m_history.m_impl->redo.empty() && std::holds_alternative<SceneObjectsReplacedDelta>(m_history.m_impl->redo.back().delta))
+            return ReplayHistory(true);
         if (m_history.m_impl->redo.empty()) {
             return Result<SceneCommandResult>::Failure(
                 MakeDocumentError(SceneDocumentErrors::NothingToRedo, "No reverted scene command is available to redo."));

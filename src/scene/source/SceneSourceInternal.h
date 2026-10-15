@@ -91,4 +91,8 @@ namespace Horo::SceneSource::Detail {
     [[nodiscard]] WireJson SceneJson(const SceneSourceView &snapshot);
     [[nodiscard]] Result<ParsedScene> ParseScene(std::string_view contents);
 
+    /** @brief Encode exact inert generation evidence without activating its producer. */
+    [[nodiscard]] WireJson SceneGeneratedOwnershipJson(const SceneGeneratedOwnership &value);
+    /** @brief Decode optional bounded generation metadata through the Scene codec. */
+    [[nodiscard]] Result<std::optional<SceneGeneratedOwnership>> ParseSceneGeneratedOwnership(const Json &object);
 }  // namespace Horo::SceneSource::Detail

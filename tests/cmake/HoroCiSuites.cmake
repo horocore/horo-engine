@@ -44,6 +44,10 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroPCGSceneOutputContractConsumer
     HoroPCGPublicHeaderConsumer
     HoroPCGTerrainAdapterPublicHeaderConsumer
+    HoroPCGSceneBakeTests
+    HoroPCGSceneBakeContractConsumer
+    HoroPCGSceneBakePublicHeaderConsumer
+    HoroEditorModelPublicHeaderConsumer
     HoroPCGDocumentTests
     HoroPCGDocumentPublicHeaderConsumer
     HoroMixerDocumentTests

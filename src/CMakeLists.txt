@@ -2485,6 +2485,7 @@ add_library(HoroSceneSource STATIC
         scene/source/SceneSourceNavigationParsing.cpp
         scene/source/SceneSourcePhysicsParsing.cpp
         scene/source/SceneSourceScene.cpp
+        scene/source/SceneSourceGenerated.cpp
         scene/source/NavigationAgentJson.cpp
 )
 add_library(HoroEngine::SceneSource ALIAS HoroSceneSource)
@@ -2527,6 +2528,7 @@ add_library(HoroEditorModel STATIC
         editor/data_bus/EditorDataBus.cpp
         editor/update/UpdateExperienceSession.cpp
         editor/document/SceneDocument.cpp
+        editor/document/SceneDocumentTransaction.cpp
         editor/document/SceneDocumentCommands.cpp
         editor/document/SceneDocumentObjectCommands.cpp
         editor/document/RuntimeSceneConversion.cpp
@@ -2699,6 +2701,11 @@ add_library(HoroEditorServices STATIC
         editor/screens/workspace/ActivityBarLayout.cpp
         editor/screens/workspace/WorkspaceSplitterInteraction.cpp
 )
+
+add_library(HoroPCGSceneBake STATIC editor/pcg/PCGSceneBake.cpp)
+add_library(HoroEngine::PCGSceneBake ALIAS HoroPCGSceneBake)
+target_compile_features(HoroPCGSceneBake PUBLIC cxx_std_20)
+target_link_libraries(HoroPCGSceneBake PUBLIC HoroEngine::PCGSceneAdapter HoroEngine::EditorServices HoroEngine::EditorModel)
 
 add_library(HoroEngine::EditorServices ALIAS HoroEditorServices)
 
