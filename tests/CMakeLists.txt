@@ -2953,6 +2953,7 @@ target_include_directories(HoroAndroidStorageTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroAndroidStorageTests PRIVATE HoroEngine::Platform)
 add_executable(HoroRuntimeSaveIdentityTests
+        support/AllocationProbe.cpp
         unit/runtime/save/SaveIdentityTests.cpp
 )
 target_compile_features(HoroRuntimeSaveIdentityTests PRIVATE cxx_std_20)

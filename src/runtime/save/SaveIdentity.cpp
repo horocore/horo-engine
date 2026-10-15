@@ -82,15 +82,17 @@ namespace Horo::Runtime {
         /** @copydoc FormatUuid */
         std::string FormatUuid(const Bytes &bytes) {
             constexpr char kHex[] = "0123456789abcdef";
-            std::string result;
-            result.reserve(36);
+            std::array<char, 36> text{};
+            std::size_t position{};
             for (std::size_t index = 0; index < bytes.size(); ++index) {
                 if (index == 4 || index == 6 || index == 8 || index == 10)
-                    result.push_back('-');
-                result.push_back(kHex[static_cast<std::size_t>(bytes[index]) >> 4U]);
-                result.push_back(kHex[static_cast<std::size_t>(bytes[index]) & 0x0fU]);
+                    text[position++] = '-';
+                text[position++] = kHex[static_cast<std::size_t>(bytes[index]) >> 4U];
+                text[position++] = kHex[static_cast<std::size_t>(bytes[index]) & 0x0fU];
             }
-            return result;
+            // MSVC Debug's noexcept default string constructor allocates its iterator proxy.
+            // Use the throwing constructor so allocation failure reaches the owner's recovery boundary.
+            return std::string{text.data(), text.size()};
         }
 
         /** @copydoc HashUuid */
