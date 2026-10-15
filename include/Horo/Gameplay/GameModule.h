@@ -25,6 +25,10 @@ namespace Horo::AI {
     class AiCapabilityDescriptorRegistry;
 }
 
+namespace Horo::Runtime::Ui {
+    class RuntimeUiClient;
+}
+
 namespace Horo::Gameplay {
     class ComponentRegistry;
     class GameAssetTypeRegistry;
@@ -38,7 +42,7 @@ namespace Horo::Gameplay {
     class GameplayAiContext;
     class GameplayCharacterContext;
 
-    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 20;
+    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 21;
     inline constexpr std::uint32_t GameplayDescriptorBundleSchemaVersion = 1;
     inline constexpr std::uint32_t GameModuleReloadSnapshotSchemaVersion = 1;
     inline constexpr std::size_t MaximumGeneratedBehaviorDescriptors = 4096;
@@ -64,13 +68,14 @@ namespace Horo::Gameplay {
 
     /** @brief Narrow generation-scoped runtime capabilities supplied after project services start. */
     struct GameRuntimeContext {
-        CancellationToken cancellation;                              /**< Revoked before module shutdown or replacement. */
-        std::span<const GameplayServiceId> activeServices;           /**< Active project-scoped services in dependency order. */
-        std::span<const GameplayCapabilityId> capabilities;          /**< Explicit host and project-service capability grants. */
-        std::shared_ptr<const GameplayPhysicsContext> physics;       /**< Optional exact module/play-world binding; no discovery. */
-        std::shared_ptr<const GameplayNavigationContext> navigation; /**< Optional exact-generation navigation grant. */
-        std::shared_ptr<const GameplayAiContext> ai;                 /**< Optional exact-generation AI grant; missing is recoverable. */
-        std::shared_ptr<const GameplayCharacterContext> character;   /**< Exact module-generation Character scope. */
+        CancellationToken cancellation;                                /**< Revoked before module shutdown or replacement. */
+        std::span<const GameplayServiceId> activeServices;             /**< Active project-scoped services in dependency order. */
+        std::span<const GameplayCapabilityId> capabilities;            /**< Explicit host and project-service capability grants. */
+        std::shared_ptr<const GameplayPhysicsContext> physics;         /**< Optional exact module/play-world binding; no discovery. */
+        std::shared_ptr<const GameplayNavigationContext> navigation;   /**< Optional exact-generation navigation grant. */
+        std::shared_ptr<const GameplayAiContext> ai;                   /**< Optional exact-generation AI grant; missing is recoverable. */
+        std::shared_ptr<const GameplayCharacterContext> character;     /**< Exact module-generation Character scope. */
+        std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi; /**< Optional independently revocable host UI grant. */
     };
 
     /** @brief Module-global state captured only after owned work and callbacks are quiescent. */

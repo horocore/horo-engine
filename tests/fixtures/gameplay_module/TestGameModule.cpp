@@ -12,6 +12,9 @@
 #include "Horo/Gameplay/ReplicationRegistration.h"
 #include "Horo/Gameplay/SystemRegistry.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
+#if defined(HORO_TEST_GAMEPLAY_UI) && HORO_TEST_GAMEPLAY_UI
+#include "Horo/Runtime/Ui/RuntimeUiClient.h"
+#endif
 #include "gameplay/GameAssetTestSupport.h"
 #if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
 #include "Horo/Gameplay/GameplayCharacterContext.h"
@@ -26,6 +29,34 @@
 
 using namespace Horo;
 using namespace Horo::Gameplay;
+
+#if defined(HORO_TEST_GAMEPLAY_UI) && HORO_TEST_GAMEPLAY_UI
+namespace {
+    std::shared_ptr<const Runtime::Ui::RuntimeUiClient> retainedUiClient;
+}
+
+/** @brief Copies a module-derived UI client into host-owned storage before actual native image retirement. */
+extern "C" HORO_GAME_EXPORT void HoroTestCopyRuntimeUiClient(std::shared_ptr<const Runtime::Ui::RuntimeUiClient> *destination) {
+    *destination = retainedUiClient;
+}
+
+/** @brief Executes the statically linked native frontend; only owned typed route input enters the host mailbox. */
+extern "C" HORO_GAME_EXPORT void HoroTestQueueRuntimeUiScreen(Result<Runtime::Ui::RuntimeUiRequestId> *output) {
+    using namespace Runtime::Ui;
+    SerializedUiId bytes{};
+    bytes.back() = 9;
+    auto route = UiRouteId::Create(bytes);
+    if (route.HasError()) {
+        *output = Result<RuntimeUiRequestId>::Failure(route.ErrorValue());
+        return;
+    }
+    if (!retainedUiClient) {
+        *output = Result<RuntimeUiRequestId>::Failure(MakeError(UiErrors::CapabilityUnavailable));
+        return;
+    }
+    *output = retainedUiClient->Screen(UiRouteOperationRequest::Push(route.Value()));
+}
+#endif
 
 namespace {
     Prefab::PrefabOperation retainedSpawn;
@@ -457,6 +488,16 @@ namespace {
             if (context.navigation && !context.navigation->Binding().queryGranted)
                 return Result<void>::Failure(MakeError(NavigationCapabilityErrors::PermissionDenied));
 #endif
+#if defined(HORO_TEST_GAMEPLAY_UI) && HORO_TEST_GAMEPLAY_UI
+            if (context.runtimeUi) {
+                auto child = context.runtimeUi->Derive();
+                if (child.HasError())
+                    return Result<void>::Failure(child.ErrorValue());
+                retainedUiClient = std::move(child).Value();
+                // A module may alter its exposed field; the host's authoritative holder must still revoke descendants.
+                context.runtimeUi.reset();
+            }
+#endif
 #if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
             if (!context.physics)
                 return Result<void>::Failure(MakeError(GameplayErrors::PhysicsUnavailable));
@@ -491,6 +532,10 @@ namespace {
         }
 
         void Stop(GameRuntimeContext &) noexcept override {
+#if defined(HORO_TEST_GAMEPLAY_UI) && HORO_TEST_GAMEPLAY_UI
+            // Module-owned holders drain at Stop; native image residency is not a resource lifetime boundary.
+            retainedUiClient.reset();
+#endif
             // The module host retires the registration-only fixture's services and descriptors.
         }
 
