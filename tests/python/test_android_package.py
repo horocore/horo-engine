@@ -215,7 +215,8 @@ class AndroidPackageTests(unittest.TestCase):
     def test_manifest_rejects_permission_feature_and_api_drift(self):
         text = ("package: name='org.horocore.packagequalification' versionCode='1' versionName='0.2.0'\n"
                 "minSdkVersion:'29'\ntargetSdkVersion:'36'\n"
-                "uses-permission: name='org.horocore.packagequalification.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'\n")
+                "uses-permission: name='org.horocore.packagequalification.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'\n"
+                "uses-permission: name='android.permission.ACTIVITY_RECOGNITION'\n")
         verify_manifest(text, self.profile)
         for changed in (text.replace("'29'", "'30'"), text + "uses-permission: name='android.permission.CAMERA'\n",
                         text + "uses-feature: name='android.hardware.vulkan.level'\n"):
@@ -225,7 +226,8 @@ class AndroidPackageTests(unittest.TestCase):
     def test_current_aapt2_min_sdk_badging_and_ambiguous_alias(self):
         text = ("package: name='org.horocore.packagequalification' versionCode='1' versionName='0.2.0'\n"
                 "minSdkVersion:'29'\ntargetSdkVersion:'36'\n"
-                "uses-permission: name='org.horocore.packagequalification.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'\n")
+                "uses-permission: name='org.horocore.packagequalification.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'\n"
+                "uses-permission: name='android.permission.ACTIVITY_RECOGNITION'\n")
         verify_manifest(text, self.profile)
         ambiguous = text + "sdkVersion:'29'\n"
         with self.assertRaisesRegex(AndroidError, "profile API 29"):
@@ -254,7 +256,8 @@ class AndroidAssemblyTests(unittest.TestCase):
     def badging(self):
         return ("package: name='org.horocore.packagequalification' versionCode='1' versionName='0.2.0'\n"
                 "minSdkVersion:'29'\ntargetSdkVersion:'36'\n"
-                "uses-permission: name='org.horocore.packagequalification.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'\n")
+                "uses-permission: name='org.horocore.packagequalification.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'\n"
+                "uses-permission: name='android.permission.ACTIVITY_RECOGNITION'\n")
 
     def prepare(self, arguments):
         native = arguments.native_root / "arm64-v8a"
@@ -392,6 +395,18 @@ class AndroidAssemblyTests(unittest.TestCase):
         with self.assertRaises(AndroidError):
             extract_game_activity(arguments.game_activity,self.root / "extract",tools,["arm64-v8a"])
         self.assertFalse((self.root / "escape").exists())
+
+    def test_staged_activity_includes_real_private_input_permission_bridge(self):
+        arguments = self.arguments()
+        tools = self.prepare(arguments)
+        stage = self.root / "java-input-stage"
+        stage.mkdir()
+        android_package.write_project(stage, tools, self.profile, ["arm64-v8a"], arguments.game_activity)
+        activity = stage / "java/org/horocore/platform/HoroInputActivity.java"
+        self.assertEqual(activity.read_bytes(), (android_package.ROOT / "apps/android-input/HoroInputActivity.java").read_bytes())
+        entry = stage / "java/org/horocore/packagequalification/PackageActivity.java"
+        self.assertIn("extends org.horocore.platform.HoroInputActivity", entry.read_text())
+        self.assertIn("android.permission.ACTIVITY_RECOGNITION", (stage / "AndroidManifest.xml").read_text())
 
 
 if __name__ == "__main__":

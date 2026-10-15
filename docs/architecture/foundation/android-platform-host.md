@@ -136,6 +136,57 @@ publication immediately after loss of permission.
 XR actions, poses, and headset tracking are owned by the XR backend. The Android
 input adapter must not create a competing controller/tracking path.
 
+### PLT-001.4 Input Composition
+
+`HoroEngine::AndroidInputIntegration` owns the portable, owner-thread
+`AndroidInputSession` adapter. It projects keyboard, incarnation-safe touch and
+at most four canonical gamepads into the existing `RawInputCollector`. Physical
+D-pad keys and normalized hat events retain independent fixed per-device held
+evidence; either source keeps the canonical direction held until both release.
+Focus loss and device retirement clear that evidence. The same
+collector implementation is compiled into the normal Input target and the NDK
+package qualification host; this does not create another input stack. Its source
+split preserves the `HoroInput` public header owner and ordinary consumers.
+
+Canonical Input snapshots additionally carry fixed-capacity accelerometer,
+gyroscope and exact step-counter evidence. Native sensor types and handles stay
+private. Unsupported, disabled, permission-required, suspended, awaiting-sample,
+native-failure and available states are distinct; unavailable samples always
+zero values/counter/timestamp. Physical collection is bounded, while device
+connection/disconnection and initial resource preparation are explicit lifecycle
+operations outside the routine projection allocation guarantee.
+
+The private `GameActivityInput` bridge consumes the pinned GameActivity's actual
+key/motion buffers and actual NDK sensor queue. It maps physical key/button/axis
+codes, enables joystick collection, burns touch incarnations, consumes at most
+512 native input events and 64 sensor events per frame, and fails closed on input
+or callback overflow. The default volume/camera key filter is retained. Motion
+event timestamps in pinned GameActivity 3.0.5 are milliseconds; key timestamps
+are nanoseconds. Both use Android uptime; `CLOCK_MONOTONIC` focus/device-removal
+cutoffs discard pre-resume/pre-removal input after converting units, and boottime
+sensor cutoffs prevent queued pre-grant/pre-resume samples from returning.
+
+`HoroInputActivity` is the private Java producer for Activity Recognition
+permission and device removal/reconfiguration observations. Its synchronized
+peer gate clears the native peer and drains callbacks before native storage
+retires. A bounded SPSC handoff publishes observations at the Input owner phase.
+Permission denial, permanent denial, revocation, requesting and settings return
+remain explicit. Step-counter access requires both explicit host admission and
+`ACTIVITY_RECOGNITION`; ordinary collection never prompts. Accelerometer and
+gyroscope require explicit host admission. Focus/pause/device loss neutralizes
+controls and sensor samples before the next committed Input frame.
+
+The existing Android qualification application now composes this actual bridge
+with explicit motion-sensor admission and step-counter disabled by default. Its
+manifest declares optional Activity Recognition access so an explicit host/user
+request can be exercised; permission declaration alone grants no sensor access.
+The profile/manifest verifier continues to reject undeclared permissions and
+required hardware features. It selects no renderer or gameplay runtime. Host
+regressions, NDK compilation/package assembly, and physical-device qualification
+are separate evidence. Authoring these sources does not itself prove any of
+those checks passed, and a built APK does not qualify physical sensor/focus or
+permission behavior.
+
 ## Storage And Assets
 
 Android adapters resolve logical Horo locations to app-private storage, cache,

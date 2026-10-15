@@ -249,6 +249,11 @@ if (HORO_ENABLE_IMGUI_UI_TESTS)
     )
 endif ()
 
+add_executable(HoroAndroidInputTests unit/platform/AndroidInputTests.cpp)
+target_compile_features(HoroAndroidInputTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAndroidInputTests PRIVATE HoroEngine::AndroidInputIntegration)
+horo_register_catch_test(HoroAndroidInputTests LABELS "unit;input;platform;headless;lifecycle")
+
 add_executable(HoroInputTests
         unit/runtime/input/GameplayInputFrameTests.cpp
         unit/runtime/input/InputTests.cpp

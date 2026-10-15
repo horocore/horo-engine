@@ -55,6 +55,7 @@ def manifest(profile: dict) -> str:
     library = profile["nativeLibrary"]
     return f'''<manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+  <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
   <application android:label="Horo Package Qualification" android:theme="@style/Theme.AppCompat.NoActionBar"
                android:extractNativeLibs="false" android:allowBackup="false">
     <activity android:name="{application}.PackageActivity" android:exported="true" android:configChanges="orientation|screenSize|keyboardHidden">
@@ -74,9 +75,12 @@ def write_project(stage: Path, tools: dict, profile: dict, abis: list[str], acti
     java_root = stage / "java" / Path(*profile["applicationId"].split("."))
     java_root.mkdir(parents=True)
     source = (f"package {profile['applicationId']};\n"
-              "public final class PackageActivity extends com.google.androidgamesdk.GameActivity {\n"
+              "public final class PackageActivity extends org.horocore.platform.HoroInputActivity {\n"
               f"    static {{ System.loadLibrary(\"{profile['nativeLibrary']}\"); }}\n}}\n")
     (java_root / "PackageActivity.java").write_text(source, encoding="utf-8")
+    input_root = stage / "java/org/horocore/platform"
+    input_root.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ROOT / "apps/android-input/HoroInputActivity.java", input_root / "HoroInputActivity.java")
     shutil.copyfile(activity, stage / "game-activity.aar")
     if digest(stage / "game-activity.aar") != tools["gameActivity"]["sha256"]:
         raise AndroidError("GameActivity changed during staging; retry with the admitted AAR.")

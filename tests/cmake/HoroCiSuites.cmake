@@ -74,6 +74,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroPrefabSceneExpansionContractConsumer
     HoroAssetRegistryTests
     HoroInputTests
+    HoroAndroidInputTests
+    HoroAndroidInputIntegrationPublicHeaderConsumer
     HoroCharacterInputTests
     HoroCharacterInputPublicHeaderConsumer
     HoroInputSdlTests

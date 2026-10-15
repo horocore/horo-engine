@@ -2110,6 +2110,7 @@ target_compile_features(HoroPrefabSceneExpansion PUBLIC cxx_std_20)
 target_link_libraries(HoroPrefabSceneExpansion PUBLIC HoroEngine::PrefabAuthoring HoroEngine::RuntimeScene)
 
 add_library(HoroInput STATIC
+        runtime/input/RawInputCollector.cpp
         runtime/input/Input.cpp
         runtime/input/InputPresentation.cpp
         runtime/input/InputErrors.cpp
@@ -2118,6 +2119,11 @@ add_library(HoroEngine::Input ALIAS HoroInput)
 target_compile_features(HoroInput PUBLIC cxx_std_20)
 target_include_directories(HoroInput PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(HoroInput PUBLIC HoroEngine::Foundation PRIVATE nlohmann_json::nlohmann_json)
+
+add_library(HoroAndroidInputIntegration STATIC platform/android/AndroidInput.cpp)
+add_library(HoroEngine::AndroidInputIntegration ALIAS HoroAndroidInputIntegration)
+target_compile_features(HoroAndroidInputIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroAndroidInputIntegration PUBLIC HoroEngine::Input)
 
 # Host-facing bridge: Input remains independent of Runtime UI, and Runtime UI
 # retains its Foundation/Assets-only contract.
