@@ -1,4 +1,5 @@
 #include "AiTestSupport.h"
+#include "AllocationProbe.h"
 #include "Horo/AI/AITaskLifecycle.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -42,11 +43,31 @@ namespace Horo::AI {
             CHECK(lifecycle.Context()->taskDefinition == fixture.Context().taskDefinition);
             CHECK(lifecycle.Context()->task == fixture.task);
             CHECK(lifecycle.Context()->agent == fixture.agent);
+            CHECK_FALSE(lifecycle.Context()->diagnostics);
             CHECK(lifecycle.TerminalResult() == nullptr);
 
             ExpectError(lifecycle.Start(fixture.Context()), AIErrors::TaskTransitionInvalid);
             CHECK(lifecycle.PrepareResume(AiTaskResumeReason::FixedTick, fixture.agent).Value() == AiTaskResumeDisposition::Ready);
             CHECK(lifecycle.PrepareResume(AiTaskResumeReason::Event, fixture.agent).Value() == AiTaskResumeDisposition::Ready);
+        }
+
+        TEST_CASE("Internal AI task context copy move and admission allocate no diagnostic storage", "[unit][ai][task]") {
+            const TaskFixture fixture;
+            AiTaskLifecycle lifecycle;
+            bool started{};
+            std::size_t requests{};
+            {
+                Tests::AllocationProbe::ScopedMeasurement measurement;
+                auto context = fixture.Context();
+                auto copied = context;
+                auto moved = std::move(copied);
+                started = lifecycle.Start(std::move(moved)).HasValue();
+                requests = measurement.Snapshot().requests;
+            }
+            REQUIRE(started);
+            CHECK(requests == 0);
+            REQUIRE(lifecycle.Context());
+            CHECK_FALSE(lifecycle.Context()->diagnostics);
         }
 
         TEST_CASE("AI task admission rejects malformed and cross-runtime context", "[unit][ai][task]") {

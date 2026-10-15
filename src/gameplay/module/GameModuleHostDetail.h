@@ -6,6 +6,7 @@
 #include "Horo/Gameplay/GameEventRegistry.h"
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameServiceRegistry.h"
+#include "Horo/Gameplay/GameplayAiContext.h"
 #include "Horo/Gameplay/GameplayRegistrationRuntime.h"
 #include "Horo/Gameplay/ReplicationRegistration.h"
 #include "Horo/Gameplay/SystemRegistry.h"
@@ -31,6 +32,7 @@ namespace Horo::Gameplay {
         /** @brief Generation-owned native contributions; shutdown retires each registry before the code image. */
         struct NativeRegistries {
             std::unique_ptr<BehaviorRegistry> registry;
+            AI::AiCapabilityDescriptorRegistry ai;
             std::unique_ptr<ComponentRegistry> components;
             std::unique_ptr<GameAssetTypeRegistry> assetTypes;
             std::unique_ptr<GameServiceRegistry> services;
@@ -73,6 +75,8 @@ namespace Horo::Gameplay {
     struct LoadedGameModule::Impl : std::enable_shared_from_this<LoadedGameModule::Impl> {
         ~Impl();
 
+        /** @brief Freezes contributed metadata and binds exact-generation leases before any runtime activation. */
+        [[nodiscard]] Result<void> FreezeRegistries(std::span<const GameplayCapabilityId> hostCapabilities);
         [[nodiscard]] Result<void> RegisterAndStart(std::span<const GameplayCapabilityId> hostCapabilities);
         [[nodiscard]] Result<GameModuleReloadSnapshot> PrepareReload();
         [[nodiscard]] Result<void> RestoreReload(const GameModuleReloadSnapshot &snapshot);
@@ -85,6 +89,7 @@ namespace Horo::Gameplay {
         std::unique_ptr<GameplayServiceRuntime> projectServices;
         GameRuntimeContext runtimeContext;
         std::shared_ptr<GameplayPhysicsContext> physics;
+        std::shared_ptr<GameplayAiContext> ai;
         std::shared_ptr<GameplayCharacterContext> character;
         std::shared_ptr<GameplayNavigationContext> navigation;
         IGameModule *gameplayModule{};

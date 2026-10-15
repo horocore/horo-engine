@@ -5,6 +5,7 @@
  * @brief Transactional SceneRuntime activation and lifecycle ownership for typed AI components.
  */
 
+#include "Horo/AI/AIRuntimeCapability.h"
 #include "Horo/AI/AISceneComponents.h"
 #include "Horo/AI/AITaskLifecycle.h"
 #include "Horo/AI/AITaskScheduler.h"
@@ -198,6 +199,10 @@ namespace Horo::AI {
          * @return Runtime or AIErrors::AgentCapacityExceeded for invalid settings.
          */
         [[nodiscard]] static Result<AiSceneRuntime> Create(AiSceneRuntimeSettings settings = {});
+
+        /** @brief Issues weak access to this exact publication on its simulation safe-point thread.
+         * @return Empty/unavailable access when inactive; replacement permanently invalidates retained access. */
+        [[nodiscard]] AiRuntimeCapability CapabilityAtSafePoint() const;
 
         AiSceneRuntime(const AiSceneRuntime &) = delete;
         AiSceneRuntime &operator=(const AiSceneRuntime &) = delete;
