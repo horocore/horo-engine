@@ -28,6 +28,7 @@
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/input/EditorInputActions.h"
 #include "editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.h"
+#include "editor/modals/packages/PackageModal.h"
 #include "editor/modals/play_topology/PlayTopologyModal.h"
 #include "editor/modals/scene_compare/SceneConflictCompareModal.h"
 #include "editor/renderer/EditorGuiRenderer.h"
@@ -143,10 +144,11 @@ namespace Horo::Editor {
 
         class EditorWorkspaceScreen final : public GuiScreen {
         public:
-            explicit EditorWorkspaceScreen(const EditorServiceRegistry &services)
-                : host_(services.Get<GuiScreenHost>()), services_(services), modalHost_(services.Get<EditorModalHost>()),
-                  context_(services.GetConst<EditorGuiContext>()), registry_(services.Get<WorkspacePanelRegistry>()),
-                  statusItems_(services.Get<EditorStatusItemRegistry>()), input_(services.Get<Input::InputRouter>()),
+            explicit EditorWorkspaceScreen(const EditorServiceRegistry &services, PackageWorkspaceAccess packages)
+                : packages_(std::move(packages)), host_(services.Get<GuiScreenHost>()), services_(services),
+                  modalHost_(services.Get<EditorModalHost>()), context_(services.GetConst<EditorGuiContext>()),
+                  registry_(services.Get<WorkspacePanelRegistry>()), statusItems_(services.Get<EditorStatusItemRegistry>()),
+                  input_(services.Get<Input::InputRouter>()),
                   view_(context_, registry_, services.Get<std::uintptr_t>(), input_.router, input_.context,
                         services.TryGet<Extensions::EditorActivityHost>(), services.TryGet<IEditorGuiRenderer>()),
                   viewportSceneState_(services.Get<EditorViewportSceneState>()),
@@ -235,6 +237,13 @@ namespace Horo::Editor {
                                                      .targetIndex = static_cast<int>(*destination),
                                                      .stringPayload = std::string{}});
                     controller_->UpdatePlayPresentation(dt);
+                    if (packages_.pump) {
+                        const auto &model = controller_->ViewModel();
+                        const auto boundary = model.playState == EditorPlayState::Idle || model.playState == EditorPlayState::Failed
+                                                  ? Packages::PackageActivationBoundary::Quiescent
+                                                  : Packages::PackageActivationBoundary::Running;
+                        static_cast<void>(packages_.pump(std::filesystem::path{model.projectRoot}, boundary));
+                    }
                     controller_->UpdateAutosave(dt, settings_.Snapshot().settings.autoSaveIntervalMinutes);
                     controller_->UpdateExternalSceneWatch(dt);
                     controller_->UpdateGameplaySources(dt);
@@ -344,6 +353,10 @@ namespace Horo::Editor {
 
             bool HandleMenuInvocation(const EditorMenuInvocation &invocation) override {
                 EditorMenuAction action = invocation.action;
+                if (action == EditorMenuAction::ManagePackages) {
+                    OpenPackagesModal();
+                    return true;
+                }
                 if (controller_ && action == EditorMenuAction::SaveScene && !controller_->CurrentScenePath().has_value())
                     action = EditorMenuAction::SaveSceneAs;
                 if (controller_ && action == EditorMenuAction::CreatePrimitive && invocation.primitive.has_value()) {
@@ -437,6 +450,8 @@ namespace Horo::Editor {
             void OnLeave() override {
                 LOG_INFO("editor.workspace", "EditorWorkspaceScreen leaving.");
                 if (controller_) {
+                    if (packages_.retire)
+                        static_cast<void>(packages_.retire(std::filesystem::path{controller_->ViewModel().projectRoot}));
                     SaveExtensionWorkspace();
                     controller_->FlushAutosave();
                     if (const auto graphs = controller_->ShutdownPCGDocuments(); graphs.HasError())
@@ -631,6 +646,19 @@ namespace Horo::Editor {
                 workspacePersistenceAdmitted_ = false;
             }
 
+            /** @brief Opens transient presentation over the exact root-owned project capability; unavailable preparation is recoverable. */
+            void OpenPackagesModal() {
+                if (!controller_ || !packages_.acquire)
+                    return;
+                const auto acquire = packages_.acquire;
+                const std::filesystem::path root{controller_->ViewModel().projectRoot};
+                const auto opened = modalHost_.OpenRoot(std::make_unique<PackageModal>(context_, [acquire, root] {
+                    return acquire(root);
+                }));
+                if (opened.HasError())
+                    LOG_WARN("editor.packages", "Package modal admission failed: %s", opened.ErrorValue().code.Value().c_str());
+            }
+
             void OpenPlayTopologyProfilesModal() {
                 if (!controller_ || !projectServices_.durableFiles)
                     return;
@@ -814,6 +842,7 @@ namespace Horo::Editor {
                                                                 .available = true}));
             }
 
+            PackageWorkspaceAccess packages_;
             GuiScreenHost &host_;
             const EditorServiceRegistry &services_;
             EditorModalHost &modalHost_;
@@ -836,9 +865,10 @@ namespace Horo::Editor {
         };
     }  // namespace
 
-    void RegisterEditorWorkspaceScreen(ScreenRegistry &registry) {
-        registry.Register(GuiRouteKind::EditorWorkspace, [](const EditorServiceRegistry &services, const GuiRoute &) {
-            return std::make_unique<EditorWorkspaceScreen>(services);
+    void RegisterEditorWorkspaceScreen(ScreenRegistry &registry, PackageWorkspaceAccess packages) {
+        registry.Register(GuiRouteKind::EditorWorkspace,
+                          [packages = std::move(packages)](const EditorServiceRegistry &services, const GuiRoute &) {
+            return std::make_unique<EditorWorkspaceScreen>(services, packages);
         });
     }
 }  // namespace Horo::Editor

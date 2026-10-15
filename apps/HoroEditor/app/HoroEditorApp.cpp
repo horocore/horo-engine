@@ -42,6 +42,8 @@
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Runtime/Save/SaveTelemetry.h"
+#include "PackageHostPolicy.h"
+#include "PackageProjectHost.h"
 #include "RenderGraphInspectionPane.h"
 #if defined(HORO_HAS_OPENTELEMETRY)
 #include "Horo/Foundation/Telemetry/OpenTelemetrySink.h"
@@ -885,9 +887,10 @@ namespace Horo::Editor {
         public:
             EditorRuntimeParticipant(RunEditorMainLoopParams &params, GuiScreenHost &screenHost,
                                      EditorViewportSceneState &viewportSceneState, EditorSettingsSnapshot &settingsSnapshot,
-                                     std::optional<EditorRendererRestartRequest> &rendererRestart, Clock &clock) noexcept
+                                     std::optional<EditorRendererRestartRequest> &rendererRestart, Clock &clock,
+                                     Application::Internal::PackageProjectHost &packages) noexcept
                 : p_(&params), screenHost_(&screenHost), viewportSceneState_(&viewportSceneState), settingsSnapshot_(&settingsSnapshot),
-                  rendererRestart_(&rendererRestart), pacing_{clock}
+                  rendererRestart_(&rendererRestart), packages_(&packages), pacing_{clock}
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                   ,
                   qualification_{params.options.qualifySurfaceLifecycle}
@@ -986,6 +989,10 @@ namespace Horo::Editor {
             }
 
             void Shutdown() noexcept override {
+                try {
+                    static_cast<void>(packages_->Close());
+                } catch (...) {
+                }
                 p_->background.jobs.StopAccepting();
                 static_cast<void>(pacing_.pacer.Stop());
                 frame_.reset();
@@ -1009,6 +1016,12 @@ namespace Horo::Editor {
                 screenHost_->Shutdown();
                 p_->operationServices.shaderBuild.Shutdown();
                 p_->background.jobs.Shutdown(ShutdownPolicy::Cancel);
+                try {
+                    if (packages_->Close().HasError())
+                        std::terminate();
+                } catch (...) {
+                    std::terminate();
+                }
             }
 
             /** @brief Reports whether shutdown published Close before backend teardown. */
@@ -1163,6 +1176,8 @@ namespace Horo::Editor {
                 const float deltaSeconds = static_cast<float>(context.variableDelta.ToNanoseconds()) / 1'000'000'000.0F;
                 p_->modalHost.OnUpdate(deltaSeconds);
                 screenHost_->OnUpdate(deltaSeconds);
+                // Independent owner pumping continues after modal closure or project route departure.
+                static_cast<void>(packages_->Pump(Packages::PackageActivationBoundary::Running));
                 return Result<void>::Success();
             }
 
@@ -1420,6 +1435,7 @@ namespace Horo::Editor {
             EditorViewportSceneState *viewportSceneState_{};
             EditorSettingsSnapshot *settingsSnapshot_{};
             std::optional<EditorRendererRestartRequest> *rendererRestart_{};
+            Application::Internal::PackageProjectHost *packages_{};
             Runtime::RuntimeHost *host_{};
             EditorPacingState pacing_;
             bool surfaceClosed_{};
@@ -1510,6 +1526,24 @@ namespace Horo::Editor {
                 .cxxCompiler = std::filesystem::path{HORO_GAMEPLAY_CXX_COMPILER},
             };
             SystemWallClock wallClock;
+            SteadyClock packageClock;
+            Application::Internal::UnconfiguredPackageTrust packageTrust;
+            auto packagePlatform = Application::Internal::NativePackagePlatform();
+            if (packagePlatform.HasError())
+                return std::nullopt;
+            const auto packageCache = ResolveEditorSettingsHomeDirectory() / ".cache" / "horo" / "packages";
+            auto packageResult =
+                Application::Internal::PackageProjectHost::Create({p.background.jobs, durableFiles, packageClock, wallClock, packageTrust},
+                                                                  {.cacheRoot = packageCache,
+                                                                   .platform = std::move(packagePlatform).Value(),
+                                                                   .lifecycle = {.temporaryRoot = packageCache / "native",
+                                                                                 .profile = Extensions::ExtensionHostProfile::Interactive,
+                                                                                 .artifactGate = std::make_shared<
+                                                                                     Application::Internal::UnconfiguredPackageGate>()}},
+                                                                  Duration::FromMilliseconds(1'000));
+            if (packageResult.HasError())
+                return std::nullopt;
+            auto packages = std::move(packageResult).Value();
             ProjectMutationCoordinator mutationCoordinator{durableFiles};
             ProjectMigrationTransactionService migrationTransactions{durableFiles, wallClock, mutationCoordinator, p.background.jobs};
             ProjectOpenPreflightService projectOpenPreflight{migrationTransactions};
@@ -1542,7 +1576,13 @@ namespace Horo::Editor {
             RegisterWelcomeScreen(screenRegistry);
             RegisterProjectCreationScreen(screenRegistry);
             RegisterProjectLoadingScreen(screenRegistry);
-            RegisterEditorWorkspaceScreen(screenRegistry);
+            RegisterEditorWorkspaceScreen(screenRegistry, {.acquire = [&packages](const std::filesystem::path &root) {
+                return packages->Acquire(root);
+            }, .pump = [&packages](const std::filesystem::path &root, Packages::PackageActivationBoundary boundary) {
+                return packages->PumpProject(root, boundary);
+            }, .retire = [&packages](const std::filesystem::path &root) {
+                return packages->Retire(root);
+            }});
             WorkspacePanelRegistry workspacePanelRegistry;
             RegisterInspectionWorkspacePanels(workspacePanelRegistry, p.presentation.renderFrontend);
             Extensions::ExtensionInventory extensionInventory;
@@ -1557,7 +1597,7 @@ namespace Horo::Editor {
             Application::NetworkDebuggerService networkDebugger;
 
             // Covers constructor failure as well as startup failure: dependencies precede both join guards.
-            const EditorWorkerShutdown constructionRollback{p.background.jobs, p.operationServices.shaderBuild};
+            const EditorWorkerShutdown constructionRollback{p.background.jobs, p.operationServices.shaderBuild, nullptr, packages.get()};
             GuiScreenHost screenHost{guiContext,
                                      GuiScreenHostComposition{.modalHost = p.modalHost,
                                                               .settingsService = p.settings,
@@ -1576,7 +1616,7 @@ namespace Horo::Editor {
                                                                   extensionInventoryRefresh.HasValue() ? &extensionMarketplace : nullptr,
                                                               .nativeDialogs = &nativeDialogs}};
             // Closes route/extension scopes and joins before destroying the successfully constructed screen host.
-            const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild, &screenHost};
+            const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild, &screenHost, packages.get()};
             screenHost.Services().Register<IEditorViewportRenderer>(p.presentation.viewportRenderer);
             screenHost.Services().Register<IEditorGuiRenderer>(p.presentation.guiRenderer);
             screenHost.Services().Register<EditorViewportSceneState>(viewportSceneState);
@@ -1619,8 +1659,8 @@ namespace Horo::Editor {
                 screenHost.Shutdown();
                 return std::nullopt;
             }
-            auto participant =
-                std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot, rendererRestart, clock);
+            auto participant = std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot,
+                                                                          rendererRestart, clock, *packages);
             participant->BindHost(*runtime);
             EditorRuntimeParticipant *pacingParticipant = participant.get();
             Result<void> startup = runtime->AddParticipant(std::move(participant));

@@ -9,6 +9,7 @@
 #include "Horo/Foundation/Utf8.h"
 #include "Horo/Runtime/Save/SaveTelemetry.h"
 #include "HostModuleComposition.h"
+#include "PackageCliHost.h"
 
 #include <algorithm>
 #include <new>
@@ -200,15 +201,26 @@ namespace Horo::Application::Internal {
             DenyToolchainPolicy toolchain;
             NativeExternalProcessRunner processes;
             HostSession session;
+            PackageCliHost packages;
             if (const auto activated = ActivateSession(session, std::move(identity), toolchain, processes); activated.HasError())
                 return CompleteError(presenter, activated.ErrorValue());
             auto configuration = Configuration();
             if (configuration.HasError())
                 return CompleteError(presenter, configuration.ErrorValue());
-            auto admitted = CliDispatcher::Create(std::move(registry), HostCommandAdapters(descriptors, session.observability, {}),
-                                                  {.activeHost = CliHostKind::HoroEngine,
-                                                   .maximumSideEffects = CliSideEffectPolicy::WritesFiles,
-                                                   .grantedCapabilities = {{"horo.mcp.serve"}, {"horo.observability.smoke"}}});
+            auto adapters = HostCommandAdapters(descriptors, session.observability, {}, &packages);
+            auto packageAdapters =
+                Cli::MakePackageCommandAdapters([&packages](const CliCommandRequest &command, CliExecutionContext &context) {
+                return packages.Bind(command, context);
+            }, [&packages] {
+                return packages.Boundary();
+            });
+            adapters.insert(adapters.end(), std::make_move_iterator(packageAdapters.begin()),
+                            std::make_move_iterator(packageAdapters.end()));
+            auto admitted =
+                CliDispatcher::Create(std::move(registry), std::move(adapters),
+                                      {.activeHost = CliHostKind::HoroEngine,
+                                       .maximumSideEffects = CliSideEffectPolicy::WritesFiles,
+                                       .grantedCapabilities = {{"horo.mcp.serve"}, {"horo.observability.smoke"}, {"horo.package.manage"}}});
             if (admitted.HasError())
                 return CompleteError(presenter, admitted.ErrorValue());
             CliDispatcher dispatcher = std::move(admitted).Value();
@@ -230,10 +242,11 @@ namespace Horo::Application::Internal {
             return 1;
         const auto normalized = NormalizeArguments(arguments);
         NativePathNormalizer paths;
-        auto registry =
-            CliCommandRegistry::Create(descriptors, {.activeHost = CliHostKind::HoroEngine,
-                                                     .supportedContractVersion = {1, 0, 0},
-                                                     .grantedCapabilities = {{"horo.mcp.serve"}, {"horo.observability.smoke"}}});
+        auto registry = CliCommandRegistry::Create(descriptors, {.activeHost = CliHostKind::HoroEngine,
+                                                                 .supportedContractVersion = {1, 0, 0},
+                                                                 .grantedCapabilities = {{"horo.mcp.serve"},
+                                                                                         {"horo.observability.smoke"},
+                                                                                         {"horo.package.manage"}}});
         const CliCommandDescriptor *selected = nullptr;
         auto parsed = [&]() {
             if (admissionFailure)
