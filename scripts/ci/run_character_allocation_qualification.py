@@ -9,6 +9,7 @@ import sys
 from defusedxml import ElementTree as element_tree
 from defusedxml.common import DefusedXmlException
 
+WORKSPACE_EVIDENCE_ERROR = "Qualification evidence must remain inside the current workspace"
 PREFIX = "HoroPhysicsTests::"
 CASES = frozenset({PREFIX + "Character preparation allocation failures roll back every retained storage stage"})
 
@@ -33,7 +34,7 @@ def verify_junit(path):
     """Count actual cases rather than assertions and reject every skipped or failed execution."""
     path = Path(path).resolve()
     if not path.is_relative_to(Path.cwd().resolve()):
-        raise ValueError("Qualification evidence must remain inside the current workspace")
+        raise ValueError(WORKSPACE_EVIDENCE_ERROR)
     root = element_tree.parse(path).getroot()
     cases = list(root.iter("testcase"))
     names = [case.get("name") for case in cases]
@@ -53,7 +54,7 @@ def write_regex(path):
     """Write only resolved workspace evidence, including for direct non-CLI callers."""
     path = Path(path).resolve()
     if not path.is_relative_to(Path.cwd().resolve()):
-        raise ValueError("Qualification evidence must remain inside the current workspace")
+        raise ValueError(WORKSPACE_EVIDENCE_ERROR)
     # CTest uses POSIX extended syntax: noncapturing Python groups are not supported.
     pattern = "^(" + "|".join(re.escape(name) for name in sorted(CASES)) + ")$"
     path.write_text(pattern, encoding="utf-8")
@@ -66,7 +67,7 @@ def workspace_path(value):
     try:
         candidate.relative_to(root)
     except ValueError as error:
-        raise argparse.ArgumentTypeError("Qualification evidence must remain inside the current workspace") from error
+        raise argparse.ArgumentTypeError(WORKSPACE_EVIDENCE_ERROR) from error
     return candidate
 
 
