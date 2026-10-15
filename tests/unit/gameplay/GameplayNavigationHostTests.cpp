@@ -339,10 +339,11 @@ TEST_CASE("Failed native startup retains an owned shadow image only until the re
                                                  Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)};
         auto failed = host.LoadShadowCopy(HORO_TEST_GAME_MODULE_PATH, root, expected);
         REQUIRE(failed.HasValue());
-        REQUIRE(failed.Value().diagnostic);
-        CHECK(failed.Value().diagnostic->code.Value() == NavigationCapabilityErrors::PermissionDenied.code.Value());
-        REQUIRE(failed.Value().owner->TryRetire().HasValue());
-        failed.Value().owner.reset();
+        auto candidate = std::move(failed).Value();
+        REQUIRE(candidate.diagnostic);
+        CHECK(candidate.diagnostic->code.Value() == NavigationCapabilityErrors::PermissionDenied.code.Value());
+        REQUIRE(candidate.owner->TryRetire().HasValue());
+        candidate.owner.reset();
         REQUIRE_FALSE(fixture.context->IsUsable());
         REQUIRE(std::distance(std::filesystem::directory_iterator{root}, std::filesystem::directory_iterator{}) == 1);
         REQUIRE(fixture.context->DrainRetired().Value());

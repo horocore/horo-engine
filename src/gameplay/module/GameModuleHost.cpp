@@ -107,6 +107,22 @@ namespace Horo::Gameplay {
         }
     }  // namespace
 
+    /** @copydoc LoadedGameModule::Impl::BindContexts */
+    Result<void> LoadedGameModule::Impl::BindContexts(const std::shared_ptr<GameplayPhysicsContext> &hostPhysics,
+                                                      const std::shared_ptr<GameplayNavigationContext> &hostNavigation) {
+        auto resolvedPhysics = ResolvePhysicsContext(hostPhysics, moduleId);
+        if (resolvedPhysics.HasError())
+            return Result<void>::Failure(resolvedPhysics.ErrorValue());
+        auto resolvedNavigation = ResolveNavigationContext(hostNavigation, moduleId);
+        if (resolvedNavigation.HasError())
+            return Result<void>::Failure(resolvedNavigation.ErrorValue());
+        if (auto pinned = resolvedNavigation.Value()->RetainCodeImage(codeImage); pinned.HasError())
+            return Result<void>::Failure(pinned.ErrorValue());
+        navigation = std::move(resolvedNavigation).Value();
+        physics = std::move(resolvedPhysics).Value();
+        return Result<void>::Success();
+    }
+
     /** @copydoc GameModuleHost::ValidateArtifact */
     Result<void> GameModuleHost::ValidateArtifact(const std::filesystem::path &libraryPath,
                                                   const GameModuleLoadExpectation &expectation) const {
@@ -150,16 +166,8 @@ namespace Horo::Gameplay {
         impl->buildFingerprint = validated.descriptor->buildFingerprint;
         impl->descriptorRevision = validated.bundle->descriptorRevision;
         impl->destroy = validated.bundle->lifecycle.destroy;
-        auto physics = ResolvePhysicsContext(physics_, impl->moduleId);
-        if (physics.HasError())
-            return Result<GameModuleLoadCandidate>::Failure(physics.ErrorValue());
-        auto navigation = ResolveNavigationContext(navigation_, impl->moduleId);
-        if (navigation.HasError())
-            return Result<GameModuleLoadCandidate>::Failure(navigation.ErrorValue());
-        if (auto pinned = navigation.Value()->RetainCodeImage(impl->codeImage); pinned.HasError())
-            return Result<GameModuleLoadCandidate>::Failure(pinned.ErrorValue());
-        impl->navigation = std::move(navigation).Value();
-        impl->physics = std::move(physics).Value();
+        if (const auto bound = impl->BindContexts(physics_, navigation_); bound.HasError())
+            return Result<GameModuleLoadCandidate>::Failure(bound.ErrorValue());
 
         auto registry = BuildRegistry(*validated.bundle);
         if (registry.HasError())
