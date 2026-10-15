@@ -173,6 +173,18 @@ namespace Horo::AI {
         }
     }
 
+    /** @copydoc BlackboardInstance::ReadAtSafePoint */
+    Result<std::optional<BlackboardValue>> BlackboardInstance::ReadAtSafePoint(const BlackboardKeyId key) const {
+        if (!active_)
+            return Result<std::optional<BlackboardValue>>::Failure(Failure(AIErrors::BlackboardInstanceStale));
+        const std::size_t index = FindKey(*schema_, key);
+        if (index == schema_->Keys().size())
+            return Result<std::optional<BlackboardValue>>::Failure(Failure(AIErrors::BlackboardUnknownValueRejected));
+        if (authorizations_[index] && !authorizations_[index]->IsCurrent())
+            return Result<std::optional<BlackboardValue>>::Failure(Failure(AIErrors::BlackboardInstanceStale));
+        return Result<std::optional<BlackboardValue>>::Success(values_[index]);
+    }
+
     /** @copydoc BlackboardInstance::BeginWriteBatch */
     Result<BlackboardWriteBatch> BlackboardInstance::BeginWriteBatch() const {
         if (publishing_)

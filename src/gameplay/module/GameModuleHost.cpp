@@ -106,6 +106,15 @@ namespace Horo::Gameplay {
         if (physics.HasError())
             return Result<std::unique_ptr<LoadedGameModule>>::Failure(physics.ErrorValue());
         impl->physics = std::move(physics).Value();
+        if (ai_ && ai_->Binding().moduleId != impl->moduleId)
+            return Result<std::unique_ptr<LoadedGameModule>>::Failure(MakeError(AI::AIErrors::CapabilityUnavailable));
+        // Derive before registration so rollback cannot revoke the reusable host anchor.
+        if (ai_) {
+            auto child = ai_->Derive({});
+            if (child.HasError())
+                return Result<std::unique_ptr<LoadedGameModule>>::Failure(child.ErrorValue());
+            impl->ai = std::move(child).Value();
+        }
 
         auto registry = BuildRegistry(*validated.bundle);
         if (registry.HasError())

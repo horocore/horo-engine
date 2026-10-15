@@ -42,6 +42,9 @@ def cmake_conditions_at(source: str, offset: int) -> list[str]:
 WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroLightCullingTests", "HoroLightFramePoolTests",
     "HoroAITaskSchedulerTests", "HoroAITaskSchedulerPublicConsumer",
+    "HoroGameplayAiTests", "HoroGameplayAiContractConsumer",
+    "HoroGameplayAiIntegrationPublicHeaderConsumer", "HoroGameplayAiScriptBridgePublicHeaderConsumer",
+    "HoroGameplayApiPublicHeaderConsumer", "HoroGameplayModuleHostPublicHeaderConsumer",
     "HoroAITests", "HoroAISightTests", "HoroAIPublicHeaderConsumer",
     "HoroAISceneIntegrationPublicHeaderConsumer", "HoroAISightIntegrationPublicHeaderConsumer",
     "HoroGameplayPerceptionIntegrationPublicHeaderConsumer",

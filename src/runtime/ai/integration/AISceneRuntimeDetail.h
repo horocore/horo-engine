@@ -3,6 +3,7 @@
 #include "Horo/AI/AISceneActivation.h"
 
 #include <functional>
+#include <thread>
 #include <unordered_map>
 
 namespace Horo::AI::Detail {
@@ -24,6 +25,7 @@ namespace Horo::AI::Detail {
 
     /** @brief One published AI population and its owner-thread mutation fence. */
     struct AiSceneRuntimeState final {
+        const std::thread::id owner{std::this_thread::get_id()};
         AiSceneActivationBinding binding;
         std::vector<AgentRuntimeState> agents;
         std::unordered_multimap<Runtime::EntityRef, std::size_t, EntityRefHash> agentsByOwner;
@@ -36,6 +38,10 @@ namespace Horo::AI::Detail {
     /** @brief Resolves an exact live agent generation. @param state Owning publication. @param handle Requested handle. @return Slot or
      * null. */
     [[nodiscard]] AgentRuntimeState *FindAgent(AiSceneRuntimeState &state, AgentHandle handle) noexcept;
+    /** @brief Admits one task through the scene-owned lifecycle and mutation fence. */
+    [[nodiscard]] Result<TaskHandle> StartOwnedTask(AiSceneRuntimeState &state, AgentHandle agent, TaskId task,
+                                                    CancellationToken capabilityCancellation = {},
+                                                    const Telemetry::OperationContext &diagnostics = {});
     /** @brief Cancels tasks and invalidates blackboard leases before releasing transient resources. @param agent Owned slot. */
     void CancelOwnedWork(AgentRuntimeState &agent) noexcept;
     /** @brief Tears down every owned agent. @param state Detached or active population. */

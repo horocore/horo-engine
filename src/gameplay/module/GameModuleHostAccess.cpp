@@ -128,6 +128,10 @@ namespace Horo::Gameplay {
     /** @copydoc LoadedGameModule::PrepareReload */
     Result<GameModuleReloadSnapshot> LoadedGameModule::PrepareReload() {  // NOSONAR(cpp:S5817) Mutates generation lifecycle.
         impl_->runtimeLeaseAdmission.store(false, std::memory_order_release);
+        if (impl_->ai) {
+            impl_->ai->Revoke();
+            impl_->ai->RetireOwnedTasksAtSafePoint();
+        }
         if (impl_->physics)
             impl_->physics->Revoke();
         if (impl_.use_count() != 1)
@@ -142,10 +146,21 @@ namespace Horo::Gameplay {
         return impl_->RestoreReload(snapshot);
     }
 
+    /** @copydoc LoadedGameModule::AiContext */
+    std::shared_ptr<const GameplayAiContext> LoadedGameModule::AiContext() const noexcept {
+        return impl_->ai;
+    }
+
     /** @copydoc GameModuleHost::GameModuleHost */
-    GameModuleHost::GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities) : hostCapabilities_(std::move(hostCapabilities)) {}
+    GameModuleHost::GameModuleHost(GameModuleHostOptions options)
+        : hostCapabilities_(std::move(options.hostCapabilities)), physics_(std::move(options.runtimeServices.physics)),
+          ai_(std::move(options.runtimeServices.ai)) {}
+
+    /** @copydoc GameModuleHost::GameModuleHost */
+    GameModuleHost::GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities)
+        : GameModuleHost(GameModuleHostOptions{std::move(hostCapabilities), {}}) {}
 
     /** @copydoc GameModuleHost::GameModuleHost */
     GameModuleHost::GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics)
-        : hostCapabilities_(std::move(hostCapabilities)), physics_(std::move(physics)) {}
+        : GameModuleHost(GameModuleHostOptions{std::move(hostCapabilities), {std::move(physics), {}}}) {}
 }  // namespace Horo::Gameplay

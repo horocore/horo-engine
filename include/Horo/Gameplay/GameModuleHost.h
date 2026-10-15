@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace Horo::Gameplay {
@@ -22,6 +23,23 @@ namespace Horo::Gameplay {
     class ReplicationRegistrationRegistry;
     class SystemRegistry;
     class GameEventRegistry;
+
+    /** @brief Explicit runtime services selected by application composition. */
+    struct GameModuleRuntimeServices final {
+        std::shared_ptr<GameplayPhysicsContext> physics;
+        std::shared_ptr<GameplayAiContext> ai;
+    };
+
+    /** @brief Canonical typed host configuration; two required arguments preserve legacy brace calls. */
+    struct GameModuleHostOptions final {
+        /** @brief Copies explicit capability and runtime grants. @param capabilities Inert host grants. @param services Explicit services.
+         */
+        GameModuleHostOptions(std::vector<GameplayCapabilityId> capabilities, GameModuleRuntimeServices services)
+            : hostCapabilities(std::move(capabilities)), runtimeServices(std::move(services)) {}
+
+        std::vector<GameplayCapabilityId> hostCapabilities;
+        GameModuleRuntimeServices runtimeServices;
+    };
 
     /** @brief Loaded module whose registry and callable objects are destroyed before its library unloads. */
     class LoadedGameModule final {
@@ -79,6 +97,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] CancellationToken Cancellation() const noexcept;
         /** @brief Returns this module generation's explicit Physics binding, if composed by the host. */
         [[nodiscard]] std::shared_ptr<const GameplayPhysicsContext> PhysicsContext() const noexcept;
+        /** @brief Returns the exact module AI lifetime, or absence in a host without AI. @return Immutable scoped holder. */
+        [[nodiscard]] std::shared_ptr<const GameplayAiContext> AiContext() const noexcept;
         /**
          * @brief Cancels and quiesces module-owned work, captures state, and stops callbacks before unload.
          * @return Bounded module snapshot only when the generation proves it is safe to unload.
@@ -101,6 +121,8 @@ namespace Horo::Gameplay {
     /** @brief Loader used by editor play sessions and packaged runtime composition. */
     class GameModuleHost final {
     public:
+        /** @brief Composes explicit typed runtime grants. @param options Owned host configuration. */
+        explicit GameModuleHost(GameModuleHostOptions options);
         /**
          * @brief Creates a loader with an explicit immutable host capability set.
          * @param hostCapabilities Capabilities composed by the owning headless or graphical host.
@@ -137,5 +159,6 @@ namespace Horo::Gameplay {
     private:
         std::vector<GameplayCapabilityId> hostCapabilities_;
         std::shared_ptr<GameplayPhysicsContext> physics_;
+        std::shared_ptr<GameplayAiContext> ai_;
     };
 }  // namespace Horo::Gameplay

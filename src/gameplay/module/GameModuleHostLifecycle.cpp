@@ -65,24 +65,8 @@ namespace Horo::Gameplay {
         Shutdown();
     }
 
-    Result<void> LoadedGameModule::Impl::RegisterAndStart(const std::span<const GameplayCapabilityId> hostCapabilities) {
-        registries.components = std::make_unique<ComponentRegistry>();
-        registries.assetTypes = std::make_unique<GameAssetTypeRegistry>(moduleId);
-        registries.services = std::make_unique<GameServiceRegistry>(moduleId);
-        registries.systems = std::make_unique<SystemRegistry>(moduleId);
-        registries.replication = std::make_unique<ReplicationRegistrationRegistry>(moduleId);
-        registries.events = std::make_unique<GameEventRegistry>();
-        registries.persistence = std::make_unique<PersistenceRegistrationRegistry>(moduleId);
-        GameRegistrationContext registration{moduleId,
-                                             *registries.components,
-                                             *registries.systems,
-                                             *registries.services,
-                                             *registries.assetTypes,
-                                             *registries.replication,
-                                             *registries.events,
-                                             *registries.persistence};
-        if (Result<void> registered = InvokeRegister(*gameplayModule, registration); registered.HasError())
-            return registered;
+    /** @copydoc LoadedGameModule::Impl::FreezeRegistries */
+    Result<void> LoadedGameModule::Impl::FreezeRegistries(const std::span<const GameplayCapabilityId> hostCapabilities) {
         if (Result<void> frozen = registries.components->Freeze(); frozen.HasError())
             return frozen;
         if (Result<void> frozen = registries.assetTypes->Freeze(); frozen.HasError())
@@ -103,8 +87,36 @@ namespace Horo::Gameplay {
                 registries.persistence->Freeze(registries.registry->Registrations(), registries.services->Registrations());
             frozen.HasError())
             return frozen;
+        const auto aiDeclarations = registries.ai.Freeze();
+        if (ai)
+            ai->declarations_ = aiDeclarations;
         registries.events->Freeze();
         Detail::GenerationLeaseBinding::Bind(*registries.events, weak_from_this(), runtimeLeaseAdmission);
+
+        return Result<void>::Success();
+    }
+
+    Result<void> LoadedGameModule::Impl::RegisterAndStart(const std::span<const GameplayCapabilityId> hostCapabilities) {
+        registries.components = std::make_unique<ComponentRegistry>();
+        registries.assetTypes = std::make_unique<GameAssetTypeRegistry>(moduleId);
+        registries.services = std::make_unique<GameServiceRegistry>(moduleId);
+        registries.systems = std::make_unique<SystemRegistry>(moduleId);
+        registries.replication = std::make_unique<ReplicationRegistrationRegistry>(moduleId);
+        registries.events = std::make_unique<GameEventRegistry>();
+        registries.persistence = std::make_unique<PersistenceRegistrationRegistry>(moduleId);
+        GameRegistrationContext registration{moduleId,
+                                             *registries.components,
+                                             *registries.systems,
+                                             *registries.services,
+                                             *registries.assetTypes,
+                                             *registries.replication,
+                                             *registries.events,
+                                             *registries.persistence,
+                                             registries.ai};
+        if (Result<void> registered = InvokeRegister(*gameplayModule, registration); registered.HasError())
+            return registered;
+        if (auto frozen = FreezeRegistries(hostCapabilities); frozen.HasError())
+            return frozen;
 
         auto activated = GameplayServiceRuntime::Create(*registries.services, GameplayServiceScope::Project, {{}, hostCapabilities});
         if (activated.HasError())
@@ -112,6 +124,7 @@ namespace Horo::Gameplay {
         projectServices = std::move(activated).Value();
         runtimeContext = {projectServices->Cancellation(), projectServices->ActiveServices(), projectServices->Capabilities()};
         runtimeContext.physics = physics;
+        runtimeContext.ai = ai;
         startAttempted = true;
         return InvokeStart(*gameplayModule, runtimeContext);
     }
@@ -120,6 +133,10 @@ namespace Horo::Gameplay {
         if (reloadPrepared || gameplayModule == nullptr || projectServices == nullptr)
             return Result<GameModuleReloadSnapshot>::Failure(MakeError(GameplayErrors::GameplayReloadRestartRequired));
         projectServices->RequestCancellation();
+        if (ai) {
+            ai->Revoke();
+            ai->RetireOwnedTasksAtSafePoint();
+        }
         if (physics)
             physics->Revoke();
         auto snapshot = InvokePrepareReload(*gameplayModule, runtimeContext);
@@ -132,6 +149,7 @@ namespace Horo::Gameplay {
         projectServices.reset();
         runtimeContext.activeServices = {};
         runtimeContext.capabilities = {};
+        runtimeContext.ai.reset();
         startAttempted = false;
         reloadPrepared = true;
         return snapshot;
@@ -148,6 +166,10 @@ namespace Horo::Gameplay {
         if (shutdown)
             return;
         shutdown = true;
+        if (ai) {
+            ai->Revoke();
+            ai->RetireOwnedTasksAtSafePoint();
+        }
         if (physics)
             physics->Revoke();
         if (projectServices)
@@ -161,6 +183,7 @@ namespace Horo::Gameplay {
         registries.persistence.reset();
         if (gameplayModule != nullptr) {
             destroy(gameplayModule);
+            runtimeContext.ai.reset();
             gameplayModule = nullptr;
         }
         registries.registry.reset();

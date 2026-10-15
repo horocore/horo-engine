@@ -21,6 +21,10 @@
 #define HORO_GAME_EXPORT __attribute__((visibility("default")))
 #endif
 
+namespace Horo::AI {
+    class AiCapabilityDescriptorRegistry;
+}
+
 namespace Horo::Gameplay {
     class ComponentRegistry;
     class GameAssetTypeRegistry;
@@ -30,8 +34,9 @@ namespace Horo::Gameplay {
     class SystemRegistry;
     class GameEventRegistry;
     class GameplayPhysicsContext;
+    class GameplayAiContext;
 
-    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 9;
+    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 11;
     inline constexpr std::uint32_t GameplayDescriptorBundleSchemaVersion = 1;
     inline constexpr std::uint32_t GameModuleReloadSnapshotSchemaVersion = 1;
     inline constexpr std::size_t MaximumGeneratedBehaviorDescriptors = 4096;
@@ -61,6 +66,7 @@ namespace Horo::Gameplay {
         std::span<const GameplayServiceId> activeServices;     /**< Active project-scoped services in dependency order. */
         std::span<const GameplayCapabilityId> capabilities;    /**< Explicit host and project-service capability grants. */
         std::shared_ptr<const GameplayPhysicsContext> physics; /**< Optional exact module/play-world binding; no discovery. */
+        std::shared_ptr<const GameplayAiContext> ai;           /**< Optional exact-generation AI grant; missing is recoverable. */
     };
 
     /** @brief Module-global state captured only after owned work and callbacks are quiescent. */
@@ -79,6 +85,7 @@ namespace Horo::Gameplay {
         ReplicationRegistrationRegistry &replication;
         GameEventRegistry &events;
         PersistenceRegistrationRegistry &persistence;
+        AI::AiCapabilityDescriptorRegistry &ai; /**< Inert task declarations, frozen before Start. */
     };
 
     /** @brief Project-owned module lifecycle valid only for one exact compatible SDK generation. */

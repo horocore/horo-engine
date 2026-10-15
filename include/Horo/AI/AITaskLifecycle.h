@@ -8,6 +8,7 @@
 #include "Horo/AI/AIIdentity.h"
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/Result.h"
+#include "Horo/Foundation/Telemetry/Operation.h"
 
 #include <cstdint>
 #include <optional>
@@ -82,14 +83,21 @@ namespace Horo::AI {
 
     /**
      * @brief Immutable task inputs captured at admission without exposing mutable Scene state.
-     * @details The task and agent handles must belong to one SceneRuntime incarnation. The cancellation token
-     * is the only ambient lifecycle signal retained by the task contract.
+     * @details The task and agent handles must belong to one SceneRuntime incarnation. The two explicit cancellation tokens
+     * retain scene/task and module-grant lifetime independently; diagnostics retain values only.
      */
     struct AiTaskOperationContext final {
-        TaskId taskDefinition;          /**< Persistent native, script, or graph task definition. */
-        TaskHandle task;                /**< Exact process-local execution generation. */
-        AgentHandle agent;              /**< Exact owning agent generation. */
-        CancellationToken cancellation; /**< Cooperative cancellation tied to owner lifetime. */
+        TaskId taskDefinition;                    /**< Persistent native, script, or graph task definition. */
+        TaskHandle task;                          /**< Exact process-local execution generation. */
+        AgentHandle agent;                        /**< Exact owning agent generation. */
+        CancellationToken cancellation;           /**< Cooperative cancellation tied to owner lifetime. */
+        CancellationToken capabilityCancellation; /**< Independent module/script grant lifetime; empty for internal tasks. */
+        Telemetry::OperationContext diagnostics;  /**< Copied explicit operation lineage, without runtime or VM references. */
+
+        /** @brief Observe both task/scene ownership and caller capability revocation. @return True if either owner cancelled. */
+        [[nodiscard]] bool IsCancellationRequested() const noexcept {
+            return cancellation.IsCancellationRequested() || capabilityCancellation.IsCancellationRequested();
+        }
     };
 
     /**
