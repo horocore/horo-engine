@@ -192,6 +192,36 @@ allocation. Count, reference, work, and lifecycle-byte bounds use checked arithm
 and failure publishes no plan or target mutation. Replacement creates a detached new
 root while retained readers continue observing the old immutable plan.
 
+### Scene Output Translation
+
+`Horo/PCGScene/SceneOutputAdapter.h` implements PCG-4.3 in the dedicated
+`HoroPCGSceneAdapter` target. It depends on PCG and the existing headless Scene
+source codec; the core `HoroPCG` target remains Foundation-only. Hosts provide
+explicit desired typed Scene values, stable logical-to-authored mappings, a
+strictly ordered complete occupied-ID snapshot, current generation-plan owner
+receipts and exact captured `core.mesh` asset dependency receipts. An asset receipt
+is supplied by the asset owner after type/content validation; the adapter never
+queries providers or loads a native mesh.
+
+`FingerprintPCGSceneOutput` uses the unchanged canonical Scene codec to bind the
+complete authored object payload to the generation plan. Translation revalidates
+the plan's provenance, ownership, capabilities and lifecycle, verifies these
+fingerprints and asset dependencies, rejects authored-ID collisions and invalid
+staged parent relationships, and returns canonical inert create/update/remove
+commands. Each command retains typed transforms, components, mesh references,
+provenance and resource estimates. The batch retains the validated plan and a
+separate bounded storage charge for commands, copied nested payloads and canonical
+codec preparation. It has no Scene pointer, live entity handle, commit callback,
+service discovery or mutation method.
+
+Retained batches remain memory-valid after replacement, cancellation or shutdown;
+that does not make their receipts current. The host/document owner must revalidate
+all owner revisions, complete hierarchy/component relationships, resource
+reservations and current asset receipts before authorizing the later aggregate
+transaction. Translation creates no entity, changes no document revision/dirty
+state and acquires no native resource. PCG-4.4 owns document publication and
+undo/redo; it is not implicitly performed by this additive adapter contract.
+
 ## Spatial Input And Node Catalog
 
 [ADR-152](../../adr/152-pcg-spatial-input-snapshot-and-node-library-ownership.md)
