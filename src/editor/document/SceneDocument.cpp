@@ -256,7 +256,7 @@ namespace Horo::Editor {
                 keys.emplace_back(v.owner, v.scope, v.lineage, v.set, v.output);
             }
             std::ranges::sort(keys);
-            if (std::adjacent_find(keys.begin(), keys.end()) != keys.end())
+            if (std::ranges::adjacent_find(keys) != keys.end())
                 return Result<void>::Failure(
                     MakeDocumentError(SceneDocumentErrors::InvalidSavedState, "Generated logical output ownership is duplicated."));
             return Result<void>::Success();

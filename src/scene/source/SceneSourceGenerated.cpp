@@ -47,12 +47,12 @@ namespace Horo::SceneSource::Detail {
             return Return::Failure(PersistenceError(SceneInvalid, "Scene generated ownership is malformed."));
         };
         const auto &v = object["generated"];
-        constexpr std::array ownerFields{"owner", "scope", "lineage", "set", "output", "revision", "ownershipGeneration"};
-        if (!StableFields(v, ownerFields) || !v.contains("source") || !v.contains("content") || !v["content"].is_string())
+        if (constexpr std::array ownerFields{"owner", "scope", "lineage", "set", "output", "revision", "ownershipGeneration"};
+            !StableFields(v, ownerFields) || !v.contains("source") || !v.contains("content") || !v["content"].is_string())
             return invalid();
         const auto &s = v["source"];
-        constexpr std::array sourceFields{"identity", "revision", "execution", "node", "pin", "sample"};
-        if (!StableFields(s, sourceFields) || !s.contains("asset") || !s["asset"].is_string() || !s.contains("ordinal") ||
+        if (constexpr std::array sourceFields{"identity", "revision", "execution", "node", "pin", "sample"};
+            !StableFields(s, sourceFields) || !s.contains("asset") || !s["asset"].is_string() || !s.contains("ordinal") ||
             !s["ordinal"].is_number_unsigned() || s["ordinal"].get<std::uint64_t>() > std::numeric_limits<std::uint32_t>::max())
             return invalid();
         const auto asset = Assets::AssetId::Parse(s["asset"].get<std::string>());

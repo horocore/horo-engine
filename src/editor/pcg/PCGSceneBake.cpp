@@ -50,10 +50,10 @@ namespace Horo::PCG {
             const auto now = graph.Snapshot();
             if (now.HasError())
                 return Result<void>::Failure(now.ErrorValue());
-            const auto &v = now.Value();
-            if (v.asset != captured.asset || v.session != captured.session || v.revision != captured.revision ||
-                v.catalogRevision != captured.catalogRevision || v.state != captured.state || v.acceptedSource != captured.acceptedSource ||
-                !captured.source || captured.source->Data().generation != plan.Execution().generation)
+            if (const auto &v = now.Value(); v.asset != captured.asset || v.session != captured.session ||
+                                             v.revision != captured.revision || v.catalogRevision != captured.catalogRevision ||
+                                             v.state != captured.state || v.acceptedSource != captured.acceptedSource || !captured.source ||
+                                             captured.source->Data().generation != plan.Execution().generation)
                 return Result<void>::Failure(MakeError(PCGErrors::GenerationPlanStale));
             const auto dependency = CapturePCGSceneGraphInput(captured, graphSource);
             if (dependency.HasError())
@@ -105,8 +105,7 @@ namespace Horo::PCG {
                                                target.receipt,
                                                target.generated,
                                                {}};
-            const auto checked = CreatePCGGenerationPlan(std::move(candidate), admission);
-            if (checked.HasError())
+            if (const auto checked = CreatePCGGenerationPlan(std::move(candidate), admission); checked.HasError())
                 return Result<void>::Failure(checked.ErrorValue());
             if (!plan.RequiredCapabilities().Contains(PCGCapability::OfflineBake))
                 return Result<void>::Failure(MakeError(PCGErrors::UnsupportedCapability));

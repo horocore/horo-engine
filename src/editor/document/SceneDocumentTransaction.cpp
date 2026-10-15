@@ -16,7 +16,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Compare exact semantic content and its independent generation ownership. */
-        Result<void> Matches(const SceneObjectSnapshot &object, const Sha256Digest content,
+        Result<void> Matches(const SceneObjectSnapshot &object, const Sha256Digest &content,
                              const std::optional<SceneSource::SceneGeneratedOwnership> &ownership) {
             if (object.generated != ownership)
                 return Result<void>::Failure(Rejected(SceneTransactionFailure::Stale));
@@ -70,7 +70,41 @@ namespace Horo::Editor {
             }
         }
 
-        /** @brief Record all changed values before preparing a new root; never mutates the owner. */
+        /** @brief Capture one validated before/after pair; absence denotes an exact semantic no-op. */
+        Result<std::optional<SceneObjectReplacementDelta>> CaptureReplacement(const std::vector<SceneObjectSnapshot> &objects,
+                                                                              const SceneObjectReplacement &change) {
+            using Return = Result<std::optional<SceneObjectReplacementDelta>>;
+            const auto current = FindObject(objects, change.object);
+            if (!FitsReservation(change, current == objects.end() ? nullptr : std::to_address(current)))
+                return Return::Failure(Rejected(SceneTransactionFailure::Capacity));
+            SceneObjectReplacementDelta captured{change.object, {}, {}};
+            if (current == objects.end()) {
+                if (change.priorContent != Sha256Digest{} || change.expectedOwnership || !change.desired)
+                    return Return::Failure(Rejected(SceneTransactionFailure::Stale));
+            } else {
+                if (IsEffectivelyLocked(objects, change.object))
+                    return Return::Failure(LockedObjectError());
+                if (const auto matches = Matches(*current, change.priorContent, change.expectedOwnership); matches.HasError())
+                    return Return::Failure(matches.ErrorValue());
+                captured.before = IndexedSceneObject{*current, static_cast<std::size_t>(current - objects.begin())};
+            }
+            if (change.desired) {
+                if (change.desired->id != change.object)
+                    return Return::Failure(Rejected(SceneTransactionFailure::Invalid));
+                // Existing objects keep their index; ResolveReplacementIndices assigns final positions after removals.
+                captured.after = IndexedSceneObject{*change.desired, captured.before ? captured.before->index : objects.size()};
+            }
+            if (captured.before && captured.after && captured.before->object.generated == captured.after->object.generated) {
+                const auto desired = FingerprintSceneObjectContent(captured.after->object, kMaximumHistoryBytes);
+                if (desired.HasError())
+                    return Return::Failure(desired.ErrorValue());
+                if (desired.Value() == change.priorContent)
+                    return Return::Success(std::nullopt);
+            }
+            return Return::Success(std::move(captured));
+        }
+
+        /** @brief Validate all submitted identities before no-op filtering and capture the complete detached delta. */
         Result<SceneObjectsReplacedDelta> CaptureReplacements(const std::vector<SceneObjectSnapshot> &objects,
                                                               const std::span<const SceneObjectReplacement> changes) {
             SceneObjectsReplacedDelta delta;
@@ -81,35 +115,11 @@ namespace Horo::Editor {
                 if (!change.object.IsValid() || std::ranges::find(submitted, change.object) != submitted.end())
                     return Result<SceneObjectsReplacedDelta>::Failure(Rejected(SceneTransactionFailure::Invalid));
                 submitted.push_back(change.object);
-                const auto current = FindObject(objects, change.object);
-                if (!FitsReservation(change, current == objects.end() ? nullptr : &*current))
-                    return Result<SceneObjectsReplacedDelta>::Failure(Rejected(SceneTransactionFailure::Capacity));
-                SceneObjectReplacementDelta captured{change.object, {}, {}};
-                if (current == objects.end()) {
-                    if (change.priorContent != Sha256Digest{} || change.expectedOwnership || !change.desired)
-                        return Result<SceneObjectsReplacedDelta>::Failure(Rejected(SceneTransactionFailure::Stale));
-                } else {
-                    if (IsEffectivelyLocked(objects, change.object))
-                        return Result<SceneObjectsReplacedDelta>::Failure(LockedObjectError());
-                    if (const auto matches = Matches(*current, change.priorContent, change.expectedOwnership); matches.HasError())
-                        return Result<SceneObjectsReplacedDelta>::Failure(matches.ErrorValue());
-                    captured.before = IndexedSceneObject{*current, static_cast<std::size_t>(current - objects.begin())};
-                }
-                if (change.desired) {
-                    if (change.desired->id != change.object)
-                        return Result<SceneObjectsReplacedDelta>::Failure(Rejected(SceneTransactionFailure::Invalid));
-                    // Existing objects keep their index; new values append in submitted stable order.
-                    captured.after = IndexedSceneObject{*change.desired,
-                                                        captured.before ? captured.before->index : objects.size() + delta.objects.size()};
-                }
-                if (captured.before && captured.after && captured.before->object.generated == captured.after->object.generated) {
-                    const auto desired = FingerprintSceneObjectContent(captured.after->object, kMaximumHistoryBytes);
-                    if (desired.HasError())
-                        return Result<SceneObjectsReplacedDelta>::Failure(desired.ErrorValue());
-                    if (desired.Value() == change.priorContent)
-                        continue;
-                }
-                delta.objects.push_back(std::move(captured));
+                auto captured = CaptureReplacement(objects, change);
+                if (captured.HasError())
+                    return Result<SceneObjectsReplacedDelta>::Failure(captured.ErrorValue());
+                if (captured.Value())
+                    delta.objects.push_back(std::move(*captured.Value()));
             }
             ResolveReplacementIndices(delta, objects.size());
             return Result<SceneObjectsReplacedDelta>::Success(std::move(delta));
@@ -142,21 +152,22 @@ namespace Horo::Editor {
 
     /** @copydoc SceneTransactionError */
     const ErrorCodeDescriptor &SceneTransactionError(const SceneTransactionFailure reason) noexcept {
+        using enum ErrorSeverity;
         static const ErrorDomainId domain{"horo.editor.scene_transaction"};
         static const std::array<ErrorCodeDescriptor, 7> errors{
-            {{domain, ErrorCode{"scene_transaction.closed"}, ErrorSeverity::Error, "Scene transaction admission is closed.",
+            {{domain, ErrorCode{"scene_transaction.closed"}, Error, "Scene transaction admission is closed.",
               "Open a fresh document transaction port.", false, true},
-             {domain, ErrorCode{"scene_transaction.wrong_thread"}, ErrorSeverity::Error, "Scene transaction requires its owner thread.",
+             {domain, ErrorCode{"scene_transaction.wrong_thread"}, Error, "Scene transaction requires its owner thread.",
               "Return to the document owner phase.", false, false},
-             {domain, ErrorCode{"scene_transaction.stale"}, ErrorSeverity::Error, "Scene transaction evidence is stale or conflicts.",
+             {domain, ErrorCode{"scene_transaction.stale"}, Error, "Scene transaction evidence is stale or conflicts.",
               "Capture current document and ownership evidence.", false, true},
-             {domain, ErrorCode{"scene_transaction.unauthorized"}, ErrorSeverity::Error, "Scene editing permission was not granted.",
+             {domain, ErrorCode{"scene_transaction.unauthorized"}, Error, "Scene editing permission was not granted.",
               "Obtain explicit document edit authority.", false, true},
-             {domain, ErrorCode{"scene_transaction.cancelled"}, ErrorSeverity::Error, "Scene transaction was cancelled.",
+             {domain, ErrorCode{"scene_transaction.cancelled"}, Error, "Scene transaction was cancelled.",
               "Preserve the prior authored state.", false, false},
-             {domain, ErrorCode{"scene_transaction.invalid"}, ErrorSeverity::Error, "Scene transaction is malformed.",
+             {domain, ErrorCode{"scene_transaction.invalid"}, Error, "Scene transaction is malformed.",
               "Supply complete finite typed replacements.", false, true},
-             {domain, ErrorCode{"scene_transaction.capacity"}, ErrorSeverity::Error, "Scene transaction exceeds its bounded reservation.",
+             {domain, ErrorCode{"scene_transaction.capacity"}, Error, "Scene transaction exceeds its bounded reservation.",
               "Reduce the transaction or raise the host budget within safety bounds.", false, true}}};
         const auto index = static_cast<std::size_t>(reason);
         return errors[index < errors.size() ? index : static_cast<std::size_t>(SceneTransactionFailure::Invalid)];
@@ -218,26 +229,28 @@ namespace Horo::Editor {
 
     /** @copydoc SceneDocumentTransactions::CheckAccess */
     Result<void> SceneDocumentTransactions::CheckAccess() const {
+        using enum SceneTransactionFailure;
         if (!state_)
-            return Result<void>::Failure(Rejected(SceneTransactionFailure::Closed));
+            return Result<void>::Failure(Rejected(Closed));
         if (state_->ownerThread != std::this_thread::get_id())
-            return Result<void>::Failure(Rejected(SceneTransactionFailure::WrongThread));
+            return Result<void>::Failure(Rejected(WrongThread));
         if (state_->document->m_replacementEpoch != state_->replacementEpoch)
-            return Result<void>::Failure(Rejected(SceneTransactionFailure::Stale));
+            return Result<void>::Failure(Rejected(Stale));
         return Result<void>::Success();
     }
 
     /** @copydoc SceneDocumentTransactions::Admit */
     Result<void> SceneDocumentTransactions::Admit(const SceneTransactionContext &context) const {
+        using enum SceneTransactionFailure;
         if (auto access = CheckAccess(); access.HasError())
             return access;
         if (context.cancellation.IsCancellationRequested())
-            return Result<void>::Failure(Rejected(SceneTransactionFailure::Cancelled));
+            return Result<void>::Failure(Rejected(Cancelled));
         if (!context.canEdit)
-            return Result<void>::Failure(Rejected(SceneTransactionFailure::Unauthorized));
+            return Result<void>::Failure(Rejected(Unauthorized));
         if (context.session != state_->session || context.revision != state_->document->Revision().value ||
             context.state != state_->document->State().value)
-            return Result<void>::Failure(Rejected(SceneTransactionFailure::Stale));
+            return Result<void>::Failure(Rejected(Stale));
         return Result<void>::Success();
     }
 
@@ -251,8 +264,8 @@ namespace Horo::Editor {
             limits.maximumPreparedBytes > 64 * 1024 * 1024 ||
             !ChargeObjects(state_->document->Objects(), limits.maximumPreparedBytes, bytes))
             return Result<SceneTransactionSnapshot>::Failure(Rejected(SceneTransactionFailure::Capacity));
-        const auto &instances = state_->document->m_prefabInstances;
-        if (instances.size() > limits.maximumSnapshotObjects - state_->document->Objects().size() ||
+        if (const auto &instances = state_->document->m_prefabInstances;
+            instances.size() > limits.maximumSnapshotObjects - state_->document->Objects().size() ||
             instances.size() > (limits.maximumPreparedBytes - bytes) / sizeof(ScenePrefabInstance))
             return Result<SceneTransactionSnapshot>::Failure(Rejected(SceneTransactionFailure::Capacity));
         auto value = state_->document->Snapshot();
@@ -278,23 +291,24 @@ namespace Horo::Editor {
     /** @copydoc SceneDocumentTransactions::PreparationBudget */
     Result<std::size_t> SceneDocumentTransactions::PreparationBudget(const std::span<const SceneObjectReplacement> changes,
                                                                      const SceneTransactionLimits limits) const {
+        using enum SceneTransactionFailure;
         if (!limits.maximumChanges || limits.maximumChanges > 4096 || changes.size() > limits.maximumChanges ||
             !limits.maximumSnapshotObjects || limits.maximumSnapshotObjects > 16'384 || !limits.maximumPreparedBytes ||
             limits.maximumPreparedBytes > 64 * 1024 * 1024)
-            return Result<std::size_t>::Failure(Rejected(SceneTransactionFailure::Capacity));
+            return Result<std::size_t>::Failure(Rejected(Capacity));
         std::size_t rootBytes{};
         if (state_->document->Objects().size() > limits.maximumSnapshotObjects ||
             !ChargeObjects(state_->document->Objects(), limits.maximumPreparedBytes / 3, rootBytes) ||
             state_->document->m_prefabInstances.size() > (limits.maximumPreparedBytes / 3 - rootBytes) / sizeof(ScenePrefabInstance))
-            return Result<std::size_t>::Failure(Rejected(SceneTransactionFailure::Capacity));
+            return Result<std::size_t>::Failure(Rejected(Capacity));
         rootBytes += state_->document->m_prefabInstances.size() * sizeof(ScenePrefabInstance);
         if (state_->history->m_impl->memoryBytes > (limits.maximumPreparedBytes - rootBytes * 3) / 2)
-            return Result<std::size_t>::Failure(Rejected(SceneTransactionFailure::Capacity));
+            return Result<std::size_t>::Failure(Rejected(Capacity));
         std::size_t incomingBytes{};
         const auto available = limits.maximumPreparedBytes - rootBytes * 3 - state_->history->m_impl->memoryBytes * 2;
         for (const auto &change : changes)
             if (change.desired && !ChargeObjects(std::span{&*change.desired, 1}, available / 4, incomingBytes))
-                return Result<std::size_t>::Failure(Rejected(SceneTransactionFailure::Capacity));
+                return Result<std::size_t>::Failure(Rejected(Capacity));
         return Result<std::size_t>::Success(available);
     }
 
@@ -366,19 +380,20 @@ namespace Horo::Editor {
         return {owner.m_revision.value, owner.m_state.value, true};
     }
 
-    /** @copydoc SceneDocumentCommandExecutor::ReplayHistory */
-    Result<SceneCommandResult> SceneDocumentCommandExecutor::ReplayHistory(const bool redoDirection) {
-        const auto &source = redoDirection ? m_history.m_impl->redo : m_history.m_impl->undo;
+    /** @copydoc SceneDocumentHistoryReplay::Execute */
+    Result<SceneCommandResult> SceneDocumentHistoryReplay::Execute(SceneDocument &document, EditorHistory &historyOwner,
+                                                                   const bool redoDirection) {
+        const auto &source = redoDirection ? historyOwner.m_impl->redo : historyOwner.m_impl->undo;
         if (source.empty())
             return Result<SceneCommandResult>::Failure(
                 MakeError(redoDirection ? SceneDocumentErrors::NothingToRedo : SceneDocumentErrors::NothingToUndo));
         const auto &entry = source.back();
-        if (auto valid = ValidateReplay(m_document.m_objects, entry.delta, redoDirection); valid.HasError())
+        if (auto valid = ValidateReplay(document.m_objects, entry.delta, redoDirection); valid.HasError())
             return Result<SceneCommandResult>::Failure(valid.ErrorValue());
-        if (m_document.m_revision.value == std::numeric_limits<std::uint64_t>::max())
+        if (document.m_revision.value == std::numeric_limits<std::uint64_t>::max())
             return Result<SceneCommandResult>::Failure(Rejected(SceneTransactionFailure::Capacity));
-        auto objects = m_document.m_objects;
-        auto instances = m_document.m_prefabInstances;
+        auto objects = document.m_objects;
+        auto instances = document.m_prefabInstances;
         if (redoDirection)
             ApplyDelta(objects, instances, entry.delta);
         else
@@ -387,20 +402,20 @@ namespace Horo::Editor {
         if (auto valid = validated.LoadSaved(objects, instances); valid.HasError())
             return Result<SceneCommandResult>::Failure(valid.ErrorValue());
         const auto state = redoDirection ? entry.afterState : entry.beforeState;
-        auto result = HistoryCommandResult(m_document, entry, redoDirection ? DocumentChangeKind::Redone : DocumentChangeKind::Undone);
-        result.revision.value = m_document.m_revision.value + 1;
+        auto result = HistoryCommandResult(document, entry, redoDirection ? DocumentChangeKind::Redone : DocumentChangeKind::Undone);
+        result.revision.value = document.m_revision.value + 1;
         result.state = state;
-        EditorHistory::Impl history = *m_history.m_impl;
+        EditorHistory::Impl history = *historyOwner.m_impl;
         auto &from = redoDirection ? history.redo : history.undo;
         auto &to = redoDirection ? history.undo : history.redo;
         to.push_back(std::move(from.back()));
         from.pop_back();
-        m_document.m_objects.swap(objects);
-        m_document.m_prefabInstances.swap(instances);
-        m_history.m_impl->undo.swap(history.undo);
-        m_history.m_impl->redo.swap(history.redo);
-        ++m_document.m_revision.value;
-        m_document.m_state = state;
+        document.m_objects.swap(objects);
+        document.m_prefabInstances.swap(instances);
+        historyOwner.m_impl->undo.swap(history.undo);
+        historyOwner.m_impl->redo.swap(history.redo);
+        ++document.m_revision.value;
+        document.m_state = state;
         return Result<SceneCommandResult>::Success(std::move(result));
     }
 

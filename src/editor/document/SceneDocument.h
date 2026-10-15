@@ -427,6 +427,7 @@ namespace Horo::Editor {
     private:
         friend class SceneDocumentCommandExecutor;
         friend class SceneDocumentTransactions;
+        friend class SceneDocumentHistoryReplay;
         struct Impl;
         std::unique_ptr<Impl> m_impl;
     };
@@ -500,6 +501,7 @@ namespace Horo::Editor {
     private:
         friend class SceneDocumentCommandExecutor;
         friend class SceneDocumentTransactions;
+        friend class SceneDocumentHistoryReplay;
 
         std::vector<SceneObjectSnapshot> m_objects;
         std::vector<ScenePrefabInstance> m_prefabInstances;
@@ -610,7 +612,6 @@ namespace Horo::Editor {
         [[nodiscard]] Result<SceneCommandResult> Redo();
 
     private:
-        [[nodiscard]] Result<SceneCommandResult> ReplayHistory(bool redo);
         struct PrefabCommitContext;
         struct ObjectCommitContext;
         [[nodiscard]] Result<SceneCommandResult> CommitObject(ObjectCommitContext context);
