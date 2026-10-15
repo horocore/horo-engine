@@ -513,3 +513,22 @@ their contracts. Clean rollback owners are removed during finalization, while
 failed teardown owners count against the manager retention limit and require
 restart. The package bridge includes those owners when deciding whether private
 verified content may be deleted. A failed load never constitutes drain evidence.
+
+### Application Composition And Command Authority
+
+`PackageApplication`, `PackageProjectHost` and `PackageProjectSession` retain their
+validating `Create` factories. Their allocation constructors accept private,
+non-aggregate construction keys so standard RAII allocation can adopt validated
+implementation state without admitting arbitrary client construction. Existing
+`Create` callers do not migrate. The non-installed project-session composition
+passes the existing typed borrowed host-service bundle instead of separate
+scheduler, filesystem, clock and trust arguments; all services remain alive until
+host shutdown completes.
+
+The editor modal session exposes `Submit` and `Activate` as mutable command
+facets. A const modal view may inspect state but cannot initiate package mutations.
+Their shared application owner does not make these operations logically const:
+restore, install and activation change the project authorities behind that lease.
+Local const-method suggestions at those two definitions are intentional authority
+exceptions; private adapter dispatch helpers may be const without widening a
+public command facet.

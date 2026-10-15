@@ -347,6 +347,8 @@ dependency direction in [System Design](./foundation/system-design.md).
 - [Terrain/Foliage Scale Budgets, Observability and Feature Boundary](../adr/143-terrain-foliage-scale-budgets-observability-and-feature-boundary.md):
   versioned core/high-end active scale, memory, streaming, cook, editor/headless gates,
   required measurements and core-1.0 versus post-1.0 recipe qualification.
+- [Scene CoreEcs Cell Codec](./runtime/scene-cell-core-ecs-codec.md): bounded versioned provider bytes using the existing Scene semantic field owner.
+- [Cooked World Dependency Sibling](./runtime/world-dependency-bundle-format.md): separately versioned, exact-index-bound dependency projection and complete hard-cell closure.
 - [World Streaming Architecture](./runtime/world-streaming-architecture.md):
   streaming cells, volumes, priority, budgets, server authority, and editor
   world-composition tools.

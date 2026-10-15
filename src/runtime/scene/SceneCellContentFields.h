@@ -2,138 +2,203 @@
 
 #include "Horo/Runtime/Scene/IncrementalSceneCellCook.h"
 
+#include <concepts>
 #include <tuple>
+#include <type_traits>
 
 namespace Horo::Runtime::CellCookDetail {
-    // Field order is the version-1 semantic key contract. Tuples borrow the source;
+    // Field order is the version-1 semantic key and Scene provider wire contract.
+    // Const and mutable tuples share this single field mapping. Tuples borrow the source;
     // no padding, pointers, or allocations enter the stream. Empty markers are
     // represented by their enclosing variant tag and contribute no payload bytes.
     inline auto ContentFields(std::monostate) {
         return std::tuple{};
     }
 
-    inline auto ContentFields(const Sha256Digest &value) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, Sha256Digest>
+    inline auto ContentFields(T &value) {
         return std::tie(value.bytes);
     }
 
-    inline auto ContentFields(const Math::Vec2 &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, Math::Vec2>
+    inline auto ContentFields(T &v) {
         return std::tie(v.x, v.y);
     }
 
-    inline auto ContentFields(const Math::Vec3 &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, Math::Vec3>
+    inline auto ContentFields(T &v) {
         return std::tie(v.x, v.y, v.z);
     }
 
-    inline auto ContentFields(const Math::Quaternion &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, Math::Quaternion>
+    inline auto ContentFields(T &v) {
         return std::tie(v.x, v.y, v.z, v.w);
     }
 
-    inline auto ContentFields(const Math::Transform &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, Math::Transform>
+    inline auto ContentFields(T &v) {
         return std::tie(v.translation, v.rotation, v.scale);
     }
 
-    inline auto ContentFields(const WorldStreaming::StreamingCellId &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, WorldStreaming::StreamingCellId>
+    inline auto ContentFields(T &v) {
         return std::tie(v.x, v.y, v.z, v.lod, v.layer);
     }
 
-    inline auto ContentFields(const SceneCellPayloadIdentity &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, SceneCellPayloadIdentity>
+    inline auto ContentFields(T &v) {
         return std::tie(v.partition, v.cell, v.scene, v.revision);
     }
 
-    inline auto ContentFields(const CameraComponent &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, CameraComponent>
+    inline auto ContentFields(T &v) {
         return std::tie(v.projection, v.verticalFieldOfViewRadians, v.orthographicHeight, v.nearPlane, v.farPlane, v.enabled);
     }
 
-    inline auto ContentFields(const LightComponent &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, LightComponent>
+    inline auto ContentFields(T &v) {
         return std::tie(v.kind, v.color, v.intensity, v.range, v.innerConeRadians, v.outerConeRadians, v.enabled);
     }
 
-    inline auto ContentFields(const Audio::AudioSoundDefinitionSchemaVersion &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, Audio::AudioSoundDefinitionSchemaVersion>
+    inline auto ContentFields(T &v) {
         return std::tie(v.major, v.minor);
     }
 
-    inline auto ContentFields(const Audio::AudioSoundExtensionReference &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, Audio::AudioSoundExtensionReference>
+    inline auto ContentFields(T &v) {
         return std::tie(v.contribution, v.definition, v.contractVersion);
     }
 
-    inline auto ContentFields(const Audio::AudioSoundReference &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, Audio::AudioSoundReference>
+    inline auto ContentFields(T &v) {
         return std::tie(v.kind, v.target);
     }
 
-    inline auto ContentFields(const Audio::AudioConcurrencyPolicy &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, Audio::AudioConcurrencyPolicy>
+    inline auto ContentFields(T &v) {
         return std::tie(v.group, v.maxInstances, v.mode);
     }
 
-    inline auto ContentFields(const Audio::AudioSoundPlaybackDefaults &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, Audio::AudioSoundPlaybackDefaults>
+    inline auto ContentFields(T &v) {
         return std::tie(v.gain, v.pitch, v.bus, v.loop, v.spatialMode, v.enableDoppler, v.playOnStart, v.priority, v.concurrency);
     }
 
-    inline auto ContentFields(const AudioSourceComponent &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, AudioSourceComponent>
+    inline auto ContentFields(T &v) {
         return std::tie(v.sound, v.playback, v.sceneLifecycle, v.enabled);
     }
 
-    inline auto ContentFields(const AudioListenerComponent &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, AudioListenerComponent>
+    inline auto ContentFields(T &v) {
         return std::tie(v.view, v.priority, v.weight, v.enabled);
     }
 
-    inline auto ContentFields(const Ui::UiCanvasAssetReference &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, Ui::UiCanvasAssetReference>
+    inline auto ContentFields(T &v) {
         return std::tie(v.asset, v.document, v.canvas, v.minimumRevision);
     }
 
-    inline auto ContentFields(const UiCanvasComponent &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, UiCanvasComponent>
+    inline auto ContentFields(T &v) {
         return std::tie(v.canvas);
     }
 
-    inline auto ContentFields(const NavigationLocalBounds &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, NavigationLocalBounds>
+    inline auto ContentFields(T &v) {
         return std::tie(v.center, v.halfExtents);
     }
 
-    inline auto ContentFields(const NavigationSurfaceComponent &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, NavigationSurfaceComponent>
+    inline auto ContentFields(T &v) {
         return std::tie(v.id, v.definition, v.schemaVersion, v.generation, v.bakeScope, v.localBounds, v.profiles, v.enabled);
     }
 
-    inline auto ContentFields(const NavigationRegionComponent &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, NavigationRegionComponent>
+    inline auto ContentFields(T &v) {
         return std::tie(v.id, v.surface, v.schemaVersion, v.generation, v.localBounds, v.sourceSelection, v.mode, v.enabled);
     }
 
-    inline auto ContentFields(const NavigationCylinderVolume &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, NavigationCylinderVolume>
+    inline auto ContentFields(T &v) {
         return std::tie(v.center, v.radius, v.halfHeight);
     }
 
-    inline auto ContentFields(const NavigationModifierComponent &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, NavigationModifierComponent>
+    inline auto ContentFields(T &v) {
         return std::tie(v.id, v.surface, v.schemaVersion, v.generation, v.volume, v.operation, v.area, v.traversalCost, v.enabled);
     }
 
-    inline auto ContentFields(const NavigationLinkEndpoint &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, NavigationLinkEndpoint>
+    inline auto ContentFields(T &v) {
         return std::tie(v.surface, v.localPosition, v.connectionRadiusMeters);
     }
 
-    inline auto ContentFields(const NavigationLinkComponent &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, NavigationLinkComponent>
+    inline auto ContentFields(T &v) {
         return std::tie(v.id, v.schemaVersion, v.generation, v.start, v.end, v.kind, v.direction, v.profiles, v.traversalCost, v.enabled);
     }
 
-    inline auto ContentFields(const NavigationAgentComponent &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, NavigationAgentComponent>
+    inline auto ContentFields(T &v) {
         return std::tie(v.schemaVersion, v.profile, v.filter, v.radiusOverride, v.movementCapability, v.enabled);
     }
 
-    inline auto ContentFields(const AI::AiCapabilitySet &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, AI::AiCapabilitySet>
+    inline auto ContentFields(T &v) {
         return std::tie(v.bits);
     }
 
-    inline auto ContentFields(const AI::AiAgentComponent &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, AI::AiAgentComponent>
+    inline auto ContentFields(T &v) {
         return std::tie(v.agent, v.schemaVersion, v.startupPolicy, v.enabled);
     }
 
-    inline auto ContentFields(const AI::AiControllerComponent &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, AI::AiControllerComponent>
+    inline auto ContentFields(T &v) {
         return std::tie(v.controller, v.decisionAsset, v.blackboardSchema, v.decisionKind, v.requiredCapabilities, v.schemaVersion,
                         v.startupPolicy, v.enabled);
     }
 
-    inline auto ContentFields(const AuthoredPhysicsPose &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, AuthoredPhysicsPose>
+    inline auto ContentFields(T &v) {
         return std::tie(v.translation, v.rotation);
     }
 
-    inline auto ContentFields(const PhysicsBodyReference &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, PhysicsBodyReference>
+    inline auto ContentFields(T &v) {
         return std::tie(v.object, v.body);
     }
 
@@ -141,53 +206,77 @@ namespace Horo::Runtime::CellCookDetail {
         return std::tuple{};
     }
 
-    inline auto ContentFields(const AuthoredPhysicsMass &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, AuthoredPhysicsMass>
+    inline auto ContentFields(T &v) {
         return std::tie(v.kilograms);
     }
 
-    inline auto ContentFields(const AuthoredPhysicsDensity &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, AuthoredPhysicsDensity>
+    inline auto ContentFields(T &v) {
         return std::tie(v.kilogramsPerCubicMeter);
     }
 
-    inline auto ContentFields(const RigidBodyComponent &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, RigidBodyComponent>
+    inline auto ContentFields(T &v) {
         return std::tie(v.id, v.body, v.schemaVersion, v.generation, v.motion, v.mass, v.initialLinearVelocity, v.initialAngularVelocity,
                         v.linearDampingPerSecond, v.angularDampingPerSecond, v.maximumLinearSpeed, v.maximumAngularSpeed, v.enabled);
     }
 
-    inline auto ContentFields(const PhysicsBoxCollider &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, PhysicsBoxCollider>
+    inline auto ContentFields(T &v) {
         return std::tie(v.halfExtentsMeters);
     }
 
-    inline auto ContentFields(const PhysicsSphereCollider &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, PhysicsSphereCollider>
+    inline auto ContentFields(T &v) {
         return std::tie(v.radiusMeters);
     }
 
-    inline auto ContentFields(const PhysicsCapsuleCollider &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, PhysicsCapsuleCollider>
+    inline auto ContentFields(T &v) {
         return std::tie(v.radiusMeters, v.cylindricalHalfHeightMeters);
     }
 
-    inline auto ContentFields(const PhysicsStaticPlaneCollider &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, PhysicsStaticPlaneCollider>
+    inline auto ContentFields(T &v) {
         return std::tie(v.normal, v.signedDistanceMeters);
     }
 
-    inline auto ContentFields(const PhysicsShapeAssetReference &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, PhysicsShapeAssetReference>
+    inline auto ContentFields(T &v) {
         return std::tie(v.asset, v.subresource);
     }
 
-    inline auto ContentFields(const PhysicsColliderMaterialBinding &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, PhysicsColliderMaterialBinding>
+    inline auto ContentFields(T &v) {
         return std::tie(v.slot, v.material);
     }
 
-    inline auto ContentFields(const ColliderComponent &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, ColliderComponent>
+    inline auto ContentFields(T &v) {
         return std::tie(v.id, v.collider, v.schemaVersion, v.generation, v.body, v.source, v.localPose, v.scale, v.collisionProfile,
                         v.materials, v.sensor, v.enabled);
     }
 
-    inline auto ContentFields(const PhysicsConstraintBodyEndpoint &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, PhysicsConstraintBodyEndpoint>
+    inline auto ContentFields(T &v) {
         return std::tie(v.body, v.localFrame);
     }
 
-    inline auto ContentFields(const PhysicsConstraintWorldEndpoint &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, PhysicsConstraintWorldEndpoint>
+    inline auto ContentFields(T &v) {
         return std::tie(v.frame);
     }
 
@@ -195,47 +284,77 @@ namespace Horo::Runtime::CellCookDetail {
         return std::tuple{};
     }
 
-    inline auto ContentFields(const PhysicsDistanceConstraint &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, PhysicsDistanceConstraint>
+    inline auto ContentFields(T &v) {
         return std::tie(v.minimumMeters, v.maximumMeters);
     }
 
-    inline auto ContentFields(const PhysicsConstraintComponent &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, PhysicsConstraintComponent>
+    inline auto ContentFields(T &v) {
         return std::tie(v.id, v.constraint, v.schemaVersion, v.generation, v.first, v.second, v.parameters, v.enabled);
     }
 
-    inline auto ContentFields(const Gameplay::BehaviorField &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, Gameplay::BehaviorField>
+    inline auto ContentFields(T &v) {
         return std::tie(v.name, v.value);
     }
 
-    inline auto ContentFields(const Gameplay::BehaviorComponent &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, Gameplay::BehaviorComponent>
+    inline auto ContentFields(T &v) {
         return std::tie(v.instanceId, v.typeId, v.schemaVersion, v.enabled, v.fields);
     }
 
-    inline auto ContentFields(const Gameplay::SerializedComponent &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, Gameplay::SerializedComponent>
+    inline auto ContentFields(T &v) {
         return std::tie(v.typeId, v.schemaVersion, v.encoding, v.payload);
+    }
+
+    inline auto ContentFields(BoxMeshParameters &v) {
+        return std::tie(v.size);
     }
 
     inline auto ContentFields(const BoxMeshParameters &v) {
         return std::tie(v.size);
     }
 
-    inline auto ContentFields(const SphereMeshParameters &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, SphereMeshParameters>
+    inline auto ContentFields(T &v) {
         return std::tie(v.radius, v.slices, v.stacks);
     }
 
-    inline auto ContentFields(const CapsuleMeshParameters &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, CapsuleMeshParameters>
+    inline auto ContentFields(T &v) {
         return std::tie(v.radius, v.totalHeight, v.radialSegments, v.hemisphereRings);
     }
 
-    inline auto ContentFields(const CylinderMeshParameters &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, CylinderMeshParameters>
+    inline auto ContentFields(T &v) {
         return std::tie(v.radius, v.height, v.radialSegments);
     }
 
-    inline auto ContentFields(const ConeMeshParameters &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, ConeMeshParameters>
+    inline auto ContentFields(T &v) {
         return std::tie(v.radius, v.height, v.radialSegments);
+    }
+
+    inline auto ContentFields(PlaneMeshParameters &v) {
+        return std::tie(v.size);
     }
 
     inline auto ContentFields(const PlaneMeshParameters &v) {
+        return std::tie(v.size);
+    }
+
+    inline auto ContentFields(QuadMeshParameters &v) {
         return std::tie(v.size);
     }
 
@@ -243,29 +362,41 @@ namespace Horo::Runtime::CellCookDetail {
         return std::tie(v.size);
     }
 
-    inline auto ContentFields(const PrimitiveMeshDescriptor &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, PrimitiveMeshDescriptor>
+    inline auto ContentFields(T &v) {
         return std::tie(v.type, v.version, v.parameters);
     }
 
-    inline auto ContentFields(const RuntimeComponentSet &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, RuntimeComponentSet>
+    inline auto ContentFields(T &v) {
         return std::tie(v.camera, v.light, v.audioSource, v.audioListener, v.uiCanvas, v.navigationSurface, v.navigationRegion,
                         v.navigationModifier, v.navigationLink, v.navigationAgent, v.aiAgent, v.aiController, v.rigidBody, v.colliders,
                         v.physicsConstraints, v.behaviors, v.gameplayComponents);
     }
 
-    inline auto ContentFields(const RuntimeEntityDefinition &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, RuntimeEntityDefinition>
+    inline auto ContentFields(T &v) {
         return std::tie(v.object, v.parent, v.localTransform, v.primitiveMesh, v.components);
     }
 
-    inline auto ContentFields(const SceneAssetDependency &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, SceneAssetDependency>
+    inline auto ContentFields(T &v) {
         return std::tie(v.id, v.expectedType);
     }
 
-    inline auto ContentFields(const SceneCellComponentSchema &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, SceneCellComponentSchema>
+    inline auto ContentFields(T &v) {
         return std::tie(v.type, v.version);
     }
 
-    inline auto ContentFields(const SceneCellBehaviorSchema &v) {
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, SceneCellBehaviorSchema>
+    inline auto ContentFields(T &v) {
         return std::tie(v.type, v.version);
     }
 }  // namespace Horo::Runtime::CellCookDetail

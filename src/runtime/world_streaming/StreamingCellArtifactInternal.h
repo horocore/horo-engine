@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Horo/WorldStreaming/StreamingCellCandidate.h"
+#include "Horo/WorldStreaming/StreamingCellInspection.h"
 
 namespace Horo::WorldStreaming::Detail {
     /** @brief Detached parser storage; the header retains no span across moves. */
@@ -11,7 +11,7 @@ namespace Horo::WorldStreaming::Detail {
 
     /** @brief Validates bounded canonical bytes without invoking providers or mutating runtime state. */
     [[nodiscard]] Result<ParsedCellArtifact> ParseCellArtifactBytes(std::span<const std::byte> artifact,
-                                                                    const StreamingCellCandidateContext &context,
+                                                                    const StreamingCellInspectionLimits &limits,
                                                                     const Sha256Digest &expectedHash,
                                                                     const CancellationToken &cancellation);
 }  // namespace Horo::WorldStreaming::Detail

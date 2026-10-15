@@ -4,15 +4,26 @@
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
+#include "PackageProjectHost.h"
+
+#include <cstdio>
 
 namespace Horo::Editor {
     /** @copydoc EditorWorkerShutdown::EditorWorkerShutdown */
-    EditorWorkerShutdown::EditorWorkerShutdown(JobSystem &jobs, Application::ShaderBuildService &shaderBuild,
-                                               GuiScreenHost *screens) noexcept
-        : jobs_(jobs), shaderBuild_(shaderBuild), screens_(screens) {}
+    EditorWorkerShutdown::EditorWorkerShutdown(JobSystem &jobs, Application::ShaderBuildService &shaderBuild, GuiScreenHost *screens,
+                                               Application::Internal::PackageProjectHost *packages) noexcept
+        : packages_(packages), jobs_(jobs), shaderBuild_(shaderBuild), screens_(screens) {}
 
     /** @copydoc EditorWorkerShutdown::~EditorWorkerShutdown */
     EditorWorkerShutdown::~EditorWorkerShutdown() {
+        // Cancellation diagnostics must never bypass joining callbacks that borrow package authorities.
+        try {
+            if (packages_)
+                static_cast<void>(packages_->Close());
+        } catch (...) {
+            // This fallback still retains the owner until scheduler cancellation joins borrowed callbacks.
+            std::fputs("Package close raised before scheduler cancellation; retaining the owner.\n", stderr);
+        }
         jobs_.StopAccepting();
         if (screens_ != nullptr)
             screens_->Shutdown();
@@ -20,5 +31,13 @@ namespace Horo::Editor {
         jobs_.Shutdown(ShutdownPolicy::Cancel);
         if (screens_ != nullptr)
             (void)screens_->GameplayRetirements()->Close();
+        if (packages_) {
+            try {
+                if (packages_->Close().HasError())
+                    std::terminate();
+            } catch (...) {
+                std::terminate();
+            }
+        }
     }
 }  // namespace Horo::Editor

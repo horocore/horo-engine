@@ -133,6 +133,10 @@ namespace Horo::Packages {
          * @return Success with independent optional outcomes, or required-role failure retaining the prior composition. */
         [[nodiscard]] Result<void> ActivateModules(std::span<const EnabledPackageModule> enabled, PackageActivationBoundary boundary,
                                                    const CancellationToken &cancellation);
+        /** @brief Checks exact injected availability authority without reading mutable package state.
+         * @param install Expected stable service instance. @return Whether this lifecycle borrows that exact authority. */
+        [[nodiscard]] bool UsesInstallService(const PackageInstallService &install) const noexcept;
+
         /** @brief Returns the last fully published composition. @return Owning immutable snapshot or empty. */
         [[nodiscard]] std::shared_ptr<const PackageActivationSnapshot> Active() const;
         /** @brief Returns the attempt journal and drain state. @return Owner-lane inspection copy. */

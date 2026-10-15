@@ -240,7 +240,9 @@ namespace Horo::WorldStreaming {
         const auto index = FindCell(manifest.Cells(), context.operation.fence.cell, &CookedWorldCellManifestEntry::cell);
         if (!index.has_value())
             return Failure<StreamingCellCandidate>(WorldStreamingErrors::CellCandidateUnavailable);
-        auto parsed = Detail::ParseCellArtifactBytes(artifact, context, manifest.Cells()[*index].artifactHash, cancellation);
+        const StreamingCellInspectionLimits limits{context.maximumPayloads, context.maximumCompressedBytes,
+                                                   context.maximumUncompressedBytes};
+        auto parsed = Detail::ParseCellArtifactBytes(artifact, limits, manifest.Cells()[*index].artifactHash, cancellation);
         if (parsed.HasError())
             return Result<StreamingCellCandidate>::Failure(parsed.ErrorValue());
         auto owned = std::move(parsed).Value();

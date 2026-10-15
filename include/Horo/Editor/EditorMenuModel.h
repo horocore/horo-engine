@@ -27,6 +27,7 @@ namespace Horo::Editor {
         ImportAssets,
         ExitApplication,
         CreatePrimitive,
+        ManagePackages,
     };
 
     /** @brief Typed command emitted by every platform menu adapter. */

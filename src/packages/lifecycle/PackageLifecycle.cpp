@@ -335,4 +335,9 @@ namespace Horo::Packages {
             impl_->journal.restartRequired = true;
         }
     }
+
+    /** @copydoc PackageLifecycleService::UsesInstallService */
+    bool PackageLifecycleService::UsesInstallService(const PackageInstallService &install) const noexcept {
+        return &impl_->install == &install;
+    }
 }  // namespace Horo::Packages

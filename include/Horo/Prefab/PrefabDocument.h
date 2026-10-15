@@ -14,6 +14,7 @@
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Prefab/PrefabIdentity.h"
 #include "Horo/Prefab/PrefabLimits.h"
+#include "Horo/Prefab/PrefabSourceRevision.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -27,14 +28,6 @@
 namespace Horo::Prefab {
     /** @brief Maximum UTF-8 bytes in one prefab-local display name. */
     inline constexpr std::size_t MaximumPrefabObjectNameBytes = PrefabHardLimits::ObjectNameBytes;
-
-    /** @brief Exact semantic source revision used to author composition data. */
-    struct PrefabSourceRevision final {
-        Application::HoroVersion projectVersion; /**< Unified project version, not a prefab-specific counter. */
-        Sha256Digest contentDigest;              /**< SHA-256 of the canonical semantic source document. */
-
-        [[nodiscard]] bool operator==(const PrefabSourceRevision &) const noexcept = default;
-    };
 
     /** @brief One authored prefab-local hierarchy object and its portable payloads. */
     struct PrefabObjectNode final {

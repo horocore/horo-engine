@@ -569,6 +569,7 @@ namespace Horo::Editor {
             case Undo:
             case Redo:
             case CreatePrimitive:
+            case ManagePackages:
                 if (activeScreen_) {
                     static_cast<void>(activeScreen_->HandleMenuInvocation(invocation));
                 }

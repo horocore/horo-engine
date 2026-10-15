@@ -149,13 +149,13 @@ namespace Horo::WorldStreaming::Detail {
 
     /** @copydoc ParseCellArtifactBytes */
     Result<ParsedCellArtifact> ParseCellArtifactBytes(const std::span<const std::byte> artifact,
-                                                      const StreamingCellCandidateContext &context, const Sha256Digest &expectedHash,
+                                                      const StreamingCellInspectionLimits &limits, const Sha256Digest &expectedHash,
                                                       const CancellationToken &cancellation) {
         if (cancellation.IsCancellationRequested())
             return Fail<ParsedCellArtifact>(WorldStreamingErrors::CellCandidateLifecycleUnavailable);
         if (artifact.size() < HeaderBytes)
             return Fail<ParsedCellArtifact>(WorldStreamingErrors::CellCandidateInvalid);
-        if (artifact.size() - HeaderBytes > context.maximumCompressedBytes)
+        if (artifact.size() - HeaderBytes > limits.maximumCompressedBytes)
             return Fail<ParsedCellArtifact>(WorldStreamingErrors::CellCandidateCapacityExceeded);
         auto hash = ArtifactHash(artifact, cancellation);
         if (hash.HasError())
@@ -170,7 +170,7 @@ namespace Horo::WorldStreaming::Detail {
         if (header.HasError())
             return Result<ParsedCellArtifact>::Failure(header.ErrorValue());
         const auto count = Read<std::uint32_t>(artifact, 60);
-        if (count > context.maximumPayloads || header.Value().uncompressedSize > context.maximumUncompressedBytes)
+        if (count > limits.maximumPayloads || header.Value().uncompressedSize > limits.maximumUncompressedBytes)
             return Fail<ParsedCellArtifact>(WorldStreamingErrors::CellCandidateCapacityExceeded);
         if (count == 0 || count > (artifact.size() - HeaderBytes) / RowBytes)
             return Fail<ParsedCellArtifact>(WorldStreamingErrors::CellCandidateInvalid);

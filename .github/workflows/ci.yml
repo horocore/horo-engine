@@ -159,7 +159,8 @@ jobs:
               environment.write(f"TMPDIR={root}\n")
           PYTHON
 
-      - name: Install native Character allocation verifier dependency
+      - name: Install native allocation verifier dependency
+        id: qualification_python
         run: |
           verifier_python="$(python -c 'from pathlib import Path; import sys; print(Path(sys.executable).resolve().as_posix())')"
           echo "HORO_QUALIFICATION_PYTHON=$verifier_python" >> "$GITHUB_ENV"
@@ -220,10 +221,10 @@ jobs:
 
       # MSVC Debug container moves may allocate iterator proxies inside noexcept.
       # Keep the complete admission/callback allocation sweep mandatory in Release.
-      - name: Build Windows Release MCP restore and Character allocation qualification
+      - name: Build Windows Release allocation qualification
         id: mcp_release_build
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.release_build.outcome == 'success' }}
-        run: cmake --build --preset ci-audio-release --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroRuntimeSaveSlotLifecycleTests
+        run: cmake --build --preset ci-audio-release --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroRuntimeSaveSlotLifecycleTests
 
       - name: Configure navigation without Recast Detour
         if: runner.os == 'Linux'
@@ -402,6 +403,23 @@ jobs:
           ctest --test-dir build/ci-audio-release --parallel 1 --output-on-failure
           --no-tests=error --timeout 90 -R '^HoroRuntimeSaveRestoreTransactionTests::'
           --output-junit build/ci-audio-release/restore-ctest.xml
+
+      - name: Test Windows Release Scene allocation qualification
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $root = 'build/ci-audio-release'
+          ctest --test-dir $root --show-only=json-v1 | Set-Content -LiteralPath "$root/scene-allocation-discovery.json" -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/ci/run_scene_allocation_qualification.py --discovery "$root/scene-allocation-discovery.json" --regex-output "$root/scene-allocation-regex.txt"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $pattern = Get-Content -Raw -LiteralPath "$root/scene-allocation-regex.txt"
+          if (Test-Path -LiteralPath "$root/scene-allocation-ctest.xml") {
+            Remove-Item -LiteralPath "$root/scene-allocation-ctest.xml" -ErrorAction Stop
+          }
+          ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 -R $pattern --output-junit "scene-allocation-ctest.xml"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/ci/run_scene_allocation_qualification.py --output-junit "$root/scene-allocation-ctest.xml"
 
       - name: Test Windows Release Character allocation qualification
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}

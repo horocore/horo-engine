@@ -2238,6 +2238,66 @@
     },
     "welcome.whats_new": {
       "text": "WHAT'S NEW"
+    },
+    "workspace.packages.button": {
+      "text": "Packages"
+    },
+    "workspace.packages.title": {
+      "text": "Project packages"
+    },
+    "workspace.packages.policy_hint": {
+      "text": "Restore and install verify availability. Activation uses the host execution and trust policy; installation never grants permission."
+    },
+    "workspace.packages.plan_unavailable": {
+      "text": "No validated package plan is available. Restore to obtain verified archive evidence."
+    },
+    "workspace.packages.verified": {
+      "text": "Archive verified"
+    },
+    "workspace.packages.locked": {
+      "text": "Locked metadata only"
+    },
+    "workspace.packages.semantic_unavailable": {
+      "text": "Package kind, license and import/copy metadata are unavailable in the current manifest contract. No permission is inferred from missing evidence."
+    },
+    "workspace.packages.restore": {
+      "text": "Restore locked packages"
+    },
+    "workspace.packages.install": {
+      "text": "Install verified packages"
+    },
+    "workspace.packages.package": {
+      "text": "Package identity"
+    },
+    "workspace.packages.descriptor": {
+      "text": "Declared extension descriptor path"
+    },
+    "workspace.packages.activate": {
+      "text": "Activate explicit selection"
+    },
+    "workspace.packages.disable": {
+      "text": "Disable package extensions"
+    },
+    "workspace.packages.cancel": {
+      "text": "Request cancellation"
+    },
+    "workspace.packages.running": {
+      "text": "Operation running; cancellation is cooperative."
+    },
+    "workspace.packages.terminal": {
+      "text": "Operation complete. Installed and active state remain separate."
+    },
+    "workspace.packages.operation_failed": {
+      "text": "The operation was rejected or failed. Its typed diagnostic is retained by the application service."
+    },
+    "workspace.packages.close": {
+      "text": "Close"
+    },
+    "workspace.packages.retry": {
+      "text": "Refresh project package session"
+    },
+    "workspace.packages.recovery_hint": {
+      "text": "Package preparation or policy may be unavailable. Check the project package documents and host configuration, then refresh. Retained application operations are not discarded."
     }
   }
 }
