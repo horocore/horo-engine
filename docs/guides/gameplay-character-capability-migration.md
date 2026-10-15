@@ -1,10 +1,10 @@
 # Gameplay Character Capability Migration
 
-This change moves the standalone current-main native Gameplay boundary from SDK9
-to SDK14. `GameRuntimeContext` appends an owned Character holder and the behavior
-backend vtable appends a Character accessor. Native modules and generated descriptor
+This change moves the merged SDK10 Navigation native Gameplay boundary to SDK15
+and preserves its context while integrating Character. `GameRuntimeContext` appends an owned Character holder and the behavior
+backend vtable adds a Character accessor. Native modules and generated descriptor
 bundles must rebuild against the matching engine/compiler/platform/configuration
-`gameplay-sdk14` fingerprint. Incompatible descriptors are rejected before factories.
+`gameplay-sdk15` fingerprint. Incompatible descriptors are rejected before factories.
 The default gameplay SDK keeps only forward declarations; consumers explicitly
 request its existing `Physics` component and link `GameplayCharacterIntegration`.
 
@@ -47,22 +47,22 @@ reported separately; authored coverage is not evidence that a test ran.
 
 ## Independent Layout Epoch
 
-SDK14 is the independently developed Character layout. Navigation SDK10 and AI
-SDK11 describe different unmerged layouts, not compatible alternatives. After
-another branch merges, assign a new epoch (15 or later) to the combined layout,
+SDK15 combines the merged Navigation SDK10 layout with Character. Parallel AI
+SDK16 and UI SDK17 describe different layouts, not compatible alternatives. After
+another branch merges, assign a new epoch (18 or later) to the combined layout,
 update fingerprint/matrix/consumer fixtures coherently, rebuild modules and repeat
 exact-main validation. Taking the greatest old number does not identify the union.
 Retain a coherent previous engine, module, generated bundle and project backup for
 rollback. Do not edit fingerprints or force-load incompatible code.
 
-SDK14 also replaces SDK12's module-emitted Physics batch and Prefab operation
+SDK15 also replaces SDK12's module-emitted Physics batch and Prefab operation
 allocation with immutable private host-bound issuers. These opaque cross-image
 state contracts changed even though public handle sizes remain unchanged. All
 SDK12 modules and descriptor bundles must be rebuilt; accepting an SDK12 binary
 would retain incompatible control blocks or private dispatch layouts. The host
 owns batch cancellation descriptors, operation cancellation sources and retained
-queue/weak-entry destruction. Runtime UI SDK13 is a separate layout; any combined
-layout requires a fresh epoch15 or later and complete consumer revalidation.
+queue/weak-entry destruction. Runtime UI SDK17 is a separate layout; any combined
+layout requires a fresh epoch18 or later and complete consumer revalidation.
 
 ## Windows Allocation Qualification
 
@@ -85,3 +85,11 @@ callable manager and destructor originate in the host image, and the host-create
 state/control block destroys them. No module supplies or replaces these routes.
 This bounded admission path accepts the callable representation's possible small
 allocation; no frame-path or performance improvement is claimed.
+
+The registry-contention regression uses the existing owner-thread `ScopedObserver`
+to pause at the first real stale-descriptor error allocation while the registry
+lock is held. It does not inject an exception through a standard-library noexcept
+constructor. The producer must return typed RejectedBusy without allocation before
+the reader resumes; the reader must return HandleStale, and admission must recover
+after lock release. This ordinary Debug case remains enabled on Windows. The
+separate preparation rollback failure sweep remains mandatory in Release.

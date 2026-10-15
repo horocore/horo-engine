@@ -17,6 +17,7 @@
 namespace Horo::Gameplay {
     class GameplayPhysicsContext;
     class GameplayCharacterContext;
+    class GameplayNavigationContext;
     class GameplayPrefabContext;
     inline constexpr std::size_t MaximumBehaviorReloadStateBytes = 1024U * 1024U;
     inline constexpr std::size_t MaximumBehaviorReloadSnapshotBytes = 16U * 1024U * 1024U;
@@ -115,6 +116,11 @@ namespace Horo::Gameplay {
             [[nodiscard]] virtual Result<void> SetLocalTransform(const Math::Transform &transform) = 0;
             [[nodiscard]] virtual Result<void> Publish(GameplayEvent event) = 0;
 
+            /** @brief Returns the explicit navigation scope for native and script calls. */
+            [[nodiscard]] virtual std::shared_ptr<const GameplayNavigationContext> NavigationContext() const noexcept {
+                return {};
+            }
+
             /** @brief Returns the explicitly composed module/scene Physics holder, or no grant. */
             [[nodiscard]] virtual std::shared_ptr<const GameplayPhysicsContext> PhysicsContext() const noexcept {
                 return {};
@@ -163,6 +169,11 @@ namespace Horo::Gameplay {
 
         [[nodiscard]] Result<void> Publish(GameplayEvent event) {
             return backend_->Publish(std::move(event));
+        }
+
+        /** @brief Returns the revocable native/script navigation scope. @return Null when omitted by host. */
+        [[nodiscard]] std::shared_ptr<const GameplayNavigationContext> NavigationContext() const noexcept {
+            return backend_->NavigationContext();
         }
 
         /** @brief Returns the same host Physics binding for native and script callbacks; no world discovery. */

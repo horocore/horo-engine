@@ -277,7 +277,7 @@ namespace Horo::Character::QualificationTest {
         });
     }
 
-    /** @brief Observes an actual registry-held error construction using the existing allocation fault seam. */
+    /** @brief Observes an actual registry-held error construction without injecting allocation failure. */
     struct RegistryContention final {
         std::binary_semaphore attempt{0};
         std::binary_semaphore returned{0};
@@ -287,10 +287,9 @@ namespace Horo::Character::QualificationTest {
         bool returnedWhileHeld{};
         std::size_t before{};
         std::size_t after{};
-        static inline RegistryContention *current{};  // Only the calling owner-thread failure observer reads this pointer.
 
-        static void Observe(const std::size_t) noexcept {
-            auto &probe = *current;
+        static void Observe(const std::size_t, void *context) noexcept {
+            auto &probe = *static_cast<RegistryContention *>(context);
             if (probe.invoked)
                 return;
             probe.invoked = true;
@@ -299,21 +298,6 @@ namespace Horo::Character::QualificationTest {
             probe.returnedWhileHeld = probe.returned.try_acquire_for(std::chrono::seconds{5});
             probe.after = Tests::AllocationProbe::Count();
         }
-    };
-
-    /** @brief Owns the fault observer pointer for one owner-thread call; no producer or production code retains it. */
-    class RegistryFaultObservation final {
-    public:
-        explicit RegistryFaultObservation(RegistryContention &probe) {
-            RegistryContention::current = &probe;
-        }
-
-        ~RegistryFaultObservation() {
-            RegistryContention::current = nullptr;
-        }
-
-        RegistryFaultObservation(const RegistryFaultObservation &) = delete;
-        RegistryFaultObservation &operator=(const RegistryFaultObservation &) = delete;
     };
 
     /** @brief Retains world/probe borrows through a producer join and releases every test-owned wait on scope exit. */
@@ -358,15 +342,12 @@ namespace Horo::Character::QualificationTest {
         std::jthread worker_;
     };
 
-    /** @brief Injects the actual copied-state error allocation while its public method owns the registry lock. */
-    inline bool ObserveRegistryHold(CharacterWorld &world, const CharacterControllerHandle stale, RegistryContention &probe) {
-        RegistryFaultObservation observation{probe};
-        Tests::AllocationProbe::ScopedFailure failure{0, RegistryContention::Observe};
-        try {
-            static_cast<void>(world.ControllerDescriptor(stale));
-        } catch (const std::bad_alloc &) {
-            return true;
-        }
-        return false;
+    /** @brief Observe actual copied-state error allocation while its public method owns the registry lock.
+     * @return The unmodified typed stale-handle result after the observed allocation completes normally.
+     */
+    inline auto ObserveRegistryHold(CharacterWorld &world, const CharacterControllerHandle stale, RegistryContention &probe) {
+        Tests::AllocationProbe::ScopedObserver observation{RegistryContention::Observe, &probe};
+        return world.ControllerDescriptor(stale);
     }
+
 }  // namespace Horo::Character::QualificationTest

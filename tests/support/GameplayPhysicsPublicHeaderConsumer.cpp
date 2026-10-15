@@ -31,7 +31,7 @@ concept AcceptsForgedCharacterContext = requires(Horo::Gameplay::GameplayCharact
 static_assert(!AcceptsForgedCharacterContext<Horo::Gameplay::GameplayCharacterContext>);
 static_assert(std::is_same_v<decltype(Horo::Gameplay::GameRuntimeContext::character),
                              std::shared_ptr<const Horo::Gameplay::GameplayCharacterContext>>);
-static_assert(Horo::Gameplay::GameplaySdkBoundaryVersion == 14);
+static_assert(Horo::Gameplay::GameplaySdkBoundaryVersion == 15);
 
 int main() {
     const auto context = Horo::Gameplay::GameplayCharacterContext::Withheld({}, Horo::Gameplay::GameplayCharacterDenial::Unavailable);

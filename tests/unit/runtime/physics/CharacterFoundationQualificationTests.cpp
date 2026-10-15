@@ -191,17 +191,16 @@ namespace Horo::Character {
             REQUIRE((active.world->PublishedTick() == CharacterPublishedTick{2, 2, 1}));
         }
 
-        TEST_CASE("Character registry fault observer admits one exchange across repeated allocations",
+        TEST_CASE("Character registry allocation observer admits one exchange across repeated allocations",
                   "[physics][character][qualification][thread][admission]") {
             RegistryContention probe;
             std::jthread responder([&probe] {
                 probe.attempt.acquire();
                 probe.returned.release();
             });
-            RegistryFaultObservation observation{probe};
-            RegistryContention::Observe(0);
-            RegistryContention::Observe(1);
-            RegistryContention::Observe(2);
+            RegistryContention::Observe(0, &probe);
+            RegistryContention::Observe(1, &probe);
+            RegistryContention::Observe(2, &probe);
             responder.join();
             REQUIRE(probe.invoked);
             REQUIRE(probe.returnedWhileHeld);
@@ -219,15 +218,15 @@ namespace Horo::Character {
             const auto after = Tests::AllocationProbe::Count();
             RequireError(staleResult, CharacterErrors::HandleStale);
             if (after == before)
-                SKIP("Error projection does not allocate on this standard library; registry-held fault observation is unsupported.");
+                SKIP("Error projection does not allocate on this standard library; registry-held allocation observation is unsupported.");
             RegistryContention probe;
             const auto request = Movement(active.controller, 1, 1);
             RegistryProducer producer{*active.world, request, probe};
             if (!producer.Start())
                 SKIP("Standard thread creation is unavailable; registry-contention qualification was not executed.");
-            const bool injected = ObserveRegistryHold(*active.world, stale, probe);
+            const auto observed = ObserveRegistryHold(*active.world, stale, probe);
             producer.Finish();
-            REQUIRE(injected);
+            RequireError(observed, CharacterErrors::HandleStale);
             REQUIRE(probe.invoked);
             REQUIRE(probe.returnedWhileHeld);
             REQUIRE(probe.after == probe.before);

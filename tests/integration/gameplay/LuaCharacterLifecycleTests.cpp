@@ -73,7 +73,7 @@ return horo.behavior { type_id='game.tests.character_missing', display_name='Mis
         REQUIRE(registry.Register(program->Registration()).HasValue());
         REQUIRE(registry.Freeze().HasValue());
         auto scene = Runtime::RuntimeScene::Create(Tests::SingleBehaviorSceneDefinition({1}, {1}, {1}, {1}, type), {8}).Value();
-        auto created = BehaviorRuntime::Create(*scene, registry, {}, host.physics, host.character);
+        auto created = BehaviorRuntime::Create(*scene, registry, {}, host.physics, {}, host.character);
         REQUIRE(created.HasValue());
         auto behavior = std::move(created).Value();
         REQUIRE(Tests::FixedUpdateAndReadPosition(*scene, *behavior, {1}).x == 11);
@@ -112,7 +112,7 @@ return horo.behavior { type_id='game.tests.character_missing', display_name='Mis
         REQUIRE(registry.Register(program->Registration()).HasValue());
         REQUIRE(registry.Freeze().HasValue());
         auto scene = Runtime::RuntimeScene::Create(Tests::SingleBehaviorSceneDefinition({1}, {1}, {1}, {1}, type), {8}).Value();
-        auto runtime = BehaviorRuntime::Create(*scene, registry, {}, host.physics, host.character);
+        auto runtime = BehaviorRuntime::Create(*scene, registry, {}, host.physics, {}, host.character);
         REQUIRE(runtime.HasValue());
         return {std::move(scene), std::move(runtime).Value()};
     }

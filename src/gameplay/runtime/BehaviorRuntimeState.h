@@ -5,6 +5,7 @@
 #include "Horo/Gameplay/BehaviorRuntime.h"
 #include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
 #include "Horo/Physics/CharacterErrors.h"
 #include "Horo/Prefab/PrefabErrors.h"
@@ -122,6 +123,12 @@ namespace Horo::Gameplay {
                 if (event.target && (!event.target->IsValid() || event.target->scene != instance.entity.runtime.value))
                     return Result<void>::Failure(MakeError(GameplayErrors::InvalidEvent));
                 return runtime.events.Publish(std::move(event));
+            }
+
+            [[nodiscard]] std::shared_ptr<const GameplayNavigationContext> NavigationContext() const noexcept override {
+                if (runtime.navigation && !instance.component.typeId.Value().starts_with(runtime.navigation->Binding().moduleId + "."))
+                    return {};
+                return runtime.navigation;
             }
 
             [[nodiscard]] std::shared_ptr<const GameplayPhysicsContext> PhysicsContext() const noexcept override {
@@ -468,6 +475,8 @@ namespace Horo::Gameplay {
             shutdown = true;
             if (character)
                 character->Revoke();
+            if (navigation)
+                navigation->Revoke();
             if (physics)
                 physics->Revoke();
             if (prefabs)
@@ -489,6 +498,7 @@ namespace Horo::Gameplay {
         Runtime::SceneRuntimeId sceneIdentity;
         std::shared_ptr<const GameplayPhysicsContext> physics;
         std::shared_ptr<const GameplayCharacterContext> character;
+        std::shared_ptr<const GameplayNavigationContext> navigation;
         std::shared_ptr<const GameplayPrefabContext> prefabs;
         std::vector<Instance> instances;
         bool shutdown{};

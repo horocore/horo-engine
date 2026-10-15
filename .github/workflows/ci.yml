@@ -13,6 +13,12 @@ on:
       - 'docs/**'
       - '.github/ISSUE_TEMPLATE/**'
   workflow_dispatch:
+    inputs:
+      save_allocation_diagnostics:
+        description: Run bounded Windows Save allocation stack diagnostics
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -308,7 +314,7 @@ jobs:
           retention-days: 3
 
       - name: Diagnose Windows Save lifecycle allocation boundary
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture' && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
+        if: ${{ !cancelled() && ((github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture') || (github.event_name == 'workflow_dispatch' && inputs.save_allocation_diagnostics == true)) && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
         timeout-minutes: 3
         shell: pwsh
         run: >-
@@ -317,7 +323,7 @@ jobs:
           -TestCase 'HoroRuntimeSaveSlotLifecycleTests::Lifecycle allocation failure after visibility preserves publication knowledge' -CaptureSymbolEvidence
 
       - name: Diagnose Windows Save retention allocation boundary
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture' && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
+        if: ${{ !cancelled() && ((github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture') || (github.event_name == 'workflow_dispatch' && inputs.save_allocation_diagnostics == true)) && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
         timeout-minutes: 3
         shell: pwsh
         run: >-
@@ -355,6 +361,11 @@ jobs:
             timeoutSeconds = 90
           } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $diagnosticDirectory 'provenance.json')
 
+      - name: Install native Character allocation verifier dependency
+        run: >-
+          python -m pip install --no-cache-dir --only-binary=:all:
+          --no-deps defusedxml==0.7.1
+
       - name: Test Debug
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
         run: ctest --preset "${{ matrix.preset }}"
@@ -381,7 +392,6 @@ jobs:
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
         shell: pwsh
         run: |
-          python -m pip install --no-cache-dir --only-binary=:all: --no-deps defusedxml==0.7.1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $root = 'build/ci-audio-release'
           ctest --test-dir $root --show-only=json-v1 | Set-Content -LiteralPath "$root/character-allocation-discovery.json" -Encoding utf8
@@ -394,7 +404,7 @@ jobs:
           }
           ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 -R $pattern --output-junit "character-allocation-ctest.xml"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_character_allocation_qualification.py --output-junit "character-allocation-ctest.xml"
+          python scripts/ci/run_character_allocation_qualification.py --output-junit "$root/character-allocation-ctest.xml"
 
       - name: Test navigation without Recast Detour
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.navigation_build.outcome == 'success' }}
@@ -409,7 +419,7 @@ jobs:
         run: ctest --preset ci-xr-openxr
 
       - name: Upload Windows Save allocation stack evidence
-        if: ${{ always() && github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture' && runner.os == 'Windows' }}
+        if: ${{ always() && ((github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture') || (github.event_name == 'workflow_dispatch' && inputs.save_allocation_diagnostics == true)) && runner.os == 'Windows' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: save-allocation-stack-Windows-${{ github.sha }}-${{ github.run_attempt }}

@@ -1,6 +1,7 @@
 #include "GameModuleHostDetail.h"
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayCharacterContext.h"
+#include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 
@@ -12,6 +13,13 @@ namespace Horo::Gameplay {
     LoadedGameModule::~LoadedGameModule() {
         if (impl_->character)
             impl_->character->Revoke();
+        if (impl_->navigation)
+            impl_->navigation->Revoke();
+    }
+
+    /** @copydoc LoadedGameModule::NavigationContext */
+    std::shared_ptr<const GameplayNavigationContext> LoadedGameModule::NavigationContext() const noexcept {
+        return impl_->navigation;
     }
 
     /** @copydoc LoadedGameModule::ModuleId */
@@ -139,6 +147,8 @@ namespace Horo::Gameplay {
         impl_->runtimeLeaseAdmission.store(false, std::memory_order_release);
         if (impl_->character)
             impl_->character->Revoke();
+        if (impl_->navigation)
+            impl_->navigation->Revoke();
         if (impl_->physics)
             impl_->physics->Revoke();
         if (impl_.use_count() != 1)
@@ -156,6 +166,12 @@ namespace Horo::Gameplay {
     /** @copydoc GameModuleHost::GameModuleHost */
     GameModuleHost::GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities)
         : GameModuleHost(GameModuleHostOptions{std::move(hostCapabilities), {}}) {}
+
+    /** @copydoc GameModuleHost::GameModuleHost */
+    GameModuleHost::GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics,
+                                   std::shared_ptr<GameplayNavigationContext> navigation)
+        : GameModuleHost(
+              GameModuleHostOptions{std::move(hostCapabilities), {.physics = std::move(physics), .navigation = std::move(navigation)}}) {}
 
     /** @copydoc GameModuleHost::GameModuleHost */
     GameModuleHost::GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics)

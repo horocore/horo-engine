@@ -18,6 +18,16 @@
 
 namespace Horo::Gameplay {
     namespace Detail {
+        /** @brief Pin native SDK deleter code independently of module instances and defer owned shadow cleanup. */
+        struct GameModuleCodeImage final {
+            explicit GameModuleCodeImage(std::unique_ptr<Platform::DynamicLibrary> loaded) : library(std::move(loaded)) {}
+
+            /** @brief Unload mapped SDK code before removing its exact host-created shadow artifact. */
+            ~GameModuleCodeImage() noexcept;
+            std::unique_ptr<Platform::DynamicLibrary> library;
+            std::filesystem::path shadowArtifact;
+        };
+
         /** @brief Generation-owned native contributions; shutdown retires each registry before the code image. */
         struct NativeRegistries {
             std::unique_ptr<BehaviorRegistry> registry;
@@ -66,14 +76,17 @@ namespace Horo::Gameplay {
         [[nodiscard]] Result<void> RegisterAndStart(std::span<const GameplayCapabilityId> hostCapabilities);
         [[nodiscard]] Result<GameModuleReloadSnapshot> PrepareReload();
         [[nodiscard]] Result<void> RestoreReload(const GameModuleReloadSnapshot &snapshot);
+        /** @brief Expose the already admitted scoped holders only after project service activation succeeds. */
+        void PublishRuntimeContext();
         void Shutdown() noexcept;
 
-        std::unique_ptr<Platform::DynamicLibrary> library;
+        std::shared_ptr<Detail::GameModuleCodeImage> codeImage;
         Detail::NativeRegistries registries;
         std::unique_ptr<GameplayServiceRuntime> projectServices;
         GameRuntimeContext runtimeContext;
         std::shared_ptr<GameplayPhysicsContext> physics;
         std::shared_ptr<GameplayCharacterContext> character;
+        std::shared_ptr<GameplayNavigationContext> navigation;
         IGameModule *gameplayModule{};
         DestroyGameModuleFunction destroy{};
         std::string moduleId;
@@ -81,7 +94,6 @@ namespace Horo::Gameplay {
         std::uint64_t descriptorRevision{};
         std::filesystem::path loadedArtifactPath;
         std::atomic_bool runtimeLeaseAdmission{true};
-        bool removeArtifactOnUnload{};
         bool startAttempted{};
         bool reloadPrepared{};
         bool shutdown{};

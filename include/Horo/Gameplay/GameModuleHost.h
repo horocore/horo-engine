@@ -26,8 +26,9 @@ namespace Horo::Gameplay {
 
     /** @brief Inert host-selected service anchors; no callback, discovery or activation occurs here. */
     struct GameModuleRuntimeServices final {
-        std::shared_ptr<GameplayPhysicsContext> physics;     /**< Existing exact per-module Physics scope. */
-        std::shared_ptr<GameplayCharacterContext> character; /**< Character anchor; each loaded generation receives a fresh child. */
+        std::shared_ptr<GameplayPhysicsContext> physics;       /**< Existing exact per-module Physics scope. */
+        std::shared_ptr<GameplayCharacterContext> character;   /**< Character anchor; each loaded generation receives a fresh child. */
+        std::shared_ptr<GameplayNavigationContext> navigation; /**< Exact generation navigation anchor. */
     };
 
     /** @brief Explicit immutable load configuration; requires both values so legacy brace calls stay unambiguous. */
@@ -100,6 +101,8 @@ namespace Horo::Gameplay {
         /** @brief Returns this loaded module generation's exact independent Character scope. @return Owned holder, including typed denial.
          */
         [[nodiscard]] std::shared_ptr<const GameplayCharacterContext> CharacterContext() const noexcept;
+        /** @brief Returns this module generation navigation grant. @return Revocable host context. */
+        [[nodiscard]] std::shared_ptr<const GameplayNavigationContext> NavigationContext() const noexcept;
         /**
          * @brief Cancels and quiesces module-owned work, captures state, and stops callbacks before unload.
          * @return Bounded module snapshot only when the generation proves it is safe to unload.
@@ -135,6 +138,12 @@ namespace Horo::Gameplay {
         /** @brief Creates a loader from inert typed options; service anchors remain host-owned.
          * @param options Explicit capability metadata and service composition. */
         explicit GameModuleHost(GameModuleHostOptions options);
+        /** @brief Bind an explicit navigation principal to the next module generation.
+         * @param hostCapabilities Immutable host grants. @param physics Optional Physics binding.
+         * @param navigation Exact module/Scene navigation binding; revoked before module reload callbacks.
+         */
+        GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics,
+                       std::shared_ptr<GameplayNavigationContext> navigation);
         /**
          * @brief Loads and starts one gameplay candidate after complete compatibility validation.
          * @param libraryPath Absolute dynamic-library artifact path.
@@ -159,6 +168,19 @@ namespace Horo::Gameplay {
                                                                                const GameModuleLoadExpectation &expectation) const;
 
     private:
+        /** @brief Load one validated artifact with explicit host-owned shadow cleanup from the first code-image lease.
+         * @param libraryPath Absolute prepared artifact. @param expectation Exact module compatibility.
+         * @param ownedShadow True only for the unique canonical artifact created by LoadShadowCopy.
+         * @return Active module or typed failure with deferred native image cleanup.
+         */
+        [[nodiscard]] Result<std::unique_ptr<LoadedGameModule>> LoadArtifact(const std::filesystem::path &libraryPath,
+                                                                             const GameModuleLoadExpectation &expectation,
+                                                                             bool ownedShadow) const;
+        /** @brief Admit the selected explicit service anchors before invoking a module factory.
+         * @param impl Validated image owner receiving authoritative scoped holders.
+         * @return Typed principal/dependency failure or success with the image pin bound by this host authority.
+         */
+        [[nodiscard]] Result<void> BindRuntimeServices(LoadedGameModule::Impl &impl) const;
         std::vector<GameplayCapabilityId> hostCapabilities_;
         GameModuleRuntimeServices runtimeServices_;
     };

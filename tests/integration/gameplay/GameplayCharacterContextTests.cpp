@@ -16,6 +16,7 @@ namespace {
     TEST_CASE("Character host options preserve legacy empty braces and explicit missing-consumer errors", "[gameplay-character]") {
         GameModuleHost one{{}};
         GameModuleHost two{{}, {}};
+        GameModuleHost three{{}, {}, {}};
         GameModuleHost typed{GameModuleHostOptions{{}, {}}};
         GameplayCharacterBinding binding{.moduleId = "game.tests", .scene = 7, .sceneGeneration = 1};
         Physics::Test::RequireError(GameplayCharacterContext::Create(binding, nullptr, nullptr), GameplayErrors::CharacterPermissionDenied);
@@ -58,10 +59,10 @@ namespace {
         CharacterModuleHost host;
         BehaviorRegistry registry;
         REQUIRE(registry.Freeze().HasValue());
-        Physics::Test::RequireError(BehaviorRuntime::Create(*host.world.scene, registry, {}, {}, host.character),
+        Physics::Test::RequireError(BehaviorRuntime::Create(*host.world.scene, registry, {}, {}, {}, host.character),
                                     GameplayErrors::CharacterUnavailable);
         host.physics->Revoke();
-        Physics::Test::RequireError(BehaviorRuntime::Create(*host.world.scene, registry, {}, host.physics, host.character),
+        Physics::Test::RequireError(BehaviorRuntime::Create(*host.world.scene, registry, {}, host.physics, {}, host.character),
                                     Physics::PhysicsErrors::CapabilityRevoked);
         REQUIRE(host.character->Acquire("game.tests", 7, 1).HasValue());
     }
@@ -111,7 +112,7 @@ namespace {
         CharacterModuleHost host;
         auto module = host.Load();
         auto grant = module->CharacterContext()->Acquire("game.tests", 7, 1).Value();
-        auto created = BehaviorRuntime::Create(*host.world.scene, module->Registry(), {}, host.physics, module->CharacterContext());
+        auto created = BehaviorRuntime::Create(*host.world.scene, module->Registry(), {}, host.physics, {}, module->CharacterContext());
         REQUIRE(created.HasValue());
         auto behavior = std::move(created).Value();
         Physics::Test::RequireError(module->PrepareReload(), GameplayErrors::GameplayReloadRestartRequired);

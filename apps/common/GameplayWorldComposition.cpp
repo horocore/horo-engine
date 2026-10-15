@@ -99,7 +99,7 @@ namespace Horo::Application::Internal {
     Result<void> GameplayWorldComposition::Activate(Runtime::RuntimeScene &scene, const GameplayWorldSelection &selection) {
         if (auto registered = RegisterModule(selection); registered.HasError())
             return registered;
-        auto runtime = Gameplay::BehaviorRuntime::Create(scene, registry_, {}, physics_, CharacterContext());
+        auto runtime = Gameplay::BehaviorRuntime::Create(scene, registry_, {}, physics_, {}, CharacterContext());
         if (runtime.HasError())
             return Result<void>::Failure(runtime.ErrorValue());
         behaviors_ = std::move(runtime).Value();
@@ -169,7 +169,7 @@ namespace Horo::Application::Internal {
         if (auto registered = composition->RegisterModule(selection); registered.HasError())
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(registered.ErrorValue());
         auto runtime = Gameplay::BehaviorRuntime::Create(scenes, composition->registry_, {}, composition->physics_,
-                                                         composition->prefabContext_, composition->CharacterContext());
+                                                         composition->prefabContext_, {}, composition->CharacterContext());
         if (runtime.HasError())
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(runtime.ErrorValue());
         composition->behaviors_ = std::move(runtime).Value();

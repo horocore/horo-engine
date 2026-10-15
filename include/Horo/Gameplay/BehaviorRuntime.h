@@ -48,17 +48,20 @@ namespace Horo::Gameplay {
          * @param scene Runtime scene that outlives the runner.
          * @param registry Frozen module registry.
          * @param limits Admission budgets.
+         * @param navigation Explicit module/Scene navigation scope.
          * @param physics Host-admitted module/world binding; revoked before shutdown callbacks.
          * @param character Optional module Character scope; a fresh runtime child is revoked before teardown.
          * @return Active runner or typed foreign-scene/activation error without partial clients.
          */
         [[nodiscard]] static Result<std::unique_ptr<BehaviorRuntime>> Create(
             Runtime::RuntimeScene &scene, const BehaviorRegistry &registry, BehaviorRuntimeLimits limits,
-            std::shared_ptr<const GameplayPhysicsContext> physics, std::shared_ptr<const GameplayCharacterContext> character = {});
+            std::shared_ptr<const GameplayPhysicsContext> physics, std::shared_ptr<const GameplayNavigationContext> navigation = {},
+            std::shared_ptr<const GameplayCharacterContext> character = {});
         /** @brief Activates Gameplay against the actual Scene service and explicitly admitted prefab scope.
          * @param scenes Scene authority outliving the runner; callbacks retain no mutable Scene storage.
          * @param registry Frozen module registry outliving the runner.
          * @param limits Bounded behavior/event admission.
+         * @param navigation Explicit module/Scene navigation scope.
          * @param physics Optional explicitly admitted Physics scope.
          * @param prefabs Explicitly admitted cooked-prefab scope for the same Scene incarnation.
          * @param character Optional module Character scope for the same Scene incarnation.
@@ -68,6 +71,7 @@ namespace Horo::Gameplay {
         [[nodiscard]] static Result<std::unique_ptr<BehaviorRuntime>> Create(
             Runtime::RuntimeSceneService &scenes, const BehaviorRegistry &registry, BehaviorRuntimeLimits limits = {},
             std::shared_ptr<const GameplayPhysicsContext> physics = {}, std::shared_ptr<const GameplayPrefabContext> prefabs = {},
+            std::shared_ptr<const GameplayNavigationContext> navigation = {},
             std::shared_ptr<const GameplayCharacterContext> character = {});
         ~BehaviorRuntime();
         BehaviorRuntime(const BehaviorRuntime &) = delete;

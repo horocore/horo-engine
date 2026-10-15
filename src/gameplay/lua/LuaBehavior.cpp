@@ -4,7 +4,9 @@
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Physics/CharacterErrors.h"
 #include "LuaBehaviorMetadata.h"
+#include "LuaBehaviorSandbox.h"
 #include "LuaCharacterBinding.h"
+#include "LuaNavigationBinding.h"
 #include "LuaPhysicsBinding.h"
 #include "LuaReplicationDeclaration.h"
 
@@ -50,33 +52,6 @@ namespace Horo::Gameplay {
             luaL_error(state, "Lua behavior instruction budget exceeded");
         }
 
-        int IdentityBehavior(lua_State *state) {
-            luaL_checktype(state, 1, LUA_TTABLE);
-            lua_settop(state, 1);
-            return 1;
-        }
-
-        void OpenSandbox(lua_State *state) {
-            luaL_requiref(state, "_G", luaopen_base, 1);
-            lua_pop(state, 1);
-            luaL_requiref(state, LUA_TABLIBNAME, luaopen_table, 1);
-            lua_pop(state, 1);
-            luaL_requiref(state, LUA_STRLIBNAME, luaopen_string, 1);
-            lua_pop(state, 1);
-            luaL_requiref(state, LUA_MATHLIBNAME, luaopen_math, 1);
-            lua_pop(state, 1);
-            luaL_requiref(state, LUA_UTF8LIBNAME, luaopen_utf8, 1);
-            lua_pop(state, 1);
-            for (const char *name : {"dofile", "loadfile", "collectgarbage", "io", "os", "package", "debug"}) {
-                lua_pushnil(state);
-                lua_setglobal(state, name);
-            }
-            lua_newtable(state);
-            lua_pushcfunction(state, IdentityBehavior);
-            lua_setfield(state, -2, "behavior");
-            lua_setglobal(state, "horo");
-        }
-
         [[nodiscard]] Result<void> LuaFailure(const std::string &message) {
             return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent, message));
         }
@@ -93,7 +68,7 @@ namespace Horo::Gameplay {
             lua_State *state = lua_newstate(BudgetAllocate, &budget);
             if (state == nullptr)
                 return Result<ParsedProgram>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent, "Unable to create Lua VM."));
-            OpenSandbox(state);
+            Detail::OpenLuaBehaviorSandbox(state);
             lua_sethook(state, InstructionLimitHook, LUA_MASKCOUNT, static_cast<int>(limits.maximumInstructionsPerCallback));
             if (const int loaded = luaL_loadbufferx(state, source.data(), source.size(), sourceName.c_str(), "t");
                 loaded != LUA_OK || lua_pcall(state, 0, 1, 0) != LUA_OK) {
@@ -181,6 +156,7 @@ namespace Horo::Gameplay {
             lua_State *state{};
             int behaviorRef{LUA_NOREF};
             std::uint64_t revision{};
+            std::optional<CancellationSource> navigationLifetime;
         };
 
         static BehaviorContext &Context(lua_State *state) {
@@ -297,6 +273,8 @@ namespace Horo::Gameplay {
 
         void PushContext(lua_State *state, BehaviorContext &context) {
             lua_newtable(state);
+            Detail::PushLuaNavigationContext(state, context, vm_.navigationLifetime->Token());
+            lua_setfield(state, -2, "navigation");
             Detail::PushLuaPhysicsContext(state, context);
             lua_setfield(state, -2, "physics");
             BindCharacter(context);
@@ -332,6 +310,8 @@ namespace Horo::Gameplay {
                 character_->Revoke();
             character_.reset();
             characterError_.reset();
+            if (vm_.navigationLifetime)
+                vm_.navigationLifetime->RequestCancellation();
             if (vm_.state != nullptr)
                 lua_close(vm_.state);
             vm_ = {};
@@ -353,11 +333,12 @@ namespace Horo::Gameplay {
         /** @brief Recreates the instance VM only after its source generation changes. */
         [[nodiscard]] bool LoadCurrentProgram() {
             const auto &impl = *program_->impl_;
+            vm_.navigationLifetime.emplace();
             vm_.budget = {0, impl.limits.maximumMemoryBytes};
             vm_.state = lua_newstate(BudgetAllocate, &vm_.budget);
             if (vm_.state == nullptr)
                 return Fail("Unable to create Lua behavior VM.");
-            OpenSandbox(vm_.state);
+            Detail::OpenLuaBehaviorSandbox(vm_.state);
             lua_sethook(vm_.state, InstructionLimitHook, LUA_MASKCOUNT, static_cast<int>(impl.limits.maximumInstructionsPerCallback));
             if (luaL_loadbufferx(vm_.state, impl.source.data(), impl.source.size(), impl.sourceName.c_str(), "t") != LUA_OK ||
                 lua_pcall(vm_.state, 0, 1, 0) != LUA_OK || !lua_istable(vm_.state, -1))

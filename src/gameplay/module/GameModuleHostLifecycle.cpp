@@ -1,6 +1,7 @@
 #include "GameModuleHostDetail.h"
 #include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
 
 #include <algorithm>
@@ -62,6 +63,15 @@ namespace Horo::Gameplay {
         }
     }  // namespace
 
+    /** @copydoc Detail::GameModuleCodeImage::~GameModuleCodeImage */
+    Detail::GameModuleCodeImage::~GameModuleCodeImage() noexcept {
+        library.reset();
+        if (!shadowArtifact.empty()) {
+            std::error_code ignored;
+            std::filesystem::remove(shadowArtifact, ignored);  // NOSONAR: canonical host-created shadow artifact only.
+        }
+    }
+
     LoadedGameModule::Impl::~Impl() {
         Shutdown();
     }
@@ -111,11 +121,17 @@ namespace Horo::Gameplay {
         if (activated.HasError())
             return Result<void>::Failure(activated.ErrorValue());
         projectServices = std::move(activated).Value();
+        PublishRuntimeContext();
+        startAttempted = true;
+        return InvokeStart(*gameplayModule, runtimeContext);
+    }
+
+    /** @copydoc LoadedGameModule::Impl::PublishRuntimeContext */
+    void LoadedGameModule::Impl::PublishRuntimeContext() {
         runtimeContext = {projectServices->Cancellation(), projectServices->ActiveServices(), projectServices->Capabilities()};
         runtimeContext.physics = physics;
         runtimeContext.character = character;
-        startAttempted = true;
-        return InvokeStart(*gameplayModule, runtimeContext);
+        runtimeContext.navigation = navigation;
     }
 
     Result<GameModuleReloadSnapshot> LoadedGameModule::Impl::PrepareReload() {
@@ -124,6 +140,8 @@ namespace Horo::Gameplay {
         projectServices->RequestCancellation();
         if (character)
             character->Revoke();
+        if (navigation)
+            navigation->Revoke();
         if (physics)
             physics->Revoke();
         auto snapshot = InvokePrepareReload(*gameplayModule, runtimeContext);
@@ -154,6 +172,8 @@ namespace Horo::Gameplay {
         shutdown = true;
         if (character)
             character->Revoke();
+        if (navigation)
+            navigation->Revoke();
         if (physics)
             physics->Revoke();
         if (projectServices)
@@ -169,16 +189,14 @@ namespace Horo::Gameplay {
             destroy(gameplayModule);
             gameplayModule = nullptr;
         }
+        runtimeContext.navigation.reset();
+        navigation.reset();
         runtimeContext.character.reset();
         character.reset();
         registries.registry.reset();
         registries.systems.reset();
         registries.services.reset();
         registries.components.reset();
-        library.reset();
-        if (removeArtifactOnUnload) {
-            std::error_code ignored;
-            std::filesystem::remove(loadedArtifactPath, ignored);  // NOSONAR: canonical host-created shadow artifact only.
-        }
+        codeImage.reset();
     }
 }  // namespace Horo::Gameplay

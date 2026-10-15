@@ -647,3 +647,18 @@ returns original Physics errors. The owner checks content, mesh, target, complet
 settings/material fingerprint and generation before replacement. Failed or stale work
 retains the prior closure; shutdown closes admission, cancels retained tokens and leaves
 existing reader snapshots/Physics cache leases valid until their owners release them.
+
+### Canonical destruction Save capture
+
+`CanonicalDestructionSnapshot` is the DestructionApi-owned semantic model shared by
+Save and replication. Network role framing converts its product authority epoch at
+the transport boundary; the Save integration has no Network dependency.
+`HoroEngine::DestructionSaveIntegration` binds an explicit owner-safe source to the
+existing Runtime Save participant registry and capture builder. It validates actual
+damage-owner identity/state and complete semantic chunk evidence, then emits bounded
+versioned canonical values through the Save-owned sink. Active chunk membership must
+have exact same-epoch Physics participant checkpoint evidence; no Physics motion is
+encoded by DFR. Failure, cancellation, stale identity and shutdown emit no new owner
+publication. The capture builder owns aggregate rollback and detached record lifetime.
+See [the HORO-1990 migration note](../../migrations/HORO-1990_destruction_save_capture.md)
+for source migration, schema1 layout and explicit host composition obligations.

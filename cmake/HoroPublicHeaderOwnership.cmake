@@ -479,6 +479,9 @@ horo_configure_target_header_boundary(HoroRuntimeScene PUBLIC_HEADERS
     Horo/Runtime/Scene/SaveContentReconciliation.h
     Horo/Runtime/Scene/SaveContentWorld.h
 )
+horo_configure_target_header_boundary(HoroGameplayNavigationIntegration PUBLIC_HEADERS
+    Horo/Gameplay/GameplayNavigationContext.h
+)
 horo_configure_target_header_boundary(HoroGameplayRuntime PUBLIC_HEADERS
     Horo/Gameplay/BehaviorRegistry.h
     Horo/Gameplay/SaveGameplayPersistence.h
@@ -608,6 +611,9 @@ horo_configure_target_header_boundary(HoroAudioCommands PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroAudioMetrics PUBLIC_HEADERS
     Horo/Audio/AudioMetricExtraction.h
     Horo/Audio/AudioMetrics.h
+)
+horo_configure_target_header_boundary(HoroAndroidInputIntegration PUBLIC_HEADERS
+    Horo/Platform/AndroidInput.h
 )
 horo_configure_target_header_boundary(HoroInput PUBLIC_HEADERS
     Horo/Runtime/Input.h
@@ -753,6 +759,7 @@ horo_configure_target_header_boundary(HoroVfxApi PUBLIC_HEADERS
 Horo/Vfx/VfxWorld.h
 )
 horo_configure_target_header_boundary(HoroDestructionApi PUBLIC_HEADERS
+    Horo/Destruction/DestructionCanonicalState.h
     Horo/Destruction/DestructibleDescriptor.h
     Horo/Destruction/DestructionCommand.h
     Horo/Destruction/DestructionComposition.h
@@ -779,6 +786,8 @@ horo_configure_target_header_boundary(HoroDestructionRuntime PUBLIC_HEADERS
     Horo/Destruction/DestructionDamageRuntime.h
     Horo/Destruction/DestructionEventStream.h
 )
+horo_configure_target_header_boundary(HoroDestructionSaveIntegration PUBLIC_HEADERS
+    Horo/Destruction/DestructionSaveCapture.h)
 horo_configure_target_header_boundary(HoroDestructionApplication PUBLIC_HEADERS
     Horo/Destruction/DestructionEventDispatcher.h
 )
@@ -860,6 +869,9 @@ horo_configure_target_header_boundary(HoroNavigationBakeService PUBLIC_HEADERS
     Horo/Application/NavigationBakeService.h
     Horo/Application/NavigationBakeDiagnostics.h
     Horo/Application/NavigationBakeSourceAuthority.h
+)
+horo_configure_target_header_boundary(HoroNavigationCharacterIntegration PUBLIC_HEADERS
+    Horo/Navigation/NavigationCharacterAdapter.h
 )
 horo_configure_target_header_boundary(HoroNavigationSceneIntegration PUBLIC_HEADERS
     Horo/Navigation/NavigationSceneActivation.h
@@ -1143,6 +1155,7 @@ horo_configure_target_header_boundary(HoroRenderVulkan)
 horo_configure_target_header_boundary(HoroRenderD3D12)
 
 horo_configure_target_header_boundary(HoroEditorModel PUBLIC_HEADERS
+    Horo/Editor/SceneDocumentTransaction.h
     Horo/Editor/EditorDataBus.h
 )
 horo_configure_target_header_boundary(HoroEditorViewportScene)
@@ -1276,6 +1289,10 @@ horo_configure_target_header_boundary(HoroUiAnimationRuntimeIntegration PUBLIC_H
 
 horo_configure_target_header_boundary(HoroPCGSceneAdapter PUBLIC_HEADERS
     Horo/PCGScene/SceneOutputAdapter.h
+)
+
+horo_configure_target_header_boundary(HoroPCGSceneBake PUBLIC_HEADERS
+    Horo/PCGScene/SceneBake.h
 )
 
 horo_verify_public_header_inventory()

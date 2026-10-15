@@ -414,7 +414,8 @@ namespace Horo::Character::Detail {
                                                  descriptor.collisionProfile,
                                                  descriptor.queryChannel,
                                                  impl.settings.Values().work.maximumMovementIterations,
-                                                 descriptor.selectors};
+                                                 descriptor.selectors,
+                                                 input.query.bodyPoseFrame};
         if (const auto budget = ReserveTickQuery(impl); budget.HasError())
             return budget;
         if (input.metrics != nullptr)

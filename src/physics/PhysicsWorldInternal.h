@@ -49,8 +49,7 @@ namespace Horo::Physics {
     struct PhysicsQueryBatchState final {
         PhysicsQueryBatchState(const std::span<const PhysicsQueryCommand> commands,
                                std::shared_ptr<PhysicsQueryEventCapabilityState> access)
-            : cancelledCode_(&PhysicsErrors::QueryCancelled), revokedCode_(&PhysicsErrors::CapabilityRevoked),
-              commands_(commands.begin(), commands.end()), access_(std::move(access)) {}
+            : commands_(commands.begin(), commands.end()), access_(std::move(access)) {}
 
         [[nodiscard]] const std::vector<PhysicsQueryCommand> &Commands() const noexcept {
             return commands_;
@@ -119,8 +118,8 @@ namespace Horo::Physics {
         }
 
     private:
-        const ErrorCodeDescriptor *const cancelledCode_;
-        const ErrorCodeDescriptor *const revokedCode_;
+        const ErrorCodeDescriptor *const cancelledCode_{&PhysicsErrors::QueryCancelled};
+        const ErrorCodeDescriptor *const revokedCode_{&PhysicsErrors::CapabilityRevoked};
         std::vector<PhysicsQueryCommand> commands_;
         std::shared_ptr<PhysicsQueryEventCapabilityState> access_;
         mutable std::mutex terminalMutex;

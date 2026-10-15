@@ -46,13 +46,24 @@ def verify_junit(path):
                 raise ValueError(f"Character allocation suite has nonzero {field}")
 
 
+def workspace_path(value):
+    """Reject CLI traversal and symlink escapes before reading or writing workspace evidence."""
+    root = Path.cwd().resolve()
+    candidate = Path(value).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("Qualification evidence must remain inside the current workspace") from error
+    return candidate
+
+
 def main():
     """Validate discovery before execution, or validate the resulting exact Release JUnit."""
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--discovery", type=Path)
-    mode.add_argument("--output-junit", type=Path)
-    parser.add_argument("--regex-output", type=Path)
+    mode.add_argument("--discovery", type=workspace_path)
+    mode.add_argument("--output-junit", type=workspace_path)
+    parser.add_argument("--regex-output", type=workspace_path)
     args = parser.parse_args()
     if args.discovery:
         if args.regex_output is None:
