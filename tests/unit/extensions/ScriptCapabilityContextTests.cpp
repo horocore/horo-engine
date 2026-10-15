@@ -304,3 +304,28 @@ namespace Horo::Extensions::Tests {
         CHECK_FALSE(lease.IsUsable());
     }
 }  // namespace Horo::Extensions::Tests
+
+namespace Horo::Extensions::Tests {
+    TEST_CASE("Script binding opaque resources preserve exact owner and can retire after scope revocation",
+              "[Extensions][ScriptCapability]") {
+        CapabilityFixture fixture;
+        auto first = ScriptCapabilityContext::Create(fixture.registry, fixture.Descriptor());
+        REQUIRE(first.HasValue());
+        auto second = ScriptCapabilityContext::Create(fixture.registry, fixture.Descriptor());
+        REQUIRE(second.HasValue());
+        auto owner = first.Value().Bind("com.example.api");
+        auto foreign = second.Value().Bind("com.example.api");
+        REQUIRE(owner.HasValue());
+        REQUIRE(foreign.HasValue());
+        auto handle = owner.Value().IssueHandle(fixture.provider, "com.example.resource");
+        REQUIRE(handle.HasValue());
+        REQUIRE(owner.Value().ValidateHandle(handle.Value()).HasValue());
+        CHECK(foreign.Value().ValidateHandle(handle.Value()).HasError());
+        CHECK(foreign.Value().ReleaseHandle(handle.Value()).HasError());
+        fixture.scene.Revoke();
+        CHECK(owner.Value().ValidateHandle(handle.Value()).HasError());
+        CHECK(owner.Value().IssueHandle(fixture.provider, "com.example.resource").HasError());
+        REQUIRE(owner.Value().ReleaseHandle(handle.Value()).HasValue());
+        CHECK(fixture.registry->ValidateHandle(handle.Value()).HasError());
+    }
+}  // namespace Horo::Extensions::Tests

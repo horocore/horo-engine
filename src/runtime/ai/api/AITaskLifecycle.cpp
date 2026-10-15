@@ -51,7 +51,7 @@ namespace Horo::AI {
             PublishCancelled(AiTaskCancellationReason::AgentGenerationRetired);
         else if (pendingCancellation_.has_value())
             PublishCancelled(*pendingCancellation_);
-        else if (context_->cancellation.IsCancellationRequested())
+        else if (context_->IsCancellationRequested())
             PublishCancelled(AiTaskCancellationReason::ContextCancelled);
         return Result<AiTaskTransitionDisposition>::Success(AiTaskTransitionDisposition::Applied);
     }
@@ -171,7 +171,7 @@ namespace Horo::AI {
             PublishCancelled(AiTaskCancellationReason::AgentGenerationRetired);
             return Result<AiTaskResumeDisposition>::Success(BecameTerminal);
         }
-        if (context_->cancellation.IsCancellationRequested()) {
+        if (context_->IsCancellationRequested()) {
             PublishCancelled(AiTaskCancellationReason::ContextCancelled);
             return Result<AiTaskResumeDisposition>::Success(BecameTerminal);
         }

@@ -103,7 +103,28 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "HORO_BUILD_NAVIGATION_RECAST_DETOUR": "OFF",
-        "HORO_BUILD_EXAMPLES": "OFF"
+        "HORO_BUILD_EXAMPLES": "OFF",
+        "HORO_BUILD_PHYSICS_NATIVE": "ON"
+      }
+    },
+    {
+      "name": "ci-navigation-physics-null",
+      "inherits": "ci-navigation-null",
+      "binaryDir": "${sourceDir}/build/ci-navigation-physics-null",
+      "cacheVariables": {
+        "HORO_BUILD_NAVIGATION_RECAST_DETOUR": "ON",
+        "HORO_BUILD_PHYSICS_NATIVE": "OFF",
+        "HORO_BUILD_INPUT_SDL3": "OFF"
+      }
+    },
+    {
+      "name": "ci-navigation-providers-null",
+      "inherits": "ci-navigation-null",
+      "binaryDir": "${sourceDir}/build/ci-navigation-providers-null",
+      "cacheVariables": {
+        "HORO_BUILD_NAVIGATION_RECAST_DETOUR": "OFF",
+        "HORO_BUILD_PHYSICS_NATIVE": "OFF",
+        "HORO_BUILD_INPUT_SDL3": "OFF"
       }
     },
     {
@@ -256,6 +277,32 @@
       "jobs": 2
     },
     {
+      "name": "ci-navigation-physics-null",
+      "configurePreset": "ci-navigation-physics-null",
+      "targets": [
+        "HoroNavigationRuntimeQualificationTests",
+        "HoroNavigationCharacterAdapterPublicConsumer",
+        "HoroNavigationCharacterIntegrationPublicHeaderConsumer",
+        "HoroNavigationCoordinatorPublicConsumer",
+        "HoroCharacterInputPublicHeaderConsumer",
+        "HoroPhysicsPublicHeaderConsumer"
+      ],
+      "jobs": 2
+    },
+    {
+      "name": "ci-navigation-providers-null",
+      "configurePreset": "ci-navigation-providers-null",
+      "targets": [
+        "HoroNavigationRuntimeQualificationTests",
+        "HoroNavigationCharacterAdapterPublicConsumer",
+        "HoroNavigationCharacterIntegrationPublicHeaderConsumer",
+        "HoroNavigationCoordinatorPublicConsumer",
+        "HoroCharacterInputPublicHeaderConsumer",
+        "HoroPhysicsPublicHeaderConsumer"
+      ],
+      "jobs": 2
+    },
+    {
       "name": "ci-network-gns",
       "configurePreset": "ci-network-gns",
       "targets": [
@@ -381,6 +428,40 @@
         "include": {
           "label": "^ci-navigation$"
         }
+      }
+    },
+    {
+      "name": "ci-navigation-physics-null",
+      "inherits": "ci-test-base",
+      "configurePreset": "ci-navigation-physics-null",
+      "output": {
+        "outputJUnitFile": "${sourceDir}/build/ci-navigation-physics-null/ctest.xml"
+      },
+      "filter": {
+        "include": {
+          "name": "^(HoroNavigationRuntimeQualificationTests::|HoroNavigationCharacterAdapterPublicConsumer$|HoroNavigationCoordinatorPublicConsumer$)"
+        }
+      },
+      "execution": {
+        "jobs": 1,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "ci-navigation-providers-null",
+      "inherits": "ci-test-base",
+      "configurePreset": "ci-navigation-providers-null",
+      "output": {
+        "outputJUnitFile": "${sourceDir}/build/ci-navigation-providers-null/ctest.xml"
+      },
+      "filter": {
+        "include": {
+          "name": "^(HoroNavigationRuntimeQualificationTests::|HoroNavigationCharacterAdapterPublicConsumer$|HoroNavigationCoordinatorPublicConsumer$)"
+        }
+      },
+      "execution": {
+        "jobs": 1,
+        "noTestsAction": "error"
       }
     },
     {
