@@ -14,6 +14,10 @@ namespace Horo::Gameplay {
     LoadedGameModule::~LoadedGameModule() {
         if (impl_ && impl_->runtimeUi)
             impl_->runtimeUi->Revoke();
+        if (impl_ && impl_->ai) {
+            impl_->ai->Revoke();
+            impl_->ai->RetireOwnedTasksAtSafePoint();
+        }
         if (impl_ && impl_->character)
             impl_->character->Revoke();
         if (impl_ && impl_->navigation)
@@ -153,8 +157,12 @@ namespace Horo::Gameplay {
     /** @copydoc LoadedGameModule::PrepareReload */
     Result<GameModuleReloadSnapshot> LoadedGameModule::PrepareReload() {  // NOSONAR(cpp:S5817) Mutates generation lifecycle.
         impl_->runtimeLeaseAdmission.store(false, std::memory_order_release);
-        if (impl_->runtimeUi)
+        if (impl_ && impl_->runtimeUi)
             impl_->runtimeUi->Revoke();
+        if (impl_ && impl_->ai) {
+            impl_->ai->Revoke();
+            impl_->ai->RetireOwnedTasksAtSafePoint();
+        }
         if (impl_ && impl_->character)
             impl_->character->Revoke();
         if (impl_ && impl_->navigation)
@@ -171,6 +179,11 @@ namespace Horo::Gameplay {
     Result<void> LoadedGameModule::RestoreReload(  // NOSONAR(cpp:S5817) Mutates generation lifecycle.
         const GameModuleReloadSnapshot &snapshot) {
         return impl_->RestoreReload(snapshot);
+    }
+
+    /** @copydoc LoadedGameModule::AiContext */
+    std::shared_ptr<const GameplayAiContext> LoadedGameModule::AiContext() const noexcept {
+        return impl_->ai;
     }
 
     /** @copydoc GameModuleHost::GameModuleHost */

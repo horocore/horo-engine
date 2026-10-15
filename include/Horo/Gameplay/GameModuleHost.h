@@ -29,6 +29,7 @@ namespace Horo::Gameplay {
         std::shared_ptr<GameplayPhysicsContext> physics;       /**< Existing exact per-module Physics scope. */
         std::shared_ptr<GameplayCharacterContext> character;   /**< Character anchor; each loaded generation receives a fresh child. */
         std::shared_ptr<GameplayNavigationContext> navigation; /**< Exact generation navigation anchor. */
+        std::shared_ptr<GameplayAiContext> ai;                 /**< AI anchor; each loaded generation receives a fresh child. */
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi; /**< Exact independently revocable UI anchor. */
     };
 
@@ -99,6 +100,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] CancellationToken Cancellation() const noexcept;
         /** @brief Returns this module generation's explicit Physics binding, if composed by the host. */
         [[nodiscard]] std::shared_ptr<const GameplayPhysicsContext> PhysicsContext() const noexcept;
+        /** @brief Returns the exact module AI lifetime, or absence in a host without AI. @return Immutable scoped holder. */
+        [[nodiscard]] std::shared_ptr<const GameplayAiContext> AiContext() const noexcept;
         /** @brief Returns this loaded module generation's exact independent Character scope. @return Owned holder, including typed denial.
          */
         [[nodiscard]] std::shared_ptr<const GameplayCharacterContext> CharacterContext() const noexcept;

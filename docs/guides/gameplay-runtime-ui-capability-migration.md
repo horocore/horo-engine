@@ -1,7 +1,7 @@
 # Gameplay Runtime UI capability migration
 
 HORO-753 / #753 / [RUI-006.7] adds explicit gameplay and Lua access over the
-canonical Runtime UI owners. This is the combined native SDK19 layout preserving main Character SDK15 and Navigation SDK10.
+canonical Runtime UI owners. This is the combined native SDK21 layout preserving main Navigation, Character and AI SDK20 before appending Runtime UI.
 
 ## Composition and ownership
 
@@ -112,14 +112,15 @@ authored tests or compile-only checkpoints do not establish runtime qualificatio
 ## SDK and rebuild
 
 Rebuild all native modules, generated descriptor bundles, SDK consumers and host
-artifacts against SDK19 and its exact `gameplay-sdk19` fingerprint. The combined layout
-preserves main Character SDK15 (including Navigation SDK10) and adds UI SDK17.
-`GameRuntimeContext` appends UI after Physics/Navigation/Character. Host behavior factories accept designated `BehaviorRuntimeServiceBindings` fields;
-no empty positional Character argument is needed when absent.
-Host service aggregates preserve Physics/Character/Navigation and append UI; use
-designated fields. Old SDK10/15/17/18 layouts are rejected before factory activation.
-AI18/20 identify independent layouts; a future combined UI+AI layout requires a fresh
-epoch and complete validation, never the maximum prior number.
+artifacts against SDK21 and its exact `gameplay-sdk21` fingerprint. The combined
+layout preserves main SDK20's Physics/Navigation/AI/Character runtime context
+order and appends UI. Host service aggregates preserve Physics/Character/
+Navigation/AI and append UI; use designated fields. Main's AI registration registry
+and immutable host-owned diagnostics remain intact. Old SDK10/15/17/18/19/20
+layouts are rejected before factory activation. SDK21 is a fresh reservation for
+this union, not a numerical maximum of the separately published UI19 and AI20.
+Host behavior factories retain designated `BehaviorRuntimeServiceBindings` fields;
+AI's explicit script bridge remains a separate composition boundary.
 
 `find_package(HoroEngineGameplay REQUIRED COMPONENTS RuntimeUi)` imports the
 existing Runtime UI target plus its reviewed Assets/runtime/text-shaping/Unicode
@@ -189,14 +190,14 @@ shim retaining a second source of activation truth. The public prefab consumer
 checks both new factories, rejects old positional signatures through dependent
 concepts, and proves bare-Scene creation cannot accept prefab scope.
 
-This repair does not change the native module ABI. `BehaviorRuntime.h` belongs to
-`HoroGameplayRuntime` in `cmake/HoroPublicHeaderOwnership.cmake`; that host target is
-absent from every build-tree gameplay SDK export in the root `CMakeLists.txt`.
-The exported core `HoroRuntime` target is a distinct owner. The default SDK exports
-Foundation/NetworkApi/SaveApi/GameplayApi, with separate optional Physics,
-Navigation and RuntimeUi components. Their export sets do not expose this host
-factory or its header. `GameRuntimeContext`, behavior/backend vtables, native
-module descriptors, their field order and the SDK fingerprint definition are
-byte-identical to the SDK19 repair head. SDK19 therefore remains the reserved
-NAV+Character+UI module boundary; this source migration requires host callers to
-rebuild, rather than inventing a new native layout epoch.
+The host factory migration itself does not change the native module ABI.
+`BehaviorRuntime.h` belongs to `HoroGameplayRuntime` in
+`cmake/HoroPublicHeaderOwnership.cmake`; that host target is absent from every
+build-tree gameplay SDK export. Its four service bindings and separate prefab
+argument remain unchanged by AI integration. The subsequent main SDK20 merge does
+change the combined native context/registration layout: SDK21 now identifies
+Navigation+Character+AI+UI, preserving main's field order before appending UI.
+Every module and descriptor bundle must rebuild against that exact fingerprint.
+The previous SDK19 native/consumer validation is historical and does not qualify
+the new union. Revalidate native lifecycle, both external SDK contracts, AI native
+fixtures and the backend-omitted public consumers before delivery.

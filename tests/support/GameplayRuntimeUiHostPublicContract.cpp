@@ -3,7 +3,11 @@
 #include <type_traits>
 
 using namespace Horo::Gameplay;
-static_assert(GameplaySdkBoundaryVersion == 19);
+static_assert(GameplaySdkBoundaryVersion == 21);
+static_assert(std::is_same_v<decltype(GameRuntimeContext::ai), std::shared_ptr<const GameplayAiContext>>);
+static_assert(std::is_same_v<decltype(GameRuntimeContext::runtimeUi), std::shared_ptr<const Horo::Runtime::Ui::RuntimeUiClient>>);
+static_assert(std::is_same_v<decltype(GameModuleRuntimeServices::ai), std::shared_ptr<GameplayAiContext>>);
+static_assert(std::is_same_v<decltype(GameModuleRuntimeServices::runtimeUi), std::shared_ptr<const Horo::Runtime::Ui::RuntimeUiClient>>);
 static_assert(!std::is_default_constructible_v<GameModuleHostOptions>);
 static_assert(!std::is_aggregate_v<GameModuleHostOptions>);
 

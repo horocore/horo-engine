@@ -180,6 +180,15 @@ namespace Horo::Gameplay {
         } else {
             impl.character = GameplayCharacterContext::Withheld({.moduleId = impl.moduleId}, GameplayCharacterDenial::Unavailable);
         }
+        if (runtimeServices_.ai && runtimeServices_.ai->Binding().moduleId != impl.moduleId)
+            return Result<void>::Failure(MakeError(AI::AIErrors::CapabilityUnavailable));
+        // Derive before registration so rollback cannot revoke the reusable host anchor.
+        if (runtimeServices_.ai) {
+            auto child = runtimeServices_.ai->Derive({});
+            if (child.HasError())
+                return Result<void>::Failure(child.ErrorValue());
+            impl.ai = std::move(child).Value();
+        }
         return Result<void>::Success();
     }
 

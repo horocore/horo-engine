@@ -97,7 +97,7 @@ the reader resumes; the reader must return HandleStale, and admission must recov
 after lock release. This ordinary Debug case remains enabled on Windows. The
 separate preparation rollback failure sweep remains mandatory in Release.
 
-The current combined Character/Navigation/Runtime UI layout uses SDK19 and
-`gameplay-sdk19`. Rebuild Character modules and Physics SDK consumers together
+The current combined Character/Navigation/AI/Runtime UI layout uses SDK21 and
+`gameplay-sdk21`. Rebuild Character modules and Physics SDK consumers together
 with the current host; SDK15 remains a historical independent layout. The union
 retains independent scope revocation and adds no ambient UI authority.

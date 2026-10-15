@@ -512,3 +512,20 @@ historical context; this layout requires the exact SDK12 fingerprint.
 
 See the [owning Character scope contract](../runtime/character-controller-architecture.md#gameplay-runtime-scope-and-revocation)
 and [migration/affected callers](../../guides/gameplay-character-capability-migration.md).
+
+## SDK21 AI and Runtime UI composition
+
+The combined native boundary preserves merged SDK20 `GameRuntimeContext` fields
+in Physics/Navigation/AI/Character order and appends Runtime UI. The inert AI
+registration registry remains in `GameRegistrationContext`; host runtime services
+preserve Physics/Character/Navigation/AI and append UI. SDK21 and its exact
+fingerprint identify this new layout; SDK19 and SDK20 cannot be loaded as it.
+AI task retirement and UI revocation both use authoritative host holders before
+module callbacks or image unload. Neither exposed context assignment can replace
+those holders. AI diagnostics retain immutable host-owned snapshots.
+
+`BehaviorRuntimeServiceBindings` remains the host factory's inert four-service
+value (Physics, Navigation, Character, UI), with SceneService-only prefab admission
+separate. AI script capabilities remain in their existing explicit bridge rather
+than creating an ambient service or expanding this binding value. Header ownership
+and SDK optional component export sets retain their existing target owners.

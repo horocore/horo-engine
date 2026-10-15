@@ -114,6 +114,8 @@ def test_gameplay_generation_is_distinct_and_matches_real_native_boundary(offlin
     "Gameplay SDK9 → SDK10 (native boundary 9 → 10)",
     "Gameplay SDK10 → SDK17 (Navigation and Runtime UI layout)",
     "Gameplay SDK15/17 → SDK19 (Character, Navigation and Runtime UI union)",
+    "Gameplay SDK15 / AI18 → SDK20",
+    "Gameplay SDK19/20 → SDK21 (Navigation, Character, AI and Runtime UI union)",
     "Gameplay SDK10 → SDK15 (Character and Navigation runtime boundary 10 → 15)",
     "Retirement source API migration in this snapshot",
 ))

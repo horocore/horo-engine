@@ -21,6 +21,10 @@
 #define HORO_GAME_EXPORT __attribute__((visibility("default")))
 #endif
 
+namespace Horo::AI {
+    class AiCapabilityDescriptorRegistry;
+}
+
 namespace Horo::Runtime::Ui {
     class RuntimeUiClient;
 }
@@ -35,9 +39,10 @@ namespace Horo::Gameplay {
     class GameEventRegistry;
     class GameplayPhysicsContext;
     class GameplayNavigationContext;
+    class GameplayAiContext;
     class GameplayCharacterContext;
 
-    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 19;
+    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 21;
     inline constexpr std::uint32_t GameplayDescriptorBundleSchemaVersion = 1;
     inline constexpr std::uint32_t GameModuleReloadSnapshotSchemaVersion = 1;
     inline constexpr std::size_t MaximumGeneratedBehaviorDescriptors = 4096;
@@ -68,6 +73,7 @@ namespace Horo::Gameplay {
         std::span<const GameplayCapabilityId> capabilities;            /**< Explicit host and project-service capability grants. */
         std::shared_ptr<const GameplayPhysicsContext> physics;         /**< Optional exact module/play-world binding; no discovery. */
         std::shared_ptr<const GameplayNavigationContext> navigation;   /**< Optional exact-generation navigation grant. */
+        std::shared_ptr<const GameplayAiContext> ai;                   /**< Optional exact-generation AI grant; missing is recoverable. */
         std::shared_ptr<const GameplayCharacterContext> character;     /**< Exact module-generation Character scope. */
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi; /**< Optional independently revocable host UI grant. */
     };
@@ -88,6 +94,7 @@ namespace Horo::Gameplay {
         ReplicationRegistrationRegistry &replication;
         GameEventRegistry &events;
         PersistenceRegistrationRegistry &persistence;
+        AI::AiCapabilityDescriptorRegistry &ai; /**< Inert task declarations, frozen before Start. */
     };
 
     /** @brief Project-owned module lifecycle valid only for one exact compatible SDK generation. */

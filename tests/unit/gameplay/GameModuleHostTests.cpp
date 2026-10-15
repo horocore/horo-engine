@@ -195,7 +195,7 @@ TEST_CASE("generated gameplay bundle validation rejects incompatible identity be
     REQUIRE(mismatch.ErrorValue().code.Value() == GameplayErrors::IncompatibleGameModule.code.Value());
 }
 
-TEST_CASE("combined SDK19 boundary rejects previous native capability layouts before activation", "[unit][gameplay][sdk]") {
+TEST_CASE("combined SDK21 boundary rejects previous native capability layouts before activation", "[unit][gameplay][sdk]") {
     ValidBundleStorage storage;
     const GameModuleLoadExpectation expected{
         .moduleId = "game.tests",
@@ -208,7 +208,7 @@ TEST_CASE("combined SDK19 boundary rejects previous native capability layouts be
     };
     REQUIRE(ValidateGameModuleDescriptor(descriptor, expected).HasValue());
     REQUIRE(ValidateGeneratedGameplayDescriptorBundle(storage.bundle, expected).HasValue());
-    for (const std::uint32_t previousLayout : {6U, 7U, 10U, 15U, 17U, 18U}) {
+    for (const std::uint32_t previousLayout : {6U, 7U, 10U, 11U, 15U, 16U, 17U, 18U, 19U, 20U}) {
         descriptor.sdkBoundaryVersion = previousLayout;
         storage.bundle.sdkBoundaryVersion = previousLayout;
         const auto oldModule = ValidateGameModuleDescriptor(descriptor, expected);
