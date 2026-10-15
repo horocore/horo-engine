@@ -290,7 +290,7 @@ namespace Horo::Character::Detail {
         movement.platformAttachmentChange =
             carry.stale ? CharacterPlatformAttachmentChange::Stale : CharacterPlatformAttachmentChange::Detached;
         if (command.detachPlatformRequested && movement.termination == CharacterMovementTermination::Complete)
-            movement.gravityVelocityMetersPerSecond = previousGravity + carry.leaveVelocity;
+            movement.gravityVelocityMetersPerSecond = previousGravity + carry.startLeaveVelocity;
     }
 
     /** @brief Stages shape clearance and resolves movement with the candidate capsule before any publication. */

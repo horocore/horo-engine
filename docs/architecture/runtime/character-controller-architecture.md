@@ -648,7 +648,10 @@ motion. Capsule up remains fixed; `inheritPlatformHeading` admits only twist abo
 `platformLeaveVelocity` explicitly selects `None`, body `Linear`, or full attachment
 `Point` velocity. A jump transfers it before free-flight integration; walk-off and
 `detachPlatformRequested` record it once in committed free-flight continuation for
-the next quantum. No later airborne tick repeats that transfer. Stale bindings,
+the next quantum. Point transfer uses the transported attachment for jump, the actual
+post-intent position for walk-off, and the start-of-tick point for explicit detach
+(which skips carry). Rejected carry is known before any transfer can enter free-flight
+displacement or continuation. No later airborne tick repeats that transfer. Stale bindings,
 blocked carry and teleport do not invent departure velocity. Teleport clears the
 attachment and continuation through the existing placement lifecycle.
 

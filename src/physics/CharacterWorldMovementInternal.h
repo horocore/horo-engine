@@ -290,6 +290,30 @@ namespace Horo::Character::Detail {
         return Result<void>::Success();
     }
 
+    /** @brief Admits immediate transfer only after carry has succeeded, before any free-flight integration. */
+    void AdmitPlatformDeparture(CharacterMovementResult &result, const CharacterMovementRequest &command,
+                                const CharacterPlatformCarry &carry) noexcept {
+        if ((!result.jumpApplied && !command.detachPlatformRequested) || result.platformCarryRejected ||
+            result.termination != CharacterMovementTermination::Complete)
+            return;
+        const auto transfer = command.detachPlatformRequested ? carry.startLeaveVelocity : carry.leaveVelocity;
+        result.gravityVelocityMetersPerSecond += transfer;
+        result.platformLeaveVelocityMetersPerSecond = transfer;
+    }
+
+    /** @brief Commits walk-off continuation at the actual resolved endpoint, once for the departed attachment. */
+    void AdmitPlatformWalkOff(CharacterMovementResult &result, const CharacterMovementRequest &command,
+                              const CharacterControllerDescriptor &descriptor, const CharacterPlatformCarry &carry,
+                              const Math::Vec3 position) noexcept {
+        if (result.grounded || result.jumpApplied || command.detachPlatformRequested || result.platformCarryRejected ||
+            result.termination != CharacterMovementTermination::Complete || !carry.predicted)
+            return;
+        const auto transfer =
+            PlatformLeaveVelocity(*carry.predicted, position, carry.predicted->pose.translation, descriptor.platformLeaveVelocity);
+        result.gravityVelocityMetersPerSecond += transfer;
+        result.platformLeaveVelocityMetersPerSecond = transfer;
+    }
+
     /**
      * @brief Resolves one desired displacement through bounded Horo capsule sweeps and iterative slide.
      *
@@ -313,10 +337,6 @@ namespace Horo::Character::Detail {
         auto carried = previous;
         carried.heading = command.detachPlatformRequested ? previous.heading : carry.heading;
         auto result = InitialSweepMovement(command, carried, descriptor, previousGravityVelocity, input.tick);
-        if (result.jumpApplied || command.detachPlatformRequested) {
-            result.gravityVelocityMetersPerSecond += carry.leaveVelocity;
-            result.platformLeaveVelocityMetersPerSecond = carry.leaveVelocity;
-        }
 
         auto admitted = AdmitSweepMotion(command, previous, input, previousGravityVelocity,
                                          impl.settings.Values().work.maximumDisplacementMetersPerTick);
@@ -326,6 +346,7 @@ namespace Horo::Character::Detail {
 
         if (const auto swept = ResolvePlatformDisplacement(impl, result, command, input, descriptor, carry, motion); swept.HasError())
             return Result<CharacterMovementResult>::Failure(swept.ErrorValue());
+        AdmitPlatformDeparture(result, command, carry);
         if (const auto moved = ResolveDesiredDisplacement(impl, result, command, input, descriptor, motion); moved.HasError())
             return Result<CharacterMovementResult>::Failure(moved.ErrorValue());
         std::optional<CharacterSweepHit> steepSupport;
@@ -345,11 +366,7 @@ namespace Horo::Character::Detail {
                 ResolvePostSweepMotion(impl, result, StepQueryContext{command, input, descriptor}, supportDescriptor, motion, steepSupport);
             completed.HasError())
             return Result<CharacterMovementResult>::Failure(completed.ErrorValue());
-        if (!result.grounded && !result.jumpApplied && !command.detachPlatformRequested && !result.platformCarryRejected &&
-            result.termination == CharacterMovementTermination::Complete) {
-            result.gravityVelocityMetersPerSecond += carry.leaveVelocity;
-            result.platformLeaveVelocityMetersPerSecond = carry.leaveVelocity;
-        }
+        AdmitPlatformWalkOff(result, command, descriptor, carry, motion.position);
         result.finalPosition = motion.position;
         result.achievedVelocityMetersPerSecond = (motion.position - previous.position) / motion.elapsedSeconds;
         std::ranges::sort(result.contacts.begin(), result.contacts.begin() + result.contactCount, ContactLess);

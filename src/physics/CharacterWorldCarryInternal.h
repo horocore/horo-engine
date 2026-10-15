@@ -8,6 +8,7 @@ namespace Horo::Character::Detail {
         Math::Vec3 displacement{};
         Math::Quaternion heading{Math::Quaternion::Identity()};
         Math::Vec3 leaveVelocity{};
+        Math::Vec3 startLeaveVelocity{};
         std::optional<CharacterPlatformBodyEvidence> predicted;
         bool stale{};
     };
@@ -71,18 +72,15 @@ namespace Horo::Character::Detail {
         return length > 1.0e-6F ? axis * (2.0F * std::atan2(length, rotation.w * sign) / (length * seconds)) : Math::Vec3{};
     }
 
-    /** @brief Selects a declared transfer policy at the captured attachment point, not a chord-average velocity. */
-    [[nodiscard]] Math::Vec3 PlatformLeaveVelocity(const CharacterPlatformBodyEvidence &body, const Physics::PhysicsPose &target,
-                                                   const Math::Vec3 localPoint, const float seconds,
+    /** @brief Selects velocity at the actual departure point in its explicit start or transported body frame. */
+    [[nodiscard]] Math::Vec3 PlatformLeaveVelocity(const CharacterPlatformBodyEvidence &motion, const Math::Vec3 point,
+                                                   const Math::Vec3 bodyCenter,
                                                    const CharacterPlatformLeaveVelocityPolicy policy) noexcept {
         if (policy == CharacterPlatformLeaveVelocityPolicy::None)
             return {};
-        const bool kinematic = body.motion == Physics::PhysicsMotionType::Kinematic;
-        const auto linear = kinematic ? (target.translation - body.pose.translation) / seconds : body.linearVelocityMetersPerSecond;
         if (policy == CharacterPlatformLeaveVelocityPolicy::Linear)
-            return linear;
-        const auto angular = kinematic ? TargetAngularVelocity(body.pose, target, seconds) : body.angularVelocityRadiansPerSecond;
-        return linear + Math::Cross(angular, body.pose.rotation.Rotate(localPoint));
+            return motion.linearVelocityMetersPerSecond;
+        return motion.linearVelocityMetersPerSecond + Math::Cross(motion.angularVelocityRadiansPerSecond, point - bodyCenter);
     }
 
     /** @brief Computes finite carry and exactly one configured transfer from copied body and target evidence. */
@@ -100,11 +98,19 @@ namespace Horo::Character::Detail {
         const auto target = PlatformTarget(body, input, seconds);
         if (const auto valid = Physics::ValidatePhysicsPose(target); valid.HasError())
             return Result<CharacterPlatformCarry>::Failure(valid.ErrorValue());
+        result.predicted = body;
+        result.predicted->pose = target;
+        if (body.motion == Physics::PhysicsMotionType::Kinematic) {
+            result.predicted->linearVelocityMetersPerSecond = (target.translation - body.pose.translation) / seconds;
+            result.predicted->angularVelocityRadiansPerSecond = TargetAngularVelocity(body.pose, target, seconds);
+        }
         if (body.motion != Physics::PhysicsMotionType::Static) {
             const auto targetPoint = target.translation + target.rotation.Rotate(attachment.localRoot.translation);
             result.displacement = targetPoint - previous.position;
+            result.startLeaveVelocity =
+                PlatformLeaveVelocity(*result.predicted, previous.position, body.pose.translation, descriptor.platformLeaveVelocity);
             result.leaveVelocity =
-                PlatformLeaveVelocity(body, target, attachment.localRoot.translation, seconds, descriptor.platformLeaveVelocity);
+                PlatformLeaveVelocity(*result.predicted, targetPoint, target.translation, descriptor.platformLeaveVelocity);
             if (descriptor.inheritPlatformHeading) {
                 auto heading =
                     CarriedHeading(previous.heading, descriptor.up, target.rotation * attachment.sampledBodyPose.rotation.Inverse());
@@ -113,10 +119,9 @@ namespace Horo::Character::Detail {
                 result.heading = heading.Value();
             }
         }
-        if (!Math::IsFinite(result.displacement) || !Math::IsFinite(result.leaveVelocity) || Math::Length(result.displacement) > maximum)
+        if (!Math::IsFinite(result.displacement) || !Math::IsFinite(result.leaveVelocity) || !Math::IsFinite(result.startLeaveVelocity) ||
+            Math::Length(result.displacement) > maximum)
             return Result<CharacterPlatformCarry>::Failure(MakeError(CharacterErrors::PlacementInvalid));
-        result.predicted = body;
-        result.predicted->pose = target;
         return Result<CharacterPlatformCarry>::Success(result);
     }
 
