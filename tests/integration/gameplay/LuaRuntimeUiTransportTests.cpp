@@ -6,12 +6,31 @@
 
 #include <cstdlib>
 #include <limits>
+#include <string_view>
 extern "C" {
 #include <lualib.h>
 }
 
 namespace Horo::Tests::UiAccess {
     namespace {
+        /** @brief Exercises a nonstandard native failure with an owner that must unwind before Lua error propagation. */
+        int ThrowNative(lua_State *state) {
+            struct Unwind final {
+                int &count;
+
+                ~Unwind() {
+                    ++count;
+                }
+            } unwind{*static_cast<int *>(lua_touserdata(state, lua_upvalueindex(1)))};
+
+            throw 42;
+        }
+
+        /** @brief Exercises typed capacity projection and its protected allocation-failure fallback. */
+        int ThrowMemory(lua_State *) {
+            throw std::bad_alloc{};
+        }
+
         /** @brief Fails every growth from one exact allocation onward, including Lua's emergency-GC retry. */
         struct Fault final {
             std::size_t attempts{};
@@ -189,6 +208,33 @@ namespace Horo::Tests::UiAccess {
             return observed;
         }
     }  // namespace
+
+    TEST_CASE("Lua Runtime UI noexcept C boundary unwinds native owners and preserves typed capacity errors", "[runtime-ui][lua][oom]") {
+        Vm vm;
+        int unwound{};
+        lua_pushlightuserdata(vm.state, &unwound);
+        lua_pushcclosure(vm.state, Gameplay::Detail::UiScript::Boundary<ThrowNative>, 1);
+        REQUIRE(lua_pcall(vm.state, 0, LUA_MULTRET, 0) == LUA_ERRRUN);
+        CHECK(unwound == 1);
+        CHECK(std::string_view{lua_tostring(vm.state, -1)} == "Runtime UI transport native failure.");
+        lua_settop(vm.state, 0);
+
+        lua_pushcfunction(vm.state, Gameplay::Detail::UiScript::Boundary<ThrowMemory>);
+        REQUIRE(lua_pcall(vm.state, 0, LUA_MULTRET, 0) == LUA_OK);
+        REQUIRE(lua_gettop(vm.state) == 2);
+        CHECK(lua_isnil(vm.state, 1));
+        lua_getfield(vm.state, 2, "code");
+        CHECK(std::string_view{lua_tostring(vm.state, -1)} == UiErrors::CapacityExceeded.code.Value());
+        lua_settop(vm.state, 0);
+
+        lua_pushcfunction(vm.state, Gameplay::Detail::UiScript::Boundary<ThrowMemory>);
+        vm.fault.firstFailure = 1;
+        vm.fault.enabled = true;
+        const int status = lua_pcall(vm.state, 0, LUA_MULTRET, 0);
+        vm.fault.enabled = false;
+        CHECK(status != LUA_OK);
+        CHECK(vm.fault.failures > 0);
+    }
 
     TEST_CASE("Lua Runtime UI protects every context and projection allocation without leaking native holders", "[runtime-ui][lua][oom]") {
         for (const auto phase : {Phase::Context, Phase::Read, Phase::DecodeAndQueue, Phase::Terminal, Phase::Event,

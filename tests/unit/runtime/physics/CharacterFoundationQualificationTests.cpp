@@ -6,6 +6,10 @@ namespace Horo::Character {
 
         TEST_CASE("Character preparation allocation failures roll back every retained storage stage",
                   "[physics][character][qualification][allocation]") {
+#if defined(_MSC_VER) && defined(_ITERATOR_DEBUG_LEVEL) && _ITERATOR_DEBUG_LEVEL != 0
+            SKIP("MSVC Debug noexcept vector proxy allocation cannot qualify the preparation failure sweep; mandatory Windows Release runs "
+                 "this exact case.");
+#endif
             const auto descriptor = WorldDescriptor();
             const auto settings = QualificationSettings();
             const auto before = Tests::AllocationProbe::Count();
@@ -187,6 +191,23 @@ namespace Horo::Character {
             REQUIRE((active.world->PublishedTick() == CharacterPublishedTick{2, 2, 1}));
         }
 
+        TEST_CASE("Character registry allocation observer admits one exchange across repeated allocations",
+                  "[physics][character][qualification][thread][admission]") {
+            RegistryContention probe;
+            std::jthread responder([&probe] {
+                probe.attempt.acquire();
+                probe.returned.release();
+            });
+            RegistryContention::Observe(0, &probe);
+            RegistryContention::Observe(1, &probe);
+            RegistryContention::Observe(2, &probe);
+            responder.join();
+            REQUIRE(probe.invoked);
+            REQUIRE(probe.returnedWhileHeld);
+            REQUIRE_FALSE(probe.attempt.try_acquire());
+            REQUIRE_FALSE(probe.returned.try_acquire());
+        }
+
         TEST_CASE("Character admission remains nonblocking while an actual copied-state reader holds the registry",
                   "[physics][character][qualification][thread][admission]") {
             auto active = QualificationSpawnedWorld();
@@ -197,15 +218,15 @@ namespace Horo::Character {
             const auto after = Tests::AllocationProbe::Count();
             RequireError(staleResult, CharacterErrors::HandleStale);
             if (after == before)
-                SKIP("Error projection does not allocate on this standard library; registry-held fault observation is unsupported.");
+                SKIP("Error projection does not allocate on this standard library; registry-held allocation observation is unsupported.");
             RegistryContention probe;
             const auto request = Movement(active.controller, 1, 1);
             RegistryProducer producer{*active.world, request, probe};
             if (!producer.Start())
                 SKIP("Standard thread creation is unavailable; registry-contention qualification was not executed.");
-            const bool injected = ObserveRegistryHold(*active.world, stale, probe);
+            const auto observed = ObserveRegistryHold(*active.world, stale, probe);
             producer.Finish();
-            REQUIRE(injected);
+            RequireError(observed, CharacterErrors::HandleStale);
             REQUIRE(probe.invoked);
             REQUIRE(probe.returnedWhileHeld);
             REQUIRE(probe.after == probe.before);

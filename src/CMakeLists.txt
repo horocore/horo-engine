@@ -877,6 +877,7 @@ add_library(HoroGameplayApi STATIC
         gameplay/api/GameplayComponentErrors.cpp
         gameplay/api/GameplayErrors.cpp
         gameplay/api/GameplayPhysicsErrors.cpp
+        gameplay/api/GameplayCharacterErrors.cpp
 )
 add_library(HoroEngine::GameplayApi ALIAS HoroGameplayApi)
 target_compile_features(HoroGameplayApi PUBLIC cxx_std_20)
@@ -1003,6 +1004,9 @@ add_library(HoroGameplayLua STATIC
         gameplay/lua/LuaBehaviorMetadata.cpp
         gameplay/lua/LuaReplicationDeclaration.cpp
         gameplay/lua/LuaPhysicsBinding.cpp
+        gameplay/lua/LuaCharacterBinding.cpp
+        gameplay/lua/LuaCharacterCommand.cpp
+        gameplay/lua/LuaCharacterBinding.h
         gameplay/lua/LuaNavigationBinding.cpp
         gameplay/lua/LuaRuntimeUiBinding.cpp
         gameplay/lua/LuaRuntimeUiBinding.h
@@ -1382,6 +1386,13 @@ target_link_libraries(HoroGameplayRuntime PRIVATE HoroEngine::GameplayPhysicsInt
 target_link_libraries(HoroGameplayRuntime PRIVATE HoroEngine::PrefabRuntime)
 target_link_libraries(HoroGameplayModuleHost PRIVATE HoroEngine::GameplayPhysicsIntegration)
 target_link_libraries(HoroGameplayLua PRIVATE HoroEngine::GameplayPhysicsIntegration)
+add_library(HoroGameplayCharacterIntegration STATIC gameplay/runtime/GameplayCharacterContext.cpp)
+add_library(HoroEngine::GameplayCharacterIntegration ALIAS HoroGameplayCharacterIntegration)
+target_compile_features(HoroGameplayCharacterIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroGameplayCharacterIntegration PUBLIC HoroEngine::GameplayPhysicsIntegration)
+target_link_libraries(HoroGameplayRuntime PRIVATE HoroEngine::GameplayCharacterIntegration)
+target_link_libraries(HoroGameplayModuleHost PRIVATE HoroEngine::GameplayCharacterIntegration)
+target_link_libraries(HoroGameplayLua PRIVATE HoroEngine::GameplayCharacterIntegration)
 if(HORO_BUILD_PHYSICS_NATIVE)
     target_sources(HoroPhysics PRIVATE
         physics/CanonicalPhysicsRuntime.cpp
@@ -2083,6 +2094,10 @@ add_library(HoroWorldStreaming STATIC
         runtime/world_streaming/StreamingEvictionPolicyErrors.cpp
         runtime/world_streaming/StreamingFairQueue.cpp
         runtime/world_streaming/StreamingFairQueueErrors.cpp
+        runtime/world_streaming/StreamingSourcePlanner.cpp
+        runtime/world_streaming/StreamingSourceRegistration.cpp
+        runtime/world_streaming/StreamingSourcePlannerGeometry.cpp
+        runtime/world_streaming/StreamingTravelReadiness.cpp
         runtime/world_streaming/StreamingSourceDescriptor.cpp
         runtime/world_streaming/StreamingSourcePrefetch.cpp
         runtime/world_streaming/StreamingSourceRange.cpp

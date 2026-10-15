@@ -70,6 +70,9 @@ TEST_CASE("Scoped allocation failure remains on its owning thread and fires once
 }
 
 TEST_CASE("Lifecycle allocation failure after visibility preserves publication knowledge", "[save][lifecycle]") {
+#if defined(_MSC_VER) && _ITERATOR_DEBUG_LEVEL != 0
+    SKIP("Unsupported MSVC Debug Error transport under global allocation injection; required in Windows Release qualification");
+#endif
     const bool syncFailure = GENERATE(false, true);
     if (syncFailure)
         SaveAllocationPhase("[save-allocation] lifecycle-sync-failure\n");

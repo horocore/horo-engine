@@ -10,7 +10,7 @@ namespace Horo::Runtime::Ui::Detail {
         }
 
         /** @brief Reserve attribution before canonical enqueue so revoked requests can never invoke a later consumer. */
-        RuntimeUiCommandResult EnqueueAction(RuntimeUiServiceState &owner, RuntimeUiScope &scope, UiReloadCanvas &canvas,
+        RuntimeUiCommandResult EnqueueAction(RuntimeUiServiceState &owner, const RuntimeUiScope &scope, UiReloadCanvas &canvas,
                                              ActionCommand &command) {
             if (!canvas.actions)
                 return MakeError(UiErrors::CapabilityUnavailable);
@@ -31,6 +31,21 @@ namespace Horo::Runtime::Ui::Detail {
             }
             return admitted.Value();
         }
+
+        /** @brief Select the next admitted command at this cutoff; revocation drains every family in original admission order. */
+        PendingCommand *NextCommand(RuntimeUiScope &scope, const RuntimeUiCommandCutoff point, const bool revoked) noexcept {
+            PendingCommand *next{};
+            for (auto &pending : scope.commands) {
+                if (!pending.command)
+                    continue;
+                if (const bool binding = std::holds_alternative<RuntimeUiProviderUpdate>(*pending.command);
+                    !revoked && binding != (point == RuntimeUiCommandCutoff::BeforeVariableUpdate))
+                    continue;
+                if (!next || pending.id.value < next->id.value)
+                    next = &pending;
+            }
+            return next;
+        }
     }  // namespace
 
     /** @brief Execute one command at its named cutoff; all spans are borrowed only for this canonical owner call. */
@@ -38,7 +53,7 @@ namespace Horo::Runtime::Ui::Detail {
         auto *canvas = Canvas(owner, scope.grant);
         if (!canvas)
             return MakeError(UiErrors::CapabilityRevoked);
-        if (auto *screen = std::get_if<UiRouteOperationRequest>(&command)) {
+        if (const auto *screen = std::get_if<UiRouteOperationRequest>(&command)) {
             if (!canvas->routes)
                 return MakeError(UiErrors::CapabilityUnavailable);
             return Terminal(canvas->routes->Navigate(*screen));
@@ -55,7 +70,8 @@ namespace Horo::Runtime::Ui::Detail {
 
 namespace Horo::Runtime::Ui {
     /** @copydoc RuntimeUiService::ApplyQueuedCommands */
-    Result<std::size_t> RuntimeUiService::ApplyQueuedCommands(const RuntimeUiCommandCutoff point) {
+    Result<std::size_t> RuntimeUiService::ApplyQueuedCommands(  // NOSONAR(cpp:S5817) Consumes mailboxes and publishes owner commands.
+        const RuntimeUiCommandCutoff point) {
         if (auto check = Detail::CheckOwner(state_); check.HasError())
             return Result<std::size_t>::Failure(check.ErrorValue());
         if (point != RuntimeUiCommandCutoff::OwnerCommands && point != RuntimeUiCommandCutoff::BeforeVariableUpdate)
@@ -68,16 +84,7 @@ namespace Horo::Runtime::Ui {
             const auto valid = Detail::CheckScope(*scope);
             // Admission order, rather than reusable storage-slot order, is the command ordering authority.
             for (std::size_t count = 0; count < Detail::CommandLimit; ++count) {
-                Detail::PendingCommand *next{};
-                for (auto &pending : scope->commands) {
-                    if (!pending.command)
-                        continue;
-                    const bool binding = std::holds_alternative<RuntimeUiProviderUpdate>(*pending.command);
-                    if (!valid.HasError() && binding != (point == RuntimeUiCommandCutoff::BeforeVariableUpdate))
-                        continue;
-                    if (!next || pending.id.value < next->id.value)
-                        next = &pending;
-                }
+                auto *next = Detail::NextCommand(*scope, point, valid.HasError());
                 if (!next)
                     break;
                 next->terminal =
@@ -90,8 +97,8 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc RuntimeUiService::DispatchActions */
-    Result<std::size_t> RuntimeUiService::DispatchActions(const RuntimeUiInstanceId instance, const UiCanvasId canvasId,
-                                                          UiActionHandler &handler, const std::size_t maximum) {
+    Result<std::size_t> RuntimeUiService::DispatchActions(  // NOSONAR(cpp:S5817) Consumes canonical actions and attribution slots.
+        const RuntimeUiInstanceId instance, const UiCanvasId canvasId, UiActionHandler &handler, const std::size_t maximum) {
         const auto state = state_;
         if (auto check = Detail::CheckOwner(state); check.HasError())
             return Result<std::size_t>::Failure(check.ErrorValue());
@@ -101,7 +108,7 @@ namespace Horo::Runtime::Ui {
         if (!canvas || !canvas->actions)
             return Result<std::size_t>::Failure(MakeError(UiErrors::CapabilityUnavailable));
         std::size_t dispatched{};
-        for (std::size_t count = 0; count < maximum; ++count) {
+        for (std::size_t count = 0; count < maximum && state->active; ++count) {
             auto request = canvas->actions->TryDequeue();
             if (request.HasError())
                 return Result<std::size_t>::Failure(request.ErrorValue());
@@ -116,15 +123,12 @@ namespace Horo::Runtime::Ui {
             attribution->occupied = false;
             if (!scope || Detail::CheckScope(*scope, RuntimeUiPermission::Actions).HasError())
                 continue;
-            auto result = [&] {
+            if (auto result = [&canvas, &request, &handler, &state] {
                 Detail::RuntimeUiDispatchGuard dispatch{state};
                 return canvas->actions->Dispatch(*request.Value(), handler);
-            }();
-            if (result.HasError())
+            }(); result.HasError())
                 return Result<std::size_t>::Failure(result.ErrorValue());
             ++dispatched;
-            if (!state->active)
-                break;
         }
         return Result<std::size_t>::Success(dispatched);
     }

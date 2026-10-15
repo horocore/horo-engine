@@ -4,13 +4,13 @@
 
 namespace Horo::Runtime::Ui {
     /** @copydoc RuntimeUiService::DispatchEvent */
-    Result<UiEventDispatchResult> RuntimeUiService::DispatchEvent(const UiCanvasId canvasId, const UiEventRoute &route,
-                                                                  const UiRoutedEvent &event, UiEventHandler &handler) {
+    Result<UiEventDispatchResult> RuntimeUiService::DispatchEvent(  // NOSONAR(cpp:S5817) Dispatches consumers and fills client mailboxes.
+        const UiCanvasId canvasId, const UiEventRoute &route, const UiRoutedEvent &event, UiEventHandler &handler) {
         using Output = Result<UiEventDispatchResult>;
         const auto state = state_;
         if (auto check = Detail::CheckOwner(state); check.HasError())
             return Output::Failure(check.ErrorValue());
-        auto *canvas = Detail::Canvas(*state, RuntimeUiGrant{.instance = route.instance, .canvas = canvasId});
+        const auto *canvas = Detail::Canvas(*state, RuntimeUiGrant{.instance = route.instance, .canvas = canvasId});
         if (!canvas)
             return Output::Failure(MakeError(UiErrors::CapabilityUnavailable));
         const auto dispatcher = std::ranges::find_if(state->dispatchers, [&route, canvasId](const auto &entry) {

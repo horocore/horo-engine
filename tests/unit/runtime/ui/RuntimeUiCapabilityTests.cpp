@@ -8,6 +8,47 @@ namespace Horo::Tests::UiAccess {
     static_assert(!std::is_default_constructible_v<RuntimeUiClient::ConstructionKey>);
     static_assert(!std::is_copy_constructible_v<RuntimeUiClient>);
 
+    // Each command remains available to its mutable owner and unavailable through const observation.
+    static_assert(std::is_invocable_v<decltype(&RuntimeUiService::ApplyQueuedCommands), RuntimeUiService &, RuntimeUiCommandCutoff>);
+    static_assert(!std::is_invocable_v<decltype(&RuntimeUiService::ApplyQueuedCommands), const RuntimeUiService &, RuntimeUiCommandCutoff>);
+    static_assert(std::is_invocable_v<decltype(&RuntimeUiService::DispatchActions), RuntimeUiService &, RuntimeUiInstanceId, UiCanvasId,
+                                      UiActionHandler &, std::size_t>);
+    static_assert(!std::is_invocable_v<decltype(&RuntimeUiService::DispatchActions), const RuntimeUiService &, RuntimeUiInstanceId,
+                                       UiCanvasId, UiActionHandler &, std::size_t>);
+    static_assert(std::is_invocable_v<decltype(&RuntimeUiService::DispatchEvent), RuntimeUiService &, UiCanvasId, const UiEventRoute &,
+                                      const UiRoutedEvent &, UiEventHandler &>);
+    static_assert(!std::is_invocable_v<decltype(&RuntimeUiService::DispatchEvent), const RuntimeUiService &, UiCanvasId,
+                                       const UiEventRoute &, const UiRoutedEvent &, UiEventHandler &>);
+    static_assert(std::is_invocable_v<decltype(&RuntimeUiService::Admit), RuntimeUiService &, const UiSceneInstanceDescriptor &,
+                                      UiHotReload &&, UiStructuralCommitPoint>);
+    static_assert(!std::is_invocable_v<decltype(&RuntimeUiService::Admit), const RuntimeUiService &, const UiSceneInstanceDescriptor &,
+                                       UiHotReload &&, UiStructuralCommitPoint>);
+    static_assert(
+        std::is_invocable_v<decltype(&RuntimeUiService::Issue), RuntimeUiService &, const RuntimeUiGrant &, const CancellationToken &>);
+    static_assert(!std::is_invocable_v<decltype(&RuntimeUiService::Issue), const RuntimeUiService &, const RuntimeUiGrant &,
+                                       const CancellationToken &>);
+    static_assert(std::is_invocable_v<decltype(&RuntimeUiService::Reload), RuntimeUiService &, RuntimeUiInstanceId, UiReloadGeneration,
+                                      UiStructuralCommitPoint, const CancellationToken &>);
+    static_assert(!std::is_invocable_v<decltype(&RuntimeUiService::Reload), const RuntimeUiService &, RuntimeUiInstanceId,
+                                       UiReloadGeneration, UiStructuralCommitPoint, const CancellationToken &>);
+    static_assert(std::is_invocable_v<decltype(&RuntimeUiService::CollectRetired), RuntimeUiService &>);
+    static_assert(!std::is_invocable_v<decltype(&RuntimeUiService::CollectRetired), const RuntimeUiService &>);
+    static_assert(std::is_invocable_v<decltype(&RuntimeUiService::Shutdown), RuntimeUiService &>);
+    static_assert(!std::is_invocable_v<decltype(&RuntimeUiService::Shutdown), const RuntimeUiService &>);
+    static_assert(std::is_invocable_v<decltype(&RuntimeUiService::PrepareTransition), RuntimeUiService &, const UiSceneTransitionRequest &,
+                                      std::vector<UiSceneBindingReplacement>, std::vector<UiSceneActivation>, const CancellationToken &>);
+    static_assert(
+        !std::is_invocable_v<decltype(&RuntimeUiService::PrepareTransition), const RuntimeUiService &, const UiSceneTransitionRequest &,
+                             std::vector<UiSceneBindingReplacement>, std::vector<UiSceneActivation>, const CancellationToken &>);
+    static_assert(std::is_invocable_v<decltype(&RuntimeUiService::CommitTransition), RuntimeUiService &, UiSceneReconciliation::Prepared &,
+                                      UiStructuralCommitPoint>);
+    static_assert(!std::is_invocable_v<decltype(&RuntimeUiService::CommitTransition), const RuntimeUiService &,
+                                       UiSceneReconciliation::Prepared &, UiStructuralCommitPoint>);
+    static_assert(std::is_invocable_v<decltype(&RuntimeUiService::WithdrawProvider), RuntimeUiService &, RuntimeUiInstanceId, UiCanvasId,
+                                      UiBindingProviderInstanceId, RuntimeUiCommandCutoff>);
+    static_assert(!std::is_invocable_v<decltype(&RuntimeUiService::WithdrawProvider), const RuntimeUiService &, RuntimeUiInstanceId,
+                                       UiCanvasId, UiBindingProviderInstanceId, RuntimeUiCommandCutoff>);
+
     TEST_CASE("Runtime UI grants are explicit exact and owner-thread bound", "[runtime-ui][capability]") {
         Fixture fixture;
         auto client = fixture.Client(RuntimeUiPermission::Elements);

@@ -8,7 +8,8 @@
 struct lua_State;
 
 namespace Horo::Gameplay::Detail::UiScript {
-    using namespace Runtime::Ui;
+    using Runtime::Ui::SerializedUiId;
+    using Runtime::Ui::UiBindingValue;
     inline constexpr const char *EventType = "horo.runtime_ui.event";
     inline constexpr const char *TerminalType = "horo.runtime_ui.terminal";
     inline constexpr const char *RouteType = "horo.runtime_ui.route";

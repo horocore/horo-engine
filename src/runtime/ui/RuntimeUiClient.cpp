@@ -60,11 +60,10 @@ namespace Horo::Runtime::Ui::Detail {
             return Result<std::shared_ptr<RuntimeUiServiceState>>::Failure(MakeError(UiErrors::CapabilityRevoked));
         if (auto checked = CheckOwner(*owner); checked.HasError())
             return Result<std::shared_ptr<RuntimeUiServiceState>>::Failure(checked.ErrorValue());
-        auto *publisher = owner->registry.Publisher(scope.grant.instance);
-        if (Cancelled(scope) || !publisher || !publisher->IsCurrent(scope.lease))
+        if (const auto *publisher = owner->registry.Publisher(scope.grant.instance);
+            Cancelled(scope) || !publisher || !publisher->IsCurrent(scope.lease))
             return Result<std::shared_ptr<RuntimeUiServiceState>>::Failure(MakeError(UiErrors::CapabilityRevoked));
-        const auto mask = static_cast<unsigned>(permission);
-        if ((static_cast<unsigned>(scope.grant.permissions) & mask) != mask)
+        if (const auto mask = static_cast<unsigned>(permission); (static_cast<unsigned>(scope.grant.permissions) & mask) != mask)
             return Result<std::shared_ptr<RuntimeUiServiceState>>::Failure(MakeError(UiErrors::CapabilityDenied));
         return Result<std::shared_ptr<RuntimeUiServiceState>>::Success(std::move(owner));
     }

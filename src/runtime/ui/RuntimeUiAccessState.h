@@ -35,7 +35,7 @@ namespace Horo::Runtime::Ui::Detail {
     struct RuntimeUiScope final {
         RuntimeUiScope(std::shared_ptr<RuntimeUiServiceState> owner, RuntimeUiGrant grant, UiReloadLease lease,
                        std::shared_ptr<const RuntimeUiScope> parent, CancellationToken cancellation)
-            : owner(std::move(owner)), grant(std::move(grant)), lease(std::move(lease)), parent(std::move(parent)),
+            : owner(owner), grant(std::move(grant)), lease(std::move(lease)), parent(std::move(parent)),
               cancellation(std::move(cancellation)) {}
 
         std::weak_ptr<RuntimeUiServiceState> owner;

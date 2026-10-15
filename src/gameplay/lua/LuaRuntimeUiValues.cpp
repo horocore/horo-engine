@@ -14,6 +14,8 @@ extern "C" {
 }
 
 namespace Horo::Gameplay::Detail::UiScript {
+    using namespace Runtime::Ui;
+
     /** @copydoc PushUnsigned */
     void PushUnsigned(lua_State *state, const std::uint64_t value) {
         std::array<char, 20> text{};
@@ -51,8 +53,8 @@ namespace Horo::Gameplay::Detail::UiScript {
         SerializedUiId bytes{};
         for (std::size_t i = 0; i < 16; ++i) {
             unsigned value{};
-            const auto parsed = std::from_chars(text + 2 * i, text + 2 * i + 2, value, 16);
-            if (parsed.ec != std::errc{} || parsed.ptr != text + 2 * i + 2)
+            if (const auto parsed = std::from_chars(text + 2 * i, text + 2 * i + 2, value, 16);
+                parsed.ec != std::errc{} || parsed.ptr != text + 2 * i + 2)
                 return Result<SerializedUiId>::Failure(MakeError(UiErrors::IdentityInvalid));
             bytes[i] = static_cast<std::uint8_t>(value);
         }
@@ -205,8 +207,8 @@ namespace Horo::Gameplay::Detail::UiScript {
                     std::size_t size{};
                     const char *text = lua_tolstring(state, 3, &size);
                     std::int64_t signedValue{};
-                    const auto parsed = std::from_chars(text, text + size, signedValue);
-                    if (!size || parsed.ec != std::errc{} || parsed.ptr != text + size)
+                    if (const auto parsed = std::from_chars(text, text + size, signedValue);
+                        !size || parsed.ec != std::errc{} || parsed.ptr != text + size)
                         return false;
                     value = signedValue;
                     return true;
@@ -251,7 +253,11 @@ namespace Horo::Gameplay::Detail::UiScript {
         /** @brief Validates finite structured components and copied stable-reference representation. */
         bool CompositeBindingValue(lua_State *state, const lua_Integer kind, UiBindingValue &value) {
             if (kind >= 9 && kind <= 11) {
-                const int count = kind == 9 ? 2 : (kind == 10 ? 3 : 4);
+                int count = 4;
+                if (kind == 9)
+                    count = 2;
+                else if (kind == 10)
+                    count = 3;
                 std::array<float, 4> components{};
                 for (int index = 0; index < count; ++index)
                     if (!Float(state, 3 + index, components[static_cast<std::size_t>(index)]))
@@ -272,19 +278,44 @@ namespace Horo::Gameplay::Detail::UiScript {
             return true;
         }
 
+        /** @brief Selects one canonical family without changing validation or allocation order. */
+        bool DecodeBindingValue(lua_State *state, const lua_Integer kind, UiBindingValue &value) {
+            if (kind <= 4)
+                return ScalarBindingValue(state, kind, value);
+            if (kind <= 8)
+                return SemanticBindingValue(state, kind, value);
+            return CompositeBindingValue(state, kind, value);
+        }
+
         /** @brief Builds the canonical closed vocabulary; owners unwind before any Lua failure is propagated. */
         int BindingValue(lua_State *state) {
             if (!lua_isinteger(state, 2))
                 return Invalid(state);
             const auto kind = lua_tointeger(state, 2);
             UiBindingValue value;
-            const bool decoded = kind <= 4
-                                     ? ScalarBindingValue(state, kind, value)
-                                     : (kind <= 8 ? SemanticBindingValue(state, kind, value) : CompositeBindingValue(state, kind, value));
-            if (!decoded)
+            if (const bool decoded = DecodeBindingValue(state, kind, value); !decoded)
                 return Invalid(state);
             PushBindingValue(state, value);
             return 1;
+        }
+
+        /** @brief Decodes exact nonzero action identities and retains their canonical error identity. */
+        Result<UiActionValue> ActionIdentity(lua_State *state, const lua_Integer kind) {
+            auto bytes = ReadIdentity(state, 3);
+            if (bytes.HasError())
+                return Result<UiActionValue>::Failure(bytes.ErrorValue());
+            if (bytes.Value() == SerializedUiId{})
+                return Result<UiActionValue>::Failure(MakeError(UiErrors::CapabilityUnsupported));
+            switch (kind) {
+                case 5:
+                    return Result<UiActionValue>::Success(UiActionId::Create(bytes.Value()).Value());
+                case 6:
+                    return Result<UiActionValue>::Success(UiDocumentId::Create(bytes.Value()).Value());
+                case 7:
+                    return Result<UiActionValue>::Success(UiCanvasId::Create(bytes.Value()).Value());
+                default:
+                    return Result<UiActionValue>::Success(UiElementId::Create(bytes.Value()).Value());
+            }
         }
 
         /** @brief Closed allocation-free action value transport, including distinct stable identity tags. */
@@ -311,19 +342,10 @@ namespace Horo::Gameplay::Detail::UiScript {
                     return Failure(state, result.ErrorValue());
                 value = result.Value();
             } else if (kind >= 5 && kind <= 8) {
-                auto bytes = ReadIdentity(state, 3);
-                if (bytes.HasError())
-                    return Failure(state, bytes.ErrorValue());
-                if (bytes.Value() == SerializedUiId{})
-                    return Invalid(state);
-                if (kind == 5)
-                    value = UiActionId::Create(bytes.Value()).Value();
-                if (kind == 6)
-                    value = UiDocumentId::Create(bytes.Value()).Value();
-                if (kind == 7)
-                    value = UiCanvasId::Create(bytes.Value()).Value();
-                if (kind == 8)
-                    value = UiElementId::Create(bytes.Value()).Value();
+                auto identity = ActionIdentity(state, kind);
+                if (identity.HasError())
+                    return Failure(state, identity.ErrorValue());
+                value = std::move(identity).Value();
             } else
                 return Invalid(state);
             return Protected(state, [&value](lua_State *inner) {

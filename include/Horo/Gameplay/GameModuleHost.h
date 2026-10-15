@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace Horo::Gameplay {
@@ -23,16 +24,18 @@ namespace Horo::Gameplay {
     class SystemRegistry;
     class GameEventRegistry;
 
-    /** @brief Explicit typed host services; omitted fields grant no authority. */
+    /** @brief Inert host-selected service anchors; no callback, discovery or activation occurs here. */
     struct GameModuleRuntimeServices final {
-        std::shared_ptr<GameplayPhysicsContext> physics;
-        std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi;
-        std::shared_ptr<GameplayNavigationContext> navigation;
+        std::shared_ptr<GameplayPhysicsContext> physics;       /**< Existing exact per-module Physics scope. */
+        std::shared_ptr<GameplayCharacterContext> character;   /**< Character anchor; each loaded generation receives a fresh child. */
+        std::shared_ptr<GameplayNavigationContext> navigation; /**< Exact generation navigation anchor. */
+        std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi; /**< Exact independently revocable UI anchor. */
     };
 
-    /** @brief Nondefault canonical options preserve legacy brace-call overload resolution. */
+    /** @brief Explicit immutable load configuration; requires both values so legacy brace calls stay unambiguous. */
     struct GameModuleHostOptions final {
-        /** @brief Copies inert policy and transfers explicit services. @param capabilities Host grants. @param services Host bindings. */
+        /** @brief Owns the supplied inert composition values.
+         * @param capabilities Host registration grants. @param services Explicitly selected service anchors. */
         GameModuleHostOptions(std::vector<GameplayCapabilityId> capabilities, GameModuleRuntimeServices services)
             : hostCapabilities(std::move(capabilities)), runtimeServices(std::move(services)) {}
 
@@ -96,6 +99,9 @@ namespace Horo::Gameplay {
         [[nodiscard]] CancellationToken Cancellation() const noexcept;
         /** @brief Returns this module generation's explicit Physics binding, if composed by the host. */
         [[nodiscard]] std::shared_ptr<const GameplayPhysicsContext> PhysicsContext() const noexcept;
+        /** @brief Returns this loaded module generation's exact independent Character scope. @return Owned holder, including typed denial.
+         */
+        [[nodiscard]] std::shared_ptr<const GameplayCharacterContext> CharacterContext() const noexcept;
         /** @brief Returns this module generation navigation grant. @return Revocable host context. */
         [[nodiscard]] std::shared_ptr<const GameplayNavigationContext> NavigationContext() const noexcept;
         /** @brief Returns the authoritative independently revocable UI holder, unaffected by module-facing context replacement.
@@ -124,8 +130,6 @@ namespace Horo::Gameplay {
     /** @brief Loader used by editor play sessions and packaged runtime composition. */
     class GameModuleHost final {
     public:
-        /** @brief Creates the canonical loader from explicit typed options. @param options Inert host policy and services. */
-        explicit GameModuleHost(GameModuleHostOptions options);
         /**
          * @brief Creates a loader with an explicit immutable host capability set.
          * @param hostCapabilities Capabilities composed by the owning headless or graphical host.
@@ -136,6 +140,9 @@ namespace Horo::Gameplay {
          * @param physics Exact per-module binding, revoked before module shutdown; cannot be reused after retirement.
          */
         GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics);
+        /** @brief Creates a loader from inert typed options; service anchors remain host-owned.
+         * @param options Explicit capability metadata and service composition. */
+        explicit GameModuleHost(GameModuleHostOptions options);
         /** @brief Bind an explicit navigation principal to the next module generation.
          * @param hostCapabilities Immutable host grants. @param physics Optional Physics binding.
          * @param navigation Exact module/Scene navigation binding; revoked before module reload callbacks.
@@ -174,14 +181,12 @@ namespace Horo::Gameplay {
         [[nodiscard]] Result<std::unique_ptr<LoadedGameModule>> LoadArtifact(const std::filesystem::path &libraryPath,
                                                                              const GameModuleLoadExpectation &expectation,
                                                                              bool ownedShadow) const;
-        /** @brief Admit exact explicit service anchors before any module factory is invoked.
-         * @param impl Validated native image owner receiving independently retained scoped holders.
-         * @return Original dependency/principal failure or success; image pinning remains private to the host authority.
+        /** @brief Admit the selected explicit service anchors before invoking a module factory.
+         * @param impl Validated image owner receiving authoritative scoped holders.
+         * @return Typed principal/dependency failure or success with the image pin bound by this host authority.
          */
         [[nodiscard]] Result<void> BindRuntimeServices(LoadedGameModule::Impl &impl) const;
         std::vector<GameplayCapabilityId> hostCapabilities_;
-        std::shared_ptr<GameplayPhysicsContext> physics_;
-        std::shared_ptr<GameplayNavigationContext> navigation_;
-        std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi_;
+        GameModuleRuntimeServices runtimeServices_;
     };
 }  // namespace Horo::Gameplay

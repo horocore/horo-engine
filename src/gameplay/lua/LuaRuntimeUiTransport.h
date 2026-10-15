@@ -51,7 +51,7 @@ namespace Horo::Gameplay::Detail::UiScript {
 
     /** @brief Protects allocation around a borrowed result; its C++ owner remains outside the Lua frame. */
     template <class T> int ProjectTransport(lua_State *state, const char *name, const T &value) {
-        return Protected(state, [&](lua_State *inner) {
+        return Protected(state, [name, &value](lua_State *inner) {
             Push(inner, name, value);
             return 1;
         });

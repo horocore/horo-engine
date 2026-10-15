@@ -1,7 +1,7 @@
 # Gameplay Runtime UI capability migration
 
 HORO-753 / #753 / [RUI-006.7] adds explicit gameplay and Lua access over the
-canonical Runtime UI owners. This is the combined native SDK17 layout preserving merged Navigation SDK10.
+canonical Runtime UI owners. This is the combined native SDK19 layout preserving main Character SDK15 and Navigation SDK10.
 
 ## Composition and ownership
 
@@ -112,10 +112,14 @@ authored tests or compile-only checkpoints do not establish runtime qualificatio
 ## SDK and rebuild
 
 Rebuild all native modules, generated descriptor bundles, SDK consumers and host
-artifacts against SDK17 and its exact fingerprint. `GameRuntimeContext` gains the
-shared UI holder after main Physics/Navigation and the behavior backend vtable gains UI access.
-Parallel AI16 and corrective Character15 layouts are different; a combined layout needs a
-fresh epoch18 or later and complete revalidation after main changes.
+artifacts against SDK19 and its exact `gameplay-sdk19` fingerprint. The combined layout
+preserves main Character SDK15 (including Navigation SDK10) and adds UI SDK17.
+`GameRuntimeContext` appends UI after Physics/Navigation/Character. The runtime
+constructor places Character before UI; use an empty Character argument when absent.
+Host service aggregates preserve Physics/Character/Navigation and append UI; use
+designated fields. Old SDK10/15/17/18 layouts are rejected before factory activation.
+AI18/20 identify independent layouts; a future combined UI+AI layout requires a fresh
+epoch and complete validation, never the maximum prior number.
 
 `find_package(HoroEngineGameplay REQUIRED COMPONENTS RuntimeUi)` imports the
 existing Runtime UI target plus its reviewed Assets/runtime/text-shaping/Unicode
@@ -141,3 +145,12 @@ OOM cannot leave a partially initialized metatable reused without its GC handler
 Per-allocation regressions retry context construction in the same VM and release
 both UI and Navigation holders on shutdown; terminal/event unpack failures retain
 their copied observation for a successful retry.
+
+Runtime UI service command and lifecycle methods remain mutable-only. Keep a mutable
+application service reference for admission, issuance, queue application, dispatch,
+reload/transition/provider publication, collection, and shutdown; a const service
+reference grants observations only. The pimpl representation does not make those
+commands logically const. The architecture contract records the eleven exact
+S5817 exceptions and paired compile-time authority checks. Lua allocator opaque
+pointers follow `lua_Alloc`; Runtime UI callback exception containment remains
+`noexcept` with errors propagated only after native catch frames unwind.

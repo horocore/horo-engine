@@ -3,7 +3,7 @@
 #include <type_traits>
 
 using namespace Horo::Gameplay;
-static_assert(GameplaySdkBoundaryVersion == 17);
+static_assert(GameplaySdkBoundaryVersion == 19);
 static_assert(!std::is_default_constructible_v<GameModuleHostOptions>);
 static_assert(!std::is_aggregate_v<GameModuleHostOptions>);
 

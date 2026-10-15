@@ -16,7 +16,7 @@ namespace Horo::Gameplay::Detail {
         [[nodiscard]] Result<std::shared_ptr<const Runtime::Ui::RuntimeUiClient>> Bind(
             const std::shared_ptr<const Runtime::Ui::RuntimeUiClient> &parent);
         /** @brief Permanently revokes all observed VM scopes without executing a callback. */
-        void Revoke() noexcept;
+        void Revoke() const noexcept;
 
     private:
         std::array<std::weak_ptr<const Runtime::Ui::RuntimeUiClient>, 256> scopes_;

@@ -32,8 +32,11 @@ namespace Horo::Gameplay::Detail {
             std::size_t keys{};
             lua_pushnil(state);
             while (lua_next(state, index)) {
-                const bool admitted = lua_isinteger(state, -2) && lua_tointeger(state, -2) >= 1 &&
-                                      static_cast<std::size_t>(lua_tointeger(state, -2)) <= count && ++keys <= count;
+                const bool validKey = lua_isinteger(state, -2) && lua_tointeger(state, -2) >= 1 &&
+                                      static_cast<std::size_t>(lua_tointeger(state, -2)) <= count;
+                if (validKey)
+                    ++keys;
+                const bool admitted = validKey && keys <= count;
                 lua_pop(state, 1);
                 if (!admitted) {
                     lua_pop(state, 1);
@@ -148,7 +151,7 @@ namespace Horo::Gameplay::Detail {
         bool DecodeProviderChanges(lua_State *state, RuntimeUiProviderUpdate &update, const std::size_t count) {
             update.changes.reserve(count);
             bool decoded{};
-            Protected(state, [&](lua_State *inner) {
+            Protected(state, [&update, count, &decoded](lua_State *inner) {
                 if (!Dense(inner, 8, count))
                     return 0;
                 for (std::size_t i = 1; i <= count; ++i) {
@@ -160,7 +163,7 @@ namespace Horo::Gameplay::Detail {
                     const auto *value = static_cast<UiBindingValue *>(luaL_testudata(inner, -1, ValueType));
                     if (!lua_isinteger(inner, -2) || lua_tointeger(inner, -2) < 0 || lua_tointeger(inner, -2) > UINT16_MAX || !value)
                         return 0;
-                    update.changes.push_back({static_cast<std::uint16_t>(lua_tointeger(inner, -2)), *value});
+                    update.changes.emplace_back(static_cast<std::uint16_t>(lua_tointeger(inner, -2)), *value);
                     lua_pop(inner, 3);
                 }
                 decoded = true;
@@ -176,14 +179,19 @@ namespace Horo::Gameplay::Detail {
                 return Missing(state);
             if (!lua_isinteger(state, 2) || !lua_isinteger(state, 3) || !lua_isinteger(state, 4) || lua_type(state, 8) != LUA_TTABLE)
                 return Invalid(state);
-            const auto provider = lua_tointeger(state, 2), major = lua_tointeger(state, 3), minor = lua_tointeger(state, 4);
-            std::uint64_t fingerprint{}, expected{}, revision{};
+            const auto provider = lua_tointeger(state, 2);
+            const auto major = lua_tointeger(state, 3);
+            const auto minor = lua_tointeger(state, 4);
+            std::uint64_t fingerprint{};
+            std::uint64_t expected{};
+            std::uint64_t revision{};
             if (provider < 1 || static_cast<std::size_t>(provider) > client->Grant().providers.size() || major <= 0 || major > UINT32_MAX ||
                 minor < 0 || minor > UINT32_MAX || !ReadUnsigned(state, 5, fingerprint) || !ReadUnsigned(state, 6, expected) ||
                 !ReadUnsigned(state, 7, revision))
                 return Invalid(state);
             auto schema = UiBindingSchemaVersion::Create(static_cast<std::uint32_t>(major), static_cast<std::uint32_t>(minor), fingerprint);
-            auto oldRevision = UiBindingSnapshotRevision::Create(expected), newRevision = UiBindingSnapshotRevision::Create(revision);
+            auto oldRevision = UiBindingSnapshotRevision::Create(expected);
+            auto newRevision = UiBindingSnapshotRevision::Create(revision);
             if (schema.HasError())
                 return Failure(state, schema.ErrorValue());
             if (oldRevision.HasError())
@@ -225,7 +233,7 @@ namespace Horo::Gameplay::Detail {
         /** @brief Copy canonical typed action values while all nontrivial payload storage remains outside the Lua jump frame. */
         bool DecodeActionValues(lua_State *state, std::array<UiActionValue, MaximumUiActionArguments> &values, const std::size_t count) {
             bool decoded{};
-            Protected(state, [&](lua_State *inner) {
+            Protected(state, [&values, count, &decoded](lua_State *inner) {
                 if (!Dense(inner, 6, count))
                     return 0;
                 for (std::size_t i = 0; i < count; ++i) {
@@ -290,7 +298,8 @@ namespace Horo::Gameplay::Detail {
             const auto *source = Transport<UiActionSource>(state, 2, SourceType);
             if (!source || !lua_isinteger(state, 3) || !lua_isinteger(state, 5) || lua_type(state, 6) != LUA_TTABLE)
                 return Invalid(state);
-            const auto kind = lua_tointeger(state, 3), operation = lua_tointeger(state, 5);
+            const auto kind = lua_tointeger(state, 3);
+            const auto operation = lua_tointeger(state, 5);
             if (kind < 0 || kind >= static_cast<int>(UiActionCommandKind::Count))
                 return Invalid(state);
             auto bytes = ReadIdentity(state, 4);
@@ -336,8 +345,8 @@ namespace Horo::Gameplay::Detail {
     }
 
     /** @copydoc LuaRuntimeUiScopes::Revoke */
-    void LuaRuntimeUiScopes::Revoke() noexcept {
-        for (auto &entry : scopes_)
+    void LuaRuntimeUiScopes::Revoke() const noexcept {
+        for (const auto &entry : scopes_)
             if (auto client = entry.lock())
                 client->Revoke();
     }
@@ -351,11 +360,15 @@ namespace Horo::Gameplay::Detail {
         Push(state, ClientType, client);
         luaL_getmetatable(state, ClientType);
         lua_newtable(state);
-        const luaL_Reg functions[] = {{"find", Boundary<Find>},          {"read", Boundary<Read>},
-                                      {"screen_guard", Boundary<Guard>}, {"screen", Boundary<Screen>},
-                                      {"publish", Boundary<Publish>},    {"source", Boundary<Source>},
-                                      {"action", Boundary<Action>},      {nullptr, nullptr}};
-        luaL_setfuncs(state, functions, 0);
+        const std::array<luaL_Reg, 8> functions = {{{"find", Boundary<Find>},
+                                                    {"read", Boundary<Read>},
+                                                    {"screen_guard", Boundary<Guard>},
+                                                    {"screen", Boundary<Screen>},
+                                                    {"publish", Boundary<Publish>},
+                                                    {"source", Boundary<Source>},
+                                                    {"action", Boundary<Action>},
+                                                    {nullptr, nullptr}}};
+        luaL_setfuncs(state, functions.data(), 0);
         InstallLuaRuntimeUiObservationMethods(state);
         InstallValueFactories(state);
         lua_setfield(state, -2, "__index");

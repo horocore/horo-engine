@@ -51,11 +51,13 @@ namespace Horo::Gameplay {
          * @param navigation Explicit module/Scene navigation scope.
          * @param runtimeUi Optional exact host UI grant, privately derived and revoked before shutdown callbacks.
          * @param physics Host-admitted module/world binding; revoked before shutdown callbacks.
+         * @param character Optional module Character scope; a fresh runtime child is revoked before teardown.
          * @return Active runner or typed foreign-scene/activation error without partial clients.
          */
         [[nodiscard]] static Result<std::unique_ptr<BehaviorRuntime>> Create(
             Runtime::RuntimeScene &scene, const BehaviorRegistry &registry, BehaviorRuntimeLimits limits,
             std::shared_ptr<const GameplayPhysicsContext> physics, std::shared_ptr<const GameplayNavigationContext> navigation = {},
+            std::shared_ptr<const GameplayCharacterContext> character = {},
             std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi = {});
         /** @brief Activates Gameplay against the actual Scene service and explicitly admitted prefab scope.
          * @param scenes Scene authority outliving the runner; callbacks retain no mutable Scene storage.
@@ -65,6 +67,7 @@ namespace Horo::Gameplay {
          * @param physics Optional explicitly admitted Physics scope.
          * @param runtimeUi Optional exact UI grant, independently derived for this runner.
          * @param prefabs Explicitly admitted cooked-prefab scope for the same Scene incarnation.
+         * @param character Optional module Character scope for the same Scene incarnation.
          * @return Active runner or typed activation failure with complete instance rollback.
          * @pre The host registered the Gameplay structural participant before Scene service startup.
          */
@@ -72,6 +75,7 @@ namespace Horo::Gameplay {
             Runtime::RuntimeSceneService &scenes, const BehaviorRegistry &registry, BehaviorRuntimeLimits limits = {},
             std::shared_ptr<const GameplayPhysicsContext> physics = {}, std::shared_ptr<const GameplayPrefabContext> prefabs = {},
             std::shared_ptr<const GameplayNavigationContext> navigation = {},
+            std::shared_ptr<const GameplayCharacterContext> character = {},
             std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi = {});
         ~BehaviorRuntime();
         BehaviorRuntime(const BehaviorRuntime &) = delete;

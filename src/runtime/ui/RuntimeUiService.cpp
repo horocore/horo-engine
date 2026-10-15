@@ -25,9 +25,9 @@ namespace Horo::Runtime::Ui::Detail {
         }
 
         /** @brief Reserve one dispatcher once per exact canvas incarnation, never in the frame path. */
-        Result<void> PrepareDispatcher(RuntimeUiServiceState &owner, const RuntimeUiGrant &grant, UiReloadCanvas &canvas,
+        Result<void> PrepareDispatcher(RuntimeUiServiceState &owner, const RuntimeUiGrant &grant, const UiReloadCanvas &canvas,
                                        const UiReloadLease &lease) {
-            for (auto &entry : owner.dispatchers) {
+            for (const auto &entry : owner.dispatchers) {
                 if (entry.events && entry.instance == grant.instance && entry.canvas == grant.canvas &&
                     entry.incarnation == canvas.tree.Canvas() && entry.lease.Get() == lease.Get())
                     return Result<void>::Success();
@@ -84,7 +84,7 @@ namespace Horo::Runtime::Ui::Detail {
             return ClientResult::Failure(MakeError(UiErrors::HandleOwnerMismatch));
         if (descriptor.Value().providerScene && descriptor.Value().providerScene->value != grant.scene)
             return ClientResult::Failure(MakeError(UiErrors::HandleOwnerMismatch));
-        auto *publisher = owner->registry.Publisher(grant.instance);
+        const auto *publisher = owner->registry.Publisher(grant.instance);
         auto lease = publisher ? publisher->Acquire() : Result<UiReloadLease>::Failure(MakeError(UiErrors::CapabilityUnavailable));
         if (lease.HasError())
             return ClientResult::Failure(lease.ErrorValue());
@@ -96,7 +96,7 @@ namespace Horo::Runtime::Ui::Detail {
                 return ClientResult::Failure(prepared.ErrorValue());
             auto scope = std::make_shared<RuntimeUiScope>(owner, grant, std::move(lease).Value(), std::move(parent), cancellation);
             auto client = std::make_shared<RuntimeUiClient>(RuntimeUiClient::ConstructionKey{}, scope);
-            *slot = std::move(scope);
+            *slot = scope;
             return ClientResult::Success(std::move(client));
         } catch (const std::bad_alloc &) {
             return ClientResult::Failure(MakeError(UiErrors::CapacityExceeded));
@@ -132,24 +132,26 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc RuntimeUiService::Admit */
-    Result<void> RuntimeUiService::Admit(const UiSceneInstanceDescriptor &descriptor, UiHotReload &&publisher,
-                                         const UiStructuralCommitPoint point) {
+    Result<void> RuntimeUiService::Admit(  // NOSONAR(cpp:S5817) Transfers publisher ownership into the registry.
+        const UiSceneInstanceDescriptor &descriptor, UiHotReload &&publisher, const UiStructuralCommitPoint point) {
         if (auto check = Detail::CheckOwner(state_); check.HasError())
             return check;
         return state_->registry.Admit(descriptor, std::move(publisher), point);
     }
 
     /** @copydoc RuntimeUiService::Issue */
-    Result<std::shared_ptr<const RuntimeUiClient>> RuntimeUiService::Issue(const RuntimeUiGrant &grant,
-                                                                           const CancellationToken &cancellation) {
+    Result<std::shared_ptr<const RuntimeUiClient>> RuntimeUiService::Issue(  // NOSONAR(cpp:S5817) Reserves host scope and dispatcher
+                                                                             // inventory.
+        const RuntimeUiGrant &grant, const CancellationToken &cancellation) {
         if (auto check = Detail::CheckOwner(state_); check.HasError())
             return Detail::ClientResult::Failure(check.ErrorValue());
         return state_->issue(state_, grant, {}, cancellation);
     }
 
     /** @copydoc RuntimeUiService::Reload */
-    Result<UiReloadReconciliation> RuntimeUiService::Reload(const RuntimeUiInstanceId instance, UiReloadGeneration replacement,
-                                                            const UiStructuralCommitPoint point, const CancellationToken &cancellation) {
+    Result<UiReloadReconciliation> RuntimeUiService::Reload(  // NOSONAR(cpp:S5817) Commits a generation and invalidates attribution.
+        const RuntimeUiInstanceId instance, UiReloadGeneration replacement, const UiStructuralCommitPoint point,
+        const CancellationToken &cancellation) {
         if (auto check = Detail::CheckOwner(state_); check.HasError())
             return Result<UiReloadReconciliation>::Failure(check.ErrorValue());
         auto *publisher = state_->registry.Publisher(instance);
@@ -172,7 +174,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc RuntimeUiService::CollectRetired */
-    Result<std::size_t> RuntimeUiService::CollectRetired() {
+    Result<std::size_t> RuntimeUiService::CollectRetired() {  // NOSONAR(cpp:S5817) Destroys retired canonical generations.
         if (!state_)
             return Result<std::size_t>::Failure(MakeError(UiErrors::CapabilityUnavailable));
         if (state_->thread != std::this_thread::get_id())
@@ -183,7 +185,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc RuntimeUiService::Shutdown */
-    void RuntimeUiService::Shutdown() noexcept {
+    void RuntimeUiService::Shutdown() noexcept {  // NOSONAR(cpp:S5817) Revokes grants and retires publisher ownership.
         if (!state_ || !state_->active || state_->thread != std::this_thread::get_id())
             return;
         for (const auto &entry : state_->scopes)

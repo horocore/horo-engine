@@ -1,10 +1,12 @@
 #include "Horo/Gameplay/GameModule.h"
+#include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
 #include "Horo/Physics/PhysicsContinuousCollision.h"
 #include "Horo/Physics/PhysicsWorld.h"
 
 #include <array>
+#include <optional>
 #include <type_traits>
 
 static_assert(std::is_same_v<decltype(Horo::Physics::PhysicsWorldSimulationBinding{}.schema),
@@ -23,6 +25,8 @@ using namespace Horo;
 using namespace Horo::Gameplay;
 
 namespace {
+    std::optional<Physics::PhysicsQueryBatchHandle> retainedBatch;
+
     /** @brief Exercise the exported Physics operations and pending-batch cancellation from a real external module. */
     Result<void> VerifyPhysicsOperations(const Physics::PhysicsQueryEventCapability &client, const GameplayPhysicsBinding &binding) {
         std::array<Physics::PhysicsEventRecord, 1> events{};
@@ -45,6 +49,7 @@ namespace {
         const auto pending = queued.Value().Poll();
         if (pending.HasError())
             return Result<void>::Failure(pending.ErrorValue());
+        retainedBatch = queued.Value();
         if (pending.Value() || !queued.Value().Cancel())
             return Result<void>::Failure(MakeError(Physics::PhysicsErrors::DescriptorInvalid));
         return Result<void>::Success();
@@ -73,12 +78,32 @@ namespace {
             if (client.HasError() && client.ErrorValue().code.Value() != GameplayErrors::PhysicsUnavailable.code.Value() &&
                 client.ErrorValue().code.Value() != GameplayErrors::PhysicsPermissionDenied.code.Value())
                 return Result<void>::Failure(client.ErrorValue());
-            if (client.HasValue())
-                return VerifyPhysicsOperations(client.Value(), binding);
-            return Result<void>::Success();
+            if (client.HasValue()) {
+                auto verified = VerifyPhysicsOperations(client.Value(), binding);
+                if (verified.HasError())
+                    return verified;
+            }
+            if (!context.character)
+                return Result<void>::Failure(MakeError(GameplayErrors::CharacterUnavailable));
+            const auto &characterBinding = context.character->Binding();
+            auto granted = context.character->Acquire("game.physics_sdk", characterBinding.scene, characterBinding.sceneGeneration);
+            if (granted.HasError()) {
+                if (granted.ErrorValue().code.Value() != GameplayErrors::CharacterUnavailable.code.Value() &&
+                    granted.ErrorValue().code.Value() != GameplayErrors::CharacterPermissionDenied.code.Value())
+                    return Result<void>::Failure(granted.ErrorValue());
+                return Result<void>::Success();
+            }
+            auto child = granted.Value().Derive();
+            if (child.HasError())
+                return Result<void>::Failure(child.ErrorValue());
+            character_ = std::move(child).Value();
+            return character_.Validate();
         }
 
         void Stop(GameRuntimeContext &) noexcept override {}
+
+    private:
+        Character::CharacterCapability character_;
     };
 }  // namespace
 
@@ -88,4 +113,9 @@ extern "C" HORO_GAME_EXPORT IGameModule *CreateGameModule() noexcept {
 
 extern "C" HORO_GAME_EXPORT void DestroyGameModule(IGameModule *module) noexcept {
     delete module;
+}
+
+/** @brief Exports the actual module-created terminal handle for host teardown after the DLL has unloaded. */
+extern "C" HORO_GAME_EXPORT void HoroTestCopyPhysicsBatch(std::optional<Physics::PhysicsQueryBatchHandle> *destination) {
+    *destination = retainedBatch;
 }

@@ -22,7 +22,7 @@ archive/provenance; do not assign it the current snapshot's contracts.
 | External native host ABI | `horo-extension` @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_MIN_HOST_MINOR@ inclusive to @HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE@.0 exclusive; declarations through @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_PUBLISHED_MINOR@ |
 | Extension descriptor | `extension.json`, schema 1 |
 | Package manifest | `horo-package.toml`, schema 1; owns package identity/dependencies |
-| Gameplay C++ boundary in this engine snapshot | Native boundary 17 / `gameplay-sdk17`; separate exact-fingerprint build-tree SDK |
+| Gameplay C++ boundary in this engine snapshot | Native boundary 19 / `gameplay-sdk19`; separate exact-fingerprint build-tree SDK |
 | Author CI platform profiles | Linux x64, macOS arm64, macOS x64, Windows x64 |
 
 The external extension range does not imply that every table/capability works on
@@ -188,6 +188,54 @@ with `poll()` and `cancel()`. Missing services return `navigation.capability_una
 
 Rollback: stop play, restore the coherent previous engine, SDK and rebuilt module
 set, then restart. Never mix SDK9 and SDK10 module binaries.
+
+## Gameplay SDK10 → SDK15 (Character and Navigation runtime boundary 10 → 15)
+
+Rebuild every native gameplay module, descriptor bundle and host with the exact
+`gameplay-sdk15` fingerprint. This layout preserves the merged SDK10 Navigation
+context and appends the Character holder and behavior backend accessor. The
+minimal GameplayApi target retains forward declarations only; native Character
+consumers opt into the existing `Physics` SDK component.
+
+Hosts supply inert anchors through `GameModuleHostOptions` and
+`GameModuleRuntimeServices` (Physics, Character, Navigation). Legacy Physics and
+Navigation constructors forward into the same composition. Each loaded module
+and behavior runtime receives its independently revocable Character child.
+Authoritative holders revoke before callbacks and release exposed copies before
+native image retirement; omitted dependencies remain typed failures.
+
+SDK15 also includes host-owned Physics batch and Prefab operation allocation and
+immutable private issuer dispatch. These opaque cross-image contracts require a
+new epoch even when public handle sizes do not change. SDK12/14 artifacts and
+SDK10 artifacts must not be mixed with this combined layout. Parallel AI SDK16
+and UI SDK17 layouts are independent; a future union requires a fresh epoch18+
+and complete consumer/lifecycle revalidation, not the maximum prior number.
+
+Rollback: restore a coherent previous engine, SDK and rebuilt module set, then
+restart play. Never edit fingerprints or force-load a mismatched binary.
+
+## Gameplay SDK15/17 → SDK19 (Character, Navigation and Runtime UI union)
+
+Rebuild every native module, generated descriptor bundle, host and optional Physics
+and RuntimeUi SDK consumer with boundary 19 and the exact `gameplay-sdk19`
+fingerprint. SDK19 combines main Character SDK15 (including Navigation SDK10)
+with Runtime UI SDK17. `GameRuntimeContext` preserves main Physics, Navigation,
+Character order and appends `runtimeUi`; the behavior backend preserves Character
+and appends UI before the existing Prefab capability. Runtime host services preserve
+Physics, Character, Navigation and append UI. The runtime constructors accept
+Character followed by UI, so UI callers must supply an empty Character argument
+when no Character grant is admitted. Use designated host service fields.
+
+Both capabilities retain separate host-derived scopes and revoke before teardown.
+Minimal/headless consumers retain forward declarations; Physics and RuntimeUi
+remain independent optional SDK components over one common exported support closure.
+SDK10/15/17/18 binaries are rejected before factories. SDK18/20 AI layouts are
+independent reservations and are not part of SDK19; a future UI+AI union needs
+another fresh identity and complete consumer/lifecycle validation, never `max`.
+
+Rollback: restore one coherent previous engine, SDK, descriptor/artifact manifests
+and rebuilt module set, then restart play. Never edit fingerprints to load an old
+binary into this combined layout.
 
 ## Gameplay SDK10 → SDK17 (Navigation and Runtime UI layout)
 

@@ -3,6 +3,7 @@
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <limits>
 #include <memory>
@@ -25,10 +26,10 @@ namespace Horo::Gameplay::Detail {
         /** @brief Trivial GC admission tag precedes placement construction of the owned scope. */
         struct ScopeStorage final {
             bool constructed{};
-            alignas(Scope) std::byte bytes[sizeof(Scope)];
+            alignas(Scope) std::array<std::byte, sizeof(Scope)> bytes;
 
             Scope *Value() noexcept {
-                return std::launder(reinterpret_cast<Scope *>(bytes));
+                return std::launder(std::bit_cast<Scope *>(bytes.data()));
             }
         };
 
@@ -38,8 +39,7 @@ namespace Horo::Gameplay::Detail {
 
         /** @brief GC may encounter partial Lua construction, but never destroys an uninitialized C++ owner. */
         int CollectScope(lua_State *state) {
-            auto *storage = static_cast<ScopeStorage *>(lua_touserdata(state, 1));
-            if (storage->constructed) {
+            if (auto *storage = static_cast<ScopeStorage *>(lua_touserdata(state, 1)); storage->constructed) {
                 std::destroy_at(storage->Value());
                 storage->constructed = false;
             }
@@ -292,7 +292,7 @@ namespace Horo::Gameplay::Detail {
         auto *storage = std::construct_at(static_cast<ScopeStorage *>(lua_newuserdatauv(state, sizeof(ScopeStorage), 0)));
         lua_pushvalue(state, metatable);
         lua_setmetatable(state, -2);
-        std::construct_at(reinterpret_cast<Scope *>(storage->bytes), context, lifetime);
+        std::construct_at(std::bit_cast<Scope *>(storage->bytes.data()), context, lifetime);
         storage->constructed = true;
         lua_remove(state, metatable);
         const auto bind = [state]<lua_CFunction Function>(const char *name) {

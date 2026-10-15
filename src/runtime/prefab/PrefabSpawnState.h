@@ -7,6 +7,7 @@
 #include "Horo/Prefab/PrefabSpawnService.h"
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <thread>
 
@@ -65,9 +66,17 @@ namespace Horo::Prefab::Detail {
 
     /** @brief Single-owner state whose shutdown severs every borrowed authority before retained clients use it. */
     struct PrefabSpawnState final {
+        using SpawnDispatcher =
+            std::function<Result<PrefabOperation>(PrefabSpawnState &, const PrefabSpawnRequest &, std::uint64_t, const CancellationToken &,
+                                                  const CancellationToken &, std::span<const Assets::AssetId>)>;
+        using DespawnDispatcher =
+            std::function<Result<PrefabOperation>(PrefabSpawnState &, const PrefabInstance &, std::uint64_t, std::uint64_t,
+                                                  const CancellationToken &, const CancellationToken &)>;
+
         PrefabSpawnState(PrefabTemplateProvider &templates, Runtime::RuntimeSceneService &sceneService,
-                         const Gameplay::ComponentRegistry *registry)
-            : provider(&templates), scenes(&sceneService), components(registry) {
+                         const Gameplay::ComponentRegistry *registry, SpawnDispatcher spawn, DespawnDispatcher despawn)
+            : submitSpawn(std::move(spawn)), submitDespawn(std::move(despawn)), provider(&templates), scenes(&sceneService),
+              components(registry) {
             if (const auto active = scenes->ActiveScene())
                 scene = active->RuntimeId();
         }
@@ -405,6 +414,10 @@ namespace Horo::Prefab::Detail {
             return true;
         }
 
+        // Only the explicit host service binds this route; operation/control-block and cancellation
+        // destruction must remain in that image after a statically linked module frontend unloads.
+        const SpawnDispatcher submitSpawn;
+        const DespawnDispatcher submitDespawn;
         PrefabTemplateProvider *provider;
         Runtime::RuntimeSceneService *scenes;
         const Gameplay::ComponentRegistry *components;

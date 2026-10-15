@@ -1,4 +1,5 @@
 #include "GameModuleHostDetail.h"
+#include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
@@ -130,14 +131,17 @@ namespace Horo::Gameplay {
     void LoadedGameModule::Impl::PublishRuntimeContext() {
         runtimeContext = {projectServices->Cancellation(), projectServices->ActiveServices(), projectServices->Capabilities()};
         runtimeContext.physics = physics;
-        runtimeContext.navigation = navigation;
+        runtimeContext.character = character;
         runtimeContext.runtimeUi = runtimeUi;
+        runtimeContext.navigation = navigation;
     }
 
     Result<GameModuleReloadSnapshot> LoadedGameModule::Impl::PrepareReload() {
         if (reloadPrepared || gameplayModule == nullptr || projectServices == nullptr)
             return Result<GameModuleReloadSnapshot>::Failure(MakeError(GameplayErrors::GameplayReloadRestartRequired));
         projectServices->RequestCancellation();
+        if (character)
+            character->Revoke();
         if (navigation)
             navigation->Revoke();
         if (runtimeUi)
@@ -170,6 +174,8 @@ namespace Horo::Gameplay {
         if (shutdown)
             return;
         shutdown = true;
+        if (character)
+            character->Revoke();
         if (navigation)
             navigation->Revoke();
         if (runtimeUi)
@@ -193,6 +199,10 @@ namespace Horo::Gameplay {
             destroy(gameplayModule);
             gameplayModule = nullptr;
         }
+        runtimeContext.navigation.reset();
+        navigation.reset();
+        runtimeContext.character.reset();
+        character.reset();
         registries.registry.reset();
         registries.systems.reset();
         registries.services.reset();

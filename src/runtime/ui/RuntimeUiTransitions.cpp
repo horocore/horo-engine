@@ -7,7 +7,7 @@ namespace Horo::Runtime::Ui {
             for (auto &entry : state.dispatchers) {
                 if (!entry.events)
                     continue;
-                auto *canvas = Detail::Canvas(state, RuntimeUiGrant{.instance = entry.instance, .canvas = entry.canvas});
+                const auto *canvas = Detail::Canvas(state, RuntimeUiGrant{.instance = entry.instance, .canvas = entry.canvas});
                 const auto *publisher = state.registry.Publisher(entry.instance);
                 if (!canvas || canvas->tree.Canvas() != entry.incarnation || !publisher || !publisher->IsCurrent(entry.lease))
                     entry = {};
@@ -28,10 +28,10 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc RuntimeUiService::PrepareTransition */
-    Result<UiSceneReconciliation::Prepared> RuntimeUiService::PrepareTransition(const UiSceneTransitionRequest &request,
-                                                                                std::vector<UiSceneBindingReplacement> bindings,
-                                                                                std::vector<UiSceneActivation> incoming,
-                                                                                const CancellationToken &cancellation) {
+    Result<UiSceneReconciliation::Prepared> RuntimeUiService::PrepareTransition(  // NOSONAR(cpp:S5817) Reserves transition candidates and
+                                                                                  // replacement inventory.
+        const UiSceneTransitionRequest &request, std::vector<UiSceneBindingReplacement> bindings, std::vector<UiSceneActivation> incoming,
+        const CancellationToken &cancellation) {
         if (auto valid = Detail::CheckOwner(state_); valid.HasError())
             return Result<UiSceneReconciliation::Prepared>::Failure(valid.ErrorValue());
         return state_->registry.Prepare(request, std::move(bindings), std::move(incoming), cancellation);
@@ -46,8 +46,9 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc RuntimeUiService::CommitTransition */
-    Result<UiSceneReconciliationResult> RuntimeUiService::CommitTransition(UiSceneReconciliation::Prepared &prepared,
-                                                                           const UiStructuralCommitPoint point) {
+    Result<UiSceneReconciliationResult> RuntimeUiService::CommitTransition(  // NOSONAR(cpp:S5817) Publishes prepared owners and discards
+                                                                             // expired routes.
+        UiSceneReconciliation::Prepared &prepared, const UiStructuralCommitPoint point) {
         if (auto valid = Detail::CheckOwner(state_); valid.HasError())
             return Result<UiSceneReconciliationResult>::Failure(valid.ErrorValue());
         auto committed = state_->registry.Commit(prepared, point);
@@ -57,9 +58,10 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc RuntimeUiService::WithdrawProvider */
-    Result<UiBindingApplyResult> RuntimeUiService::WithdrawProvider(const RuntimeUiInstanceId instance, const UiCanvasId canvasId,
-                                                                    const UiBindingProviderInstanceId provider,
-                                                                    const RuntimeUiCommandCutoff point) {
+    Result<UiBindingApplyResult> RuntimeUiService::WithdrawProvider(  // NOSONAR(cpp:S5817) Unregisters providers and changes canonical
+                                                                      // bindings.
+        const RuntimeUiInstanceId instance, const UiCanvasId canvasId, const UiBindingProviderInstanceId provider,
+        const RuntimeUiCommandCutoff point) {
         if (auto valid = Detail::CheckOwner(state_); valid.HasError())
             return Result<UiBindingApplyResult>::Failure(valid.ErrorValue());
         if (point != RuntimeUiCommandCutoff::BeforeVariableUpdate)

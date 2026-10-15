@@ -3,9 +3,11 @@
 /** @file BehaviorRuntimeState.h @brief Target-private behavior instances, event queues and structural publication state. */
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Gameplay/BehaviorRuntime.h"
+#include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
+#include "Horo/Physics/CharacterErrors.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
 #include "Horo/Runtime/Ui/RuntimeUiClient.h"
@@ -140,9 +142,20 @@ namespace Horo::Gameplay {
             [[nodiscard]] std::shared_ptr<const Runtime::Ui::RuntimeUiClient> RuntimeUiContext() const noexcept override {
                 if (!runtime.runtimeUi)
                     return {};
-                const auto &module = runtime.runtimeUi->Grant().moduleId;
+                const auto &moduleId = runtime.runtimeUi->Grant().moduleId;
                 const auto &type = instance.component.typeId.Value();
-                return type.size() > module.size() && type.starts_with(module) && type[module.size()] == '.' ? runtime.runtimeUi : nullptr;
+                return type.size() > moduleId.size() && type.starts_with(moduleId) && type[moduleId.size()] == '.' ? runtime.runtimeUi
+                                                                                                                   : nullptr;
+            }
+
+            [[nodiscard]] std::shared_ptr<const GameplayCharacterContext> CharacterContext() const noexcept override {
+                if (runtime.character && !runtime.character->Binding().moduleId.empty()) {
+                    const auto &principal = runtime.character->Binding().moduleId;
+                    const auto &type = instance.component.typeId.Value();
+                    if (!type.starts_with(principal) || type.size() <= principal.size() || type[principal.size()] != '.')
+                        return {};
+                }
+                return runtime.character;
             }
 
             [[nodiscard]] std::shared_ptr<const GameplayPrefabContext> PrefabContext() const noexcept override {
@@ -470,6 +483,8 @@ namespace Horo::Gameplay {
             if (shutdown)
                 return;
             shutdown = true;
+            if (character)
+                character->Revoke();
             if (navigation)
                 navigation->Revoke();
             if (runtimeUi)
@@ -495,6 +510,7 @@ namespace Horo::Gameplay {
         Runtime::SceneRuntimeId sceneIdentity;
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi;
         std::shared_ptr<const GameplayPhysicsContext> physics;
+        std::shared_ptr<const GameplayCharacterContext> character;
         std::shared_ptr<const GameplayNavigationContext> navigation;
         std::shared_ptr<const GameplayPrefabContext> prefabs;
         std::vector<Instance> instances;

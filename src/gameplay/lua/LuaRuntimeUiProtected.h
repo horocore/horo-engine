@@ -7,6 +7,7 @@
 
 #include <exception>
 #include <new>
+#include <optional>
 #include <type_traits>
 extern "C" {
 #include <lauxlib.h>
@@ -29,13 +30,15 @@ namespace Horo::Gameplay::Detail::UiScript {
         struct Frame final {
             Call &call;
             std::exception_ptr exception;
-        } frame{call, {}};
+        };
+
+        Frame frame{call, {}};
 
         const int base = lua_gettop(state);
         const int count = arguments ? base : 0;
         if (count > 12 || !lua_checkstack(state, count + LUA_MINSTACK))
             throw std::bad_alloc{};
-        lua_pushcfunction(state, +[](lua_State *inner) -> int {
+        lua_pushcfunction(state, +[](lua_State *inner) noexcept -> int {
             auto &frame = *static_cast<Frame *>(lua_touserdata(inner, -1));
             lua_pop(inner, 1);
             try {
@@ -58,38 +61,53 @@ namespace Horo::Gameplay::Detail::UiScript {
     /** @brief Reads locked transport through a protected raw metatable lookup, retaining no VM or arbitrary pointer. */
     template <class T> T *Transport(lua_State *state, const int index, const char *name) {
         T *value{};
-        Protected(state, [&](lua_State *inner) {
+        Protected(state, [&value, index, name](lua_State *inner) {
             value = static_cast<T *>(luaL_testudata(inner, index, name));
             return 0;
         }, true);
         return value;
     }
 
-    /** @brief Unwinds native owners before propagating a Lua error; no C++ exception crosses the C callback boundary. */
-    template <lua_CFunction Function> int Boundary(lua_State *state) {
-        bool memory{};
-        bool native{};
+    /** @brief Attempts the typed memory failure after native owners unwind; failure selects a nonallocating static fallback. */
+    inline std::optional<int> MemoryFailure(lua_State *state) noexcept {
+        try {
+            return Failure(state, MakeError(Runtime::Ui::UiErrors::CapacityExceeded));
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+
+    /** @brief Unwinds native owners before propagating a Lua error; every C++ exception is contained by this C callback boundary. */
+    template <lua_CFunction Function> int Boundary(lua_State *state) noexcept {
+        enum class FailureKind {
+            Lua,
+            Memory,
+            Native
+        };
+        FailureKind failure = FailureKind::Lua;
         try {
             if (lua_gettop(state) > 12)
                 return Invalid(state);
             return Function(state);
         } catch (const LuaTransportFailure &) {
-            // The protected call retained the original Lua error for propagation after this catch completes.
+            failure = FailureKind::Lua;
         } catch (const std::bad_alloc &) {
-            memory = true;
+            failure = FailureKind::Memory;
         } catch (...) {
-            native = true;
+            failure = FailureKind::Native;
         }
-        if (memory) {
-            try {
-                return Failure(state, MakeError(UiErrors::CapacityExceeded));
-            } catch (...) {
-                // All temporary diagnostics unwind before the final Lua error operation.
-            }
+        // No active C++ catch or nontrivial automatic may remain when Lua performs its C longjmp.
+        if (failure == FailureKind::Memory) {
+            if (const auto result = MemoryFailure(state))
+                return *result;
             return luaL_error(state, "Runtime UI transport memory capacity exceeded.");
         }
-        if (native)
+        if (failure == FailureKind::Native)
             return luaL_error(state, "Runtime UI transport native failure.");
         return lua_error(state);
     }
+
+    static_assert(std::is_trivially_destructible_v<std::optional<int>>);
+    static_assert(std::is_convertible_v<decltype(&Boundary<Invalid>), lua_CFunction>);
+    static_assert(noexcept(Boundary<Invalid>(nullptr)));
 }  // namespace Horo::Gameplay::Detail::UiScript

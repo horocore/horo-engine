@@ -1,6 +1,7 @@
 #include "Horo/Gameplay/GameModuleHost.h"
 
 #include "GameModuleHostDetail.h"
+#include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
@@ -148,23 +149,36 @@ namespace Horo::Gameplay {
 
     /** @copydoc GameModuleHost::BindRuntimeServices */
     Result<void> GameModuleHost::BindRuntimeServices(LoadedGameModule::Impl &impl) const {
-        auto physics = ResolvePhysicsContext(physics_, impl.moduleId);
+        auto physics = ResolvePhysicsContext(runtimeServices_.physics, impl.moduleId);
         if (physics.HasError())
             return Result<void>::Failure(physics.ErrorValue());
-        auto navigation = ResolveNavigationContext(navigation_, impl.moduleId);
+        auto navigation = ResolveNavigationContext(runtimeServices_.navigation, impl.moduleId);
         if (navigation.HasError())
             return Result<void>::Failure(navigation.ErrorValue());
         if (auto pinned = navigation.Value()->RetainCodeImage(impl.codeImage); pinned.HasError())
             return Result<void>::Failure(pinned.ErrorValue());
         impl.navigation = std::move(navigation).Value();
         impl.physics = std::move(physics).Value();
-        if (runtimeUi_) {
-            if (runtimeUi_->Grant().moduleId != impl.moduleId)
+        if (runtimeServices_.runtimeUi) {
+            if (runtimeServices_.runtimeUi->Grant().moduleId != impl.moduleId)
                 return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::CapabilityDenied));
-            auto ui = runtimeUi_->Derive();
+            auto ui = runtimeServices_.runtimeUi->Derive();
             if (ui.HasError())
                 return Result<void>::Failure(ui.ErrorValue());
             impl.runtimeUi = std::move(ui).Value();
+        }
+
+        if (runtimeServices_.character) {
+            if (const auto &binding = runtimeServices_.character->Binding(); binding.moduleId != impl.moduleId)
+                return Result<void>::Failure(MakeError(GameplayErrors::CharacterPermissionDenied));
+            if (auto dependency = runtimeServices_.character->ValidateDependency(impl.physics.get()); dependency.HasError())
+                return Result<void>::Failure(dependency.ErrorValue());
+            auto character = runtimeServices_.character->Derive();
+            if (character.HasError())
+                return Result<void>::Failure(character.ErrorValue());
+            impl.character = std::move(character).Value();
+        } else {
+            impl.character = GameplayCharacterContext::Withheld({.moduleId = impl.moduleId}, GameplayCharacterDenial::Unavailable);
         }
         return Result<void>::Success();
     }

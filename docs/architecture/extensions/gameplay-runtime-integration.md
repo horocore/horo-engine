@@ -480,3 +480,17 @@ reports budget ownership and obeys the binary-boundary allocation rules above.
 - [Asset Pipeline](../runtime/asset-pipeline.md)
 - [Input Architecture](../runtime/input-architecture.md)
 - [Horo Package System](../packages/package-system.md): library-provided services and game-owned asset types
+
+## Character Execution Scope (SDK12)
+
+The current standalone Character layout appends `GameRuntimeContext::character`
+and `BehaviorContext::Backend::CharacterContext`. Explicit `GameModuleRuntimeServices`
+and non-default `GameModuleHostOptions` compose anchors without executing a
+registration callback. Loaded module, behavior runtime and script incarnation
+receive separate descendant grants; unload/reload closes those grants before
+callbacks and before queued command closure. Character and Physics retain all
+world, controller and tick ownership. The earlier SDK9 Physics migration remains
+historical context; this layout requires the exact SDK12 fingerprint.
+
+See the [owning Character scope contract](../runtime/character-controller-architecture.md#gameplay-runtime-scope-and-revocation)
+and [migration/affected callers](../../guides/gameplay-character-capability-migration.md).
