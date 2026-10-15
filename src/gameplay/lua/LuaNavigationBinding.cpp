@@ -261,7 +261,7 @@ namespace Horo::Gameplay::Detail {
             lua_setfield(state, -2, "__gc");
         }
         lua_setmetatable(state, -2);
-        const auto bind = [&]<lua_CFunction Function>(const char *name) {
+        const auto bind = [state]<lua_CFunction Function>(const char *name) {
             lua_pushvalue(state, -1);
             lua_pushcclosure(state, Function, 1);
             lua_setfield(state, -3, name);
