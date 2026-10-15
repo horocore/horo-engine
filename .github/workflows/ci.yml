@@ -154,6 +154,12 @@ jobs:
               environment.write(f"TMPDIR={root}\n")
           PYTHON
 
+      - name: Install native Character allocation verifier dependency
+        run: |
+          verifier_python="$(python -c 'from pathlib import Path; import sys; print(Path(sys.executable).resolve().as_posix())')"
+          echo "HORO_QUALIFICATION_PYTHON=$verifier_python" >> "$GITHUB_ENV"
+          "$verifier_python" -m pip install --no-cache-dir --only-binary=:all: --no-deps defusedxml==0.7.1
+
       - name: Restore dependency and compiler caches
         id: cache
         uses: ./.github/actions/restore-native-cache
@@ -166,7 +172,7 @@ jobs:
           max-size: 2G
 
       - name: Configure Debug
-        run: cmake --preset "${{ matrix.preset }}"
+        run: cmake --preset "${{ matrix.preset }}" -DPython3_EXECUTABLE="$HORO_QUALIFICATION_PYTHON"
 
       - name: Build Debug
         id: debug_build
@@ -360,11 +366,6 @@ jobs:
             stackCapture = 'not performed; no debugger installation or attachment assumed'
             timeoutSeconds = 90
           } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $diagnosticDirectory 'provenance.json')
-
-      - name: Install native Character allocation verifier dependency
-        run: >-
-          python -m pip install --no-cache-dir --only-binary=:all:
-          --no-deps defusedxml==0.7.1
 
       - name: Test Debug
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}

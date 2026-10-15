@@ -1,7 +1,7 @@
 """The Windows Release Character route requires actual exact, non-skipped CTest cases."""
 
 import importlib.util
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from html import escape
 
 import pytest
@@ -12,6 +12,12 @@ SPEC = importlib.util.spec_from_file_location(
 )
 QUALIFICATION = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(QUALIFICATION)
+
+
+@pytest.fixture(autouse=True)
+def evidence_workspace(tmp_path, monkeypatch):
+    """Every direct reader test owns an explicit evidence workspace."""
+    monkeypatch.chdir(tmp_path)
 
 
 def discovery(names=None):
@@ -154,3 +160,60 @@ def test_actual_cli_rejects_outside_evidence(tmp_path, monkeypatch, absolute):
     with pytest.raises(SystemExit) as rejected:
         QUALIFICATION.main()
     assert rejected.value.code == 2
+
+
+def test_sonar_native_reader_uses_the_parser_environment():
+    workflow = (ROOT / ".github/workflows/sonar.yml").read_text(encoding="utf-8")
+    install = workflow.split("- name: Install coverage tools", 1)[1].split("\n      - name:", 1)[0]
+    configure = workflow.split("- name: Configure instrumented Debug build", 1)[1].split("\n      - name:", 1)[0]
+    venv_command = next(line.strip() for line in install.splitlines() if line.strip().startswith("python3 -m venv "))
+    environment = PurePosixPath(venv_command.split(maxsplit=3)[3])
+    assert f"{environment / 'bin' / 'pip'} install" in install
+    assert "defusedxml==0.7.1" in install
+    assert f"-DPython3_EXECUTABLE={environment / 'bin' / 'python'}" in configure
+    assert workflow.index("Install coverage tools") < workflow.index("Configure instrumented Debug build")
+    assert workflow.index("Configure instrumented Debug build") < workflow.index("Run C++ coverage tests")
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+def test_direct_reader_accepts_workspace_reports_with_spaces(tmp_path, absolute):
+    folder = tmp_path / "direct evidence with spaces"
+    folder.mkdir()
+    report = junit(folder)
+    QUALIFICATION.verify_junit(report if absolute else report.relative_to(tmp_path))
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+def test_direct_reader_rejects_outside_reports(tmp_path, absolute):
+    folder = tmp_path.parent / (tmp_path.name + "-outside")
+    folder.mkdir()
+    report = junit(folder)
+    argument = report if absolute else Path("..") / folder.name / report.name
+    with pytest.raises(ValueError, match="inside the current workspace"):
+        QUALIFICATION.verify_junit(argument)
+
+
+def test_direct_reader_rejects_symlink_escape(tmp_path):
+    folder = tmp_path.parent / (tmp_path.name + "-outside")
+    folder.mkdir()
+    report = junit(folder)
+    link = tmp_path / "outside report.xml"
+    try:
+        link.symlink_to(report)
+    except OSError:
+        pytest.skip("Host does not permit test symlink creation")
+    with pytest.raises(ValueError, match="inside the current workspace"):
+        QUALIFICATION.verify_junit(link)
+
+
+def test_native_reader_reuses_the_installed_parser_interpreter():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    install = workflow.split("- name: Install native Character allocation verifier dependency", 1)[1]
+    install = install.split("\n      - name:", 1)[0]
+    assert "Path(sys.executable).resolve().as_posix()" in install
+    assert 'HORO_QUALIFICATION_PYTHON=$verifier_python' in install
+    assert '"$verifier_python" -m pip install' in install
+    assert "defusedxml==0.7.1" in install
+    configure = workflow.split("- name: Configure Debug", 1)[1].split("\n      - name:", 1)[0]
+    assert '-DPython3_EXECUTABLE="$HORO_QUALIFICATION_PYTHON"' in configure
+    assert workflow.index("Install native Character allocation verifier dependency") < workflow.index("- name: Configure Debug")
