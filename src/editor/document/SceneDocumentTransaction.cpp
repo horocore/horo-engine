@@ -118,8 +118,9 @@ namespace Horo::Editor {
                 auto captured = CaptureReplacement(objects, change);
                 if (captured.HasError())
                     return Result<SceneObjectsReplacedDelta>::Failure(captured.ErrorValue());
-                if (captured.Value())
-                    delta.objects.push_back(std::move(*captured.Value()));
+                auto owned = std::move(captured).Value();
+                if (owned)
+                    delta.objects.push_back(std::move(*owned));
             }
             ResolveReplacementIndices(delta, objects.size());
             return Result<SceneObjectsReplacedDelta>::Success(std::move(delta));
