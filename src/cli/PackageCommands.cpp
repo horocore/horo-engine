@@ -181,6 +181,9 @@ namespace Horo::Cli {
                                               .valueKind = CliOptionValueKind::String,
                                               .required = true,
                                               .repeatable = true});
+            // The registry canonicalizes options before exact adapter-schema admission.
+            // Publish that same order so activation cannot invalidate every host registration.
+            std::ranges::sort(descriptor.options, {}, &CliOptionDescriptor::name);
             result.push_back(std::move(descriptor));
         }
         return result;

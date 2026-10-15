@@ -4,6 +4,8 @@
 #include "Horo/Mcp/PackageTools.h"
 #include "PackageApplicationServiceTestSupport.h"
 
+#include <algorithm>
+
 namespace {
     using namespace Horo;
     using namespace Horo::Application;
@@ -40,6 +42,23 @@ namespace {
                                                       .grantedCapabilities = {{"horo.package.manage"}}});
         REQUIRE(dispatcher.HasValue());
         return std::move(dispatcher).Value();
+    }
+
+    TEST_CASE("Every package CLI adapter preserves the canonical registry option schema", "[packages][application][cli]") {
+        const auto descriptors = Cli::DescribePackageCommands();
+        REQUIRE(descriptors.size() == 4);
+        for (const auto &descriptor : descriptors)
+            CHECK(std::ranges::is_sorted(descriptor.options, {}, &Cli::CliOptionDescriptor::name));
+        const auto activation = std::ranges::find_if(descriptors, [](const auto &descriptor) {
+            return descriptor.path == Cli::CommandPath{{"package", "activate"}};
+        });
+        REQUIRE(activation != descriptors.end());
+        REQUIRE(activation->options.size() == 3);
+        CHECK(activation->options.front().name == "enable");
+        Fixture fixture;
+        auto dispatcher = Dispatcher(fixture);
+        CHECK(dispatcher.Registry().Find({{"package", "activate"}}) != nullptr);
+        CHECK(fixture.source.calls == 0);
     }
 
     TEST_CASE("Package modal reopening reconnects to actual retained work and rejects stale controls", "[packages][application][editor]") {
