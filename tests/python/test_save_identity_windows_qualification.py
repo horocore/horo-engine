@@ -27,6 +27,8 @@ def test_release_save_qualification_is_mandatory_and_debug_skips_are_explicit() 
         "HoroMcpSessionTests",
         "HoroRuntimeSaveRestoreTransactionTests",
         "HoroRuntimeSaveSlotLifecycleTests",
+        "HoroSceneRuntimeConversionTests",
+        "HoroPhysicsTests",
     } <= set(build_targets.group(1).split())
     step = workflow.split("      - name: Test Windows Release Save lifecycle allocation qualification", 1)[1].split("      - name:", 1)[0]
     assert "runner.os == 'Windows'" in step

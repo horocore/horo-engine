@@ -30,6 +30,13 @@
 namespace Horo::Physics {
     /** @brief Shared only by copied client handles; the world invalidates its borrowed pointer before retirement. */
     struct PhysicsQueryEventCapabilityState final {
+        using BatchAllocator = std::function<std::shared_ptr<PhysicsQueryBatchState>(std::span<const PhysicsQueryCommand>,
+                                                                                     std::shared_ptr<PhysicsQueryEventCapabilityState>)>;
+
+        explicit PhysicsQueryEventCapabilityState(BatchAllocator allocator) : allocateBatch(std::move(allocator)) {}
+
+        // Bound by the issuing world image. Client frontends cannot replace destruction authority.
+        const BatchAllocator allocateBatch;
         PhysicsWorld *world{};
         PhysicsQueryEventIdentity identity;
         std::thread::id ownerThread;
@@ -58,7 +65,7 @@ namespace Horo::Physics {
             // only its cancellation token, never the owner-thread-only world pointer/flags.
             // The terminal lock arbitrates revocation and completion; committed results never change.
             if (!terminal && access_->revocation.IsCancellationRequested()) {
-                failureCode = &PhysicsErrors::CapabilityRevoked;
+                failureCode = revokedCode_;
                 terminal = true;
             }
             if (failureCode)
@@ -66,6 +73,10 @@ namespace Horo::Physics {
             if (failure)
                 return Result<std::shared_ptr<const PhysicsQueryBatchCompletion>>::Failure(*failure);
             return Result<std::shared_ptr<const PhysicsQueryBatchCompletion>>::Success(completion);
+        }
+
+        [[nodiscard]] bool Cancel() noexcept {
+            return FailCode(*cancelledCode_);
         }
 
         [[nodiscard]] bool Fail(Error error) {
@@ -91,7 +102,7 @@ namespace Horo::Physics {
             if (terminal)
                 return false;
             if (access_->revocation.IsCancellationRequested()) {
-                failureCode = &PhysicsErrors::CapabilityRevoked;
+                failureCode = revokedCode_;
                 terminal = true;
                 return false;
             }
@@ -107,6 +118,8 @@ namespace Horo::Physics {
         }
 
     private:
+        const ErrorCodeDescriptor *const cancelledCode_{&PhysicsErrors::QueryCancelled};
+        const ErrorCodeDescriptor *const revokedCode_{&PhysicsErrors::CapabilityRevoked};
         std::vector<PhysicsQueryCommand> commands_;
         std::shared_ptr<PhysicsQueryEventCapabilityState> access_;
         mutable std::mutex terminalMutex;

@@ -2,7 +2,10 @@
 
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Physics/CharacterErrors.h"
 #include "LuaBehaviorMetadata.h"
+#include "LuaBehaviorSandbox.h"
+#include "LuaCharacterBinding.h"
 #include "LuaNavigationBinding.h"
 #include "LuaPhysicsBinding.h"
 #include "LuaReplicationDeclaration.h"
@@ -49,33 +52,6 @@ namespace Horo::Gameplay {
             luaL_error(state, "Lua behavior instruction budget exceeded");
         }
 
-        int IdentityBehavior(lua_State *state) {
-            luaL_checktype(state, 1, LUA_TTABLE);
-            lua_settop(state, 1);
-            return 1;
-        }
-
-        void OpenSandbox(lua_State *state) {
-            luaL_requiref(state, "_G", luaopen_base, 1);
-            lua_pop(state, 1);
-            luaL_requiref(state, LUA_TABLIBNAME, luaopen_table, 1);
-            lua_pop(state, 1);
-            luaL_requiref(state, LUA_STRLIBNAME, luaopen_string, 1);
-            lua_pop(state, 1);
-            luaL_requiref(state, LUA_MATHLIBNAME, luaopen_math, 1);
-            lua_pop(state, 1);
-            luaL_requiref(state, LUA_UTF8LIBNAME, luaopen_utf8, 1);
-            lua_pop(state, 1);
-            for (const char *name : {"dofile", "loadfile", "collectgarbage", "io", "os", "package", "debug"}) {
-                lua_pushnil(state);
-                lua_setglobal(state, name);
-            }
-            lua_newtable(state);
-            lua_pushcfunction(state, IdentityBehavior);
-            lua_setfield(state, -2, "behavior");
-            lua_setglobal(state, "horo");
-        }
-
         [[nodiscard]] Result<void> LuaFailure(const std::string &message) {
             return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent, message));
         }
@@ -92,7 +68,7 @@ namespace Horo::Gameplay {
             lua_State *state = lua_newstate(BudgetAllocate, &budget);
             if (state == nullptr)
                 return Result<ParsedProgram>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent, "Unable to create Lua VM."));
-            OpenSandbox(state);
+            Detail::OpenLuaBehaviorSandbox(state);
             lua_sethook(state, InstructionLimitHook, LUA_MASKCOUNT, static_cast<int>(limits.maximumInstructionsPerCallback));
             if (const int loaded = luaL_loadbufferx(state, source.data(), source.size(), sourceName.c_str(), "t");
                 loaded != LUA_OK || lua_pcall(state, 0, 1, 0) != LUA_OK) {
@@ -112,27 +88,6 @@ namespace Horo::Gameplay {
             return Result<ParsedProgram>::Success({std::move(descriptor).Value(), std::move(replication).Value()});
         }
 
-        [[nodiscard]] bool Compatible(const BehaviorDescriptor &active, const BehaviorDescriptor &candidate) {
-            if (active.typeId != candidate.typeId || active.schemaVersion != candidate.schemaVersion ||
-                active.allowMultiple != candidate.allowMultiple || active.fields.size() != candidate.fields.size() ||
-                active.phases.size() != candidate.phases.size())
-                return false;
-            for (std::size_t index = 0; index < active.fields.size(); ++index) {
-                if (active.fields[index].name != candidate.fields[index].name ||
-                    active.fields[index].defaultValue.index() != candidate.fields[index].defaultValue.index())
-                    return false;
-            }
-            return true;
-        }
-
-        /** @brief Reloads preserve gameplay ownership, schema major version and simulation safe points. */
-        bool CompatibleReplicationSchedule(const GameplayReplicationRegistration &active,
-                                           const GameplayReplicationRegistration &replacement) {
-            return active.owner == replacement.owner && active.schema.version.major == replacement.schema.version.major &&
-                   active.schedule.capturePhase == replacement.schedule.capturePhase &&
-                   active.schedule.applyPhase == replacement.schedule.applyPhase;
-        }
-
     }  // namespace
 
     struct LuaBehaviorProgram::Impl {
@@ -143,6 +98,7 @@ namespace Horo::Gameplay {
         std::string sourceName;
         LuaBehaviorLimits limits;
         std::uint64_t revision{1};
+        Detail::LuaCharacterScopeRegistry characterScopes;
     };
 
     class LuaBehaviorInstance final : public IBehaviorInstance {
@@ -295,12 +251,35 @@ namespace Horo::Gameplay {
             lua_setfield(state, -2, name);
         }
 
+        /** @brief Binds one script incarnation to an independently revocable Character child without retaining BehaviorContext. */
+        void BindCharacter(const BehaviorContext &context) {
+            if (character_ || characterError_)
+                return;
+            const auto parent = context.CharacterContext();
+            if (!parent)
+                return;
+            auto child = parent->Derive();
+            if (child.HasError()) {
+                characterError_ = child.ErrorValue();
+                return;
+            }
+            if (!program_->impl_->characterScopes.Retain(child.Value())) {
+                child.Value()->Revoke();
+                characterError_ = MakeError(Character::CharacterErrors::CapacityExceeded);
+                return;
+            }
+            character_ = std::move(child).Value();
+        }
+
         void PushContext(lua_State *state, BehaviorContext &context) {
             lua_newtable(state);
             Detail::PushLuaNavigationContext(state, context, vm_.navigationLifetime->Token());
             lua_setfield(state, -2, "navigation");
             Detail::PushLuaPhysicsContext(state, context);
             lua_setfield(state, -2, "physics");
+            BindCharacter(context);
+            Detail::PushLuaCharacterContext(state, character_, characterError_);
+            lua_setfield(state, -2, "character");
             lua_newtable(state);
             Function<Position>(state, context, "position");
             Function<SetPosition>(state, context, "set_position");
@@ -327,6 +306,10 @@ namespace Horo::Gameplay {
         }
 
         void Close() noexcept {
+            if (character_)
+                character_->Revoke();
+            character_.reset();
+            characterError_.reset();
             if (vm_.navigationLifetime)
                 vm_.navigationLifetime->RequestCancellation();
             if (vm_.state != nullptr)
@@ -355,7 +338,7 @@ namespace Horo::Gameplay {
             vm_.state = lua_newstate(BudgetAllocate, &vm_.budget);
             if (vm_.state == nullptr)
                 return Fail("Unable to create Lua behavior VM.");
-            OpenSandbox(vm_.state);
+            Detail::OpenLuaBehaviorSandbox(vm_.state);
             lua_sethook(vm_.state, InstructionLimitHook, LUA_MASKCOUNT, static_cast<int>(impl.limits.maximumInstructionsPerCallback));
             if (luaL_loadbufferx(vm_.state, impl.source.data(), impl.source.size(), impl.sourceName.c_str(), "t") != LUA_OK ||
                 lua_pcall(vm_.state, 0, 1, 0) != LUA_OK || !lua_istable(vm_.state, -1))
@@ -366,6 +349,8 @@ namespace Horo::Gameplay {
         }
 
         bool Fail(const std::string &message) {
+            if (character_)
+                character_->Revoke();
             LOG_ERROR("gameplay.lua", "%s", message.c_str());
             failed_ = true;
             failedRevision_ = program_->Revision();
@@ -435,6 +420,8 @@ namespace Horo::Gameplay {
 
         LuaBehaviorProgram *program_{};
         Vm vm_{};
+        std::shared_ptr<const GameplayCharacterContext> character_;
+        std::optional<Error> characterError_;
         bool failed_{};
         std::uint64_t failedRevision_{};
     };
@@ -510,28 +497,17 @@ namespace Horo::Gameplay {
 
     /** @copydoc LuaBehaviorProgram::ReplaceCompatible */
     Result<void> LuaBehaviorProgram::ReplaceCompatible(std::unique_ptr<LuaBehaviorProgram> candidate) {
-        if (!candidate || !Compatible(impl_->descriptor, candidate->impl_->descriptor))
-            return LuaFailure((candidate ? candidate->impl_->sourceName : impl_->sourceName) +
-                              ": Lua behavior reload requires a schema-compatible candidate or play-session restart.");
-        if (impl_->replication.has_value() != candidate->impl_->replication.has_value())
-            return LuaFailure(candidate->impl_->sourceName + ": Lua replication reload requires the previous schema declaration.");
-        if (impl_->replication) {
-            const auto &active = *impl_->replication;
-            const auto &replacement = *candidate->impl_->replication;
-            if (!CompatibleReplicationSchedule(active, replacement))
-                return LuaFailure(candidate->impl_->sourceName + ": Lua replication reload changed owner or safe points.");
-            const auto previous = impl_->replicationRegistry->Acquire().Value();
-            if (const auto compatible = Network::BuildReplicationDescriptorReplacement(previous.Descriptors(), {&replacement.schema, 1},
-                                                                                       GameplayReplicationRegistryLimits{}.descriptors);
-                compatible.HasError()) {
-                auto error = compatible.ErrorValue();
-                error.message = candidate->impl_->sourceName + ": " + error.message;
-                return Result<void>::Failure(std::move(error));
-            }
-            const auto codecs = Detail::ValidateLuaReplicationCodecs(active, replacement, candidate->impl_->sourceName);
-            if (codecs.HasError())
-                return codecs;
-        }
+        const Detail::LuaBehaviorReloadMetadata active{impl_->descriptor, impl_->replication, impl_->replicationRegistry.get(),
+                                                       impl_->sourceName};
+        std::optional<Detail::LuaBehaviorReloadMetadata> incoming;
+        if (candidate)
+            incoming.emplace(candidate->impl_->descriptor, candidate->impl_->replication, candidate->impl_->replicationRegistry.get(),
+                             candidate->impl_->sourceName);
+        if (auto valid = Detail::ValidateLuaBehaviorReplacement(active, incoming ? &*incoming : nullptr); valid.HasError())
+            return valid;
+        if (impl_->revision == std::numeric_limits<std::uint64_t>::max())
+            return LuaFailure(impl_->sourceName + ": Lua source generations exhausted.");
+        impl_->characterScopes.Revoke();
         impl_->replication = std::move(candidate->impl_->replication);
         impl_->replicationRegistry = std::move(candidate->impl_->replicationRegistry);
         impl_->descriptor.displayName = std::move(candidate->impl_->descriptor.displayName);
