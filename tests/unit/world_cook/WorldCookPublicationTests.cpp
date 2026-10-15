@@ -3,6 +3,8 @@
 #include "Horo/WorldCook/WorldCookPublication.h"
 #include "assets/AssetCookOutputFixture.h"
 
+#include <fstream>
+
 namespace Horo::WorldCook {
     namespace {
         namespace W = WorldStreaming;
@@ -181,6 +183,53 @@ namespace Horo::WorldCook {
             }
         };
     }  // namespace
+
+    TEST_CASE("Cook test directory collisions preserve existing roots and bound exclusive admission", "[world_cook][native]") {
+        T::TempDir parent;
+        const auto existing = parent.path / "existing";
+        REQUIRE(std::filesystem::create_directory(existing));
+        const auto sentinel = existing / "sentinel.txt";
+        {
+            std::ofstream stream(sentinel);
+            stream << "existing owner";
+            REQUIRE(stream.good());
+        }
+        std::size_t attempts{};
+        SECTION("Collision retries into a distinct exclusively created child") {
+            const auto fresh = parent.path / "fresh";
+            const auto created = A::CookTestValues::CreateCookTestDirectoryFromCandidates([&](const std::size_t attempt) {
+                ++attempts;
+                return attempt == 0 ? existing : fresh;
+            }, true);
+            CHECK(attempts == 2);
+            CHECK(created == std::filesystem::canonical(fresh));
+            CHECK(T::ReadText(sentinel) == "existing owner");
+            // This enclosing exclusively owned parent also owns the newly admitted child.
+            CHECK(std::filesystem::remove(created));
+            CHECK(std::filesystem::is_directory(existing));
+            CHECK(T::ReadText(sentinel) == "existing owner");
+        }
+        SECTION("Repeated collisions exhaust the finite bound without adopting an existing root") {
+            REQUIRE_THROWS_AS(A::CookTestValues::CreateCookTestDirectoryFromCandidates(
+                                  [&](const std::size_t) {
+                ++attempts;
+                return existing;
+            }, false),
+                              std::filesystem::filesystem_error);
+            CHECK(attempts == A::CookTestValues::MaximumCookTestDirectoryAttempts);
+            CHECK(T::ReadText(sentinel) == "existing owner");
+        }
+        SECTION("Non-collision filesystem errors surface without retry") {
+            REQUIRE_THROWS_AS(A::CookTestValues::CreateCookTestDirectoryFromCandidates(
+                                  [&](const std::size_t) {
+                ++attempts;
+                return parent.path / "missing" / "child";
+            }, false),
+                              std::filesystem::filesystem_error);
+            CHECK(attempts == 1);
+            CHECK(T::ReadText(sentinel) == "existing owner");
+        }
+    }
 
     TEST_CASE("World committed Scene adoption and report lease transport allocate no new storage", "[world_cook][native]") {
         Fixture fixture;

@@ -2,6 +2,7 @@
 
 #include "AISceneRuntimeDetail.h"
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/AIRuntimeCapability.h"
 
 #include <algorithm>
 #include <functional>
@@ -16,6 +17,11 @@
 
 namespace Horo::AI {
     namespace {
+        /** @brief Copies diagnostics in the original scene-owner image; clients cannot replace this allocator dispatch. */
+        std::shared_ptr<const Telemetry::OperationContext> CaptureHostDiagnostics(const Telemetry::OperationContext &context) {
+            return std::make_shared<const Telemetry::OperationContext>(context);
+        }
+
         template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor, std::string message) {
             return Result<T>::Failure(MakeError(descriptor, std::move(message)));
         }
@@ -53,6 +59,9 @@ namespace Horo::AI {
     }  // namespace
 
     namespace Detail {
+        /** @copydoc AiSceneRuntimeState::AiSceneRuntimeState */
+        AiSceneRuntimeState::AiSceneRuntimeState() noexcept : captureDiagnostics(&CaptureHostDiagnostics) {}
+
         /** @copydoc EntityRefHash::operator() */
         std::size_t EntityRefHash::operator()(const Runtime::EntityRef &entity) const noexcept {
             std::size_t result = std::hash<std::uint64_t>{}(entity.runtime.value);
@@ -423,33 +432,11 @@ namespace Horo::AI {
     Result<TaskHandle> AiSceneRuntime::StartTaskAtSafePoint(const AgentHandle agent, const TaskId taskDefinition) const {
         if (shutdown_ || active_ == nullptr)
             return Failure<TaskHandle>(AIErrors::RuntimeUnavailable, "The AI scene runtime is not active.");
-        if (active_->revision == std::numeric_limits<std::uint64_t>::max())
-            return Result<TaskHandle>::Failure(MakeError(AIErrors::CanonicalRestoreStale, "The AI mutation revision is exhausted."));
-        if (!taskDefinition.IsValid())
-            return Failure<TaskHandle>(AIErrors::TaskContextInvalid, "An AI task requires a valid persistent task identity.");
-        if (const Result<void> valid = ValidateAiRuntimeHandle(agent, active_->binding.incarnation); valid.HasError())
-            return Result<TaskHandle>::Failure(valid.ErrorValue());
-        AgentRuntimeState *slot = FindAgent(*active_, agent);
-        if (slot == nullptr || slot->record.state != AiAgentActivationState::Active)
-            return Failure<TaskHandle>(AIErrors::HandleInvalid, "The AI agent handle is stale or disabled.");
-        if (slot->task != nullptr)
-            return Failure<TaskHandle>(AIErrors::TaskTransitionInvalid, "The AI agent already owns a running task.");
-        if (active_->nextTaskSlot == Horo::Handle<TaskHandleTag>::InvalidIndex)
-            return Failure<TaskHandle>(AIErrors::TaskCapacityExceeded, "The AI task handle slot range is exhausted.");
-
-        const TaskHandle task{active_->binding.incarnation, {active_->nextTaskSlot++, 1}};
-        auto lifecycle = std::make_unique<AiTaskLifecycle>();
-        if (const Result<AiTaskTransitionDisposition> started =
-                lifecycle->Start(AiTaskOperationContext{.taskDefinition = taskDefinition,
-                                                        .task = task,
-                                                        .agent = agent,
-                                                        .cancellation = slot->cancellation.Token()});
-            started.HasError())
-            return Result<TaskHandle>::Failure(started.ErrorValue());
-        ++active_->revision;
-        slot->task = std::move(lifecycle);
-        slot->record.hasRunningTask = true;
-        return Result<TaskHandle>::Success(task);
+        try {
+            return Detail::StartOwnedTask(*active_, agent, taskDefinition);
+        } catch (const std::bad_alloc &) {
+            return Result<TaskHandle>::Failure(MakeError(AIErrors::TaskCapacityExceeded));
+        }
     }
 
     /** @copydoc AiSceneRuntime::DisableAtSafePoint */
@@ -620,5 +607,50 @@ namespace Horo::AI {
         if (candidate.HasError())
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(candidate.ErrorValue());
         return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Success(std::move(candidate).Value());
+    }
+}  // namespace Horo::AI
+
+namespace Horo::AI::Detail {
+    /** @copydoc StartOwnedTask */
+    Result<TaskHandle> StartOwnedTask(AiSceneRuntimeState &state, const AgentHandle agent, const TaskId taskDefinition,
+                                      CancellationToken capabilityCancellation, const Telemetry::OperationContext *diagnostics) {
+        if (state.revision == std::numeric_limits<std::uint64_t>::max())
+            return Result<TaskHandle>::Failure(MakeError(AIErrors::CanonicalRestoreStale, "The AI mutation revision is exhausted."));
+        if (!taskDefinition.IsValid())
+            return Failure<TaskHandle>(AIErrors::TaskContextInvalid, "An AI task requires a valid persistent task identity.");
+        if (const Result<void> valid = ValidateAiRuntimeHandle(agent, state.binding.incarnation); valid.HasError())
+            return Result<TaskHandle>::Failure(valid.ErrorValue());
+        AgentRuntimeState *slot = FindAgent(state, agent);
+        if (slot == nullptr || slot->record.state != AiAgentActivationState::Active)
+            return Failure<TaskHandle>(AIErrors::HandleInvalid, "The AI agent handle is stale or disabled.");
+        if (slot->task != nullptr)
+            return Failure<TaskHandle>(AIErrors::TaskTransitionInvalid, "The AI agent already owns a running task.");
+        if (state.nextTaskSlot == Horo::Handle<TaskHandleTag>::InvalidIndex)
+            return Failure<TaskHandle>(AIErrors::TaskCapacityExceeded, "The AI task handle slot range is exhausted.");
+
+        const TaskHandle task{state.binding.incarnation, {state.nextTaskSlot, 1}};
+        auto lifecycle = std::make_unique<AiTaskLifecycle>();
+        if (const Result<AiTaskTransitionDisposition> started =
+                lifecycle->Start(AiTaskOperationContext{.taskDefinition = taskDefinition,
+                                                        .task = task,
+                                                        .agent = agent,
+                                                        .cancellation = slot->cancellation.Token(),
+                                                        .capabilityCancellation = capabilityCancellation,
+                                                        .diagnostics = diagnostics ? state.captureDiagnostics(*diagnostics) : nullptr});
+            started.HasError())
+            return Result<TaskHandle>::Failure(started.ErrorValue());
+        ++state.nextTaskSlot;
+        ++state.revision;
+        slot->task = std::move(lifecycle);
+        slot->record.hasRunningTask = true;
+        return Result<TaskHandle>::Success(task);
+    }
+
+}  // namespace Horo::AI::Detail
+
+namespace Horo::AI {
+    /** @copydoc AiSceneRuntime::CapabilityAtSafePoint */
+    AiRuntimeCapability AiSceneRuntime::CapabilityAtSafePoint() const {
+        return AiRuntimeCapability{shutdown_ ? std::weak_ptr<Detail::AiSceneRuntimeState>{} : active_, std::this_thread::get_id()};
     }
 }  // namespace Horo::AI

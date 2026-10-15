@@ -206,7 +206,7 @@ namespace Horo::WorldCook {
             return Result<ValidationReport>::Failure(semantic.ErrorValue());
         ValidationReport report{source.sourceRevision, {}};
         for (const auto &diagnostic : semantic.Value().diagnostics)
-            report.findings.push_back({diagnostic, MakeError(Errors::Invalid)});
+            report.findings.emplace_back(diagnostic, MakeError(Errors::Invalid));
         return Result<ValidationReport>::Success(std::move(report));
     }
 }  // namespace Horo::WorldCook

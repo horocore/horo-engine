@@ -164,6 +164,35 @@ namespace Horo::Extensions {
         }
     }
 
+    /** @copydoc ScriptCapabilityBinding::IssueHandle */
+    Result<ScriptHandle> ScriptCapabilityBinding::IssueHandle(const ScriptInvocationProviderRegistration &provider,
+                                                              std::string type) const {
+        if (!IsUsable())
+            return Denied<ScriptHandle>();
+        if (const auto &imported = state_->context->descriptor.imports[state_->importIndex]; !imported.provider.Matches(provider))
+            return Denied<ScriptHandle>();
+        return state_->context->registry->IssueHandle(state_->context->registration, provider, std::move(type));
+    }
+
+    /** @copydoc ScriptCapabilityBinding::ValidateHandle */
+    Result<void> ScriptCapabilityBinding::ValidateHandle(const ScriptHandle &handle) const {
+        if (!IsUsable())
+            return Denied<void>();
+        if (const auto &imported = state_->context->descriptor.imports[state_->importIndex];
+            handle.context != state_->context->registration.Id() || handle.providerGeneration != imported.provider.Generation())
+            return Denied<void>();
+        return state_->context->registry->ValidateHandle(handle);
+    }
+
+    /** @copydoc ScriptCapabilityBinding::ReleaseHandle */
+    Result<void> ScriptCapabilityBinding::ReleaseHandle(const ScriptHandle &handle) const {
+        if (!state_ || handle.context != state_->context->registration.Id() ||
+            handle.providerGeneration != state_->context->descriptor.imports[state_->importIndex].provider.Generation())
+            return Denied<void>();
+        // Revocation closes use immediately, but must not prevent exact-owner resource retirement.
+        return state_->context->registry->ReleaseHandle(handle);
+    }
+
     ScriptCapabilityContext::ScriptCapabilityContext(std::shared_ptr<ScriptCapabilityContextState> state) : state_(std::move(state)) {}
 
     /** @copydoc ScriptCapabilityContext::~ScriptCapabilityContext */

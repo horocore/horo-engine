@@ -23,7 +23,7 @@ if(NOT HORO_GIT_REVISION_RESULT EQUAL 0 OR HORO_SOURCE_REVISION STREQUAL "")
 endif()
 
 set(HORO_GAMEPLAY_SDK_FINGERPRINT
-    "horo-${HORO_ENGINE_VERSION}-gameplay-sdk15-${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}"
+    "horo-${HORO_ENGINE_VERSION}-gameplay-sdk20-${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}"
 )
 set(HORO_EXTENSION_SDK_VERSION "${HORO_ENGINE_VERSION}")
 set(HORO_EXTENSION_ABI_MAJOR_VERSION 1)
@@ -138,6 +138,7 @@ endforeach()
 # Native prefab gameplay fixtures link the Scene runtime closure into a module.
 # Keep this host-only link closure independent from the exported Physics SDK.
 foreach(target HoroPrefabRuntime HoroPrefab HoroRuntimeScene HoroSceneModel
+        HoroGameplayAiIntegration HoroAISceneIntegration
         HoroRuntimeUi HoroAudioApi HoroVfxApi HoroAI HoroNavigationApi HoroRenderApi harfbuzz)
     get_target_property(target_type ${target} TYPE)
     if(target_type STREQUAL "STATIC_LIBRARY")
