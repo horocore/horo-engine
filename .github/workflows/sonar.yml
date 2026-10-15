@@ -91,7 +91,7 @@ jobs:
             coverage==7.6.10 fastcov==1.17 pytest==8.3.4 defusedxml==0.7.1
 
       - name: Configure instrumented Debug build
-        run: cmake --preset sonar
+        run: cmake --preset sonar -DPython3_EXECUTABLE=/tmp/horo-coverage/bin/python
 
       - name: Build instrumented targets
         id: build

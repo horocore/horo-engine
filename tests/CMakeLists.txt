@@ -1,3 +1,8 @@
+add_test(NAME HoroSaveJunitOutputPathTest
+    COMMAND "${CMAKE_COMMAND}" "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/save-junit-output-path" "-DHORO_TEST_CONFIG=$<CONFIG>"
+    -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunSaveJunitOutputPathTest.cmake")
+set_tests_properties(HoroSaveJunitOutputPathTest PROPERTIES LABELS "unit;save;cmake;ci-windows" TIMEOUT 90)
+
 add_test(NAME HoroSaveObservabilityDependencyPolicyTest
     COMMAND "${CMAKE_COMMAND}" "-DHORO_ENGINE_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/save-observability-dependency"
@@ -3001,6 +3006,7 @@ target_include_directories(HoroAndroidStorageTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroAndroidStorageTests PRIVATE HoroEngine::Platform)
 add_executable(HoroRuntimeSaveIdentityTests
+        support/AllocationProbe.cpp
         unit/runtime/save/SaveIdentityTests.cpp
 )
 target_compile_features(HoroRuntimeSaveIdentityTests PRIVATE cxx_std_20)
