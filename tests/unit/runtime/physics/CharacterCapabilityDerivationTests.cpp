@@ -23,8 +23,9 @@ namespace Horo::Character {
             parent.Revoke();
             RequireError(sibling.Validate(), CharacterErrors::CapabilityRevoked);
             RequireError(sibling.Derive(), CharacterErrors::CapabilityRevoked);
-            REQUIRE(active.world->AdvanceFixedTick(FixedTick(2, trace.Observer())).HasValue());
-            REQUIRE(trace.movementCount == 0);
+            CommandTrace secondTrace;
+            REQUIRE(active.world->AdvanceFixedTick(FixedTick(2, secondTrace.Observer())).HasValue());
+            REQUIRE(secondTrace.movementCount == 0);
         }
 
         TEST_CASE("Character delegation depth bounds cancellation traversal after intermediate clients expire",

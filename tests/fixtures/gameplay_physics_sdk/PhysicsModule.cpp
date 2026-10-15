@@ -6,6 +6,7 @@
 #include "Horo/Physics/PhysicsWorld.h"
 
 #include <array>
+#include <optional>
 #include <type_traits>
 
 static_assert(std::is_same_v<decltype(Horo::Physics::PhysicsWorldSimulationBinding{}.schema),
@@ -24,6 +25,8 @@ using namespace Horo;
 using namespace Horo::Gameplay;
 
 namespace {
+    std::optional<Physics::PhysicsQueryBatchHandle> retainedBatch;
+
     /** @brief Exercise the exported Physics operations and pending-batch cancellation from a real external module. */
     Result<void> VerifyPhysicsOperations(const Physics::PhysicsQueryEventCapability &client, const GameplayPhysicsBinding &binding) {
         std::array<Physics::PhysicsEventRecord, 1> events{};
@@ -46,6 +49,7 @@ namespace {
         const auto pending = queued.Value().Poll();
         if (pending.HasError())
             return Result<void>::Failure(pending.ErrorValue());
+        retainedBatch = queued.Value();
         if (pending.Value() || !queued.Value().Cancel())
             return Result<void>::Failure(MakeError(Physics::PhysicsErrors::DescriptorInvalid));
         return Result<void>::Success();
@@ -109,4 +113,9 @@ extern "C" HORO_GAME_EXPORT IGameModule *CreateGameModule() noexcept {
 
 extern "C" HORO_GAME_EXPORT void DestroyGameModule(IGameModule *module) noexcept {
     delete module;
+}
+
+/** @brief Exports the actual module-created terminal handle for host teardown after the DLL has unloaded. */
+extern "C" HORO_GAME_EXPORT void HoroTestCopyPhysicsBatch(std::optional<Physics::PhysicsQueryBatchHandle> *destination) {
+    *destination = retainedBatch;
 }

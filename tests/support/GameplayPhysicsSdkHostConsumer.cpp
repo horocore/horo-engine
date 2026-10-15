@@ -3,8 +3,11 @@
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
 #include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsWorld.h"
+#include "Horo/Platform/DynamicLibrary.h"
 
 #include <charconv>
+#include <cstring>
+#include <optional>
 #include <string_view>
 
 namespace {
@@ -15,6 +18,37 @@ namespace {
         if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size())
             return 0;
         return revision;
+    }
+
+    /** @brief Unloads the actual external image before observing and releasing its escaped terminal batch. */
+    int VerifyBatchImageRetirement(std::unique_ptr<Horo::Gameplay::LoadedGameModule> module, Horo::Physics::PhysicsWorld *world) {
+        auto loadedImage = Horo::Platform::LoadDynamicLibrary(module->LoadedArtifactPath().string());
+        if (loadedImage.HasError())
+            return 11;
+        auto image = std::move(loadedImage).Value();
+        void *symbol = image->GetSymbol("HoroTestCopyPhysicsBatch");
+        if (!symbol)
+            return 12;
+        using CopyBatch = void (*)(std::optional<Horo::Physics::PhysicsQueryBatchHandle> *);
+        CopyBatch copy{};
+        static_assert(sizeof(copy) == sizeof(symbol));
+        std::memcpy(&copy, &symbol, sizeof(copy));
+        std::optional<Horo::Physics::PhysicsQueryBatchHandle> escaped;
+        copy(&escaped);
+        module.reset();
+        copy = nullptr;
+        image.reset();
+        if (!world)
+            return 0;
+        if (!escaped)
+            return 15;
+        const auto terminal = escaped->Poll();
+        if (!terminal.HasError() || terminal.ErrorValue().code.Value() != Horo::Physics::PhysicsErrors::QueryCancelled.code.Value())
+            return 13;
+        if (world->ProcessQueryBatch().HasError())
+            return 14;
+        escaped.reset();  // Releases the last strong batch after both module unload and host queue drain.
+        return 0;         // The caller subsequently destroys capability registry weak entries with the host world.
     }
 
 #if HORO_TEST_PHYSICS_NATIVE
@@ -90,6 +124,12 @@ int main(int argc, char **argv) {
     character = std::move(characterContext).Value();
 #endif
     GameModuleHost host{GameModuleHostOptions{{}, {.physics = context, .character = character}}};
-    const auto loaded = host.Load(argv[1], {"game.physics_sdk", CurrentGameplayBuildFingerprint(), revision});
-    return loaded.HasValue() ? 0 : 7;
+    auto loaded = host.Load(argv[1], {"game.physics_sdk", CurrentGameplayBuildFingerprint(), revision});
+    if (loaded.HasError())
+        return 7;
+#if HORO_TEST_PHYSICS_NATIVE
+    return VerifyBatchImageRetirement(std::move(loaded).Value(), world.Value().get());
+#else
+    return VerifyBatchImageRetirement(std::move(loaded).Value(), nullptr);
+#endif
 }

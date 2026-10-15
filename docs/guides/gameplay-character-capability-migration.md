@@ -1,10 +1,10 @@
 # Gameplay Character Capability Migration
 
 This change moves the standalone current-main native Gameplay boundary from SDK9
-to SDK12. `GameRuntimeContext` appends an owned Character holder and the behavior
+to SDK14. `GameRuntimeContext` appends an owned Character holder and the behavior
 backend vtable appends a Character accessor. Native modules and generated descriptor
 bundles must rebuild against the matching engine/compiler/platform/configuration
-`gameplay-sdk12` fingerprint. Incompatible descriptors are rejected before factories.
+`gameplay-sdk14` fingerprint. Incompatible descriptors are rejected before factories.
 The default gameplay SDK keeps only forward declarations; consumers explicitly
 request its existing `Physics` component and link `GameplayCharacterIntegration`.
 
@@ -47,10 +47,41 @@ reported separately; authored coverage is not evidence that a test ran.
 
 ## Independent Layout Epoch
 
-SDK12 is the independently developed Character layout. Navigation SDK10 and AI
+SDK14 is the independently developed Character layout. Navigation SDK10 and AI
 SDK11 describe different unmerged layouts, not compatible alternatives. After
-another branch merges, assign a new epoch (13 or later) to the combined layout,
+another branch merges, assign a new epoch (15 or later) to the combined layout,
 update fingerprint/matrix/consumer fixtures coherently, rebuild modules and repeat
 exact-main validation. Taking the greatest old number does not identify the union.
 Retain a coherent previous engine, module, generated bundle and project backup for
 rollback. Do not edit fingerprints or force-load incompatible code.
+
+SDK14 also replaces SDK12's module-emitted Physics batch and Prefab operation
+allocation with immutable private host-bound issuers. These opaque cross-image
+state contracts changed even though public handle sizes remain unchanged. All
+SDK12 modules and descriptor bundles must be rebuilt; accepting an SDK12 binary
+would retain incompatible control blocks or private dispatch layouts. The host
+owns batch cancellation descriptors, operation cancellation sources and retained
+queue/weak-entry destruction. Runtime UI SDK13 is a separate layout; any combined
+layout requires a fresh epoch15 or later and complete consumer revalidation.
+
+## Windows Allocation Qualification
+
+The exact preparation failure sweep is unsupported with MSVC Debug iterator
+proxies and is reported skipped by Catch's exit4 / CTest SKIP_RETURN_CODE4.
+Windows Release must discover and execute that same case with no skip, failure or
+error; ordinary Character Debug cases remain scheduled. The verifier rejects
+zero/missing/extra/disabled cases and unexpected instantiated variants.
+
+The Windows runner uses MSVC14.44 (VS17.14). Microsoft's pinned
+[VS17.14 vector implementation](https://github.com/microsoft/STL/blob/vs-2022-17.14/stl/inc/vector#L759-L765)
+allocates a container proxy in its noexcept move constructor. The actual prepare
+path moves CharacterControllerRegistry into CharacterWorld::Impl, moving
+GenerationalSlotStorage::entries_ inside two noexcept constructors. Injecting a
+bad_alloc at that proxy allocation terminates rather than reaching Prepare's
+catch. No iterator setting, production allocator or deadline is weakened.
+
+The private issuers are immutable host-constructed `std::function` values. Their
+callable manager and destructor originate in the host image, and the host-created
+state/control block destroys them. No module supplies or replaces these routes.
+This bounded admission path accepts the callable representation's possible small
+allocation; no frame-path or performance improvement is claimed.

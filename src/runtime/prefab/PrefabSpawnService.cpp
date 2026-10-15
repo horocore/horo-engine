@@ -16,14 +16,14 @@ namespace Horo::Gameplay {
     /** @copydoc GameplayPrefabContext::Spawn */
     Result<Prefab::PrefabOperation> GameplayPrefabContext::Spawn(const Prefab::PrefabSpawnRequest &request,
                                                                  const CancellationToken &cancellation) const {
-        return state_->Spawn(request, scope_, revocation_.Token(), cancellation, lineage_);
+        return state_->submitSpawn(*state_, request, scope_, revocation_.Token(), cancellation, lineage_);
     }
 
     /** @copydoc GameplayPrefabContext::Despawn */
     Result<Prefab::PrefabOperation> GameplayPrefabContext::Despawn(const Prefab::PrefabInstance &instance,
                                                                    const std::uint64_t notBeforeTick,
                                                                    const CancellationToken &cancellation) const {
-        return state_->Despawn(instance, notBeforeTick, scope_, revocation_.Token(), cancellation);
+        return state_->submitDespawn(*state_, instance, notBeforeTick, scope_, revocation_.Token(), cancellation);
     }
 
     /** @copydoc GameplayPrefabContext::Revoke */
@@ -154,7 +154,19 @@ namespace Horo::Prefab {
     /** @copydoc PrefabSpawnService::PrefabSpawnService */
     PrefabSpawnService::PrefabSpawnService(PrefabTemplateProvider &provider, Runtime::RuntimeSceneService &scenes,
                                            const Gameplay::ComponentRegistry *components)
-        : state_(std::make_shared<Detail::PrefabSpawnState>(provider, scenes, components)) {}
+        : state_(
+              std::make_shared<Detail::PrefabSpawnState>(provider, scenes, components,
+                                                         +[](Detail::PrefabSpawnState &state, const PrefabSpawnRequest &request,
+                                                             const std::uint64_t scope, const CancellationToken &revocation,
+                                                             const CancellationToken &cancellation,
+                                                             const std::span<const Assets::AssetId> lineage) {
+                                                             return state.Spawn(request, scope, revocation, cancellation, lineage);
+                                                         },
+                                                         +[](Detail::PrefabSpawnState &state, const PrefabInstance &instance,
+                                                             const std::uint64_t due, const std::uint64_t scope,
+                                                             const CancellationToken &revocation, const CancellationToken &cancellation) {
+                                                             return state.Despawn(instance, due, scope, revocation, cancellation);
+                                                         })) {}
 
     PrefabSpawnService::~PrefabSpawnService() {
         Shutdown();

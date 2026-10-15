@@ -24,6 +24,20 @@
 using namespace Horo;
 using namespace Horo::Gameplay;
 
+namespace {
+    Prefab::PrefabOperation retainedSpawn;
+    Prefab::PrefabOperation retainedDespawn;
+    Prefab::PrefabInstance retainedInstance;
+}  // namespace
+
+/** @brief Copies real module-created operation ownership into the host before native image retirement. */
+extern "C" HORO_GAME_EXPORT void HoroTestCopyPrefabOperations(Prefab::PrefabOperation *spawn, Prefab::PrefabOperation *despawn,
+                                                              Prefab::PrefabInstance *instance) {
+    *spawn = retainedSpawn;
+    *despawn = retainedDespawn;
+    *instance = retainedInstance;
+}
+
 #if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
 namespace {
     Character::CharacterCapability retainedCharacterClient;
@@ -145,12 +159,15 @@ public:
             if (operation.HasError())
                 throw NativePrefabOperationFailure("Typed prefab spawn admission failed.");
             operation_ = std::move(operation).Value();
+            retainedSpawn = operation_;
             requested_ = true;
         } else if (!retired_ && operation_.State() == Prefab::PrefabSpawnState::Committed) {
-            auto operation = capability->Despawn(operation_.Spawned().Value(), tick_);
+            retainedInstance = operation_.Spawned().Value();
+            auto operation = capability->Despawn(retainedInstance, tick_);
             if (operation.HasError())
                 throw NativePrefabOperationFailure("Typed prefab despawn admission failed.");
             retirement_ = std::move(operation).Value();
+            retainedDespawn = retirement_;
             retired_ = true;
         }
     }

@@ -22,7 +22,7 @@ archive/provenance; do not assign it the current snapshot's contracts.
 | External native host ABI | `horo-extension` @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_MIN_HOST_MINOR@ inclusive to @HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE@.0 exclusive; declarations through @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_PUBLISHED_MINOR@ |
 | Extension descriptor | `extension.json`, schema 1 |
 | Package manifest | `horo-package.toml`, schema 1; owns package identity/dependencies |
-| Gameplay C++ boundary in this engine snapshot | Native boundary 12 / `gameplay-sdk12`; separate exact-fingerprint build-tree SDK |
+| Gameplay C++ boundary in this engine snapshot | Native boundary 14 / `gameplay-sdk14`; separate exact-fingerprint build-tree SDK |
 | Author CI platform profiles | Linux x64, macOS arm64, macOS x64, Windows x64 |
 
 The external extension range does not imply that every table/capability works on
@@ -175,11 +175,11 @@ migration is required. Both the strict C11 consumer and C++ public-header consum
 check the append-only host prefix and callback contracts; the relocated installed
 SDK consumer remains the packaging compatibility check.
 
-## Gameplay SDK9 → SDK12 (Character runtime boundary 9 → 12)
+## Gameplay SDK9 → SDK14 (Character runtime boundary 9 → 14)
 
 This independent Character integration appends `GameRuntimeContext::character` and
 `BehaviorContext::Backend::CharacterContext`. Rebuild every native module,
-generated descriptor bundle and host with the exact `gameplay-sdk12` fingerprint;
+generated descriptor bundle and host with the exact `gameplay-sdk14` fingerprint;
 old binaries must fail descriptor admission before factory invocation. Opt into the
 existing `Physics` gameplay SDK component and link
 `HoroEngine::GameplayCharacterIntegration` to consume the Horo-owned Character
@@ -192,10 +192,19 @@ module and behavior runtime derives a fresh revocable child, preserving the
 anchor for sequential reload. No Scene/world is discovered or retained by a module.
 Unavailable dependencies and omitted grants remain typed failures.
 
-SDK12 identifies this standalone main-based Character layout. Parallel Navigation
+SDK14 identifies this standalone main-based Character layout. Parallel Navigation
 SDK10 and AI SDK11 layouts are different contracts; their numbers do not imply
 layout compatibility. Once another change merges, the combined layout needs a
-fresh SDK epoch (13 or later), coherent fingerprint/matrix migration, rebuilt
+fresh SDK epoch (15 or later), coherent fingerprint/matrix migration, rebuilt
 modules and exact-head consumer/lifecycle revalidation. Taking the maximum prior
 version is insufficient. Retain the previous coherent engine/module artifacts for
 rollback; never edit fingerprints or force-load a mismatched binary.
+
+SDK14 also replaces SDK12's module-emitted Physics batch and Prefab operation
+allocation with immutable private host-bound issuers. These opaque cross-image
+state contracts changed even though public handle sizes remain unchanged. All
+SDK12 modules and descriptor bundles must be rebuilt; accepting an SDK12 binary
+would retain incompatible control blocks or private dispatch layouts. The host
+owns batch cancellation descriptors, operation cancellation sources and retained
+queue/weak-entry destruction. Runtime UI SDK13 is a separate layout; any combined
+layout requires a fresh epoch15 or later and complete consumer revalidation.

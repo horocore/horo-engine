@@ -291,6 +291,8 @@ namespace Horo::Character::QualificationTest {
 
         static void Observe(const std::size_t) noexcept {
             auto &probe = *current;
+            if (probe.invoked)
+                return;
             probe.invoked = true;
             probe.before = Tests::AllocationProbe::Count();
             probe.attempt.release();

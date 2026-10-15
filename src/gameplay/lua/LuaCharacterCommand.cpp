@@ -28,8 +28,8 @@ namespace Horo::Gameplay::Detail {
             lua_pushnil(state);
             while (lua_next(state, index) != 0) {
                 std::size_t bytes{};
-                const char *key = lua_type(state, -2) == LUA_TSTRING ? lua_tolstring(state, -2, &bytes) : nullptr;
-                if (++count > names.size() || !key || std::ranges::find(names, std::string_view{key, bytes}) == names.end()) {
+                if (const char *key = lua_type(state, -2) == LUA_TSTRING ? lua_tolstring(state, -2, &bytes) : nullptr;
+                    ++count > names.size() || !key || std::ranges::find(names, std::string_view{key, bytes}) == names.end()) {
                     lua_pop(state, 2);
                     return false;
                 }
@@ -120,8 +120,7 @@ namespace Horo::Gameplay::Detail {
 
         /** @brief Parses typed collision IDs without admitting another Physics world or native body reference. */
         bool Selectors(lua_State *state, int index, Physics::PhysicsWorldId world, Character::CharacterCollisionSelectors &output) {
-            constexpr std::array<std::string_view, 3> keys{"layer", "profile", "excluded_body"};
-            if (!Closed(state, index, keys))
+            if (constexpr std::array<std::string_view, 3> keys{"layer", "profile", "excluded_body"}; !Closed(state, index, keys))
                 return false;
             index = lua_absindex(state, index);
             Field(state, index, "layer");
@@ -220,12 +219,14 @@ namespace Horo::Gameplay::Detail {
                                                                          const Character::CharacterControllerHandle handle,
                                                                          const Physics::PhysicsWorldId physicsWorld) {
         using Output = Result<Character::CharacterMovementRequest>;
-        constexpr std::array<std::string_view, 8> keys{"tick", "correlation", "velocity", "heading", "jump", "stance", "shape", "filter"};
-        if (!Closed(state, index, keys))
+        if (constexpr std::array<std::string_view, 8> keys{"tick", "correlation", "velocity", "heading", "jump", "stance", "shape",
+                                                           "filter"};
+            !Closed(state, index, keys))
             return Output::Failure(MakeError(Character::CharacterErrors::RequestInvalid));
         index = lua_absindex(state, index);
-        const auto tick = UnsignedField(state, index, "tick"), sequence = UnsignedField(state, index, "correlation");
-        if (!tick || !sequence)
+        const auto tick = UnsignedField(state, index, "tick");
+        const auto sequence = UnsignedField(state, index, "correlation");
+        if (!tick.has_value() || !sequence.has_value())
             return Output::Failure(MakeError(Character::CharacterErrors::RequestInvalid));
         Character::CharacterMovementRequest output{.controller = handle, .tick = *tick, .sequence = *sequence};
         if (!Motion(state, index, output))

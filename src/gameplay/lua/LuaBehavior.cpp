@@ -276,7 +276,7 @@ namespace Horo::Gameplay {
         }
 
         /** @brief Binds one script incarnation to an independently revocable Character child without retaining BehaviorContext. */
-        void BindCharacter(BehaviorContext &context) {
+        void BindCharacter(const BehaviorContext &context) {
             if (character_ || characterError_)
                 return;
             const auto parent = context.CharacterContext();
@@ -520,8 +520,8 @@ namespace Horo::Gameplay {
                                                        impl_->sourceName};
         std::optional<Detail::LuaBehaviorReloadMetadata> incoming;
         if (candidate)
-            incoming.emplace(Detail::LuaBehaviorReloadMetadata{candidate->impl_->descriptor, candidate->impl_->replication,
-                                                               candidate->impl_->replicationRegistry.get(), candidate->impl_->sourceName});
+            incoming.emplace(candidate->impl_->descriptor, candidate->impl_->replication, candidate->impl_->replicationRegistry.get(),
+                             candidate->impl_->sourceName);
         if (auto valid = Detail::ValidateLuaBehaviorReplacement(active, incoming ? &*incoming : nullptr); valid.HasError())
             return valid;
         if (impl_->revision == std::numeric_limits<std::uint64_t>::max())

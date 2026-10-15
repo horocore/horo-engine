@@ -36,9 +36,9 @@ namespace Horo::Gameplay {
         if (binding.scene == 0 || binding.sceneGeneration == 0 || !binding.moduleId.starts_with("game.") ||
             GameplayCapabilityId::Parse(binding.moduleId + ".character").HasError())
             return Output::Failure(MakeError(GameplayErrors::InvalidCapabilityId));
-        const auto &owner = world->Descriptor();
-        if (binding.world != owner.identity || binding.sceneGeneration != owner.sceneGeneration ||
-            binding.physicsWorld != owner.physicsWorld || binding.physicsWorld != physics->Binding().world)
+        if (const auto &owner = world->Descriptor(); binding.world != owner.identity || binding.sceneGeneration != owner.sceneGeneration ||
+                                                     binding.physicsWorld != owner.physicsWorld ||
+                                                     binding.physicsWorld != physics->Binding().world)
             return Output::Failure(MakeError(Character::CharacterErrors::HandleWorldMismatch));
         if (auto dependency = physics->Acquire(binding.moduleId, binding.scene, binding.sceneGeneration); dependency.HasError())
             return Output::Failure(dependency.ErrorValue());
@@ -75,8 +75,7 @@ namespace Horo::Gameplay {
             return Result<void>::Failure(MakeError(GameplayErrors::CharacterUnavailable));
         if (physics->Binding().world != binding_.physicsWorld)
             return Result<void>::Failure(MakeError(Character::CharacterErrors::HandleWorldMismatch));
-        const auto dependency = physics->Acquire(binding_.moduleId, binding_.scene, binding_.sceneGeneration);
-        if (dependency.HasError())
+        if (const auto dependency = physics->Acquire(binding_.moduleId, binding_.scene, binding_.sceneGeneration); dependency.HasError())
             return Result<void>::Failure(dependency.ErrorValue());
         return Result<void>::Success();
     }

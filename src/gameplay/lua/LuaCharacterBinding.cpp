@@ -95,8 +95,7 @@ namespace Horo::Gameplay::Detail {
 
         /** @brief Checks live access without borrowing a controller or world. */
         int Validate(lua_State *state) {
-            const auto result = ReadClient(state).Validate();
-            if (result.HasError())
+            if (const auto result = ReadClient(state).Validate(); result.HasError())
                 return Failure(state, result.ErrorValue());
             lua_pushboolean(state, true);
             return 1;
@@ -104,7 +103,8 @@ namespace Horo::Gameplay::Detail {
 
         /** @brief Resolves a caller-owned slot incarnation only through canonical Character validation. */
         int Controller(lua_State *state) {
-            const auto slot = luaL_checkinteger(state, 2), generation = luaL_checkinteger(state, 3);
+            const auto slot = luaL_checkinteger(state, 2);
+            const auto generation = luaL_checkinteger(state, 3);
             if (slot < 0 || slot >= std::numeric_limits<std::uint32_t>::max() || generation <= 0 ||
                 generation > std::numeric_limits<std::uint32_t>::max())
                 return Failure(state, MakeError(Character::CharacterErrors::HandleMalformed));
@@ -113,8 +113,7 @@ namespace Horo::Gameplay::Detail {
             const Handle handle{identity.sceneGeneration,
                                 identity.world,
                                 {static_cast<std::uint32_t>(slot), static_cast<std::uint32_t>(generation)}};
-            const auto checked = client.ControllerDescriptor(handle);
-            if (checked.HasError())
+            if (const auto checked = client.ControllerDescriptor(handle); checked.HasError())
                 return Failure(state, checked.ErrorValue());
             Push(state, handle, HandleType);
             return 1;

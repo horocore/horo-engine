@@ -109,8 +109,7 @@ namespace Horo::Gameplay {
         impl->physics = std::move(physics).Value();
 
         if (runtimeServices_.character) {
-            const auto &binding = runtimeServices_.character->Binding();
-            if (binding.moduleId != impl->moduleId)
+            if (const auto &binding = runtimeServices_.character->Binding(); binding.moduleId != impl->moduleId)
                 return Result<std::unique_ptr<LoadedGameModule>>::Failure(MakeError(GameplayErrors::CharacterPermissionDenied));
             if (auto dependency = runtimeServices_.character->ValidateDependency(impl->physics.get()); dependency.HasError())
                 return Result<std::unique_ptr<LoadedGameModule>>::Failure(dependency.ErrorValue());
