@@ -2012,6 +2012,14 @@ else()
 endif()
 
 add_library(HoroWorldStreaming STATIC
+        runtime/world_streaming/StreamingCellEncoding.cpp
+        runtime/world_streaming/StreamingCellInspection.cpp
+        runtime/world_streaming/WorldIndexEncoding.cpp
+        runtime/world_streaming/WorldIndexDecoding.cpp
+        runtime/world_streaming/WorldDependencyArtifactEncoding.cpp
+        runtime/world_streaming/WorldDependencyArtifactDecoding.cpp
+        runtime/world_streaming/WorldDependencyArtifactModel.cpp
+        runtime/world_streaming/WorldArtifactErrors.cpp
         runtime/world_streaming/CellAttachmentManifest.cpp
         runtime/world_streaming/CellAttachmentErrors.cpp
         runtime/world_streaming/NetworkStreamingAuthority.cpp
@@ -2080,10 +2088,11 @@ add_library(HoroWorldStreaming STATIC
 )
 add_library(HoroEngine::WorldStreaming ALIAS HoroWorldStreaming)
 target_compile_features(HoroWorldStreaming PUBLIC cxx_std_20)
-target_link_libraries(HoroWorldStreaming PUBLIC HoroEngine::Foundation HoroEngine::Assets)
+target_link_libraries(HoroWorldStreaming PUBLIC HoroEngine::Foundation HoroEngine::Assets PRIVATE utf8proc)
 
 # Scene owns CoreEcs baseline semantics; this host-composed seam leaves streaming policy and ECS targets independent.
 add_library(HoroSceneCellPayload STATIC
+        runtime/scene/SceneCellPayloadCodec.cpp
         runtime/scene/RuntimeSceneCellAttachment.cpp
         runtime/scene/SceneCellAttachments.cpp
         runtime/scene/RuntimeSceneCellPayload.cpp
@@ -2095,6 +2104,17 @@ add_library(HoroSceneCellPayload STATIC
 add_library(HoroEngine::SceneCellPayload ALIAS HoroSceneCellPayload)
 target_compile_features(HoroSceneCellPayload PUBLIC cxx_std_20)
 target_link_libraries(HoroSceneCellPayload PUBLIC HoroEngine::RuntimeScene HoroEngine::WorldStreaming)
+
+# Offline tooling composition above the three independent semantic, format and durable owners.
+# This target is deliberately non-installed; applications explicitly supply source, release and I/O authority.
+add_library(HoroWorldCookIntegration STATIC
+        world_cook/WorldCookEncoding.cpp
+        world_cook/WorldCookInventory.cpp
+        world_cook/WorldCookValidation.cpp
+        world_cook/WorldCookPublication.cpp)
+add_library(HoroEngine::WorldCookIntegration ALIAS HoroWorldCookIntegration)
+target_compile_features(HoroWorldCookIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroWorldCookIntegration PUBLIC HoroEngine::SceneCellPayload HoroEngine::WorldStreaming HoroEngine::Assets)
 
 # Narrow non-installed wire helper: neither a repository-wide include root nor a public API.
 add_library(HoroJsonEncodingInternal INTERFACE)

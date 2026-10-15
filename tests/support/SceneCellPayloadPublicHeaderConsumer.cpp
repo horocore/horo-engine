@@ -2,6 +2,7 @@
 #include "Horo/Runtime/Scene/RuntimeSceneCellLayers.h"
 #include "Horo/Runtime/Scene/RuntimeSceneCellPayload.h"
 #include "Horo/Runtime/Scene/SceneCellAttachments.h"
+#include "Horo/Runtime/Scene/SceneCellPayloadCodec.h"
 #include "Horo/Runtime/Scene/WorldBuildValidation.h"
 
 #include <type_traits>
@@ -35,3 +36,8 @@ namespace {
 }  // namespace
 
 static_assert(std::is_move_constructible_v<Horo::Runtime::WorldBuildValidationReport>);
+
+static_assert(
+    std::is_same_v<decltype(&Horo::Runtime::EncodeSceneCellPayload),
+                   Horo::Result<std::vector<std::byte>> (*)(const Horo::Runtime::RuntimeSceneCellPayload &,
+                                                            Horo::Runtime::SceneCellPayloadCodecLimits, const Horo::CancellationToken &)>);

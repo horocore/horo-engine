@@ -22,6 +22,14 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroDestructionApiPublicHeaderConsumer
     HoroDestructionReplicationTests
     HoroDestructionReplicationPublicHeaderConsumer
+    HoroRuntimeSceneCellPayloadTests
+    HoroSceneCellPayloadPublicHeaderConsumer
+    HoroWorldCookIntegrationTests
+    HoroWorldCookIntegrationConsumer
+    HoroWorldCookIntegrationPublicHeaderConsumer
+    HoroWorldStreamingPublicHeaderConsumer
+    HoroWorldArtifactCodecTests
+    HoroWorldArtifactCodecConsumer
     HoroAnimationApiTests
     HoroAnimationGraphPublicHeaderConsumer
     HoroLightCullingTests

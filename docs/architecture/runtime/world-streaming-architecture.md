@@ -1575,6 +1575,34 @@ aggregate retained-payload ceilings bound each set, while caller-held leases rem
 charged to their owning callers. There is no frame-hot work, disk cache, ambient
 state or background job to drain.
 
+## Complete Offline World Publication
+
+`HoroWorldCookIntegration` is the non-installed headless composition above
+`HoroSceneCellPayload`, `HoroWorldStreaming` and `HoroAssets`. Applications supply
+immutable authored captures, validated plans, explicit registered artifact types,
+release package intent and the existing Assets durable writer policy. Lower
+owners do not depend on this composition or one another's private headers.
+
+Scene owns semantic CoreEcs encoding and its prepared cache receipt;
+WorldStreaming owns canonical index/cell bytes and the separately versioned
+[dependency sibling](world-dependency-bundle-format.md); Assets owns complete
+generation publication. Existing ADR-023 index rows are unchanged. The sibling
+binds the complete final index digest, schema and partition. Its hard closure is
+rederived from the validated assignment/spanning/dependency projections before
+the existing cooked manifest and package assignment admit release coverage.
+Unresolved soft edges remain explicit. Every placement must bind actual encoded
+Scene content; nonspatial content must bind an independently captured verified
+provider envelope in the Base release.
+
+All fallible encoding, package/content validation and receipt preparation precede
+pointer commit. A host source-revision reservation and Scene's exact cache
+reservation run immediately before Assets replaces its sole current pointer.
+Scene adoption is preallocated and noexcept under the retained native writer
+lease, including committed-but-not-durable outcomes. Abort before commit preserves
+the previous cache revision and durable selector. No parallel cache, installer,
+runtime activation or diagnostic-store authority is introduced. See the
+[caller migration and validation contract](../../guides/world-cook-artifact-migration.md).
+
 ## Cooked World Index Format (`world.index`)
 
 The World Index manifest is the authoritative spatial directory for a streamed

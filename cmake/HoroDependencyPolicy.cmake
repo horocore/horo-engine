@@ -340,3 +340,4 @@ if(HORO_VERIFY_NETWORK_DISABLED)
 endif()
 
 horo_allow_target_dependencies(TARGET HoroPCGSceneBake DEPENDENCIES HoroPCGSceneAdapter HoroEditorServices HoroEditorModel)
+horo_allow_target_dependencies(TARGET HoroWorldCookIntegration DEPENDENCIES HoroSceneCellPayload HoroWorldStreaming HoroAssets)

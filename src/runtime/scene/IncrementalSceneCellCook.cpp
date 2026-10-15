@@ -3,9 +3,34 @@
 #include "SceneCellContentHasher.h"
 
 #include <algorithm>
+#include <cassert>
 #include <limits>
 
 namespace Horo::Runtime {
+    namespace CellCookDetail {
+        /** @brief One authoritative retained set, kept alive by pending publication receipts. */
+        struct CacheState final {
+            std::uint64_t revision{};
+            bool closed{};
+            std::vector<SceneCellCookEntry> entries;
+            std::weak_ptr<PreparedState> pending;
+        };
+
+        /** @brief Preallocated replacement and report tied to exactly one cache incarnation. */
+        struct PreparedState final {
+            std::shared_ptr<CacheState> owner;
+            std::uint64_t expectedRevision{};
+            SceneCellCookReport report;
+            std::vector<SceneCellCookEntry> replacement;
+            enum class Phase {
+                Prepared,
+                Reserved,
+                Adopted
+            };
+            Phase phase{Phase::Prepared};
+        };
+    }  // namespace CellCookDetail
+
     namespace {
         template <class T> Result<T> Failure(const ErrorCodeDescriptor &code) {
             return Result<T>::Failure(MakeError(code));
@@ -267,15 +292,23 @@ namespace Horo::Runtime {
     /** @copydoc IncrementalSceneCellCook::IncrementalSceneCellCook */
     IncrementalSceneCellCook::IncrementalSceneCellCook(const SceneCellCookCacheLimits &limits) noexcept : limits_(limits) {}
 
+    /** @copydoc IncrementalSceneCellCook::~IncrementalSceneCellCook */
+    IncrementalSceneCellCook::~IncrementalSceneCellCook() {
+        Shutdown();
+    }
+
     /** @copydoc IncrementalSceneCellCook::Revision */
     std::uint64_t IncrementalSceneCellCook::Revision() const noexcept {
-        return revision_;
+        return state_ ? state_->revision : 0;
     }
 
     /** @copydoc IncrementalSceneCellCook::Shutdown */
     void IncrementalSceneCellCook::Shutdown() noexcept {
         closed_ = true;
-        entries_.clear();
+        if (state_) {
+            state_->closed = true;
+            state_->entries.clear();
+        }
     }
 
     /** @copydoc IncrementalSceneCellCook::Cook */
@@ -285,36 +318,56 @@ namespace Horo::Runtime {
                                                                const Sha256Digest &settings, std::uint64_t expectedRevision,
                                                                SceneCellPayloadLimits payloadLimits,
                                                                const CancellationToken &cancellation) {
+        auto prepared = Prepare(partition, inputs, dependencies, settings, expectedRevision, payloadLimits, cancellation);
+        if (prepared.HasError())
+            return Result<SceneCellCookReport>::Failure(prepared.ErrorValue());
+        auto owned = std::move(prepared).Value();
+        auto report = owned.Report();
+        if (const auto reserved = owned.Reserve(cancellation); reserved.HasError())
+            return Result<SceneCellCookReport>::Failure(reserved.ErrorValue());
+        owned.Adopt();
+        return Result<SceneCellCookReport>::Success(std::move(report));
+    }
+
+    /** @copydoc IncrementalSceneCellCook::Prepare */
+    Result<PreparedSceneCellCook> IncrementalSceneCellCook::Prepare(const WorldStreaming::WorldPartitionDescriptor &partition,
+                                                                    std::span<const SceneCellCookInput> inputs,
+                                                                    std::span<const SceneCellCookDependency> dependencies,
+                                                                    const Sha256Digest &settings, std::uint64_t expectedRevision,
+                                                                    SceneCellPayloadLimits payloadLimits,
+                                                                    const CancellationToken &cancellation) {
         if (cancellation.IsCancellationRequested())
-            return Failure<SceneCellCookReport>(SceneCellPayloadErrors::Cancelled);
+            return Failure<PreparedSceneCellCook>(SceneCellPayloadErrors::Cancelled);
         if (closed_ || !limits_.maximumCells || !limits_.maximumDependencies || !limits_.maximumDependencyEdges ||
             !limits_.maximumSchemas || !limits_.maximumKeyBytes || !limits_.maximumRetainedBytes || !payloadLimits.maximumEntities ||
             !payloadLimits.maximumDependencies || !payloadLimits.maximumRetainedBytes || settings == Sha256Digest{})
-            return Failure<SceneCellCookReport>(SceneCellPayloadErrors::Invalid);
-        if (expectedRevision != revision_)
-            return Failure<SceneCellCookReport>(SceneCellPayloadErrors::Stale);
-        if (inputs.size() > limits_.maximumCells || revision_ == std::numeric_limits<std::uint64_t>::max())
-            return Failure<SceneCellCookReport>(SceneCellPayloadErrors::CapacityExceeded);
+            return Failure<PreparedSceneCellCook>(SceneCellPayloadErrors::Invalid);
+        if (expectedRevision != Revision() || (state_ && !state_->pending.expired()))
+            return Failure<PreparedSceneCellCook>(SceneCellPayloadErrors::Stale);
+        if (inputs.size() > limits_.maximumCells || Revision() == std::numeric_limits<std::uint64_t>::max())
+            return Failure<PreparedSceneCellCook>(SceneCellPayloadErrors::CapacityExceeded);
         auto graph = BuildGraph(dependencies, limits_, cancellation);
         if (graph.HasError())
-            return Result<SceneCellCookReport>::Failure(graph.ErrorValue());
+            return Result<PreparedSceneCellCook>::Failure(graph.ErrorValue());
         auto sorted = CaptureInputs(partition, inputs, payloadLimits, limits_.maximumSchemas);
         if (sorted.HasError())
-            return Result<SceneCellCookReport>::Failure(sorted.ErrorValue());
-        SceneCellCookReport report{.revision = revision_ + 1};
+            return Result<PreparedSceneCellCook>::Failure(sorted.ErrorValue());
+        if (!state_)
+            state_ = std::make_shared<CellCookDetail::CacheState>();
+        SceneCellCookReport report{.revision = state_->revision + 1};
         std::size_t retained{};
         for (const auto *captured : sorted.Value()) {
             const auto &input = *captured;
-            auto candidate =
-                PrepareCell(partition, input, graph.Value(), settings, {payloadLimits, limits_.maximumKeyBytes}, entries_, cancellation);
+            auto candidate = PrepareCell(partition, input, graph.Value(), settings, {payloadLimits, limits_.maximumKeyBytes},
+                                         state_->entries, cancellation);
             if (candidate.HasError())
-                return Result<SceneCellCookReport>::Failure(candidate.ErrorValue());
+                return Result<PreparedSceneCellCook>::Failure(candidate.ErrorValue());
             auto prepared = std::move(candidate).Value();
             const auto &payload = prepared.entry.payload;
             if (payload->RetainedBytes() > payloadLimits.maximumRetainedBytes ||
                 payload->Definition().AssetDependencies().size() > payloadLimits.maximumDependencies ||
                 payload->RetainedBytes() > limits_.maximumRetainedBytes - retained)
-                return Failure<SceneCellCookReport>(SceneCellPayloadErrors::CapacityExceeded);
+                return Failure<PreparedSceneCellCook>(SceneCellPayloadErrors::CapacityExceeded);
             retained += payload->RetainedBytes();
             report.reused += prepared.reused ? 1 : 0;
             report.cooked += prepared.reused ? 0 : 1;
@@ -322,9 +375,72 @@ namespace Horo::Runtime {
         }
         auto replacement = report.cells;
         if (cancellation.IsCancellationRequested())
-            return Failure<SceneCellCookReport>(SceneCellPayloadErrors::Cancelled);
-        entries_.swap(replacement);
-        revision_ = report.revision;
-        return Result<SceneCellCookReport>::Success(std::move(report));
+            return Failure<PreparedSceneCellCook>(SceneCellPayloadErrors::Cancelled);
+        auto prepared = std::make_shared<CellCookDetail::PreparedState>();
+        prepared->owner = state_;
+        prepared->expectedRevision = state_->revision;
+        prepared->report = std::move(report);
+        prepared->replacement = std::move(replacement);
+        state_->pending = prepared;
+        return Result<PreparedSceneCellCook>::Success(PreparedSceneCellCook{std::move(prepared)});
+    }
+
+    /** @copydoc PreparedSceneCellCook::PreparedSceneCellCook */
+    PreparedSceneCellCook::PreparedSceneCellCook(std::shared_ptr<CellCookDetail::PreparedState> state) noexcept
+        : state_(std::move(state)) {}
+
+    /** @copydoc PreparedSceneCellCook::operator= */
+    PreparedSceneCellCook &PreparedSceneCellCook::operator=(PreparedSceneCellCook &&other) noexcept {
+        if (this != &other) {
+            ReleaseReservation();
+            state_ = std::move(other.state_);
+        }
+        return *this;
+    }
+
+    /** @copydoc PreparedSceneCellCook::~PreparedSceneCellCook */
+    PreparedSceneCellCook::~PreparedSceneCellCook() {
+        ReleaseReservation();
+    }
+
+    /** @copydoc PreparedSceneCellCook::ReleaseReservation */
+    void PreparedSceneCellCook::ReleaseReservation() noexcept {
+        if (state_ && state_->owner->pending.lock().get() == state_.get())
+            state_->owner->pending.reset();
+    }
+
+    /** @copydoc PreparedSceneCellCook::Report */
+    const SceneCellCookReport &PreparedSceneCellCook::Report() const noexcept {
+        assert(state_);
+        return state_->report;
+    }
+
+    /** @copydoc PreparedSceneCellCook::ReportLease */
+    std::shared_ptr<const SceneCellCookReport> PreparedSceneCellCook::ReportLease() const noexcept {
+        assert(state_);
+        return {state_, &state_->report};
+    }
+
+    /** @copydoc PreparedSceneCellCook::Reserve */
+    Result<void> PreparedSceneCellCook::Reserve(const CancellationToken &cancellation) {
+        if (cancellation.IsCancellationRequested())
+            return Failure<void>(SceneCellPayloadErrors::Cancelled);
+        if (!state_ || state_->phase != CellCookDetail::PreparedState::Phase::Prepared || state_->owner->closed)
+            return Failure<void>(SceneCellPayloadErrors::Invalid);
+        if (state_->owner->revision != state_->expectedRevision || state_->owner->pending.lock().get() != state_.get())
+            return Failure<void>(SceneCellPayloadErrors::Stale);
+        state_->phase = CellCookDetail::PreparedState::Phase::Reserved;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc PreparedSceneCellCook::Adopt */
+    void PreparedSceneCellCook::Adopt() noexcept {
+        assert(state_ && state_->phase == CellCookDetail::PreparedState::Phase::Reserved);
+        auto &owner = *state_->owner;
+        if (!owner.closed)
+            owner.entries.swap(state_->replacement);
+        owner.revision = state_->report.revision;
+        owner.pending.reset();
+        state_->phase = CellCookDetail::PreparedState::Phase::Adopted;
     }
 }  // namespace Horo::Runtime
