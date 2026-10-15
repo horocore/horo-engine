@@ -1,3 +1,8 @@
+add_test(NAME HoroSaveJunitOutputPathTest
+    COMMAND "${CMAKE_COMMAND}" "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/save-junit-output-path"
+    -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunSaveJunitOutputPathTest.cmake")
+set_tests_properties(HoroSaveJunitOutputPathTest PROPERTIES LABELS "unit;save;cmake;ci-windows" TIMEOUT 90)
+
 add_test(NAME HoroSaveObservabilityDependencyPolicyTest
     COMMAND "${CMAKE_COMMAND}" "-DHORO_ENGINE_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/save-observability-dependency"

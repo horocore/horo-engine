@@ -27,7 +27,8 @@ def test_release_save_qualification_is_mandatory_and_debug_skips_are_explicit() 
     assert "--no-tests=error --timeout 90" in step
     assert "Lifecycle allocation failure after visibility preserves publication knowledge" in step
     assert "Retention allocation failure after selection preserves publication and binding ownership" in step
-    assert "--output-junit build/ci-audio-release/save-allocation-ctest.xml" in step
+    assert "--output-junit save-allocation-ctest.xml" in step
+    assert "--output-junit build/ci-audio-release/" not in step
     verifier = workflow.split("      - name: Verify Windows Release Save allocation variants", 1)[1].split("      - name:", 1)[0]
     assert "steps.save_allocation_release_tests.outcome == 'success'" in verifier
     assert "python scripts/verify_save_allocation_qualification.py build/ci-audio-release/save-allocation-ctest.xml" in verifier
@@ -40,3 +41,16 @@ def test_release_save_qualification_is_mandatory_and_debug_skips_are_explicit() 
         assert "#if defined(_MSC_VER) && _ITERATOR_DEBUG_LEVEL != 0" in source
         assert f'SKIP("{reason}; required in Windows Release qualification");' in source
         assert "GENERATE(false, true)" in source
+
+
+def test_save_junit_path_qualification_uses_real_ctest_from_an_outer_directory() -> None:
+    source = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    name = "HoroSaveJunitOutputPathTest"
+    assert f"add_test(NAME {name}" in source
+    assert f'set_tests_properties({name} PROPERTIES LABELS "unit;save;cmake;ci-windows"' in source
+    fixture = (ROOT / "tests/cmake/RunSaveJunitOutputPathTest.cmake").read_text(encoding="utf-8")
+    assert '"--test-dir" "${build}"' in fixture
+    assert '"--output-junit" "save-allocation-ctest.xml"' in fixture
+    assert 'WORKING_DIRECTORY "${outer}"' in fixture
+    assert 'set(report "${build}/save-allocation-ctest.xml")' in fixture
+    assert 'file(READ "${report}" xml)' in fixture

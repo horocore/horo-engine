@@ -384,7 +384,7 @@ jobs:
           ctest --test-dir build/ci-audio-release --parallel 1 --output-on-failure
           --no-tests=error --timeout 90
           -R '^HoroRuntimeSaveSlotLifecycleTests::(Lifecycle allocation failure after visibility preserves publication knowledge|Retention allocation failure after selection preserves publication and binding ownership)$'
-          --output-junit build/ci-audio-release/save-allocation-ctest.xml
+          --output-junit save-allocation-ctest.xml
 
       - name: Install Windows Save qualification XML parser
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.save_allocation_release_tests.outcome == 'success' }}
