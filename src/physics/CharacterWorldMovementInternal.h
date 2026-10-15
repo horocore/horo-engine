@@ -4,6 +4,7 @@
  * @brief Target-private fixed-tick movement orchestration and shared-budget continuation.
  * Only checked travel reaches the caller; failures still roll back the candidate tick.
  */
+#include "CharacterWorldCarryInternal.h"
 #include "CharacterWorldStepInternal.h"
 
 #include <cmath>
@@ -265,6 +266,57 @@ namespace Horo::Character::Detail {
         return Result<SweepMotionState>::Success(std::move(motion));
     }
 
+    /** @brief Sweeps carry first using the same finite budget; blocked carry cannot certify continued support. */
+    [[nodiscard]] Result<void> ResolvePlatformDisplacement(auto &impl, CharacterMovementResult &result,
+                                                           const CharacterMovementRequest &command, const CharacterFixedTickInput &input,
+                                                           const CharacterControllerDescriptor &descriptor,
+                                                           const CharacterPlatformCarry &carry, SweepMotionState &motion) {
+        if (command.detachPlatformRequested || Math::LengthSquared(carry.displacement) == 0.0F)
+            return Result<void>::Success();
+        const auto desired = motion.remaining;
+        const auto start = motion.position;
+        motion.remaining = carry.displacement;
+        auto carryDescriptor = descriptor;
+        carryDescriptor.minimumMoveDistanceMeters = 0.0F;
+        carryDescriptor.maximumStepHeightMeters = 0.0F;
+        auto carryCommand = command;
+        carryCommand.desiredVelocityMetersPerSecond = Math::Vec3{};
+        auto carryInput = input;
+        if (carryInput.query.bodyPoseFrame)
+            carryInput.query.bodyPoseFrame->participation = Physics::PhysicsQueryFrameParticipation::CoMovingCarry;
+        if (const auto swept = ResolveDesiredDisplacement(impl, result, carryCommand, carryInput, carryDescriptor, motion);
+            swept.HasError())
+            return swept;
+        result.platformCarriedDisplacement = motion.position - start;
+        result.platformCarryRejected = Math::LengthSquared(result.platformCarriedDisplacement - carry.displacement) > 1.0e-10F;
+        motion.remaining = result.termination == CharacterMovementTermination::Complete ? desired : Math::Vec3{};
+        return Result<void>::Success();
+    }
+
+    /** @brief Admits immediate transfer only after carry has succeeded, before any free-flight integration. */
+    void AdmitPlatformDeparture(CharacterMovementResult &result, const CharacterMovementRequest &command,
+                                const CharacterPlatformCarry &carry) noexcept {
+        if ((!result.jumpApplied && !command.detachPlatformRequested) || result.platformCarryRejected ||
+            result.termination != CharacterMovementTermination::Complete)
+            return;
+        const auto transfer = command.detachPlatformRequested ? carry.startLeaveVelocity : carry.leaveVelocity;
+        result.gravityVelocityMetersPerSecond += transfer;
+        result.platformLeaveVelocityMetersPerSecond = transfer;
+    }
+
+    /** @brief Commits walk-off continuation at the actual resolved endpoint, once for the departed attachment. */
+    void AdmitPlatformWalkOff(CharacterMovementResult &result, const CharacterMovementRequest &command,
+                              const CharacterControllerDescriptor &descriptor, const CharacterPlatformCarry &carry,
+                              const Math::Vec3 position) noexcept {
+        if (result.grounded || result.jumpApplied || command.detachPlatformRequested || result.platformCarryRejected ||
+            result.termination != CharacterMovementTermination::Complete || !carry.predicted)
+            return;
+        const auto transfer =
+            PlatformLeaveVelocity(*carry.predicted, position, carry.predicted->pose.translation, descriptor.platformLeaveVelocity);
+        result.gravityVelocityMetersPerSecond += transfer;
+        result.platformLeaveVelocityMetersPerSecond = transfer;
+    }
+
     /**
      * @brief Resolves one desired displacement through bounded Horo capsule sweeps and iterative slide.
      *
@@ -276,15 +328,15 @@ namespace Horo::Character::Detail {
                                                                                   const CharacterTransformPublication &previous,
                                                                                   const CharacterFixedTickInput &input,
                                                                                   const CharacterControllerDescriptor &descriptor,
-                                                                                  const Math::Vec3 previousGravityVelocity) {
-        const CharacterPhysicsQueryExpectations expected{impl.descriptor.sceneGeneration,        impl.descriptor.identity,
-                                                         impl.descriptor.physicsWorld,           impl.descriptor.collisionFilterGeneration,
-                                                         impl.descriptor.originGeneration,       input.tick,
-                                                         impl.descriptor.physicsSnapshotRevision};
+                                                                                  const Math::Vec3 previousGravityVelocity,
+                                                                                  const CharacterPlatformCarry &carry) {
+        const auto expected = QueryExpectations(impl, input.tick);
         if (const auto valid = ValidateCharacterPhysicsQueryContext(input.query, expected); valid.HasError())
             return Result<CharacterMovementResult>::Failure(valid.ErrorValue());
 
-        auto result = InitialSweepMovement(command, previous, descriptor, previousGravityVelocity, input.tick);
+        auto carried = previous;
+        carried.heading = command.detachPlatformRequested ? previous.heading : carry.heading;
+        auto result = InitialSweepMovement(command, carried, descriptor, previousGravityVelocity, input.tick);
 
         auto admitted = AdmitSweepMotion(command, previous, input, previousGravityVelocity,
                                          impl.settings.Values().work.maximumDisplacementMetersPerTick);
@@ -292,6 +344,9 @@ namespace Horo::Character::Detail {
             return Result<CharacterMovementResult>::Failure(admitted.ErrorValue());
         auto motion = std::move(admitted).Value();
 
+        if (const auto swept = ResolvePlatformDisplacement(impl, result, command, input, descriptor, carry, motion); swept.HasError())
+            return Result<CharacterMovementResult>::Failure(swept.ErrorValue());
+        AdmitPlatformDeparture(result, command, carry);
         if (const auto moved = ResolveDesiredDisplacement(impl, result, command, input, descriptor, motion); moved.HasError())
             return Result<CharacterMovementResult>::Failure(moved.ErrorValue());
         std::optional<CharacterSweepHit> steepSupport;
@@ -311,6 +366,7 @@ namespace Horo::Character::Detail {
                 ResolvePostSweepMotion(impl, result, StepQueryContext{command, input, descriptor}, supportDescriptor, motion, steepSupport);
             completed.HasError())
             return Result<CharacterMovementResult>::Failure(completed.ErrorValue());
+        AdmitPlatformWalkOff(result, command, descriptor, carry, motion.position);
         result.finalPosition = motion.position;
         result.achievedVelocityMetersPerSecond = (motion.position - previous.position) / motion.elapsedSeconds;
         std::ranges::sort(result.contacts.begin(), result.contacts.begin() + result.contactCount, ContactLess);

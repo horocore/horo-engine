@@ -141,6 +141,10 @@ namespace Horo::Character {
             CharacterPhysicsQueryAdapter adapter(*world);
             const auto query = adapter.Context({61, WorldId(), world->Identity(), 91, 101, 2, revision});
             const auto first = query.platformBody(query.context, body, descriptor.shape, revision).Value().value();
+            const auto state = world->ReadSceneBodyReconciliation(body).Value().state;
+            REQUIRE(first.linearVelocityMetersPerSecond == state.linearVelocity);
+            REQUIRE(first.angularVelocityRadiansPerSecond == state.angularVelocity);
+            REQUIRE(first.linearVelocityMetersPerSecond.y < 0.0F);
             const auto replacementShape = world->CreateSceneShape(Physics::PhysicsSphereShape{}).Value();
             REQUIRE(world->PublishedTick().publicationRevision == revision);
             const Physics::PhysicsStructuralCommand mutation{.order = {.simulationTick = 2,
@@ -164,6 +168,8 @@ namespace Horo::Character {
             REQUIRE(second.shape == replacementShape);
             REQUIRE(second.pose.translation.y < first.pose.translation.y);
             REQUIRE(first.shape == descriptor.shape);
+            REQUIRE(first.linearVelocityMetersPerSecond == state.linearVelocity);
+            REQUIRE(first.angularVelocityRadiansPerSecond == state.angularVelocity);
         }
     }  // namespace
 }  // namespace Horo::Character

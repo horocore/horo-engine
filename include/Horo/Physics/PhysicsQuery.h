@@ -113,6 +113,30 @@ namespace Horo::Physics {
     using PhysicsQueryGeometry = std::variant<PhysicsRayQuery, PhysicsSweepQuery, PhysicsOverlapQuery, PhysicsPointQuery,
                                               PhysicsCapsuleSweepQuery, PhysicsCapsuleOverlapQuery>;
 
+    /** @brief Selects collision participation of the exact framed support during one synchronous capsule query. */
+    enum class PhysicsQueryFrameParticipation : std::uint8_t {
+        PredictedPose, /**< Query the framed body at its predicted pose. */
+        CoMovingCarry, /**< Omit only this support while sweeping its own transport; every unrelated selector still applies. */
+    };
+
+    /**
+     * @brief Read-only capsule-query view of one resident body at an admitted predicted pose.
+     *
+     * Both poses are in the captured Physics origin frame. Execution requires the exact live
+     * body/shape, source publication and next consuming tick. The framed body must be admitted by
+     * the explicit query filter; contradictory selectors fail closed. This is query evidence, never
+     * transform authority or a retained resource lease. Other bodies keep their captured poses.
+     */
+    struct PhysicsQueryBodyPoseFrame final {
+        BodyHandle body;
+        ShapeHandle shape;
+        PhysicsPose sourcePose;
+        PhysicsPose predictedPose;
+        std::uint64_t sourcePublicationRevision{};
+        std::uint64_t consumingTick{};
+        PhysicsQueryFrameParticipation participation{PhysicsQueryFrameParticipation::PredictedPose};
+    };
+
     /**
      * @brief Owned inert query request targeting one exact world and scene generation.
      *
@@ -127,6 +151,7 @@ namespace Horo::Physics {
         PhysicsQueryCollection collection{PhysicsQueryCollection::Closest};
         PhysicsQueryOrdering ordering{PhysicsQueryOrdering::ClosestFirst};
         std::uint32_t maximumHitCount{1};
+        std::optional<PhysicsQueryBodyPoseFrame> bodyPoseFrame; /**< Supported for capsule overlap/sweep only. */
     };
 
     /** @brief Stable physical-material evidence copied into a hit. */
@@ -166,8 +191,10 @@ namespace Horo::Physics {
      *
      * This is deliberately a narrow runtime admission value, not a replacement for authored
      * scene conversion. It lets hosts and canonical fixtures install one explicit analytic
-     * collider while the scene activation path is being assembled. For primitive geometry, the
-     * top-level filter, response, subshape and material fields are authoritative. For a compound,
+     * collider while the scene activation path is being assembled. Without an installed Project table, the
+     * top-level filter and response are explicit fixture policy. With a table, exact profile/channel
+     * responses come from that authority; contributor IDs must resolve before admission. Primitive
+     * subshape and material fields remain authored evidence. For a compound,
      * each child owns those fields; top-level filter IDs must still be valid but are ignored by
      * query/event projection, and top-level subshape/material must be absent. A compound has one
      * uniform trigger policy because the native body is the sensor owner. The request owns its

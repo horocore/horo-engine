@@ -1271,6 +1271,7 @@ target_link_libraries(HoroAudioMetrics PUBLIC HoroEngine::AudioCommands HoroEngi
 add_library(HoroPhysics STATIC
         physics/CharacterClearanceQuery.cpp
         physics/CharacterControllerContracts.cpp
+        physics/CharacterQueryContext.cpp
         physics/CharacterDebugSnapshot.cpp
         physics/CharacterDebugStorageInternal.h
         physics/CharacterPhysicsQueryAdapter.cpp
@@ -1290,6 +1291,7 @@ add_library(HoroPhysics STATIC
         physics/CharacterWorldSweepInternal.h
         physics/CharacterWorldStepInternal.h
         physics/CharacterWorldPlatformInternal.h
+        physics/CharacterWorldCarryInternal.h
         physics/CharacterSweepPlanesInternal.h
         physics/CharacterWorldInternal.h
         physics/CharacterWorldPlacementInternal.h
@@ -1331,6 +1333,7 @@ add_library(HoroPhysics STATIC
         physics/PhysicsTransformAuthority.cpp
         physics/PhysicsTransformContracts.cpp
         physics/PhysicsWorld.cpp
+        physics/PhysicsWorldQuery.cpp
         physics/PhysicsQueryEventCapability.cpp
         physics/PhysicsWorldInternal.h
         physics/PhysicsWorldScene.cpp
@@ -1361,6 +1364,9 @@ if(HORO_BUILD_PHYSICS_NATIVE)
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
         physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
+        physics/CanonicalPhysicsRuntimeQueryFrame.cpp
+        physics/CanonicalPhysicsRuntimeQueryResident.cpp
+        physics/CanonicalPhysicsRuntimeQueryAuthority.cpp
         physics/CanonicalPhysicsRuntimeQueryBridge.cpp
         physics/CanonicalPhysicsRuntimeReadback.cpp
         physics/CanonicalPhysicsRuntimeScene.cpp
@@ -1377,6 +1383,9 @@ if(HORO_BUILD_PHYSICS_NATIVE)
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
         physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
+        physics/CanonicalPhysicsRuntimeQueryFrame.cpp
+        physics/CanonicalPhysicsRuntimeQueryResident.cpp
+        physics/CanonicalPhysicsRuntimeQueryAuthority.cpp
         physics/CanonicalPhysicsRuntimeQueryBridge.cpp
         physics/CanonicalPhysicsRuntimeReadback.cpp
         physics/CanonicalPhysicsRuntimeScene.cpp
