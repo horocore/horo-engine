@@ -1,5 +1,7 @@
 #include "Horo/Scene/ScenePrefabExpansionOwner.h"
 
+#include "ScenePrefabProjectionContext.h"
+
 #include <algorithm>
 #include <new>
 #include <nlohmann/json.hpp>
@@ -94,6 +96,14 @@ namespace Horo::SceneSource {
                 if (!AdmitObject(budget, object))
                     return false;
             }
+            for (const auto &placement : document.prefabInstances) {
+                if (!placement.valueOverrides)
+                    continue;
+                auto bytes =
+                    Prefab::SerializePrefabValueOverrides(*placement.valueOverrides, Prefab::PrefabLimitProfile::Create({}).Value());
+                if (bytes.HasError() || !budget.Add(bytes.Value().size(), 6))
+                    return false;
+            }
             return true;
         }
 
@@ -121,6 +131,8 @@ namespace Horo::SceneSource {
                     bytes.size() > MaximumSceneSourceBytes)
                     return Result<void>::Failure(MakeError(Prefab::PrefabErrors::PayloadTooLarge));
                 return Result<void>::Success();
+            } catch (const std::invalid_argument &error) {
+                return Result<void>::Failure(MakeError(Prefab::PrefabErrors::OverrideInvalid, error.what()));
             } catch (const nlohmann::json::exception &error) {
                 return Result<void>::Failure(MakeError(Prefab::PrefabErrors::AdmissionRejected, error.what()));
             }
@@ -159,7 +171,10 @@ namespace Horo::SceneSource {
             return !closed && !cancellation.IsCancellationRequested() && definition && current.documentSession == request.documentSession &&
                    current.scene == request.scene && current.revision == request.revision &&
                    current.resolver.RegistryRevision() == request.resolver.RegistryRevision() &&
-                   current.limits.Policy() == request.limits.Policy() && SameAuthoredDocument(current.document, request.document);
+                   current.limits.Policy() == request.limits.Policy() &&
+                   (current.valueSchemas ? current.valueSchemas->Revision() : Sha256Digest{}) ==
+                       (request.valueSchemas ? request.valueSchemas->Revision() : Sha256Digest{}) &&
+                   SameAuthoredDocument(current.document, request.document);
         }
 
         /** @brief Recaptures source identities and cancellation at the publication boundary, without mutating cache state. */
@@ -210,12 +225,14 @@ namespace Horo::SceneSource {
                     candidates[index] = std::move(candidate).Value();
                     entry.expanded = *candidates[index];
                 }
+                Detail::ApplyInstanceValues(entry, request.valueSchemas ? &*request.valueSchemas : nullptr, request.limits, token);
                 projection.instances.push_back(std::move(entry));
             }
             if (token.IsCancellationRequested())
                 return JobCancelled();
             auto converted = ConvertScenePrefabProjectionToRuntime({request.document.objects, placements}, request.scene, request.revision,
-                                                                   projection, request.resolver, request.limits);
+                                                                   projection, request.resolver, request.limits,
+                                                                   request.valueSchemas ? &*request.valueSchemas : nullptr);
             if (converted.HasError())
                 return Result<void>::Failure(converted.ErrorValue());
             if (token.IsCancellationRequested())

@@ -210,6 +210,11 @@ namespace Horo::Editor {
         return m_state != m_savedState;
     }
 
+    /** @copydoc SceneDocument::ReplacementEpoch */
+    std::uint64_t SceneDocument::ReplacementEpoch() const noexcept {
+        return m_replacementEpoch;
+    }
+
     /** @copydoc SceneDocument::Snapshot */
     SceneDocumentSnapshot SceneDocument::Snapshot() const {
         return SceneDocumentSnapshot{m_revision, m_state, m_objects, m_prefabInstances};
@@ -258,6 +263,10 @@ namespace Horo::Editor {
         if (maximumPrefabInstanceId.HasError())
             return Result<void>::Failure(maximumPrefabInstanceId.ErrorValue());
 
+        if (m_replacementEpoch == std::numeric_limits<std::uint64_t>::max())
+            return Result<void>::Failure(
+                MakeDocumentError(SceneDocumentErrors::HistoryEntryTooLarge, "Scene opening generations exhausted."));
+        ++m_replacementEpoch;
         m_objects = std::move(objects);
         m_prefabInstances = std::move(prefabInstances);
         m_revision = {};

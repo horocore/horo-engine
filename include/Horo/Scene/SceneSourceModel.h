@@ -14,6 +14,7 @@
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Prefab/PrefabIdentity.h"
+#include "Horo/Prefab/PrefabValueOverrideTypes.h"
 #include "Horo/Runtime/Scene/NavigationSceneComponents.h"
 #include "Horo/Runtime/Scene/PhysicsSceneComponents.h"
 #include "Horo/Runtime/Scene/PrimitiveMeshDescriptor.h"
@@ -79,10 +80,11 @@ namespace Horo::SceneSource {
 
     /** @brief Lightweight authored placement of one prefab asset in a containing scene. */
     struct ScenePrefabInstance final {
-        Prefab::PrefabInstanceId instanceId;       /**< Stable scene-local occurrence identity. */
-        Prefab::PrefabAssetReference sourcePrefab; /**< Path-independent source asset identity. */
-        std::optional<SceneObjectId> parent;       /**< Optional containing-scene parent; never a prefab member. */
-        Math::Transform rootTransform;             /**< Placement transform, separate from prefab-local transforms. */
+        Prefab::PrefabInstanceId instanceId;                          /**< Stable scene-local occurrence identity. */
+        Prefab::PrefabAssetReference sourcePrefab;                    /**< Path-independent source asset identity. */
+        std::optional<SceneObjectId> parent;                          /**< Optional containing-scene parent; never a prefab member. */
+        Math::Transform rootTransform;                                /**< Placement transform, separate from prefab-local transforms. */
+        std::optional<Prefab::PrefabValueOverrideSet> valueOverrides; /**< Exact source-relative intent; absence preserves legacy bytes. */
 
         [[nodiscard]] bool operator==(const ScenePrefabInstance &) const noexcept = default;
     };

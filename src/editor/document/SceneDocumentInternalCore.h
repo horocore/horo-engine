@@ -137,6 +137,14 @@ namespace Horo::Editor::SceneDocumentDetail {
         Math::Transform after;
     };
 
+    struct PrefabInstanceValuesDelta {
+        Prefab::PrefabInstanceId instance;
+        std::optional<Prefab::PrefabValueOverrideSet> before;
+        std::optional<Prefab::PrefabValueOverrideSet> after;
+        std::size_t ownedBytes{};
+        std::uint64_t replacementEpoch{};
+    };
+
     struct PrefabInstanceReparentDelta {
         Prefab::PrefabInstanceId instance;
         std::optional<SceneObjectId> before;
@@ -163,7 +171,7 @@ namespace Horo::Editor::SceneDocumentDetail {
                      LightChangedDelta, TriggerVolumeChangedDelta, AudioSourceChangedDelta, NavigationComponentsChangedDelta,
                      EditorStateChangedDelta, ComponentAddedDelta, ComponentRemovedDelta, BehaviorsChangedDelta,
                      GameplayComponentsChangedDelta, DeletedObjectsDelta, CreatedPrefabInstanceDelta, PrefabInstanceTransformDelta,
-                     PrefabInstanceReparentDelta, DeletedPrefabInstancesDelta>;
+                     PrefabInstanceReparentDelta, DeletedPrefabInstancesDelta, PrefabInstanceValuesDelta>;
 
     struct HistoryRecord {
         DocumentStateId beforeState;

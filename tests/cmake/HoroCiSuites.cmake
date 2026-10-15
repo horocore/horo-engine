@@ -73,6 +73,13 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroEditorSurfaceIdentityTests
     HoroSourceFileOpenServiceTests
     HoroPrefabTests
+    HoroPrefabOverrideModelPublicHeaderConsumer
+    HoroPrefabAuthoringPublicHeaderConsumer
+    HoroSceneSourceModelPublicHeaderConsumer
+    HoroSceneSourcePublicHeaderConsumer
+    HoroSceneRuntimeConversionPublicHeaderConsumer
+    HoroSceneRuntimeConversionTests
+    HoroSceneDocumentTests
     HoroPrefabSceneExpansionTests
     HoroPrefabSceneExpansionContractConsumer
     HoroAssetRegistryTests

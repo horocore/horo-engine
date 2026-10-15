@@ -477,6 +477,8 @@ namespace Horo::Editor {
             return Result<SceneCommandResult>::Failure(
                 MakeDocumentError(SceneDocumentErrors::NothingToUndo, "No committed scene command is available to undo."));
         }
+        if (std::holds_alternative<PrefabInstanceValuesDelta>(m_history.m_impl->undo.back().delta))
+            return ReplayPrefabValues(true);
         HistoryRecord entry = std::move(m_history.m_impl->undo.back());
         m_history.m_impl->undo.pop_back();
         RevertDelta(m_document.m_objects, m_document.m_prefabInstances, entry.delta);
@@ -493,6 +495,8 @@ namespace Horo::Editor {
             return Result<SceneCommandResult>::Failure(
                 MakeDocumentError(SceneDocumentErrors::NothingToRedo, "No reverted scene command is available to redo."));
         }
+        if (std::holds_alternative<PrefabInstanceValuesDelta>(m_history.m_impl->redo.back().delta))
+            return ReplayPrefabValues(false);
         HistoryRecord entry = std::move(m_history.m_impl->redo.back());
         m_history.m_impl->redo.pop_back();
         ApplyDelta(m_document.m_objects, m_document.m_prefabInstances, entry.delta);

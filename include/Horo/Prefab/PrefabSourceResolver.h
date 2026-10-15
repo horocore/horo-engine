@@ -36,6 +36,7 @@ namespace Horo::Prefab {
         std::optional<ExpandedPrefabObjectKey> parent; /**< Effective parent, when the object is not a placement root. */
         PrefabObjectNode object;                       /**< Owned authored object data; contains no source path. */
         Math::Transform effectiveLocalTransform;       /**< Placement-adjusted transform used by Scene conversion. */
+        Math::Transform placementTransform; /**< Exact mount TRS applied to a nested root; identity for ordinary source objects. */
 
         [[nodiscard]] bool operator==(const ResolvedPrefabObject &) const noexcept = default;
     };
@@ -49,17 +50,21 @@ namespace Horo::Prefab {
         [[nodiscard]] const PrefabResolutionRevision &Revision() const noexcept;
         /** @brief Returns the canonical expanded hierarchy. @return Borrowed immutable objects. */
         [[nodiscard]] std::span<const ResolvedPrefabObject> Objects() const noexcept;
+        /** @brief Read exact instance value-intent commitment. @return Zero for unmodified source expansion. */
+        [[nodiscard]] Sha256Digest ValueOverridesDigest() const noexcept;
 
     private:
+        friend class PrefabValueOverrideResolver;
         friend class PrefabSourceResolverSnapshot;
         friend class PrefabExpansionCache;
 
-        EffectivePrefabCandidate(Assets::AssetId rootAsset, PrefabResolutionRevision revision,
-                                 std::vector<ResolvedPrefabObject> objects) noexcept;
+        EffectivePrefabCandidate(Assets::AssetId rootAsset, PrefabResolutionRevision revision, std::vector<ResolvedPrefabObject> objects,
+                                 Sha256Digest valueOverrides = {}) noexcept;
 
         Assets::AssetId rootAsset_{};
         PrefabResolutionRevision revision_{};
         std::vector<ResolvedPrefabObject> objects_;
+        Sha256Digest valueOverrides_{};
     };
 
     /** @brief Self-contained immutable prefab documents and dependency graph from one registry revision. */

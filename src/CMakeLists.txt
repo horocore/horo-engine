@@ -2092,6 +2092,12 @@ add_library(HoroEngine::PrefabRuntime ALIAS HoroPrefabRuntime)
 target_compile_features(HoroPrefabRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroPrefabRuntime PUBLIC HoroEngine::Prefab HoroEngine::RuntimeScene)
 
+# Inert source-model data; keeps Scene models independent from executable authoring services.
+add_library(HoroPrefabOverrideModel INTERFACE)
+add_library(HoroEngine::PrefabOverrideModel ALIAS HoroPrefabOverrideModel)
+target_compile_features(HoroPrefabOverrideModel INTERFACE cxx_std_20)
+target_link_libraries(HoroPrefabOverrideModel INTERFACE HoroEngine::Prefab HoroEngine::Application)
+
 add_library(HoroPrefabAuthoring STATIC
         runtime/prefab/PrefabAssetDependencyClosure.cpp
         runtime/prefab/PrefabDependencyGraph.cpp
@@ -2103,12 +2109,18 @@ add_library(HoroPrefabAuthoring STATIC
         runtime/prefab/PrefabDocumentSerialization.cpp
         runtime/prefab/PrefabSceneIdentityRemap.cpp
         runtime/prefab/PrefabSourceResolver.cpp
+        runtime/prefab/PrefabValueOverrideAddresses.cpp
+        runtime/prefab/PrefabValueOverrideBindings.cpp
+        runtime/prefab/PrefabValueOverrideResolution.cpp
+        runtime/prefab/PrefabValueOverrideSerialization.cpp
+        runtime/prefab/PrefabValueOverrideValues.cpp
+        runtime/prefab/PrefabValueSchemas.cpp
         runtime/prefab/PrefabTemplateCook.cpp
 )
 add_library(HoroEngine::PrefabAuthoring ALIAS HoroPrefabAuthoring)
 target_compile_features(HoroPrefabAuthoring PUBLIC cxx_std_20)
 target_include_directories(HoroPrefabAuthoring PRIVATE ${PROJECT_SOURCE_DIR}/src/foundation/json)
-target_link_libraries(HoroPrefabAuthoring PUBLIC HoroEngine::Prefab HoroEngine::Application
+target_link_libraries(HoroPrefabAuthoring PUBLIC HoroEngine::Prefab HoroEngine::Application HoroEngine::PrefabOverrideModel
         PRIVATE nlohmann_json::nlohmann_json HoroJsonEncodingInternal)
 
 # Load/cook bridge. RuntimeScene never depends on prefab source authoring or Editor.
@@ -2470,6 +2482,7 @@ add_library(HoroSceneSourceModel INTERFACE)
 add_library(HoroEngine::SceneSourceModel ALIAS HoroSceneSourceModel)
 target_compile_features(HoroSceneSourceModel INTERFACE cxx_std_20)
 target_link_libraries(HoroSceneSourceModel INTERFACE
+        HoroEngine::PrefabOverrideModel
         HoroEngine::Foundation
         HoroEngine::AI
         HoroEngine::Prefab
@@ -2491,7 +2504,7 @@ add_library(HoroEngine::SceneSource ALIAS HoroSceneSource)
 target_compile_features(HoroSceneSource PUBLIC cxx_std_20)
 target_link_libraries(HoroSceneSource
         PUBLIC HoroEngine::SceneSourceModel
-        PRIVATE nlohmann_json::nlohmann_json HoroJsonEncodingInternal
+        PRIVATE nlohmann_json::nlohmann_json HoroJsonEncodingInternal HoroEngine::PrefabAuthoring
 )
 
 # Non-installed, narrow codec bridge for existing Editor JSON adapters.
@@ -2507,6 +2520,7 @@ target_link_libraries(HoroSceneSourceCodecInternal INTERFACE
 # Shared headless conversion owner. Editor is a downstream snapshot adapter, not a cook dependency.
 add_library(HoroSceneRuntimeConversion STATIC
         scene/source/ScenePrefabCachedConversion.cpp
+        scene/source/ScenePrefabValueProjection.cpp
         scene/source/SceneRuntimeConversion.cpp
         scene/source/ScenePrefabExpansionOwner.cpp)
 add_library(HoroEngine::SceneRuntimeConversion ALIAS HoroSceneRuntimeConversion)
@@ -2529,6 +2543,7 @@ add_library(HoroEditorModel STATIC
         editor/document/SceneDocument.cpp
         editor/document/SceneDocumentCommands.cpp
         editor/document/SceneDocumentObjectCommands.cpp
+        editor/document/SceneDocumentPrefabValueCommands.cpp
         editor/document/RuntimeSceneConversion.cpp
         editor/project_model/EditorModelErrors.cpp
         editor/project_model/EditorSelectionModel.cpp

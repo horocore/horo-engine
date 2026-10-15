@@ -1,5 +1,7 @@
+#include "Horo/Prefab/PrefabValueOverrides.h"
 #include "SceneSourceInternal.h"
 
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -21,12 +23,20 @@ namespace Horo::SceneSource::Detail {
         }
         WireJson prefabInstances = WireJson::array();
         for (const ScenePrefabInstance &instance : snapshot.prefabInstances) {
-            prefabInstances.push_back({
+            WireJson value{
                 {"instanceId", instance.instanceId.Value()},
                 {"sourceAsset", instance.sourcePrefab.Asset().ToString()},
                 {"parent", instance.parent.has_value() ? WireJson(instance.parent->value) : WireJson(nullptr)},
                 {"rootTransform", TransformJson(instance.rootTransform)},
-            });
+            };
+            if (instance.valueOverrides) {
+                const auto limits = Prefab::PrefabLimitProfile::Create({}).Value();
+                auto encoded = Prefab::SerializePrefabValueOverrides(*instance.valueOverrides, limits);
+                if (encoded.HasError())
+                    throw std::invalid_argument("Scene contains invalid prefab value override storage.");
+                value["valueOverrides"] = std::move(encoded).Value();
+            }
+            prefabInstances.push_back(std::move(value));
         }
         return WireJson{{"schemaVersion", kSceneSchemaVersion},
                         {"objects", std::move(objects)},
@@ -136,8 +146,22 @@ namespace Horo::SceneSource::Detail {
             }
             parent = SceneObjectId{value["parent"].get<std::uint64_t>()};
         }
+        std::optional<Prefab::PrefabValueOverrideSet> overrides;
+        if (value.contains("valueOverrides")) {
+            if (!value["valueOverrides"].is_string())
+                return Result<ScenePrefabInstance>::Failure(
+                    PersistenceError(SceneInvalid, "Prefab override envelope must contain canonical bytes."));
+            auto parsed = Prefab::ParsePrefabValueOverrides(value["valueOverrides"].get_ref<const std::string &>(),
+                                                            Prefab::PrefabLimitProfile::Create({}).Value());
+            if (parsed.HasError())
+                return Result<ScenePrefabInstance>::Failure(parsed.ErrorValue());
+            if (parsed.Value().sourcePrefab != assetId.Value())
+                return Result<ScenePrefabInstance>::Failure(
+                    PersistenceError(SceneInvalid, "Prefab override source identity disagrees with placement."));
+            overrides = std::move(parsed).Value();
+        }
         return Result<ScenePrefabInstance>::Success(
-            ScenePrefabInstance{instanceId.Value(), sourcePrefab.Value(), parent, rootTransform.Value()});
+            ScenePrefabInstance{instanceId.Value(), sourcePrefab.Value(), parent, rootTransform.Value(), std::move(overrides)});
     }
 
     [[nodiscard]] Result<ParsedScene> ParseScene(const std::string_view contents) {

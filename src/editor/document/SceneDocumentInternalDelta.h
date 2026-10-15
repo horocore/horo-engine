@@ -46,6 +46,34 @@ namespace Horo::Editor::SceneDocumentDetail {
         return bytes;
     }
 
+    /** @brief Account for owned payload strings and vector storage retained by semantic history. */
+    [[nodiscard]] inline std::size_t EstimateOverrideMemoryBytes(const std::optional<Prefab::PrefabValueOverrideSet> &set) noexcept {
+        if (!set)
+            return 0;
+        const auto recordBytes = [](const Prefab::PrefabValueOverrideRecord &record) {
+            std::size_t bytes = std::holds_alternative<std::string>(record.value) ? std::get<std::string>(record.value).size() : 0;
+            if (const auto *property = std::get_if<Prefab::PrefabPropertyAddress>(&record.target))
+                bytes += property->ComponentType().Value().size();
+            return bytes;
+        };
+        std::size_t bytes = set->records.capacity() * sizeof(Prefab::PrefabValueOverrideRecord) +
+                            set->conflicts.capacity() * sizeof(Prefab::PrefabValueOverrideConflict) +
+                            set->orphans.capacity() * sizeof(Prefab::PrefabValueOverrideOrphan);
+        for (const auto &record : set->records)
+            bytes += recordBytes(record);
+        bytes += set->authoredAgainst.projectVersion.prerelease.size();
+        for (const auto &conflict : set->conflicts)
+            bytes += recordBytes(conflict.original) + conflict.authoredAgainst.projectVersion.prerelease.size() +
+                     conflict.observedSource.projectVersion.prerelease.size();
+        for (const auto &orphan : set->orphans)
+            bytes += recordBytes(orphan.original) + orphan.authoredAgainst.projectVersion.prerelease.size();
+        return bytes;
+    }
+
+    [[nodiscard]] inline std::size_t EstimateTypedDeltaMemoryBytes(const CreatedPrefabInstanceDelta &delta) noexcept {
+        return sizeof(delta) + EstimateOverrideMemoryBytes(delta.instance.valueOverrides);
+    }
+
     template <typename Delta> [[nodiscard]] std::size_t EstimateTypedDeltaMemoryBytes(const Delta &) noexcept {
         return sizeof(Delta);
     }
@@ -62,11 +90,21 @@ namespace Horo::Editor::SceneDocumentDetail {
         std::size_t bytes = sizeof(delta) + delta.roots.size() * sizeof(SceneObjectId) + delta.objects.size() * sizeof(IndexedSceneObject);
         for (const IndexedSceneObject &object : delta.objects)
             bytes += EstimateSceneObjectOwnedMemoryBytes(object.object);
-        return bytes + delta.prefabInstances.size() * sizeof(IndexedPrefabInstance);
+        bytes += delta.prefabInstances.size() * sizeof(IndexedPrefabInstance);
+        for (const auto &instance : delta.prefabInstances)
+            bytes += EstimateOverrideMemoryBytes(instance.instance.valueOverrides);
+        return bytes;
+    }
+
+    [[nodiscard]] inline std::size_t EstimateTypedDeltaMemoryBytes(const PrefabInstanceValuesDelta &delta) noexcept {
+        return sizeof(delta) + delta.ownedBytes;
     }
 
     [[nodiscard]] inline std::size_t EstimateTypedDeltaMemoryBytes(const DeletedPrefabInstancesDelta &delta) noexcept {
-        return sizeof(delta) + delta.instances.size() * sizeof(IndexedPrefabInstance);
+        std::size_t bytes = sizeof(delta) + delta.instances.size() * sizeof(IndexedPrefabInstance);
+        for (const auto &instance : delta.instances)
+            bytes += EstimateOverrideMemoryBytes(instance.instance.valueOverrides);
+        return bytes;
     }
 
     [[nodiscard]] inline std::size_t EstimateTypedDeltaMemoryBytes(const TransformedObjectsDelta &delta) noexcept {
@@ -108,7 +146,8 @@ namespace Horo::Editor::SceneDocumentDetail {
             } else if constexpr (std::is_same_v<Delta, TransformedObjectsDelta>) {
                 return typedDelta.objects.empty() ? SceneObjectId{} : typedDelta.objects.front().object;
             } else if constexpr (std::is_same_v<Delta, CreatedPrefabInstanceDelta> || std::is_same_v<Delta, PrefabInstanceTransformDelta> ||
-                                 std::is_same_v<Delta, PrefabInstanceReparentDelta> || std::is_same_v<Delta, DeletedPrefabInstancesDelta>) {
+                                 std::is_same_v<Delta, PrefabInstanceValuesDelta> || std::is_same_v<Delta, PrefabInstanceReparentDelta> ||
+                                 std::is_same_v<Delta, DeletedPrefabInstancesDelta>) {
                 return SceneObjectId{};
             } else {
                 return typedDelta.object;
@@ -120,7 +159,7 @@ namespace Horo::Editor::SceneDocumentDetail {
         return std::visit([]<typename Delta>(const Delta &typedDelta) -> std::optional<Prefab::PrefabInstanceId> {
             if constexpr (std::is_same_v<Delta, CreatedPrefabInstanceDelta>) {
                 return typedDelta.instance.instanceId;
-            } else if constexpr (std::is_same_v<Delta, PrefabInstanceTransformDelta> ||
+            } else if constexpr (std::is_same_v<Delta, PrefabInstanceTransformDelta> || std::is_same_v<Delta, PrefabInstanceValuesDelta> ||
                                  std::is_same_v<Delta, PrefabInstanceReparentDelta>) {
                 return typedDelta.instance;
             } else if constexpr (std::is_same_v<Delta, DeletedPrefabInstancesDelta>) {
@@ -291,6 +330,11 @@ namespace Horo::Editor::SceneDocumentDetail {
         FindPrefabInstance(instances, delta.instance)->rootTransform = delta.after;
     }
 
+    inline void ApplyPrefabTypedDelta(std::vector<ScenePrefabInstance> &instances, const PrefabInstanceValuesDelta &delta) {
+        auto prepared = delta.after;
+        FindPrefabInstance(instances, delta.instance)->valueOverrides.swap(prepared);
+    }
+
     inline void ApplyPrefabTypedDelta(std::vector<ScenePrefabInstance> &instances, const PrefabInstanceReparentDelta &delta) {
         FindPrefabInstance(instances, delta.instance)->parent = delta.after;
     }
@@ -315,7 +359,8 @@ namespace Horo::Editor::SceneDocumentDetail {
     inline void ApplyDelta(std::vector<SceneObjectSnapshot> &objects, const SceneCommandDelta &delta) {
         std::visit([&objects]<typename Delta>(const Delta &typedDelta) {
             if constexpr (!std::is_same_v<Delta, CreatedPrefabInstanceDelta> && !std::is_same_v<Delta, PrefabInstanceTransformDelta> &&
-                          !std::is_same_v<Delta, PrefabInstanceReparentDelta> && !std::is_same_v<Delta, DeletedPrefabInstancesDelta>) {
+                          !std::is_same_v<Delta, PrefabInstanceReparentDelta> && !std::is_same_v<Delta, PrefabInstanceValuesDelta> &&
+                          !std::is_same_v<Delta, DeletedPrefabInstancesDelta>) {
                 ApplyTypedDelta(objects, typedDelta);
             }
         }, delta);
@@ -406,6 +451,11 @@ namespace Horo::Editor::SceneDocumentDetail {
         FindPrefabInstance(instances, delta.instance)->rootTransform = delta.before;
     }
 
+    inline void RevertPrefabTypedDelta(std::vector<ScenePrefabInstance> &instances, const PrefabInstanceValuesDelta &delta) {
+        auto prepared = delta.before;
+        FindPrefabInstance(instances, delta.instance)->valueOverrides.swap(prepared);
+    }
+
     inline void RevertPrefabTypedDelta(std::vector<ScenePrefabInstance> &instances, const PrefabInstanceReparentDelta &delta) {
         FindPrefabInstance(instances, delta.instance)->parent = delta.before;
     }
@@ -431,7 +481,8 @@ namespace Horo::Editor::SceneDocumentDetail {
                             const SceneCommandDelta &delta) {
         std::visit([&objects, &instances]<typename Delta>(const Delta &typedDelta) {
             if constexpr (std::is_same_v<Delta, CreatedPrefabInstanceDelta> || std::is_same_v<Delta, PrefabInstanceTransformDelta> ||
-                          std::is_same_v<Delta, PrefabInstanceReparentDelta> || std::is_same_v<Delta, DeletedPrefabInstancesDelta>) {
+                          std::is_same_v<Delta, PrefabInstanceValuesDelta> || std::is_same_v<Delta, PrefabInstanceReparentDelta> ||
+                          std::is_same_v<Delta, DeletedPrefabInstancesDelta>) {
                 if constexpr (Revert)
                     RevertPrefabTypedDelta(instances, typedDelta);
                 else

@@ -137,7 +137,8 @@ namespace Horo::Prefab {
                         return Fail(state, composed.ErrorValue());
                     localTransform = composed.Value();
                 }
-                state.objects.emplace_back(document.assetId, key, parent, object, localTransform);
+                state.objects.emplace_back(document.assetId, key, parent, object, localTransform,
+                                           mountParent && !object.parentLocalId ? mountTransform : Math::Transform{});
             }
             return Result<void>::Success();
         }
@@ -199,8 +200,9 @@ namespace Horo::Prefab {
 
     /** @copydoc EffectivePrefabCandidate::EffectivePrefabCandidate */
     EffectivePrefabCandidate::EffectivePrefabCandidate(Assets::AssetId rootAsset, PrefabResolutionRevision revision,
-                                                       std::vector<ResolvedPrefabObject> objects) noexcept
-        : rootAsset_(rootAsset), revision_(std::move(revision)), objects_(std::move(objects)) {}
+                                                       std::vector<ResolvedPrefabObject> objects,
+                                                       const Sha256Digest valueOverrides) noexcept
+        : rootAsset_(rootAsset), revision_(std::move(revision)), objects_(std::move(objects)), valueOverrides_(valueOverrides) {}
 
     /** @copydoc EffectivePrefabCandidate::RootAsset */
     Assets::AssetId EffectivePrefabCandidate::RootAsset() const noexcept {
@@ -210,6 +212,11 @@ namespace Horo::Prefab {
     /** @copydoc EffectivePrefabCandidate::Revision */
     const PrefabResolutionRevision &EffectivePrefabCandidate::Revision() const noexcept {
         return revision_;
+    }
+
+    /** @copydoc EffectivePrefabCandidate::ValueOverridesDigest */
+    Sha256Digest EffectivePrefabCandidate::ValueOverridesDigest() const noexcept {
+        return valueOverrides_;
     }
 
     /** @copydoc EffectivePrefabCandidate::Objects */

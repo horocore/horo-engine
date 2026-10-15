@@ -12,6 +12,7 @@
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Prefab/PrefabIdentity.h"
+#include "Horo/Prefab/PrefabValueOverrides.h"
 #include "Horo/Runtime/Scene/NavigationSceneComponents.h"
 #include "Horo/Runtime/Scene/PhysicsSceneComponents.h"
 #include "Horo/Runtime/Scene/PrimitiveMeshDescriptor.h"
@@ -171,6 +172,7 @@ namespace Horo::Editor {
         PrefabInstanceReparented,
         PrefabInstanceDuplicated,
         PrefabInstanceDeleted,
+        PrefabInstanceValuesChanged,
     };
 
     /** @brief Typed request to create one authored scene object. */
@@ -373,6 +375,16 @@ namespace Horo::Editor {
         Math::Transform rootTransform;
     };
 
+    /** @brief Revision-fenced semantic instance value edit, prepared against explicit source/schema owners. */
+    struct EditScenePrefabValueCommand final {
+        Prefab::PrefabInstanceId instance;
+        DocumentRevision expectedRevision;
+        Prefab::PrefabResolutionRevision expectedSource; /**< Exact registry and reachable source graph captured for the edit. */
+        Sha256Digest expectedSchema;
+        Prefab::PrefabValueEdit edit;
+        std::uint64_t expectedReplacementEpoch{}; /**< Exact owner-local opening generation; never portable between document owners. */
+    };
+
     /** @brief Typed request to duplicate a placement with a fresh scene-local instance identity. */
     struct DuplicateScenePrefabInstanceCommand final {
         Prefab::PrefabInstanceId source;
@@ -439,6 +451,10 @@ namespace Horo::Editor {
         /** @brief Returns whether committed state differs from the last marked saved revision. */
         [[nodiscard]] bool IsDirty() const noexcept;
 
+        /** @brief Read the owner-local successful-load generation. @return Nonzero epoch invalidating captured edit intent on replacement.
+         */
+        [[nodiscard]] std::uint64_t ReplacementEpoch() const noexcept;
+
         /** @brief Returns an immutable value snapshot of the committed document. */
         [[nodiscard]] SceneDocumentSnapshot Snapshot() const;
 
@@ -501,6 +517,7 @@ namespace Horo::Editor {
 
         std::vector<SceneObjectSnapshot> m_objects;
         std::vector<ScenePrefabInstance> m_prefabInstances;
+        std::uint64_t m_replacementEpoch{1};
         DocumentRevision m_revision{};
         DocumentRevision m_savedRevision{};
         DocumentStateId m_state{1};
@@ -591,6 +608,18 @@ namespace Horo::Editor {
         /** @brief Validates and atomically replaces one prefab root placement transform. */
         [[nodiscard]] Result<SceneCommandResult> Execute(const SetScenePrefabInstanceRootTransformCommand &command);
 
+        /** @brief Resolve and atomically commit one instance-local assignment, revert or rebase.
+         * @param command Typed intent with exact document/source/schema fences.
+         * @param sources Immutable source context explicitly composed by the application.
+         * @param schemas Owned schema metadata; null preserves unavailable properties as orphans.
+         * @param limits Captured resource policy. @param cancellation Cooperative preparation cancellation.
+         * @return One semantic history transition, no-op, or typed error without mutation. */
+        [[nodiscard]] Result<SceneCommandResult> Execute(const EditScenePrefabValueCommand &command,
+                                                         const Prefab::PrefabSourceResolverSnapshot &sources,
+                                                         const Prefab::PrefabValueSchemaSnapshot *schemas,
+                                                         const Prefab::PrefabLimitProfile &limits,
+                                                         const CancellationToken &cancellation = {});
+
         /** @brief Atomically duplicates a prefab reference under a fresh instance identity. */
         [[nodiscard]] Result<SceneCommandResult> Execute(const DuplicateScenePrefabInstanceCommand &command);
 
@@ -609,6 +638,8 @@ namespace Horo::Editor {
     private:
         struct PrefabCommitContext;
         struct ObjectCommitContext;
+        /** @brief Prepare one value-history replay completely before its no-throw publication. */
+        [[nodiscard]] Result<SceneCommandResult> ReplayPrefabValues(bool undo);
         [[nodiscard]] Result<SceneCommandResult> CommitObject(ObjectCommitContext context);
         [[nodiscard]] Result<SceneCommandResult> CommitNavigationComponents(
             SceneObjectId object, const std::optional<Runtime::NavigationSurfaceComponent> *surface,
