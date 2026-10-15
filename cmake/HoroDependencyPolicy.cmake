@@ -237,7 +237,7 @@ horo_allow_target_dependencies(TARGET HoroEditorViewportOpenGL
 horo_allow_target_dependencies(TARGET HoroEditorViewportMetal
     DEPENDENCIES HoroEditorViewportScene HoroEditorViewportResources HoroRenderMetal HoroRenderFrontend)
 horo_allow_target_dependencies(TARGET HoroGui
-    DEPENDENCIES HoroPlayTopologyApplication HoroEditorServices HoroCinematicCameraRuntime HoroFoundation HoroEditorRenderExtraction HoroExtensions)
+    DEPENDENCIES HoroPackageApplication HoroEditorPackageAdapters HoroPlayTopologyApplication HoroEditorServices HoroCinematicCameraRuntime HoroFoundation HoroEditorRenderExtraction HoroExtensions)
 horo_allow_target_dependencies(TARGET HoroPackageLifecycle
     DEPENDENCIES HoroFoundation HoroPackageSecurity HoroExtensions HoroAssets)
 horo_allow_target_dependencies(TARGET HoroExtensions
@@ -249,7 +249,7 @@ horo_allow_target_dependencies(TARGET HoroNetworkProductHost
     DEPENDENCIES HoroNetworkRuntime HoroRuntimeScene HoroPhysics HoroRuntime HoroGameplayModuleHost HoroGameplayLua HoroGameplayPhysicsIntegration HoroGameplayCharacterIntegration HoroPrefabRuntime HoroNetworkDebuggerApplication)
 horo_allow_target_dependencies(TARGET HoroUiAnimationRuntimeIntegration DEPENDENCIES HoroRuntime HoroRuntimeUi)
 horo_allow_target_dependencies(TARGET horo-engine
-    DEPENDENCIES HoroApplication HoroExtensions HoroHostModuleComposition HoroNetworkProductHost HoroNetworkTransportGNS HoroCliHost HoroRuntime HoroMcpController HoroPlatform)
+    DEPENDENCIES HoroPackageProjectHost HoroCliPackageAdapters HoroMcpPackageAdapters HoroApplication HoroExtensions HoroHostModuleComposition HoroNetworkProductHost HoroNetworkTransportGNS HoroCliHost HoroRuntime HoroMcpController HoroPlatform)
 horo_allow_target_dependencies(TARGET horo-extension-validate DEPENDENCIES HoroExtensions)
 horo_allow_target_dependencies(TARGET HoroExtensionSdkValidatorStage DEPENDENCIES horo-extension-validate)
 horo_allow_target_dependencies(TARGET horo-extension-conformance DEPENDENCIES HoroExtensions)
@@ -260,6 +260,7 @@ horo_allow_target_dependencies(TARGET HoroExtensionAuthorCiStage
     DEPENDENCIES HoroExtensionSdkValidatorStage HoroExtensionSdkConformanceStage HoroExtensionSdkPackageStage)
 horo_allow_target_dependencies(TARGET HoroEditor
     DEPENDENCIES
+        HoroPackageProjectHost
         HoroShaderBuild
         HoroGui
         HoroEditorServices
@@ -344,3 +345,8 @@ endif()
 
 horo_allow_target_dependencies(TARGET HoroPCGSceneBake DEPENDENCIES HoroPCGSceneAdapter HoroEditorServices HoroEditorModel)
 horo_allow_target_dependencies(TARGET HoroWorldCookIntegration DEPENDENCIES HoroSceneCellPayload HoroWorldStreaming HoroAssets)
+horo_allow_target_dependencies(TARGET HoroPackageApplication DEPENDENCIES HoroPackageLifecycle)
+horo_allow_target_dependencies(TARGET HoroCliPackageAdapters DEPENDENCIES HoroCliHost HoroPackageApplication)
+horo_allow_target_dependencies(TARGET HoroMcpPackageAdapters DEPENDENCIES HoroMcpRegistry HoroPackageApplication)
+horo_allow_target_dependencies(TARGET HoroEditorPackageAdapters DEPENDENCIES HoroEditorServices HoroPackageApplication)
+horo_allow_target_dependencies(TARGET HoroPackageProjectHost DEPENDENCIES HoroPackageApplication)

@@ -1,3 +1,15 @@
+# Explicit non-installed package composition contract; stage only its owning host header.
+set(HORO_PACKAGE_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/package_host_headers")
+file(MAKE_DIRECTORY "${HORO_PACKAGE_HOST_HEADERS}")
+configure_file(common/PackageProjectSession.h "${HORO_PACKAGE_HOST_HEADERS}/PackageProjectSession.h" COPYONLY)
+configure_file(common/PackageProjectHost.h "${HORO_PACKAGE_HOST_HEADERS}/PackageProjectHost.h" COPYONLY)
+configure_file(common/PackageHostPolicy.h "${HORO_PACKAGE_HOST_HEADERS}/PackageHostPolicy.h" COPYONLY)
+add_library(HoroPackageProjectHost STATIC common/PackageProjectSession.cpp common/PackageProjectPreparation.cpp
+    common/PackageProjectHost.cpp common/PackageProjectMetadata.cpp common/PackageHostPolicy.cpp)
+target_compile_features(HoroPackageProjectHost PUBLIC cxx_std_20)
+target_include_directories(HoroPackageProjectHost PUBLIC "${HORO_PACKAGE_HOST_HEADERS}")
+target_link_libraries(HoroPackageProjectHost PUBLIC HoroEngine::PackageApplication)
+
 add_library(HoroHostModuleComposition STATIC
     common/HostModuleComposition.cpp
 )
@@ -22,6 +34,7 @@ target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime H
 add_executable(horo-engine
     horo-engine/main.cpp
     horo-engine/cli_host/CliHost.cpp
+    horo-engine/cli_host/PackageCliHost.cpp
     horo-engine/cli_host/CliHostCommands.cpp
     horo-engine/cli_host/McpServe.cpp
     horo-engine/cli_host/McpStdio.cpp
@@ -38,7 +51,7 @@ target_compile_definitions(horo-engine PRIVATE
     HORO_PRODUCT_HAS_GNS=$<BOOL:${HORO_BUILD_NETWORK_GNS}>
 )
 target_link_libraries(horo-engine PRIVATE HoroEngine::Application HoroEngine::Extensions HoroHostModuleComposition
-    HoroNetworkProductHost
+    HoroNetworkProductHost HoroPackageProjectHost HoroEngine::CliPackageAdapters HoroEngine::McpPackageAdapters
     HoroEngine::Runtime
     HoroEngine::CliHost
     HoroEngine::McpController
@@ -275,6 +288,7 @@ if(HORO_BUILD_EDITOR_GUI)
 
     target_link_libraries(HoroEditor
         PRIVATE
+            HoroPackageProjectHost
             HoroEngine::ShaderBuild
             HoroEngine::Gui
             HoroEngine::EditorServices

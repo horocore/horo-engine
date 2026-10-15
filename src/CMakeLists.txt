@@ -2934,6 +2934,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/asset_import/AssetImportModalPresentation.cpp
             editor/modals/asset_import/AssetImportModalPresentationDetails.cpp
             editor/modals/play_topology/PlayTopologyModal.cpp
+            editor/modals/packages/PackageModal.cpp
             editor/modals/scene_compare/SceneConflictCompareModal.cpp
             editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.cpp
             editor/screens/welcome/WelcomeView.cpp
@@ -3148,6 +3149,34 @@ add_library(HoroPackageLifecycle STATIC
 add_library(HoroEngine::PackageLifecycle ALIAS HoroPackageLifecycle)
 target_compile_features(HoroPackageLifecycle PUBLIC cxx_std_20)
 target_link_libraries(HoroPackageLifecycle PUBLIC HoroEngine::Foundation HoroEngine::PackageSecurity HoroEngine::Extensions HoroEngine::Assets)
+
+# Application coordination is shared; adapters depend on it, never the inverse.
+add_library(HoroPackageApplication STATIC
+        application/packages/PackageApplication.cpp
+        application/packages/PackageApplicationProgress.cpp
+        application/packages/PackageApplicationPlan.cpp
+)
+add_library(HoroEngine::PackageApplication ALIAS HoroPackageApplication)
+target_compile_features(HoroPackageApplication PUBLIC cxx_std_20)
+target_link_libraries(HoroPackageApplication PUBLIC HoroEngine::PackageLifecycle)
+
+add_library(HoroCliPackageAdapters STATIC cli/PackageCommands.cpp)
+add_library(HoroEngine::CliPackageAdapters ALIAS HoroCliPackageAdapters)
+target_compile_features(HoroCliPackageAdapters PUBLIC cxx_std_20)
+target_link_libraries(HoroCliPackageAdapters PUBLIC HoroEngine::CliHost HoroEngine::PackageApplication)
+
+add_library(HoroMcpPackageAdapters STATIC mcp/PackageTools.cpp)
+add_library(HoroEngine::McpPackageAdapters ALIAS HoroMcpPackageAdapters)
+target_compile_features(HoroMcpPackageAdapters PUBLIC cxx_std_20)
+target_link_libraries(HoroMcpPackageAdapters PUBLIC HoroEngine::McpRegistry HoroEngine::PackageApplication)
+
+add_library(HoroEditorPackageAdapters STATIC editor/modals/packages/PackageModalSession.cpp)
+add_library(HoroEngine::EditorPackageAdapters ALIAS HoroEditorPackageAdapters)
+target_compile_features(HoroEditorPackageAdapters PUBLIC cxx_std_20)
+target_link_libraries(HoroEditorPackageAdapters PUBLIC HoroEngine::EditorServices HoroEngine::PackageApplication)
+if (HORO_BUILD_EDITOR_GUI)
+    target_link_libraries(HoroGui PUBLIC HoroEngine::PackageApplication PRIVATE HoroEngine::EditorPackageAdapters)
+endif ()
 
 # Host-side bridge: sequence model and runtime remain independent of Extensions.
 add_library(HoroGameplayAiScriptBridge STATIC

@@ -1312,8 +1312,11 @@ horo_configure_target_header_boundary(HoroPCGSceneBake PUBLIC_HEADERS
     Horo/PCGScene/SceneBake.h
 )
 
-horo_configure_target_header_boundary(HoroWorldCookIntegration PUBLIC_HEADERS
-    Horo/WorldCook/WorldCookPublication.h)
+horo_configure_target_header_boundary(HoroWorldCookIntegration PUBLIC_HEADERS Horo/WorldCook/WorldCookPublication.h)
+horo_configure_target_header_boundary(HoroPackageApplication PUBLIC_HEADERS Horo/Application/PackageApplication.h)
+horo_configure_target_header_boundary(HoroCliPackageAdapters PUBLIC_HEADERS Horo/Cli/PackageCommands.h)
+horo_configure_target_header_boundary(HoroMcpPackageAdapters PUBLIC_HEADERS Horo/Mcp/PackageTools.h)
+horo_configure_target_header_boundary(HoroEditorPackageAdapters PUBLIC_HEADERS Horo/Editor/PackageModalSession.h)
 
 horo_verify_public_header_inventory()
 message(STATUS "Target-specific public header inventory is complete")

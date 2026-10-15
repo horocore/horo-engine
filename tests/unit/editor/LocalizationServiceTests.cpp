@@ -128,6 +128,27 @@ namespace {
         RequireCatalogKeys(service, updateKeys);
         REQUIRE_FALSE(service.Get("editor", "settings.packages.download_threads").starts_with("[missing:"));
         REQUIRE(service.Get("editor", "settings.network.download_threads").starts_with("[missing:"));
+        constexpr std::array packageKeys{"workspace.packages.button",
+                                         "workspace.packages.title",
+                                         "workspace.packages.policy_hint",
+                                         "workspace.packages.plan_unavailable",
+                                         "workspace.packages.verified",
+                                         "workspace.packages.locked",
+                                         "workspace.packages.semantic_unavailable",
+                                         "workspace.packages.restore",
+                                         "workspace.packages.install",
+                                         "workspace.packages.package",
+                                         "workspace.packages.descriptor",
+                                         "workspace.packages.activate",
+                                         "workspace.packages.disable",
+                                         "workspace.packages.cancel",
+                                         "workspace.packages.running",
+                                         "workspace.packages.terminal",
+                                         "workspace.packages.operation_failed",
+                                         "workspace.packages.close",
+                                         "workspace.packages.retry",
+                                         "workspace.packages.recovery_hint"};
+        RequireCatalogKeys(service, packageKeys);
         RequireCatalogKeys(service, globalDockKeys);
         RequireCatalogKeys(service, contentBrowserKeys);
         RequireCatalogKeys(service, recoveryKeys);
