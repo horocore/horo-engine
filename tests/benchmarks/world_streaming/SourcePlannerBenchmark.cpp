@@ -97,7 +97,9 @@ int main(int argc, char **argv) {
         const auto side = argc > 1 ? std::atoi(argv[1]) : 256;
         if (side < 16 || side > 256)
             return 2;
-        std::cout << "{\"buildMode\":\"" << HORO_BENCHMARK_BUILD_MODE << "\",\"compiler\":\"";
+        std::cout << "{\"clockBasis\":\"constant service timestamp; CPU/work "
+                     "measurement\",\"virtualServiceMilliseconds\":1000,\"serviceCadenceAssumed\":false,\"buildMode\":\""
+                  << HORO_BENCHMARK_BUILD_MODE << "\",\"compiler\":\"";
 #if defined(_MSC_VER)
         std::cout << "MSVC " << _MSC_FULL_VER;
 #else

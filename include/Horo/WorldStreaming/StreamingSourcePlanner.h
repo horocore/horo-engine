@@ -219,6 +219,10 @@ namespace Horo::WorldStreaming {
                                                     const StreamingSourceEnvironment &environment);
         /**
          * @brief Advances one deterministic bounded planning quantum without allocation.
+         * @details The host explicitly selects cadence, work ceilings and maximum age; positive budgets do not establish that a full
+         * cycle fits that age. Completion beyond the age returns PrefetchStale, and Plan rejects aged previous intent during staging.
+         * No automatic frame cadence or eventual publication is promised for an incompatible profile. Constant-clock qualification
+         * measures CPU/work only; advancing-clock qualification is required to establish a particular host profile.
          * @param serviceTimeMilliseconds Monotonic unscaled current service time.
          * @param pressure Explicit host pressure; no ambient sampling.
          * @return Actual work counters/publication status or typed failure; no partial plan is published.

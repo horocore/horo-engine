@@ -2122,3 +2122,11 @@ the complete provider-readiness authority; Scene performs no provider discovery.
 Exact revision replacement/retirement and aggregate resident count ceilings are
 part of the structural transaction. See [Scene Runtime](scene-runtime.md#independent-cell-baseline-ownership-wst-0056)
 for ownership, failure, cancellation, hierarchy and shutdown contracts.
+
+WST-002 qualification must distinguish service work quanta from wall-clock
+publication age. The host explicitly supplies budgets, cadence and maximum age;
+there is no automatic 60Hz caller or production default. A constant-service-clock
+benchmark qualifies CPU/work only. Advancing-clock dense/moving-source tests
+qualify compatible profiles and typed expiry for incompatible profiles without
+serving aged intent. Positive budgets alone do not imply feasibility at any
+arbitrary cadence or deadline.

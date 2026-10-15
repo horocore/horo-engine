@@ -124,3 +124,24 @@ and equivalent bounded spatial traversal, and separately measures integrated pla
 It emits compiler/configuration, total milliseconds, worst quantum, work counts and
 result agreement. Record the actual platform/CPU and output with the delivery evidence;
 a benchmark source file or an unrun command is not a performance result.
+
+## Service cadence and bounded-age qualification
+
+There are no production default limits: the host supplies every positive work
+ceiling and a maximum age in 1..60000 milliseconds. One Service call is one
+host-controlled work quantum; the API does not infer a frame cadence or prove
+that a configured age can accommodate an arbitrary query. A profile whose full
+cycle exceeds that age fails with PrefetchStale at completion. Plan rejects an
+aged previous publication while staging continues; it never substitutes stale
+intent. Repeating an incompatible profile does not promise eventual publication.
+
+The 65536-cell benchmark intentionally reuses service timestamp 1000. Its JSON
+clockBasis identifies CPU/work measurements, not once-per-render-frame elapsed
+time. The measured 1535-quanta first dense cycle would take about 25.6 seconds
+at one 60Hz quantum per frame, so it is incompatible with a two-second age bound.
+Native advancing 16/17ms-clock regressions separately qualify continuous motion
+with a 60-second/128-work profile, fail-closed two-second/128-work behavior with
+a real previous publication, and a separate two-second/4096-work profile.
+No test changes immutable limits mid-cycle, relaxes freshness, sleeps, or
+performs unbounded work in one Service call. Their actual runtime results must
+be recorded separately from benchmark CPU timing.
