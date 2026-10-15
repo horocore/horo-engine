@@ -9,7 +9,12 @@ file(WRITE "${source}/CMakeLists.txt" [=[
 cmake_minimum_required(VERSION 3.25)
 project(SaveJunitOutputPath NONE)
 enable_testing()
-add_test(NAME SaveJunitPathEvidence COMMAND "${CMAKE_COMMAND}" -E echo "save-junit-path-qualified")
+add_test(NAME SaveJunitPathEvidence COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/EmitEvidence.cmake")
+]=])
+file(WRITE "${source}/EmitEvidence.cmake" [=[
+string(REPEAT "bounded-output-padding" 100 padding)
+message("${padding}")
+message("save-junit-path-qualified")
 ]=])
 execute_process(COMMAND "${CMAKE_COMMAND}" -S "${source}" -B "${build}"
     RESULT_VARIABLE configured OUTPUT_VARIABLE output ERROR_VARIABLE error)
@@ -20,8 +25,20 @@ set(report "${build}/save-allocation-ctest.xml")
 file(REMOVE "${report}" "${outer}/save-allocation-ctest.xml")
 get_filename_component(cmake_directory "${CMAKE_COMMAND}" DIRECTORY)
 find_program(ctest NAMES ctest HINTS "${cmake_directory}" REQUIRED NO_DEFAULT_PATH)
+# The default 1024-byte passed-output limit must reproduce the missing late evidence.
 execute_process(COMMAND "${ctest}" "--test-dir" "${build}" "--no-tests=error"
     "--output-on-failure" "--output-junit" "save-allocation-ctest.xml"
+    WORKING_DIRECTORY "${outer}" RESULT_VARIABLE default_tested OUTPUT_VARIABLE output ERROR_VARIABLE error)
+if(NOT default_tested EQUAL 0 OR NOT EXISTS "${report}")
+    message(FATAL_ERROR "Default-output CTest failed: ${output}\n${error}")
+endif()
+file(READ "${report}" default_xml)
+if(default_xml MATCHES "save-junit-path-qualified" OR NOT default_xml MATCHES "1024 bytes")
+    message(FATAL_ERROR "Default passed-output capture did not reproduce truncation of the late marker")
+endif()
+file(REMOVE "${report}")
+execute_process(COMMAND "${ctest}" "--test-dir" "${build}" "--no-tests=error"
+    "--output-on-failure" "--test-output-size-passed" "16384" "--output-junit" "save-allocation-ctest.xml"
     WORKING_DIRECTORY "${outer}" RESULT_VARIABLE tested OUTPUT_VARIABLE output ERROR_VARIABLE error)
 if(NOT tested EQUAL 0 OR NOT EXISTS "${report}" OR EXISTS "${outer}/save-allocation-ctest.xml")
     message(FATAL_ERROR "CTest did not publish its JUnit report inside the selected test directory: ${output}\n${error}")

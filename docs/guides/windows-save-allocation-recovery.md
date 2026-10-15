@@ -115,3 +115,14 @@ reopen/reconcile and both completed fixture scopes. Fresh-head Windows Release
 evidence is required before claiming these allocation cases qualified. Temporary
 recovery-branch Debug capture gates are retired; the original diagnostic branch
 gates and historical artifacts remain available.
+
+The exact `fef58df4` Windows qualification ran both Release cases successfully,
+but CTest truncated each passed case's JUnit output at its default 1024-byte
+limit. The failure-variant reopen/reconcile and fixture-exit markers were cut,
+so the strict verifier correctly rejected incomplete evidence. The dedicated
+two-case command now retains at most 16384 bytes per passed case. The owning
+CTest fixture reproduces default truncation with a late marker and verifies
+that the bounded larger capture retains it from the same spaced test directory.
+This changes evidence capture only; the verifier, allocation probes, generator
+variants, assertions and deadlines remain unchanged. Full Windows variant proof
+still requires the new head's actual untruncated JUnit to pass verification.

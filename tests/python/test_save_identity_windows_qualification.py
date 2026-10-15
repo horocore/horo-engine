@@ -28,6 +28,7 @@ def test_release_save_qualification_is_mandatory_and_debug_skips_are_explicit() 
     assert "Lifecycle allocation failure after visibility preserves publication knowledge" in step
     assert "Retention allocation failure after selection preserves publication and binding ownership" in step
     assert "--output-junit save-allocation-ctest.xml" in step
+    assert "--test-output-size-passed 16384" in step
     assert "--output-junit build/ci-audio-release/" not in step
     verifier = workflow.split("      - name: Verify Windows Release Save allocation variants", 1)[1].split("      - name:", 1)[0]
     assert "steps.save_allocation_release_tests.outcome == 'success'" in verifier
@@ -54,3 +55,13 @@ def test_save_junit_path_qualification_uses_real_ctest_from_an_outer_directory()
     assert 'WORKING_DIRECTORY "${outer}"' in fixture
     assert 'set(report "${build}/save-allocation-ctest.xml")' in fixture
     assert 'file(READ "${report}" xml)' in fixture
+
+
+def test_save_junit_capture_qualifies_default_truncation_and_bounded_complete_output() -> None:
+    fixture = (ROOT / "tests/cmake/RunSaveJunitOutputPathTest.cmake").read_text(encoding="utf-8")
+    assert 'string(REPEAT "bounded-output-padding" 100 padding)' in fixture
+    assert 'file(READ "${report}" default_xml)' in fixture
+    assert 'default_xml MATCHES "save-junit-path-qualified"' in fixture
+    assert 'NOT default_xml MATCHES "1024 bytes"' in fixture
+    assert '"--test-output-size-passed" "16384"' in fixture
+    assert '"save-junit-path-qualified")' in fixture
