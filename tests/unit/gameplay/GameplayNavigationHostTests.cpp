@@ -2,12 +2,18 @@
 #include "GameplayRuntimeTestSupport.h"
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
+#include "Horo/Gameplay/GameplayPhysicsContext.h"
 #include "Horo/Gameplay/LuaBehavior.h"
+#include "Horo/Platform/DynamicLibrary.h"
 #include "navigation/NavigationCoordinatorTestFixtures.h"
 #ifdef HORO_TEST_NAVIGATION_DETOUR
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
 #endif
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <cstring>
+#include <filesystem>
+#include <iterator>
 using namespace Horo;
 using namespace Horo::Gameplay;
 using namespace Horo::Navigation;
@@ -83,11 +89,13 @@ namespace {
         }
 
         ~Fixture() {
-            context->Revoke();
+            if (context)
+                context->Revoke();
             coordinator.BeginShutdown();
             jobs.Shutdown(ShutdownPolicy::Drain);
             static_cast<void>(coordinator.Commit(Current(std::array{Caller()}, 100)));
-            static_cast<void>(context->DrainRetired());
+            if (context)
+                static_cast<void>(context->DrainRetired());
             movement->BeginShutdown();
             static_cast<void>(movement->Update(Now(100)));
         }
@@ -125,6 +133,11 @@ TEST_CASE("Loaded native module reload and shutdown revoke pending navigation de
     REQUIRE(loaded.HasValue());
     std::unique_ptr<LoadedGameModule> module = std::move(loaded).Value();
     REQUIRE(module->NavigationContext() == fixture.context);
+    auto duplicate = host.Load(HORO_TEST_GAME_MODULE_PATH, expected);
+    REQUIRE(duplicate.HasError());
+    CHECK(duplicate.ErrorValue().code.Value() == NavigationCapabilityErrors::PermissionDenied.code.Value());
+    REQUIRE(fixture.context->IsUsable());
+    REQUIRE_FALSE(module->Cancellation().IsCancellationRequested());
     auto request = module->NavigationContext()->Submit({.start = {1, 0, 1}, .destination = {9, 0, 9}});
     REQUIRE(request.HasValue());
     SECTION("reload") {
@@ -251,3 +264,137 @@ TEST_CASE("Lua move-to and follow expose canonical replacement and explicit canc
     auto active = ActivateScript(*program.Value(), registry, fixture.context);
     CHECK(Tests::FixedUpdateAndReadPosition(*active.scene, *active.runtime, Runtime::SceneObjectId{2}).x == 5);
 }
+
+TEST_CASE("Pending actual native behavior navigation keeps SDK code alive through retired host drain") {
+    Fixture fixture;
+    GameModuleHost host{{}, nullptr, fixture.context};
+    const GameModuleLoadExpectation expected{"game.tests", CurrentGameplayBuildFingerprint(),
+                                             Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)};
+    auto loading = host.Load(HORO_TEST_GAME_MODULE_PATH, expected);
+    REQUIRE(loading.HasValue());
+    auto module = std::move(loading).Value();
+    const auto moduleCancellation = module->Cancellation();
+    auto definition =
+        Tests::SingleBehaviorSceneDefinition(Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}, Runtime::SceneObjectId{2},
+                                             BehaviorInstanceId{1}, BehaviorTypeId::Parse("game.tests.navigation_client").Value());
+    auto scene = std::move(Runtime::RuntimeScene::Create(definition, Runtime::SceneRuntimeId{Activation().scene.Value()})).Value();
+    auto creation = BehaviorRuntime::Create(*scene, module->Registry(), {}, nullptr, module->NavigationContext());
+    REQUIRE(creation.HasValue());
+    auto runtime = std::move(creation).Value();
+    CHECK(Tests::FixedUpdateAndReadPosition(*scene, *runtime, Runtime::SceneObjectId{2}).x == 0);
+    runtime->Shutdown();
+    runtime.reset();
+    module.reset();
+    REQUIRE(moduleCancellation.IsCancellationRequested());
+    REQUIRE_FALSE(fixture.context->IsUsable());
+    fixture.Publish();
+    REQUIRE(fixture.context->DrainRetired().Value());
+    REQUIRE(fixture.coordinator.IsDrained());
+}
+
+TEST_CASE("Native navigation code pins defer shadow artifact removal until retired handles release") {
+    Fixture fixture;
+    const auto root = std::filesystem::temp_directory_path() /
+                      ("horo nav code image " + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::path shadow;
+    {
+        GameModuleHost host{{}, nullptr, fixture.context};
+        const GameModuleLoadExpectation expected{"game.tests", CurrentGameplayBuildFingerprint(),
+                                                 Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)};
+        auto loading = host.LoadShadowCopy(HORO_TEST_GAME_MODULE_PATH, root, expected);
+        REQUIRE(loading.HasValue());
+        auto module = std::move(loading).Value();
+        shadow = module->LoadedArtifactPath();
+        auto request = module->NavigationContext()->Submit({.start = {1, 0, 1}, .destination = {9, 0, 9}});
+        REQUIRE(request.HasValue());
+        module.reset();
+        REQUIRE_FALSE(fixture.context->IsUsable());
+        REQUIRE(std::filesystem::exists(shadow));
+        fixture.Publish();
+        REQUIRE(fixture.context->DrainRetired().Value());
+        REQUIRE(std::filesystem::exists(shadow));
+        REQUIRE(request.Value().Poll().HasError());
+    }
+    fixture.context.reset();
+    REQUIRE_FALSE(std::filesystem::exists(shadow));
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+}
+
+TEST_CASE("Failed native startup retains an owned shadow image only until the revoked scope releases") {
+    Fixture fixture;
+    const auto root = std::filesystem::temp_directory_path() /
+                      ("horo nav failed image " + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    auto physics = GameplayPhysicsContext::Withheld({.moduleId = "game.tests",
+                                                     .scene = fixture.binding.scene.Value(),
+                                                     .sceneGeneration = fixture.binding.sceneGeneration.Value(),
+                                                     .moduleEnabled = true,
+                                                     .permissionGranted = true},
+                                                    GameplayPhysicsDenial::Unavailable);
+    {
+        GameModuleHost host{{}, physics, fixture.context};
+        const GameModuleLoadExpectation expected{"game.tests", CurrentGameplayBuildFingerprint(),
+                                                 Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)};
+        auto failed = host.LoadShadowCopy(HORO_TEST_GAME_MODULE_PATH, root, expected);
+        REQUIRE(failed.HasError());
+        REQUIRE_FALSE(fixture.context->IsUsable());
+        REQUIRE(std::distance(std::filesystem::directory_iterator{root}, std::filesystem::directory_iterator{}) == 1);
+        REQUIRE(fixture.context->DrainRetired().Value());
+    }
+    fixture.context.reset();
+    REQUIRE(std::filesystem::is_empty(root));
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+}
+
+#ifdef HORO_TEST_NAVIGATION_DETOUR
+TEST_CASE("Completed native navigation result outlives every module scope and code image") {
+    Fixture fixture;
+    const auto root = std::filesystem::temp_directory_path() /
+                      ("horo nav detached result " + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::shared_ptr<const GameplayNavigationResult> completed;
+    std::filesystem::path shadow;
+    {
+        GameModuleHost host{{}, nullptr, fixture.context};
+        const GameModuleLoadExpectation expected{"game.tests", CurrentGameplayBuildFingerprint(),
+                                                 Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)};
+        auto loading = host.LoadShadowCopy(HORO_TEST_GAME_MODULE_PATH, root, expected);
+        REQUIRE(loading.HasValue());
+        auto module = std::move(loading).Value();
+        shadow = module->LoadedArtifactPath();
+        auto definition = Tests::SingleBehaviorSceneDefinition(Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1},
+                                                               Runtime::SceneObjectId{2}, BehaviorInstanceId{1},
+                                                               BehaviorTypeId::Parse("game.tests.navigation_client").Value());
+        auto scene = std::move(Runtime::RuntimeScene::Create(definition, Runtime::SceneRuntimeId{Activation().scene.Value()})).Value();
+        auto creation = BehaviorRuntime::Create(*scene, module->Registry(), {}, nullptr, module->NavigationContext());
+        REQUIRE(creation.HasValue());
+        auto runtime = std::move(creation).Value();
+        CHECK(Tests::FixedUpdateAndReadPosition(*scene, *runtime, Runtime::SceneObjectId{2}).x == 0);
+        fixture.Publish();
+        CHECK(Tests::FixedUpdateAndReadPosition(*scene, *runtime, Runtime::SceneObjectId{2}).x == 7);
+        {
+            auto image = Platform::LoadDynamicLibrary(shadow.string());
+            REQUIRE(image.HasValue());
+            void *symbol = image.Value()->GetSymbol("HoroTestTakeNavigationResult");
+            REQUIRE(symbol != nullptr);
+            void (*take)(void *){};
+            static_assert(sizeof(take) == sizeof(symbol));
+            std::memcpy(&take, &symbol, sizeof(take));
+            take(&completed);
+        }
+        REQUIRE(completed);
+        REQUIRE(completed->path);
+        runtime->Shutdown();
+        runtime.reset();
+        module.reset();
+        REQUIRE(fixture.context->DrainRetired().Value());
+    }
+    fixture.context.reset();
+    REQUIRE_FALSE(std::filesystem::exists(shadow));
+    REQUIRE(completed->path);
+    CHECK_FALSE(completed->path->points.empty());
+    completed.reset();
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+}
+#endif

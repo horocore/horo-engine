@@ -142,3 +142,16 @@ TEST_CASE("Native gameplay correlation is restored inside the canonical provider
     CHECK(evidence->context.parentOperationId == 45);
     REQUIRE(request.Value().Poll().HasError());
 }
+
+TEST_CASE("Navigation grants preserve descriptor module identities without imposing a namespace") {
+    for (const std::string &identity : {std::string{"tests.gameplay_build"}, std::string{"project.module"}, std::string(256, 'x')}) {
+        auto absent = GameplayNavigationContext::Create({.moduleId = identity, .queryGranted = true}, nullptr, nullptr, nullptr, {});
+        REQUIRE(absent.HasValue());
+        CHECK(absent.Value()->Binding().moduleId == identity);
+        ErrorIs(absent.Value()->Submit({}), NavigationErrors::CapabilityUnavailable);
+    }
+    for (const std::string &identity : {std::string{}, std::string(257, 'x'), std::string{"game.\0module", 12}}) {
+        ErrorIs(GameplayNavigationContext::Create({.moduleId = identity}, nullptr, nullptr, nullptr, {}),
+                NavigationErrors::CapabilityDescriptorInvalid);
+    }
+}

@@ -79,23 +79,47 @@ namespace Horo::Gameplay {
                 return Result<std::shared_ptr<GameplayPhysicsContext>>::Failure(admission.ErrorValue());
             return Result<std::shared_ptr<GameplayPhysicsContext>>::Success(physics);
         }
+
+        /** @brief Resolve only the selected principal, preserving an explicit unavailable context for omitted navigation. */
+        Result<std::shared_ptr<GameplayNavigationContext>> ResolveNavigationContext(
+            const std::shared_ptr<GameplayNavigationContext> &navigation, const std::string &moduleId) {
+            if (navigation && navigation->Binding().moduleId != moduleId)
+                return Result<std::shared_ptr<GameplayNavigationContext>>::Failure(MakeError(NavigationCapabilityErrors::PermissionDenied));
+            if (navigation && !navigation->IsUsable())
+                return Result<std::shared_ptr<GameplayNavigationContext>>::Failure(MakeError(NavigationCapabilityErrors::ScopeRevoked));
+            if (navigation)
+                return Result<std::shared_ptr<GameplayNavigationContext>>::Success(navigation);
+            return GameplayNavigationContext::Create({.moduleId = moduleId, .queryGranted = true, .movementGranted = true}, nullptr,
+                                                     nullptr, nullptr, {});
+        }
     }  // namespace
 
     /** @copydoc GameModuleHost::Load */
     Result<std::unique_ptr<LoadedGameModule>> GameModuleHost::Load(const std::filesystem::path &libraryPath,
                                                                    const GameModuleLoadExpectation &expectation) const {
+        return LoadArtifact(libraryPath, expectation, false);
+    }
+
+    /** @copydoc GameModuleHost::LoadArtifact */
+    Result<std::unique_ptr<LoadedGameModule>> GameModuleHost::LoadArtifact(const std::filesystem::path &libraryPath,
+                                                                           const GameModuleLoadExpectation &expectation,
+                                                                           const bool ownedShadow) const {
         if (!libraryPath.is_absolute())
             return Result<std::unique_ptr<LoadedGameModule>>::Failure(
                 MakeError(GameplayErrors::InvalidGameModuleDescriptor, "Gameplay module path must be absolute."));
 
+        auto image = std::make_shared<Detail::GameModuleCodeImage>(std::unique_ptr<Platform::DynamicLibrary>{});
+        if (ownedShadow)
+            image->shadowArtifact = libraryPath;
         auto loaded = Platform::LoadDynamicLibrary(libraryPath.string());
         if (loaded.HasError())
             return Result<std::unique_ptr<LoadedGameModule>>::Failure(loaded.ErrorValue());
+        image->library = std::move(loaded).Value();
         auto impl = std::make_shared<LoadedGameModule::Impl>();
-        impl->library = std::move(loaded).Value();
+        impl->codeImage = std::move(image);
         impl->loadedArtifactPath = libraryPath;
 
-        auto exports = ReadValidatedExports(*impl->library, expectation);
+        auto exports = ReadValidatedExports(*impl->codeImage->library, expectation);
         if (exports.HasError())
             return Result<std::unique_ptr<LoadedGameModule>>::Failure(exports.ErrorValue());
         const ValidatedModuleExports validated = exports.Value();
@@ -106,19 +130,13 @@ namespace Horo::Gameplay {
         auto physics = ResolvePhysicsContext(physics_, impl->moduleId);
         if (physics.HasError())
             return Result<std::unique_ptr<LoadedGameModule>>::Failure(physics.ErrorValue());
+        auto navigation = ResolveNavigationContext(navigation_, impl->moduleId);
+        if (navigation.HasError())
+            return Result<std::unique_ptr<LoadedGameModule>>::Failure(navigation.ErrorValue());
+        if (auto pinned = navigation.Value()->RetainCodeImage(impl->codeImage); pinned.HasError())
+            return Result<std::unique_ptr<LoadedGameModule>>::Failure(pinned.ErrorValue());
+        impl->navigation = std::move(navigation).Value();
         impl->physics = std::move(physics).Value();
-        if (navigation_ && navigation_->Binding().moduleId != impl->moduleId)
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(MakeError(NavigationCapabilityErrors::PermissionDenied));
-        if (navigation_ && !navigation_->IsUsable())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(MakeError(NavigationCapabilityErrors::ScopeRevoked));
-        impl->navigation = navigation_;
-        if (!impl->navigation) {
-            auto absent = GameplayNavigationContext::Create({.moduleId = impl->moduleId, .queryGranted = true, .movementGranted = true},
-                                                            nullptr, nullptr, nullptr, {});
-            if (absent.HasError())
-                return Result<std::unique_ptr<LoadedGameModule>>::Failure(absent.ErrorValue());
-            impl->navigation = std::move(absent).Value();
-        }
 
         auto registry = BuildRegistry(*validated.bundle);
         if (registry.HasError())

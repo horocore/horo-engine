@@ -62,6 +62,15 @@ namespace Horo::Gameplay {
         }
     }  // namespace
 
+    /** @copydoc Detail::GameModuleCodeImage::~GameModuleCodeImage */
+    Detail::GameModuleCodeImage::~GameModuleCodeImage() noexcept {
+        library.reset();
+        if (!shadowArtifact.empty()) {
+            std::error_code ignored;
+            std::filesystem::remove(shadowArtifact, ignored);  // NOSONAR: canonical host-created shadow artifact only.
+        }
+    }
+
     LoadedGameModule::Impl::~Impl() {
         Shutdown();
     }
@@ -173,10 +182,6 @@ namespace Horo::Gameplay {
         registries.systems.reset();
         registries.services.reset();
         registries.components.reset();
-        library.reset();
-        if (removeArtifactOnUnload) {
-            std::error_code ignored;
-            std::filesystem::remove(loadedArtifactPath, ignored);  // NOSONAR: canonical host-created shadow artifact only.
-        }
+        codeImage.reset();
     }
 }  // namespace Horo::Gameplay

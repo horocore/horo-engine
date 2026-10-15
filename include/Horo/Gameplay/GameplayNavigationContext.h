@@ -48,13 +48,15 @@ namespace Horo::Gameplay {
         bool queryGranted{};
         bool movementGranted{};
     };
+    class GameModuleHost;
     struct GameplayNavigationState;
     struct GameplayNavigationRecord;
 
     /** @brief Opaque owned operation; all methods run on the host navigation owner thread. */
     class GameplayNavigationHandle final {
     public:
-        /** @brief Observe an owned result without waiting. @return Empty while pending, or typed terminal/revocation error. */
+        /** @brief Observe an owned result without waiting. @return Empty while pending, or typed terminal/revocation error. Completed
+         * values are host-owned and may outlive the scope and native code image. */
         [[nodiscard]] Result<std::shared_ptr<const GameplayNavigationResult>> Poll() const;
         /** @brief Request cancellation without invoking module or VM code. @return True when cancellation was requested. */
         [[nodiscard]] Result<bool> Cancel() const;
@@ -71,12 +73,14 @@ namespace Horo::Gameplay {
      * Host creation, refresh, submission, polling and revocation are serialized on the navigation owner thread.
      * Borrowed world/coordinator/movement owners outlive this adapter until DrainRetired succeeds; retained client/handle copies
      * then fail without dereferencing retired services. No user callback is retained or invoked. The host drains
-     * the canonical coordinator after revocation and joins Foundation jobs before provider unload.
+     * the canonical coordinator after revocation and joins Foundation jobs before provider unload. Native SDK code
+     * remains pinned privately through retained record/handle destruction; this does not permit retired callbacks.
      */
     class GameplayNavigationContext final {
     public:
         /** @brief Prepare one module/scene grant and finite request storage.
-         * @param binding Explicit principal, exact scene and operation grants.
+         * @param binding Explicit principal (nonempty module identity up to 256 bytes, without embedded NUL), exact scene and operation
+         * grants.
          * @param world Composed world, or null for a typed unavailable context.
          * @param coordinator Canonical path owner, or null when unavailable.
          * @param movement Exact agent controller, or null when movement is unavailable.
@@ -117,6 +121,12 @@ namespace Horo::Gameplay {
         [[nodiscard]] const GameplayNavigationBinding &Binding() const noexcept;
 
     private:
+        friend class GameModuleHost;
+        /** @brief Retain host-owned native SDK code through late record and cancellation-state destruction.
+         * @param image Independent code image owner with no context/module-instance cycle; host thread before native startup.
+         * @return Success or typed rejection of a replacement generation; existing grants are unchanged.
+         */
+        [[nodiscard]] Result<void> RetainCodeImage(std::shared_ptr<void> image) const;
         explicit GameplayNavigationContext(std::shared_ptr<GameplayNavigationState> state);
         std::shared_ptr<GameplayNavigationState> state_;
     };

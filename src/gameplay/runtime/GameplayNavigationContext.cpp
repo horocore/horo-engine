@@ -22,12 +22,21 @@ namespace Horo::Gameplay {
         CancellationSource cancellation;
         std::optional<Navigation::NavRequestHandle> query;
         std::optional<Navigation::NavigationMovementId> movement;
-        std::shared_ptr<GameplayNavigationResult> storage{std::make_shared<GameplayNavigationResult>()};
+        std::shared_ptr<GameplayNavigationResult> storage;
         std::shared_ptr<const GameplayNavigationResult> completed;
         std::optional<Error> error;
     };
 
+    namespace {
+        /** @brief Allocate result ownership in the composing host image, independent of native SDK call sites. */
+        std::shared_ptr<GameplayNavigationResult> MakeHostResult() {
+            return std::make_shared<GameplayNavigationResult>();
+        }
+    }  // namespace
+
     struct GameplayNavigationState final {
+        std::shared_ptr<void> codeImage; /**< Declared first, destroyed last after SDK-origin record and token deleters. */
+        std::shared_ptr<GameplayNavigationResult> (*allocateResult)(){}; /**< Captured by host Create, never rebound by SDK submission. */
         GameplayNavigationBinding binding;
         Navigation::NavigationWorldLifecycle *world{};
         Navigation::NavigationCoordinator *coordinator{};
@@ -175,8 +184,9 @@ namespace Horo::Gameplay {
         GameplayNavigationBinding binding, Navigation::NavigationWorldLifecycle *world, Navigation::NavigationCoordinator *coordinator,
         Navigation::NavigationMovementController *movement, Navigation::NavigationPathSubmission policy, const std::size_t maximumPending) {
         try {
-            if (!binding.moduleId.starts_with("game.") || maximumPending == 0 || maximumPending > 64 ||
-                (world == nullptr) != (coordinator == nullptr) || (movement && (movement->Binding() != binding.scene || !coordinator)))
+            if (binding.moduleId.empty() || binding.moduleId.size() > 256 || binding.moduleId.find('\0') != std::string::npos ||
+                maximumPending == 0 || maximumPending > 64 || (world == nullptr) != (coordinator == nullptr) ||
+                (movement && (movement->Binding() != binding.scene || !coordinator)))
                 return Result<std::shared_ptr<GameplayNavigationContext>>::Failure(
                     MakeError(Navigation::NavigationErrors::CapabilityDescriptorInvalid));
             if (world) {
@@ -189,6 +199,7 @@ namespace Horo::Gameplay {
                         MakeError(Navigation::NavigationErrors::InvalidWorld));
             }
             auto state = std::make_shared<GameplayNavigationState>();
+            state->allocateResult = &MakeHostResult;
             state->binding = std::move(binding);
             state->world = world;
             state->coordinator = coordinator;
@@ -218,12 +229,22 @@ namespace Horo::Gameplay {
         std::erase_if(state_->records, [](const auto &record) {
             return record->completed || record->error;
         });
-        if (!state_->records.empty())
+        if (!state_->records.empty() || (state_->coordinator && !state_->coordinator->IsDrained()))
             return Result<bool>::Success(false);
         state_->world = nullptr;
         state_->coordinator = nullptr;
         state_->movement = nullptr;
         return Result<bool>::Success(true);
+    }
+
+    /** @copydoc GameplayNavigationContext::RetainCodeImage */
+    Result<void> GameplayNavigationContext::RetainCodeImage(std::shared_ptr<void> image) const {
+        if (auto admission = state_->Check(); admission.HasError())
+            return admission;
+        if (state_->codeImage && state_->codeImage != image)
+            return Result<void>::Failure(MakeError(NavigationCapabilityErrors::PermissionDenied));
+        state_->codeImage = std::move(image);
+        return Result<void>::Success();
     }
 
     /** @copydoc GameplayNavigationContext::Binding */
@@ -253,6 +274,7 @@ namespace Horo::Gameplay {
             if (auto admission = state_->ValidateRequest(request); admission.HasError())
                 return Result<GameplayNavigationHandle>::Failure(admission.ErrorValue());
             auto record = std::make_shared<GameplayNavigationRecord>();
+            record->storage = state_->allocateResult();
             record->cancellation = CancellationSource{request.cancellation};
             if (request.operation == GameplayNavigationOperation::Path) {
                 auto accepted = state_->SubmitPath(request, record->cancellation.Token());

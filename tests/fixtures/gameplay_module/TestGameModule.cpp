@@ -56,6 +56,15 @@ public:
 HORO_BEHAVIOR(MoveBehavior, "game.tests.dynamic_mover")
 
 #if defined(HORO_TEST_GAMEPLAY_NAVIGATION) && HORO_TEST_GAMEPLAY_NAVIGATION
+namespace {
+    std::shared_ptr<const GameplayNavigationResult> navigationClientCompleted;
+}
+
+/** @brief Transfer the actual native consumer's completed result to host regression ownership. */
+extern "C" HORO_GAME_EXPORT void HoroTestTakeNavigationResult(void *output) {
+    *static_cast<std::shared_ptr<const GameplayNavigationResult> *>(output) = std::move(navigationClientCompleted);
+}
+
 /** @brief Actual native module consumer of the same request/poll path used by Lua. */
 class NavigationClientBehavior final : public IBehaviorInstance {
 public:
@@ -79,6 +88,7 @@ public:
         auto result = request_->Poll();
         if (result.HasError() || !result.Value())
             return;
+        navigationClientCompleted = result.Value();
         auto transform = context.LocalTransform();
         if (transform.HasValue()) {
             auto changed = transform.Value();

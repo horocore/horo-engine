@@ -9,7 +9,10 @@
 namespace Horo::Gameplay {
     LoadedGameModule::LoadedGameModule(std::shared_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
-    LoadedGameModule::~LoadedGameModule() = default;
+    LoadedGameModule::~LoadedGameModule() {
+        if (impl_->navigation)
+            impl_->navigation->Revoke();
+    }
 
     /** @copydoc LoadedGameModule::NavigationContext */
     std::shared_ptr<const GameplayNavigationContext> LoadedGameModule::NavigationContext() const noexcept {

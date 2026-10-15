@@ -1584,7 +1584,7 @@ add_dependencies(HoroCinematicRuntimeTests HoroTestGameModule)
 add_executable(HoroGameplayNavigationTests unit/gameplay/GameplayNavigationContextTests.cpp unit/gameplay/GameplayNavigationHostTests.cpp)
 target_compile_features(HoroGameplayNavigationTests PRIVATE cxx_std_20)
 target_include_directories(HoroGameplayNavigationTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/support" "${CMAKE_CURRENT_SOURCE_DIR}/helpers")
-target_link_libraries(HoroGameplayNavigationTests PRIVATE HoroEngine::GameplayNavigationIntegration HoroEngine::GameplayLua HoroEngine::GameplayModuleHost)
+target_link_libraries(HoroGameplayNavigationTests PRIVATE HoroEngine::GameplayNavigationIntegration HoroEngine::GameplayLua HoroEngine::GameplayModuleHost HoroEngine::GameplayPhysicsIntegration HoroEngine::Platform)
 target_compile_definitions(HoroGameplayNavigationTests PRIVATE
     HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
     HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}")

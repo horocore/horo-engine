@@ -143,6 +143,14 @@ namespace Horo::Gameplay {
                                                                                const GameModuleLoadExpectation &expectation) const;
 
     private:
+        /** @brief Load one validated artifact with explicit host-owned shadow cleanup from the first code-image lease.
+         * @param libraryPath Absolute prepared artifact. @param expectation Exact module compatibility.
+         * @param ownedShadow True only for the unique canonical artifact created by LoadShadowCopy.
+         * @return Active module or typed failure with deferred native image cleanup.
+         */
+        [[nodiscard]] Result<std::unique_ptr<LoadedGameModule>> LoadArtifact(const std::filesystem::path &libraryPath,
+                                                                             const GameModuleLoadExpectation &expectation,
+                                                                             bool ownedShadow) const;
         std::vector<GameplayCapabilityId> hostCapabilities_;
         std::shared_ptr<GameplayPhysicsContext> physics_;
         std::shared_ptr<GameplayNavigationContext> navigation_;
