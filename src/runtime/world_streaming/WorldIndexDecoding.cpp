@@ -34,8 +34,8 @@ namespace Horo::WorldStreaming {
                                        WorldIndexRead<std::uint32_t>(bytes, 128), WorldIndexRead<std::uint32_t>(bytes, 136), limits);
             if (layout.HasError())
                 return layout;
-            const auto &packed = layout.Value();
-            if (packed.layers != WorldIndexRead<std::uint32_t>(bytes, 108) || packed.volumes != WorldIndexRead<std::uint32_t>(bytes, 116) ||
+            if (const auto &packed = layout.Value();
+                packed.layers != WorldIndexRead<std::uint32_t>(bytes, 108) || packed.volumes != WorldIndexRead<std::uint32_t>(bytes, 116) ||
                 packed.cells != WorldIndexRead<std::uint32_t>(bytes, 124) || packed.strings != WorldIndexRead<std::uint32_t>(bytes, 132) ||
                 packed.total != bytes.size())
                 return WorldIndexReject<WorldIndexLayout>(WorldArtifactErrors::Invalid, "world.index sections are not exactly packed.");
@@ -45,11 +45,13 @@ namespace Horo::WorldStreaming {
         /** @brief Reads one canonical NFC string at the next exact string-table position. */
         Result<std::string> Name(const std::span<const std::byte> bytes, const WorldIndexLayout &layout, const std::size_t offset,
                                  const std::size_t size, std::size_t &cursor, const WorldIndexArtifactLimits &limits) {
-            const auto remaining = layout.total - layout.strings - cursor;
-            if (offset != cursor || size > remaining)
+            if (const auto remaining = layout.total - layout.strings - cursor; offset != cursor || size > remaining)
                 return WorldIndexReject<std::string>(WorldArtifactErrors::Invalid, "world.index name ranges are not canonical.");
-            const auto *characters = reinterpret_cast<const char *>(bytes.data() + layout.strings + cursor);
-            const std::string_view text{characters, size};
+            const auto encoded = bytes.subspan(layout.strings + cursor, size);
+            std::string text;
+            text.reserve(encoded.size());
+            for (const auto byte : encoded)
+                text.push_back(std::to_integer<char>(byte));
             auto normalized = WorldIndexName(text, limits.maximumStringBytes);
             if (normalized.HasError())
                 return normalized;
@@ -148,7 +150,8 @@ namespace Horo::WorldStreaming {
             CellRows result;
             result.topology.reserve(count);
             result.integrity.reserve(count);
-            std::uint64_t compressed{}, decoded{};
+            std::uint64_t compressed{};
+            std::uint64_t decoded{};
             for (std::size_t i = 0; i < count; ++i) {
                 if (cancellation.IsCancellationRequested())
                     return WorldIndexReject<CellRows>(WorldArtifactErrors::Cancelled);
@@ -196,7 +199,9 @@ namespace Horo::WorldStreaming {
             const auto partition = WorldPartitionId::Create(guid);
             if (partition.HasError())
                 return Result<WorldPartitionDescriptor>::Failure(partition.ErrorValue());
-            const auto minimum = Coordinate(bytes, 40), maximum = Coordinate(bytes, 52), origin = Coordinate(bytes, 68);
+            const auto minimum = Coordinate(bytes, 40);
+            const auto maximum = Coordinate(bytes, 52);
+            const auto origin = Coordinate(bytes, 68);
             if (minimum.HasError())
                 return Result<WorldPartitionDescriptor>::Failure(minimum.ErrorValue());
             if (maximum.HasError())

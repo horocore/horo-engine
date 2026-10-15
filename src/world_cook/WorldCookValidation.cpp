@@ -84,13 +84,11 @@ namespace Horo::WorldCook {
             std::size_t expectedBindings{};
             for (const auto &object : dependencies.objects) {
                 expectedBindings += object.cells.empty() ? 1 : object.cells.size();
-                if (object.cells.empty()) {
-                    if (std::ranges::count_if(source.objects, [&](const auto &binding) {
-                        const auto *base = std::get_if<BaseObjectBinding>(&binding);
-                        return base && base->source == object.object;
-                    }) != 1)
-                        return Result<void>::Failure(MakeError(Errors::Invalid));
-                }
+                if (object.cells.empty() && std::ranges::count_if(source.objects, [&](const auto &binding) {
+                    const auto *base = std::get_if<BaseObjectBinding>(&binding);
+                    return base && base->source == object.object;
+                }) != 1)
+                    return Result<void>::Failure(MakeError(Errors::Invalid));
                 for (const auto cell : object.cells) {
                     if (std::ranges::count_if(source.objects, [&](const auto &binding) {
                         const auto *spatial = std::get_if<SpatialObjectBinding>(&binding);
@@ -139,9 +137,9 @@ namespace Horo::WorldCook {
                 return Result<CookedWorldIndexManifest>::Failure(expectedIndex.ErrorValue());
             if (!std::ranges::equal(expectedIndex.Value().bytes, artifacts.index))
                 return Result<CookedWorldIndexManifest>::Failure(MakeError(Errors::Stale));
-            auto packages = WorldPackageChunkAssignment::Create(manifest.Value(), release.packages, release.binding, release.baseManifest,
-                                                                limits.packages);
-            if (packages.HasError())
+            if (auto packages = WorldPackageChunkAssignment::Create(manifest.Value(), release.packages, release.binding,
+                                                                    release.baseManifest, limits.packages);
+                packages.HasError())
                 return Result<CookedWorldIndexManifest>::Failure(packages.ErrorValue());
             return Result<CookedWorldIndexManifest>::Success(std::move(manifest).Value());
         }
@@ -199,7 +197,7 @@ namespace Horo::WorldCook {
         const auto &payloads = decodedCells.Value();
         std::vector<Runtime::WorldBuildCell> cells;
         for (const auto &payload : payloads)
-            cells.push_back({payload->Identity(), {}});
+            cells.emplace_back(payload->Identity(), std::nullopt);
         if (auto bindings = CheckObjects(source, dependencies.Value(), payloads); bindings.HasError())
             return FindingReport(source, cancellation, bindings.ErrorValue(), "world.build.missing_object_content");
         auto semantic = Runtime::ValidateWorldBuild(source.partition, source.sourceRevision, cells, payloads, source.requiredReferences,

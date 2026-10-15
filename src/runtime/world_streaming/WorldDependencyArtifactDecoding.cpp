@@ -111,8 +111,8 @@ namespace Horo::WorldStreaming {
                 auto placed = ReadCells(bytes, layout.offsets[2], placementOffset, placementCount, cancellation);
                 if (placed.HasError())
                     return Result<void>::Failure(placed.ErrorValue());
-                model.objects.push_back({endpoint.Value(), static_cast<WorldSpanningObjectPlacement>(placement), std::move(covered).Value(),
-                                         std::move(placed).Value()});
+                model.objects.emplace_back(endpoint.Value(), static_cast<WorldSpanningObjectPlacement>(placement),
+                                           std::move(covered).Value(), std::move(placed).Value());
             }
             if (nextCoverage != layout.counts[1] || nextPlacement != layout.counts[2])
                 return WorldIndexReject<void>(WorldArtifactErrors::Invalid);
@@ -161,7 +161,7 @@ namespace Horo::WorldStreaming {
                 auto target = ReadDependencyEndpoint(bytes, offset + 32);
                 if (target.HasError())
                     return Result<void>::Failure(target.ErrorValue());
-                model.softReferences.push_back({source.Value(), target.Value(), WorldDependencyKind::Soft});
+                model.softReferences.emplace_back(source.Value(), target.Value(), WorldDependencyKind::Soft);
             }
             return Result<void>::Success();
         }
@@ -183,7 +183,7 @@ namespace Horo::WorldStreaming {
                 auto targets = ReadCells(bytes, layout.offsets[7], first, count, cancellation);
                 if (targets.HasError())
                     return Result<void>::Failure(targets.ErrorValue());
-                model.cells.push_back({cell.Value(), std::move(targets).Value()});
+                model.cells.emplace_back(cell.Value(), std::move(targets).Value());
             }
             if (nextTarget != layout.counts[7])
                 return WorldIndexReject<void>(WorldArtifactErrors::Invalid);
@@ -200,7 +200,7 @@ namespace Horo::WorldStreaming {
         auto admitted = ReadHeader(bytes, index, limits, cancellation);
         if (admitted.HasError())
             return Result<DecodedWorldDependencies>::Failure(admitted.ErrorValue());
-        const auto layout = admitted.Value();
+        const auto &layout = admitted.Value();
         DecodedWorldDependencies model{.partition = index.descriptor.Partition(), .indexArtifactHash = index.artifactHash};
         if (auto objects = ReadObjects(model, bytes, layout, cancellation); objects.HasError())
             return Result<DecodedWorldDependencies>::Failure(objects.ErrorValue());

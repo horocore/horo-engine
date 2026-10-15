@@ -75,14 +75,16 @@ namespace Horo::Runtime {
          * @param cancellation Observer checked before sealing; later cancellation cannot roll back committed external output.
          * @return Success or typed stale, closed or cancelled failure without changing cache output.
          * @details The caller must also validate its captured source authority before sealing. All other cache cooks are
-         * refused while this receipt exists. No allocation is needed by successful admission.
+         * refused while this receipt exists. No allocation is needed by successful admission. This is a mutating
+         * authority operation even though its owner state is reached through a shared control block; const receipts cannot seal.
          */
         [[nodiscard]] Result<void> Reserve(const CancellationToken &cancellation = {});
         /**
          * @brief Adopts the reserved, preallocated candidate after external publication has committed.
          * @pre Reserve succeeded on this non-moved receipt and adoption has not already occurred.
          * @details Call also for committed-but-not-durable external outcomes. Shutdown after Reserve keeps admission
-         * closed and releases retained payload ownership, while still recording the committed revision.
+         * closed and releases retained payload ownership, while still recording the committed revision. This mutates
+         * publication authority and deliberately requires a mutable receipt; ReportLease remains an immutable observer.
          */
         void Adopt() noexcept;
 
@@ -90,7 +92,9 @@ namespace Horo::Runtime {
         friend class IncrementalSceneCellCook;
         /** @brief Captures the validated detached candidate and its exclusive cache reservation. @param state Owned candidate. */
         explicit PreparedSceneCellCook(std::shared_ptr<CellCookDetail::PreparedState> state) noexcept;
-        /** @brief Releases only this receipt's pending cache admission without mutating retained output. */
+        /** @brief Mutates this receipt's pending cache authority without changing retained output.
+         * @details Deliberately non-const: destroying or replacing a receipt revokes admission even while report leases survive.
+         */
         void ReleaseReservation() noexcept;
         std::shared_ptr<CellCookDetail::PreparedState> state_;
     };

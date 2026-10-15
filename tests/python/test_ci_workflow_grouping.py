@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import re
 
+from ci_gameplay_targets import GAMEPLAY_CHARACTER_TARGETS
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 SUITES = (ROOT / "tests/cmake/HoroCiSuites.cmake").read_text(encoding="utf-8")
@@ -40,6 +42,7 @@ def cmake_conditions_at(source: str, offset: int) -> list[str]:
 
 
 WINDOWS_NON_AUDIO_TARGETS = frozenset({
+    "HoroWorldStreamingTests", "HoroWorldStreamingPublicHeaderConsumer", "HoroStreamingSourcePlannerBenchmark",
     "HoroDestructionSaveTests", "HoroDestructionSavePublicConsumer",
     "HoroDestructionSaveIntegrationPublicHeaderConsumer", "HoroDestructionApiPublicHeaderConsumer",
     "HoroDestructionReplicationTests", "HoroDestructionReplicationPublicHeaderConsumer",
@@ -91,7 +94,7 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroProjectCodeQueryPublicHeaderConsumer", "HoroMcpProjectCodeQueryPublicHeaderConsumer",
     "HoroSourceDocumentCodeQueryPublicHeaderConsumer",
     "HoroPackageLifecycleTests", "HoroPackageLifecyclePublicHeaderConsumer",
-    "HoroMcpSessionPublicHeaderConsumer", "HoroRuntimeSaveRootResolverTests",
+    "HoroMcpSessionPublicHeaderConsumer", "HoroRuntimeSaveIdentityTests", "HoroRuntimeSaveRootResolverTests",
     "HoroRuntimeSaveStorageQualificationTests", "HoroSaveStorageUserStateQualificationTests",
     "HoroRuntimeSaveFilesystemLockTests", "HoroRuntimeSaveSlotCommitTransactionTests",
     "HoroRuntimeSaveSlotLifecycleTests", "HoroSaveSlotLifecyclePublicHeaderConsumer",
@@ -121,7 +124,8 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
 
 
 def test_windows_group_preserves_every_previously_built_target() -> None:
-    assert targets("HORO_CI_WINDOWS_TARGETS") == targets("HORO_CI_AUDIO_TARGETS") | WINDOWS_NON_AUDIO_TARGETS | TERRAIN_RENDER_TARGETS
+    assert targets("HORO_CI_WINDOWS_TARGETS") == (targets("HORO_CI_AUDIO_TARGETS") | WINDOWS_NON_AUDIO_TARGETS
+        | TERRAIN_RENDER_TARGETS | GAMEPLAY_CHARACTER_TARGETS)
     for workflow in ("prefab-foundation-windows", "extension-abi-windows", "mcp-session-windows", "save-path-windows"):
         assert not (ROOT / f".github/workflows/{workflow}.yml").exists()
     assert preset("buildPresets", "ci-windows-debug")["targets"] == ["HoroCiWindowsChecks"]
@@ -410,7 +414,7 @@ def test_instrumented_render_graph_pane_keeps_sonar_coverage() -> None:
 
 
 def test_windows_restore_allocation_sweep_has_mandatory_release_coverage() -> None:
-    build = re.search(r"      - name: Build Windows Release MCP and restore allocation qualification\n(.*?)(?=\n      - name:|\Z)", WORKFLOW, re.S)
+    build = re.search(r"      - name: Build Windows Release MCP restore and Character allocation qualification\n(.*?)(?=\n      - name:|\Z)", WORKFLOW, re.S)
     assert build
     assert "--target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests" in build.group(1)
     test = re.search(r"      - name: Test Windows Release restore allocation qualification\n(.*?)(?=\n      - name:|\Z)", WORKFLOW, re.S)

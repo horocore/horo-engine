@@ -217,7 +217,7 @@ namespace Horo::Runtime::CellCookDetail {
                 }
                 value = static_cast<T>(signedValue);
             } else {
-                if (raw > std::numeric_limits<T>::max()) {
+                if (raw > static_cast<std::uint64_t>(std::numeric_limits<T>::max())) {
                     Fail(SceneCellPayloadErrors::Invalid);
                     return;
                 }

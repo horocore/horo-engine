@@ -59,7 +59,7 @@ namespace Horo::WorldCook {
             for (const auto &cell : encoded.cells) {
                 const auto definition =
                     std::ranges::find(source.partition.Cells(), cell.integrity.cell, &WorldStreaming::WorldPartitionCellDescriptor::id);
-                views.push_back({definition->package.chunkAsset, cell.bytes});
+                views.emplace_back(definition->package.chunkAsset, cell.bytes);
             }
             return views;
         }
@@ -95,14 +95,14 @@ namespace Horo::WorldCook {
         if (auto admitted = Detail::ValidateInventory(source, release, inventory.Value(), limits); admitted.HasError())
             return Result<PublicationReport>::Failure(admitted.ErrorValue());
         auto composed = policy;
-        composed.beforeCommit = [&]() -> Result<void> {
+        composed.beforeCommit = [&cancellation, &policy, &receipt] {
             if (cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(Errors::Cancelled));
             if (auto current = policy.beforeCommit(); current.HasError())
                 return current;
             return receipt.Reserve(cancellation);
         };
-        composed.afterCommit = [&](const Assets::AssetCookGeneration &generation) {
+        composed.afterCommit = [&receipt, &policy](const Assets::AssetCookGeneration &generation) {
             // Adopt also when generation.durabilityError is set: the sole Assets pointer has committed.
             receipt.Adopt();
             if (policy.afterCommit)

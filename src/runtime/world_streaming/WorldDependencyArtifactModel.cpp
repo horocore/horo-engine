@@ -47,37 +47,23 @@ namespace Horo::WorldStreaming::Detail {
 
         /** @brief Checks actual placement without silently dropping authored coverage or nonspatial content. */
         bool ValidPlacement(const WorldDependencyObjectProjection &object) {
+            using enum WorldSpanningObjectPlacement;
             switch (object.placement) {
-                case WorldSpanningObjectPlacement::Direct:
-                case WorldSpanningObjectPlacement::SplitPerCell:
+                case Direct:
+                case SplitPerCell:
                     return object.coverage == object.cells;
-                case WorldSpanningObjectPlacement::SingleCellOwner:
+                case SingleCellOwner:
                     return object.cells.size() == 1 &&
                            std::ranges::binary_search(object.coverage, object.cells.front(), StreamingCellCanonicalLess{});
-                case WorldSpanningObjectPlacement::NonSpatial:
+                case NonSpatial:
                     return object.cells.empty();
             }
             return false;
         }
 
-        /** @brief Admits all aggregate counts before graph scratch allocation and semantic traversal. */
-        Result<void> ValidateObjects(const DecodedWorldDependencies &model, const DecodedWorldIndex &index,
-                                     const WorldDependencyArtifactLimits &limits, const CancellationToken &cancellation) {
-            if (!ValidLimits(limits) || model.objects.empty())
-                return Reject<void>(WorldArtifactErrors::Invalid);
-            if (model.partition != index.descriptor.Partition() || model.indexArtifactHash != index.artifactHash)
-                return Reject<void>(WorldArtifactErrors::Stale);
-            if (index.artifactHash == Sha256Digest{} || index.cells.empty())
-                return Reject<void>(WorldArtifactErrors::Invalid);
-            if (model.objects.size() > limits.maximumObjects || model.softReferences.size() > limits.maximumSoftReferences ||
-                index.cells.size() > limits.maximumCells)
-                return Reject<void>(WorldArtifactErrors::CapacityExceeded);
-            if (index.cells.size() != index.descriptor.Cells().size() ||
-                !std::ranges::is_sorted(index.cells, StreamingCellCanonicalLess{}, &CookedWorldCellManifestEntry::cell))
-                return Reject<void>(WorldArtifactErrors::Invalid);
-            for (std::size_t position = 0; position < index.cells.size(); ++position)
-                if (index.cells[position].cell != index.descriptor.Cells()[position].id)
-                    return Reject<void>(WorldArtifactErrors::Invalid);
+        /** @brief Checks canonical object identities, bounded placement counts and exact cell membership in order. */
+        Result<void> ValidateObjectProjections(const DecodedWorldDependencies &model, const DecodedWorldIndex &index,
+                                               const WorldDependencyArtifactLimits &limits, const CancellationToken &cancellation) {
             std::size_t coverage{};
             std::size_t placements{};
             for (std::size_t position = 0; position < model.objects.size(); ++position) {
@@ -102,10 +88,31 @@ namespace Horo::WorldStreaming::Detail {
             return Result<void>::Success();
         }
 
+        /** @brief Admits all aggregate counts before graph scratch allocation and semantic traversal. */
+        Result<void> ValidateObjects(const DecodedWorldDependencies &model, const DecodedWorldIndex &index,
+                                     const WorldDependencyArtifactLimits &limits, const CancellationToken &cancellation) {
+            if (!ValidLimits(limits) || model.objects.empty())
+                return Reject<void>(WorldArtifactErrors::Invalid);
+            if (model.partition != index.descriptor.Partition() || model.indexArtifactHash != index.artifactHash)
+                return Reject<void>(WorldArtifactErrors::Stale);
+            if (index.artifactHash == Sha256Digest{} || index.cells.empty())
+                return Reject<void>(WorldArtifactErrors::Invalid);
+            if (model.objects.size() > limits.maximumObjects || model.softReferences.size() > limits.maximumSoftReferences ||
+                index.cells.size() > limits.maximumCells)
+                return Reject<void>(WorldArtifactErrors::CapacityExceeded);
+            if (index.cells.size() != index.descriptor.Cells().size() ||
+                !std::ranges::is_sorted(index.cells, StreamingCellCanonicalLess{}, &CookedWorldCellManifestEntry::cell))
+                return Reject<void>(WorldArtifactErrors::Invalid);
+            for (std::size_t position = 0; position < index.cells.size(); ++position)
+                if (index.cells[position].cell != index.descriptor.Cells()[position].id)
+                    return Reject<void>(WorldArtifactErrors::Invalid);
+            return ValidateObjectProjections(model, index, limits, cancellation);
+        }
+
         /** @brief Validates disjoint canonical hard components against exact known object revisions. */
         Result<std::vector<std::size_t>> ValidateBundles(const DecodedWorldDependencies &model, const WorldDependencyArtifactLimits &limits,
                                                          const CancellationToken &cancellation) {
-            std::vector<std::size_t> owners(model.objects.size(), model.bundles.size());
+            std::vector owners(model.objects.size(), model.bundles.size());
             std::size_t members{};
             for (std::size_t bundle = 0; bundle < model.bundles.size(); ++bundle) {
                 if (cancellation.IsCancellationRequested())
@@ -165,9 +172,9 @@ namespace Horo::WorldStreaming::Detail {
             explicit CellClosure(const DecodedWorldIndex &index, const WorldDependencyArtifactLimits &limits,
                                  const std::size_t edgeCapacity, const CancellationToken &cancellation)
                 : limits_(limits), cancellation_(cancellation), edgeCapacity_(edgeCapacity) {
-                cells.reserve(index.cells.size());
+                cells_.reserve(index.cells.size());
                 for (const auto &entry : index.cells)
-                    cells.push_back({entry.cell, {}});
+                    cells_.emplace_back(entry.cell, std::vector<StreamingCellId>{});
             }
 
             /** @brief Adds one exact admitted target without duplicate storage or unchecked work growth. */
@@ -179,8 +186,8 @@ namespace Horo::WorldStreaming::Detail {
                 ++steps_;
                 if (source == target)
                     return Result<void>::Success();
-                auto found = std::ranges::lower_bound(cells, source, StreamingCellCanonicalLess{}, &WorldDependencyCellProjection::cell);
-                if (found == cells.end() || found->cell != source)
+                auto found = std::ranges::lower_bound(cells_, source, StreamingCellCanonicalLess{}, &WorldDependencyCellProjection::cell);
+                if (found == cells_.end() || found->cell != source)
                     return Reject<void>(WorldArtifactErrors::Invalid);
                 auto &targets = found->hardTargets;
                 const auto position = std::ranges::lower_bound(targets, target, StreamingCellCanonicalLess{});
@@ -193,9 +200,13 @@ namespace Horo::WorldStreaming::Detail {
                 return Result<void>::Success();
             }
 
-            std::vector<WorldDependencyCellProjection> cells;
+            /** @brief Transfers the fully validated rows after all bounded derivation has completed. */
+            std::vector<WorldDependencyCellProjection> &&TakeCells() && noexcept {
+                return std::move(cells_);
+            }
 
         private:
+            std::vector<WorldDependencyCellProjection> cells_;
             const WorldDependencyArtifactLimits &limits_;
             const CancellationToken &cancellation_;
             const std::size_t edgeCapacity_;
@@ -227,6 +238,16 @@ namespace Horo::WorldStreaming::Detail {
                 for (const auto &target : cells)
                     if (auto added = closure.Add(source, target); added.HasError())
                         return added;
+            return Result<void>::Success();
+        }
+
+        /** @brief Derives one single-owner object's coverage edges without changing membership or error ordering. */
+        Result<void> AddSingleOwner(const WorldDependencyObjectProjection &object, CellClosure &closure) {
+            if (object.placement != WorldSpanningObjectPlacement::SingleCellOwner)
+                return Result<void>::Success();
+            for (const auto &covered : object.coverage)
+                if (auto added = closure.Add(covered, object.cells.front()); added.HasError())
+                    return added;
             return Result<void>::Success();
         }
 
@@ -272,14 +293,12 @@ namespace Horo::WorldStreaming::Detail {
             return Result<std::vector<WorldDependencyCellProjection>>::Failure(soft.ErrorValue());
         CellClosure closure{index, limits, capacity.Value(), cancellation};
         for (const auto &object : model.objects)
-            if (object.placement == WorldSpanningObjectPlacement::SingleCellOwner)
-                for (const auto &covered : object.coverage)
-                    if (auto added = closure.Add(covered, object.cells.front()); added.HasError())
-                        return Result<std::vector<WorldDependencyCellProjection>>::Failure(added.ErrorValue());
+            if (auto added = AddSingleOwner(object, closure); added.HasError())
+                return Result<std::vector<WorldDependencyCellProjection>>::Failure(added.ErrorValue());
         for (const auto &bundle : model.bundles)
             if (auto added = AddBundle(model, bundle, closure, cancellation); added.HasError())
                 return Result<std::vector<WorldDependencyCellProjection>>::Failure(added.ErrorValue());
-        return Result<std::vector<WorldDependencyCellProjection>>::Success(std::move(closure.cells));
+        return Result<std::vector<WorldDependencyCellProjection>>::Success(std::move(closure).TakeCells());
     }
 
     /** @copydoc CaptureWorldDependencyProjection */

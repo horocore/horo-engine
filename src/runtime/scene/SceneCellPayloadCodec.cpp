@@ -42,7 +42,7 @@ namespace Horo::Runtime {
     }  // namespace
 
     /** @copydoc EncodeSceneCellPayload */
-    Result<std::vector<std::byte>> EncodeSceneCellPayload(const RuntimeSceneCellPayload &payload, const SceneCellPayloadCodecLimits limits,
+    Result<std::vector<std::byte>> EncodeSceneCellPayload(const RuntimeSceneCellPayload &payload, const SceneCellPayloadCodecLimits &limits,
                                                           const CancellationToken &cancellation) {
         if (!ValidLimits(limits))
             return Result<std::vector<std::byte>>::Failure(MakeError(SceneCellPayloadErrors::Invalid));
@@ -71,7 +71,7 @@ namespace Horo::Runtime {
                                                            const std::span<const std::byte> bytes, const SceneCellPayloadIdentity &expected,
                                                            const std::span<const SceneCellComponentSchema> componentSchemas,
                                                            const std::span<const SceneCellBehaviorSchema> behaviorSchemas,
-                                                           const SceneCellPayloadCodecLimits limits,
+                                                           const SceneCellPayloadCodecLimits &limits,
                                                            const CancellationToken &cancellation) {
         if (cancellation.IsCancellationRequested())
             return Result<RuntimeSceneCellPayload>::Failure(MakeError(SceneCellPayloadErrors::Cancelled));

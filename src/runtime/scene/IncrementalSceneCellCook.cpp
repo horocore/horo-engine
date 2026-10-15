@@ -412,7 +412,7 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc PreparedSceneCellCook::ReleaseReservation */
-    void PreparedSceneCellCook::ReleaseReservation() noexcept {
+    void PreparedSceneCellCook::ReleaseReservation() noexcept {  // NOSONAR cpp:S5817 - mutating receipt authority
         if (state_ && state_->owner->pending.lock().get() == state_.get())
             state_->owner->pending.reset();
     }
@@ -430,7 +430,7 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc PreparedSceneCellCook::Reserve */
-    Result<void> PreparedSceneCellCook::Reserve(const CancellationToken &cancellation) {
+    Result<void> PreparedSceneCellCook::Reserve(const CancellationToken &cancellation) {  // NOSONAR cpp:S5817 - mutating receipt authority
         if (cancellation.IsCancellationRequested())
             return Failure<void>(SceneCellPayloadErrors::Cancelled);
         if (!state_ || state_->phase != CellCookDetail::PreparedState::Phase::Prepared || state_->owner->closed)
@@ -442,7 +442,7 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc PreparedSceneCellCook::Adopt */
-    void PreparedSceneCellCook::Adopt() noexcept {
+    void PreparedSceneCellCook::Adopt() noexcept {  // NOSONAR cpp:S5817 - mutating receipt authority
         assert(state_ && state_->phase == CellCookDetail::PreparedState::Phase::Reserved);
         auto &owner = *state_->owner;
         if (!owner.closed)

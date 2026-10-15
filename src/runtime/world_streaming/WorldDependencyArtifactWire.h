@@ -48,7 +48,7 @@ namespace Horo::WorldStreaming::Detail {
                                                   limits.maximumBundleMembers,  limits.maximumSoftReferences,
                                                   limits.maximumCells,          limits.maximumHardCellEdges};
         const auto maximum = std::min<std::size_t>(limits.maximumArtifactBytes, std::numeric_limits<std::uint32_t>::max());
-        if (maximum < DependencyHeaderBytes || !DependencyAllocationRemaining(counts, limits.maximumDecodedAllocationBytes))
+        if (maximum < DependencyHeaderBytes || !DependencyAllocationRemaining(counts, limits.maximumDecodedAllocationBytes).has_value())
             return WorldIndexReject<DependencyLayout>(WorldArtifactErrors::CapacityExceeded);
         DependencyLayout layout{.counts = counts, .total = DependencyHeaderBytes};
         for (std::size_t table = 0; table < counts.size(); ++table) {

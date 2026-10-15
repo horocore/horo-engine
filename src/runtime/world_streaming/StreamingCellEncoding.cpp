@@ -54,8 +54,8 @@ namespace Horo::WorldStreaming {
             std::size_t decoded{};
             std::size_t cores{};
             for (const auto &payload : payloads) {
-                const auto provider = static_cast<std::uint16_t>(payload.provider);
-                if (!provider || (provider > 7 && provider < 0x8000) || !payload.version || payload.bytes.empty() ||
+                if (const auto provider = static_cast<std::uint16_t>(payload.provider);
+                    !provider || (provider > 7 && provider < 0x8000) || !payload.version || payload.bytes.empty() ||
                     payload.requirement >= StreamingCellPayloadRequirement::Count)
                     return Reject<std::size_t>(WorldStreamingErrors::CellCandidateInvalid);
                 if (payload.provider == StreamingCellProvider::CoreEcs) {

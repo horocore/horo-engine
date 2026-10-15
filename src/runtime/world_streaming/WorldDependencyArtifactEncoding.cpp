@@ -152,7 +152,7 @@ namespace Horo::WorldStreaming {
         auto checked = AdmitDependencyLayout(counts, limits);
         if (checked.HasError())
             return Result<std::vector<std::byte>>::Failure(checked.ErrorValue());
-        const auto layout = checked.Value();
+        const auto &layout = checked.Value();
         std::vector<std::byte> bytes(layout.total);
         WriteHeader(bytes, index, layout);
         if (auto objects = WriteObjects(bytes, model, layout, cancellation); objects.HasError())

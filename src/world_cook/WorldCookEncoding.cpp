@@ -18,8 +18,8 @@ namespace Horo::WorldCook::Detail {
         candidates.reserve(cells.size());
         for (const auto &cell : cells) {
             const auto edges = std::ranges::find(dependencies, cell.cell, &WorldDependencyCellProjection::cell);
-            candidates.push_back({cell.cell, cell.uncompressedSize, cell.compressedSize, cell.payloadCrc32, cell.artifactHash,
-                                  edges == dependencies.end() ? std::span<const StreamingCellId>{} : edges->hardTargets});
+            candidates.emplace_back(cell.cell, cell.uncompressedSize, cell.compressedSize, cell.payloadCrc32, cell.artifactHash,
+                                    edges == dependencies.end() ? std::span<const StreamingCellId>{} : edges->hardTargets);
         }
         return CookedWorldIndexManifest::Create(std::move(copied).Value(), candidates, limits.index.cooked);
     }

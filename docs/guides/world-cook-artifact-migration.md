@@ -72,7 +72,6 @@ stale/publication checks. See the owning Scene CoreEcs codec contract for format
 logical allocation budgets and caller migration. Existing semantic-only cook
 callers remain source-compatible; byte producers/consumers opt into the new API.
 
-
 ## Incremental cache and durable publication
 
 `IncrementalSceneCellCook::Prepare` is the Scene-owned transaction boundary for
@@ -175,3 +174,23 @@ and committed durability failure. A real durable commit callback measures Scene
 adoption and immutable report/result lease transport without C++ allocations.
 These are authored coverage requirements;
 execution evidence must be recorded separately on the final source freeze.
+
+## Codec argument and receipt authority refinement
+
+`EncodeSceneCellPayload` and `DecodeSceneCellPayload` now borrow
+`const SceneCellPayloadCodecLimits&` for their synchronous call instead of
+copying the limits value. Ordinary calls, including temporary limit values, keep
+their behavior. Rebuild callers and update stored function-pointer types to the
+const-reference parameter; no parallel value-taking overload remains. The public
+Scene payload consumer pins both exact signatures and compiles against the owning
+header boundary. The private inspection constructor likewise borrows its scalar
+header only until it copies those facts into the returned owner.
+
+Prepared receipts keep `Reserve`, `Adopt` and internal reservation release
+non-const. These operations mutate cache admission or committed publication state,
+even though an immutable report lease shares the backing allocation. Exactly those
+three implementation locations have a documented `cpp:S5817` exception; changing
+them to const would admit mutation through a const authority token. Public consumer
+assertions reject const invocation of the mutators, while runtime reservation,
+receipt destruction, shutdown and zero-allocation adoption tests retain the actual
+lifetime contract. `Report` and `ReportLease` remain const observers.

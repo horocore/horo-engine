@@ -19,8 +19,8 @@ namespace Horo::WorldCook::Detail {
             }))
                 return Result<void>::Failure(MakeError(Errors::Invalid));
             total += bytes.size();
-            inventory.entries.push_back({decoded.Value().id, decoded.Value().type, decoded.Value().id.ToString() + ".cooked",
-                                         ComputeSha256(std::as_bytes(std::span{bytes}))});
+            inventory.entries.emplace_back(decoded.Value().id, decoded.Value().type, decoded.Value().id.ToString() + ".cooked",
+                                           ComputeSha256(std::as_bytes(std::span{bytes})));
             inventory.artifacts.push_back(std::move(bytes));
             return Result<void>::Success();
         }
@@ -47,6 +47,18 @@ namespace Horo::WorldCook::Detail {
             return std::ranges::any_of(inventory.entries, [&](const auto &entry) {
                 return entry.assetId == id;
             });
+        }
+
+        /** @brief Requires exact retained Base envelope bytes after every candidate artifact has been admitted. */
+        Result<void> ValidateBaseBindings(const SourceCapture &source, const ReleaseCapture &release) {
+            for (const auto &binding : source.objects) {
+                if (const auto *base = std::get_if<BaseObjectBinding>(&binding);
+                    base && std::ranges::none_of(release.baseArtifacts, [base](const auto &bytes) {
+                    return ComputeSha256(std::as_bytes(std::span{bytes})) == base->artifactHash;
+                }))
+                    return Result<void>::Failure(MakeError(Errors::Stale));
+            }
+            return Result<void>::Success();
         }
     }  // namespace
 
@@ -135,8 +147,7 @@ namespace Horo::WorldCook::Detail {
                                          const PublicationLimits &limits, const CancellationToken &cancellation) {
         Assets::AssetCookGenerationContents inventory;
         std::size_t total{};
-        const auto add = [&](const Assets::AssetId id, const Assets::AssetTypeId &type,
-                             const std::span<const std::byte> bytes) -> Result<void> {
+        const auto add = [&](const Assets::AssetId id, const Assets::AssetTypeId &type, const std::span<const std::byte> bytes) {
             if (!id.IsValid() || type.Value().empty() || inventory.entries.size() >= limits.assets.maximumAssets ||
                 bytes.size() > limits.maximumTotalArtifactBytes - total || Contains(inventory, id))
                 return Result<void>::Failure(MakeError(Errors::Invalid));
@@ -167,14 +178,8 @@ namespace Horo::WorldCook::Detail {
             if (auto result = add(decoded.Value().id, decoded.Value().type, std::as_bytes(std::span{bytes})); result.HasError())
                 return result;
         }
-        for (const auto &binding : source.objects) {
-            if (const auto *base = std::get_if<BaseObjectBinding>(&binding)) {
-                if (std::ranges::none_of(release.baseArtifacts, [&](const auto &bytes) {
-                    return ComputeSha256(std::as_bytes(std::span{bytes})) == base->artifactHash;
-                }))
-                    return Result<void>::Failure(MakeError(Errors::Stale));
-            }
-        }
+        if (auto bindings = ValidateBaseBindings(source, release); bindings.HasError())
+            return bindings;
         return ValidateInventory(source, release, inventory, limits);
     }
 }  // namespace Horo::WorldCook::Detail

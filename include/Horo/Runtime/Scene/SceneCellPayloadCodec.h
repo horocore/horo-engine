@@ -24,7 +24,7 @@ namespace Horo::Runtime {
      * @throws std::bad_alloc on bounded output allocation.
      */
     [[nodiscard]] Result<std::vector<std::byte>> EncodeSceneCellPayload(const RuntimeSceneCellPayload &payload,
-                                                                        SceneCellPayloadCodecLimits limits,
+                                                                        const SceneCellPayloadCodecLimits &limits,
                                                                         const CancellationToken &cancellation = {});
     /**
      * @brief Decodes bounded logical fields and reuses the existing Scene cook admission before exposing a baseline.
@@ -46,6 +46,6 @@ namespace Horo::Runtime {
                                                                          const SceneCellPayloadIdentity &expected,
                                                                          std::span<const SceneCellComponentSchema> componentSchemas,
                                                                          std::span<const SceneCellBehaviorSchema> behaviorSchemas,
-                                                                         SceneCellPayloadCodecLimits limits,
+                                                                         const SceneCellPayloadCodecLimits &limits,
                                                                          const CancellationToken &cancellation = {});
 }  // namespace Horo::Runtime

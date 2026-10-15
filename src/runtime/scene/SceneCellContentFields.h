@@ -314,9 +314,11 @@ namespace Horo::Runtime::CellCookDetail {
         return std::tie(v.typeId, v.schemaVersion, v.encoding, v.payload);
     }
 
-    template <class T>
-        requires std::same_as<std::remove_cv_t<T>, BoxMeshParameters>
-    inline auto ContentFields(T &v) {
+    inline auto ContentFields(BoxMeshParameters &v) {
+        return std::tie(v.size);
+    }
+
+    inline auto ContentFields(const BoxMeshParameters &v) {
         return std::tie(v.size);
     }
 
@@ -344,15 +346,19 @@ namespace Horo::Runtime::CellCookDetail {
         return std::tie(v.radius, v.height, v.radialSegments);
     }
 
-    template <class T>
-        requires std::same_as<std::remove_cv_t<T>, PlaneMeshParameters>
-    inline auto ContentFields(T &v) {
+    inline auto ContentFields(PlaneMeshParameters &v) {
         return std::tie(v.size);
     }
 
-    template <class T>
-        requires std::same_as<std::remove_cv_t<T>, QuadMeshParameters>
-    inline auto ContentFields(T &v) {
+    inline auto ContentFields(const PlaneMeshParameters &v) {
+        return std::tie(v.size);
+    }
+
+    inline auto ContentFields(QuadMeshParameters &v) {
+        return std::tie(v.size);
+    }
+
+    inline auto ContentFields(const QuadMeshParameters &v) {
         return std::tie(v.size);
     }
 

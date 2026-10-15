@@ -824,6 +824,45 @@ waiting work, not a budget bypass or an unconditional admission deadline. Hosts 
 the ranked prefix to the separate scheduler/budget authority, which remains
 responsible for capacity, pins, required content and retirement.
 
+### Integrated bounded source planning
+
+`StreamingSourcePlanner` is the WST-002 owner-thread integration of source lifetime,
+range, reduction, priority, stability and velocity prediction. Application-owned RAII
+registrations issue non-wrapping slot generations. Hard source revision, runtime
+selection, owner removal and partition replacement immediately revoke old published
+intent. Immutable snapshots keep in-flight traversal data alive without extending
+residency or granting stale owners authority.
+
+The planner explicitly budgets source visits, visited BVH nodes, tested leaf candidates
+and stability/publication rows per service quantum. Fixed-stack continuations and
+preallocated generation-stamped dense-slot lookup avoid whole-world frame scans;
+canonical heaps bound staging work logarithmically. Existing synchronous Query is
+unchanged and does not acquire these work guarantees. Source/cell demand uses the
+shared desired-state algebra. Integer Chebyshev anchor-to-cell distance feeds the
+existing numerical priority policy; signed margin threshold evidence feeds stability.
+Policy-only linger has no live source or pin, and disabled runtime layers cannot linger.
+
+Motion samples are separate from hard source revisions. Stable-ID source visits capture
+one canonical motion sample for direct and predicted traversal, coalescing later motion
+for the next cycle. Exact contribution timestamps and a mandatory maximum plan age
+make this linearization explicit. Continuous motion must not indefinitely cancel an
+unrelated fixed destination's staging. Preload/teleport destinations remain hard revisions.
+No old publication is served after hard invalidation; incomplete or expired plans are
+explicitly unavailable. Publication sequences advance on every complete cycle.
+
+Travel readiness is nonblocking and consumes explicitly supplied immutable current
+residency facts from the partition authority. Desired Loaded/Activated intent is never
+proof of actual residency. Source/world fences, evidence freshness, canonical membership
+and exact direct contribution scope are checked; only actual Resident/Active states can
+satisfy the corresponding request. This trusted host projection is not a network proof,
+a new cell-state authority, or permission to create entities or start I/O. Runtime-layer,
+grid, profile, platform and gameplay-tag filtering are explicit host inputs, independent
+of authored existence and network replication policy.
+
+See the [source-planner migration guide](../../guides/world-streaming-source-planner-migration.md)
+for caller ownership, bounded-age sampling, immutable query continuations and actual
+sparse/dense qualification commands.
+
 `StreamingFairQueue` is the authority-owned WST-003.7 pending-work contract.
 It captures exact operation/cell-generation fences and source descriptors in bounded
 preallocated storage, and uses the existing numerical priority policy unchanged.
@@ -1598,7 +1637,14 @@ All fallible encoding, package/content validation and receipt preparation preced
 pointer commit. A host source-revision reservation and Scene's exact cache
 reservation run immediately before Assets replaces its sole current pointer.
 Scene adoption is preallocated and noexcept under the retained native writer
-lease, including committed-but-not-durable outcomes. Abort before commit preserves
+lease, including committed-but-not-durable outcomes.
+Receipt reservation, adoption and abandonment are logically mutating authority
+operations and require a mutable receipt, regardless of the shared control block
+that keeps immutable report leases alive. Only report observation is const.
+Per-location `cpp:S5817` exceptions preserve this authority boundary; they do not
+permit allocation or a fallible operation after the durable commit point.
+
+Abort before commit preserves
 the previous cache revision and durable selector. No parallel cache, installer,
 runtime activation or diagnostic-store authority is introduced. See the
 [caller migration and validation contract](../../guides/world-cook-artifact-migration.md).
@@ -2111,3 +2157,11 @@ the complete provider-readiness authority; Scene performs no provider discovery.
 Exact revision replacement/retirement and aggregate resident count ceilings are
 part of the structural transaction. See [Scene Runtime](scene-runtime.md#independent-cell-baseline-ownership-wst-0056)
 for ownership, failure, cancellation, hierarchy and shutdown contracts.
+
+WST-002 qualification must distinguish service work quanta from wall-clock
+publication age. The host explicitly supplies budgets, cadence and maximum age;
+there is no automatic 60Hz caller or production default. A constant-service-clock
+benchmark qualifies CPU/work only. Advancing-clock dense/moving-source tests
+qualify compatible profiles and typed expiry for incompatible profiles without
+serving aged intent. Positive budgets alone do not imply feasibility at any
+arbitrary cadence or deadline.

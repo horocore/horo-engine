@@ -24,7 +24,7 @@ namespace Horo::WorldStreaming {
                                                                             const StreamingCellInspectionLimits &,
                                                                             const CancellationToken &);
         /** @brief Captures verified scalar metadata and owned TOC rows. @param header Scalar facts. @param payloads Owned TOC. */
-        StreamingCellInspection(StreamingCellHeaderView header, std::vector<StreamingCellPayloadHeader> payloads) noexcept;
+        StreamingCellInspection(const StreamingCellHeaderView &header, std::vector<StreamingCellPayloadHeader> payloads) noexcept;
         StreamingCellHeaderView header_;
         std::vector<StreamingCellPayloadHeader> payloads_;
     };

@@ -300,7 +300,8 @@ TEST_CASE("Collision domain-invalid cache fails with source context before reuse
     REQUIRE(std::ranges::any_of(invalidOutput->records, [&session](const BuildOutputRecord &record) {
         return record.stage == "cache_check" && record.code.Value() == PhysicsErrors::ShapeArtifactInvalid.code.Value() &&
                record.result == BuildOutputResult::Failed && record.source.has_value() &&
-               record.source->absolutePath == (session.project.root / session.project.Record().sourcePath.String()).string();
+               record.source->absolutePath ==
+                   (session.project.root / session.project.Record().sourcePath.String()).lexically_normal().make_preferred().string();
     }));
     REQUIRE(Assets::ResolveCurrentCookGeneration(session.request.cookedRoot).Value().manifestDigest ==
             session.first.generation.manifestDigest);
@@ -322,7 +323,8 @@ TEST_CASE("Collision importer findings preserve source line and diagnostic detai
     REQUIRE(finding->source.has_value());
     REQUIRE(finding->source->line == 7);
     REQUIRE(finding->source->column == 3);
-    REQUIRE(finding->source->absolutePath == (session.project.root / session.project.Record().sourcePath.String()).string());
+    REQUIRE(finding->source->absolutePath ==
+            (session.project.root / session.project.Record().sourcePath.String()).lexically_normal().make_preferred().string());
 }
 
 TEST_CASE("Collision invalid source and cancellation retain the last-good generation", "[physics][collision-cook]") {
@@ -341,7 +343,8 @@ TEST_CASE("Collision invalid source and cancellation retain the last-good genera
     REQUIRE(finding != failedOutput->records.end());
     REQUIRE(finding->result == BuildOutputResult::Failed);
     REQUIRE(finding->message.find("subresource 9") != std::string::npos);
-    REQUIRE(finding->source->absolutePath == (session.project.root / session.project.Record().sourcePath.String()).string());
+    REQUIRE(finding->source->absolutePath ==
+            (session.project.root / session.project.Record().sourcePath.String()).lexically_normal().make_preferred().string());
 
     Assets::AssetCookService cancellingService(session.jobs, Catalog(std::make_shared<SourceImporter>(4)));
     const auto cancelled = cancellingService.Cook(session.request, {});
@@ -379,7 +382,8 @@ TEST_CASE("Collision unexpected importer exceptions fail joined work without rep
     REQUIRE(finding->result == BuildOutputResult::Failed);
     REQUIRE(finding->severity == DiagnosticSeverity::Error);
     REQUIRE(finding->source.has_value());
-    REQUIRE(finding->source->absolutePath == (session.project.root / session.project.Record().sourcePath.String()).string());
+    REQUIRE(finding->source->absolutePath ==
+            (session.project.root / session.project.Record().sourcePath.String()).lexically_normal().make_preferred().string());
     REQUIRE(finding->message == (kind == 9 ? "private adapter invariant text" : "The asset cooker threw before publication."));
     REQUIRE(Assets::ResolveCurrentCookGeneration(session.request.cookedRoot).Value().manifestDigest ==
             session.first.generation.manifestDigest);

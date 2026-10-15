@@ -4,7 +4,7 @@
 
 namespace Horo::WorldStreaming {
     /** @copydoc StreamingCellInspection::StreamingCellInspection */
-    StreamingCellInspection::StreamingCellInspection(StreamingCellHeaderView header,
+    StreamingCellInspection::StreamingCellInspection(const StreamingCellHeaderView &header,
                                                      std::vector<StreamingCellPayloadHeader> payloads) noexcept
         : header_(header), payloads_(std::move(payloads)) {
         header_.payloads = {};

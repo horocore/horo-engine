@@ -37,7 +37,21 @@ namespace {
 
 static_assert(std::is_move_constructible_v<Horo::Runtime::WorldBuildValidationReport>);
 
+static_assert(std::is_same_v<decltype(&Horo::Runtime::EncodeSceneCellPayload),
+                             Horo::Result<std::vector<std::byte>> (*)(const Horo::Runtime::RuntimeSceneCellPayload &,
+                                                                      const Horo::Runtime::SceneCellPayloadCodecLimits &,
+                                                                      const Horo::CancellationToken &)>);
+
+static_assert(std::is_same_v<decltype(&Horo::Runtime::DecodeSceneCellPayload),
+                             Horo::Result<Horo::Runtime::RuntimeSceneCellPayload> (*)(
+                                 const Horo::WorldStreaming::WorldPartitionDescriptor &, std::span<const std::byte>,
+                                 const Horo::Runtime::SceneCellPayloadIdentity &, std::span<const Horo::Runtime::SceneCellComponentSchema>,
+                                 std::span<const Horo::Runtime::SceneCellBehaviorSchema>,
+                                 const Horo::Runtime::SceneCellPayloadCodecLimits &, const Horo::CancellationToken &)>);
 static_assert(
-    std::is_same_v<decltype(&Horo::Runtime::EncodeSceneCellPayload),
-                   Horo::Result<std::vector<std::byte>> (*)(const Horo::Runtime::RuntimeSceneCellPayload &,
-                                                            Horo::Runtime::SceneCellPayloadCodecLimits, const Horo::CancellationToken &)>);
+    std::is_same_v<decltype(&Horo::Runtime::PreparedSceneCellCook::Adopt), void (Horo::Runtime::PreparedSceneCellCook::*)() noexcept>);
+static_assert(std::is_invocable_v<decltype(&Horo::Runtime::PreparedSceneCellCook::Reserve), Horo::Runtime::PreparedSceneCellCook &,
+                                  const Horo::CancellationToken &>);
+static_assert(!std::is_invocable_v<decltype(&Horo::Runtime::PreparedSceneCellCook::Reserve), const Horo::Runtime::PreparedSceneCellCook &,
+                                   const Horo::CancellationToken &>);
+static_assert(!std::is_invocable_v<decltype(&Horo::Runtime::PreparedSceneCellCook::Adopt), const Horo::Runtime::PreparedSceneCellCook &>);

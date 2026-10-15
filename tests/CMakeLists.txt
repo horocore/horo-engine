@@ -1,3 +1,8 @@
+add_test(NAME HoroSaveJunitOutputPathTest
+    COMMAND "${CMAKE_COMMAND}" "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/save-junit-output-path" "-DHORO_TEST_CONFIG=$<CONFIG>"
+    -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunSaveJunitOutputPathTest.cmake")
+set_tests_properties(HoroSaveJunitOutputPathTest PROPERTIES LABELS "unit;save;cmake;ci-windows" TIMEOUT 90)
+
 add_test(NAME HoroSaveObservabilityDependencyPolicyTest
     COMMAND "${CMAKE_COMMAND}" "-DHORO_ENGINE_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/save-observability-dependency"
@@ -712,6 +717,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/CharacterMetricsTests.cpp
         unit/runtime/physics/CharacterWorldSettingsTests.cpp
         unit/runtime/physics/CharacterCapabilityTests.cpp
+        unit/runtime/physics/CharacterCapabilityDerivationTests.cpp
         unit/runtime/physics/CharacterWorldTests.cpp
         unit/runtime/physics/CharacterWorldCommandTests.cpp
         unit/runtime/physics/CanonicalSolverTests.cpp
@@ -1471,6 +1477,9 @@ add_executable(HoroWorldStreamingTests
         unit/runtime/world_streaming/StreamingPriorityPolicyTests.cpp
         unit/runtime/world_streaming/StreamingEvictionPolicyTests.cpp
         unit/runtime/world_streaming/StreamingFairQueueTests.cpp
+        unit/runtime/world_streaming/StreamingSourcePlannerTests.cpp
+        unit/runtime/world_streaming/StreamingSourcePlannerQualificationTests.cpp
+        unit/runtime/world_streaming/StreamingSourcePlannerClockTests.cpp
         unit/runtime/world_streaming/StreamingSourceDescriptorTests.cpp
         unit/runtime/world_streaming/StreamingSourcePrefetchTests.cpp
         unit/runtime/world_streaming/StreamingSourceRangeTests.cpp
@@ -1492,6 +1501,15 @@ add_executable(HoroWorldStreamingTests
         unit/runtime/world_streaming/WorldStreamingMetricsTests.cpp
         unit/runtime/world_streaming/WorldStreamingTraceTests.cpp
 )
+target_include_directories(HoroWorldStreamingTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_sources(HoroWorldStreamingPublicHeaderConsumer PRIVATE support/StreamingSourcePlannerPublicContract.cpp)
+add_executable(HoroStreamingSourcePlannerBenchmark benchmarks/world_streaming/SourcePlannerBenchmark.cpp)
+target_compile_features(HoroStreamingSourcePlannerBenchmark PRIVATE cxx_std_20)
+target_compile_definitions(HoroStreamingSourcePlannerBenchmark PRIVATE HORO_BENCHMARK_BUILD_MODE="$<CONFIG>")
+target_include_directories(HoroStreamingSourcePlannerBenchmark PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_link_libraries(HoroStreamingSourcePlannerBenchmark PRIVATE HoroEngine::WorldStreaming)
+add_test(NAME HoroStreamingSourcePlannerQualification COMMAND HoroStreamingSourcePlannerBenchmark 256)
+set_tests_properties(HoroStreamingSourcePlannerQualification PROPERTIES LABELS "unit;world_streaming;headless;qualification;ci-windows" TIMEOUT 90)
 target_compile_features(HoroWorldStreamingTests PRIVATE cxx_std_20)
 target_link_libraries(HoroWorldStreamingTests PRIVATE HoroEngine::WorldStreaming)
 horo_register_catch_test(HoroWorldStreamingTests LABELS "unit;world_streaming;headless")
@@ -1641,7 +1659,7 @@ horo_add_gameplay_module(HoroTestGameModule
 )
 target_include_directories(HoroTestGameModule PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
 target_compile_definitions(HoroTestGameModule PRIVATE HORO_TEST_GAMEPLAY_PHYSICS=1 HORO_TEST_GAMEPLAY_NAVIGATION=1)
-target_link_libraries(HoroTestGameModule PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::PrefabRuntime HoroEngine::GameplayNavigationIntegration)
+target_link_libraries(HoroTestGameModule PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::PrefabRuntime HoroEngine::GameplayNavigationIntegration)
 get_property(HORO_TEST_GAME_MODULE_REVISION_FILE TARGET HoroTestGameModule PROPERTY HORO_GAMEPLAY_DESCRIPTOR_REVISION_FILE)
 target_include_directories(HoroCinematicRuntimeTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
 target_compile_definitions(HoroCinematicRuntimeTests PRIVATE
@@ -1680,6 +1698,8 @@ target_compile_definitions(HoroGameModuleHostTests PRIVATE
 target_link_libraries(HoroGameModuleHostTests PRIVATE HoroEngine::GameplayModuleHost)
 add_dependencies(HoroGameModuleHostTests HoroTestGameModule)
 add_executable(HoroGameplayPhysicsTests unit/gameplay/GameplayPhysicsContextTests.cpp
+    integration/gameplay/GameplayCharacterContextTests.cpp
+    integration/gameplay/LuaCharacterLifecycleTests.cpp
     integration/gameplay/GameplayPhysicsHostTests.cpp
     integration/gameplay/PrefabGameplayHostTests.cpp
     integration/gameplay/GameplayCharacterSlopeTests.cpp
@@ -1694,7 +1714,7 @@ target_compile_definitions(HoroGameplayPhysicsTests PRIVATE
     HORO_TEST_SOURCE_ROOT="${PROJECT_SOURCE_DIR}"
     HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
     HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}")
-target_link_libraries(HoroGameplayPhysicsTests PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayModuleHost
+target_link_libraries(HoroGameplayPhysicsTests PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::GameplayModuleHost HoroEngine::Platform
     HoroNetworkProductHost)
 add_dependencies(HoroGameplayPhysicsTests HoroTestGameModule)
 horo_register_catch_test(HoroGameplayPhysicsTests LABELS "unit;gameplay;physics;headless")
@@ -1706,12 +1726,12 @@ add_test(NAME HoroGameplayProductLaunchContract
 set_tests_properties(HoroGameplayProductLaunchContract PROPERTIES LABELS "integration;gameplay;physics;headless;product" TIMEOUT 60)
 add_executable(HoroGameplayPhysicsPublicHeaderConsumer support/GameplayPhysicsPublicHeaderConsumer.cpp)
 target_compile_features(HoroGameplayPhysicsPublicHeaderConsumer PRIVATE cxx_std_20)
-target_link_libraries(HoroGameplayPhysicsPublicHeaderConsumer PRIVATE HoroEngine::GameplayPhysicsIntegration)
+target_link_libraries(HoroGameplayPhysicsPublicHeaderConsumer PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration)
 add_test(NAME HoroGameplayPhysicsPublicHeaderConsumer COMMAND HoroGameplayPhysicsPublicHeaderConsumer)
 add_executable(HoroGameplayPhysicsSdkHostConsumer support/GameplayPhysicsSdkHostConsumer.cpp)
 target_compile_features(HoroGameplayPhysicsSdkHostConsumer PRIVATE cxx_std_20)
 target_compile_definitions(HoroGameplayPhysicsSdkHostConsumer PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
-target_link_libraries(HoroGameplayPhysicsSdkHostConsumer PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayModuleHost)
+target_link_libraries(HoroGameplayPhysicsSdkHostConsumer PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::GameplayModuleHost HoroEngine::Platform)
 add_test(NAME HoroGameplayPhysicsSdkContract COMMAND ${CMAKE_COMMAND}
     "-DSDK_DIR=${HORO_GAMEPLAY_SDK_PACKAGE_DIR}"
     "-DFIXTURE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_physics_sdk"
@@ -3026,6 +3046,7 @@ target_include_directories(HoroAndroidStorageTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroAndroidStorageTests PRIVATE HoroEngine::Platform)
 add_executable(HoroRuntimeSaveIdentityTests
+        support/AllocationProbe.cpp
         unit/runtime/save/SaveIdentityTests.cpp
 )
 target_compile_features(HoroRuntimeSaveIdentityTests PRIVATE cxx_std_20)
@@ -4764,6 +4785,14 @@ target_compile_features(HoroPCGSceneOutputContractConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroPCGSceneOutputContractConsumer PRIVATE HoroEngine::PCGSceneAdapter)
 add_test(NAME HoroPCGSceneOutputContractConsumer COMMAND HoroPCGSceneOutputContractConsumer)
 set_tests_properties(HoroPCGSceneOutputContractConsumer PROPERTIES LABELS "unit;pcg;headless;public_headers;ci-windows")
+
+add_test(NAME HoroCharacterAllocationJunitPathContract
+    COMMAND "${CMAKE_COMMAND}" "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/character_junit_path_contract"
+        "-DCTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+        -DPYTHON_EXECUTABLE=${Python3_EXECUTABLE}
+        -DVERIFIER=${PROJECT_SOURCE_DIR}/scripts/ci/run_character_allocation_qualification.py
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CharacterAllocationJunitPathContract.cmake")
+set_tests_properties(HoroCharacterAllocationJunitPathContract PROPERTIES LABELS "unit;headless" TIMEOUT 30)
 
 horo_finalize_ci_suites()
 

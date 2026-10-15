@@ -47,21 +47,19 @@ namespace Horo::WorldStreaming::Detail {
     inline Result<std::int64_t> WorldIndexMillimeters(const float meters) {
         const long double scaled = static_cast<long double>(meters) * 1000.0L;
         const long double rounded = std::round(scaled);
-        const long double exclusiveMaximum = std::ldexp(1.0L, 63);
-        if (!WorldIndexCanonicalFloat(meters) || rounded < -exclusiveMaximum || rounded >= exclusiveMaximum)
+        if (const auto exclusiveMaximum = std::ldexp(1.0L, 63);
+            !WorldIndexCanonicalFloat(meters) || rounded < -exclusiveMaximum || rounded >= exclusiveMaximum)
             return WorldIndexReject<std::int64_t>(WorldArtifactErrors::Invalid, "World coordinate cannot be represented in millimeters.");
         const auto millimeters = static_cast<std::int64_t>(rounded);
-        const float roundTrip = static_cast<float>(static_cast<double>(millimeters) / 1000.0);
-        if (roundTrip != meters)
+        if (const auto roundTrip = static_cast<float>(static_cast<double>(millimeters) / 1000.0); roundTrip != meters)
             return WorldIndexReject<std::int64_t>(WorldArtifactErrors::Invalid, "World coordinate loses canonical millimeter precision.");
         return Result<std::int64_t>::Success(millimeters);
     }
 
     /** @brief Admits an exact millimeter value to the existing version-one float-meter wire representation. */
     inline Result<float> WorldIndexMeters(const std::int64_t millimeters) {
-        const float meters = static_cast<float>(static_cast<double>(millimeters) / 1000.0);
-        const auto decoded = WorldIndexMillimeters(meters);
-        if (decoded.HasError() || decoded.Value() != millimeters)
+        const auto meters = static_cast<float>(static_cast<double>(millimeters) / 1000.0);
+        if (const auto decoded = WorldIndexMillimeters(meters); decoded.HasError() || decoded.Value() != millimeters)
             return WorldIndexReject<float>(WorldArtifactErrors::Unsupported,
                                            "Version-one world.index cannot represent this coordinate exactly.");
         return Result<float>::Success(meters);
@@ -74,16 +72,17 @@ namespace Horo::WorldStreaming::Detail {
         if (text.size() > maximumBytes || text.size() > static_cast<std::size_t>(std::numeric_limits<utf8proc_ssize_t>::max()))
             return WorldIndexReject<std::string>(WorldArtifactErrors::CapacityExceeded);
         constexpr auto options = static_cast<utf8proc_option_t>(UTF8PROC_STABLE | UTF8PROC_COMPOSE | UTF8PROC_REJECTNA);
-        const auto *input = reinterpret_cast<const utf8proc_uint8_t *>(text.data());
+        // The C Unicode API consumes code units, not an aliased C++ character buffer.
+        const std::vector<utf8proc_uint8_t> input(text.begin(), text.end());
         const auto length = static_cast<utf8proc_ssize_t>(text.size());
-        const auto count = utf8proc_decompose(input, length, nullptr, 0, options);
+        const auto count = utf8proc_decompose(input.data(), length, nullptr, 0, options);
         if (count < 0)
             return WorldIndexReject<std::string>(WorldArtifactErrors::Invalid, "World name is not a supported UTF-8 scalar sequence.");
         if (static_cast<std::size_t>(count) > maximumBytes ||
             static_cast<std::size_t>(count) >= std::numeric_limits<std::size_t>::max() / sizeof(utf8proc_int32_t))
             return WorldIndexReject<std::string>(WorldArtifactErrors::CapacityExceeded);
         std::vector<utf8proc_int32_t> buffer(static_cast<std::size_t>(count) + 1);
-        const auto decoded = utf8proc_decompose(input, length, buffer.data(), count, options);
+        const auto decoded = utf8proc_decompose(input.data(), length, buffer.data(), count, options);
         if (decoded < 0)
             return WorldIndexReject<std::string>(WorldArtifactErrors::Invalid);
         const auto size = utf8proc_reencode(buffer.data(), decoded, options);
@@ -91,7 +90,12 @@ namespace Horo::WorldStreaming::Detail {
             return WorldIndexReject<std::string>(WorldArtifactErrors::Invalid);
         if (static_cast<std::size_t>(size) > maximumBytes)
             return WorldIndexReject<std::string>(WorldArtifactErrors::CapacityExceeded);
-        return Result<std::string>::Success(std::string{reinterpret_cast<const char *>(buffer.data()), static_cast<std::size_t>(size)});
+        const auto encoded = std::as_bytes(std::span{buffer}).first(static_cast<std::size_t>(size));
+        std::string normalized;
+        normalized.reserve(encoded.size());
+        for (const auto byte : encoded)
+            normalized.push_back(std::to_integer<char>(byte));
+        return Result<std::string>::Success(std::move(normalized));
     }
 
     /** @brief Hashes bounded pieces while zeroing only the exact embedded digest field when requested. */
@@ -105,8 +109,7 @@ namespace Horo::WorldStreaming::Detail {
             const bool hashField = zeroHash && offset == WorldIndexHashOffset;
             const auto boundary = zeroHash && offset < WorldIndexHashOffset ? WorldIndexHashOffset : bytes.size();
             const auto count = hashField ? zero.size() : std::min<std::size_t>(65536, boundary - offset);
-            const auto piece = hashField ? std::span<const std::byte>{zero} : bytes.subspan(offset, count);
-            if (!builder.Update(piece))
+            if (const auto piece = hashField ? std::span<const std::byte>{zero} : bytes.subspan(offset, count); !builder.Update(piece))
                 return WorldIndexReject<Sha256Digest>(WorldArtifactErrors::CapacityExceeded);
             offset += count;
         }
