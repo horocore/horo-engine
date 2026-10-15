@@ -3,6 +3,26 @@
 namespace Horo::Navigation {
     using namespace SceneLifecycleTestSupport;
 
+    TEST_CASE("Default lifecycle admission identity rejects missing Character revision without registration mutation",
+              "[unit][navigation][scene][lifecycle][admission]") {
+        Fixture fixture;
+        const NavigationSceneAgentLifecycleDescriptor empty;
+        REQUIRE(empty.characterRevision == 0);
+        const auto scene = *fixture.scene.ActiveScene();
+        const auto missingIdentity =
+            NavigationSceneAgentLifecycle::Create(fixture.registry, fixture.world, fixture.coordinator, scene, empty);
+        REQUIRE(missingIdentity.HasError());
+        REQUIRE(missingIdentity.ErrorValue().code.Value() == NavigationErrors::AgentRegistryStale.code.Value());
+        const NavigationSceneAgentLifecycleDescriptor missingRevision{fixture.entity, fixture.agent, fixture.caller};
+        const auto rejected =
+            NavigationSceneAgentLifecycle::Create(fixture.registry, fixture.world, fixture.coordinator, scene, missingRevision);
+        REQUIRE(rejected.HasError());
+        REQUIRE(rejected.ErrorValue().code.Value() == NavigationErrors::AgentDescriptorInvalid.code.Value());
+        REQUIRE(fixture.registry.Find(fixture.agent).HasValue());
+        REQUIRE(fixture.lifecycle->ReconcileAtSafePoint(fixture.scene.ActiveScene()).HasValue());
+        REQUIRE(fixture.coordinator.IsDrained());
+    }
+
     TEST_CASE("Scene disable destruction and unload retire queued navigation reservations", "[unit][navigation][scene][lifecycle]") {
         for (const bool dispatch : {false, true}) {
             for (int cause = 0; cause < 3; ++cause) {

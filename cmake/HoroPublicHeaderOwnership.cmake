@@ -479,6 +479,9 @@ horo_configure_target_header_boundary(HoroRuntimeScene PUBLIC_HEADERS
     Horo/Runtime/Scene/SaveContentReconciliation.h
     Horo/Runtime/Scene/SaveContentWorld.h
 )
+horo_configure_target_header_boundary(HoroGameplayNavigationIntegration PUBLIC_HEADERS
+    Horo/Gameplay/GameplayNavigationContext.h
+)
 horo_configure_target_header_boundary(HoroGameplayRuntime PUBLIC_HEADERS
     Horo/Gameplay/BehaviorRegistry.h
     Horo/Gameplay/SaveGameplayPersistence.h
@@ -1273,6 +1276,10 @@ horo_configure_target_header_boundary(HoroHostErrors PUBLIC_HEADERS
 
 horo_configure_target_header_boundary(HoroUiAnimationRuntimeIntegration PUBLIC_HEADERS
     Horo/Runtime/UiAnimationRuntimeParticipant.h)
+
+horo_configure_target_header_boundary(HoroPCGSceneAdapter PUBLIC_HEADERS
+    Horo/PCGScene/SceneOutputAdapter.h
+)
 
 horo_verify_public_header_inventory()
 message(STATUS "Target-specific public header inventory is complete")

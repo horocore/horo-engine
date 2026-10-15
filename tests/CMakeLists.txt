@@ -693,6 +693,9 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/CharacterFastPathStorageTests.cpp
         unit/runtime/physics/CharacterGroundingTests.cpp
         unit/runtime/physics/CharacterPlatformAttachmentTests.cpp
+        unit/runtime/physics/CharacterPlatformMotionTests.cpp
+        unit/runtime/physics/CharacterPlatformQueryFrameTests.cpp
+        unit/runtime/physics/CharacterPlatformTestHelpers.h
         unit/runtime/physics/CharacterPlatformAdapterTests.cpp
         unit/runtime/physics/CharacterCollisionFilteringTests.cpp
         unit/runtime/physics/CharacterSlopeTests.cpp
@@ -1596,8 +1599,8 @@ horo_add_gameplay_module(HoroTestGameModule
         SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_module/TestGameModule.cpp
 )
 target_include_directories(HoroTestGameModule PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
-target_compile_definitions(HoroTestGameModule PRIVATE HORO_TEST_GAMEPLAY_PHYSICS=1)
-target_link_libraries(HoroTestGameModule PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::PrefabRuntime)
+target_compile_definitions(HoroTestGameModule PRIVATE HORO_TEST_GAMEPLAY_PHYSICS=1 HORO_TEST_GAMEPLAY_NAVIGATION=1)
+target_link_libraries(HoroTestGameModule PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::PrefabRuntime HoroEngine::GameplayNavigationIntegration)
 get_property(HORO_TEST_GAME_MODULE_REVISION_FILE TARGET HoroTestGameModule PROPERTY HORO_GAMEPLAY_DESCRIPTOR_REVISION_FILE)
 target_include_directories(HoroCinematicRuntimeTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
 target_compile_definitions(HoroCinematicRuntimeTests PRIVATE
@@ -1605,6 +1608,24 @@ target_compile_definitions(HoroCinematicRuntimeTests PRIVATE
         HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
 )
 add_dependencies(HoroCinematicRuntimeTests HoroTestGameModule)
+add_executable(HoroGameplayNavigationTests unit/gameplay/GameplayNavigationContextTests.cpp unit/gameplay/GameplayNavigationHostTests.cpp)
+target_compile_features(HoroGameplayNavigationTests PRIVATE cxx_std_20)
+target_include_directories(HoroGameplayNavigationTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/support" "${CMAKE_CURRENT_SOURCE_DIR}/helpers")
+target_link_libraries(HoroGameplayNavigationTests PRIVATE HoroEngine::GameplayNavigationIntegration HoroEngine::GameplayLua HoroEngine::GameplayModuleHost HoroEngine::Platform)
+target_compile_definitions(HoroGameplayNavigationTests PRIVATE
+    HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
+    HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}")
+add_dependencies(HoroGameplayNavigationTests HoroTestGameModule)
+if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
+    target_link_libraries(HoroGameplayNavigationTests PRIVATE HoroEngine::NavigationRecastDetour)
+    target_compile_definitions(HoroGameplayNavigationTests PRIVATE HORO_TEST_NAVIGATION_DETOUR=1)
+endif()
+horo_register_catch_test(HoroGameplayNavigationTests LABELS "unit;gameplay;navigation;headless;lifecycle;ci-navigation")
+add_executable(HoroGameplayNavigationPublicConsumer support/GameplayNavigationPublicConsumer.cpp)
+target_link_libraries(HoroGameplayNavigationPublicConsumer PRIVATE HoroEngine::GameplayNavigationIntegration)
+add_test(NAME HoroGameplayNavigationPublicConsumer COMMAND HoroGameplayNavigationPublicConsumer)
+set_tests_properties(HoroGameplayNavigationPublicConsumer PROPERTIES LABELS "unit;gameplay;navigation;headless;public_headers;ci-windows;ci-navigation")
+
 add_executable(HoroGameModuleHostTests
         unit/gameplay/GameModuleHostTests.cpp
         unit/gameplay/GameModuleContentPersistenceTests.cpp
@@ -4679,6 +4700,17 @@ target_compile_features(HoroPCGDocumentPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroPCGDocumentPublicHeaderConsumer PRIVATE HoroEngine::EditorServices)
 add_test(NAME HoroPCGDocumentPublicHeaderConsumer COMMAND HoroPCGDocumentPublicHeaderConsumer)
 set_tests_properties(HoroPCGDocumentPublicHeaderConsumer PROPERTIES LABELS "unit;editor;pcg;headless;public_headers;ci-windows")
+
+add_executable(HoroPCGSceneAdapterTests unit/runtime/pcg/SceneOutputAdapterTests.cpp)
+target_compile_features(HoroPCGSceneAdapterTests PRIVATE cxx_std_20)
+target_link_libraries(HoroPCGSceneAdapterTests PRIVATE HoroEngine::PCGSceneAdapter)
+horo_register_catch_test(HoroPCGSceneAdapterTests LABELS "unit;pcg;scene;headless;ci-windows;sonar-coverage")
+
+add_executable(HoroPCGSceneOutputContractConsumer support/PCGSceneAdapterPublicHeaderConsumer.cpp)
+target_compile_features(HoroPCGSceneOutputContractConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPCGSceneOutputContractConsumer PRIVATE HoroEngine::PCGSceneAdapter)
+add_test(NAME HoroPCGSceneOutputContractConsumer COMMAND HoroPCGSceneOutputContractConsumer)
+set_tests_properties(HoroPCGSceneOutputContractConsumer PROPERTIES LABELS "unit;pcg;headless;public_headers;ci-windows")
 
 horo_finalize_ci_suites()
 

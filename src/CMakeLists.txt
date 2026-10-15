@@ -953,6 +953,11 @@ add_library(HoroEngine::NetworkDebuggerApplication ALIAS HoroNetworkDebuggerAppl
 target_compile_features(HoroNetworkDebuggerApplication PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkDebuggerApplication PUBLIC HoroEngine::NetworkApi)
 
+add_library(HoroGameplayNavigationIntegration STATIC gameplay/runtime/GameplayNavigationContext.cpp)
+add_library(HoroEngine::GameplayNavigationIntegration ALIAS HoroGameplayNavigationIntegration)
+target_compile_features(HoroGameplayNavigationIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroGameplayNavigationIntegration PUBLIC HoroEngine::NavigationRuntime)
+
 add_library(HoroGameplayRuntime STATIC
         gameplay/runtime/BehaviorRegistry.cpp
         gameplay/runtime/BehaviorRuntime.cpp
@@ -970,7 +975,7 @@ add_library(HoroGameplayRuntime STATIC
 add_library(HoroEngine::GameplayRuntime ALIAS HoroGameplayRuntime)
 target_compile_features(HoroGameplayRuntime PUBLIC cxx_std_20)
 target_include_directories(HoroGameplayRuntime PUBLIC ${PROJECT_SOURCE_DIR}/include)
-target_link_libraries(HoroGameplayRuntime PUBLIC HoroEngine::GameplayApi HoroEngine::RuntimeScene HoroEngine::Runtime)
+target_link_libraries(HoroGameplayRuntime PUBLIC HoroEngine::GameplayApi HoroEngine::RuntimeScene HoroEngine::Runtime PRIVATE HoroEngine::GameplayNavigationIntegration)
 
 add_library(HoroGameplayModuleHost STATIC
         gameplay/module/GameModuleHostDetail.h
@@ -982,13 +987,14 @@ add_library(HoroGameplayModuleHost STATIC
 add_library(HoroEngine::GameplayModuleHost ALIAS HoroGameplayModuleHost)
 target_compile_features(HoroGameplayModuleHost PUBLIC cxx_std_20)
 target_include_directories(HoroGameplayModuleHost PUBLIC ${PROJECT_SOURCE_DIR}/include)
-target_link_libraries(HoroGameplayModuleHost PUBLIC HoroEngine::GameplayRuntime PRIVATE HoroEngine::Platform)
+target_link_libraries(HoroGameplayModuleHost PUBLIC HoroEngine::GameplayRuntime PRIVATE HoroEngine::Platform HoroEngine::GameplayNavigationIntegration)
 
 add_library(HoroGameplayLua STATIC
         gameplay/lua/LuaBehavior.cpp
         gameplay/lua/LuaBehaviorMetadata.cpp
         gameplay/lua/LuaReplicationDeclaration.cpp
         gameplay/lua/LuaPhysicsBinding.cpp
+        gameplay/lua/LuaNavigationBinding.cpp
 )
 
 add_library(HoroGameplayBuild STATIC
@@ -1006,6 +1012,7 @@ target_link_libraries(HoroGameplayBuild
 add_library(HoroEngine::GameplayLua ALIAS HoroGameplayLua)
 target_compile_features(HoroGameplayLua PUBLIC cxx_std_20)
 target_include_directories(HoroGameplayLua PUBLIC ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(HoroGameplayLua PRIVATE HoroEngine::GameplayNavigationIntegration)
 target_link_libraries(HoroGameplayLua
         PUBLIC HoroEngine::GameplayRuntime
         PRIVATE HoroThirdParty::Lua nlohmann_json::nlohmann_json
@@ -1264,6 +1271,7 @@ target_link_libraries(HoroAudioMetrics PUBLIC HoroEngine::AudioCommands HoroEngi
 add_library(HoroPhysics STATIC
         physics/CharacterClearanceQuery.cpp
         physics/CharacterControllerContracts.cpp
+        physics/CharacterQueryContext.cpp
         physics/CharacterDebugSnapshot.cpp
         physics/CharacterDebugStorageInternal.h
         physics/CharacterPhysicsQueryAdapter.cpp
@@ -1283,6 +1291,7 @@ add_library(HoroPhysics STATIC
         physics/CharacterWorldSweepInternal.h
         physics/CharacterWorldStepInternal.h
         physics/CharacterWorldPlatformInternal.h
+        physics/CharacterWorldCarryInternal.h
         physics/CharacterSweepPlanesInternal.h
         physics/CharacterWorldInternal.h
         physics/CharacterWorldPlacementInternal.h
@@ -1324,6 +1333,7 @@ add_library(HoroPhysics STATIC
         physics/PhysicsTransformAuthority.cpp
         physics/PhysicsTransformContracts.cpp
         physics/PhysicsWorld.cpp
+        physics/PhysicsWorldQuery.cpp
         physics/PhysicsQueryEventCapability.cpp
         physics/PhysicsWorldInternal.h
         physics/PhysicsWorldScene.cpp
@@ -1354,6 +1364,9 @@ if(HORO_BUILD_PHYSICS_NATIVE)
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
         physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
+        physics/CanonicalPhysicsRuntimeQueryFrame.cpp
+        physics/CanonicalPhysicsRuntimeQueryResident.cpp
+        physics/CanonicalPhysicsRuntimeQueryAuthority.cpp
         physics/CanonicalPhysicsRuntimeQueryBridge.cpp
         physics/CanonicalPhysicsRuntimeReadback.cpp
         physics/CanonicalPhysicsRuntimeScene.cpp
@@ -1370,6 +1383,9 @@ if(HORO_BUILD_PHYSICS_NATIVE)
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
         physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
+        physics/CanonicalPhysicsRuntimeQueryFrame.cpp
+        physics/CanonicalPhysicsRuntimeQueryResident.cpp
+        physics/CanonicalPhysicsRuntimeQueryAuthority.cpp
         physics/CanonicalPhysicsRuntimeQueryBridge.cpp
         physics/CanonicalPhysicsRuntimeReadback.cpp
         physics/CanonicalPhysicsRuntimeScene.cpp
@@ -1543,6 +1559,14 @@ add_library(HoroPCGTerrainAdapter STATIC
 add_library(HoroEngine::PCGTerrainAdapter ALIAS HoroPCGTerrainAdapter)
 target_compile_features(HoroPCGTerrainAdapter PUBLIC cxx_std_20)
 target_link_libraries(HoroPCGTerrainAdapter PUBLIC HoroEngine::PCG HoroEngine::TerrainApi)
+
+add_library(HoroPCGSceneAdapter STATIC runtime/pcg/scene/SceneOutputAdapter.cpp)
+add_library(HoroEngine::PCGSceneAdapter ALIAS HoroPCGSceneAdapter)
+target_compile_features(HoroPCGSceneAdapter PUBLIC cxx_std_20)
+target_link_libraries(HoroPCGSceneAdapter
+        PUBLIC HoroEngine::PCG HoroEngine::SceneSource
+        PRIVATE nlohmann_json::nlohmann_json
+)
 
 add_library(HoroVfxApi STATIC
         runtime/vfx/api/CpuParticleBuffer.cpp

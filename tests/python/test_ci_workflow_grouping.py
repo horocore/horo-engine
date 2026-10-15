@@ -52,6 +52,8 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroPlayTopologyTests", "HoroPlayTopologyPublicHeaderConsumer",
     "HoroTerrainAuthoringTests", "HoroTerrainAuthoringPublicHeaderConsumer",
     "HoroPCGTests", "HoroPCGTerrainAdapterTests",
+    "HoroPCGSceneAdapterTests", "HoroPCGSceneAdapterPublicHeaderConsumer",
+    "HoroPCGSceneOutputContractConsumer",
     "HoroPCGDocumentTests", "HoroPCGDocumentPublicHeaderConsumer",
     "HoroPCGPublicHeaderConsumer", "HoroPCGTerrainAdapterPublicHeaderConsumer",
     "HoroCliCommandRegistryTests", "HoroPlatformTests", "HoroUpdateZipPackageProducerTests",
@@ -101,6 +103,10 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroNavigationTransportReservationTests", "HoroNavigationCoordinatorPublicConsumer",
     "HoroNavigationCharacterAdapterTests", "HoroNavigationCharacterAdapterPublicConsumer",
     "HoroNavigationCharacterIntegrationPublicHeaderConsumer",
+    "HoroGameplayNavigationTests", "HoroGameplayNavigationPublicConsumer",
+    "HoroGameplayNavigationIntegrationPublicHeaderConsumer", "HoroGameplayApiPublicHeaderConsumer",
+    "HoroGameplayRuntimePublicHeaderConsumer", "HoroGameplayModuleHostPublicHeaderConsumer",
+    "HoroGameplayLuaPublicHeaderConsumer", "HoroNavigationRuntimePublicHeaderConsumer",
 })
 
 

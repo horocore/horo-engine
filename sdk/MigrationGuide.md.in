@@ -22,7 +22,7 @@ archive/provenance; do not assign it the current snapshot's contracts.
 | External native host ABI | `horo-extension` @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_MIN_HOST_MINOR@ inclusive to @HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE@.0 exclusive; declarations through @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_PUBLISHED_MINOR@ |
 | Extension descriptor | `extension.json`, schema 1 |
 | Package manifest | `horo-package.toml`, schema 1; owns package identity/dependencies |
-| Gameplay C++ boundary in this engine snapshot | Native boundary 9 / `gameplay-sdk9`; separate exact-fingerprint build-tree SDK |
+| Gameplay C++ boundary in this engine snapshot | Native boundary 10 / `gameplay-sdk10`; separate exact-fingerprint build-tree SDK |
 | Author CI platform profiles | Linux x64, macOS arm64, macOS x64, Windows x64 |
 
 The external extension range does not imply that every table/capability works on
@@ -174,3 +174,17 @@ numeric constants, callback signatures, or version negotiation. No package data
 migration is required. Both the strict C11 consumer and C++ public-header consumer
 check the append-only host prefix and callback contracts; the relocated installed
 SDK consumer remains the packaging compatibility check.
+
+## Gameplay SDK9 → SDK10 (native boundary 9 → 10)
+
+Rebuild native gameplay modules and generated descriptor bundles against the exact
+engine/toolchain fingerprint. `GameRuntimeContext::navigation` is an additive
+revocable host grant; `BehaviorContext::NavigationContext()` supplies the same
+capability for native and Lua behaviors. The host binds one module/Scene and
+allowed operation set, refreshes committed observations, revokes before reload,
+and drains canonical results through `DrainRetired()` before retiring services.
+Navigation never retains a module/VM callback. Scripts use opaque request values
+with `poll()` and `cancel()`. Missing services return `navigation.capability_unavailable`.
+
+Rollback: stop play, restore the coherent previous engine, SDK and rebuilt module
+set, then restart. Never mix SDK9 and SDK10 module binaries.

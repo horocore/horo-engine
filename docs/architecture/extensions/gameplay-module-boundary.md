@@ -600,3 +600,22 @@ game.<project>.save
 - [ADR-118](../../adr/118-animation-character-and-gameplay-authority-during-cinematics.md):
   cinematic control claims, typed gameplay suppression and owner-preserving pose/
   movement integration.
+
+## Navigation SDK Record Retirement
+
+`GameplayNavigationContext` is bound by the module host to a private independent
+code-image lease before native startup. A native SDK call can instantiate
+shared-record or cancellation-state deleter code in that image. Logical module
+retirement therefore revokes navigation admission and delivery before module
+callbacks stop, while retained opaque records/handles pin the code required for
+late destruction. The lease does not retain the module instance or reference the
+context, so it cannot form an instance/context ownership cycle.
+
+The host continues canonical publication and `DrainRetired` until the coordinator
+is quiescent; a cancelled published result alone does not prove the worker
+partition has retired. Only then may borrowed navigation services be destroyed.
+Mapped native code may outlive logical retirement while revoked handles remain
+retained. A host-created shadow artifact is removed by its code-image owner only
+after the final library lease unloads, including partial startup failure and
+Windows mapped-file behavior. No provider/Scene pointer or native library lease
+is exposed to scripts.

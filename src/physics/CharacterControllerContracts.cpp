@@ -79,6 +79,8 @@ namespace Horo::Character {
             if (descriptor.steepSlopePolicy != CharacterSteepSlopePolicy::Stop &&
                 descriptor.steepSlopePolicy != CharacterSteepSlopePolicy::Slide)
                 return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
+            if (descriptor.platformLeaveVelocity > CharacterPlatformLeaveVelocityPolicy::Point)
+                return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
             if (descriptor.maximumContacts == 0 || descriptor.maximumContacts > MaximumCharacterContacts)
                 return Result<void>::Failure(MakeError(CharacterErrors::CapacityExceeded));
             return Result<void>::Success();
@@ -140,6 +142,7 @@ namespace Horo::Character {
         [[nodiscard]] bool IsMovementPoseValid(const CharacterMovementResult &result) noexcept {
             return result.tick != 0 && result.sequence != 0 && Math::IsFinite(result.finalPosition) && IsUnit(result.finalHeading) &&
                    Math::IsFinite(result.achievedVelocityMetersPerSecond) && Math::IsFinite(result.gravityVelocityMetersPerSecond) &&
+                   Math::IsFinite(result.platformCarriedDisplacement) && Math::IsFinite(result.platformLeaveVelocityMetersPerSecond) &&
                    IsUnit(result.up) && IsFiniteNonNegative(result.groundSlopeDegrees) && result.groundSlopeDegrees <= 180;
         }
 
@@ -402,29 +405,6 @@ namespace Horo::Character {
         if (const auto bindings = ValidateDescriptorBindings(descriptor); bindings.HasError())
             return bindings;
         return ValidateDescriptorPolicy(descriptor);
-    }
-
-    /** @copydoc ValidateCharacterPhysicsQueryContext */
-    Result<void> ValidateCharacterPhysicsQueryContext(const CharacterPhysicsQueryContext &context,
-                                                      const CharacterPhysicsQueryExpectations &expected) {
-        if (const std::array expectedValid{expected.sceneGeneration != 0, expected.characterWorld.IsValid(),
-                                           expected.physicsWorld.IsValid(), expected.collisionFilterGeneration != 0,
-                                           expected.originGeneration != 0, expected.physicsSnapshotRevision != 0};
-            !std::ranges::all_of(expectedValid, std::identity{}))
-            return Result<void>::Failure(MakeError(CharacterErrors::WorldInvalid));
-        if (const std::array ownerMatches{context.sceneGeneration == expected.sceneGeneration,
-                                          context.characterWorld == expected.characterWorld, context.physicsWorld == expected.physicsWorld};
-            !std::ranges::all_of(ownerMatches, std::identity{}))
-            return Result<void>::Failure(MakeError(CharacterErrors::HandleWorldMismatch));
-        if (const std::array snapshotMatches{context.collisionFilterGeneration == expected.collisionFilterGeneration,
-                                             context.originGeneration == expected.originGeneration, context.tick == expected.tick,
-                                             context.physicsSnapshotRevision == expected.physicsSnapshotRevision};
-            !std::ranges::all_of(snapshotMatches, std::identity{}))
-            return Result<void>::Failure(MakeError(CharacterErrors::QuerySnapshotStale));
-        if (context.overlap == nullptr && context.sweep == nullptr)
-            return Result<void>::Failure(
-                MakeError(CharacterErrors::OperationUnsupported, "Character movement requires a Physics overlap or sweep probe."));
-        return Result<void>::Success();
     }
 
     /** @copydoc ValidateCharacterOverlapProbeResult */

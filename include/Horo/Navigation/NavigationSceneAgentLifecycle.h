@@ -10,10 +10,10 @@
 namespace Horo::Navigation {
     /** @brief Exact host-published identity used to admit one Scene navigation lifecycle owner. */
     struct NavigationSceneAgentLifecycleDescriptor final {
-        Runtime::EntityRef entity;       /**< Exact live Scene entity. */
-        CrowdAgentHandle agent;          /**< Its enabled logical registration. */
-        NavigationPathCaller caller;     /**< Unique host caller incarnation. */
-        std::uint64_t characterRevision; /**< Nonzero Character reset incarnation. */
+        Runtime::EntityRef entity;         /**< Exact live Scene entity. */
+        CrowdAgentHandle agent;            /**< Its enabled logical registration. */
+        NavigationPathCaller caller;       /**< Unique host caller incarnation. */
+        std::uint64_t characterRevision{}; /**< Nonzero Character reset incarnation; zero rejects admission. */
     };
 
     /** @brief Explicit host-composed navigation owner for one exact live Scene entity.

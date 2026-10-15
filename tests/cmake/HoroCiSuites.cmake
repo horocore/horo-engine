@@ -39,6 +39,9 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroTerrainAuthoringPublicHeaderConsumer
     HoroPCGTests
     HoroPCGTerrainAdapterTests
+    HoroPCGSceneAdapterTests
+    HoroPCGSceneAdapterPublicHeaderConsumer
+    HoroPCGSceneOutputContractConsumer
     HoroPCGPublicHeaderConsumer
     HoroPCGTerrainAdapterPublicHeaderConsumer
     HoroPCGDocumentTests
@@ -144,15 +147,30 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroNavigationCharacterAdapterPublicConsumer
     HoroNavigationCharacterIntegrationPublicHeaderConsumer
     HoroNavigationCoordinatorPublicConsumer
+    HoroGameplayNavigationIntegrationPublicHeaderConsumer
+    HoroGameplayApiPublicHeaderConsumer
+    HoroGameplayRuntimePublicHeaderConsumer
+    HoroGameplayModuleHostPublicHeaderConsumer
+    HoroGameplayLuaPublicHeaderConsumer
+    HoroNavigationRuntimePublicHeaderConsumer
+    HoroGameplayNavigationTests
+    HoroGameplayNavigationPublicConsumer
     HoroNavigationBakeServiceTests
 )
 
 set(HORO_CI_NAVIGATION_TARGETS
+    HoroGameplayNavigationIntegrationPublicHeaderConsumer
+    HoroGameplayApiPublicHeaderConsumer
+    HoroGameplayRuntimePublicHeaderConsumer
+    HoroGameplayModuleHostPublicHeaderConsumer
+    HoroGameplayLuaPublicHeaderConsumer
+    HoroNavigationRuntimePublicHeaderConsumer
+    HoroGameplayNavigationTests
+    HoroGameplayNavigationPublicConsumer
     HoroNavigationRuntime
     HoroNavigationNull
     HoroNavigationRecastDetour
     HoroNavigationApiPublicHeaderConsumer
-    HoroNavigationRuntimePublicHeaderConsumer
     HoroNavigationCoordinatorPublicConsumer
     HoroNavigationNullPublicHeaderConsumer
     HoroNavigationRecastDetourPublicHeaderConsumer
