@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <thread>
 
 namespace Horo::Gameplay {
     namespace Detail {
@@ -80,6 +81,7 @@ namespace Horo::Gameplay {
         std::uint64_t descriptorRevision{};
         std::filesystem::path loadedArtifactPath;
         std::atomic_bool runtimeLeaseAdmission{true};
+        std::thread::id ownerThread{std::this_thread::get_id()};
         bool removeArtifactOnUnload{};
         bool startAttempted{};
         bool reloadPrepared{};

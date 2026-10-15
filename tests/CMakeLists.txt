@@ -1597,17 +1597,20 @@ add_dependencies(HoroCinematicRuntimeTests HoroTestGameModule)
 add_executable(HoroGameModuleHostTests
         unit/gameplay/GameModuleHostTests.cpp
         unit/gameplay/GameModuleContentPersistenceTests.cpp
+        unit/gameplay/GameModuleRetirementTests.cpp
+        support/AllocationProbe.cpp
 )
-target_include_directories(HoroGameModuleHostTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
+target_include_directories(HoroGameModuleHostTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers" "${PROJECT_SOURCE_DIR}/tests/support")
 target_compile_features(HoroGameModuleHostTests PRIVATE cxx_std_20)
 target_compile_definitions(HoroGameModuleHostTests PRIVATE
         HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
         HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
 )
-target_link_libraries(HoroGameModuleHostTests PRIVATE HoroEngine::GameplayModuleHost)
+target_link_libraries(HoroGameModuleHostTests PRIVATE HoroEngine::GameplayModuleHost HoroEngine::Platform)
 add_dependencies(HoroGameModuleHostTests HoroTestGameModule)
 add_executable(HoroGameplayPhysicsTests unit/gameplay/GameplayPhysicsContextTests.cpp
     integration/gameplay/GameplayPhysicsHostTests.cpp
+    integration/gameplay/GameplayRetirementHostTests.cpp
     integration/gameplay/PrefabGameplayHostTests.cpp
     integration/gameplay/GameplayCharacterSlopeTests.cpp
     integration/gameplay/GameplayCharacterAirborneTests.cpp
@@ -1621,7 +1624,7 @@ target_compile_definitions(HoroGameplayPhysicsTests PRIVATE
     HORO_TEST_SOURCE_ROOT="${PROJECT_SOURCE_DIR}"
     HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
     HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}")
-target_link_libraries(HoroGameplayPhysicsTests PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayModuleHost
+target_link_libraries(HoroGameplayPhysicsTests PRIVATE HoroEngine::Platform HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayModuleHost
     HoroNetworkProductHost)
 add_dependencies(HoroGameplayPhysicsTests HoroTestGameModule)
 horo_register_catch_test(HoroGameplayPhysicsTests LABELS "unit;gameplay;physics;headless")
@@ -1710,7 +1713,7 @@ target_compile_definitions(HoroProjectGameplayRegistryTests PRIVATE
         HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
         HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
 )
-target_link_libraries(HoroProjectGameplayRegistryTests PRIVATE HoroEngine::EditorServices)
+target_link_libraries(HoroProjectGameplayRegistryTests PRIVATE HoroEngine::EditorServices HoroEngine::Platform)
 add_dependencies(HoroProjectGameplayRegistryTests HoroTestGameModule)
 add_executable(HoroSceneMathTests
         unit/foundation/SceneMathTests.cpp
@@ -1808,8 +1811,12 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/GuiScreenHostLifecycleTests.cpp
     )
     target_compile_features(HoroGuiScreenHostLifecycleTests PRIVATE cxx_std_20)
-    target_link_libraries(HoroGuiScreenHostLifecycleTests PRIVATE HoroEngine::Gui HoroEngine::Extensions)
-    target_include_directories(HoroGuiScreenHostLifecycleTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+    target_link_libraries(HoroGuiScreenHostLifecycleTests PRIVATE HoroEngine::Gui HoroEngine::Extensions HoroEngine::Platform)
+    target_include_directories(HoroGuiScreenHostLifecycleTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support ${PROJECT_SOURCE_DIR}/tests/helpers)
+    add_dependencies(HoroGuiScreenHostLifecycleTests HoroTestGameModule)
+    target_compile_definitions(HoroGuiScreenHostLifecycleTests PRIVATE
+        HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
+        HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}")
 
     add_executable(HoroSettingsModalLifecycleTests
             unit/editor/SettingsModalLifecycleTests.cpp
@@ -3916,15 +3923,21 @@ foreach(abi_fixture_mode RANGE 0 11)
     target_compile_definitions(HoroExtensionManagerTests PRIVATE
             HORO_ABI_FIXTURE_${abi_fixture_mode}="$<TARGET_FILE:${abi_fixture_target}>")
 endforeach()
-add_executable(HoroPackageLifecycleTests unit/packages/PackageLifecycleTests.cpp)
-target_link_libraries(HoroPackageLifecycleTests PRIVATE HoroEngine::PackageLifecycle HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
-target_include_directories(HoroPackageLifecycleTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
-add_dependencies(HoroPackageLifecycleTests HoroExtensionAbiFixture0 HoroExtensionAbiFixture4 HoroExtensionAbiFixture6)
+add_executable(HoroPackageLifecycleTests unit/packages/PackageLifecycleTests.cpp unit/packages/PackageHybridLifecycleTests.cpp
+    unit/packages/PackageGameplayLifecycleTests.cpp)
+target_link_libraries(HoroPackageLifecycleTests PRIVATE HoroEngine::PackageLifecycle HoroEngine::PackageGameplayHost HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
+target_include_directories(HoroPackageLifecycleTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support ${PROJECT_SOURCE_DIR}/tests/helpers)
+add_dependencies(HoroPackageLifecycleTests HoroTestGameModule HoroExtensionAbiFixture0 HoroExtensionAbiFixture4 HoroExtensionAbiFixture6 HoroEditorActivityFixture)
 target_compile_definitions(HoroPackageLifecycleTests PRIVATE
+    HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
+    HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
+        HORO_EDITOR_ACTIVITY_FIXTURE="$<TARGET_FILE:HoroEditorActivityFixture>"
     HORO_PACKAGE_NATIVE_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture4>"
     HORO_PACKAGE_EMPTY_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture0>"
     HORO_PACKAGE_FAILING_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture6>")
 horo_register_catch_test(HoroPackageLifecycleTests LABELS "packages;extensions;headless")
+add_library(HoroPackageHostSurfacePublicHeaderConsumer OBJECT support/PackageHostPublicHeaderConsumer.cpp)
+target_link_libraries(HoroPackageHostSurfacePublicHeaderConsumer PRIVATE HoroEngine::PackageGameplayHost)
 
 add_library(HoroExtensionAbiMissingLoadFixture MODULE fixtures/extensions/AbiModuleMissingLoad.c)
 target_compile_features(HoroExtensionAbiMissingLoadFixture PRIVATE c_std_11)
@@ -3956,6 +3969,8 @@ foreach(abi_hostile_fixture_mode RANGE 0 7)
 endforeach()
 add_dependencies(HoroPackageLifecycleTests HoroExtensionAbiHostileFixture6)
 target_compile_definitions(HoroPackageLifecycleTests PRIVATE
+    HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
+    HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
     HORO_PACKAGE_TEARDOWN_FAILING_FIXTURE="$<TARGET_FILE:HoroExtensionAbiHostileFixture6>")
 add_test(NAME HoroExtensionAbiConformanceCliSupported
     COMMAND "$<TARGET_FILE:horo-extension-conformance>" --json "$<TARGET_FILE:HoroExtensionAbiFixture1>")

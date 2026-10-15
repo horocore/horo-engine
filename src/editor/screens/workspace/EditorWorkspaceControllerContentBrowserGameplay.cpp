@@ -109,7 +109,8 @@ namespace Horo::Editor {
             m_nativeGameplayReloadPending = true;
             return;
         }
-        std::unique_ptr<ProjectGameplayRegistry> candidate = ProjectGameplayRegistry::Discover(m_viewModel.projectRoot);
+        std::unique_ptr<ProjectGameplayRegistry> candidate =
+            ProjectGameplayRegistry::Discover(m_viewModel.projectRoot, m_gameplayRetirements);
         if (m_playSession.IsActive()) {
             m_pendingGameplayRegistry = std::move(candidate);
             return;
@@ -214,7 +215,7 @@ namespace Horo::Editor {
             return Result<std::unique_ptr<ProjectGameplayRegistry>>::Failure(
                 MakeError(Gameplay::GameplayErrors::GameplayReloadRestoreFailed, "Native reload generation was not retired."));
         std::unique_ptr<ProjectGameplayRegistry> candidate =
-            ProjectGameplayRegistry::DiscoverNativeGeneration(projectRoot, transaction.luaGeneration);
+            ProjectGameplayRegistry::DiscoverNativeGeneration(projectRoot, transaction.luaGeneration, m_gameplayRetirements);
         if (!candidate->HasNativeModule() || candidate->HasBlockingDiagnostics())
             return Result<std::unique_ptr<ProjectGameplayRegistry>>::Failure(
                 NativeGenerationError(*candidate, "The replacement native gameplay generation could not be loaded."));
@@ -237,7 +238,8 @@ namespace Horo::Editor {
     void EditorWorkspaceController::RollbackNativeGameplayReload(const std::filesystem::path &projectRoot,
                                                                  NativeGameplayReloadTransaction transaction, const Error &candidateError) {
         std::unique_ptr<ProjectGameplayRegistry> rollback =
-            ProjectGameplayRegistry::DiscoverRollback(projectRoot, transaction.rollbackArtifact, transaction.luaGeneration);
+            ProjectGameplayRegistry::DiscoverRollback(projectRoot, transaction.rollbackArtifact, transaction.luaGeneration,
+                                                      m_gameplayRetirements);
         Error rollbackError = NativeGenerationError(*rollback, "The previous native gameplay generation could not be loaded.");
         const bool ready = rollback->HasNativeModule() && !rollback->HasBlockingDiagnostics();
         Result<void> activated =

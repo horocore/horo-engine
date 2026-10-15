@@ -1,4 +1,5 @@
 #include "Horo/Gameplay/GameModuleHost.h"
+#include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
 #include "Horo/Physics/PhysicsWorld.h"
 
@@ -66,6 +67,16 @@ int main(int argc, char **argv) {
     context = std::move(admitted).Value();
 #endif
     GameModuleHost host{{}, context};
-    const auto loaded = host.Load(argv[1], {"game.physics_sdk", CurrentGameplayBuildFingerprint(), revision});
-    return loaded.HasValue() ? 0 : 7;
+    GameModuleRetirementQueue retirement{1};
+    auto reserved = retirement.Reserve();
+    if (reserved.HasError())
+        return 7;
+    auto loaded = host.Load(argv[1], {"game.physics_sdk", CurrentGameplayBuildFingerprint(), revision});
+    if (loaded.HasError())
+        return 7;
+    auto candidate = std::move(loaded).Value();
+    const bool active = !candidate.diagnostic;
+    auto admission = std::move(reserved).Value();
+    admission.Retain(std::move(candidate.owner));
+    return active && retirement.Close().HasValue() ? 0 : 7;
 }

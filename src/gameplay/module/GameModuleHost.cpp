@@ -80,23 +80,37 @@ namespace Horo::Gameplay {
         }
     }  // namespace
 
-    /** @copydoc GameModuleHost::Load */
-    Result<std::unique_ptr<LoadedGameModule>> GameModuleHost::Load(const std::filesystem::path &libraryPath,
-                                                                   const GameModuleLoadExpectation &expectation) const {
+    /** @copydoc GameModuleHost::ValidateArtifact */
+    Result<void> GameModuleHost::ValidateArtifact(const std::filesystem::path &libraryPath,
+                                                  const GameModuleLoadExpectation &expectation) const {
         if (!libraryPath.is_absolute())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(
+            return Result<void>::Failure(MakeError(GameplayErrors::InvalidGameModuleDescriptor));
+        auto image = Platform::LoadDynamicLibrary(libraryPath.string());
+        if (image.HasError())
+            return Result<void>::Failure(image.ErrorValue());
+        auto validated = ReadValidatedExports(*image.Value(), expectation);
+        if (validated.HasError())
+            return Result<void>::Failure(validated.ErrorValue());
+        return Result<void>::Success();
+    }
+
+    /** @copydoc GameModuleHost::Load */
+    Result<GameModuleLoadCandidate> GameModuleHost::Load(const std::filesystem::path &libraryPath,
+                                                         const GameModuleLoadExpectation &expectation) const {
+        if (!libraryPath.is_absolute())
+            return Result<GameModuleLoadCandidate>::Failure(
                 MakeError(GameplayErrors::InvalidGameModuleDescriptor, "Gameplay module path must be absolute."));
 
         auto loaded = Platform::LoadDynamicLibrary(libraryPath.string());
         if (loaded.HasError())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(loaded.ErrorValue());
+            return Result<GameModuleLoadCandidate>::Failure(loaded.ErrorValue());
         auto impl = std::make_shared<LoadedGameModule::Impl>();
         impl->library = std::move(loaded).Value();
         impl->loadedArtifactPath = libraryPath;
 
         auto exports = ReadValidatedExports(*impl->library, expectation);
         if (exports.HasError())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(exports.ErrorValue());
+            return Result<GameModuleLoadCandidate>::Failure(exports.ErrorValue());
         const ValidatedModuleExports validated = exports.Value();
         impl->moduleId = validated.descriptor->moduleId;
         impl->buildFingerprint = validated.descriptor->buildFingerprint;
@@ -104,22 +118,31 @@ namespace Horo::Gameplay {
         impl->destroy = validated.bundle->lifecycle.destroy;
         auto physics = ResolvePhysicsContext(physics_, impl->moduleId);
         if (physics.HasError())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(physics.ErrorValue());
+            return Result<GameModuleLoadCandidate>::Failure(physics.ErrorValue());
         impl->physics = std::move(physics).Value();
 
         auto registry = BuildRegistry(*validated.bundle);
         if (registry.HasError())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(registry.ErrorValue());
+            return Result<GameModuleLoadCandidate>::Failure(registry.ErrorValue());
         impl->registries.registry = std::move(registry).Value();
 
-        impl->gameplayModule = validated.bundle->lifecycle.create();
-        if (impl->gameplayModule == nullptr)
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(
-                MakeError(GameplayErrors::InvalidBehaviorComponent, "Gameplay module factory returned no module object."));
-        if (Result<void> activated = impl->RegisterAndStart(hostCapabilities_); activated.HasError())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(activated.ErrorValue());
-        return Result<std::unique_ptr<LoadedGameModule>>::Success(
-            std::unique_ptr<LoadedGameModule>{new LoadedGameModule{std::move(impl)}});  // NOSONAR(cpp:S5950)
+        // Allocate the exported RAII wrapper before any module factory can publish work.
+        GameModuleLoadCandidate candidate{std::unique_ptr<LoadedGameModule>{new LoadedGameModule{impl}}, {}};
+        auto initializationFailure =
+            MakeError(GameplayErrors::GameplayFactoryFailed, "Gameplay host initialization failed after factory admission.");
+        try {
+            impl->gameplayModule = validated.bundle->lifecycle.create();
+            if (impl->gameplayModule == nullptr)
+                candidate.diagnostic =
+                    MakeError(GameplayErrors::InvalidBehaviorComponent, "Gameplay module factory returned no module object.");
+            else if (auto activated = impl->RegisterAndStart(hostCapabilities_); activated.HasError())
+                candidate.diagnostic = activated.ErrorValue();
+        } catch (...) {
+            candidate.diagnostic = std::move(initializationFailure);
+        }
+        if (candidate.diagnostic)
+            candidate.owner->RequestRetirement();
+        return Result<GameModuleLoadCandidate>::Success(std::move(candidate));
     }
 
 }  // namespace Horo::Gameplay

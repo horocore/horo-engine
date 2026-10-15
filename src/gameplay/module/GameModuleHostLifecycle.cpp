@@ -23,7 +23,7 @@ namespace Horo::Gameplay {
             return capabilities;
         }
 
-        [[nodiscard]] Result<void> InvokeRegister(IGameModule &gameModule, GameRegistrationContext &context) noexcept {
+        [[nodiscard]] Result<void> InvokeRegister(IGameModule &gameModule, GameRegistrationContext &context) {
             try {
                 return gameModule.Register(context);
             } catch (...) {
@@ -32,7 +32,7 @@ namespace Horo::Gameplay {
             }
         }
 
-        [[nodiscard]] Result<void> InvokeStart(IGameModule &gameModule, GameRuntimeContext &context) noexcept {
+        [[nodiscard]] Result<void> InvokeStart(IGameModule &gameModule, GameRuntimeContext &context) {
             try {
                 return gameModule.Start(context);
             } catch (...) {
@@ -41,7 +41,7 @@ namespace Horo::Gameplay {
             }
         }
 
-        [[nodiscard]] Result<GameModuleReloadSnapshot> InvokePrepareReload(IGameModule &gameModule, GameRuntimeContext &context) noexcept {
+        [[nodiscard]] Result<GameModuleReloadSnapshot> InvokePrepareReload(IGameModule &gameModule, GameRuntimeContext &context) {
             try {
                 return gameModule.PrepareReload(context);
             } catch (...) {
@@ -51,7 +51,7 @@ namespace Horo::Gameplay {
         }
 
         [[nodiscard]] Result<void> InvokeRestoreReload(IGameModule &gameModule, const GameModuleReloadSnapshot &snapshot,
-                                                       GameRuntimeContext &context) noexcept {
+                                                       GameRuntimeContext &context) {
             try {
                 return gameModule.RestoreReload(snapshot, context);
             } catch (...) {
@@ -154,6 +154,10 @@ namespace Horo::Gameplay {
             projectServices->RequestCancellation();
         if (gameplayModule != nullptr && startAttempted)
             gameplayModule->Stop(runtimeContext);  // NOSONAR: exact-generation module boundary; path analysis is unrelated.
+        // Mutable public context copies may contain module-emitted shared owners; release them while code and module still exist.
+        runtimeContext.physics.reset();
+        runtimeContext.activeServices = {};
+        runtimeContext.capabilities = {};
         projectServices.reset();
         registries.assetTypes.reset();
         registries.replication.reset();

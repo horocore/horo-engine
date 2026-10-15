@@ -1,3 +1,4 @@
+#include "GameplayRetirementFixture.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Gameplay/GameAssetTypeRegistry.h"
 #include "Horo/Gameplay/GameEventRegistry.h"
@@ -103,6 +104,8 @@ private:
 HORO_BEHAVIOR(PrefabSpawnerBehavior, "game.tests.prefab_spawner")
 
 namespace {
+    Tests::GameplayRetirementFixture *retirementFixture{};
+
     class DurableCandidate final : public IPreparedPersistenceState {
     public:
         DurableCandidate(std::vector<std::byte> &active, std::vector<std::byte> candidate)
@@ -228,7 +231,20 @@ namespace {
 
     class Module final : public IGameModule {
     public:
+        ~Module() override {
+            if (retirement_) {
+                ++retirement_->destroyed;
+                retirement_->destroyedOn = std::this_thread::get_id();
+            }
+        }
+
         Result<void> Register(GameRegistrationContext &context) override {
+            retirement_ = retirementFixture;
+            if (retirement_)
+                ++retirement_->registered;
+            events_ = &context.events;
+            if (retirement_ && retirement_->failPhase == 1)
+                return Result<void>::Failure(MakeError(GameplayErrors::GameplayFactoryFailed));
             if (auto registered = context.events.Register({90, 1, 91, 1, BorrowedCallbackContext{this}, &CompleteQuest});
                 registered.HasError())
                 return registered;
@@ -322,6 +338,21 @@ namespace {
         }
 
         Result<void> Start(GameRuntimeContext &context) override {
+            if (retirement_) {
+                ++retirement_->started;
+                retirement_->physics = context.physics;
+            }
+            if (retirement_ && (retirement_->failPhase == 2 || retirement_->failPhase == 5)) {
+                auto acquired = events_->Acquire(90, 1, 91, 1, context.cancellation);
+                if (acquired.HasError())
+                    return Result<void>::Failure(acquired.ErrorValue());
+                retirement_->publish(retirement_->callbackOwner, std::move(acquired).Value());
+                if (retirement_->failPhase == 5) {
+                    retirement_->armAllocationFailure(retirement_->allocationOwner);
+                    throw 5;
+                }
+                return Result<void>::Failure(MakeError(GameplayErrors::GameplayFactoryFailed));
+            }
 #if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
             if (!context.physics)
                 return Result<void>::Failure(MakeError(GameplayErrors::PhysicsUnavailable));
@@ -343,10 +374,22 @@ namespace {
         }
 
         void Stop(GameRuntimeContext &) noexcept override {
+            if (retirement_) {
+                ++retirement_->stopped;
+                if (retirement_->onStop)
+                    retirement_->onStop(retirement_->stopOwner);
+            }
             // The module host retires the registration-only fixture's services and descriptors.
         }
 
         Result<GameModuleReloadSnapshot> PrepareReload(GameRuntimeContext &context) override {
+            if (retirement_) {
+                ++retirement_->prepared;
+                if (retirement_->failPhase == 3)
+                    return IGameModule::PrepareReload(context);
+                if (retirement_->failPhase == 4)
+                    return Result<GameModuleReloadSnapshot>::Success({0, {}});
+            }
             if (!context.cancellation.IsCancellationRequested())
                 return Result<GameModuleReloadSnapshot>::Failure(MakeError(GameplayErrors::GameplayReloadRestartRequired));
             return Result<GameModuleReloadSnapshot>::Success({1, {}});
@@ -379,15 +422,23 @@ namespace {
             return Accepted;
         }
 
+        Tests::GameplayRetirementFixture *retirement_{};
+        GameEventRegistry *events_{};
         std::uint64_t completedQuests_{};
     };
 
 }  // namespace
 
 extern "C" HORO_GAME_EXPORT IGameModule *CreateGameModule() noexcept {
+    if (retirementFixture)
+        ++retirementFixture->created;
     return std::make_unique<Module>().release();
 }
 
 extern "C" HORO_GAME_EXPORT void DestroyGameModule(IGameModule *gameModule) noexcept {
     const std::unique_ptr<IGameModule> owned{gameModule};
+}
+
+extern "C" HORO_GAME_EXPORT void ConfigureGameplayRetirementFixture(Tests::GameplayRetirementFixture *control) noexcept {
+    retirementFixture = control;
 }

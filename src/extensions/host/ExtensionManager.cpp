@@ -4,6 +4,7 @@
 #include "EditorActivitySession.h"
 #include "ExtensionAbiValidation.h"
 #include "ExtensionActivationTransaction.h"
+#include "ExtensionModuleSelection.h"
 #include "ExtensionPlatformProviderCopy.h"
 #include "Horo/Assets/AssetImporter.h"
 #include "Horo/Extensions/ExtensionAbi.h"
@@ -536,13 +537,14 @@ namespace Horo::Extensions {
 
         /** @brief Keeps capability-view borrows within synchronous module graph resolution. */
         [[nodiscard]] Result<ExtensionModulePlan> ResolveForHost(const ExtensionManifest &manifest, const ExtensionHostProfile profile,
-                                                                 const std::vector<std::string> &capabilities) {
+                                                                 const std::vector<std::string> &capabilities,
+                                                                 const std::span<const std::string> selectedModules) {
             std::vector<std::string_view> views;
             views.reserve(capabilities.size());
             std::ranges::transform(capabilities, std::back_inserter(views), [](const auto &capability) {
                 return std::string_view{capability};
             });
-            return ResolveExtensionModules(manifest, CurrentHostEnvironment(profile, views));
+            return ResolveExtensionModules(manifest, CurrentHostEnvironment(profile, views), selectedModules);
         }
 
         /** @brief Publishes admitted editor and importer contributions within the single activation rollback authority. */
@@ -552,6 +554,20 @@ namespace Horo::Extensions {
                 return editor;
             return CommitContributions(transaction.Contributions(), catalog);
         }
+
+        /** @brief Resolves compatibility and narrows contributions for this explicit owning-host admission. */
+        Result<ExtensionModulePlan> ResolveOwningHostPlan(ExtensionManifest &manifest, const ExtensionHostProfile profile,
+                                                          const std::vector<std::string> &capabilities,
+                                                          const std::span<const std::string> selectedModules) {
+            auto result = ResolveForHost(manifest, profile, capabilities, selectedModules);
+            if (result.HasError())
+                return result;
+            auto plan = std::move(result).Value();
+            if (auto narrowed = Detail::NarrowOwningModulePlan(manifest, plan, selectedModules); narrowed.HasError())
+                return Result<ExtensionModulePlan>::Failure(narrowed.ErrorValue());
+            return Result<ExtensionModulePlan>::Success(std::move(plan));
+        }
+
     }  // namespace
 
     /** @copydoc ExtensionManager::ExtensionManager */
@@ -576,7 +592,8 @@ namespace Horo::Extensions {
     }
 
     Result<std::string> ExtensionManager::LoadExtension(const std::string &extensionDir,
-                                                        const std::span<const std::string> providerExtensions) {
+                                                        const std::span<const std::string> providerExtensions,
+                                                        const std::span<const std::string> selectedModules) {
         FinalizeRetirements();
         if (!HasActivationCapacity(providerExtensions.size()))
             return Result<std::string>::Failure(MakeError(ExtensionErrors::LoadFailed, "Extension activation retention bound exceeded."));
@@ -590,11 +607,10 @@ namespace Horo::Extensions {
         if (auto providers = AcquireProviderDependencies(providerExtensions, manifest.id, dependencies, providerLeases);
             providers.HasError())
             return Result<std::string>::Failure(providers.ErrorValue());
-        auto planResult = ResolveForHost(manifest, m_hostProfile, m_hostCapabilities);
-        if (planResult.HasError())
-            return Result<std::string>::Failure(planResult.ErrorValue());
-        ExtensionModulePlan plan = std::move(planResult).Value();
-        auto retirement = std::make_shared<ExtensionRetirement>(manifest.id, plan.moduleIds);
+        auto plan = ResolveOwningHostPlan(manifest, m_hostProfile, m_hostCapabilities, selectedModules);
+        if (plan.HasError())
+            return Result<std::string>::Failure(plan.ErrorValue());
+        auto retirement = std::make_shared<ExtensionRetirement>(manifest.id, plan.Value().moduleIds);
 
         auto declarationsResult = ValidateProviderPackage(manifest, m_platformProviderCommit, m_hostCapabilities);
         if (declarationsResult.HasError())
@@ -604,7 +620,7 @@ namespace Horo::Extensions {
         FailedActivationGuard failureGuard{m_failedActivations, retirement};
 
         ExtensionActivationTransaction transaction;
-        auto staged = StageDeclaredNativeModules({manifest, plan, retirement, m_libraryLoader, m_artifactGate, platformDeclarations,
+        auto staged = StageDeclaredNativeModules({manifest, plan.Value(), retirement, m_libraryLoader, m_artifactGate, platformDeclarations,
                                                   m_editorActivityHost},
                                                  dependencies, transaction);
         if (staged.HasError())
@@ -612,7 +628,7 @@ namespace Horo::Extensions {
         auto platformCandidates = std::move(staged).Value();
         std::string extensionId = manifest.id;
         std::string activationId = extensionId;
-        auto record = PrepareLoadedExtension(std::move(manifest), std::move(plan), std::move(retirement), providerExtensions);
+        auto record = PrepareLoadedExtension(std::move(manifest), std::move(plan).Value(), std::move(retirement), providerExtensions);
         record.mapped()->providerLeases = std::move(providerLeases);
         m_activationOrder.reserve(m_activationOrder.size() + 1);
         m_loadedExtensions.reserve(m_loadedExtensions.size() + 1);

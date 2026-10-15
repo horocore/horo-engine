@@ -136,6 +136,28 @@ namespace Horo::Gameplay {
         return impl_->PrepareReload();
     }
 
+    /** @copydoc LoadedGameModule::RequestRetirement */
+    void LoadedGameModule::RequestRetirement() noexcept {
+        impl_->runtimeLeaseAdmission.store(false, std::memory_order_release);
+        if (impl_->physics)
+            impl_->physics->Revoke();
+        if (impl_->projectServices)
+            impl_->projectServices->RequestCancellation();
+    }
+
+    /** @copydoc LoadedGameModule::TryRetire */
+    Result<void> LoadedGameModule::TryRetire() {
+        if (std::this_thread::get_id() != impl_->ownerThread)
+            return Result<void>::Failure(
+                MakeError(GameplayErrors::GameplayReloadRestartRequired, "Retirement belongs to the gameplay module owner lane."));
+        RequestRetirement();
+        if (impl_.use_count() != 1)
+            return Result<void>::Failure(
+                MakeError(GameplayErrors::GameplayReloadRestartRequired, "Runtime callback leases still own this module generation."));
+        impl_->Shutdown();
+        return Result<void>::Success();
+    }
+
     /** @copydoc LoadedGameModule::RestoreReload */
     Result<void> LoadedGameModule::RestoreReload(  // NOSONAR(cpp:S5817) Mutates generation lifecycle.
         const GameModuleReloadSnapshot &snapshot) {

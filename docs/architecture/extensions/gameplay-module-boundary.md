@@ -600,3 +600,46 @@ game.<project>.save
 - [ADR-118](../../adr/118-animation-character-and-gameplay-authority-during-cinematics.md):
   cinematic control claims, typed gameplay suppression and owner-preserving pose/
   movement integration.
+
+## Owned load-attempt migration (PKG-001.12)
+
+`GameModuleHost::Load` and `LoadShadowCopy` return one canonical
+`GameModuleLoadCandidate`. An early error owns no initialized module; a returned
+candidate owns its native module even if its diagnostic reports failed Register
+or Start. Check the diagnostic before publishing and retain the owner until
+`TryRetire` succeeds. The former error-only result could discard a busy failed
+owner and run Stop/destroy/unload on the worker releasing its final callback.
+This host C++ source migration changes no GameRuntimeContext or generated module
+export layout, so it does not change the module SDK ABI epoch or fingerprint.
+
+Package roles use their package retirement authority. Application/editor callers
+instead inject an application-owned `GameModuleRetirementQueue`, reserving bounded
+storage before factories. Every successful or failed owner transfers exactly once.
+Drain/Close preserve typed causes and retain busy owners; foreign-thread calls
+reject before mutable queue access. Reservations also have owner-lane lifetimes.
+The last application owner must retain the drain handle until Close succeeds;
+queue destruction while busy is an explicit fatal lifetime violation, following
+`BackendServiceRegistry::QuarantineForRestart`, never normal cancellation.
+
+Ordinary retirement revokes admission/Physics and requests project-service
+cancellation, waits for exact runtime leases, then calls Stop and destroys on the
+owner lane. It does not invoke PrepareReload or require a valid state snapshot.
+Impl retains project services, runtimeContext and the guarded Physics context.
+The Physics context owns a revocable generation capability rather than a raw world
+pointer, so applications revoke it before retiring the world. No optional future
+borrowed-context ownership channel is introduced.
+
+GameplayBuildService now calls ValidateArtifact: the same native export,
+fingerprint and generated-descriptor validation runs without factories or runtime
+activation. Native application composition, editor discovery/rollback, cinematic
+fixtures and the public SDK consumer explicitly handle owned candidate results.
+
+Editor worker shutdown first withdraws screens, then shuts down shader work and
+cancels/joins the existing JobSystem; it retries native Close after that join.
+No new shutdown timeout or unbounded polling loop is introduced. The standalone
+CLI composition exposes no external module/event lease borrowing: its synchronous
+GameplayWorldComposition shutdown destroys its BehaviorRuntime owners before
+closing the injected queue. A remaining generation lease at that final process
+boundary violates the module ownership contract and takes the documented fatal
+final-owner path explicitly. General headless application roots may retain their
+injected queue after a typed busy Close and drain it when external callbacks finish.
