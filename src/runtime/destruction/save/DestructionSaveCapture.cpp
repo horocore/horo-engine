@@ -22,8 +22,9 @@ namespace Horo::Destruction {
             for (std::size_t i = 0; i < artifact.canonicalChunks.size(); ++i) {
                 if ((state.masks.active[i / 8] & (std::byte{1} << (i % 8))) == std::byte{})
                     continue;
-                if (!physics || active >= physics->activeChunks.size() || physics->activeChunks[active++] != artifact.canonicalChunks[i])
+                if (!physics || active >= physics->activeChunks.size() || physics->activeChunks[active] != artifact.canonicalChunks[i])
                     return Reject<void>(DestructionErrors::StaleRevision);
+                ++active;
             }
             if (!active)
                 return physics ? Reject<void>(DestructionErrors::StateInvalid) : Result<void>::Success();
@@ -64,8 +65,8 @@ namespace Horo::Destruction {
             state.content != live.content || state.configuration != live.configurationRevision || state.revision != live.revision ||
             state.effectiveFeatures != live.effectiveFeatures || state.phase != live.phase)
             return Reject<CapturedDestructionState>(DestructionErrors::StaleRevision);
-        const double quantized = std::round(static_cast<double>(live.health) * 65536.0);
-        if (!std::isfinite(quantized) || quantized < 0 || quantized > std::numeric_limits<std::uint32_t>::max() ||
+        if (const double quantized = std::round(static_cast<double>(live.health) * 65536.0);
+            !std::isfinite(quantized) || quantized < 0 || quantized > std::numeric_limits<std::uint32_t>::max() ||
             static_cast<std::uint32_t>(quantized) != state.healthQ16)
             return Reject<CapturedDestructionState>(DestructionErrors::StateInvalid);
         if (auto paired = Detail::ValidateDestructionPhysicsCapture(state, artifact, fence, physics); paired.HasError())

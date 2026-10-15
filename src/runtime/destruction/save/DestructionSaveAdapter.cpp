@@ -90,7 +90,7 @@ namespace Horo::Destruction {
     }
 
     /** @copydoc DestructionSaveAdapter::Shutdown */
-    void DestructionSaveAdapter::Shutdown() noexcept {
+    void DestructionSaveAdapter::Shutdown() const noexcept {
         shutdown_.RequestCancellation();
     }
 }  // namespace Horo::Destruction

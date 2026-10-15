@@ -151,8 +151,11 @@ namespace Horo::Destruction {
             if (checkpointBytes.HasError())
                 return Result<void>::Failure(checkpointBytes.ErrorValue());
             const auto &bytes = participantBytes.Value();
-            auto participant =
-                Runtime::SaveParticipantId::Parse(std::string_view{reinterpret_cast<const char *>(bytes.data()), bytes.size()});
+            std::string participantText(bytes.size(), '\0');
+            std::ranges::transform(bytes, participantText.begin(), [](const std::byte byte) {
+                return std::to_integer<char>(byte);
+            });
+            auto participant = Runtime::SaveParticipantId::Parse(participantText);
             auto checkpoint = Runtime::SaveRecordId::FromBytes(checkpointBytes.Value());
             if (participant.HasError() || checkpoint.HasError())
                 return Invalid<void>();

@@ -155,7 +155,7 @@ namespace Horo::Destruction {
         [[nodiscard]] Result<Runtime::CanonicalCaptureDisposition> Capture(const Runtime::CanonicalCaptureContext &context,
                                                                            Runtime::ICanonicalCaptureSink &sink) const override;
         /** @brief Idempotently close capture admission without touching a runtime owner or emitted bytes. */
-        void Shutdown() noexcept;
+        void Shutdown() const noexcept;
 
     private:
         DestructionSaveBinding binding_;

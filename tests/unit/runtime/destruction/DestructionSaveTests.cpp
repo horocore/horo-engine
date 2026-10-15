@@ -66,7 +66,8 @@ namespace Horo::Destruction {
             f.source->runtime.Replace({Id<DestructionWorldId>(1), Id<DestructibleId>(1), Id<DestructionGeneration>(2)}, Descriptor())
                 .Value();
         f.source->runtime = f.source->runtime.BeginShutdown();
-        f.adapter->Shutdown();
+        const DestructionSaveAdapter &adapter = *f.adapter;
+        adapter.Shutdown();
         const auto decoded =
             DecodeDestructionSaveState(Runtime::CanonicalValueReader::Create(captured.Records()[0].Segment(0)).Value(), f.Artifact());
         REQUIRE(decoded.HasValue());
