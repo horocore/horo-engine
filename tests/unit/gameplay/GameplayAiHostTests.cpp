@@ -1,9 +1,10 @@
 #include "GameplayAiTestSupport.h"
 #include "GameplayModuleTestSupport.h"
+#include "Horo/Gameplay/BehaviorRuntime.h"
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayErrors.h"
-#include "Horo/Gameplay/ReplicationRegistration.h"
 #include "Horo/Platform/DynamicLibrary.h"
+#include "Horo/Runtime/Scene/RuntimeScene.h"
 
 #include <cstring>
 #include <memory>
@@ -129,15 +130,23 @@ namespace Horo::Gameplay {
         auto started = retained->StartTask(fixture.agent, AiTestSupport::MakeIdentity<AI::TaskId>(411));
         REQUIRE(started.HasValue());
         REQUIRE(fixture.runtime.Find(fixture.agent).Value().hasRunningTask);
+        Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{87}, Runtime::SceneDefinitionRevision{1}};
+        Runtime::RuntimeEntityDefinition entity;
+        entity.object = Runtime::SceneObjectId{1};
+        builder.Add(std::move(entity));
+        auto definition = std::move(builder).Build();
+        REQUIRE(definition.HasValue());
+        auto scene = Runtime::RuntimeScene::Create(std::move(definition).Value(), Runtime::SceneRuntimeId{87});
+        REQUIRE(scene.HasValue());
         {
-            // A real frozen registry lease pins this module generation even though this fixture declares no replication schemas.
-            auto lease = loaded->Replication().Acquire();
-            REQUIRE(lease.HasValue());
+            // An actual runtime acquires the module's private generation lease even when no behavior descriptors are registered.
+            auto runtime = BehaviorRuntime::Create(*scene.Value(), loaded->Registry());
+            REQUIRE(runtime.HasValue());
             loaded->RequestRetirement();
             CHECK_FALSE(fixture.runtime.Find(fixture.agent).Value().hasRunningTask);
             CHECK(retained->ResolveAgent(fixture.scene.agent.agent.agent).HasError());
             CHECK(retained->StartTask(fixture.agent, AiTestSupport::MakeIdentity<AI::TaskId>(412)).HasError());
-            CHECK(loaded->Replication().Acquire().HasError());
+            CHECK(BehaviorRuntime::Create(*scene.Value(), loaded->Registry()).HasError());
             auto busy = loaded->TryRetire();
             REQUIRE(busy.HasError());
             CHECK(busy.ErrorValue().code.Value() == GameplayErrors::GameplayReloadRestartRequired.code.Value());
