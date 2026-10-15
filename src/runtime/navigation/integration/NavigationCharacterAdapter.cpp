@@ -119,10 +119,10 @@ namespace Horo::Navigation {
             static_cast<std::uint16_t>(result.movement.collisions) & static_cast<std::uint16_t>(CharacterCollisionFlags::Sides);
         const bool blocked = sides != 0 || result.movement.termination != Character::CharacterMovementTermination::Complete;
         const auto &publication = motion.publication_;
-        const auto feedback = state_->pipeline->ObserveFeedback(
-            {publication.intent.operation, publication.intent.path, motion.Tick(), publication.characterRevision,
-             result.movement.achievedVelocityMetersPerSecond * motion.stepSeconds_, blocked});
-        if (feedback.HasError())
+        if (const auto feedback = state_->pipeline->ObserveFeedback(
+                {publication.intent.operation, publication.intent.path, motion.Tick(), publication.characterRevision,
+                 result.movement.achievedVelocityMetersPerSecond * motion.stepSeconds_, blocked});
+            feedback.HasError())
             return Return::Failure(feedback.ErrorValue());
         state_->pending.reset();
         return snapshot;
