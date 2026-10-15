@@ -144,15 +144,30 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroNavigationRuntimeTests
     HoroNavigationTransportReservationTests
     HoroNavigationCoordinatorPublicConsumer
+    HoroGameplayNavigationIntegrationPublicHeaderConsumer
+    HoroGameplayApiPublicHeaderConsumer
+    HoroGameplayRuntimePublicHeaderConsumer
+    HoroGameplayModuleHostPublicHeaderConsumer
+    HoroGameplayLuaPublicHeaderConsumer
+    HoroNavigationRuntimePublicHeaderConsumer
+    HoroGameplayNavigationTests
+    HoroGameplayNavigationPublicConsumer
     HoroNavigationBakeServiceTests
 )
 
 set(HORO_CI_NAVIGATION_TARGETS
+    HoroGameplayNavigationIntegrationPublicHeaderConsumer
+    HoroGameplayApiPublicHeaderConsumer
+    HoroGameplayRuntimePublicHeaderConsumer
+    HoroGameplayModuleHostPublicHeaderConsumer
+    HoroGameplayLuaPublicHeaderConsumer
+    HoroNavigationRuntimePublicHeaderConsumer
+    HoroGameplayNavigationTests
+    HoroGameplayNavigationPublicConsumer
     HoroNavigationRuntime
     HoroNavigationNull
     HoroNavigationRecastDetour
     HoroNavigationApiPublicHeaderConsumer
-    HoroNavigationRuntimePublicHeaderConsumer
     HoroNavigationCoordinatorPublicConsumer
     HoroNavigationNullPublicHeaderConsumer
     HoroNavigationRecastDetourPublicHeaderConsumer

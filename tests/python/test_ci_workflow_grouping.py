@@ -101,6 +101,10 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroRuntimeSaveRestoreTransactionTests", "HoroSaveGameplayCheckpointPublicHeaderConsumer",
     "HoroNavigationRuntimeTests", "HoroNavigationBakeServiceTests",
     "HoroNavigationTransportReservationTests", "HoroNavigationCoordinatorPublicConsumer",
+    "HoroGameplayNavigationTests", "HoroGameplayNavigationPublicConsumer",
+    "HoroGameplayNavigationIntegrationPublicHeaderConsumer", "HoroGameplayApiPublicHeaderConsumer",
+    "HoroGameplayRuntimePublicHeaderConsumer", "HoroGameplayModuleHostPublicHeaderConsumer",
+    "HoroGameplayLuaPublicHeaderConsumer", "HoroNavigationRuntimePublicHeaderConsumer",
 })
 
 

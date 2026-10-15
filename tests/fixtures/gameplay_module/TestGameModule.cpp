@@ -5,6 +5,9 @@
 #include "Horo/Gameplay/GameServiceRegistry.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/NativeBehavior.h"
+#if defined(HORO_TEST_GAMEPLAY_NAVIGATION) && HORO_TEST_GAMEPLAY_NAVIGATION
+#include "Horo/Gameplay/GameplayNavigationContext.h"
+#endif
 #include "Horo/Gameplay/PersistenceRegistration.h"
 #include "Horo/Gameplay/ReplicationRegistration.h"
 #include "Horo/Gameplay/SystemRegistry.h"
@@ -51,6 +54,54 @@ public:
 };
 
 HORO_BEHAVIOR(MoveBehavior, "game.tests.dynamic_mover")
+
+#if defined(HORO_TEST_GAMEPLAY_NAVIGATION) && HORO_TEST_GAMEPLAY_NAVIGATION
+namespace {
+    std::shared_ptr<const GameplayNavigationResult> navigationClientCompleted;
+}
+
+/** @brief Transfer the actual native consumer's completed result to host regression ownership. */
+extern "C" HORO_GAME_EXPORT void HoroTestTakeNavigationResult(void *output) {
+    *static_cast<std::shared_ptr<const GameplayNavigationResult> *>(output) = std::move(navigationClientCompleted);
+}
+
+/** @brief Actual native module consumer of the same request/poll path used by Lua. */
+class NavigationClientBehavior final : public IBehaviorInstance {
+public:
+    static BehaviorDescriptor DescribeBehavior() {
+        BehaviorDescriptor descriptor;
+        descriptor.displayName = "Native Navigation Client";
+        return descriptor;
+    }
+
+    void OnFixedUpdate(BehaviorContext &context, FixedDeltaTime) override {
+        auto navigation = context.NavigationContext();
+        if (!navigation)
+            return;
+        if (!request_) {
+            auto submitted =
+                navigation->Submit({.start = {1, 0, 1}, .destination = {9, 0, 9}, .context = Telemetry::CaptureOperationContext()});
+            if (submitted.HasValue())
+                request_ = std::move(submitted).Value();
+            return;
+        }
+        auto result = request_->Poll();
+        if (result.HasError() || !result.Value())
+            return;
+        navigationClientCompleted = result.Value();
+        auto transform = context.LocalTransform();
+        if (transform.HasValue()) {
+            auto changed = transform.Value();
+            changed.translation.x = 7;
+            static_cast<void>(context.SetLocalTransform(changed));
+        }
+    }
+
+private:
+    std::optional<GameplayNavigationHandle> request_;
+};
+HORO_BEHAVIOR(NavigationClientBehavior, "game.tests.navigation_client")
+#endif
 
 /** @brief Real module consumer of the host-admitted typed prefab capability, with no Scene storage or source access. */
 class PrefabSpawnerBehavior final : public IBehaviorInstance {
@@ -322,6 +373,10 @@ namespace {
         }
 
         Result<void> Start(GameRuntimeContext &context) override {
+#if defined(HORO_TEST_GAMEPLAY_NAVIGATION) && HORO_TEST_GAMEPLAY_NAVIGATION
+            if (context.navigation && !context.navigation->Binding().queryGranted)
+                return Result<void>::Failure(MakeError(NavigationCapabilityErrors::PermissionDenied));
+#endif
 #if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
             if (!context.physics)
                 return Result<void>::Failure(MakeError(GameplayErrors::PhysicsUnavailable));
