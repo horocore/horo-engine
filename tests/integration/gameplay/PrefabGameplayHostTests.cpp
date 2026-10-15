@@ -1,10 +1,12 @@
 #include "GameplayModuleTestSupport.h"
 #include "GameplayWorldComposition.h"
 #include "Horo/Assets/AssetCook.h"
+#include "Horo/Platform/DynamicLibrary.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <cstring>
 #include <thread>
 
 namespace {
@@ -20,6 +22,39 @@ namespace {
                 if (active->EntityAt(index))
                     ++count;
         return count;
+    }
+
+    /** @brief Retains module-produced values across real native unload and later host weak-slot retirement. */
+    struct EscapedPrefabOperations final {
+        Prefab::PrefabOperation spawn;
+        Prefab::PrefabOperation despawn;
+        Prefab::PrefabInstance instance;
+        std::unique_ptr<Platform::DynamicLibrary> image;
+    };
+
+    /** @brief Copies values through a real module export; the function pointer never outlives the pinned call. */
+    EscapedPrefabOperations CapturePrefabOperations() {
+        auto loaded = Platform::LoadDynamicLibrary(HORO_TEST_GAME_MODULE_PATH);
+        REQUIRE(loaded.HasValue());
+        EscapedPrefabOperations escaped;
+        escaped.image = std::move(loaded).Value();
+        void *symbol = escaped.image->GetSymbol("HoroTestCopyPrefabOperations");
+        REQUIRE(symbol != nullptr);
+        using CopyOperations = void (*)(Prefab::PrefabOperation *, Prefab::PrefabOperation *, Prefab::PrefabInstance *);
+        CopyOperations copy{};
+        static_assert(sizeof(copy) == sizeof(symbol));
+        std::memcpy(&copy, &symbol, sizeof(copy));
+        copy(&escaped.spawn, &escaped.despawn, &escaped.instance);
+        REQUIRE(escaped.spawn.State() == Prefab::PrefabSpawnState::Committed);
+        REQUIRE(escaped.despawn.State() == Prefab::PrefabSpawnState::Committed);
+        return escaped;
+    }
+
+    /** @brief Observes host-owned completion storage after its originating module code has been unloaded. */
+    void RequireCommitted(const EscapedPrefabOperations &escaped) {
+        REQUIRE(escaped.spawn.Spawned().HasValue());
+        REQUIRE(escaped.instance.Root().IsValid());
+        REQUIRE(escaped.despawn.State() == Prefab::PrefabSpawnState::Committed);
     }
 
     /** @brief Publishes the exact immutable two-entity cooked artifact used by the native module. */
@@ -66,6 +101,22 @@ namespace {
     void FixedTick(GameplayWorldComposition &gameplay, const std::uint64_t tick, const CancellationToken &cancellation) {
         REQUIRE(gameplay.FixedTick(Runtime::FixedStepContext{tick, Duration::FromNanoseconds(10'000'000), cancellation}).HasValue());
     }
+
+    /** @brief Asserts complete actual native spawn and despawn publication before testing post-image observation. */
+    void RequireSpawnThenDespawn(GameplayWorldComposition &gameplay, const Runtime::RuntimeSceneService &scenes,
+                                 const Runtime::FrameContext &frame, const CancellationToken &cancellation) {
+        FixedTick(gameplay, 1, cancellation);
+        CHECK(Count(scenes) == 1);
+        for (std::size_t attempt = 0; attempt < 2000 && Count(scenes) != 3; ++attempt) {
+            REQUIRE(gameplay.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
+            if (Count(scenes) != 3)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        REQUIRE(Count(scenes) == 3);
+        FixedTick(gameplay, 2, cancellation);
+        REQUIRE(gameplay.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
+        CHECK(Count(scenes) == 1);
+    }
 }  // namespace
 
 TEST_CASE("Production Gameplay composition routes a native module through cooked preparation Scene publication and despawn",
@@ -102,18 +153,12 @@ TEST_CASE("Production Gameplay composition routes a native module through cooked
     REQUIRE(composition.HasValue());
     gameplay = std::move(composition).Value();
     activeGameplay = gameplay.get();
-    FixedTick(*activeGameplay, 1, cancellation.Token());
-    CHECK(Count(scenes) == 1);
-    for (std::size_t attempt = 0; attempt < 2000 && Count(scenes) != 3; ++attempt) {
-        REQUIRE(activeGameplay->OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
-        if (Count(scenes) != 3)
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    REQUIRE(Count(scenes) == 3);
-    FixedTick(*activeGameplay, 2, cancellation.Token());
-    REQUIRE(activeGameplay->OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
-    CHECK(Count(scenes) == 1);
+    RequireSpawnThenDespawn(*activeGameplay, scenes, frame, cancellation.Token());
+    auto escaped = CapturePrefabOperations();
     activeGameplay->Shutdown();
+    escaped.image.reset();  // Actual native module unloaded before both retained observations and service weak slots.
+    RequireCommitted(escaped);
+    gameplay.reset();  // Drops the service's final weak observation slots after native image retirement.
     activeGameplay = nullptr;
     templates.Shutdown();
     scenes.Shutdown();

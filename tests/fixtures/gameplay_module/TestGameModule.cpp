@@ -15,7 +15,9 @@
 #include "Horo/Prefab/PrefabSpawnService.h"
 #include "gameplay/GameAssetTestSupport.h"
 #if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
+#include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
+#include "Horo/Physics/CharacterErrors.h"
 #endif
 
 #include <algorithm>
@@ -25,6 +27,31 @@
 
 using namespace Horo;
 using namespace Horo::Gameplay;
+
+namespace {
+    Prefab::PrefabOperation retainedSpawn;
+    Prefab::PrefabOperation retainedDespawn;
+    Prefab::PrefabInstance retainedInstance;
+}  // namespace
+
+/** @brief Copies real module-created operation ownership into the host before native image retirement. */
+extern "C" HORO_GAME_EXPORT void HoroTestCopyPrefabOperations(Prefab::PrefabOperation *spawn, Prefab::PrefabOperation *despawn,
+                                                              Prefab::PrefabInstance *instance) {
+    *spawn = retainedSpawn;
+    *despawn = retainedDespawn;
+    *instance = retainedInstance;
+}
+
+#if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
+namespace {
+    Character::CharacterCapability retainedCharacterClient;
+}
+
+/** @brief Copies a module-derived fixture grant to host-owned storage for actual image-unload lifetime regression. */
+extern "C" HORO_GAME_EXPORT void HoroTestCopyCharacterClient(Character::CharacterCapability *destination) {
+    *destination = retainedCharacterClient;
+}
+#endif
 
 /** @brief Reports a rejected typed prefab operation from the native integration fixture. */
 class NativePrefabOperationFailure final : public std::runtime_error {
@@ -55,6 +82,56 @@ public:
 };
 
 HORO_BEHAVIOR(MoveBehavior, "game.tests.dynamic_mover")
+
+/** @brief Native behavior consumer of the same Character context and owned command used by scripts. */
+class CharacterClientBehavior final : public IBehaviorInstance {
+public:
+    static BehaviorDescriptor DescribeBehavior() {
+        BehaviorDescriptor descriptor;
+        descriptor.displayName = "Character Client";
+        descriptor.fields = {{"slot", std::int64_t{0}}, {"generation", std::int64_t{1}}};
+        descriptor.phases.push_back({BehaviorPhase::Gameplay, "game.tests.character_client", {}, {}, {}});
+        return descriptor;
+    }
+
+    void OnFixedUpdate(BehaviorContext &context, FixedDeltaTime) override {
+#if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
+        if (submitted_)
+            return;
+        const auto holder = context.CharacterContext();
+        if (!holder)
+            throw std::runtime_error("Native Character context is missing.");
+        const auto &binding = holder->Binding();
+        auto granted = holder->Acquire("game.tests", binding.scene, binding.sceneGeneration);
+        if (granted.HasError())
+            throw std::runtime_error(granted.ErrorValue().code.Value());
+        const auto identity = granted.Value().Identity();
+        Character::CharacterControllerHandle handle{identity.sceneGeneration, identity.world, {0, 1}};
+        for (const auto &field : context.Fields()) {
+            if (field.name == "slot")
+                handle.slot.index = static_cast<std::uint32_t>(std::get<std::int64_t>(field.value));
+            if (field.name == "generation")
+                handle.slot.generation = static_cast<std::uint32_t>(std::get<std::int64_t>(field.value));
+        }
+        auto queued = granted.Value().QueueMovementCommand(
+            {.controller = handle, .tick = 1, .sequence = 968, .desiredVelocityMetersPerSecond = Math::Vec3{1, 0, 0}});
+        if (queued.HasError())
+            throw std::runtime_error(queued.ErrorValue().code.Value());
+        auto transform = context.LocalTransform().Value();
+        transform.translation.x = 21;
+        if (context.SetLocalTransform(transform).HasError())
+            throw std::runtime_error("Native Character marker rejected.");
+        submitted_ = true;
+#else
+        static_cast<void>(context);
+        throw std::runtime_error("Character fixture requires the explicit Physics SDK component.");
+#endif
+    }
+
+private:
+    bool submitted_{};
+};
+HORO_BEHAVIOR(CharacterClientBehavior, "game.tests.character_client")
 
 #if defined(HORO_TEST_GAMEPLAY_NAVIGATION) && HORO_TEST_GAMEPLAY_NAVIGATION
 namespace {
@@ -134,12 +211,15 @@ public:
             if (operation.HasError())
                 throw NativePrefabOperationFailure("Typed prefab spawn admission failed.");
             operation_ = std::move(operation).Value();
+            retainedSpawn = operation_;
             requested_ = true;
         } else if (!retired_ && operation_.State() == Prefab::PrefabSpawnState::Committed) {
-            auto operation = capability->Despawn(operation_.Spawned().Value(), tick_);
+            retainedInstance = operation_.Spawned().Value();
+            auto operation = capability->Despawn(retainedInstance, tick_);
             if (operation.HasError())
                 throw NativePrefabOperationFailure("Typed prefab despawn admission failed.");
             retirement_ = std::move(operation).Value();
+            retainedDespawn = retirement_;
             retired_ = true;
         }
     }
@@ -420,6 +500,19 @@ namespace {
             if (!binding.permissionGranted && physics.HasValue())
                 return Result<void>::Failure(MakeError(GameplayErrors::PhysicsPermissionDenied));
 #endif
+#if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
+            if (context.character && context.character->Binding().permissionGranted) {
+                const auto &characterBinding = context.character->Binding();
+                auto grant = context.character->Acquire("game.tests", characterBinding.scene, characterBinding.sceneGeneration);
+                if (grant.HasError())
+                    return Result<void>::Failure(grant.ErrorValue());
+                auto child = grant.Value().Derive();
+                if (child.HasError())
+                    return Result<void>::Failure(child.ErrorValue());
+                character_ = std::move(child).Value();
+                retainedCharacterClient = character_;
+            }
+#endif
             const GameplayServiceId service = GameplayServiceId::Parse("game.tests.session_service").Value();
             if (const GameplayCapabilityId capability = GameplayCapabilityId::Parse("game.tests.session.read").Value();
                 context.cancellation.IsCancellationRequested() ||
@@ -448,6 +541,13 @@ namespace {
             }
             if (!context.cancellation.IsCancellationRequested())
                 return Result<GameModuleReloadSnapshot>::Failure(MakeError(GameplayErrors::GameplayReloadRestartRequired));
+#if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
+            if (character_.Identity().generation != 0) {
+                auto access = character_.Validate();
+                if (access.HasValue() || access.ErrorValue().code.Value() != Character::CharacterErrors::CapabilityRevoked.code.Value())
+                    return Result<GameModuleReloadSnapshot>::Failure(MakeError(GameplayErrors::GameplayReloadRestartRequired));
+            }
+#endif
             return Result<GameModuleReloadSnapshot>::Success({1, {}});
         }
 
@@ -458,6 +558,9 @@ namespace {
         }
 
     private:
+#if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
+        Character::CharacterCapability character_;
+#endif
         static GameplayEventOutcome CompleteQuest(const BorrowedCallbackContext &context, const GameplayEventRequest &request) {
             using enum GameplayEventOutcome;
             auto *instance = context.Get<Module>();

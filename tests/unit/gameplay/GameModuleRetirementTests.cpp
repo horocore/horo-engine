@@ -26,6 +26,31 @@ TEST_CASE("Failed native registration retains an explicit candidate until owner-
     CHECK(native.control.stopped == 0);
 }
 
+TEST_CASE("Failed native registration candidate destruction releases ownership after result moves", "[gameplay][retirement]") {
+    NativeFailureControl native{1};
+    GameModuleHost loader;
+    SECTION("unconsumed result") {
+        auto result = loader.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
+        REQUIRE(result.HasValue());
+        REQUIRE(result.Value().diagnostic);
+        REQUIRE(result.Value().owner);
+        CHECK(native.control.destroyed == 0);
+    }
+    SECTION("moved result and candidate") {
+        auto result = loader.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
+        REQUIRE(result.HasValue());
+        auto movedResult = std::move(result);
+        auto candidate = std::move(movedResult).Value();
+        REQUIRE(candidate.diagnostic);
+        REQUIRE(candidate.owner);
+        CHECK(native.control.destroyed == 0);
+    }
+    CHECK(native.control.registered == 1);
+    CHECK(native.control.stopped == 0);
+    CHECK(native.control.destroyed == 1);
+    CHECK(native.control.destroyedOn == std::this_thread::get_id());
+}
+
 TEST_CASE("Failed native startup callback drains after loader destruction on its original owner lane", "[gameplay][retirement]") {
     NativeFailureControl native{2};
     GameModuleRetirementQueue retirement{1};

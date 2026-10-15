@@ -1,4 +1,5 @@
 #include "GameModuleHostDetail.h"
+#include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
@@ -25,30 +26,30 @@ namespace Horo::Gameplay {
         }
 
         [[nodiscard]] Result<void> InvokeRegister(IGameModule &gameModule, GameRegistrationContext &context) {
+            // Native module callbacks may throw arbitrary types; preserve typed rollback diagnostics at the host boundary.
             try {
                 return gameModule.Register(context);
-            } catch (
-                ...) {  // NOSONAR(cpp:S2738) Native module boundary contains arbitrary plugin exceptions and preserves rollback ownership.
+            } catch (...) {  // NOSONAR: native ABI boundary.
                 return Result<void>::Failure(
                     MakeError(GameplayErrors::GameplayFactoryFailed, "Gameplay module registration threw an exception."));
             }
         }
 
         [[nodiscard]] Result<void> InvokeStart(IGameModule &gameModule, GameRuntimeContext &context) {
+            // Native module callbacks may throw arbitrary types; preserve typed rollback diagnostics at the host boundary.
             try {
                 return gameModule.Start(context);
-            } catch (
-                ...) {  // NOSONAR(cpp:S2738) Native module boundary contains arbitrary plugin exceptions and preserves rollback ownership.
+            } catch (...) {  // NOSONAR: native ABI boundary.
                 return Result<void>::Failure(
                     MakeError(GameplayErrors::GameplayFactoryFailed, "Gameplay module startup threw an exception."));
             }
         }
 
         [[nodiscard]] Result<GameModuleReloadSnapshot> InvokePrepareReload(IGameModule &gameModule, GameRuntimeContext &context) {
+            // Native module callbacks may throw arbitrary types; preserve typed rollback diagnostics at the host boundary.
             try {
                 return gameModule.PrepareReload(context);
-            } catch (
-                ...) {  // NOSONAR(cpp:S2738) Native module boundary contains arbitrary plugin exceptions and preserves rollback ownership.
+            } catch (...) {  // NOSONAR: native ABI boundary.
                 return Result<GameModuleReloadSnapshot>::Failure(
                     MakeError(GameplayErrors::GameplayReloadRestartRequired, "Gameplay reload quiescence callback threw an exception."));
             }
@@ -56,10 +57,10 @@ namespace Horo::Gameplay {
 
         [[nodiscard]] Result<void> InvokeRestoreReload(IGameModule &gameModule, const GameModuleReloadSnapshot &snapshot,
                                                        GameRuntimeContext &context) {
+            // Native module callbacks may throw arbitrary types; preserve typed rollback diagnostics at the host boundary.
             try {
                 return gameModule.RestoreReload(snapshot, context);
-            } catch (
-                ...) {  // NOSONAR(cpp:S2738) Native module boundary contains arbitrary plugin exceptions and preserves rollback ownership.
+            } catch (...) {  // NOSONAR: native ABI boundary.
                 return Result<void>::Failure(
                     MakeError(GameplayErrors::GameplayReloadRestoreFailed, "Gameplay reload restore callback threw an exception."));
             }
@@ -124,17 +125,25 @@ namespace Horo::Gameplay {
         if (activated.HasError())
             return Result<void>::Failure(activated.ErrorValue());
         projectServices = std::move(activated).Value();
-        runtimeContext = {projectServices->Cancellation(), projectServices->ActiveServices(), projectServices->Capabilities()};
-        runtimeContext.physics = physics;
-        runtimeContext.navigation = navigation;
+        PublishRuntimeContext();
         startAttempted = true;
         return InvokeStart(*gameplayModule, runtimeContext);
+    }
+
+    /** @copydoc LoadedGameModule::Impl::PublishRuntimeContext */
+    void LoadedGameModule::Impl::PublishRuntimeContext() {
+        runtimeContext = {projectServices->Cancellation(), projectServices->ActiveServices(), projectServices->Capabilities()};
+        runtimeContext.physics = physics;
+        runtimeContext.character = character;
+        runtimeContext.navigation = navigation;
     }
 
     Result<GameModuleReloadSnapshot> LoadedGameModule::Impl::PrepareReload() {
         if (reloadPrepared || gameplayModule == nullptr || projectServices == nullptr)
             return Result<GameModuleReloadSnapshot>::Failure(MakeError(GameplayErrors::GameplayReloadRestartRequired));
         projectServices->RequestCancellation();
+        if (character)
+            character->Revoke();
         if (navigation)
             navigation->Revoke();
         if (physics)
@@ -165,6 +174,8 @@ namespace Horo::Gameplay {
         if (shutdown)
             return;
         shutdown = true;
+        if (character)
+            character->Revoke();
         if (navigation)
             navigation->Revoke();
         if (physics)
@@ -187,6 +198,10 @@ namespace Horo::Gameplay {
             destroy(gameplayModule);
             gameplayModule = nullptr;
         }
+        runtimeContext.navigation.reset();
+        navigation.reset();
+        runtimeContext.character.reset();
+        character.reset();
         registries.registry.reset();
         registries.systems.reset();
         registries.services.reset();

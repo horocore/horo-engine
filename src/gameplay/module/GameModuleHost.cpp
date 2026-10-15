@@ -1,6 +1,7 @@
 #include "Horo/Gameplay/GameModuleHost.h"
 
 #include "GameModuleHostDetail.h"
+#include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
@@ -107,21 +108,6 @@ namespace Horo::Gameplay {
         }
     }  // namespace
 
-    /** @copydoc GameModuleHost::BindContexts */
-    Result<void> GameModuleHost::BindContexts(LoadedGameModule::Impl &selectedModule) const {
-        auto resolvedPhysics = ResolvePhysicsContext(physics_, selectedModule.moduleId);
-        if (resolvedPhysics.HasError())
-            return Result<void>::Failure(resolvedPhysics.ErrorValue());
-        auto resolvedNavigation = ResolveNavigationContext(navigation_, selectedModule.moduleId);
-        if (resolvedNavigation.HasError())
-            return Result<void>::Failure(resolvedNavigation.ErrorValue());
-        if (auto pinned = resolvedNavigation.Value()->RetainCodeImage(selectedModule.codeImage); pinned.HasError())
-            return Result<void>::Failure(pinned.ErrorValue());
-        selectedModule.navigation = std::move(resolvedNavigation).Value();
-        selectedModule.physics = std::move(resolvedPhysics).Value();
-        return Result<void>::Success();
-    }
-
     /** @copydoc GameModuleHost::ValidateArtifact */
     Result<void> GameModuleHost::ValidateArtifact(const std::filesystem::path &libraryPath,
                                                   const GameModuleLoadExpectation &expectation) const {
@@ -164,7 +150,7 @@ namespace Horo::Gameplay {
         impl->buildFingerprint = validated.descriptor->buildFingerprint;
         impl->descriptorRevision = validated.bundle->descriptorRevision;
         impl->destroy = validated.bundle->lifecycle.destroy;
-        if (const auto bound = BindContexts(*impl); bound.HasError())
+        if (const auto bound = BindRuntimeServices(*impl); bound.HasError())
             return Result<GameModuleLoadCandidate>::Failure(bound.ErrorValue());
 
         auto registry = BuildRegistry(*validated.bundle);
@@ -173,22 +159,50 @@ namespace Horo::Gameplay {
         impl->registries.registry = std::move(registry).Value();
 
         // Allocate the exported RAII wrapper before any module factory can publish work.
-        GameModuleLoadCandidate candidate{std::make_unique<LoadedGameModule>(LoadedGameModule::ConstructionKey{}, impl), {}};
+        auto owner = std::make_unique<LoadedGameModule>(LoadedGameModule::ConstructionKey{}, impl);
+        std::optional<Error> diagnostic;
         auto initializationFailure =
             MakeError(GameplayErrors::GameplayFactoryFailed, "Gameplay host initialization failed after factory admission.");
         try {
             impl->gameplayModule = validated.bundle->lifecycle.create();
             if (impl->gameplayModule == nullptr)
-                candidate.diagnostic =
-                    MakeError(GameplayErrors::InvalidBehaviorComponent, "Gameplay module factory returned no module object.");
+                diagnostic = MakeError(GameplayErrors::InvalidBehaviorComponent, "Gameplay module factory returned no module object.");
             else if (auto activated = impl->RegisterAndStart(hostCapabilities_); activated.HasError())
-                candidate.diagnostic = activated.ErrorValue();
+                diagnostic = activated.ErrorValue();
         } catch (...) {  // NOSONAR(cpp:S2738) Native module boundary contains arbitrary plugin exceptions and preserves rollback ownership.
-            candidate.diagnostic = std::move(initializationFailure);
+            diagnostic = std::move(initializationFailure);
         }
-        if (candidate.diagnostic)
-            candidate.owner->RequestRetirement();
-        return Result<GameModuleLoadCandidate>::Success(std::move(candidate));
+        if (diagnostic)
+            owner->RequestRetirement();
+        return Result<GameModuleLoadCandidate>::Success({std::move(owner), std::move(diagnostic)});
+    }
+
+    /** @copydoc GameModuleHost::BindRuntimeServices */
+    Result<void> GameModuleHost::BindRuntimeServices(LoadedGameModule::Impl &impl) const {
+        auto physics = ResolvePhysicsContext(runtimeServices_.physics, impl.moduleId);
+        if (physics.HasError())
+            return Result<void>::Failure(physics.ErrorValue());
+        auto navigation = ResolveNavigationContext(runtimeServices_.navigation, impl.moduleId);
+        if (navigation.HasError())
+            return Result<void>::Failure(navigation.ErrorValue());
+        if (auto pinned = navigation.Value()->RetainCodeImage(impl.codeImage); pinned.HasError())
+            return Result<void>::Failure(pinned.ErrorValue());
+        impl.navigation = std::move(navigation).Value();
+        impl.physics = std::move(physics).Value();
+
+        if (runtimeServices_.character) {
+            if (const auto &binding = runtimeServices_.character->Binding(); binding.moduleId != impl.moduleId)
+                return Result<void>::Failure(MakeError(GameplayErrors::CharacterPermissionDenied));
+            if (auto dependency = runtimeServices_.character->ValidateDependency(impl.physics.get()); dependency.HasError())
+                return Result<void>::Failure(dependency.ErrorValue());
+            auto character = runtimeServices_.character->Derive();
+            if (character.HasError())
+                return Result<void>::Failure(character.ErrorValue());
+            impl.character = std::move(character).Value();
+        } else {
+            impl.character = GameplayCharacterContext::Withheld({.moduleId = impl.moduleId}, GameplayCharacterDenial::Unavailable);
+        }
+        return Result<void>::Success();
     }
 
 }  // namespace Horo::Gameplay

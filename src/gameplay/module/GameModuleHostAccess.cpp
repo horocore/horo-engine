@@ -1,5 +1,6 @@
 #include "GameModuleHostDetail.h"
 #include "Horo/Gameplay/GameModuleHost.h"
+#include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
@@ -10,6 +11,8 @@ namespace Horo::Gameplay {
     LoadedGameModule::LoadedGameModule(const ConstructionKey &, std::shared_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
     LoadedGameModule::~LoadedGameModule() {
+        if (impl_->character)
+            impl_->character->Revoke();
         if (impl_->navigation)
             impl_->navigation->Revoke();
     }
@@ -134,9 +137,16 @@ namespace Horo::Gameplay {
         return impl_->physics;
     }
 
+    /** @copydoc LoadedGameModule::CharacterContext */
+    std::shared_ptr<const GameplayCharacterContext> LoadedGameModule::CharacterContext() const noexcept {
+        return impl_->character;
+    }
+
     /** @copydoc LoadedGameModule::PrepareReload */
     Result<GameModuleReloadSnapshot> LoadedGameModule::PrepareReload() {  // NOSONAR(cpp:S5817) Mutates generation lifecycle.
         impl_->runtimeLeaseAdmission.store(false, std::memory_order_release);
+        if (impl_->character)
+            impl_->character->Revoke();
         if (impl_->navigation)
             impl_->navigation->Revoke();
         if (impl_->physics)
@@ -151,6 +161,8 @@ namespace Horo::Gameplay {
     void LoadedGameModule::RequestRetirement() noexcept {  // NOSONAR(cpp:S5817) Revokes generation admission and requests lifecycle
                                                            // cancellation.
         impl_->runtimeLeaseAdmission.store(false, std::memory_order_release);
+        if (impl_->character)
+            impl_->character->Revoke();
         if (impl_->navigation)
             impl_->navigation->Revoke();
         if (impl_->physics)
@@ -179,14 +191,20 @@ namespace Horo::Gameplay {
     }
 
     /** @copydoc GameModuleHost::GameModuleHost */
-    GameModuleHost::GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics,
-                                   std::shared_ptr<GameplayNavigationContext> navigation)
-        : hostCapabilities_(std::move(hostCapabilities)), physics_(std::move(physics)), navigation_(std::move(navigation)) {}
+    GameModuleHost::GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities)
+        : GameModuleHost(GameModuleHostOptions{std::move(hostCapabilities), {}}) {}
 
     /** @copydoc GameModuleHost::GameModuleHost */
-    GameModuleHost::GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities) : hostCapabilities_(std::move(hostCapabilities)) {}
+    GameModuleHost::GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics,
+                                   std::shared_ptr<GameplayNavigationContext> navigation)
+        : GameModuleHost(
+              GameModuleHostOptions{std::move(hostCapabilities), {.physics = std::move(physics), .navigation = std::move(navigation)}}) {}
 
     /** @copydoc GameModuleHost::GameModuleHost */
     GameModuleHost::GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics)
-        : hostCapabilities_(std::move(hostCapabilities)), physics_(std::move(physics)) {}
+        : GameModuleHost(GameModuleHostOptions{std::move(hostCapabilities), {.physics = std::move(physics)}}) {}
+
+    /** @copydoc GameModuleHost::GameModuleHost */
+    GameModuleHost::GameModuleHost(GameModuleHostOptions options)
+        : hostCapabilities_(std::move(options.hostCapabilities)), runtimeServices_(std::move(options.runtimeServices)) {}
 }  // namespace Horo::Gameplay

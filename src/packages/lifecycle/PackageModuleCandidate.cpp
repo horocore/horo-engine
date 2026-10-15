@@ -115,7 +115,7 @@ namespace Horo::Packages::Detail {
             for (const auto &capability : selectedModule.requiredCapabilities) {
                 Extensions::ExtensionCapabilityRequest required{{capability}, {}};
                 if (request.role == Extensions::ExtensionModuleRole::RuntimeParticipant && capability == "runtime.participate")
-                    required.requiredPermissions.push_back({"runtime.participate"});
+                    required.requiredPermissions.emplace_back("runtime.participate");
                 grant.capabilities.emplace_back(std::move(required));
             }
             auto accepted = Extensions::ExtensionCapabilityAdmission::Evaluate(grant, approval.policy);

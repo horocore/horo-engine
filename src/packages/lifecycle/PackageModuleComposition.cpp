@@ -98,7 +98,7 @@ namespace Horo::Packages::Detail {
 
     /** @copydoc PackageModuleComposition::PrepareHost */
     Result<void> PackageModuleComposition::PrepareHost(Entry &entry, const PackageLifecycleConfiguration &configuration,
-                                                       const IPackageExtensionTrust &trust) {
+                                                       const IPackageExtensionTrust &trust) const {
         const auto &request = entry.request;
         const bool presentationOmitted = configuration.profile == Extensions::ExtensionHostProfile::Headless &&
                                          request.role == Extensions::ExtensionModuleRole::EditorPresentation;
@@ -158,8 +158,7 @@ namespace Horo::Packages::Detail {
 
     /** @copydoc PackageModuleComposition::DependenciesReady */
     Result<bool> PackageModuleComposition::DependenciesReady(Entry &entry) const {
-        auto local = LocalDependenciesReady(entry);
-        if (local.HasError() || !local.Value())
+        if (auto local = LocalDependenciesReady(entry); local.HasError() || !local.Value())
             return local;
         const auto &packages = snapshot_->install->Graph()->packages;
         const auto package = std::ranges::find(packages, entry.request.package, [](const auto &value) {

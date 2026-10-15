@@ -37,6 +37,10 @@ namespace Horo::Gameplay::GameplayErrors {
     extern const ErrorCodeDescriptor CapabilityMissing;
     extern const ErrorCodeDescriptor PhysicsPermissionDenied;
     extern const ErrorCodeDescriptor PhysicsUnavailable;
+    /** @brief Character access requires an explicit matching module permission. */
+    extern const ErrorCodeDescriptor CharacterPermissionDenied;
+    /** @brief Character or its paired Physics dependency is not active for this execution scope. */
+    extern const ErrorCodeDescriptor CharacterUnavailable;
     extern const ErrorCodeDescriptor SystemScheduleCycle;
     extern const ErrorCodeDescriptor ServiceDependencyCycle;
     extern const ErrorCodeDescriptor SystemAccessConflict;

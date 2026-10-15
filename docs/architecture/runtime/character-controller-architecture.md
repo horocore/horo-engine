@@ -1088,3 +1088,64 @@ Runtime variables:
 - [VFX And Particles Architecture](./vfx-and-particles-architecture.md): impact
   effects and decals.
 - [Scene Runtime](./scene-runtime.md): transform ownership and update order.
+
+## Gameplay Runtime Scope And Revocation
+
+`GameplayCharacterContext` is a downstream Gameplay/Physics integration, not a
+second controller or simulation owner. Explicit host composition admits an exact
+module principal, runtime Scene ID, scene activation generation, Character world
+and paired active Physics world. Permission defaults denied. An omitted consumer
+is typed `gameplay.character.unavailable`; a foreign principal or denied grant is
+`gameplay.character.permission_denied`. Character's original affinity, stale-world,
+handle, command-order and capacity errors pass through unchanged.
+
+The host creates an anchor after dependencies are active. `GameModuleRuntimeServices`
+is inert composition metadata; `GameModuleHostOptions` selects those anchors
+explicitly. Every actual native load derives a new scope before factories and
+passes it to `GameRuntimeContext::character` only after project services start.
+Every BehaviorRuntime derives its own child and verifies the exact Scene. Native
+and Lua behaviors consume the same canonical `CharacterCapability`. No concrete
+world is discovered, selected or retained in a module-facing execution context.
+Existing hosts without a selected Character world remain explicitly unavailable.
+
+Delegation has a fixed depth of eight and shares the parent's cancellation chain.
+Closing a child never closes its host anchor or a sibling; closing an ancestor
+also rejects unfrozen queued descendant commands. Admission and result snapshots
+preserve the existing tick, sequence/correlation, handle and publication identities.
+Revocation after command closure does not rewrite that attempted tick's simulation.
+The original world registry binds an immutable private issuer callback. A native
+module's derived grant therefore allocates state, control blocks and weak registry
+storage through the host image even when the public SDK method is linked into the
+module. Consumers cannot replace that issuer. The last retained client and weak
+entry may safely be released after the native module image has unloaded.
+
+PrepareReload revokes Character before native callbacks and before a retained-runtime
+lease can reject quiescence. Wrapper withdrawal closes authority even while a
+native generation lease pins code. Controlled shutdown, failed activation and Scene
+retirement revoke before cleanup callbacks and storage release. Exposed mutable
+runtime-context copies are released while the native image is still loaded;
+authoritative holders stay private to the host. Retained clients never retain a
+Scene, controller record, consumer callback or owning world.
+
+Lua gets a bounded `ctx.character.acquire()` projection with locked opaque client
+and controller userdata. `client:controller(slot, generation)` resolves only a
+validated Horo handle. `client:queue(handle, request)` accepts the complete closed
+movement intent: decimal-string/integer `tick` and `correlation`, optional velocity
+and heading arrays, jump, stance, capsule shape and typed collision selectors.
+Unsigned tick/correlation values use lossless decimal strings on output; neither
+world IDs nor body/controller generations pass through floating-point conversions.
+Unknown keys, sparse arrays and malformed values fail before canonical admission;
+authored lookup/length metamethods do not supply request data. `snapshot` returns
+owned committed tick, correlation, revision, position and grounded facts.
+
+Each VM incarnation owns a fresh child. A fixed weak inventory (at most 256 scopes
+per script program, additionally bounded by the Character world) closes all old
+script grants synchronously when compatible source replacement succeeds, before
+the next callback or VM recreation. Failed replacement preserves current authority.
+Callback failure, VM close and program destruction close their scopes. Source
+generations reject overflow. No script userdata retains BehaviorContext, a VM
+callback pointer, Scene storage or a raw world. The canonical owner remains the
+only authority that advances fixed ticks or publishes simulation state.
+
+See [Character capability migration](../../guides/gameplay-character-capability-migration.md)
+for the deliberate native SDK12 layout and affected consumers.

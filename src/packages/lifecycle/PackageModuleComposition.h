@@ -42,7 +42,7 @@ namespace Horo::Packages::Detail {
                                                   const PackageLifecycleConfiguration &configuration, const IPackageExtensionTrust &trust);
         /** @brief Prepares one already validated role's host and admission without invoking executable factories. */
         [[nodiscard]] Result<void> PrepareHost(Entry &entry, const PackageLifecycleConfiguration &configuration,
-                                               const IPackageExtensionTrust &trust);
+                                               const IPackageExtensionTrust &trust) const;
         /** @brief Pins all enabled local providers, rejecting unavailable required roles before activation. */
         [[nodiscard]] Result<bool> LocalDependenciesReady(Entry &entry) const;
         [[nodiscard]] Result<bool> DependenciesReady(Entry &entry) const;

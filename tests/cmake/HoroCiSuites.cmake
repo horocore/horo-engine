@@ -16,6 +16,21 @@ set(HORO_CI_AUDIO_TARGETS
 # The full Windows suite remains disabled. Preserve all existing focused checks
 # in one headless Debug build, including their public-header compile consumers.
 set(HORO_CI_WINDOWS_TARGETS
+    HoroPhysicsTests
+    HoroPhysicsPublicHeaderConsumer
+    HoroGameplayPhysicsTests
+    HoroGameplayRuntimeTests
+    HoroGameModuleHostTests
+    HoroLuaBehaviorTests
+    HoroGameplayCharacterIntegrationPublicHeaderConsumer
+    HoroGameplayPhysicsIntegrationPublicHeaderConsumer
+    HoroGameplayModuleHostPublicHeaderConsumer
+    HoroGameplayApiPublicHeaderConsumer
+    HoroGameplayRuntimePublicHeaderConsumer
+    HoroGameplayLuaPublicHeaderConsumer
+    HoroGameplayPhysicsPublicHeaderConsumer
+    HoroGameplayPhysicsSdkHostConsumer
+
     HoroWorldStreamingTests
     HoroWorldStreamingPublicHeaderConsumer
     HoroStreamingSourcePlannerBenchmark
@@ -253,6 +268,7 @@ function(horo_finalize_ci_suites)
     endif()
 
     set_property(TEST
+        HoroCharacterAllocationJunitPathContract
         HoroRuntimeUiSceneReconciliationPublicHeaderConsumer
         HoroRuntimeUiHotReloadPublicHeaderConsumer
         HoroSceneIdentityContractConsumer
@@ -264,6 +280,8 @@ function(horo_finalize_ci_suites)
         HoroRuntimeUiScreenTransitionPublicHeaderConsumer
         HoroExtensionManagerTests
         HoroNavigationCoordinatorPublicConsumer
+        HoroGameplayPhysicsPublicHeaderConsumer
+        HoroGameplayPhysicsSdkContract
         HoroNavigationCharacterAdapterPublicConsumer
         HoroExtensionAbiConformanceCliSupported
         HoroExtensionAbiConformanceCliIncompatible

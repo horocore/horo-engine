@@ -23,7 +23,7 @@ if(NOT HORO_GIT_REVISION_RESULT EQUAL 0 OR HORO_SOURCE_REVISION STREQUAL "")
 endif()
 
 set(HORO_GAMEPLAY_SDK_FINGERPRINT
-    "horo-${HORO_ENGINE_VERSION}-gameplay-sdk10-${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}"
+    "horo-${HORO_ENGINE_VERSION}-gameplay-sdk15-${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}"
 )
 set(HORO_EXTENSION_SDK_VERSION "${HORO_ENGINE_VERSION}")
 set(HORO_EXTENSION_ABI_MAJOR_VERSION 1)
@@ -118,12 +118,13 @@ export(TARGETS HoroFoundation HoroNetworkApi HoroSaveApi HoroGameplayApi
 # Physics is an explicit SDK component. The minimal gameplay export remains solver-free;
 # opting in exports the reviewed private static-link closure, never repository-wide includes.
 set_target_properties(HoroSceneIdentity PROPERTIES EXPORT_NAME SceneIdentity)
-set(HORO_GAMEPLAY_PHYSICS_SDK_TARGETS HoroSceneIdentity HoroGameplayPhysicsIntegration HoroPhysics HoroPhysicsModel HoroAssets HoroRuntime
+set(HORO_GAMEPLAY_PHYSICS_SDK_TARGETS HoroSceneIdentity HoroGameplayPhysicsIntegration HoroGameplayCharacterIntegration HoroPhysics HoroPhysicsModel HoroAssets HoroRuntime
     HoroThirdPartyUfbx miniz utf8proc nlohmann_json)
 if(TARGET Jolt)
     list(APPEND HORO_GAMEPLAY_PHYSICS_SDK_TARGETS Jolt)
 endif()
 set_target_properties(HoroGameplayPhysicsIntegration PROPERTIES EXPORT_NAME GameplayPhysicsIntegration)
+set_target_properties(HoroGameplayCharacterIntegration PROPERTIES EXPORT_NAME GameplayCharacterIntegration)
 set_target_properties(HoroPhysics PROPERTIES EXPORT_NAME Physics)
 set_target_properties(HoroPhysicsModel PROPERTIES EXPORT_NAME PhysicsModel)
 set_target_properties(HoroAssets PROPERTIES EXPORT_NAME Assets)

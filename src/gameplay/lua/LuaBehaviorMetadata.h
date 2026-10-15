@@ -3,9 +3,23 @@
  * @brief Target-private inert metadata reads shared by behavior and replication compilation.
  */
 #include "Horo/Gameplay/BehaviorRegistry.h"
+#include "Horo/Gameplay/ReplicationRegistration.h"
 struct lua_State;
 
 namespace Horo::Gameplay::Detail {
+    /** @brief Borrowed immutable metadata evidence for one validated Lua program publication; retains no VM or runtime. */
+    struct LuaBehaviorReloadMetadata final {
+        const BehaviorDescriptor &descriptor;
+        const std::optional<GameplayReplicationRegistration> &replication;
+        const ReplicationRegistrationRegistry *replicationRegistry;
+        const std::string &sourceName;
+    };
+
+    /** @brief Validates descriptor, replication ownership, schedule and codecs before any source publication or scope revocation.
+     * @param active Current immutable publication. @param candidate Replacement, or missing.
+     * @return Existing typed compatibility failure with original source context, or success without mutation. */
+    [[nodiscard]] Result<void> ValidateLuaBehaviorReplacement(const LuaBehaviorReloadMetadata &active,
+                                                              const LuaBehaviorReloadMetadata *candidate);
     /** @brief Pushes one raw metadata value from the table at the top of the Lua stack.
      * @param state Compiler-owned Lua state with a table on top.
      * @param key Borrowed literal metadata key.

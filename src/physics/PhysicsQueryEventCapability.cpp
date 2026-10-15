@@ -98,7 +98,7 @@ namespace Horo::Physics {
             if (const auto validation = ValidateBatchCommands(*access, impl, commands, admission.Value().published); validation.HasError())
                 return Result<std::shared_ptr<PhysicsQueryBatchState>>::Failure(validation.ErrorValue());
             try {
-                auto batch = std::make_shared<PhysicsQueryBatchState>(commands, access);
+                auto batch = access->allocateBatch(commands, access);
                 impl.queryBatch.pending = batch;
                 impl.queryBatch.tick = admission.Value().published.completedTick;
                 impl.queryBatch.admissions = admission.Value().admittedThisTick + static_cast<std::uint32_t>(commands.size());
@@ -135,7 +135,7 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsQueryBatchHandle::Cancel */
     bool PhysicsQueryBatchHandle::Cancel() const noexcept {
-        return state_ && state_->FailCode(PhysicsErrors::QueryCancelled);
+        return state_ && state_->Cancel();
     }
 
     /** @copydoc PhysicsQueryBatchHandle::Poll */
@@ -166,7 +166,10 @@ namespace Horo::Physics {
         if (impl_->queryEvents.capabilities.size() >= MaximumPhysicsQueryEventCapabilitiesPerWorld)
             return Result<PhysicsQueryEventCapability>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
         try {
-            auto state = std::make_shared<PhysicsQueryEventCapabilityState>();
+            auto state = std::make_shared<PhysicsQueryEventCapabilityState>(
+                +[](const std::span<const PhysicsQueryCommand> commands, std::shared_ptr<PhysicsQueryEventCapabilityState> access) {
+                return std::make_shared<PhysicsQueryBatchState>(commands, std::move(access));
+            });
             state->world = this;
             state->identity = {impl_->identity, impl_->queryEvents.nextCapabilityGeneration};
             state->ownerThread = impl_->runtime->ownerThread;
