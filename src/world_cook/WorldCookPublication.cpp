@@ -51,6 +51,18 @@ namespace Horo::WorldCook {
 
             const Result<Assets::AssetCookGeneration> result;
         };
+
+        /** @brief Borrows encoded cell bytes only for the synchronous complete-world validation. */
+        std::vector<CellArtifactView> CellViews(const SourceCapture &source, const Detail::EncodedWorld &encoded) {
+            std::vector<CellArtifactView> views;
+            views.reserve(encoded.cells.size());
+            for (const auto &cell : encoded.cells) {
+                const auto definition =
+                    std::ranges::find(source.partition.Cells(), cell.integrity.cell, &WorldStreaming::WorldPartitionCellDescriptor::id);
+                views.push_back({definition->package.chunkAsset, cell.bytes});
+            }
+            return views;
+        }
     }  // namespace
 
     /** @copydoc PublishWorldCook */
@@ -68,13 +80,7 @@ namespace Horo::WorldCook {
         auto encoded = Detail::EncodeWorld(source, receipt.Report(), limits, cancellation);
         if (encoded.HasError())
             return Result<PublicationReport>::Failure(encoded.ErrorValue());
-        std::vector<CellArtifactView> views;
-        views.reserve(encoded.Value().cells.size());
-        for (const auto &cell : encoded.Value().cells) {
-            const auto definition =
-                std::ranges::find(source.partition.Cells(), cell.integrity.cell, &WorldStreaming::WorldPartitionCellDescriptor::id);
-            views.push_back({definition->package.chunkAsset, cell.bytes});
-        }
+        const auto views = CellViews(source, encoded.Value());
         auto validation = ValidateWorldCookArtifacts(source, release, {encoded.Value().index.bytes, encoded.Value().dependencies, views},
                                                      limits, cancellation);
         if (validation.HasError())

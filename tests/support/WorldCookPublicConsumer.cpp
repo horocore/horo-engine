@@ -2,6 +2,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdio>
 
 namespace {
     using namespace Horo;
@@ -26,6 +27,44 @@ namespace {
         std::array<std::uint8_t, 16> bytes{};
         bytes.front() = value;
         return Assets::AssetId::FromBytes(bytes);
+    }
+
+    /** @brief Finite independent public-consumer ceilings for one real native world publication. */
+    C::PublicationLimits Limits() {
+        return {{65536, 65536, {8, 8, 65536}},
+                {1, 65536, 65536},
+                {65536, 64, 1, {1, 1, 4}, {1, 1, 1, 65536, 65536}},
+                {65536, 65536, 1, 1, 1, 1, 2, 1, 1, 8},
+                {1, 1, 3, 3},
+                {1, 1, 1, 4, 1024, 65536, 65536},
+                {65536, 131072, 3, 1},
+                1048576,
+                1};
+    }
+
+    /** @brief Preserves a failed public consumer's typed cause without allocating C++ diagnostic storage. */
+    void PrintError(const Error &error) {
+        std::fprintf(stderr, "World cook error %s/%s: %s\n", error.domain.Value().c_str(), error.code.Value().c_str(),
+                     error.message.c_str());
+    }
+
+    /** @brief Verifies actual committed artifacts and adopted Scene state while the caller retains the native writer lease. */
+    int VerifyPublication(const C::SourceCapture &source, const C::ReleaseCapture &release,
+                          const Assets::AssetCookPublicationPolicy &policy) {
+        Runtime::IncrementalSceneCellCook cache{{1, 1, 1, 1, 65536, 65536}};
+        auto published = C::PublishWorldCook(cache, source, release, Limits(), policy);
+        if (published.HasError()) {
+            PrintError(published.ErrorValue());
+            return 8;
+        }
+        for (const auto &finding : published.Value().validation->findings) {
+            std::fprintf(stderr, "World cook validation %s\n", finding.diagnostic.code.Value().c_str());
+            PrintError(finding.cause);
+        }
+        return published.HasValue() && published.Value().validation->CanPublish() && published.Value().publication &&
+                       published.Value().scene->cells.size() == 1 && cache.Revision() == 1
+                   ? 0
+                   : 8;
     }
 
     /** @brief Exercises the full public publication facade against actual native files, not a header-only declaration. */
@@ -56,7 +95,8 @@ namespace {
         const C::SourceCapture source{partition, assignments, placements, dependencies,   inputs, {}, objects, {},
                                       settings,  1,           0,          "Public world", {},     {}};
         const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
-        Output output{std::filesystem::temp_directory_path() / ("horo world cook consumer " + std::to_string(nonce))};
+        Output output{std::filesystem::canonical(std::filesystem::temp_directory_path()) /
+                      ("horo world cook consumer " + std::to_string(nonce))};
         output.created = std::filesystem::create_directory(output.root);
         if (!output.created)
             return 6;
@@ -73,24 +113,10 @@ namespace {
                                         {indexType.Value(), depsType.Value(), cellType.Value()},
                                         output.root,
                                         target.Value()};
-        const C::PublicationLimits limits{{65536, 65536, {8, 8, 65536}},
-                                          {1, 65536, 65536},
-                                          {65536, 64, 1, {1, 1, 4}, {1, 1, 1, 65536, 65536}},
-                                          {65536, 65536, 1, 1, 1, 1, 2, 1, 1, 8},
-                                          {1, 1, 3, 3},
-                                          {1, 1, 1, 4, 1024, 65536, 65536},
-                                          {65536, 131072, 3, 1},
-                                          1048576,
-                                          1};
-        Runtime::IncrementalSceneCellCook cache{{1, 1, 1, 1, 65536, 65536}};
         Assets::AssetCookPublicationPolicy policy{.files = &files, .beforeCommit = [] {
             return Result<void>::Success();
         }, .operationId = "10000000-0000-0000-0000-000000000001", .writerLease = &lock.Value()};
-        auto published = C::PublishWorldCook(cache, source, release, limits, policy);
-        return published.HasValue() && published.Value().validation->CanPublish() && published.Value().publication &&
-                       published.Value().scene->cells.size() == 1 && cache.Revision() == 1
-                   ? 0
-                   : 8;
+        return VerifyPublication(source, release, policy);
     }
 }  // namespace
 

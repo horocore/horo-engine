@@ -1421,7 +1421,7 @@ horo_register_catch_test(HoroWorldCookIntegrationTests LABELS "unit;world_stream
 
 add_executable(HoroWorldCookIntegrationConsumer support/WorldCookPublicConsumer.cpp)
 target_compile_features(HoroWorldCookIntegrationConsumer PRIVATE cxx_std_20)
-target_link_libraries(HoroWorldCookIntegrationConsumer PRIVATE HoroEngine::WorldCookIntegration)
+target_link_libraries(HoroWorldCookIntegrationConsumer PRIVATE HoroEngine::WorldCookIntegration HoroEngine::Platform)
 add_test(NAME HoroWorldCookIntegrationConsumer COMMAND HoroWorldCookIntegrationConsumer)
 set_tests_properties(HoroWorldCookIntegrationConsumer PROPERTIES LABELS "unit;world_streaming;headless;ci-windows")
 

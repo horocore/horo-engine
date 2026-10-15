@@ -287,6 +287,18 @@ namespace Horo::Runtime {
             auto payload = std::make_shared<const RuntimeSceneCellPayload>(std::move(cooked).Value());
             return Result<CellCookCandidate>::Success({{key.Value(), std::move(payload)}, false});
         }
+
+        /** @brief Completes detached receipt ownership before publishing the pending cache reservation. */
+        std::shared_ptr<CellCookDetail::PreparedState> MakePreparedState(const std::shared_ptr<CellCookDetail::CacheState> &owner,
+                                                                         SceneCellCookReport &&report,
+                                                                         std::vector<SceneCellCookEntry> &&replacement) {
+            auto prepared = std::make_shared<CellCookDetail::PreparedState>();
+            prepared->owner = owner;
+            prepared->expectedRevision = owner->revision;
+            prepared->report = std::move(report);
+            prepared->replacement = std::move(replacement);
+            return prepared;
+        }
     }  // namespace
 
     /** @copydoc IncrementalSceneCellCook::IncrementalSceneCellCook */
@@ -376,11 +388,7 @@ namespace Horo::Runtime {
         auto replacement = report.cells;
         if (cancellation.IsCancellationRequested())
             return Failure<PreparedSceneCellCook>(SceneCellPayloadErrors::Cancelled);
-        auto prepared = std::make_shared<CellCookDetail::PreparedState>();
-        prepared->owner = state_;
-        prepared->expectedRevision = state_->revision;
-        prepared->report = std::move(report);
-        prepared->replacement = std::move(replacement);
+        auto prepared = MakePreparedState(state_, std::move(report), std::move(replacement));
         state_->pending = prepared;
         return Result<PreparedSceneCellCook>::Success(PreparedSceneCellCook{std::move(prepared)});
     }

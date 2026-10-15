@@ -190,7 +190,7 @@ namespace Horo::WorldCook {
         auto receipt = std::move(prepared).Value();
         const auto reportLease = receipt.ReportLease();
         const auto validation = std::make_shared<const ValidationReport>();
-        const std::vector payloads{T::MakePayload(Asset(8), 16)};
+        const std::vector<std::vector<std::uint8_t>> payloads{T::MakePayload(Asset(8), 16)};
         const std::array entries{T::Entry(Asset(8), payloads.front())};
         auto writer = fixture.files.native.TryAcquireExclusive(fixture.directory.path / ".cook-writer.lock", "adoption fixture");
         REQUIRE(writer.HasValue());
