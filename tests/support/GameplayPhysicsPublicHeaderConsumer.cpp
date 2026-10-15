@@ -1,4 +1,6 @@
 #include "Horo/Gameplay/GameModule.h"
+#include "Horo/Gameplay/GameplayCharacterContext.h"
+#include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
 #include "Horo/Physics/PhysicsContinuousCollision.h"
 #include "Horo/Physics/PhysicsWorld.h"
@@ -23,6 +25,17 @@ static_assert(std::is_same_v<decltype(std::declval<const Horo::Gameplay::Gamepla
                                  "game.tests", 1, Horo::Character::CharacterPhysicsQueryExpectations{})),
                              Horo::Result<Horo::Physics::CharacterClearanceQuery>>);
 
+template <class Context>
+concept AcceptsForgedCharacterContext = requires(Horo::Gameplay::GameplayCharacterBinding binding,
+                                                 Horo::Character::CharacterCapability client) { Context{{}, binding, client}; };
+static_assert(!AcceptsForgedCharacterContext<Horo::Gameplay::GameplayCharacterContext>);
+static_assert(std::is_same_v<decltype(Horo::Gameplay::GameRuntimeContext::character),
+                             std::shared_ptr<const Horo::Gameplay::GameplayCharacterContext>>);
+static_assert(Horo::Gameplay::GameplaySdkBoundaryVersion == 12);
+
 int main() {
-    return 0;
+    const auto context = Horo::Gameplay::GameplayCharacterContext::Withheld({}, Horo::Gameplay::GameplayCharacterDenial::Unavailable);
+    const auto result = context->Acquire("game.tests", 1, 1);
+    return result.HasError() && result.ErrorValue().code.Value() == Horo::Gameplay::GameplayErrors::CharacterUnavailable.code.Value() ? 0
+                                                                                                                                      : 1;
 }

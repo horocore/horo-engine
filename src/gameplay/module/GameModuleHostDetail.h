@@ -73,6 +73,7 @@ namespace Horo::Gameplay {
         std::unique_ptr<GameplayServiceRuntime> projectServices;
         GameRuntimeContext runtimeContext;
         std::shared_ptr<GameplayPhysicsContext> physics;
+        std::shared_ptr<GameplayCharacterContext> character;
         IGameModule *gameplayModule{};
         DestroyGameModuleFunction destroy{};
         std::string moduleId;

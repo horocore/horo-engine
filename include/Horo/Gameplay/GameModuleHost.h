@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace Horo::Gameplay {
@@ -22,6 +23,23 @@ namespace Horo::Gameplay {
     class ReplicationRegistrationRegistry;
     class SystemRegistry;
     class GameEventRegistry;
+
+    /** @brief Inert host-selected service anchors; no callback, discovery or activation occurs here. */
+    struct GameModuleRuntimeServices final {
+        std::shared_ptr<GameplayPhysicsContext> physics;     /**< Existing exact per-module Physics scope. */
+        std::shared_ptr<GameplayCharacterContext> character; /**< Character anchor; each loaded generation receives a fresh child. */
+    };
+
+    /** @brief Explicit immutable load configuration; requires both values so legacy brace calls stay unambiguous. */
+    struct GameModuleHostOptions final {
+        /** @brief Owns the supplied inert composition values.
+         * @param capabilities Host registration grants. @param services Explicitly selected service anchors. */
+        GameModuleHostOptions(std::vector<GameplayCapabilityId> capabilities, GameModuleRuntimeServices services)
+            : hostCapabilities(std::move(capabilities)), runtimeServices(std::move(services)) {}
+
+        std::vector<GameplayCapabilityId> hostCapabilities;
+        GameModuleRuntimeServices runtimeServices;
+    };
 
     /** @brief Loaded module whose registry and callable objects are destroyed before its library unloads. */
     class LoadedGameModule final {
@@ -79,6 +97,9 @@ namespace Horo::Gameplay {
         [[nodiscard]] CancellationToken Cancellation() const noexcept;
         /** @brief Returns this module generation's explicit Physics binding, if composed by the host. */
         [[nodiscard]] std::shared_ptr<const GameplayPhysicsContext> PhysicsContext() const noexcept;
+        /** @brief Returns this loaded module generation's exact independent Character scope. @return Owned holder, including typed denial.
+         */
+        [[nodiscard]] std::shared_ptr<const GameplayCharacterContext> CharacterContext() const noexcept;
         /**
          * @brief Cancels and quiesces module-owned work, captures state, and stops callbacks before unload.
          * @return Bounded module snapshot only when the generation proves it is safe to unload.
@@ -111,6 +132,9 @@ namespace Horo::Gameplay {
          * @param physics Exact per-module binding, revoked before module shutdown; cannot be reused after retirement.
          */
         GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics);
+        /** @brief Creates a loader from inert typed options; service anchors remain host-owned.
+         * @param options Explicit capability metadata and service composition. */
+        explicit GameModuleHost(GameModuleHostOptions options);
         /**
          * @brief Loads and starts one gameplay candidate after complete compatibility validation.
          * @param libraryPath Absolute dynamic-library artifact path.
@@ -136,6 +160,6 @@ namespace Horo::Gameplay {
 
     private:
         std::vector<GameplayCapabilityId> hostCapabilities_;
-        std::shared_ptr<GameplayPhysicsContext> physics_;
+        GameModuleRuntimeServices runtimeServices_;
     };
 }  // namespace Horo::Gameplay

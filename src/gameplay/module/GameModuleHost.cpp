@@ -1,6 +1,7 @@
 #include "Horo/Gameplay/GameModuleHost.h"
 
 #include "GameModuleHostDetail.h"
+#include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
 
@@ -102,10 +103,24 @@ namespace Horo::Gameplay {
         impl->buildFingerprint = validated.descriptor->buildFingerprint;
         impl->descriptorRevision = validated.bundle->descriptorRevision;
         impl->destroy = validated.bundle->lifecycle.destroy;
-        auto physics = ResolvePhysicsContext(physics_, impl->moduleId);
+        auto physics = ResolvePhysicsContext(runtimeServices_.physics, impl->moduleId);
         if (physics.HasError())
             return Result<std::unique_ptr<LoadedGameModule>>::Failure(physics.ErrorValue());
         impl->physics = std::move(physics).Value();
+
+        if (runtimeServices_.character) {
+            const auto &binding = runtimeServices_.character->Binding();
+            if (binding.moduleId != impl->moduleId)
+                return Result<std::unique_ptr<LoadedGameModule>>::Failure(MakeError(GameplayErrors::CharacterPermissionDenied));
+            if (auto dependency = runtimeServices_.character->ValidateDependency(impl->physics.get()); dependency.HasError())
+                return Result<std::unique_ptr<LoadedGameModule>>::Failure(dependency.ErrorValue());
+            auto character = runtimeServices_.character->Derive();
+            if (character.HasError())
+                return Result<std::unique_ptr<LoadedGameModule>>::Failure(character.ErrorValue());
+            impl->character = std::move(character).Value();
+        } else {
+            impl->character = GameplayCharacterContext::Withheld({.moduleId = impl->moduleId}, GameplayCharacterDenial::Unavailable);
+        }
 
         auto registry = BuildRegistry(*validated.bundle);
         if (registry.HasError())

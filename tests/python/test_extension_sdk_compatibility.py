@@ -111,6 +111,7 @@ def test_gameplay_generation_is_distinct_and_matches_real_native_boundary(offlin
     "External C ABI 1.0 → 1.1",
     "External C ABI 1.1 → 1.2 → 1.3",
     "Gameplay SDK8 → SDK9 (native boundary 8 → 9)",
+    "Gameplay SDK9 → SDK12 (Character runtime boundary 9 → 12)",
     "Retirement source API migration in this snapshot",
 ))
 def test_each_version_specific_migration_has_action_and_rollback(section, offline_sdk):

@@ -1,5 +1,7 @@
 #include "Horo/Gameplay/GameModuleHost.h"
+#include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
+#include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsWorld.h"
 
 #include <charconv>
@@ -16,6 +18,18 @@ namespace {
     }
 
 #if HORO_TEST_PHYSICS_NATIVE
+    /** @brief Captures the fixed bounded Physics setup used by actual external SDK dependency admission. */
+    Horo::Physics::PhysicsWorldSettingsDescriptor SdkWorldSettings() {
+        using namespace Horo::Physics;
+        PhysicsWorldSettingsDescriptor descriptor;
+        descriptor.world.capacity = {16, 32, 16, 4096};
+        descriptor.budgets.maximumContactPairs = 32;
+        descriptor.budgets.maximumContactConstraints = 16;
+        descriptor.budgets.maximumInFlightPairs = 8;
+        descriptor.budgets.scratchBytes = 1024 * 1024;
+        return descriptor;
+    }
+
     /** @brief Publish the explicit SDK fixture world before module startup exercises event/query/batch operations. */
     Horo::Result<void> ActivatePublication(Horo::Physics::PhysicsWorld &world, Horo::Physics::PhysicsRuntime &runtime,
                                            const Horo::Gameplay::GameplayPhysicsBinding &binding) {
@@ -41,17 +55,13 @@ int main(int argc, char **argv) {
     using namespace Horo::Physics;
     GameplayPhysicsBinding binding{"game.physics_sdk", 7, 1, {}, true, true};
     auto context = GameplayPhysicsContext::Withheld(binding, GameplayPhysicsDenial::Unavailable);
+    auto character = GameplayCharacterContext::Withheld({.moduleId = "game.physics_sdk", .scene = 7, .sceneGeneration = 1},
+                                                        GameplayCharacterDenial::Unavailable);
 #if HORO_TEST_PHYSICS_NATIVE
     auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical);
     if (runtime.HasError())
         return 3;
-    PhysicsWorldSettingsDescriptor descriptor;
-    descriptor.world.capacity = {16, 32, 16, 4096};
-    descriptor.budgets.maximumContactPairs = 32;
-    descriptor.budgets.maximumContactConstraints = 16;
-    descriptor.budgets.maximumInFlightPairs = 8;
-    descriptor.budgets.scratchBytes = 1024 * 1024;
-    auto settings = PhysicsWorldSettings::Capture(descriptor);
+    auto settings = PhysicsWorldSettings::Capture(SdkWorldSettings());
     if (settings.HasError())
         return 4;
     auto world = runtime.Value()->PrepareWorld(settings.Value());
@@ -64,8 +74,22 @@ int main(int argc, char **argv) {
     if (admitted.HasError())
         return 6;
     context = std::move(admitted).Value();
+    Character::CharacterWorldSettingsDescriptor characterSettings;
+    characterSettings.capacities.maximumControllers = 1;
+    auto captured = Character::CharacterWorldSettings::Capture(characterSettings);
+    if (captured.HasError())
+        return 8;
+    auto characterWorld = Character::CharacterWorld::Prepare({1, binding.world, 1, 1}, captured.Value());
+    if (characterWorld.HasError() || characterWorld.Value()->Activate().HasError())
+        return 9;
+    auto characterContext = GameplayCharacterContext::Create({"game.physics_sdk", 7, 1, characterWorld.Value()->Descriptor().identity,
+                                                              binding.world, true, true},
+                                                             characterWorld.Value().get(), context.get());
+    if (characterContext.HasError())
+        return 10;
+    character = std::move(characterContext).Value();
 #endif
-    GameModuleHost host{{}, context};
+    GameModuleHost host{GameModuleHostOptions{{}, {.physics = context, .character = character}}};
     const auto loaded = host.Load(argv[1], {"game.physics_sdk", CurrentGameplayBuildFingerprint(), revision});
     return loaded.HasValue() ? 0 : 7;
 }

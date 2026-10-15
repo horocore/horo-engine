@@ -30,8 +30,9 @@ namespace Horo::Gameplay {
     class SystemRegistry;
     class GameEventRegistry;
     class GameplayPhysicsContext;
+    class GameplayCharacterContext;
 
-    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 9;
+    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 12;
     inline constexpr std::uint32_t GameplayDescriptorBundleSchemaVersion = 1;
     inline constexpr std::uint32_t GameModuleReloadSnapshotSchemaVersion = 1;
     inline constexpr std::size_t MaximumGeneratedBehaviorDescriptors = 4096;
@@ -61,6 +62,8 @@ namespace Horo::Gameplay {
         std::span<const GameplayServiceId> activeServices;     /**< Active project-scoped services in dependency order. */
         std::span<const GameplayCapabilityId> capabilities;    /**< Explicit host and project-service capability grants. */
         std::shared_ptr<const GameplayPhysicsContext> physics; /**< Optional exact module/play-world binding; no discovery. */
+        std::shared_ptr<const GameplayCharacterContext>
+            character; /**< Exact module-generation Character scope; optional services fail typed. */
     };
 
     /** @brief Module-global state captured only after owned work and callbacks are quiescent. */

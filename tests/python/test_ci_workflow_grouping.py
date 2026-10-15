@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import re
 
+from ci_gameplay_targets import GAMEPLAY_CHARACTER_TARGETS
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 SUITES = (ROOT / "tests/cmake/HoroCiSuites.cmake").read_text(encoding="utf-8")
@@ -105,7 +107,8 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
 
 
 def test_windows_group_preserves_every_previously_built_target() -> None:
-    assert targets("HORO_CI_WINDOWS_TARGETS") == targets("HORO_CI_AUDIO_TARGETS") | WINDOWS_NON_AUDIO_TARGETS | TERRAIN_RENDER_TARGETS
+    assert targets("HORO_CI_WINDOWS_TARGETS") == (targets("HORO_CI_AUDIO_TARGETS") | WINDOWS_NON_AUDIO_TARGETS
+        | TERRAIN_RENDER_TARGETS | GAMEPLAY_CHARACTER_TARGETS)
     for workflow in ("prefab-foundation-windows", "extension-abi-windows", "mcp-session-windows", "save-path-windows"):
         assert not (ROOT / f".github/workflows/{workflow}.yml").exists()
     assert preset("buildPresets", "ci-windows-debug")["targets"] == ["HoroCiWindowsChecks"]
