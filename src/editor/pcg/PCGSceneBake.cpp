@@ -177,8 +177,9 @@ namespace Horo::PCG {
             snapshot.Value().revision == std::numeric_limits<std::uint64_t>::max())
             return Return::Failure(MakeError(PCGErrors::UnsupportedCapability));
         const auto revision = snapshot.Value().revision + 1;
+        const auto ownerGeneration = snapshot.Value().session.generation;
         PCGSceneBakeTarget result{std::move(snapshot).Value(),
-                                  {GenerationValidationReceiptId::Create(revision).Value(), binding.owner, revision,
+                                  {GenerationValidationReceiptId::Create(revision).Value(), binding.owner, ownerGeneration,
                                    binding.capabilityGeneration, binding.capabilities},
                                   {},
                                   {},

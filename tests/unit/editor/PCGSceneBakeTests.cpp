@@ -46,13 +46,14 @@ namespace Horo::PCG {
                 return {binding, Fence(now.Value()), {}, {}};
             }
 
-            PCGGeneratedOutputProvenance Provenance(const ExecutionId execution, const std::uint64_t revision) const {
+            PCGGeneratedOutputProvenance Provenance(const ExecutionId execution, const std::uint64_t revision,
+                                                    const std::uint64_t ownerGeneration) const {
                 return {Id<GenerationLogicalOutputId>(1),
                         {execution, Id<NodeId>(1), Id<PinId>(2), Id<SourceSampleId>(1), 0},
                         binding.scope.lineage,
                         binding.scope.set,
                         revision,
-                        1,
+                        ownerGeneration,
                         binding.owner,
                         binding.scope.cell};
             }
@@ -63,7 +64,7 @@ namespace Horo::PCG {
                 REQUIRE(capture.HasValue());
                 const auto &view = capture.Value();
                 const ExecutionId execution{graphCapture.source->Data().generation, Id<ExecutionValue>(revision)};
-                const auto provenance = Provenance(execution, revision);
+                const auto provenance = Provenance(execution, revision, view.receipt.ownerGeneration);
                 const auto input = CapturePCGSceneGraphInput(graphCapture, binding.graphSource);
                 REQUIRE(input.HasValue());
                 PCGSceneOutputIntent intent{provenance.logicalOutput, {.id = {10}, .name = std::move(name)}, {}};
@@ -371,5 +372,52 @@ namespace Horo::PCG {
         REQUIRE(Bytes(undone) == Bytes(before));
         REQUIRE(target.Replay(Fence(undone), true).HasValue());
         REQUIRE(Bytes(target.Snapshot().Value()) == Bytes(after));
+    }
+
+    TEST_CASE("Offline PCG ownership survives unrelated authored revisions while receipts expire", "[pcg][bake][generation]") {
+        BakeFixture f;
+        REQUIRE(f.Bake(f.Batch()).HasValue());
+        const auto before = f.target.Snapshot().Value();
+        const auto priorReceipt = CapturePCGSceneBakeTarget(f.target, f.binding).Value().receipt;
+        const auto staleUpdate = f.Batch(PCGOutputDeltaKind::Update, "replacement", 2);
+        auto renamed = before.objects.front();
+        renamed.name = "unrelated authored edit";
+        const std::array changes{
+            Editor::SceneObjectReplacement{renamed.id,
+                                           Editor::FingerprintSceneObjectContent(before.objects.front(), 65536).Value(),
+                                           {},
+                                           renamed,
+                                           {}}};
+        REQUIRE(f.target.Execute(Fence(before), changes).HasValue());
+        const auto edited = f.target.Snapshot().Value();
+        const auto current = CapturePCGSceneBakeTarget(f.target, f.binding).Value();
+        REQUIRE(current.receipt.ownerGeneration == priorReceipt.ownerGeneration);
+        REQUIRE(current.receipt.ownerGeneration == edited.session.generation);
+        REQUIRE(current.receipt.receipt != priorReceipt.receipt);
+        REQUIRE(f.Bake(staleUpdate).HasError());
+        REQUIRE(Bytes(f.target.Snapshot().Value()) == Bytes(edited));
+        REQUIRE(f.Bake(f.Batch(PCGOutputDeltaKind::Update, "replacement", 2)).HasValue());
+        REQUIRE(f.target.Snapshot().Value().objects.front().name == "unrelated authored edit");
+        REQUIRE(f.Bake(f.Batch(PCGOutputDeltaKind::Remove, {}, 3)).HasValue());
+        REQUIRE(f.target.Snapshot().Value().objects.size() == 1);
+        REQUIRE(f.target.Snapshot().Value().objects.front().name == "unrelated authored edit");
+    }
+
+    TEST_CASE("Offline PCG rejects old opening work and issues a distinct replacement ownership generation", "[pcg][bake][generation]") {
+        BakeFixture f;
+        const auto stale = f.Batch();
+        f.target = std::move(Editor::SceneDocumentTransactions::Create({Doc::Asset(2), 2}, {{{1}, {}, "replacement opening"}})).Value();
+        f.binding.capabilityGeneration = 2;
+        const auto before = f.target.Snapshot().Value();
+        REQUIRE(CapturePCGSceneBakeTarget(f.target, f.binding).Value().receipt.ownerGeneration == 2);
+        REQUIRE(f.Bake(stale).HasError());
+        const auto unchanged = f.target.Snapshot().Value();
+        REQUIRE(Bytes(unchanged) == Bytes(before));
+        REQUIRE(unchanged.revision == before.revision);
+        REQUIRE(unchanged.state == before.state);
+        REQUIRE_FALSE(unchanged.dirty);
+        REQUIRE(f.target.Replay(Fence(unchanged), false).HasError());
+        REQUIRE(f.Bake(f.Batch()).HasValue());
+        REQUIRE(f.target.Snapshot().Value().objects.back().generated->ownershipGeneration == 2);
     }
 }  // namespace Horo::PCG

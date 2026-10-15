@@ -43,3 +43,8 @@ replacement/shutdown/thread boundaries. The real public consumer uses only stage
 headers. Windows build and discovery inventories include the bake tests, consumer
 and generated public-header consumers. Execution results are recorded separately
 in the delivery PR; authored coverage alone is not a passing native test result.
+
+The target receipt identity changes with authored revision, while its owner generation
+is the stable document opening generation. An unrelated authored edit expires old
+receipts but does not transfer generated ownership. Reopening/replacing the document
+uses a new host-issued session generation and rejects work from the previous opening.
