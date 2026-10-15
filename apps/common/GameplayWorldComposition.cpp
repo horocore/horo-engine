@@ -1,6 +1,7 @@
 #include "GameplayWorldComposition.h"
 
 #include "Horo/Physics/PhysicsWorld.h"
+#include "Horo/Runtime/Ui/RuntimeUiClient.h"
 
 namespace Horo::Application::Internal {
     namespace {
@@ -71,7 +72,7 @@ namespace Horo::Application::Internal {
     Result<void> GameplayWorldComposition::Activate(Runtime::RuntimeScene &scene, const GameplayWorldSelection &selection) {
         if (auto registered = RegisterModule(selection); registered.HasError())
             return registered;
-        auto runtime = Gameplay::BehaviorRuntime::Create(scene, registry_, {}, physics_);
+        auto runtime = Gameplay::BehaviorRuntime::Create(scene, registry_, {}, physics_, {}, runtimeUi_);
         if (runtime.HasError())
             return Result<void>::Failure(runtime.ErrorValue());
         behaviors_ = std::move(runtime).Value();
@@ -81,8 +82,18 @@ namespace Horo::Application::Internal {
     /** @copydoc GameplayWorldComposition::RegisterModule */
     Result<void> GameplayWorldComposition::RegisterModule(const GameplayWorldSelection &selection) {
         using namespace Gameplay;
+        if (selection.runtimeUi) {
+            const auto &grant = selection.runtimeUi->Grant();
+            if (grant.moduleId != selection.moduleId || grant.scene != physics_->Binding().scene ||
+                grant.sceneGeneration != physics_->Binding().sceneGeneration)
+                return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::HandleOwnerMismatch));
+            auto child = selection.runtimeUi->Derive();
+            if (child.HasError())
+                return Result<void>::Failure(child.ErrorValue());
+            runtimeUi_ = std::move(child).Value();
+        }
         if (!selection.nativeArtifact.empty()) {
-            GameModuleHost loader{{}, physics_};
+            GameModuleHost loader{GameModuleHostOptions{{}, {physics_, runtimeUi_}}};
             auto loaded = loader.Load(selection.nativeArtifact,
                                       {selection.moduleId, CurrentGameplayBuildFingerprint(), selection.descriptorRevision});
             if (loaded.HasError())
@@ -135,8 +146,8 @@ namespace Horo::Application::Internal {
         }
         if (auto registered = composition->RegisterModule(selection); registered.HasError())
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(registered.ErrorValue());
-        auto runtime =
-            Gameplay::BehaviorRuntime::Create(scenes, composition->registry_, {}, composition->physics_, composition->prefabContext_);
+        auto runtime = Gameplay::BehaviorRuntime::Create(scenes, composition->registry_, {}, composition->physics_,
+                                                         composition->prefabContext_, {}, composition->runtimeUi_);
         if (runtime.HasError())
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(runtime.ErrorValue());
         composition->behaviors_ = std::move(runtime).Value();
@@ -188,6 +199,8 @@ namespace Horo::Application::Internal {
 
     /** @copydoc GameplayWorldComposition::UnloadModule */
     void GameplayWorldComposition::UnloadModule() noexcept {
+        if (runtimeUi_)
+            runtimeUi_->Revoke();
         if (prefabContext_)
             prefabContext_->Revoke();
         if (prefabs_)

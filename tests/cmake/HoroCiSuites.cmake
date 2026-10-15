@@ -109,6 +109,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroRuntimeUiHudPublicHeaderConsumer
     HoroRuntimeUiSceneReconciliationTests
     HoroRuntimeUiSceneReconciliationPublicHeaderConsumer
+    HoroGameplayRuntimeUiSdkHostConsumer
+    HoroRuntimeUiCapabilityTests
     HoroRuntimeUiHotReloadTests
     HoroRuntimeUiHotReloadPublicHeaderConsumer
     HoroSceneIdentityPublicHeaderConsumer
@@ -264,6 +266,7 @@ function(horo_finalize_ci_suites)
         HoroExtensionAbiConformanceCliSupported
         HoroExtensionAbiConformanceCliIncompatible
         HoroExtensionAbiConformanceCliRequiresModule
+        HoroGameplayRuntimeUiSdkContract
         APPEND PROPERTY LABELS ci-windows)
     set_property(TEST HoroNavigationBakeDiagnosticsPublicConsumer HoroNavigationCoordinatorPublicConsumer
         APPEND PROPERTY LABELS ci-navigation)

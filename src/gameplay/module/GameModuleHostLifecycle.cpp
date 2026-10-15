@@ -2,6 +2,7 @@
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
+#include "Horo/Runtime/Ui/RuntimeUiClient.h"
 
 #include <algorithm>
 #include <system_error>
@@ -120,11 +121,17 @@ namespace Horo::Gameplay {
         if (activated.HasError())
             return Result<void>::Failure(activated.ErrorValue());
         projectServices = std::move(activated).Value();
+        PublishRuntimeContext();
+        startAttempted = true;
+        return InvokeStart(*gameplayModule, runtimeContext);
+    }
+
+    /** @copydoc LoadedGameModule::Impl::PublishRuntimeContext */
+    void LoadedGameModule::Impl::PublishRuntimeContext() {
         runtimeContext = {projectServices->Cancellation(), projectServices->ActiveServices(), projectServices->Capabilities()};
         runtimeContext.physics = physics;
         runtimeContext.navigation = navigation;
-        startAttempted = true;
-        return InvokeStart(*gameplayModule, runtimeContext);
+        runtimeContext.runtimeUi = runtimeUi;
     }
 
     Result<GameModuleReloadSnapshot> LoadedGameModule::Impl::PrepareReload() {
@@ -133,6 +140,8 @@ namespace Horo::Gameplay {
         projectServices->RequestCancellation();
         if (navigation)
             navigation->Revoke();
+        if (runtimeUi)
+            runtimeUi->Revoke();
         if (physics)
             physics->Revoke();
         auto snapshot = InvokePrepareReload(*gameplayModule, runtimeContext);
@@ -163,6 +172,8 @@ namespace Horo::Gameplay {
         shutdown = true;
         if (navigation)
             navigation->Revoke();
+        if (runtimeUi)
+            runtimeUi->Revoke();
         if (physics)
             physics->Revoke();
         if (projectServices)
@@ -170,6 +181,10 @@ namespace Horo::Gameplay {
         if (gameplayModule != nullptr && startAttempted)
             gameplayModule->Stop(runtimeContext);  // NOSONAR: exact-generation module boundary; path analysis is unrelated.
         projectServices.reset();
+        runtimeContext.navigation.reset();
+        navigation.reset();
+        runtimeContext.runtimeUi.reset();
+        runtimeUi.reset();
         registries.assetTypes.reset();
         registries.replication.reset();
         registries.events.reset();

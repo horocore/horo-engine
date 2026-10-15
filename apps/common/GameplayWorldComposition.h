@@ -32,6 +32,7 @@ namespace Horo::Application::Internal {
         GameplayPhysicsPermission physicsPermission{GameplayPhysicsPermission::Denied};
         bool enabled{true}; /**< Trusted host enablement; disabled modules never execute a callback. */
         GameplayPrefabPermission prefabPermission{GameplayPrefabPermission::Denied};
+        std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi; /**< Explicit host grant; absent means typed unavailable. */
     };
 
     /** @brief Owner-thread gameplay lifetime borrowing an explicit world and Scene.
@@ -99,6 +100,7 @@ namespace Horo::Application::Internal {
         /** @brief Loads the explicitly selected module/script and freezes its registry before any callback. */
         [[nodiscard]] Result<void> RegisterModule(const GameplayWorldSelection &selection);
         std::shared_ptr<Gameplay::GameplayPhysicsContext> physics_;
+        std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi_;
         std::unique_ptr<Gameplay::LoadedGameModule> native_;
         std::unique_ptr<Gameplay::LuaBehaviorProgram> script_;
         Gameplay::BehaviorRegistry registry_;

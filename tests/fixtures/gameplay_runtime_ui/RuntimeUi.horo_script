@@ -1,0 +1,7 @@
+return horo.behavior {
+    type_id = "game.tests.runtime_ui",
+    display_name = "Runtime UI Application Contract",
+    on_create = function(ctx)
+        assert(ctx.ui:screen(0, "00000000000000000000000000000009") ~= nil)
+    end
+}

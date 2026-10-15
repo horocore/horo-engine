@@ -4,6 +4,7 @@
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
+#include "Horo/Runtime/Ui/RuntimeUiClient.h"
 
 #include <cstring>
 #include <utility>
@@ -127,16 +128,8 @@ namespace Horo::Gameplay {
         impl->buildFingerprint = validated.descriptor->buildFingerprint;
         impl->descriptorRevision = validated.bundle->descriptorRevision;
         impl->destroy = validated.bundle->lifecycle.destroy;
-        auto physics = ResolvePhysicsContext(physics_, impl->moduleId);
-        if (physics.HasError())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(physics.ErrorValue());
-        auto navigation = ResolveNavigationContext(navigation_, impl->moduleId);
-        if (navigation.HasError())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(navigation.ErrorValue());
-        if (auto pinned = navigation.Value()->RetainCodeImage(impl->codeImage); pinned.HasError())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(pinned.ErrorValue());
-        impl->navigation = std::move(navigation).Value();
-        impl->physics = std::move(physics).Value();
+        if (auto bound = BindRuntimeServices(*impl); bound.HasError())
+            return Result<std::unique_ptr<LoadedGameModule>>::Failure(bound.ErrorValue());
 
         auto registry = BuildRegistry(*validated.bundle);
         if (registry.HasError())
@@ -151,6 +144,29 @@ namespace Horo::Gameplay {
             return Result<std::unique_ptr<LoadedGameModule>>::Failure(activated.ErrorValue());
         return Result<std::unique_ptr<LoadedGameModule>>::Success(
             std::unique_ptr<LoadedGameModule>{new LoadedGameModule{std::move(impl)}});  // NOSONAR(cpp:S5950)
+    }
+
+    /** @copydoc GameModuleHost::BindRuntimeServices */
+    Result<void> GameModuleHost::BindRuntimeServices(LoadedGameModule::Impl &impl) const {
+        auto physics = ResolvePhysicsContext(physics_, impl.moduleId);
+        if (physics.HasError())
+            return Result<void>::Failure(physics.ErrorValue());
+        auto navigation = ResolveNavigationContext(navigation_, impl.moduleId);
+        if (navigation.HasError())
+            return Result<void>::Failure(navigation.ErrorValue());
+        if (auto pinned = navigation.Value()->RetainCodeImage(impl.codeImage); pinned.HasError())
+            return Result<void>::Failure(pinned.ErrorValue());
+        impl.navigation = std::move(navigation).Value();
+        impl.physics = std::move(physics).Value();
+        if (runtimeUi_) {
+            if (runtimeUi_->Grant().moduleId != impl.moduleId)
+                return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::CapabilityDenied));
+            auto ui = runtimeUi_->Derive();
+            if (ui.HasError())
+                return Result<void>::Failure(ui.ErrorValue());
+            impl.runtimeUi = std::move(ui).Value();
+        }
+        return Result<void>::Success();
     }
 
 }  // namespace Horo::Gameplay

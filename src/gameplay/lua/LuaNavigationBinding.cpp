@@ -3,7 +3,10 @@
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 
 #include <array>
+#include <cstddef>
 #include <limits>
+#include <memory>
+#include <type_traits>
 extern "C" {
 #include <lauxlib.h>
 #include <lua.h>
@@ -18,6 +21,30 @@ namespace Horo::Gameplay::Detail {
             std::shared_ptr<const GameplayNavigationContext> context;
             CancellationToken lifetime;
         };
+
+        /** @brief Trivial GC admission tag precedes placement construction of the owned scope. */
+        struct ScopeStorage final {
+            bool constructed{};
+            alignas(Scope) std::byte bytes[sizeof(Scope)];
+
+            Scope *Value() noexcept {
+                return std::launder(reinterpret_cast<Scope *>(bytes));
+            }
+        };
+
+        static_assert(std::is_trivially_destructible_v<ScopeStorage>);
+        static_assert(
+            std::is_nothrow_constructible_v<Scope, const std::shared_ptr<const GameplayNavigationContext> &, const CancellationToken &>);
+
+        /** @brief GC may encounter partial Lua construction, but never destroys an uninitialized C++ owner. */
+        int CollectScope(lua_State *state) {
+            auto *storage = static_cast<ScopeStorage *>(lua_touserdata(state, 1));
+            if (storage->constructed) {
+                std::destroy_at(storage->Value());
+                storage->constructed = false;
+            }
+            return 0;
+        }
 
         /** @brief Finalize owned values without dereferencing Scene or provider state. */
         template <class T> int Collect(lua_State *state) {
@@ -200,7 +227,7 @@ namespace Horo::Gameplay::Detail {
 
         /** @brief Marshal primitive inputs into the same bounded host policy used by native callers. */
         template <GameplayNavigationOperation Operation> int Submit(lua_State *state) {
-            const auto &scope = *static_cast<Scope *>(luaL_checkudata(state, lua_upvalueindex(1), ScopeType));
+            const auto &scope = *static_cast<ScopeStorage *>(luaL_checkudata(state, lua_upvalueindex(1), ScopeType))->Value();
             Math::Vec3 start{};
             Math::Vec3 destination{};
             if constexpr (Operation == GameplayNavigationOperation::Path) {
@@ -250,17 +277,24 @@ namespace Horo::Gameplay::Detail {
     }  // namespace
 
     /** @copydoc PushLuaNavigationContext */
-    void PushLuaNavigationContext(lua_State *state, const BehaviorContext &context, CancellationToken lifetime) {
+    void PushLuaNavigationContext(lua_State *state, const std::shared_ptr<const GameplayNavigationContext> &context,
+                                  const CancellationToken &lifetime) {
+        if (!lua_checkstack(state, 6))
+            luaL_error(state, "Navigation context stack capacity exhausted");
         lua_newtable(state);
-        auto *scope = static_cast<Scope *>(lua_newuserdatauv(state, sizeof(Scope), 0));
-        std::construct_at(scope, Scope{context.NavigationContext(), std::move(lifetime)});
-        if (luaL_newmetatable(state, ScopeType)) {
-            lua_pushboolean(state, false);
-            lua_setfield(state, -2, "__metatable");
-            lua_pushcfunction(state, Collect<Scope>);
-            lua_setfield(state, -2, "__gc");
-        }
+        // Complete even an existing partial metatable left by an earlier protected OOM.
+        luaL_newmetatable(state, ScopeType);
+        lua_pushboolean(state, false);
+        lua_setfield(state, -2, "__metatable");
+        lua_pushcfunction(state, CollectScope);
+        lua_setfield(state, -2, "__gc");
+        const int metatable = lua_gettop(state);
+        auto *storage = std::construct_at(static_cast<ScopeStorage *>(lua_newuserdatauv(state, sizeof(ScopeStorage), 0)));
+        lua_pushvalue(state, metatable);
         lua_setmetatable(state, -2);
+        std::construct_at(reinterpret_cast<Scope *>(storage->bytes), context, lifetime);
+        storage->constructed = true;
+        lua_remove(state, metatable);
         const auto bind = [state]<lua_CFunction Function>(const char *name) {
             lua_pushvalue(state, -1);
             lua_pushcclosure(state, Function, 1);

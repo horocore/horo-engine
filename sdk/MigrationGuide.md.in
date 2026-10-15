@@ -22,7 +22,7 @@ archive/provenance; do not assign it the current snapshot's contracts.
 | External native host ABI | `horo-extension` @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_MIN_HOST_MINOR@ inclusive to @HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE@.0 exclusive; declarations through @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_PUBLISHED_MINOR@ |
 | Extension descriptor | `extension.json`, schema 1 |
 | Package manifest | `horo-package.toml`, schema 1; owns package identity/dependencies |
-| Gameplay C++ boundary in this engine snapshot | Native boundary 10 / `gameplay-sdk10`; separate exact-fingerprint build-tree SDK |
+| Gameplay C++ boundary in this engine snapshot | Native boundary 17 / `gameplay-sdk17`; separate exact-fingerprint build-tree SDK |
 | Author CI platform profiles | Linux x64, macOS arm64, macOS x64, Windows x64 |
 
 The external extension range does not imply that every table/capability works on
@@ -188,3 +188,27 @@ with `poll()` and `cancel()`. Missing services return `navigation.capability_una
 
 Rollback: stop play, restore the coherent previous engine, SDK and rebuilt module
 set, then restart. Never mix SDK9 and SDK10 module binaries.
+
+## Gameplay SDK10 → SDK17 (Navigation and Runtime UI layout)
+
+This combined layout preserves merged Navigation and appends `GameRuntimeContext::runtimeUi` and the matching
+`BehaviorContext` backend virtual capability. It preserves existing field and
+constructor ordering. Rebuild all native module descriptors, bundles and SDK
+consumers with boundary 17 and the exact `gameplay-sdk17` fingerprint. The optional
+`find_package(HoroEngineGameplay REQUIRED COMPONENTS RuntimeUi)` exposes canonical
+Horo UI values/client calls; the default Gameplay API retains forward declarations
+and does not import UI, renderer, input or platform implementations. Physics and
+RuntimeUi share one exported common support closure and remain independent options.
+
+Hosts compose `GameModuleHostOptions{capabilities, GameModuleRuntimeServices{physics,
+runtimeUi, navigation}}`; legacy Physics constructors forward to this sole authority. A grant
+is issued by the application-owned `RuntimeUiService`, then independently derived
+for native module, behavior runner and each Lua VM. Revoke before callback admission
+closes; module-facing context assignment cannot replace the authoritative holder.
+
+SDK17 combines merged NAV SDK10 with Runtime UI. Parallel Character SDK15 and
+AI SDK16 identify different layouts; a future union requires a fresh boundary18
+or later, a new fingerprint and complete SDK revalidation. Taking a numeric
+maximum is unsafe. Revalidate after main changes. Rollback requires rebuilding
+the previous exact SDK and restoring its module/artifact manifest together;
+never change a fingerprint to admit an old native binary.

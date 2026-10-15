@@ -54,6 +54,16 @@ belongs to runtime scene/game content.
   renderer backend handles, live input focus pointers, or editor widget state.
 - Templates are presets over core UI elements, not special runtime systems.
 
+## Explicit gameplay access
+
+The application-owned `RuntimeUiService` exposes host-issued `RuntimeUiClient`
+scopes for gameplay and Lua through the [gameplay integration contract](../extensions/gameplay-runtime-integration.md#runtime-ui-execution-context-rui-0067).
+These clients project the canonical screen stack, binding store, action router
+and event dispatcher. They introduce no second UI registry, widget hierarchy,
+provider authority, renderer selection or input backend. Commands have bounded
+owned mailboxes and run at explicit owner cutoffs; module/script retirement and
+successful UI generation replacement invalidate outstanding access.
+
 ## Ownership Boundary
 
 ```text

@@ -64,6 +64,39 @@ Boundary 9 changes `GameRuntimeContext` and the behavior backend vtable: all nat
 modules must rebuild with the matching sdk9 fingerprint. See
 [migration and consumer contract](../../guides/gameplay-physics-capability-migration.md).
 
+### Runtime UI execution context (RUI-006.7)
+
+The application owns `RuntimeUiService` and its canonical `UiSceneReconciliation`
+registry. It explicitly issues a `RuntimeUiClient` for an exact module, Scene
+activation generation, UI instance and canvas, with independent permissions and
+an explicit bounded writable-provider inventory. `GameModuleHostOptions` carries
+this binding in `GameModuleRuntimeServices`; the legacy Physics constructor only
+forwards to those same options. No module descriptor registers a service or selects
+an input/renderer backend.
+
+`GameplayRuntime`, `GameplayModuleHost` and `GameplayLua` privately depend on
+`RuntimeUi` to derive and revoke their own scopes and translate closed typed
+values. `GameplayApi` only forward-declares the client. Runtime UI has no reverse
+Gameplay dependency. Native `GameRuntimeContext::runtimeUi` and behavior access
+refer to the same host-issued authority; the host retains a separate authoritative
+child even if module code resets its exposed shared holder. Retirement revokes
+before callbacks and releases holders before image unload. Public derivation inherits immutable parent
+cancellation and accepts no caller token or callback; only the application issues
+the root cancellation fence. Provider callbacks,
+renderer/input handles, mutable Scene pointers and VM pointers never become
+retained client state. Queued commands recheck revocation before canonical owner
+publication or consumer dispatch.
+
+The optional build-tree SDK `RuntimeUi` component exports the existing canonical
+Runtime UI target and its static-link dependencies, including text shaping and
+Unicode support. This larger opt-in closure follows the existing target boundary;
+it selects no renderer or input backend. The default Gameplay SDK remains narrow.
+Standalone boundary13 changes native context layout and the behavior backend
+vtable, requiring all native modules and fingerprints to rebuild together. It is
+independent of other unpublished capability layouts; combining layouts requires
+a new boundary15 or later, rather than selecting the largest prior number. The
+[capability migration guide](../../guides/gameplay-runtime-ui-capability-migration.md) records callers, Lua transport and rollback.
+
 ## Game-Owned Asset Types
 
 Game modules may register asset types for source assets owned by the project:

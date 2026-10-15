@@ -23,6 +23,23 @@ namespace Horo::Gameplay {
     class SystemRegistry;
     class GameEventRegistry;
 
+    /** @brief Explicit typed host services; omitted fields grant no authority. */
+    struct GameModuleRuntimeServices final {
+        std::shared_ptr<GameplayPhysicsContext> physics;
+        std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi;
+        std::shared_ptr<GameplayNavigationContext> navigation;
+    };
+
+    /** @brief Nondefault canonical options preserve legacy brace-call overload resolution. */
+    struct GameModuleHostOptions final {
+        /** @brief Copies inert policy and transfers explicit services. @param capabilities Host grants. @param services Host bindings. */
+        GameModuleHostOptions(std::vector<GameplayCapabilityId> capabilities, GameModuleRuntimeServices services)
+            : hostCapabilities(std::move(capabilities)), runtimeServices(std::move(services)) {}
+
+        std::vector<GameplayCapabilityId> hostCapabilities;
+        GameModuleRuntimeServices runtimeServices;
+    };
+
     /** @brief Loaded module whose registry and callable objects are destroyed before its library unloads. */
     class LoadedGameModule final {
     public:
@@ -81,6 +98,10 @@ namespace Horo::Gameplay {
         [[nodiscard]] std::shared_ptr<const GameplayPhysicsContext> PhysicsContext() const noexcept;
         /** @brief Returns this module generation navigation grant. @return Revocable host context. */
         [[nodiscard]] std::shared_ptr<const GameplayNavigationContext> NavigationContext() const noexcept;
+        /** @brief Returns the authoritative independently revocable UI holder, unaffected by module-facing context replacement.
+         * @return Exact module child or null when UI was not composed.
+         */
+        [[nodiscard]] std::shared_ptr<const Runtime::Ui::RuntimeUiClient> RuntimeUiContext() const noexcept;
         /**
          * @brief Cancels and quiesces module-owned work, captures state, and stops callbacks before unload.
          * @return Bounded module snapshot only when the generation proves it is safe to unload.
@@ -103,6 +124,8 @@ namespace Horo::Gameplay {
     /** @brief Loader used by editor play sessions and packaged runtime composition. */
     class GameModuleHost final {
     public:
+        /** @brief Creates the canonical loader from explicit typed options. @param options Inert host policy and services. */
+        explicit GameModuleHost(GameModuleHostOptions options);
         /**
          * @brief Creates a loader with an explicit immutable host capability set.
          * @param hostCapabilities Capabilities composed by the owning headless or graphical host.
@@ -151,8 +174,14 @@ namespace Horo::Gameplay {
         [[nodiscard]] Result<std::unique_ptr<LoadedGameModule>> LoadArtifact(const std::filesystem::path &libraryPath,
                                                                              const GameModuleLoadExpectation &expectation,
                                                                              bool ownedShadow) const;
+        /** @brief Admit exact explicit service anchors before any module factory is invoked.
+         * @param impl Validated native image owner receiving independently retained scoped holders.
+         * @return Original dependency/principal failure or success; image pinning remains private to the host authority.
+         */
+        [[nodiscard]] Result<void> BindRuntimeServices(LoadedGameModule::Impl &impl) const;
         std::vector<GameplayCapabilityId> hostCapabilities_;
         std::shared_ptr<GameplayPhysicsContext> physics_;
         std::shared_ptr<GameplayNavigationContext> navigation_;
+        std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi_;
     };
 }  // namespace Horo::Gameplay

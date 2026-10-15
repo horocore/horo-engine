@@ -23,7 +23,7 @@ if(NOT HORO_GIT_REVISION_RESULT EQUAL 0 OR HORO_SOURCE_REVISION STREQUAL "")
 endif()
 
 set(HORO_GAMEPLAY_SDK_FINGERPRINT
-    "horo-${HORO_ENGINE_VERSION}-gameplay-sdk10-${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}"
+    "horo-${HORO_ENGINE_VERSION}-gameplay-sdk17-${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}"
 )
 set(HORO_EXTENSION_SDK_VERSION "${HORO_ENGINE_VERSION}")
 set(HORO_EXTENSION_ABI_MAJOR_VERSION 1)
@@ -118,8 +118,11 @@ export(TARGETS HoroFoundation HoroNetworkApi HoroSaveApi HoroGameplayApi
 # Physics is an explicit SDK component. The minimal gameplay export remains solver-free;
 # opting in exports the reviewed private static-link closure, never repository-wide includes.
 set_target_properties(HoroSceneIdentity PROPERTIES EXPORT_NAME SceneIdentity)
-set(HORO_GAMEPLAY_PHYSICS_SDK_TARGETS HoroSceneIdentity HoroGameplayPhysicsIntegration HoroPhysics HoroPhysicsModel HoroAssets HoroRuntime
-    HoroThirdPartyUfbx miniz utf8proc nlohmann_json)
+set(HORO_GAMEPLAY_COMMON_SDK_TARGETS HoroSceneIdentity HoroAssets HoroRuntime HoroThirdPartyUfbx miniz utf8proc nlohmann_json)
+set(HORO_GAMEPLAY_PHYSICS_SDK_TARGETS HoroGameplayPhysicsIntegration HoroPhysics HoroPhysicsModel)
+set(HORO_GAMEPLAY_UI_SDK_TARGETS HoroRuntimeUi harfbuzz HoroThirdPartyUnicode)
+set_target_properties(HoroRuntimeUi PROPERTIES EXPORT_NAME RuntimeUi)
+set_target_properties(HoroThirdPartyUnicode PROPERTIES EXPORT_NAME ThirdPartyUnicode)
 if(TARGET Jolt)
     list(APPEND HORO_GAMEPLAY_PHYSICS_SDK_TARGETS Jolt)
 endif()
@@ -128,7 +131,7 @@ set_target_properties(HoroPhysics PROPERTIES EXPORT_NAME Physics)
 set_target_properties(HoroPhysicsModel PROPERTIES EXPORT_NAME PhysicsModel)
 set_target_properties(HoroAssets PROPERTIES EXPORT_NAME Assets)
 set_target_properties(HoroRuntime PROPERTIES EXPORT_NAME Runtime)
-foreach(target IN LISTS HORO_GAMEPLAY_PHYSICS_SDK_TARGETS)
+foreach(target IN LISTS HORO_GAMEPLAY_PHYSICS_SDK_TARGETS HORO_GAMEPLAY_COMMON_SDK_TARGETS HORO_GAMEPLAY_UI_SDK_TARGETS)
     get_target_property(target_type ${target} TYPE)
     if(target_type STREQUAL "STATIC_LIBRARY")
         set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -143,6 +146,12 @@ foreach(target HoroPrefabRuntime HoroPrefab HoroRuntimeScene HoroSceneModel
         set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
     endif()
 endforeach()
+export(TARGETS ${HORO_GAMEPLAY_COMMON_SDK_TARGETS}
+       NAMESPACE HoroEngine::
+       FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayCommonTargets.cmake")
+export(TARGETS ${HORO_GAMEPLAY_UI_SDK_TARGETS}
+       NAMESPACE HoroEngine::
+       FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayRuntimeUiTargets.cmake")
 export(TARGETS ${HORO_GAMEPLAY_PHYSICS_SDK_TARGETS}
        NAMESPACE HoroEngine::
        FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayPhysicsTargets.cmake")

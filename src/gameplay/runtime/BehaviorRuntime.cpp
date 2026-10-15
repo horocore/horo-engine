@@ -14,7 +14,8 @@ namespace Horo::Gameplay {
     Result<std::unique_ptr<BehaviorRuntime>> BehaviorRuntime::Create(Runtime::RuntimeScene &scene, const BehaviorRegistry &registry,
                                                                      const BehaviorRuntimeLimits limits,
                                                                      std::shared_ptr<const GameplayPhysicsContext> physics,
-                                                                     std::shared_ptr<const GameplayNavigationContext> navigation) {
+                                                                     std::shared_ptr<const GameplayNavigationContext> navigation,
+                                                                     std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi) {
         if (physics && physics->Binding().scene != scene.View().RuntimeId().value)
             return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Physics::PhysicsErrors::HandleWorldMismatch));
         auto generationLease = registry.AcquireGenerationLease();
@@ -25,6 +26,14 @@ namespace Horo::Gameplay {
             navigation->Binding().scene.scene.Value() != impl->sceneIdentity.value)
             return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Navigation::NavigationErrors::InvalidWorld));
         impl->navigation = std::move(navigation);
+        if (runtimeUi) {
+            if (runtimeUi->Grant().scene != impl->sceneIdentity.value)
+                return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Runtime::Ui::UiErrors::HandleOwnerMismatch));
+            auto child = runtimeUi->Derive();
+            if (child.HasError())
+                return Result<std::unique_ptr<BehaviorRuntime>>::Failure(child.ErrorValue());
+            impl->runtimeUi = std::move(child).Value();
+        }
         impl->physics = std::move(physics);
         return ActivateImpl(std::move(impl));
     }
@@ -34,7 +43,8 @@ namespace Horo::Gameplay {
                                                                      const BehaviorRuntimeLimits limits,
                                                                      std::shared_ptr<const GameplayPhysicsContext> physics,
                                                                      std::shared_ptr<const GameplayPrefabContext> prefabs,
-                                                                     std::shared_ptr<const GameplayNavigationContext> navigation) {
+                                                                     std::shared_ptr<const GameplayNavigationContext> navigation,
+                                                                     std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi) {
         if (const auto active = scenes.ActiveScene(); !active || (prefabs && prefabs->Binding().scene != active->RuntimeId()) ||
                                                       (physics && physics->Binding().scene != active->RuntimeId().value))
             return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Prefab::PrefabErrors::SceneUnavailable));
@@ -46,6 +56,14 @@ namespace Horo::Gameplay {
             navigation->Binding().scene.scene.Value() != impl->sceneIdentity.value)
             return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Navigation::NavigationErrors::InvalidWorld));
         impl->navigation = std::move(navigation);
+        if (runtimeUi) {
+            if (runtimeUi->Grant().scene != impl->sceneIdentity.value)
+                return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Runtime::Ui::UiErrors::HandleOwnerMismatch));
+            auto child = runtimeUi->Derive();
+            if (child.HasError())
+                return Result<std::unique_ptr<BehaviorRuntime>>::Failure(child.ErrorValue());
+            impl->runtimeUi = std::move(child).Value();
+        }
         impl->physics = std::move(physics);
         impl->prefabs = std::move(prefabs);
         return ActivateImpl(std::move(impl));
@@ -56,6 +74,8 @@ namespace Horo::Gameplay {
         if (Result<void> built = impl->BuildInstances(); built.HasError()) {
             if (impl->navigation)
                 impl->navigation->Revoke();
+            if (impl->runtimeUi)
+                impl->runtimeUi->Revoke();
             if (impl->physics)
                 impl->physics->Revoke();
             if (impl->prefabs)
