@@ -139,8 +139,8 @@ namespace Horo::Prefab::ValueDetail {
 
     /** @brief Apply one validated value solely to operation-owned objects, preserving a nested root's original mount transform. */
     Result<void> WriteBinding(ResolutionState &state, ValueBinding &binding, const PrefabOverrideValue &value) {
-        auto &object = state.objects[binding.object];
         if (!binding.component) {
+            auto &object = state.objects[binding.object];
             const auto &transform = std::get<Math::Transform>(value);
             auto effective = Math::TryDecomposeAffineTRS(Math::Multiply(object.placementTransform.ToMatrix(), transform.ToMatrix()));
             if (effective.HasError())

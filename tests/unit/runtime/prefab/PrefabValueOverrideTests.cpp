@@ -2,6 +2,7 @@
 #include "Horo/Prefab/PrefabValueOverrides.h"
 #include "PrefabValueOverrideTestSupport.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
@@ -52,6 +53,27 @@ namespace Horo::Prefab {
                 BuildPrefabSourceResolverSnapshot(registry.Snapshot(), {{original}, {std::move(document).Value(), revision}}, Limits());
             REQUIRE(sources.HasValue());
             return sources.Value().Resolve(outer, PrefabInstanceId::Create(9).Value(), Limits()).Value();
+        }
+
+        /** @brief Known canonical identity order exercises every persisted comparison dimension. */
+        std::vector<PrefabValueOverrideTarget> CanonicalTargets() {
+            const auto property = [](const PrefabObjectAddress &object, const char *type, std::uint32_t occurrence,
+                                     std::uint32_t id) -> PrefabValueOverrideTarget {
+                const auto component = Gameplay::ComponentTypeId::Parse(type);
+                REQUIRE(component.HasValue());
+                return PrefabPropertyAddress::Create(object, component.Value(), PrefabComponentInstanceId::Create(occurrence).Value(),
+                                                     PrefabPropertyId::Create(id).Value())
+                    .Value();
+            };
+            const std::array scope3{LocalObjectId{3}}, scope4{LocalObjectId{4}};
+            return std::vector<PrefabValueOverrideTarget>{Object(),
+                                                          property(Object(), "game.order.a", 2, 1),
+                                                          property(Object(), "game.order.a", 3, 1),
+                                                          property(Object(), "game.order.z", 1, 1),
+                                                          property(Object(), "game.order.z", 1, 2),
+                                                          property(PrefabObjectAddress::Create({}, {1}).Value(), "game.order.a", 1, 1),
+                                                          property(PrefabObjectAddress::Create(scope3, {0}).Value(), "game.order.a", 1, 1),
+                                                          property(PrefabObjectAddress::Create(scope4, {0}).Value(), "game.order.a", 1, 1)};
         }
 
         TEST_CASE("Inherited values and repeated nested scopes preserve independent stable override identity",
@@ -173,6 +195,38 @@ namespace Horo::Prefab {
             cancellation.RequestCancellation();
             CHECK(ResolvePrefabValueOverrides(source, assigned.rebased, &schemas, Limits(), cancellation.Token()).HasError());
             CHECK(source.ValueOverridesDigest() == Sha256Digest{});
+        }
+
+        TEST_CASE("Prefab override canonical order compares object scope component type occurrence and property",
+                  "[unit][prefab][override][identity]") {
+            const auto source = Source();
+            const auto schemas = Schemas();
+            auto set = PreparePrefabValueEdit(source, std::nullopt, {PrefabValueEditKind::Assign, Property(), 5.0}, &schemas, Limits())
+                           .Value()
+                           .rebased;
+            const auto propertyRecord = set.records.front();
+            const auto rootRecord =
+                PreparePrefabValueEdit(source, std::nullopt,
+                                       {PrefabValueEditKind::Assign, Object(), Math::Transform{.translation = {1, 0, 0}}}, &schemas,
+                                       Limits())
+                    .Value()
+                    .rebased.records.front();
+            const auto expected = CanonicalTargets();
+            set.records.clear();
+            for (const auto &target : expected) {
+                auto record = std::holds_alternative<PrefabObjectAddress>(target) ? rootRecord : propertyRecord;
+                record.target = target;
+                set.records.push_back(std::move(record));
+            }
+            const auto canonical = SerializePrefabValueOverrides(set, Limits());
+            REQUIRE(canonical.HasValue());
+            std::ranges::reverse(set.records);
+            CHECK(SerializePrefabValueOverrides(set, Limits()).Value() == canonical.Value());
+            const auto parsed = ParsePrefabValueOverrides(canonical.Value(), Limits());
+            REQUIRE(parsed.HasValue());
+            REQUIRE(parsed.Value().records.size() == expected.size());
+            for (std::size_t i = 0; i < expected.size(); ++i)
+                CHECK(parsed.Value().records[i].target == expected[i]);
         }
 
         TEST_CASE("Prefab transforms preserve absent properties without applying future registry defaults", "[unit][prefab][override]") {

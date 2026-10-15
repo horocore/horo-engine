@@ -1,5 +1,7 @@
 #include "PrefabValueOverridesInternal.h"
 
+#include <compare>
+
 namespace Horo::Prefab::ValueDetail {
     namespace {
         /** @brief Extract the common stable object dimension without creating an identity from display data. */
@@ -44,7 +46,7 @@ namespace Horo::Prefab::ValueDetail {
     /** @brief Define canonical target order independently from record arrival and UI order. */
     bool TargetLess(const PrefabValueOverrideTarget &left, const PrefabValueOverrideTarget &right) noexcept {
         if (auto order = CompareObjects(Object(left), Object(right)); order != 0)
-            return order < 0;
+            return std::is_lt(order);
         if (left.index() != right.index())
             return left.index() < right.index();
         const auto *a = std::get_if<PrefabPropertyAddress>(&left);
@@ -52,9 +54,9 @@ namespace Horo::Prefab::ValueDetail {
             return false;
         const auto &b = std::get<PrefabPropertyAddress>(right);
         if (auto order = a->ComponentType() <=> b.ComponentType(); order != 0)
-            return order < 0;
+            return std::is_lt(order);
         if (auto order = a->ComponentInstance() <=> b.ComponentInstance(); order != 0)
-            return order < 0;
+            return std::is_lt(order);
         return a->Property() < b.Property();
     }
 
