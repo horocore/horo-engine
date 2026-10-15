@@ -1631,6 +1631,7 @@ horo_add_gameplay_module(HoroTestGameModule
         MODULE_ID game.tests
         NO_MANIFEST
         SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_module/TestGameModule.cpp
+                ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_module/CharacterClientBehavior.cpp
 )
 target_include_directories(HoroTestGameModule PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
 target_compile_definitions(HoroTestGameModule PRIVATE HORO_TEST_GAMEPLAY_PHYSICS=1 HORO_TEST_GAMEPLAY_NAVIGATION=1)
