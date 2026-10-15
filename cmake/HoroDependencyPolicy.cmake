@@ -337,3 +337,5 @@ if(HORO_VERIFY_NETWORK_DISABLED)
     endforeach()
     message(STATUS "Network disabled: production targets and FetchContent dependencies are absent")
 endif()
+
+horo_allow_target_dependencies(TARGET HoroPCGSceneBake DEPENDENCIES HoroPCGSceneAdapter HoroEditorServices HoroEditorModel)

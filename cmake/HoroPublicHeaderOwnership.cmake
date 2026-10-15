@@ -1149,6 +1149,7 @@ horo_configure_target_header_boundary(HoroRenderVulkan)
 horo_configure_target_header_boundary(HoroRenderD3D12)
 
 horo_configure_target_header_boundary(HoroEditorModel PUBLIC_HEADERS
+    Horo/Editor/SceneDocumentTransaction.h
     Horo/Editor/EditorDataBus.h
 )
 horo_configure_target_header_boundary(HoroEditorViewportScene)
@@ -1282,6 +1283,10 @@ horo_configure_target_header_boundary(HoroUiAnimationRuntimeIntegration PUBLIC_H
 
 horo_configure_target_header_boundary(HoroPCGSceneAdapter PUBLIC_HEADERS
     Horo/PCGScene/SceneOutputAdapter.h
+)
+
+horo_configure_target_header_boundary(HoroPCGSceneBake PUBLIC_HEADERS
+    Horo/PCGScene/SceneBake.h
 )
 
 horo_verify_public_header_inventory()
