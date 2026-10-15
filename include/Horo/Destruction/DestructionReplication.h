@@ -5,7 +5,7 @@
  * @brief Bounded server-authored destruction replication schema and canonical semantic encoding.
  */
 
-#include "Horo/Destruction/DestructionStateMachine.h"
+#include "Horo/Destruction/DestructionCanonicalState.h"
 #include "Horo/Network/ReplicationDescriptor.h"
 #include "Horo/Network/ReplicationRoles.h"
 #include "Horo/Network/ReplicationSerializer.h"
@@ -19,50 +19,12 @@ namespace Horo::Destruction {
     /** @brief Exact version of the destruction semantic replication payload; no implicit downgrade is admitted. */
     inline constexpr Network::ReplicationSchemaVersion DestructionReplicationVersion{1, 0};
 
-    /** @brief Finite wire and semantic admission bounds, selected by the product before a session starts. */
-    struct DestructionReplicationLimits final {
-        std::uint32_t maximumChunks{DestructionHardLimits::ChunksPerDestructible};  /**< Artifact-local bit positions. */
-        std::uint32_t maximumAnchors{DestructionHardLimits::ChunksPerDestructible}; /**< Stable support-anchor identities. */
-        std::size_t maximumBytes{16 * 1024}; /**< Complete canonical payload ceiling, including fixed fields. */
-    };
-
-    /** @brief Four content-scoped canonical sets; an ordinal is meaningful only with the exact content identity. */
-    struct DestructionReplicationMasks final {
-        std::uint32_t chunkCount{};       /**< Exact canonical stable chunk-table length. */
-        std::vector<std::byte> broken;    /**< Chunks no longer intact. */
-        std::vector<std::byte> active;    /**< Broken chunks with authoritative live motion. */
-        std::vector<std::byte> supported; /**< Broken chunks still supported by canonical connectivity. */
-        std::vector<std::byte> dormant;   /**< Broken chunks durably dormant without a live body. */
-
-        bool operator==(const DestructionReplicationMasks &) const = default;
-    };
-
-    /** @brief Semantic seed/cursor, not a native RNG or worker checkpoint. */
-    struct DestructionReplicationSeed final {
-        std::uint32_t version{}; /**< Non-zero deterministic algorithm/seed schema version. */
-        std::uint64_t value{};   /**< Stable seed value; zero is a valid seed. */
-        std::uint64_t cursor{};  /**< Next semantic draw position. */
-
-        constexpr auto operator<=>(const DestructionReplicationSeed &) const noexcept = default;
-    };
-
-    /** @brief Owned authority-produced semantics; Physics motion is paired separately, never embedded here. */
-    struct DestructionReplicationState final {
-        DestructionHandle target;                                   /**< Exact world/destructible/runtime generation. */
-        FractureArtifactContentIdentity content;                    /**< Exact chunk-table/content fingerprint. */
-        DestructionConfigurationRevision configuration;             /**< Exact admitted policy generation. */
-        DestructionFeatureSet effectiveFeatures;                    /**< Resolved capabilities, including authority replication. */
-        Network::ReplicationAuthorityEpoch authority;               /**< Server authority generation. */
-        DestructionStateRevision revision;                          /**< Monotonic semantic revision. */
-        DestructionStatePhase phase{DestructionStatePhase::Intact}; /**< Canonical phase. */
-        std::uint32_t healthQ16{};                                  /**< Health in unsigned Q16.16 units. */
-        DestructionReplicationSeed seed;                            /**< Future deterministic decision state. */
-        DestructionReplicationMasks masks;                          /**< Four content-scoped sets. */
-        std::vector<DestructionChunkId> supportAnchors;             /**< Sorted stable anchor identities, never ordinals. */
-        std::uint32_t supportCursor{};                              /**< Bounded canonical support-progress cursor. */
-
-        bool operator==(const DestructionReplicationState &) const = default;
-    };
+    /** @brief Compatibility spellings of the single Destruction-owned canonical semantic model. */
+    using DestructionReplicationLimits = DestructionCanonicalLimits;
+    using DestructionReplicationMasks = DestructionCanonicalMasks;
+    using DestructionReplicationSeed = DestructionCanonicalSeed;
+    using DestructionReplicationState = CanonicalDestructionSnapshot;
+    using DestructionReplicationArtifactView = DestructionCanonicalArtifactView;
 
     /** @brief One complete Network-owned field set, sorted by stable FieldId, not C++ member order. */
     struct DestructionReplicationField final {
@@ -89,12 +51,6 @@ namespace Horo::Destruction {
         DestructionFeatureSet effectiveFeatures;        /**< Exact current admitted capabilities. */
         Network::ReplicationAuthorityEpoch authority;   /**< Current server authority epoch. */
         DestructionStateRevision currentRevision;       /**< Last committed semantic revision. */
-    };
-
-    /** @brief Borrowed immutable exact cooked chunk-table evidence; neither encoder nor decoder retains it. */
-    struct DestructionReplicationArtifactView final {
-        FractureArtifactContentIdentity content;             /**< Exact published artifact identity. */
-        std::span<const DestructionChunkId> canonicalChunks; /**< Unique stable IDs in canonical artifact order. */
     };
 
     /**
