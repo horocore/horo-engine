@@ -145,6 +145,11 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroEditorActivityBoundaryTests
 
     HoroPackageLifecycleTests
+    HoroPackageApplicationTests
+    HoroPackageApplicationPublicHeaderConsumer
+    HoroCliPackageAdaptersPublicHeaderConsumer
+    HoroMcpPackageAdaptersPublicHeaderConsumer
+    HoroEditorPackageAdaptersPublicHeaderConsumer
     HoroPackageLifecyclePublicHeaderConsumer
     HoroMcpSessionTests
     HoroMcpSessionPublicHeaderConsumer
@@ -225,6 +230,7 @@ set(HORO_CI_NETWORK_TARGETS
 
 # These editor-labelled suites were explicitly run by the coverage workflow.
 set(HORO_SONAR_EDITOR_TARGETS
+    HoroPackageApplicationTests
     HoroFractureDocumentTests
     HoroTerrainAuthoringTests
     HoroMixerDocumentTests
