@@ -388,7 +388,7 @@ namespace Horo::WorldStreaming {
         if (!IsValid() || !Ordered(query.bounds) || (query.layer && !query.layer->IsValid()))
             return Failure<WorldPartitionSpatialCursor>(WorldStreamingErrors::PartitionRegistryInvalid);
         if ((query.layer && !IsDeclaredLayer(state_->descriptor, *query.layer)) ||
-            (query.lod && *query.lod >= state_->descriptor.Grid().LodLevels()))
+            (query.lod.has_value() && *query.lod >= state_->descriptor.Grid().LodLevels()))
             return Failure<WorldPartitionSpatialCursor>(WorldStreamingErrors::PartitionRegistryUnsupported);
         WorldPartitionSpatialCursor cursor;
         cursor.binding_ = state_->binding;
@@ -409,7 +409,7 @@ namespace Horo::WorldStreaming {
         WorldPartitionSpatialBatch batch{};
         const auto &index = state_->spatialIndex;
         const auto cells = Cells();
-        while (cursor.pendingCount_ != 0 && batch.matches < output.size()) {
+        while (cursor.pendingCount_ != 0 && batch.matches < output.size() && batch.candidatesExamined < budget.candidates) {
             const auto &node = index.nodes[cursor.pending_[cursor.pendingCount_ - 1]];
             if (cursor.leafOffset_ == 0) {
                 if (batch.nodesVisited == budget.nodes)
@@ -432,12 +432,10 @@ namespace Horo::WorldStreaming {
                 if (Matches(cells[slot], index.cellBounds[slot], cursor.query_))
                     output[batch.matches++] = {state_->binding, slot, cells[slot].id};
             }
-            if (cursor.leafOffset_ != node.count)
-                break;
-            cursor.leafOffset_ = 0;
-            --cursor.pendingCount_;
-            if (batch.candidatesExamined == budget.candidates)
-                break;
+            if (cursor.leafOffset_ == node.count) {
+                cursor.leafOffset_ = 0;
+                --cursor.pendingCount_;
+            }
         }
         cursor.complete_ = cursor.pendingCount_ == 0;
         batch.complete = cursor.complete_;

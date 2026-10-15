@@ -319,37 +319,42 @@ namespace Horo::WorldStreaming {
     }
 
     namespace {
-        /** @brief Applies signed inward margins to the same concrete geometry used by ordinary range evaluation. */
-        [[nodiscard]] bool MarginIntersects(const StreamingSourceShape &shape, const ExactBounds &cell, const std::int64_t inward) {
-            return std::visit([&]<typename Shape>(const Shape &original) {
-                auto value = original;
-                if constexpr (std::is_same_v<Shape, StreamingSourceSphere>) {
-                    value.radiusMillimeters -= inward;
-                    if (value.radiusMillimeters < 0)
-                        return false;
-                } else if constexpr (std::is_same_v<Shape, StreamingSourceBox>) {
-                    auto minimum = value.minimum.Millimeters();
-                    auto maximum = value.maximum.Millimeters();
-                    for (std::size_t axis = 0; axis < 3; ++axis) {
-                        minimum[axis] = AddSaturated(minimum[axis], inward);
-                        maximum[axis] = AddSaturated(maximum[axis], -inward);
-                        if (minimum[axis] > maximum[axis])
-                            return false;
-                    }
-                    value.minimum = Math::WorldCoordinate64::FromMillimeters(minimum[0], minimum[1], minimum[2]);
-                    value.maximum = Math::WorldCoordinate64::FromMillimeters(maximum[0], maximum[1], maximum[2]);
-                } else if constexpr (std::is_same_v<Shape, StreamingSourceFrustum>) {
-                    value.maximumExtentMillimeters -= inward;
-                    if (value.maximumExtentMillimeters < 0)
-                        return false;
-                    for (auto &plane : value.planes)
-                        plane.distanceMillimeters -= static_cast<float>(inward);
-                } else {
-                    value.halfExtentMillimeters -= inward;
-                    if (value.halfExtentMillimeters < 0)
+        /** @brief Applies the same signed margin to one concrete shape without changing range semantics. */
+        template <typename Shape> bool MarginShapeIntersects(const Shape &original, const ExactBounds &cell, const std::int64_t inward) {
+            auto value = original;
+            if constexpr (std::is_same_v<Shape, StreamingSourceSphere>) {
+                value.radiusMillimeters -= inward;
+                if (value.radiusMillimeters < 0)
+                    return false;
+            } else if constexpr (std::is_same_v<Shape, StreamingSourceBox>) {
+                auto minimum = value.minimum.Millimeters();
+                auto maximum = value.maximum.Millimeters();
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    minimum[axis] = AddSaturated(minimum[axis], inward);
+                    maximum[axis] = AddSaturated(maximum[axis], -inward);
+                    if (minimum[axis] > maximum[axis])
                         return false;
                 }
-                return Intersects(value, cell);
+                value.minimum = Math::WorldCoordinate64::FromMillimeters(minimum[0], minimum[1], minimum[2]);
+                value.maximum = Math::WorldCoordinate64::FromMillimeters(maximum[0], maximum[1], maximum[2]);
+            } else if constexpr (std::is_same_v<Shape, StreamingSourceFrustum>) {
+                value.maximumExtentMillimeters -= inward;
+                if (value.maximumExtentMillimeters < 0)
+                    return false;
+                for (auto &plane : value.planes)
+                    plane.distanceMillimeters -= static_cast<float>(inward);
+            } else {
+                value.halfExtentMillimeters -= inward;
+                if (value.halfExtentMillimeters < 0)
+                    return false;
+            }
+            return Intersects(value, cell);
+        }
+
+        /** @brief Applies signed inward margins to the same concrete geometry used by ordinary range evaluation. */
+        [[nodiscard]] bool MarginIntersects(const StreamingSourceShape &shape, const ExactBounds &cell, const std::int64_t inward) {
+            return std::visit([&](const auto &original) {
+                return MarginShapeIntersects(original, cell, inward);
             }, shape);
         }
     }  // namespace
@@ -380,13 +385,9 @@ namespace Horo::WorldStreaming {
         return Result<std::uint64_t>::Success(distance);
     }
 
-    /** @copydoc StreamingSourceQueryBounds */
-    Result<WorldPartitionBounds> StreamingSourceQueryBounds(const StreamingSourceShape &shape, const std::int64_t expansionMillimeters) {
-        if (const auto valid = ValidateStreamingSourceShape(shape); valid.HasError())
-            return Result<WorldPartitionBounds>::Failure(valid.ErrorValue());
-        if (expansionMillimeters < 0 || expansionMillimeters > StreamingSourceRangeLimits::MaximumExtentMillimeters)
-            return Result<WorldPartitionBounds>::Failure(MakeError(WorldStreamingErrors::SourceShapeInvalid));
-        const auto bounds = std::visit([]<typename Shape>(const Shape &value) -> ExactBounds {
+    namespace {
+        /** @brief Computes exact concrete query geometry before the separate saturating expansion. */
+        template <typename Shape> ExactBounds ShapeQueryBounds(const Shape &value) {
             if constexpr (std::is_same_v<Shape, StreamingSourceBox>) {
                 return {value.minimum.Millimeters(), value.maximum.Millimeters()};
             } else if constexpr (std::is_same_v<Shape, StreamingSourcePathVolume>) {
@@ -409,6 +410,17 @@ namespace Horo::WorldStreaming {
                     static_cast<void>(ExpandChecked(value.anchor.Millimeters(), value.maximumExtentMillimeters, result));
                 return result;
             }
+        }
+    }  // namespace
+
+    /** @copydoc StreamingSourceQueryBounds */
+    Result<WorldPartitionBounds> StreamingSourceQueryBounds(const StreamingSourceShape &shape, const std::int64_t expansionMillimeters) {
+        if (const auto valid = ValidateStreamingSourceShape(shape); valid.HasError())
+            return Result<WorldPartitionBounds>::Failure(valid.ErrorValue());
+        if (expansionMillimeters < 0 || expansionMillimeters > StreamingSourceRangeLimits::MaximumExtentMillimeters)
+            return Result<WorldPartitionBounds>::Failure(MakeError(WorldStreamingErrors::SourceShapeInvalid));
+        const auto bounds = std::visit([](const auto &value) {
+            return ShapeQueryBounds(value);
         }, shape);
         auto minimum = bounds.minimum;
         auto maximum = bounds.maximum;

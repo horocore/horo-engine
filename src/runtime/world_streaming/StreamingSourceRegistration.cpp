@@ -47,8 +47,7 @@ namespace Horo::WorldStreaming {
     Result<void> StreamingSourcePlannerState::ValidateRequest(const StreamingSourceRequest &request, const StreamingSourceOwnerToken &owner,
                                                               const std::optional<StreamingSourceRevision> previous) const {
         const StreamingSourceDescriptor descriptor{request.id, owner, request.intent, request.priority, request.revision};
-        const auto desired = StreamingSourceDesiredState::Create(descriptor, request.residency, request.retention);
-        if (desired.HasError())
+        if (const auto desired = StreamingSourceDesiredState::Create(descriptor, request.residency, request.retention); desired.HasError())
             return Result<void>::Failure(desired.ErrorValue());
         const StreamingSourceAdmissionContext admission{owner, previous, 0, config.limits.sources, StreamingSourceOwnerState::Active};
         if (const auto valid = ValidateStreamingSourceAdmission(descriptor, admission); valid.HasError())
@@ -62,8 +61,7 @@ namespace Horo::WorldStreaming {
         const auto bounds = StreamingSourceQueryBounds(request.shape, config.stability.ExitMarginMillimeters());
         if (bounds.HasError())
             return Result<void>::Failure(bounds.ErrorValue());
-        const auto query = partition.BeginQuery({bounds.Value(), selection.layer, selection.lod});
-        if (query.HasError())
+        if (const auto query = partition.BeginQuery({bounds.Value(), selection.layer, selection.lod}); query.HasError())
             return Result<void>::Failure(query.ErrorValue());
         // The existing admission/range boundary owns shape capability selection.
         if (!partition.Cells().empty()) {
@@ -76,8 +74,7 @@ namespace Horo::WorldStreaming {
             if (request.intent != StreamingSourceIntent::Camera && request.intent != StreamingSourceIntent::Gameplay)
                 return Failure<void>(WorldStreamingErrors::PrefetchUnsupported);
             const auto &sample = *request.prediction;
-            const auto moved = SourcePlanning::Reposition(request.shape, sample.position);
-            if (moved.HasError())
+            if (const auto moved = SourcePlanning::Reposition(request.shape, sample.position); moved.HasError())
                 return Result<void>::Failure(moved.ErrorValue());
             const StreamingPrefetchEvaluationContext context{config.prefetch.Id(), config.prefetch.Revision(),          owner.partition,
                                                              owner.epoch,          sample.sampledAtServiceMilliseconds, admission,
@@ -92,18 +89,18 @@ namespace Horo::WorldStreaming {
     }
 
     void StreamingSourcePlannerState::Invalidate() noexcept {
-        publishedRevision = 0;
-        cycleActive = false;
-        cursor.reset();
-        queryShape.reset();
+        publication.publishedRevision = 0;
+        cycle.cycleActive = false;
+        cycle.cursor.reset();
+        cycle.queryShape.reset();
         staged.clear();
         readyHeap.clear();
         nextPublished.clear();
         nextPublishedContributions.clear();
         stagedContributions.clear();
-        sourceSlot = 0;
-        historySlot = 0;
-        predicting = false;
+        cycle.sourceSlot = 0;
+        cycle.historySlot = 0;
+        cycle.predicting = false;
         if (revision == std::numeric_limits<std::uint64_t>::max())
             closed = true;
         else
@@ -121,7 +118,7 @@ namespace Horo::WorldStreaming {
 
     /** @copydoc StreamingSourceRegistration::StreamingSourceRegistration */
     StreamingSourceRegistration::StreamingSourceRegistration(std::shared_ptr<StreamingSourcePlannerState> state,
-                                                             const StreamingSourceOwnerToken owner) noexcept
+                                                             const StreamingSourceOwnerToken &owner) noexcept
         : state_(std::move(state)), owner_(owner) {}
 
     /** @copydoc StreamingSourceRegistration::StreamingSourceRegistration */
@@ -150,43 +147,54 @@ namespace Horo::WorldStreaming {
         return owner_;
     }
 
+    /** @copydoc StreamingSourceRegistration::OwnerState */
+    StreamingSourcePlannerState *StreamingSourceRegistration::OwnerState() noexcept {
+        return state_ && state_->OnLane() ? state_.get() : nullptr;
+    }
+
+    /** @copydoc StreamingSourcePlanner::OwnerState */
+    StreamingSourcePlannerState *StreamingSourcePlanner::OwnerState() noexcept {
+        return state_ && state_->OnLane() ? state_.get() : nullptr;
+    }
+
     /** @copydoc StreamingSourceRegistration::Replace */
     Result<void> StreamingSourceRegistration::Replace(const StreamingSourceRequest &request) {
-        if (!state_)
-            return Failure<void>(WorldStreamingErrors::SourceOwnerStale);
-        if (const auto valid = state_->ValidateOwner(owner_); valid.HasError())
+        auto *state = OwnerState();
+        if (!state)
+            return Failure<void>(state_ ? WorldStreamingErrors::SourceLifecycleUnavailable : WorldStreamingErrors::SourceOwnerStale);
+        if (const auto valid = state->ValidateOwner(owner_); valid.HasError())
             return valid;
-        const auto &previous = *state_->sources[owner_.slot].request;
+        const auto &previous = *state->sources[owner_.slot].request;
         if (request.id != previous.id || request.intent != previous.intent)
             return Failure<void>(WorldStreamingErrors::SourceOwnerStale);
-        if (state_->revision == std::numeric_limits<std::uint64_t>::max())
+        if (state->revision == std::numeric_limits<std::uint64_t>::max())
             return Failure<void>(WorldStreamingErrors::GenerationExhausted);
-        if (const auto valid = state_->ValidateRequest(request, owner_, previous.revision); valid.HasError())
+        if (const auto valid = state->ValidateRequest(request, owner_, previous.revision); valid.HasError())
             return valid;
-        state_->sources[owner_.slot].request = request;
-        state_->sources[owner_.slot].motion = request.prediction;
-        state_->Invalidate();
+        state->sources[owner_.slot].request = request;
+        state->sources[owner_.slot].motion = request.prediction;
+        state->Invalidate();
         return Result<void>::Success();
     }
 
     /** @copydoc StreamingSourceRegistration::SampleMotion */
     Result<void> StreamingSourceRegistration::SampleMotion(const StreamingSourceMotionSample &sample) {
-        if (!state_)
-            return Failure<void>(WorldStreamingErrors::SourceOwnerStale);
-        if (const auto valid = state_->ValidateOwner(owner_); valid.HasError())
+        auto *state = OwnerState();
+        if (!state)
+            return Failure<void>(state_ ? WorldStreamingErrors::SourceLifecycleUnavailable : WorldStreamingErrors::SourceOwnerStale);
+        if (const auto valid = state->ValidateOwner(owner_); valid.HasError())
             return valid;
-        auto &source = state_->sources[owner_.slot];
+        auto &source = state->sources[owner_.slot];
         if (source.request->intent == StreamingSourceIntent::Preload)
             return Failure<void>(WorldStreamingErrors::SourceIntentUnsupported);
         if (source.motion && sample.sampledAtServiceMilliseconds <= source.motion->sampledAtServiceMilliseconds)
             return Failure<void>(WorldStreamingErrors::PrefetchStale);
-        const auto moved = SourcePlanning::Reposition(source.request->shape, sample.position);
-        if (moved.HasError())
+        if (const auto moved = SourcePlanning::Reposition(source.request->shape, sample.position); moved.HasError())
             return Result<void>::Failure(moved.ErrorValue());
         if (source.request->prediction) {
             auto candidate = *source.request;
             candidate.prediction = sample;
-            if (const auto valid = state_->ValidateRequest(candidate, owner_); valid.HasError())
+            if (const auto valid = state->ValidateRequest(candidate, owner_); valid.HasError())
                 return valid;
         }
         source.motion = sample;
@@ -202,8 +210,7 @@ namespace Horo::WorldStreaming {
         if (!state_->closed && owner_.slot < state_->sources.size() && state_->Token(owner_.slot) == owner_ &&
             state_->sources[owner_.slot].request) {
             state_->sources[owner_.slot].request.reset();
-            const auto slot = std::ranges::find(state_->sourceOrder, owner_.slot);
-            if (slot != state_->sourceOrder.end())
+            if (const auto slot = std::ranges::find(state_->sourceOrder, owner_.slot); slot != state_->sourceOrder.end())
                 state_->sourceOrder.erase(slot);
             state_->Invalidate();
         }
@@ -251,8 +258,10 @@ namespace Horo::WorldStreaming {
             state->enabledLayers.assign(environment.enabledLayers.begin(), environment.enabledLayers.end());
             state->environment = environment;
             state->environment.enabledLayers = state->enabledLayers;
-            return Result<std::unique_ptr<StreamingSourcePlanner>>::Success(
-                std::unique_ptr<StreamingSourcePlanner>(new StreamingSourcePlanner(std::move(state))));
+            auto planner =
+                std::unique_ptr<StreamingSourcePlanner>(  // NOSONAR(cpp:S5950) Sealed private constructor; immediate RAII ownership.
+                    new StreamingSourcePlanner(std::move(state)));
+            return Result<std::unique_ptr<StreamingSourcePlanner>>::Success(std::move(planner));
         } catch (const std::bad_alloc &) {
             return Failure<std::unique_ptr<StreamingSourcePlanner>>(WorldStreamingErrors::PartitionRegistryStorageUnavailable);
         }
@@ -260,52 +269,54 @@ namespace Horo::WorldStreaming {
 
     /** @copydoc StreamingSourcePlanner::Register */
     Result<StreamingSourceRegistration> StreamingSourcePlanner::Register(const StreamingSourceRequest &request) {
-        if (!state_->OnLane() || state_->closed)
+        auto *state = OwnerState();
+        if (!state || state->closed)
             return Failure<StreamingSourceRegistration>(WorldStreamingErrors::SourceLifecycleUnavailable);
-        if (state_->revision == std::numeric_limits<std::uint64_t>::max())
+        if (state->revision == std::numeric_limits<std::uint64_t>::max())
             return Failure<StreamingSourceRegistration>(WorldStreamingErrors::GenerationExhausted);
         std::optional<std::size_t> available;
-        for (std::size_t slot = 0; slot < state_->sources.size(); ++slot) {
-            const auto &source = state_->sources[slot];
+        for (std::size_t slot = 0; slot < state->sources.size(); ++slot) {
+            const auto &source = state->sources[slot];
             if (source.request && source.request->id == request.id)
                 return Failure<StreamingSourceRegistration>(WorldStreamingErrors::SourceReductionIdentityConflict);
-            if (!source.request && source.generation != std::numeric_limits<std::uint32_t>::max() && !available)
+            if (!source.request && source.generation != std::numeric_limits<std::uint32_t>::max() && !available.has_value())
                 available = slot;
         }
-        if (!available)
+        if (!available.has_value())
             return Failure<StreamingSourceRegistration>(WorldStreamingErrors::SourceCapacityExceeded);
-        auto token = state_->Token(*available);
+        auto token = state->Token(*available);
         ++token.generation;
-        if (const auto valid = state_->ValidateRequest(request, token); valid.HasError())
+        if (const auto valid = state->ValidateRequest(request, token); valid.HasError())
             return Result<StreamingSourceRegistration>::Failure(valid.ErrorValue());
-        auto &source = state_->sources[*available];
+        auto &source = state->sources[*available];
         source.request = request;
         source.motion = request.prediction;
         source.generation = token.generation;
-        const auto position = std::ranges::lower_bound(state_->sourceOrder, request.id, {}, [&](const auto slot) {
-            return state_->sources[slot].request->id;
+        const auto position = std::ranges::lower_bound(state->sourceOrder, request.id, {}, [&](const auto slot) {
+            return state->sources[slot].request->id;
         });
-        state_->sourceOrder.insert(position, static_cast<std::uint32_t>(*available));
-        state_->Invalidate();
+        state->sourceOrder.insert(position, static_cast<std::uint32_t>(*available));
+        state->Invalidate();
         return Result<StreamingSourceRegistration>::Success(StreamingSourceRegistration{state_, token});
     }
 
     /** @copydoc StreamingSourcePlanner::ReplaceEnvironment */
     Result<void> StreamingSourcePlanner::ReplaceEnvironment(const StreamingSourceEnvironment &environment) {
-        if (!state_->OnLane() || state_->closed)
+        auto *state = OwnerState();
+        if (!state || state->closed)
             return Failure<void>(WorldStreamingErrors::SourceLifecycleUnavailable);
-        if (environment.revision <= state_->environment.revision)
+        if (environment.revision <= state->environment.revision)
             return Failure<void>(WorldStreamingErrors::SourceRevisionStale);
-        if (state_->revision == std::numeric_limits<std::uint64_t>::max())
+        if (state->revision == std::numeric_limits<std::uint64_t>::max())
             return Failure<void>(WorldStreamingErrors::GenerationExhausted);
-        if (const auto valid = state_->ValidateEnvironment(environment, state_->partition); valid.HasError())
+        if (const auto valid = state->ValidateEnvironment(environment, state->partition); valid.HasError())
             return valid;
         try {
             std::vector<StreamingLayerId> layers(environment.enabledLayers.begin(), environment.enabledLayers.end());
-            state_->enabledLayers.swap(layers);
-            state_->environment = environment;
-            state_->environment.enabledLayers = state_->enabledLayers;
-            state_->Invalidate();
+            state->enabledLayers.swap(layers);
+            state->environment = environment;
+            state->environment.enabledLayers = state->enabledLayers;
+            state->Invalidate();
             return Result<void>::Success();
         } catch (const std::bad_alloc &) {
             return Failure<void>(WorldStreamingErrors::PartitionRegistryStorageUnavailable);
@@ -315,27 +326,28 @@ namespace Horo::WorldStreaming {
     /** @copydoc StreamingSourcePlanner::ReplacePartition */
     Result<void> StreamingSourcePlanner::ReplacePartition(WorldPartitionRegistrySnapshot partition,
                                                           const StreamingSourceEnvironment &environment) {
-        if (!state_->OnLane() || state_->closed)
+        auto *state = OwnerState();
+        if (!state || state->closed)
             return Failure<void>(WorldStreamingErrors::SourceLifecycleUnavailable);
-        if (partition.Binding() == state_->partition.Binding())
+        if (partition.Binding() == state->partition.Binding())
             return Failure<void>(WorldStreamingErrors::PartitionRegistryStale);
-        if (state_->revision == std::numeric_limits<std::uint64_t>::max())
+        if (state->revision == std::numeric_limits<std::uint64_t>::max())
             return Failure<void>(WorldStreamingErrors::GenerationExhausted);
-        if (const auto valid = state_->ValidateEnvironment(environment, partition); valid.HasError())
+        if (const auto valid = state->ValidateEnvironment(environment, partition); valid.HasError())
             return valid;
         try {
             std::vector<StreamingLayerId> layers(environment.enabledLayers.begin(), environment.enabledLayers.end());
             std::vector<StreamingSourcePlannerState::Lookup> lookup(partition.Cells().size());
-            state_->lookup.swap(lookup);
-            state_->partition = std::move(partition);
-            state_->enabledLayers.swap(layers);
-            state_->environment = environment;
-            state_->environment.enabledLayers = state_->enabledLayers;
-            for (auto &source : state_->sources)
+            state->lookup.swap(lookup);
+            state->partition = std::move(partition);
+            state->enabledLayers.swap(layers);
+            state->environment = environment;
+            state->environment.enabledLayers = state->enabledLayers;
+            for (auto &source : state->sources)
                 source.request.reset();
-            state_->sourceOrder.clear();
-            state_->published.clear();
-            state_->Invalidate();
+            state->sourceOrder.clear();
+            state->published.clear();
+            state->Invalidate();
             return Result<void>::Success();
         } catch (const std::bad_alloc &) {
             return Failure<void>(WorldStreamingErrors::PartitionRegistryStorageUnavailable);
@@ -344,14 +356,15 @@ namespace Horo::WorldStreaming {
 
     /** @copydoc StreamingSourcePlanner::Shutdown */
     Result<void> StreamingSourcePlanner::Shutdown() {
-        if (!state_->OnLane())
+        auto *state = OwnerState();
+        if (!state)
             return Failure<void>(WorldStreamingErrors::SourceLifecycleUnavailable);
-        state_->closed = true;
-        for (auto &source : state_->sources)
+        state->closed = true;
+        for (auto &source : state->sources)
             source.request.reset();
-        state_->sourceOrder.clear();
-        state_->published.clear();
-        state_->Invalidate();
+        state->sourceOrder.clear();
+        state->published.clear();
+        state->Invalidate();
         return Result<void>::Success();
     }
 }  // namespace Horo::WorldStreaming

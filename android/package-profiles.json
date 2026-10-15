@@ -17,7 +17,8 @@
       ],
       "nativeLibrary": "horo-package-qualification",
       "permissions": [
-        "org.horocore.packagequalification.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        "org.horocore.packagequalification.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+        "android.permission.ACTIVITY_RECOGNITION"
       ],
       "features": [],
       "assets": {
@@ -44,7 +45,8 @@
       ],
       "nativeLibrary": "horo-package-qualification",
       "permissions": [
-        "org.horocore.packagequalification.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        "org.horocore.packagequalification.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+        "android.permission.ACTIVITY_RECOGNITION"
       ],
       "features": [],
       "assets": {

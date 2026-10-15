@@ -29,10 +29,11 @@ namespace Horo::Editor {
         bool asset{};
         bool components{};
         bool editorState{};
+        bool generatedOwnership{};
 
         /** @brief Reports whether at least one authored field differs. */
         [[nodiscard]] constexpr bool Any() const noexcept {
-            return name || parent || transform || primitive || asset || components || editorState;
+            return name || parent || transform || primitive || asset || components || editorState || generatedOwnership;
         }
     };
 

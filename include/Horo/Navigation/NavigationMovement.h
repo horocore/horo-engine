@@ -56,6 +56,8 @@ namespace Horo::Navigation {
         NavigationRepathPolicy repath{.debounceTicks = 2, .cooldownTicks = 5};
         NavigationQueryRequirement query; /**< Provider quality and finite per-query bounds. */
         std::uint64_t capabilityRevision{};
+        CancellationToken cancellation;        /**< Parent operation cancellation, propagated to every repath. */
+        Telemetry::OperationContext operation; /**< Owned correlation propagated to provider jobs. */
     };
 
     /** @brief Current committed target value, supplied by the host without retaining a Scene pointer. */

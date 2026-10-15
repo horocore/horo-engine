@@ -25,8 +25,7 @@ namespace Horo::WorldStreaming {
                     return Failure<void>(WorldStreamingErrors::SourceDescriptorInvalid);
                 if (fact.fence.partition != source.partition || fact.fence.epoch != source.epoch)
                     return Failure<void>(WorldStreamingErrors::PartitionRegistryStale);
-                const auto membership = state.partition.Find(fact.fence.cell);
-                if (membership.HasError())
+                if (const auto membership = state.partition.Find(fact.fence.cell); membership.HasError())
                     return Result<void>::Failure(membership.ErrorValue());
                 previous = fact.fence.cell;
             }
@@ -55,8 +54,8 @@ namespace Horo::WorldStreaming {
             return Result<StreamingTravelReadiness>::Failure(valid.ErrorValue());
         if (!state_->Selected(request) || request.residency == StreamingDesiredResidency::Unloaded)
             return Failure<StreamingTravelReadiness>(WorldStreamingErrors::PartitionRegistryUnavailable);
-        if (state_->publishedRevision != state_->revision || serviceTimeMilliseconds < state_->publishedTime ||
-            serviceTimeMilliseconds - state_->publishedTime > state_->config.limits.maximumPlanAgeMilliseconds)
+        if (state_->publication.publishedRevision != state_->revision || serviceTimeMilliseconds < state_->publication.publishedTime ||
+            serviceTimeMilliseconds - state_->publication.publishedTime > state_->config.limits.maximumPlanAgeMilliseconds)
             return Result<StreamingTravelReadiness>::Success(StreamingTravelReadiness::Pending);
         bool destinationFound = false;
         bool pending = false;

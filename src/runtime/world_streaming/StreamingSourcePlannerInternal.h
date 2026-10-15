@@ -16,6 +16,27 @@ namespace Horo::WorldStreaming {
             std::uint64_t capturedServiceTime{};
         };
 
+        /** @brief One resumable work cycle; every service quantum shares these exact cursors and sample cutoffs. */
+        struct Cycle final {
+            std::uint64_t cycleSequence{};
+            StreamingCellStabilityPressure cyclePressure{};
+            std::uint64_t cycleTime{};
+            std::uint64_t oldestCycleSampleTime{};
+            std::size_t sourceSlot{};
+            std::size_t historySlot{};
+            bool cycleActive{};
+            bool predicting{};
+            std::optional<WorldPartitionSpatialCursor> cursor;
+            std::optional<StreamingSourceShape> queryShape;
+        } cycle;
+
+        /** @brief Complete published plan stamps, replaced together only at a successful cycle boundary. */
+        struct Publication final {
+            std::uint64_t publishedRevision{};
+            std::uint64_t planSequence{};
+            std::uint64_t publishedTime{};
+        } publication;
+
         StreamingSourcePlannerConfig config;
         WorldPartitionRegistrySnapshot partition;
         StreamingSourceEnvironment environment{};
@@ -33,26 +54,13 @@ namespace Horo::WorldStreaming {
 
         std::vector<Lookup> lookup;
         std::vector<std::uint32_t> readyHeap;
-        std::uint64_t cycleSequence{};
-        StreamingCellStabilityPressure cyclePressure{};
         std::vector<StreamingPlannedSourceCell> stagedContributions;
         std::vector<StreamingPlannedSourceCell> publishedContributions;
         std::vector<StreamingPlannedSourceCell> nextPublishedContributions;
         std::thread::id lane{std::this_thread::get_id()};
         std::uint64_t revision{1};
-        std::uint64_t publishedRevision{};
-        std::uint64_t planSequence{};
         std::uint64_t lastServiceTime{};
-        std::uint64_t cycleTime{};
-        std::uint64_t publishedTime{};
-        std::uint64_t oldestCycleSampleTime{};
-        std::size_t sourceSlot{};
-        std::size_t historySlot{};
         bool closed{};
-        bool cycleActive{};
-        bool predicting{};
-        std::optional<WorldPartitionSpatialCursor> cursor;
-        std::optional<StreamingSourceShape> queryShape;
 
         StreamingSourcePlannerState(StreamingSourcePlannerConfig configValue, WorldPartitionRegistrySnapshot partitionValue)
             : config(std::move(configValue)), partition(std::move(partitionValue)) {}
@@ -81,6 +89,8 @@ namespace Horo::WorldStreaming {
         [[nodiscard]] Result<std::size_t> AdmitRow(const StreamingPlannedCell &row);
         [[nodiscard]] bool HeapLess(std::uint32_t left, std::uint32_t right) const noexcept;
         void BeginCycle(std::uint64_t time, StreamingCellStabilityPressure pressure) noexcept;
+        /** @brief Advances the captured cursor and charges existing quantum counters before accumulation; never resets work budgets. */
+        [[nodiscard]] Result<void> StepCursor(std::size_t slot, StreamingSourcePlannerProgress &progress);
         [[nodiscard]] Result<void> StepSources(StreamingSourcePlannerProgress &progress);
         [[nodiscard]] Result<void> StepHistory(StreamingSourcePlannerProgress &progress);
         [[nodiscard]] Result<void> StepOutput(StreamingSourcePlannerProgress &progress);
@@ -88,6 +98,7 @@ namespace Horo::WorldStreaming {
     };
 
     namespace SourcePlanning {
+        /** @brief Translates a source anchor while preserving checked concrete geometry and typed range failures. */
         [[nodiscard]] Result<StreamingSourceShape> Reposition(const StreamingSourceShape &shape, const Math::WorldCoordinate64 &anchor);
 
         template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor) {

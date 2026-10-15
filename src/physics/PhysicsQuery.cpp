@@ -289,6 +289,39 @@ namespace Horo::Physics {
         return Result<void>::Success();
     }
 
+    namespace {
+        /** @brief Validates inert frame ownership and shape without claiming live body or snapshot liveness. */
+        Result<void> ValidateBodyPoseFrame(const PhysicsQueryDescriptor &descriptor) {
+            if (!descriptor.bodyPoseFrame)
+                return Result<void>::Success();
+            const auto &frame = *descriptor.bodyPoseFrame;
+            if (frame.participation != PhysicsQueryFrameParticipation::PredictedPose &&
+                frame.participation != PhysicsQueryFrameParticipation::CoMovingCarry)
+                return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported));
+            if (frame.participation == PhysicsQueryFrameParticipation::CoMovingCarry &&
+                !std::holds_alternative<PhysicsCapsuleSweepQuery>(descriptor.geometry))
+                return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported));
+            if (!std::holds_alternative<PhysicsCapsuleOverlapQuery>(descriptor.geometry) &&
+                !std::holds_alternative<PhysicsCapsuleSweepQuery>(descriptor.geometry))
+                return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported));
+            if (auto body = ValidatePhysicsHandleOwner(frame.body, descriptor.world); body.HasError())
+                return body;
+            if (auto shape = ValidatePhysicsHandleOwner(frame.shape, descriptor.world); shape.HasError())
+                return shape;
+            if (frame.sourcePublicationRevision == 0 || frame.consumingTick == 0)
+                return Result<void>::Failure(MakeError(PhysicsErrors::QuerySnapshotStale));
+            for (const auto &pose : {frame.sourcePose, frame.predictedPose}) {
+                if (const auto valid = ValidatePhysicsPose(pose); valid.HasError())
+                    return valid;
+                if (std::abs(pose.translation.x) > MaximumPhysicsLocalHalfExtentMeters ||
+                    std::abs(pose.translation.y) > MaximumPhysicsLocalHalfExtentMeters ||
+                    std::abs(pose.translation.z) > MaximumPhysicsLocalHalfExtentMeters)
+                    return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
+            }
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     /** @copydoc ValidatePhysicsQueryDescriptor */
     Result<void> ValidatePhysicsQueryDescriptor(const PhysicsQueryDescriptor &descriptor, const PhysicsWorldId expectedWorld,
                                                 const std::uint64_t expectedSceneGeneration) {
@@ -298,6 +331,8 @@ namespace Horo::Physics {
             return policies;
         if (const auto selectors = ValidateQuerySelectors(descriptor.filter, expectedWorld); selectors.HasError())
             return selectors;
+        if (const auto frame = ValidateBodyPoseFrame(descriptor); frame.HasError())
+            return frame;
         return std::visit([expectedWorld](const auto &geometry) {
             return ValidateGeometry(geometry, expectedWorld);
         }, descriptor.geometry);

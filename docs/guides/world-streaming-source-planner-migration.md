@@ -145,3 +145,13 @@ a real previous publication, and a separate two-second/4096-work profile.
 No test changes immutable limits mid-cycle, relaxes freshness, sleeps, or
 performs unbounded work in one Service call. Their actual runtime results must
 be recorded separately from benchmark CPU timing.
+
+The quality integration keeps owner-lane mutation admission non-const. A private
+mutable-state boundary checks lane affinity before exposing writable state; read
+queries retain their const contract. In-flight cycle cursors and captured sample
+cutoffs are grouped separately from complete publication stamps. Phase helpers
+charge the same caller-owned quantum counters and do not reset work budgets.
+The sealed planner factory retains direct allocation with immediate unique RAII
+ownership because `std::make_unique` cannot invoke its private constructor; its
+line-specific S5950 exception follows the existing PackageLifecycle factory
+precedent and does not expose an alternate unvalidated construction path.

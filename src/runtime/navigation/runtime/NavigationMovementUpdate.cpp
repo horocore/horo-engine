@@ -163,7 +163,9 @@ namespace Horo::Navigation {
                                             .source = path.provenance,
                                             .capabilityRevision = request_.capabilityRevision,
                                             .targetTick = path.tick + 1,
-                                            .deadlineTick = deadline_};
+                                            .deadlineTick = deadline_,
+                                            .cancellation = request_.cancellation,
+                                            .operation = request_.operation};
         auto accepted = coordinator_.Submit(world_, std::move(submission), path.tick);
         if (accepted.HasError()) {
             if (!IsError(accepted.ErrorValue(), NavigationErrors::AdmissionRejected))
@@ -230,6 +232,9 @@ namespace Horo::Navigation {
         if (!ValidObservation(current) || (lastUpdate_.has_value() && current.path.tick <= *lastUpdate_))
             return Return::Failure(MakeError(NavigationErrors::OutcomeDescriptorInvalid));
         lastUpdate_ = current.path.tick;
+        if (request_.cancellation.IsCancellationRequested() && status_.state < NavigationMovementState::Arrived)
+            Finish(NavigationMovementState::Cancelled);
+
         const auto stopped = [&] {
             return Return::Success({status_.id, {}, current.path.tick, {}, status_.state});
         };

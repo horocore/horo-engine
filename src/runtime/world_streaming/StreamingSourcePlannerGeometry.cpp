@@ -7,7 +7,7 @@
 namespace Horo::WorldStreaming::SourcePlanning {
     namespace {
         /** @brief Preserves point offsets with checked integer translation. */
-        Result<Math::WorldCoordinate64> TranslatePoint(const Math::WorldCoordinate64 point, const std::array<std::int64_t, 3> &oldAnchor,
+        Result<Math::WorldCoordinate64> TranslatePoint(const Math::WorldCoordinate64 &point, const std::array<std::int64_t, 3> &oldAnchor,
                                                        const std::array<std::int64_t, 3> &target) {
             auto axes = point.Millimeters();
             for (std::size_t axis = 0; axis < axes.size(); ++axis) {
@@ -24,9 +24,9 @@ namespace Horo::WorldStreaming::SourcePlanning {
         }
     }  // namespace
 
-    /** @brief Translates only the source anchor; geometry and source configuration are preserved. */
-    Result<StreamingSourceShape> Reposition(const StreamingSourceShape &shape, const Math::WorldCoordinate64 &anchor) {
-        return std::visit([&]<typename Shape>(const Shape &original) -> Result<StreamingSourceShape> {
+    namespace {
+        /** @brief Preserves concrete source geometry while translating its validated anchor. */
+        template <typename Shape> Result<StreamingSourceShape> MoveShape(const Shape &original, const Math::WorldCoordinate64 &anchor) {
             const auto oldAnchor = [&] {
                 if constexpr (std::is_same_v<Shape, StreamingSourceSphere>)
                     return original.center;
@@ -50,17 +50,24 @@ namespace Horo::WorldStreaming::SourcePlanning {
                 moved.minimum = anchor;
                 moved.maximum = maximum.Value();
             } else {
-                for (std::size_t index = 0; index < moved.pointCount; ++index) {
-                    const auto point = TranslatePoint(original.points[index], oldAnchor, target);
-                    if (point.HasError())
-                        return Result<StreamingSourceShape>::Failure(point.ErrorValue());
-                    moved.points[index] = point.Value();
+                for (auto &point : std::span{moved.points}.first(moved.pointCount)) {
+                    const auto translated = TranslatePoint(point, oldAnchor, target);
+                    if (translated.HasError())
+                        return Result<StreamingSourceShape>::Failure(translated.ErrorValue());
+                    point = translated.Value();
                 }
             }
             const StreamingSourceShape result{moved};
             if (const auto valid = ValidateStreamingSourceShape(result); valid.HasError())
                 return Result<StreamingSourceShape>::Failure(valid.ErrorValue());
             return Result<StreamingSourceShape>::Success(result);
+        }
+    }  // namespace
+
+    /** @copydoc Reposition */
+    Result<StreamingSourceShape> Reposition(const StreamingSourceShape &shape, const Math::WorldCoordinate64 &anchor) {
+        return std::visit([&anchor](const auto &original) {
+            return MoveShape(original, anchor);
         }, shape);
     }
 }  // namespace Horo::WorldStreaming::SourcePlanning

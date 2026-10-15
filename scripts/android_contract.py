@@ -97,8 +97,9 @@ def validate_asset_names(profile: dict) -> None:
 def validate_profile_identity(profile: dict) -> None:
     if profile["renderer"] != "none" or profile["distributionQualified"]:
         raise AndroidError("This qualification composition has no presentation/device support; provide a qualified product host.")
-    if profile["permissions"] != [profile["applicationId"] + ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"] or profile["features"]:
-        raise AndroidError("Qualification profiles admit only their AndroidX signature-scoped receiver permission and no interactive features.")
+    if profile["permissions"] != [profile["applicationId"] + ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+                                   "android.permission.ACTIVITY_RECOGNITION"] or profile["features"]:
+        raise AndroidError("Qualification profiles admit only AndroidX receiver and optional Activity Recognition permissions; no required hardware features.")
     if not re.fullmatch(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+", profile["applicationId"]):
         raise AndroidError("Invalid Android application identity.")
     if not re.fullmatch(r"[a-z][a-z0-9-]*", profile["nativeLibrary"]):

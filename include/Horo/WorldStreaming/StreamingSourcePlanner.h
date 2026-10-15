@@ -176,7 +176,9 @@ namespace Horo::WorldStreaming {
 
     private:
         friend class StreamingSourcePlanner;
-        StreamingSourceRegistration(std::shared_ptr<StreamingSourcePlannerState> state, StreamingSourceOwnerToken owner) noexcept;
+        StreamingSourceRegistration(std::shared_ptr<StreamingSourcePlannerState> state, const StreamingSourceOwnerToken &owner) noexcept;
+        /** @brief Exposes mutable shared ownership only on its admitted owner lane; null rejects a missing/foreign owner. */
+        [[nodiscard]] StreamingSourcePlannerState *OwnerState() noexcept;
         std::shared_ptr<StreamingSourcePlannerState> state_;
         StreamingSourceOwnerToken owner_{};
     };
@@ -250,6 +252,8 @@ namespace Horo::WorldStreaming {
 
     private:
         explicit StreamingSourcePlanner(std::shared_ptr<StreamingSourcePlannerState> state) noexcept;
+        /** @brief Exposes mutable shared ownership only on its admitted owner lane; null rejects a missing/foreign owner. */
+        [[nodiscard]] StreamingSourcePlannerState *OwnerState() noexcept;
         std::shared_ptr<StreamingSourcePlannerState> state_;
     };
 }  // namespace Horo::WorldStreaming

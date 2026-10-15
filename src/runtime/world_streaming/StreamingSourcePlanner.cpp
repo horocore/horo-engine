@@ -17,20 +17,28 @@ namespace Horo::WorldStreaming {
                 return left.source.id > right.source.id;
             if (left.cell.slot != right.cell.slot)
                 return left.cell.slot > right.cell.slot;
-            return left.predicted > right.predicted;
+            return left.predicted && !right.predicted;
         }
 
+        /** @brief Withdraws incomplete publication on any failed service attempt; ownership cannot be copied. */
         struct CycleAttempt final {
             StreamingSourcePlannerState &state;
             bool success{};
 
+            explicit CycleAttempt(StreamingSourcePlannerState &owner) noexcept : state(owner) {}
+
+            CycleAttempt(const CycleAttempt &) = delete;
+            CycleAttempt &operator=(const CycleAttempt &) = delete;
+            CycleAttempt(CycleAttempt &&) = delete;
+            CycleAttempt &operator=(CycleAttempt &&) = delete;
+
             ~CycleAttempt() {
                 if (!success) {
-                    state.cycleActive = false;
-                    state.publishedRevision = 0;
-                    state.cursor.reset();
-                    state.queryShape.reset();
-                    state.predicting = false;
+                    state.cycle.cycleActive = false;
+                    state.publication.publishedRevision = 0;
+                    state.cycle.cursor.reset();
+                    state.cycle.queryShape.reset();
+                    state.cycle.predicting = false;
                 }
             }
 
@@ -64,7 +72,7 @@ namespace Horo::WorldStreaming {
             if (source.captured->prediction)
                 source.captured->prediction = source.motion;
         }
-        oldestCycleSampleTime = std::min(oldestCycleSampleTime, source.capturedTime);
+        cycle.oldestCycleSampleTime = std::min(cycle.oldestCycleSampleTime, source.capturedTime);
         return Result<void>::Success();
     }
 
@@ -75,10 +83,10 @@ namespace Horo::WorldStreaming {
                 return captured;
         }
         const auto &request = *source.captured;
-        queryShape = request.shape;
+        cycle.queryShape = request.shape;
         if (prediction) {
             if (!request.prediction) {
-                queryShape.reset();
+                cycle.queryShape.reset();
                 return Result<void>::Success();
             }
             const auto descriptor = Descriptor(slot);
@@ -98,18 +106,18 @@ namespace Horo::WorldStreaming {
             if (result.HasError())
                 return Result<void>::Failure(result.ErrorValue());
             if (!result.Value().path) {
-                queryShape.reset();
+                cycle.queryShape.reset();
                 return Result<void>::Success();
             }
-            queryShape = *result.Value().path;
+            cycle.queryShape = *result.Value().path;
         }
-        const auto bounds = StreamingSourceQueryBounds(*queryShape, config.stability.ExitMarginMillimeters());
+        const auto bounds = StreamingSourceQueryBounds(*cycle.queryShape, config.stability.ExitMarginMillimeters());
         if (bounds.HasError())
             return Result<void>::Failure(bounds.ErrorValue());
         const auto query = partition.BeginQuery({bounds.Value(), request.selection.layer, request.selection.lod});
         if (query.HasError())
             return Result<void>::Failure(query.ErrorValue());
-        cursor = query.Value();
+        cycle.cursor = query.Value();
         return Result<void>::Success();
     }
 
@@ -126,7 +134,7 @@ namespace Horo::WorldStreaming {
                                                       prediction,
                                                       sources[slot].capturedTime};
         stagedContributions.push_back(contribution);
-        std::push_heap(stagedContributions.begin(), stagedContributions.end(), ContributionHeapLess);
+        std::ranges::push_heap(stagedContributions, ContributionHeapLess);
         return Result<void>::Success();
     }
 
@@ -152,7 +160,7 @@ namespace Horo::WorldStreaming {
         value.boundaryThresholdMillimeters = std::numeric_limits<std::int64_t>::min();
         const auto previous = FindPrevious(published, cell.cell);
         value.queuedAtServiceMilliseconds =
-            previous != published.end() && previous->cell.cell == cell.cell ? previous->queuedAtServiceMilliseconds : cycleTime;
+            previous != published.end() && previous->cell.cell == cell.cell ? previous->queuedAtServiceMilliseconds : cycle.cycleTime;
         const auto admitted = AdmitRow(value);
         if (admitted.HasError())
             return Result<void>::Failure(admitted.ErrorValue());
@@ -186,11 +194,10 @@ namespace Horo::WorldStreaming {
                                                          config.priority.Revision(),
                                                          descriptor.owner.partition,
                                                          descriptor.owner.epoch,
-                                                         cycleTime,
+                                                         cycle.cycleTime,
                                                          StreamingPriorityPolicyState::Active};
         std::array<StreamingRankedCellPriority, 1> ranked;
-        const auto result = RankStreamingCellPriorities(config.priority, context, std::span{&candidate, 1}, ranked);
-        if (result.HasError())
+        if (const auto result = RankStreamingCellPriorities(config.priority, context, std::span{&candidate, 1}, ranked); result.HasError())
             return Result<void>::Failure(result.ErrorValue());
         if (!row.prioritySource.has_value() || ranked[0].score > row.priority ||
             (ranked[0].score == row.priority && descriptor.id < row.prioritySource->id)) {
@@ -206,14 +213,14 @@ namespace Horo::WorldStreaming {
 
     Result<std::size_t> StreamingSourcePlannerState::AdmitRow(const StreamingPlannedCell &row) {
         auto &entry = lookup[row.cell.slot];
-        if (entry.cycle == cycleSequence)
+        if (entry.cycle == cycle.cycleSequence)
             return Result<std::size_t>::Success(entry.row);
         if (staged.size() == config.limits.cells)
             return Failure<std::size_t>(WorldStreamingErrors::SourceCapacityExceeded);
-        entry = {cycleSequence, static_cast<std::uint32_t>(staged.size())};
+        entry = {cycle.cycleSequence, static_cast<std::uint32_t>(staged.size())};
         staged.push_back(row);
         readyHeap.push_back(entry.row);
-        std::push_heap(readyHeap.begin(), readyHeap.end(), [this](auto left, auto right) {
+        std::ranges::push_heap(readyHeap, [this](auto left, auto right) {
             return HeapLess(left, right);
         });
         return Result<std::size_t>::Success(entry.row);
@@ -229,7 +236,7 @@ namespace Horo::WorldStreaming {
                                                     config.stability.Revision(),
                                                     world.partition,
                                                     world.epoch,
-                                                    cycleTime,
+                                                    cycle.cycleTime,
                                                     static_cast<std::uint32_t>(staged.size() - (snapshot ? 0 : 1)),
                                                     StreamingCellStabilityLifecycle::Active,
                                                     pressure};
@@ -244,56 +251,62 @@ namespace Horo::WorldStreaming {
     }
 
     void StreamingSourcePlannerState::CompleteSourceTraversal() {
-        cursor.reset();
-        queryShape.reset();
-        if (predicting) {
-            predicting = false;
-            ++sourceSlot;
+        cycle.cursor.reset();
+        cycle.queryShape.reset();
+        if (cycle.predicting) {
+            cycle.predicting = false;
+            ++cycle.sourceSlot;
         } else
-            predicting = true;
+            cycle.predicting = true;
+    }
+
+    /** @copydoc StreamingSourcePlannerState::StepCursor */
+    Result<void> StreamingSourcePlannerState::StepCursor(const std::size_t slot, StreamingSourcePlannerProgress &progress) {
+        const auto limits = config.limits;
+        std::array<WorldPartitionCellHandle, 1> cell;
+        const auto batch = partition.QueryNext(*cycle.cursor,
+                                               {static_cast<std::uint32_t>(limits.nodesPerFrame - progress.nodesVisited),
+                                                static_cast<std::uint32_t>(limits.candidatesPerFrame - progress.candidatesExamined)},
+                                               cell);
+        if (batch.HasError())
+            return Result<void>::Failure(batch.ErrorValue());
+        progress.nodesVisited += batch.Value().nodesVisited;
+        progress.candidatesExamined += batch.Value().candidatesExamined;
+        if (batch.Value().matches != 0) {
+            if (const auto added = Accumulate(slot, cell[0], *cycle.queryShape, cycle.predicting); added.HasError())
+                return Result<void>::Failure(added.ErrorValue());
+        }
+        if (batch.Value().complete)
+            CompleteSourceTraversal();
+        return Result<void>::Success();
     }
 
     Result<void> StreamingSourcePlannerState::StepSources(StreamingSourcePlannerProgress &progress) {
         auto &state = *this;
         const auto limits = config.limits;
-        while (state.sourceSlot < state.sourceOrder.size()) {
-            const auto slot = state.sourceOrder[state.sourceSlot];
-            if (!state.cursor) {
+        while (state.cycle.sourceSlot < state.sourceOrder.size()) {
+            const auto slot = state.sourceOrder[state.cycle.sourceSlot];
+            if (!state.cycle.cursor) {
                 if (progress.sourceVisits == limits.sourceVisitsPerFrame)
-                    break;
+                    return Result<void>::Success();
                 ++progress.sourceVisits;
-                const auto &source = state.sources[slot];
-                if (!source.request || !state.Selected(*source.request) ||
-                    source.request->residency == StreamingDesiredResidency::Unloaded) {
-                    ++state.sourceSlot;
+                if (const auto &source = state.sources[slot]; !source.request || !state.Selected(*source.request) ||
+                                                              source.request->residency == StreamingDesiredResidency::Unloaded) {
+                    ++state.cycle.sourceSlot;
                     continue;
                 }
-                if (const auto begun = state.BeginSource(slot, state.predicting); begun.HasError())
+                if (const auto begun = state.BeginSource(slot, state.cycle.predicting); begun.HasError())
                     return Result<void>::Failure(begun.ErrorValue());
-                if (!state.cursor) {
-                    state.predicting = false;
-                    ++state.sourceSlot;
+                if (!state.cycle.cursor) {
+                    state.cycle.predicting = false;
+                    ++state.cycle.sourceSlot;
                     continue;
                 }
             }
             if (progress.nodesVisited == limits.nodesPerFrame || progress.candidatesExamined == limits.candidatesPerFrame)
                 break;
-            std::array<WorldPartitionCellHandle, 1> cell;
-            const auto batch =
-                state.partition.QueryNext(*state.cursor,
-                                          {static_cast<std::uint32_t>(limits.nodesPerFrame - progress.nodesVisited),
-                                           static_cast<std::uint32_t>(limits.candidatesPerFrame - progress.candidatesExamined)},
-                                          cell);
-            if (batch.HasError())
-                return Result<void>::Failure(batch.ErrorValue());
-            progress.nodesVisited += batch.Value().nodesVisited;
-            progress.candidatesExamined += batch.Value().candidatesExamined;
-            if (batch.Value().matches != 0) {
-                if (const auto added = state.Accumulate(slot, cell[0], *state.queryShape, state.predicting); added.HasError())
-                    return Result<void>::Failure(added.ErrorValue());
-            }
-            if (batch.Value().complete)
-                state.CompleteSourceTraversal();
+            if (const auto advanced = state.StepCursor(slot, progress); advanced.HasError())
+                return advanced;
         }
         return Result<void>::Success();
     }
@@ -302,12 +315,12 @@ namespace Horo::WorldStreaming {
         auto &state = *this;
         const auto limits = config.limits;
         // Only bounded previous demand is visited. No manifest or active source registry scan occurs here.
-        while (state.historySlot < state.published.size() && progress.stabilityRows < limits.stabilityRowsPerFrame) {
-            auto old = state.published[state.historySlot++];
+        while (state.cycle.historySlot < state.published.size() && progress.stabilityRows < limits.stabilityRowsPerFrame) {
+            auto old = state.published[state.cycle.historySlot++];
             ++progress.stabilityRows;
             if (!std::ranges::binary_search(state.enabledLayers, old.cell.cell.layer))
                 continue;
-            if (state.lookup[old.cell.slot].cycle != state.cycleSequence) {
+            if (state.lookup[old.cell.slot].cycle != state.cycle.cycleSequence) {
                 old.residency = StreamingDesiredResidency::Unloaded;
                 old.pinnedFloor.reset();
                 old.prioritySource.reset();
@@ -325,21 +338,21 @@ namespace Horo::WorldStreaming {
         auto &state = *this;
         const auto limits = config.limits;
         while (!state.readyHeap.empty() && progress.stabilityRows < limits.stabilityRowsPerFrame) {
-            std::pop_heap(state.readyHeap.begin(), state.readyHeap.end(), [&state](auto left, auto right) {
+            std::ranges::pop_heap(state.readyHeap, [&state](auto left, auto right) {
                 return state.HeapLess(left, right);
             });
             const auto index = state.readyHeap.back();
             state.readyHeap.pop_back();
             auto &row = state.staged[index];
             ++progress.stabilityRows;
-            if (const auto stable = state.Stabilize(row, state.cyclePressure); stable.HasError())
+            if (const auto stable = state.Stabilize(row, state.cycle.cyclePressure); stable.HasError())
                 return Result<void>::Failure(stable.ErrorValue());
             if (row.stability.phase != StreamingCellStabilityPhase::Unloaded)
                 state.nextPublished.push_back(row);
         }
         while (state.readyHeap.empty() && !state.stagedContributions.empty() && progress.stabilityRows < limits.stabilityRowsPerFrame) {
             ++progress.stabilityRows;
-            std::pop_heap(state.stagedContributions.begin(), state.stagedContributions.end(), ContributionHeapLess);
+            std::ranges::pop_heap(state.stagedContributions, ContributionHeapLess);
             state.nextPublishedContributions.push_back(state.stagedContributions.back());
             state.stagedContributions.pop_back();
         }
@@ -347,16 +360,16 @@ namespace Horo::WorldStreaming {
     }
 
     void StreamingSourcePlannerState::BeginCycle(const std::uint64_t time, const StreamingCellStabilityPressure pressure) noexcept {
-        ++cycleSequence;
-        cyclePressure = pressure;
+        ++cycle.cycleSequence;
+        cycle.cyclePressure = pressure;
         readyHeap.clear();
         nextPublished.clear();
         nextPublishedContributions.clear();
-        cycleActive = true;
-        cycleTime = time;
-        oldestCycleSampleTime = time;
-        sourceSlot = 0;
-        historySlot = 0;
+        cycle.cycleActive = true;
+        cycle.cycleTime = time;
+        cycle.oldestCycleSampleTime = time;
+        cycle.sourceSlot = 0;
+        cycle.historySlot = 0;
         staged.clear();
         stagedContributions.clear();
     }
@@ -364,48 +377,46 @@ namespace Horo::WorldStreaming {
     /** @copydoc StreamingSourcePlanner::Service */
     Result<StreamingSourcePlannerProgress> StreamingSourcePlanner::Service(const std::uint64_t serviceTimeMilliseconds,
                                                                            const StreamingCellStabilityPressure pressure) {
-        auto &state = *state_;
-        if (!state.OnLane() || state.closed)
+        auto *owner = OwnerState();
+        if (!owner || owner->closed)
             return Failure<StreamingSourcePlannerProgress>(WorldStreamingErrors::SourceLifecycleUnavailable);
+        auto &state = *owner;
         if (serviceTimeMilliseconds < state.lastServiceTime)
             return Failure<StreamingSourcePlannerProgress>(WorldStreamingErrors::CellStabilityStale);
         if (pressure >= StreamingCellStabilityPressure::Count)
             return Failure<StreamingSourcePlannerProgress>(WorldStreamingErrors::CellStabilityUnsupported);
         state.lastServiceTime = serviceTimeMilliseconds;
         CycleAttempt guard{state};
-        if (!state.cycleActive) {
-            if (state.cycleSequence == std::numeric_limits<std::uint64_t>::max())
+        if (!state.cycle.cycleActive) {
+            if (state.cycle.cycleSequence == std::numeric_limits<std::uint64_t>::max())
                 return Failure<StreamingSourcePlannerProgress>(WorldStreamingErrors::GenerationExhausted);
             state.BeginCycle(serviceTimeMilliseconds, pressure);
         }
         StreamingSourcePlannerProgress progress;
-        progress.revision = state.planSequence;
-        const auto sources = state.StepSources(progress);
-        if (sources.HasError())
+        progress.revision = state.publication.planSequence;
+        if (const auto sources = state.StepSources(progress); sources.HasError())
             return Result<StreamingSourcePlannerProgress>::Failure(sources.ErrorValue());
-        if (state.sourceSlot != state.sourceOrder.size())
+        if (state.cycle.sourceSlot != state.sourceOrder.size())
             return guard.Complete(progress);
-        const auto history = state.StepHistory(progress);
-        if (history.HasError())
+        if (const auto history = state.StepHistory(progress); history.HasError())
             return Result<StreamingSourcePlannerProgress>::Failure(history.ErrorValue());
-        if (state.historySlot != state.published.size())
+        if (state.cycle.historySlot != state.published.size())
             return guard.Complete(progress);
-        const auto output = state.StepOutput(progress);
-        if (output.HasError())
+        if (const auto output = state.StepOutput(progress); output.HasError())
             return Result<StreamingSourcePlannerProgress>::Failure(output.ErrorValue());
         if (state.readyHeap.empty() && state.stagedContributions.empty()) {
-            if (serviceTimeMilliseconds - state.oldestCycleSampleTime > state.config.limits.maximumPlanAgeMilliseconds)
+            if (serviceTimeMilliseconds - state.cycle.oldestCycleSampleTime > state.config.limits.maximumPlanAgeMilliseconds)
                 return Failure<StreamingSourcePlannerProgress>(WorldStreamingErrors::PrefetchStale);
-            if (state.planSequence == std::numeric_limits<std::uint64_t>::max())
+            if (state.publication.planSequence == std::numeric_limits<std::uint64_t>::max())
                 return Failure<StreamingSourcePlannerProgress>(WorldStreamingErrors::GenerationExhausted);
-            ++state.planSequence;
+            ++state.publication.planSequence;
             state.published.swap(state.nextPublished);
             state.publishedContributions.swap(state.nextPublishedContributions);
-            state.publishedRevision = state.revision;
-            state.publishedTime = state.oldestCycleSampleTime;
-            state.cycleActive = false;
+            state.publication.publishedRevision = state.revision;
+            state.publication.publishedTime = state.cycle.oldestCycleSampleTime;
+            state.cycle.cycleActive = false;
             progress.published = true;
-            progress.revision = state.planSequence;
+            progress.revision = state.publication.planSequence;
         }
         return guard.Complete(progress);
     }
@@ -414,10 +425,11 @@ namespace Horo::WorldStreaming {
     Result<StreamingSourcePlanView> StreamingSourcePlanner::Plan() const {
         if (!state_->OnLane() || state_->closed)
             return Failure<StreamingSourcePlanView>(WorldStreamingErrors::SourceLifecycleUnavailable);
-        if (state_->publishedRevision == 0 || state_->publishedRevision != state_->revision ||
-            state_->lastServiceTime - state_->publishedTime > state_->config.limits.maximumPlanAgeMilliseconds)
+        if (state_->publication.publishedRevision == 0 || state_->publication.publishedRevision != state_->revision ||
+            state_->lastServiceTime - state_->publication.publishedTime > state_->config.limits.maximumPlanAgeMilliseconds)
             return Failure<StreamingSourcePlanView>(WorldStreamingErrors::PartitionRegistryUnavailable);
-        return Result<StreamingSourcePlanView>::Success(
-            {state_->partition.Binding(), state_->planSequence, state_->publishedTime, state_->published, state_->publishedContributions});
+        return Result<StreamingSourcePlanView>::Success({state_->partition.Binding(), state_->publication.planSequence,
+                                                         state_->publication.publishedTime, state_->published,
+                                                         state_->publishedContributions});
     }
 }  // namespace Horo::WorldStreaming

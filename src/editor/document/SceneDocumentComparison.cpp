@@ -24,6 +24,7 @@ namespace Horo::Editor {
                 .asset = document.meshAsset != disk.meshAsset,
                 .components = document.components != disk.components,
                 .editorState = document.editorState != disk.editorState,
+                .generatedOwnership = document.generated != disk.generated,
             };
         }
 
