@@ -11,6 +11,10 @@ namespace Horo::Gameplay {
     LoadedGameModule::LoadedGameModule(const ConstructionKey &, std::shared_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
     LoadedGameModule::~LoadedGameModule() {
+        if (impl_->ai) {
+            impl_->ai->Revoke();
+            impl_->ai->RetireOwnedTasksAtSafePoint();
+        }
         if (impl_->character)
             impl_->character->Revoke();
         if (impl_->navigation)
@@ -145,6 +149,10 @@ namespace Horo::Gameplay {
     /** @copydoc LoadedGameModule::PrepareReload */
     Result<GameModuleReloadSnapshot> LoadedGameModule::PrepareReload() {  // NOSONAR(cpp:S5817) Mutates generation lifecycle.
         impl_->runtimeLeaseAdmission.store(false, std::memory_order_release);
+        if (impl_->ai) {
+            impl_->ai->Revoke();
+            impl_->ai->RetireOwnedTasksAtSafePoint();
+        }
         if (impl_->character)
             impl_->character->Revoke();
         if (impl_->navigation)
@@ -161,6 +169,11 @@ namespace Horo::Gameplay {
     void LoadedGameModule::RequestRetirement() noexcept {  // NOSONAR(cpp:S5817) Revokes generation admission and requests lifecycle
                                                            // cancellation.
         impl_->runtimeLeaseAdmission.store(false, std::memory_order_release);
+        if (impl_->ai) {
+            impl_->ai->Revoke();
+            // Composition retirement is owner-lane; the AI helper independently rejects foreign-lane task mutation.
+            impl_->ai->RetireOwnedTasksAtSafePoint();
+        }
         if (impl_->character)
             impl_->character->Revoke();
         if (impl_->navigation)
@@ -188,6 +201,11 @@ namespace Horo::Gameplay {
     Result<void> LoadedGameModule::RestoreReload(  // NOSONAR(cpp:S5817) Mutates generation lifecycle.
         const GameModuleReloadSnapshot &snapshot) {
         return impl_->RestoreReload(snapshot);
+    }
+
+    /** @copydoc LoadedGameModule::AiContext */
+    std::shared_ptr<const GameplayAiContext> LoadedGameModule::AiContext() const noexcept {
+        return impl_->ai;
     }
 
     /** @copydoc GameModuleHost::GameModuleHost */

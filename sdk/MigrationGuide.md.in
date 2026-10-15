@@ -22,7 +22,7 @@ archive/provenance; do not assign it the current snapshot's contracts.
 | External native host ABI | `horo-extension` @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_MIN_HOST_MINOR@ inclusive to @HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE@.0 exclusive; declarations through @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_PUBLISHED_MINOR@ |
 | Extension descriptor | `extension.json`, schema 1 |
 | Package manifest | `horo-package.toml`, schema 1; owns package identity/dependencies |
-| Gameplay C++ boundary in this engine snapshot | Native boundary 15 / `gameplay-sdk15`; separate exact-fingerprint build-tree SDK |
+| Gameplay C++ boundary in this engine snapshot | Native boundary 20 / `gameplay-sdk20`; separate exact-fingerprint build-tree SDK |
 | Author CI platform profiles | Linux x64, macOS arm64, macOS x64, Windows x64 |
 
 The external extension range does not imply that every table/capability works on
@@ -213,3 +213,19 @@ and complete consumer/lifecycle revalidation, not the maximum prior number.
 
 Rollback: restore a coherent previous engine, SDK and rebuilt module set, then
 restart play. Never edit fingerprints or force-load a mismatched binary.
+
+## Gameplay SDK15 / AI18 → SDK20
+
+This snapshot combines current-main Character15 and Navigation with the AI18
+host-owned immutable diagnostic snapshot layout as boundary20 / `gameplay-sdk20`.
+It excludes the separately reserved Runtime UI19 layout. SDK15, AI18 and UI19
+modules and descriptor bundles are rejected before native factory activation.
+Rebuild the engine hosts, every native module, descriptor bundles and public
+consumers together; changing only a fingerprint never migrates a binary.
+
+The canonical `GameModuleRuntimeServices` retains Physics, Character and Navigation
+anchors and adds AI. Migrate earlier positional AI aggregates to designated `.ai`
+fields. Legacy empty, Physics and Navigation host constructors retain their meaning.
+Each module receives independently revocable AI and Character children; AI tasks
+retire before module callbacks/image unload, while Navigation retains its exact
+code-image pin and Physics/Character allocation authority remains host-owned.

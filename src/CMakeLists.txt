@@ -1428,6 +1428,7 @@ target_compile_features(HoroCharacterInput PUBLIC cxx_std_20)
 target_link_libraries(HoroCharacterInput PUBLIC HoroEngine::Input HoroEngine::Physics)
 
 add_library(HoroAI STATIC
+        runtime/ai/api/AICapabilityDescriptors.cpp
         runtime/ai/api/AICanonicalErrors.cpp
         runtime/ai/api/AICanonicalState.cpp
         runtime/ai/api/BlackboardCanonicalState.cpp
@@ -1467,6 +1468,7 @@ target_link_libraries(HoroAI PUBLIC HoroEngine::Foundation)
 target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::AI)
 
 add_library(HoroAISceneIntegration STATIC
+        runtime/ai/integration/AIRuntimeCapability.cpp
         runtime/ai/integration/AISceneActivation.cpp
         runtime/ai/integration/AISceneStructural.cpp
         runtime/ai/integration/AISceneRestore.cpp
@@ -1476,6 +1478,13 @@ add_library(HoroAISceneIntegration STATIC
 add_library(HoroEngine::AISceneIntegration ALIAS HoroAISceneIntegration)
 target_compile_features(HoroAISceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroAISceneIntegration PUBLIC HoroEngine::AI HoroEngine::RuntimeScene)
+
+# Explicit gameplay composition above the AI scene owner; core AI never depends on Gameplay or Extensions.
+add_library(HoroGameplayAiIntegration STATIC gameplay/GameplayAiContext.cpp)
+add_library(HoroEngine::GameplayAiIntegration ALIAS HoroGameplayAiIntegration)
+target_compile_features(HoroGameplayAiIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroGameplayAiIntegration PUBLIC HoroEngine::GameplayApi HoroEngine::AISceneIntegration)
+target_link_libraries(HoroGameplayModuleHost PRIVATE HoroEngine::GameplayAiIntegration)
 
 add_library(HoroAISightIntegration STATIC runtime/ai/integration/PerceptionSight.cpp)
 add_library(HoroEngine::AISightIntegration ALIAS HoroAISightIntegration)
@@ -3143,6 +3152,14 @@ target_link_libraries(HoroPackageGameplayHost PUBLIC HoroEngine::PackageLifecycl
 
 
 # Host-side bridge: sequence model and runtime remain independent of Extensions.
+add_library(HoroGameplayAiScriptBridge STATIC
+    gameplay/GameplayAiScriptBridge.cpp
+    gameplay/GameplayAiScriptDescriptor.cpp
+    gameplay/GameplayAiScriptValue.cpp)
+add_library(HoroEngine::GameplayAiScriptBridge ALIAS HoroGameplayAiScriptBridge)
+target_compile_features(HoroGameplayAiScriptBridge PUBLIC cxx_std_20)
+target_link_libraries(HoroGameplayAiScriptBridge PUBLIC HoroEngine::GameplayAiIntegration HoroEngine::Extensions)
+
 add_library(HoroCinematicScriptBridge STATIC
         runtime/cinematic/script/ScriptEventCook.cpp
         runtime/cinematic/script/GameplayEventAdapter.cpp

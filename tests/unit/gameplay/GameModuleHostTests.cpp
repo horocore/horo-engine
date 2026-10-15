@@ -215,7 +215,7 @@ TEST_CASE("persistence SDK boundary rejects previous native registration layouts
     };
     REQUIRE(ValidateGameModuleDescriptor(descriptor, expected).HasValue());
     REQUIRE(ValidateGeneratedGameplayDescriptorBundle(storage.bundle, expected).HasValue());
-    for (const std::uint32_t previousLayout : {6U, 7U}) {
+    for (const std::uint32_t previousLayout : {6U, 7U, 10U, 11U, 15U, 16U, 17U, 18U, 19U}) {
         descriptor.sdkBoundaryVersion = previousLayout;
         storage.bundle.sdkBoundaryVersion = previousLayout;
         const auto oldModule = ValidateGameModuleDescriptor(descriptor, expected);

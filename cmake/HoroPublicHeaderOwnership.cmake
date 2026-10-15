@@ -684,6 +684,7 @@ horo_configure_target_header_boundary(HoroCharacterInput PUBLIC_HEADERS
     Horo/CharacterInput/DesiredMotionAdapter.h
 )
 horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
+    Horo/AI/AICapabilityDescriptors.h
     Horo/AI/AICanonicalState.h
     Horo/AI/AIErrors.h
     Horo/AI/AISceneComponents.h
@@ -707,6 +708,7 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/PerceptionMemory.h
 )
 horo_configure_target_header_boundary(HoroAISceneIntegration PUBLIC_HEADERS
+    Horo/AI/AIRuntimeCapability.h
     Horo/AI/AISceneActivation.h
     Horo/AI/AIScenePerceptionSource.h
     Horo/AI/PerceptionSpatialBroadphase.h
@@ -1298,6 +1300,14 @@ horo_configure_target_header_boundary(HoroUiAnimationRuntimeIntegration PUBLIC_H
 
 horo_configure_target_header_boundary(HoroPCGSceneAdapter PUBLIC_HEADERS
     Horo/PCGScene/SceneOutputAdapter.h
+)
+
+horo_configure_target_header_boundary(HoroGameplayAiIntegration PUBLIC_HEADERS
+    Horo/Gameplay/GameplayAiContext.h
+)
+
+horo_configure_target_header_boundary(HoroGameplayAiScriptBridge PUBLIC_HEADERS
+    Horo/Gameplay/GameplayAiScriptBridge.h
 )
 
 horo_configure_target_header_boundary(HoroPCGSceneBake PUBLIC_HEADERS

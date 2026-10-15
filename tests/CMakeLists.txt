@@ -49,6 +49,18 @@ add_test(NAME HoroGameplayManifestRevisionValidationTest
 set_tests_properties(HoroGameplayManifestRevisionValidationTest PROPERTIES
     LABELS "gameplay;cmake")
 
+add_test(NAME HoroGameplayModuleInputManifestTest
+    COMMAND "${CMAKE_COMMAND}"
+        "-DHORO_ENGINE_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+        "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/gameplay-input-manifest"
+        "-DPYTHON_EXECUTABLE=${Python3_EXECUTABLE}"
+        "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+        "-DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}"
+        "-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+        -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunGameplayModuleInputManifestTest.cmake")
+set_tests_properties(HoroGameplayModuleInputManifestTest PROPERTIES
+    LABELS "gameplay;cmake;ci-windows" TIMEOUT 90)
+
 add_test(NAME HoroExtensionSdkExternalConsumerTest
     COMMAND "${CMAKE_COMMAND}"
         "-DHORO_EXTENSION_SDK_PACKAGE_DIR=${HORO_EXTENSION_SDK_PACKAGE_DIR}"
@@ -1681,6 +1693,32 @@ target_compile_definitions(HoroGameModuleHostTests PRIVATE
 )
 target_link_libraries(HoroGameModuleHostTests PRIVATE HoroEngine::GameplayModuleHost HoroEngine::Platform)
 add_dependencies(HoroGameModuleHostTests HoroTestGameModule)
+horo_add_gameplay_module(HoroTestAiGameModule
+    MODULE_ID game.ai.tests
+    INPUT_MANIFEST_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/HoroTestAiGameModule/input-manifest.txt"
+    NO_MANIFEST
+    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_module/AiGameModule.cpp)
+target_link_libraries(HoroTestAiGameModule PRIVATE HoroEngine::GameplayAiIntegration)
+get_property(HORO_TEST_AI_MODULE_REVISION_FILE TARGET HoroTestAiGameModule PROPERTY HORO_GAMEPLAY_DESCRIPTOR_REVISION_FILE)
+add_executable(HoroGameplayAiTests
+    support/AllocationProbe.cpp
+    unit/gameplay/GameplayAiCapabilityTests.cpp
+    unit/gameplay/GameplayAiScriptTests.cpp
+    unit/gameplay/GameplayAiHostTests.cpp)
+target_compile_features(HoroGameplayAiTests PRIVATE cxx_std_20)
+target_include_directories(HoroGameplayAiTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
+target_link_libraries(HoroGameplayAiTests PRIVATE HoroEngine::GameplayAiScriptBridge HoroEngine::GameplayModuleHost)
+target_compile_definitions(HoroGameplayAiTests PRIVATE
+    HORO_TEST_AI_MODULE_PATH="$<TARGET_FILE:HoroTestAiGameModule>"
+    HORO_TEST_AI_MODULE_REVISION_PATH="${HORO_TEST_AI_MODULE_REVISION_FILE}")
+add_dependencies(HoroGameplayAiTests HoroTestAiGameModule)
+horo_register_catch_test(HoroGameplayAiTests LABELS "unit;gameplay;ai;headless")
+add_executable(HoroGameplayAiContractConsumer support/GameplayAiContractConsumer.cpp)
+target_compile_features(HoroGameplayAiContractConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroGameplayAiContractConsumer PRIVATE HoroEngine::GameplayAiScriptBridge HoroEngine::GameplayModuleHost)
+add_test(NAME HoroGameplayAiContractConsumer COMMAND HoroGameplayAiContractConsumer)
+set_tests_properties(HoroGameplayAiContractConsumer PROPERTIES LABELS "public_headers;ci-windows;sonar-coverage")
+
 add_executable(HoroGameplayPhysicsTests unit/gameplay/GameplayPhysicsContextTests.cpp
     integration/gameplay/GameplayCharacterContextTests.cpp
     integration/gameplay/LuaCharacterLifecycleTests.cpp

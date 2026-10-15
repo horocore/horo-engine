@@ -54,6 +54,8 @@ public:
     }
 
 private:
+#if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
     bool submitted_{};
+#endif
 };
 HORO_BEHAVIOR(CharacterClientBehavior, "game.tests.character_client")
