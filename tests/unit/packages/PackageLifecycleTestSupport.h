@@ -107,7 +107,16 @@ namespace Horo::Packages::Tests::Support {
         for (const auto &[path, bytes] : files)
             REQUIRE(mz_zip_writer_add_mem(&zip, path.c_str(), bytes.data(), bytes.size(), MZ_BEST_COMPRESSION));
         REQUIRE(mz_zip_writer_add_mem(&zip, "files.manifest.json", manifest.data(), manifest.size(), MZ_BEST_COMPRESSION));
-        auto verified = ValidatedPackageArchive::Verify(::Horo::Tests::Packages::FinalizeArchive(zip));
+        const auto archiveBytes = ::Horo::Tests::Packages::FinalizeArchive(zip);
+        auto verified = ValidatedPackageArchive::Verify(archiveBytes);
+        if (verified.HasError()) {
+            UNSCOPED_INFO("Package fixture archive bytes=" << archiveBytes.size());
+            for (const auto &[path, bytes] : files)
+                UNSCOPED_INFO("Package fixture file=" << path << " bytes=" << bytes.size());
+            for (const Error *error = &verified.ErrorValue(); error; error = error->cause.Get())
+                UNSCOPED_INFO("Package verification domain=" << error->domain.Value() << " code=" << error->code.Value()
+                                                             << " detail=" << error->message);
+        }
         REQUIRE(verified.HasValue());
         auto archive = std::make_shared<const ValidatedPackageArchive>(std::move(verified).Value());
         LockedPackage lock{.package = Parse<HoroPackageId>(packageId),
