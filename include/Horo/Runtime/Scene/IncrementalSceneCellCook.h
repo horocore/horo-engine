@@ -7,6 +7,11 @@
 #include "Horo/Runtime/Scene/RuntimeSceneCellPayload.h"
 
 namespace Horo::Runtime {
+    namespace CellCookDetail {
+        struct CacheState;
+        struct PreparedState;
+    }  // namespace CellCookDetail
+
     /** @brief Exact captured dependency artifact and its direct dependency identities; host owns artifact verification. */
     struct SceneCellCookDependency final {
         Assets::AssetId id;
@@ -46,6 +51,55 @@ namespace Horo::Runtime {
     };
 
     /**
+     * @brief Detached complete cook with exclusive owner-thread cache admission until adoption or destruction.
+     * @details Owns its cache state; destroying the original cache cannot leave a dangling transaction. Destruction
+     * before adoption releases the reservation without changing the retained set or revision. No I/O is performed.
+     */
+    class PreparedSceneCellCook final {
+    public:
+        PreparedSceneCellCook(const PreparedSceneCellCook &) = delete;
+        PreparedSceneCellCook &operator=(const PreparedSceneCellCook &) = delete;
+        PreparedSceneCellCook(PreparedSceneCellCook &&) noexcept = default;
+        /** @brief Releases any abandoned reservation before taking the other receipt. @param other Owned source receipt.
+         * @return This receipt. */
+        PreparedSceneCellCook &operator=(PreparedSceneCellCook &&other) noexcept;
+        /** @brief Releases an unadopted reservation even when immutable report leases remain alive. */
+        ~PreparedSceneCellCook();
+        /** @brief Reads the preallocated candidate report. @return Complete report; requires a non-moved receipt. */
+        [[nodiscard]] const SceneCellCookReport &Report() const noexcept;
+        /** @brief Retains the immutable preallocated report without copying or moving its vector.
+         * @return Aliasing owned lease valid across receipt destruction and adoption; requires a non-moved receipt. */
+        [[nodiscard]] std::shared_ptr<const SceneCellCookReport> ReportLease() const noexcept;
+        /**
+         * @brief Seals exact cache freshness immediately before a caller's external publication point.
+         * @param cancellation Observer checked before sealing; later cancellation cannot roll back committed external output.
+         * @return Success or typed stale, closed or cancelled failure without changing cache output.
+         * @details The caller must also validate its captured source authority before sealing. All other cache cooks are
+         * refused while this receipt exists. No allocation is needed by successful admission. This is a mutating
+         * authority operation even though its owner state is reached through a shared control block; const receipts cannot seal.
+         */
+        [[nodiscard]] Result<void> Reserve(const CancellationToken &cancellation = {});
+        /**
+         * @brief Adopts the reserved, preallocated candidate after external publication has committed.
+         * @pre Reserve succeeded on this non-moved receipt and adoption has not already occurred.
+         * @details Call also for committed-but-not-durable external outcomes. Shutdown after Reserve keeps admission
+         * closed and releases retained payload ownership, while still recording the committed revision. This mutates
+         * publication authority and deliberately requires a mutable receipt; ReportLease remains an immutable observer.
+         */
+        void Adopt() noexcept;
+
+    private:
+        friend class IncrementalSceneCellCook;
+        /** @brief Captures the validated detached candidate and its exclusive cache reservation. @param state Owned candidate. */
+        explicit PreparedSceneCellCook(std::shared_ptr<CellCookDetail::PreparedState> state) noexcept;
+        /** @brief Mutates this receipt's pending cache authority without changing retained output.
+         * @details Deliberately non-const: destroying or replacing a receipt revokes admission even while report leases survive.
+         */
+        void ReleaseReservation() noexcept;
+        std::shared_ptr<CellCookDetail::PreparedState> state_;
+    };
+
+    /**
      * @brief Explicit tooling/load-time cache owner, confined to one thread with no ambient registration or I/O.
      * @details A successful request atomically replaces the entire retained cell set. Failure, cancellation or allocation
      * exception preserves the previous set and revision. Removed cells retire from the cache; caller leases remain owned.
@@ -55,6 +109,8 @@ namespace Horo::Runtime {
     public:
         /** @brief Captures mandatory owner ceilings. @param limits Positive ceilings validated by Cook before allocation. */
         explicit IncrementalSceneCellCook(const SceneCellCookCacheLimits &limits) noexcept;
+        /** @brief Closes admission and releases owner retention; pending receipts remain safe to destroy. */
+        ~IncrementalSceneCellCook();
         IncrementalSceneCellCook(const IncrementalSceneCellCook &) = delete;
         IncrementalSceneCellCook &operator=(const IncrementalSceneCellCook &) = delete;
         /**
@@ -78,6 +134,24 @@ namespace Horo::Runtime {
                                                        std::span<const SceneCellCookDependency> dependencies, const Sha256Digest &settings,
                                                        std::uint64_t expectedRevision, SceneCellPayloadLimits payloadLimits,
                                                        const CancellationToken &cancellation = {});
+        /**
+         * @brief Prepares the same canonical cook as Cook without publishing the cache replacement.
+         * @param partition Immutable topology authority.
+         * @param inputs Complete desired captured cell set.
+         * @param dependencies Complete verified artifact catalog.
+         * @param settings Exact byte-affecting settings digest.
+         * @param expectedRevision Exact cache revision fence.
+         * @param payloadLimits Per-cell bounds rechecked for hits and misses.
+         * @param cancellation Cooperative cancellation before reservation/publication.
+         * @return Detached owned candidate or the same typed cook failure; a pending receipt rejects competing preparation.
+         * @throws std::bad_alloc Without changing retained payloads or revision.
+         */
+        [[nodiscard]] Result<PreparedSceneCellCook> Prepare(const WorldStreaming::WorldPartitionDescriptor &partition,
+                                                            std::span<const SceneCellCookInput> inputs,
+                                                            std::span<const SceneCellCookDependency> dependencies,
+                                                            const Sha256Digest &settings, std::uint64_t expectedRevision,
+                                                            SceneCellPayloadLimits payloadLimits,
+                                                            const CancellationToken &cancellation = {});
         /** @brief Returns the last successful replacement revision. @return Monotonic owner revision, initially zero. */
         [[nodiscard]] std::uint64_t Revision() const noexcept;
         /** @brief Releases cache ownership and permanently closes admission; outstanding immutable leases remain valid. */
@@ -85,8 +159,7 @@ namespace Horo::Runtime {
 
     private:
         SceneCellCookCacheLimits limits_;
-        std::uint64_t revision_{};
         bool closed_{};
-        std::vector<SceneCellCookEntry> entries_;
+        std::shared_ptr<CellCookDetail::CacheState> state_;
     };
 }  // namespace Horo::Runtime

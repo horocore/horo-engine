@@ -421,4 +421,97 @@ namespace Horo::Runtime {
         ErrorIs(invalid.Cook(manifest.Descriptor(), inputs, {}, Hash(), 0, PayloadLimits()), SceneCellPayloadErrors::Invalid);
     }
 
+    TEST_CASE("Prepared cell cooking reserves one cache without publishing or losing abort state", "[scene][incremental_cell_cook]") {
+        const auto manifest = W::CandidateTestSupport::Manifest();
+        IncrementalSceneCellCook cache{CacheLimits()};
+        std::array entities{Entity()};
+        std::array inputs{Input(entities)};
+        auto initial = cache.Cook(manifest.Descriptor(), inputs, {}, Hash(), 0, PayloadLimits());
+        REQUIRE(initial.HasValue());
+        const auto original = initial.Value().cells.front().payload;
+        entities.front().components.camera = CameraComponent{};
+        std::shared_ptr<const SceneCellCookReport> abandonedReport;
+        {
+            auto result = cache.Prepare(manifest.Descriptor(), inputs, {}, Hash(), 1, PayloadLimits());
+            REQUIRE(result.HasValue());
+            auto prepared = std::move(result).Value();
+            CHECK(cache.Revision() == 1);
+            CHECK(prepared.Report().revision == 2);
+            CHECK(prepared.Report().cells.front().payload != original);
+            abandonedReport = prepared.ReportLease();
+            auto competing = cache.Cook(manifest.Descriptor(), inputs, {}, Hash(), 1, PayloadLimits());
+            ErrorIs(competing, SceneCellPayloadErrors::Stale);
+            // External encoding/publication failure destroys the candidate without adopting it.
+        }
+        CHECK(cache.Revision() == 1);
+        REQUIRE(abandonedReport);
+        CHECK(abandonedReport->revision == 2);
+        // Retaining diagnostic output must not retain exclusive cache admission after receipt abandonment.
+        auto retry = cache.Prepare(manifest.Descriptor(), inputs, {}, Hash(), 1, PayloadLimits());
+        REQUIRE(retry.HasValue());
+        auto prepared = std::move(retry).Value();
+        REQUIRE(prepared.Reserve().HasValue());
+        const auto report = prepared.ReportLease();
+        prepared.Adopt();
+        CHECK(cache.Revision() == 2);
+        CHECK(report->cells.front().payload->Definition().Entities().front().components.camera.has_value());
+        CHECK_FALSE(original->Definition().Entities().front().components.camera.has_value());
+    }
+
+    TEST_CASE("Prepared cell publication rejects cancellation and closed owners before sealing", "[scene][incremental_cell_cook]") {
+        const auto manifest = W::CandidateTestSupport::Manifest();
+        IncrementalSceneCellCook cache{CacheLimits()};
+        std::array entities{Entity()};
+        std::array inputs{Input(entities)};
+        auto result = cache.Prepare(manifest.Descriptor(), inputs, {}, Hash(), 0, PayloadLimits());
+        REQUIRE(result.HasValue());
+        auto prepared = std::move(result).Value();
+        CancellationSource cancellation;
+        cancellation.RequestCancellation();
+        auto cancelled = prepared.Reserve(cancellation.Token());
+        REQUIRE(cancelled.HasError());
+        CHECK(cancelled.ErrorValue().code.Value() == SceneCellPayloadErrors::Cancelled.code.Value());
+        CHECK(cache.Revision() == 0);
+        cache.Shutdown();
+        auto closed = prepared.Reserve();
+        REQUIRE(closed.HasError());
+        CHECK(closed.ErrorValue().code.Value() == SceneCellPayloadErrors::Invalid.code.Value());
+        CHECK(cache.Revision() == 0);
+    }
+
+    TEST_CASE("Sealed cell adoption records committed publication through owner shutdown", "[scene][incremental_cell_cook]") {
+        const auto manifest = W::CandidateTestSupport::Manifest();
+        auto cache = std::make_unique<IncrementalSceneCellCook>(CacheLimits());
+        std::array entities{Entity()};
+        std::array inputs{Input(entities)};
+        auto result = cache->Prepare(manifest.Descriptor(), inputs, {}, Hash(), 0, PayloadLimits());
+        REQUIRE(result.HasValue());
+        auto prepared = std::move(result).Value();
+        REQUIRE(prepared.Reserve().HasValue());
+        cache->Shutdown();
+        // A committed-but-not-durable external publication still needs exact adoption knowledge.
+        const auto report = prepared.ReportLease();
+        prepared.Adopt();
+        CHECK(report->revision == 1);
+        CHECK(cache->Revision() == 1);
+        CHECK(report->cells.size() == 1);
+        ErrorIs(cache->Cook(manifest.Descriptor(), inputs, {}, Hash(), 1, PayloadLimits()), SceneCellPayloadErrors::Invalid);
+        cache.reset();
+        CHECK(report->cells.front().payload->Identity() == Identity());
+    }
+
+    TEST_CASE("Prepared cell receipt revokes admission when its cache owner is destroyed", "[scene][incremental_cell_cook]") {
+        const auto manifest = W::CandidateTestSupport::Manifest();
+        auto cache = std::make_unique<IncrementalSceneCellCook>(CacheLimits());
+        std::array entities{Entity()};
+        std::array inputs{Input(entities)};
+        auto result = cache->Prepare(manifest.Descriptor(), inputs, {}, Hash(), 0, PayloadLimits());
+        REQUIRE(result.HasValue());
+        auto prepared = std::move(result).Value();
+        cache.reset();
+        const auto closed = prepared.Reserve();
+        REQUIRE(closed.HasError());
+        CHECK(closed.ErrorValue().code.Value() == SceneCellPayloadErrors::Invalid.code.Value());
+        CHECK(prepared.Report().cells.front().payload->Identity() == Identity());
+    }
 }  // namespace Horo::Runtime

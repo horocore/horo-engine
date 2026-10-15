@@ -1436,6 +1436,31 @@ target_compile_features(HoroTerrainAsyncJobsTests PRIVATE cxx_std_20)
 target_link_libraries(HoroTerrainAsyncJobsTests PRIVATE HoroEngine::TerrainRuntime Threads::Threads)
 horo_register_catch_test(HoroTerrainAsyncJobsTests LABELS "unit;terrain;headless")
 
+add_executable(HoroWorldCookIntegrationTests unit/world_cook/WorldCookPublicationTests.cpp support/AllocationProbe.cpp)
+target_compile_features(HoroWorldCookIntegrationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroWorldCookIntegrationTests PRIVATE HoroEngine::WorldCookIntegration HoroEngine::Platform)
+target_include_directories(HoroWorldCookIntegrationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+horo_register_catch_test(HoroWorldCookIntegrationTests LABELS "unit;world_streaming;headless;ci-windows")
+
+add_executable(HoroWorldCookIntegrationConsumer support/WorldCookPublicConsumer.cpp)
+target_compile_features(HoroWorldCookIntegrationConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroWorldCookIntegrationConsumer PRIVATE HoroEngine::WorldCookIntegration HoroEngine::Platform)
+add_test(NAME HoroWorldCookIntegrationConsumer COMMAND HoroWorldCookIntegrationConsumer)
+set_tests_properties(HoroWorldCookIntegrationConsumer PROPERTIES LABELS "unit;world_streaming;headless;ci-windows")
+
+add_executable(HoroWorldArtifactCodecTests
+        unit/runtime/world_streaming/WorldArtifactCodecTests.cpp
+        unit/runtime/world_streaming/WorldDependencyArtifactTests.cpp)
+target_compile_features(HoroWorldArtifactCodecTests PRIVATE cxx_std_20)
+target_link_libraries(HoroWorldArtifactCodecTests PRIVATE HoroEngine::WorldStreaming)
+horo_register_catch_test(HoroWorldArtifactCodecTests LABELS "unit;world_streaming;headless;ci-windows")
+
+add_executable(HoroWorldArtifactCodecConsumer support/WorldArtifactCodecPublicConsumer.cpp)
+target_compile_features(HoroWorldArtifactCodecConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroWorldArtifactCodecConsumer PRIVATE HoroEngine::WorldStreaming)
+add_test(NAME HoroWorldArtifactCodecConsumer COMMAND HoroWorldArtifactCodecConsumer)
+set_tests_properties(HoroWorldArtifactCodecConsumer PROPERTIES LABELS "unit;world_streaming;headless;ci-windows")
+
 add_executable(HoroWorldStreamingTests
         unit/runtime/world_streaming/CellAttachmentManifestTests.cpp
         unit/runtime/world_streaming/NetworkStreamingAuthorityTests.cpp
@@ -3732,6 +3757,7 @@ add_executable(HoroRuntimeSceneCellPayloadTests
     unit/runtime/scene/IncrementalSceneCellCookTests.cpp
     unit/runtime/scene/WorldBuildValidationTests.cpp
     unit/runtime/scene/SceneCellContentHasherTests.cpp
+    unit/runtime/scene/SceneCellPayloadCodecTests.cpp
 )
 target_compile_features(HoroRuntimeSceneCellPayloadTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSceneCellPayloadTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/scene)
