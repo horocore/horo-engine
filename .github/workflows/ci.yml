@@ -13,6 +13,12 @@ on:
       - 'docs/**'
       - '.github/ISSUE_TEMPLATE/**'
   workflow_dispatch:
+    inputs:
+      save_allocation_diagnostics:
+        description: Run bounded Windows Save allocation stack diagnostics
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -308,7 +314,7 @@ jobs:
           retention-days: 3
 
       - name: Diagnose Windows Save lifecycle allocation boundary
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture' && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
+        if: ${{ !cancelled() && ((github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture') || (github.event_name == 'workflow_dispatch' && inputs.save_allocation_diagnostics == true)) && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
         timeout-minutes: 3
         shell: pwsh
         run: >-
@@ -317,7 +323,7 @@ jobs:
           -TestCase 'HoroRuntimeSaveSlotLifecycleTests::Lifecycle allocation failure after visibility preserves publication knowledge' -CaptureSymbolEvidence
 
       - name: Diagnose Windows Save retention allocation boundary
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture' && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
+        if: ${{ !cancelled() && ((github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture') || (github.event_name == 'workflow_dispatch' && inputs.save_allocation_diagnostics == true)) && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
         timeout-minutes: 3
         shell: pwsh
         run: >-
@@ -390,7 +396,7 @@ jobs:
         run: ctest --preset ci-xr-openxr
 
       - name: Upload Windows Save allocation stack evidence
-        if: ${{ always() && github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture' && runner.os == 'Windows' }}
+        if: ${{ always() && ((github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture') || (github.event_name == 'workflow_dispatch' && inputs.save_allocation_diagnostics == true)) && runner.os == 'Windows' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: save-allocation-stack-Windows-${{ github.sha }}-${{ github.run_attempt }}
