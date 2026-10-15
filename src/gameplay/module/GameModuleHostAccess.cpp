@@ -7,7 +7,7 @@
 #include <utility>
 
 namespace Horo::Gameplay {
-    LoadedGameModule::LoadedGameModule(std::shared_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
+    LoadedGameModule::LoadedGameModule(const ConstructionKey &, std::shared_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
     LoadedGameModule::~LoadedGameModule() {
         if (impl_->navigation)
@@ -137,6 +137,8 @@ namespace Horo::Gameplay {
     /** @copydoc LoadedGameModule::PrepareReload */
     Result<GameModuleReloadSnapshot> LoadedGameModule::PrepareReload() {  // NOSONAR(cpp:S5817) Mutates generation lifecycle.
         impl_->runtimeLeaseAdmission.store(false, std::memory_order_release);
+        if (impl_->navigation)
+            impl_->navigation->Revoke();
         if (impl_->physics)
             impl_->physics->Revoke();
         if (impl_.use_count() != 1)
@@ -146,8 +148,11 @@ namespace Horo::Gameplay {
     }
 
     /** @copydoc LoadedGameModule::RequestRetirement */
-    void LoadedGameModule::RequestRetirement() noexcept {
+    void LoadedGameModule::RequestRetirement() noexcept {  // NOSONAR(cpp:S5817) Revokes generation admission and requests lifecycle
+                                                           // cancellation.
         impl_->runtimeLeaseAdmission.store(false, std::memory_order_release);
+        if (impl_->navigation)
+            impl_->navigation->Revoke();
         if (impl_->physics)
             impl_->physics->Revoke();
         if (impl_->projectServices)
@@ -155,7 +160,7 @@ namespace Horo::Gameplay {
     }
 
     /** @copydoc LoadedGameModule::TryRetire */
-    Result<void> LoadedGameModule::TryRetire() {
+    Result<void> LoadedGameModule::TryRetire() {  // NOSONAR(cpp:S5817) Finalizes native lifetime authority after runtime leases drain.
         if (std::this_thread::get_id() != impl_->ownerThread)
             return Result<void>::Failure(
                 MakeError(GameplayErrors::GameplayReloadRestartRequired, "Retirement belongs to the gameplay module owner lane."));

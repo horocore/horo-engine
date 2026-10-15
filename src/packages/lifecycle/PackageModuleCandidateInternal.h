@@ -21,7 +21,7 @@ namespace Horo::Packages {
     namespace Detail {
         /** @brief Only lifecycle verification can issue a module handoff and its revocable capability admission. */
         struct PackageModuleCandidateFactory final {
-            [[nodiscard]] static PackageActivationCandidate NativeCandidate(const VerifiedPackageModule &module);
+            [[nodiscard]] static PackageActivationCandidate NativeCandidate(const VerifiedPackageModule &selectedModule);
             [[nodiscard]] static Result<VerifiedPackageModule> Prepare(std::shared_ptr<const VerifiedPackageInstallRecord> install,
                                                                        const EnabledPackageModule &request,
                                                                        const PackageLifecycleConfiguration &configuration,

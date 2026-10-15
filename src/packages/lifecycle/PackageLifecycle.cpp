@@ -5,6 +5,7 @@
 #include "PackageModuleComposition.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <thread>
 #include <utility>
@@ -19,6 +20,15 @@ namespace Horo::Packages {
                 return false;
             const bool directory = std::filesystem::is_directory(canonical, error);
             return directory && !error;
+        }
+
+        /** @brief Rejects ambiguous ownership of any module role independently of selected package contents. */
+        bool HostsOverlap(const IPackageModuleHost &first, const IPackageModuleHost &second) {
+            using enum Extensions::ExtensionModuleRole;
+            constexpr std::array roles{BackendCapability, EditorPresentation, HeadlessTooling, ScriptProvider, RuntimeParticipant};
+            return first.Identity() == second.Identity() || std::ranges::any_of(roles, [&first, &second](const auto role) {
+                return first.Supports(role) && second.Supports(role);
+            });
         }
     }  // namespace
 
@@ -157,14 +167,8 @@ namespace Horo::Packages {
             if (!host || host->Identity().empty() || host->Identity().size() > 256)
                 return Result<std::unique_ptr<PackageLifecycleService>>::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
             for (std::size_t other = 0; other < index; ++other)
-                for (const auto role :
-                     {Extensions::ExtensionModuleRole::BackendCapability, Extensions::ExtensionModuleRole::EditorPresentation,
-                      Extensions::ExtensionModuleRole::HeadlessTooling, Extensions::ExtensionModuleRole::ScriptProvider,
-                      Extensions::ExtensionModuleRole::RuntimeParticipant})
-                    if (host->Identity() == configuration.moduleHosts[other]->Identity() ||
-                        (host->Supports(role) && configuration.moduleHosts[other]->Supports(role)))
-                        return Result<std::unique_ptr<PackageLifecycleService>>::Failure(
-                            MakeError(PackageLifecycleErrors::InvalidLifecycle));
+                if (HostsOverlap(*host, *configuration.moduleHosts[other]))
+                    return Result<std::unique_ptr<PackageLifecycleService>>::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
         }
         // Seal and validate the capability catalog rather than silently omitting invalid host policy.
         std::ranges::sort(configuration.capabilities);
@@ -261,23 +265,22 @@ namespace Horo::Packages {
         Impl::PreparationGuard guard{*this, *impl_};
         try {
             auto *modules = static_cast<Detail::PackageModuleComposition *>(staged.get());
-            auto prepared = modules->Prepare(enabled, impl_->configuration, impl_->trust, cancellation, impl_->shutdownRequested);
-            if (prepared.HasError())
+            if (auto prepared = modules->Prepare(enabled, impl_->configuration, impl_->trust, cancellation, impl_->shutdownRequested);
+                prepared.HasError())
                 return impl_->Reject(std::move(staged), prepared.ErrorValue());
             if (cancellation.IsCancellationRequested() || impl_->shutdownRequested)
                 return impl_->Reject(std::move(staged), MakeError(PackageLifecycleErrors::Cancelled));
             if (impl_->install.InstalledRecord() != install)
                 return impl_->Reject(std::move(staged), MakeError(PackageLifecycleErrors::StaleInstall));
-            const auto snapshot = staged->Snapshot();
-            if (!std::ranges::all_of(snapshot->activations, [generation](const auto &lease) {
+            if (const auto snapshot = staged->Snapshot(); !std::ranges::all_of(snapshot->activations, [generation](const auto &lease) {
                 return lease.IsUsable() && lease.Activation().Generation() == generation;
             }))
                 return impl_->Reject(std::move(staged), MakeError(PackageLifecycleErrors::InvalidCandidate));
             impl_->Publish(staged);
             return Result<void>::Success();
-        } catch (const std::exception &error) {
+        } catch (const std::exception &error) {  // NOSONAR(cpp:S1181) Preserve foreign callback diagnostics.
             return impl_->Reject(std::move(staged), MakeError(PackageLifecycleErrors::InvalidCandidate, error.what()));
-        } catch (...) {
+        } catch (...) {  // NOSONAR(cpp:S2738) Native module boundary contains arbitrary plugin exceptions and preserves rollback ownership.
             return impl_->Reject(std::move(staged), MakeError(PackageLifecycleErrors::InvalidCandidate));
         }
     }

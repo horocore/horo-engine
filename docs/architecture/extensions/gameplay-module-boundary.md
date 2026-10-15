@@ -542,6 +542,28 @@ Shipping builds do not load unsigned replacement gameplay code.
 Hot-reload preservation is an implementation/session migration and does not
 implicitly register a durable canonical participant, schema or compatibility promise.
 
+### Host Wrapper Construction And Admission
+
+`LoadedGameModule` construction requires a non-aggregate `ConstructionKey` whose
+constructor is private to `GameModuleHost`, together with the host-private
+validated state. This permits `std::make_unique` to allocate the complete rollback
+wrapper before any factory runs while preserving host-only construction authority.
+The constructor is publicly declared solely for that standard allocation helper;
+callers continue to obtain candidates through the host's validated `Load` or
+`LoadShadowCopy` paths. The owning public-header target remains
+`HoroGameplayModuleHost`; existing load consumers need no migration. The dedicated
+public-header consumer verifies that the key cannot be default-constructed or
+aggregate-initialized by external callers.
+
+Retirement and finalization retain non-const member signatures because read-only
+module views do not carry lifecycle mutation authority. Their shared implementation
+state does not make those operations observationally const.
+
+Retirement requests and reload admission close both Physics and Navigation grants
+before checking runtime leases. A busy generation remains retained for native
+callback teardown, but previously retained navigation contexts cannot submit new
+work or deliver stale pending results during that interval.
+
 ## Errors And Diagnostics
 
 Game registration, startup, and scene construction return typed errors with

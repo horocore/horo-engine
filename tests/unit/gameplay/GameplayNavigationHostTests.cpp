@@ -1,6 +1,7 @@
 #include "GameplayModuleTestSupport.h"
 #include "GameplayRuntimeTestSupport.h"
 #include "Horo/Gameplay/GameModuleHost.h"
+#include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/LuaBehavior.h"
 #include "Horo/Platform/DynamicLibrary.h"
@@ -155,6 +156,49 @@ TEST_CASE("Loaded native module reload and shutdown revoke pending navigation de
     fixture.Publish();
     REQUIRE(fixture.context->DrainRetired().Value());
     REQUIRE(fixture.coordinator.IsDrained());
+}
+
+TEST_CASE("Busy native retirement closes retained navigation admission before runtime leases drain") {
+    Fixture fixture;
+    GameModuleHost host{{}, nullptr, fixture.context};
+    const GameModuleLoadExpectation expected{"game.tests", CurrentGameplayBuildFingerprint(),
+                                             Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)};
+    auto loading = host.Load(HORO_TEST_GAME_MODULE_PATH, expected);
+    REQUIRE(loading.HasValue());
+    REQUIRE_FALSE(loading.Value().diagnostic);
+    auto module = std::move(loading).Value().owner;
+    const auto retained = module->NavigationContext();
+    auto definition =
+        Tests::SingleBehaviorSceneDefinition(Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}, Runtime::SceneObjectId{2},
+                                             BehaviorInstanceId{1}, BehaviorTypeId::Parse("game.tests.navigation_client").Value());
+    auto scene = std::move(Runtime::RuntimeScene::Create(definition, Runtime::SceneRuntimeId{Activation().scene.Value()})).Value();
+    auto creation = BehaviorRuntime::Create(*scene, module->Registry(), {}, nullptr, retained);
+    REQUIRE(creation.HasValue());
+    auto runtime = std::move(creation).Value();
+    auto pending = retained->Submit({.start = {1, 0, 1}, .destination = {9, 0, 9}});
+    REQUIRE(pending.HasValue());
+
+    SECTION("retirement requested") {
+        module->RequestRetirement();
+    }
+    SECTION("reload refused while runtime lease is live") {
+        auto reload = module->PrepareReload();
+        REQUIRE(reload.HasError());
+        CHECK(reload.ErrorValue().code.Value() == GameplayErrors::GameplayReloadRestartRequired.code.Value());
+    }
+    REQUIRE_FALSE(retained->IsUsable());
+    auto rejected = retained->Submit({.start = {1, 0, 1}, .destination = {9, 0, 9}});
+    REQUIRE(rejected.HasError());
+    CHECK(rejected.ErrorValue().code.Value() == NavigationCapabilityErrors::ScopeRevoked.code.Value());
+    auto delivery = pending.Value().Poll();
+    REQUIRE(delivery.HasError());
+    CHECK(delivery.ErrorValue().code.Value() == NavigationCapabilityErrors::ScopeRevoked.code.Value());
+    REQUIRE(module->TryRetire().HasError());
+    runtime->Shutdown();
+    runtime.reset();
+    REQUIRE(module->TryRetire().HasValue());
+    fixture.Publish();
+    REQUIRE(fixture.context->DrainRetired().Value());
 }
 
 TEST_CASE("Lua retained navigation closures and opaque requests survive callbacks with native typed failures") {

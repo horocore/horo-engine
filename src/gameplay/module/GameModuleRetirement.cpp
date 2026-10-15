@@ -67,12 +67,18 @@ namespace Horo::Gameplay {
         draining_ = true;
 
         struct DrainScope final {
+            explicit DrainScope(bool &value) noexcept : active(value) {}
+
+            DrainScope(const DrainScope &) = delete;
+            DrainScope &operator=(const DrainScope &) = delete;
             bool &active;
 
             ~DrainScope() {
                 active = false;
             }
-        } scope{draining_};
+        };
+
+        DrainScope scope{draining_};
 
         std::size_t pending{};
         for (auto &entry : entries_) {

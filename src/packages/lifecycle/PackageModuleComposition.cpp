@@ -24,7 +24,7 @@ namespace Horo::Packages::Detail {
     /** @copydoc PackageModuleComposition::PackageModuleComposition */
     PackageModuleComposition::PackageModuleComposition(std::shared_ptr<const VerifiedPackageInstallRecord> install,
                                                        const std::uint64_t generation, const bool hasRetirementReservation)
-        : snapshot_(std::make_shared<PackageActivationSnapshot>()), hasRetirementReservation_(hasRetirementReservation) {
+        : hasRetirementReservation_(hasRetirementReservation) {
         snapshot_->install = std::move(install);
         snapshot_->generation = generation;
     }
@@ -35,7 +35,7 @@ namespace Horo::Packages::Detail {
     }
 
     /** @copydoc PackageModuleComposition::RejectEntry */
-    Result<void> PackageModuleComposition::RejectEntry(Entry &entry, Error error, const PackageModuleOutcome outcome) {
+    Result<void> PackageModuleComposition::RejectEntry(Entry &entry, Error error, const PackageModuleOutcome outcome) const {
         entry.pending = false;
         entry.report.outcome = outcome;
         entry.report.diagnostic = error;
@@ -83,9 +83,10 @@ namespace Horo::Packages::Detail {
             auto declared = ReadDeclaredPackageDescriptor(*package, request.descriptor);
             if (declared.HasError())
                 return Result<void>::Failure(declared.ErrorValue());
-            const auto module =
-                std::ranges::find(declared.Value().manifest.modules, request.module, &Extensions::ExtensionModuleManifest::id);
-            if (module == declared.Value().manifest.modules.end() || std::ranges::find(module->roles, request.role) == module->roles.end())
+            if (const auto selectedModule =
+                    std::ranges::find(declared.Value().manifest.modules, request.module, &Extensions::ExtensionModuleManifest::id);
+                selectedModule == declared.Value().manifest.modules.end() ||
+                std::ranges::find(selectedModule->roles, request.role) == selectedModule->roles.end())
                 return Result<void>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
             auto prepared = PrepareHost(entry, configuration, trust);
             entries_.push_back(std::move(entry));
@@ -125,17 +126,17 @@ namespace Horo::Packages::Detail {
             auto rejected = RejectEntry(entry, prepared.ErrorValue(), outcome);
             return rejected;
         }
-        entry.module.emplace(std::move(prepared).Value());
-        entry.report = entry.module->Identity();
+        entry.selectedModule.emplace(std::move(prepared).Value());
+        entry.report = entry.selectedModule->Identity();
         entry.report.phases.reserve(16);
         entry.pending = true;
         return Result<void>::Success();
     }
 
-    /** @copydoc PackageModuleComposition::DependenciesReady */
-    Result<bool> PackageModuleComposition::DependenciesReady(Entry &entry) {
+    /** @copydoc PackageModuleComposition::LocalDependenciesReady */
+    Result<bool> PackageModuleComposition::LocalDependenciesReady(Entry &entry) const {
         entry.dependencies.clear();
-        for (const auto &required : entry.module->RequiredModules()) {
+        for (const auto &required : entry.selectedModule->RequiredModules()) {
             bool found = false;
             for (const auto &provider : entries_) {
                 if (provider.request.package != entry.request.package || provider.request.module != required)
@@ -152,6 +153,14 @@ namespace Horo::Packages::Detail {
                 return Result<bool>::Failure(
                     MakeError(PackageLifecycleErrors::InvalidCandidate, "A required local module was not enabled."));
         }
+        return Result<bool>::Success(true);
+    }
+
+    /** @copydoc PackageModuleComposition::DependenciesReady */
+    Result<bool> PackageModuleComposition::DependenciesReady(Entry &entry) const {
+        auto local = LocalDependenciesReady(entry);
+        if (local.HasError() || !local.Value())
+            return local;
         const auto &packages = snapshot_->install->Graph()->packages;
         const auto package = std::ranges::find(packages, entry.request.package, [](const auto &value) {
             return value.lock.package;
@@ -170,11 +179,12 @@ namespace Horo::Packages::Detail {
 
     /** @copydoc PackageModuleComposition::ActivateEntry */
     Result<void> PackageModuleComposition::ActivateEntry(Entry &entry, const CancellationToken &cancellation) {
+        using enum PackageModuleOutcome;
         try {
             const auto slot = std::make_shared<ActivationOwnerSlot>();
-            auto activated = entry.host->Activate(*entry.module, entry.dependencies, cancellation);
+            auto activated = entry.host->Activate(*entry.selectedModule, entry.dependencies, cancellation);
             if (activated.HasError())
-                return RejectEntry(entry, activated.ErrorValue(), PackageModuleOutcome::Failed);
+                return RejectEntry(entry, activated.ErrorValue(), Failed);
             slot->owner = std::move(activated).Value();
             if (slot->owner)
                 entry.owner = std::shared_ptr<IPackageModuleActivation>(slot, slot->owner.get());
@@ -185,20 +195,35 @@ namespace Horo::Packages::Detail {
                                    entry.owner && entry.owner->Diagnostic() ? *entry.owner->Diagnostic()
                                                                             : MakeError(PackageLifecycleErrors::InvalidCandidate,
                                                                                         "The owning host returned no live activation."),
-                                   PackageModuleOutcome::Failed);
+                                   Failed);
             entry.pending = false;
-            entry.report.phases.push_back(PackageModuleOutcome::Loaded);
-            entry.report.phases.push_back(PackageModuleOutcome::Active);
-            entry.report.outcome = PackageModuleOutcome::Active;
-            snapshot_->activations.push_back(entry.module->Activation());
+            entry.report.phases.push_back(Loaded);
+            entry.report.phases.push_back(Active);
+            entry.report.outcome = Active;
+            snapshot_->activations.push_back(entry.selectedModule->Activation());
             return Result<void>::Success();
-        } catch (const std::exception &error) {
-            return RejectEntry(entry, MakeError(PackageLifecycleErrors::InvalidCandidate, error.what()), PackageModuleOutcome::Failed);
-        } catch (...) {
+        } catch (const std::exception &error) {  // NOSONAR(cpp:S1181) Preserve foreign callback diagnostics.
+            return RejectEntry(entry, MakeError(PackageLifecycleErrors::InvalidCandidate, error.what()), Failed);
+        } catch (...) {  // NOSONAR(cpp:S2738) Native module boundary contains arbitrary plugin exceptions and preserves rollback ownership.
             return RejectEntry(entry,
                                MakeError(PackageLifecycleErrors::InvalidCandidate, "The owning module host threw during activation."),
-                               PackageModuleOutcome::Failed);
+                               Failed);
         }
+    }
+
+    /** @copydoc PackageModuleComposition::AdvanceEntry */
+    Result<bool> PackageModuleComposition::AdvanceEntry(Entry &entry, const CancellationToken &cancellation) {
+        auto ready = DependenciesReady(entry);
+        if (ready.HasError()) {
+            if (auto rejected = RejectEntry(entry, ready.ErrorValue(), PackageModuleOutcome::Unavailable); rejected.HasError())
+                return Result<bool>::Failure(rejected.ErrorValue());
+            return Result<bool>::Success(true);
+        }
+        if (!ready.Value())
+            return Result<bool>::Success(false);
+        if (auto activated = ActivateEntry(entry, cancellation); activated.HasError())
+            return Result<bool>::Failure(activated.ErrorValue());
+        return Result<bool>::Success(true);
     }
 
     /** @copydoc PackageModuleComposition::Prepare */
@@ -216,18 +241,10 @@ namespace Horo::Packages::Detail {
                     continue;
                 if (cancellation.IsCancellationRequested() || shutdownRequested)
                     return Result<void>::Failure(MakeError(PackageLifecycleErrors::Cancelled));
-                auto ready = DependenciesReady(entry);
-                if (ready.HasError()) {
-                    if (auto rejected = RejectEntry(entry, ready.ErrorValue(), PackageModuleOutcome::Unavailable); rejected.HasError())
-                        return rejected;
-                    advanced = true;
-                    continue;
-                }
-                if (!ready.Value())
-                    continue;
-                if (auto activated = ActivateEntry(entry, cancellation); activated.HasError())
-                    return activated;
-                advanced = true;
+                auto progress = AdvanceEntry(entry, cancellation);
+                if (progress.HasError())
+                    return Result<void>::Failure(progress.ErrorValue());
+                advanced = progress.Value() || advanced;
             }
             if (!advanced)
                 return Result<void>::Failure(
@@ -240,6 +257,7 @@ namespace Horo::Packages::Detail {
 
     /** @copydoc PackageModuleComposition::Retire */
     void PackageModuleComposition::Retire() noexcept {
+        using enum PackageModuleOutcome;
         if (retired_)
             return;
         retired_ = true;
@@ -247,9 +265,9 @@ namespace Horo::Packages::Detail {
         for (auto &entry : entries_) {
             if (entry.admission)
                 entry.admission->Revoke();
-            if (entry.report.outcome == PackageModuleOutcome::Active) {
-                entry.report.outcome = PackageModuleOutcome::Retiring;
-                entry.report.phases.push_back(PackageModuleOutcome::Retiring);
+            if (entry.report.outcome == Active) {
+                entry.report.outcome = Retiring;
+                entry.report.phases.push_back(Retiring);
             }
         }
         for (auto index = activationOrder_.rbegin(); index != activationOrder_.rend(); ++index)
@@ -275,7 +293,7 @@ namespace Horo::Packages::Detail {
                 continue;
             entry.owner.reset();
             entry.dependencies.clear();
-            entry.module.reset();
+            entry.selectedModule.reset();
         }
         return std::ranges::none_of(entries_, [](const auto &entry) {
             return static_cast<bool>(entry.owner);

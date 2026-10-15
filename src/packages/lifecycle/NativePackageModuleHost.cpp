@@ -9,7 +9,7 @@ namespace Horo::Packages {
     namespace {
         /** @brief Keeps exact verified resources and owning-host registrations together through native callback drain. */
         struct NativeRoleState final {
-            VerifiedPackageModule module;
+            VerifiedPackageModule selectedModule;
             std::vector<std::shared_ptr<IPackageModuleActivation>> dependencies;
             std::unique_ptr<Detail::PackageActivationComposition> composition;
             std::optional<Error> failure;
@@ -22,7 +22,8 @@ namespace Horo::Packages {
             explicit NativeRoleReceipt(std::shared_ptr<NativeRoleState> state) : state_(std::move(state)) {}
 
             bool IsActive() const noexcept override {
-                return !state_->retired && !state_->failure && state_->module.Activation().IsUsable() && state_->composition->Snapshot();
+                return !state_->retired && !state_->failure && state_->selectedModule.Activation().IsUsable() &&
+                       state_->composition->Snapshot();
             }
 
             std::optional<Error> Diagnostic() const override {
@@ -45,7 +46,8 @@ namespace Horo::Packages {
                     state_->composition.reset();
                     state_->dependencies.clear();
                     return true;
-                } catch (...) {
+                } catch (...) {  // NOSONAR(cpp:S2738) Native module boundary contains arbitrary plugin exceptions and preserves rollback
+                                 // ownership.
                     return false;
                 }
             }
@@ -85,27 +87,28 @@ namespace Horo::Packages {
 
     /** @copydoc NativePackageModuleHost::Activate */
     Result<std::unique_ptr<IPackageModuleActivation>> NativePackageModuleHost::Activate(
-        const VerifiedPackageModule &module, const std::span<const std::shared_ptr<IPackageModuleActivation>> dependencies,
+        const VerifiedPackageModule &selectedModule, const std::span<const std::shared_ptr<IPackageModuleActivation>> dependencies,
         const CancellationToken &cancellation) {
         std::erase_if(impl_->roles, [](const auto &role) {
             return role.expired();
         });
-        if ((!Supports(module.Identity().role) && module.Identity().role != Extensions::ExtensionModuleRole::ScriptProvider) ||
-            !module.Activation().IsUsable() || impl_->roles.size() >= 64)
+        if ((!Supports(selectedModule.Identity().role) &&
+             selectedModule.Identity().role != Extensions::ExtensionModuleRole::ScriptProvider) ||
+            !selectedModule.Activation().IsUsable() || impl_->roles.size() >= 64)
             return Result<std::unique_ptr<IPackageModuleActivation>>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
-        auto composition =
-            std::make_unique<Detail::PackageActivationComposition>(impl_->configuration, module.Install(), module.Identity().generation);
-        auto state =
-            std::make_shared<NativeRoleState>(NativeRoleState{module, {dependencies.begin(), dependencies.end()}, std::move(composition)});
+        auto composition = std::make_unique<Detail::PackageActivationComposition>(impl_->configuration, selectedModule.Install(),
+                                                                                  selectedModule.Identity().generation);
+        auto state = std::make_shared<NativeRoleState>(
+            NativeRoleState{selectedModule, {dependencies.begin(), dependencies.end()}, std::move(composition)});
         auto receipt = std::make_unique<NativeRoleReceipt>(state);
         impl_->roles.push_back(state);
-        const auto candidate = Detail::PackageModuleCandidateFactory::NativeCandidate(module);
+        const auto candidate = Detail::PackageModuleCandidateFactory::NativeCandidate(selectedModule);
         auto activationFailure = MakeError(PackageLifecycleErrors::InvalidCandidate);
         try {
             auto prepared = state->composition->Prepare(std::span{&candidate, 1}, impl_->configuration, cancellation);
             if (prepared.HasError())
                 state->failure = prepared.ErrorValue();
-        } catch (...) {
+        } catch (...) {  // NOSONAR(cpp:S2738) Native module boundary contains arbitrary plugin exceptions and preserves rollback ownership.
             state->failure = std::move(activationFailure);
         }
         return Result<std::unique_ptr<IPackageModuleActivation>>::Success(std::move(receipt));
@@ -113,11 +116,12 @@ namespace Horo::Packages {
 
     /** @copydoc NativePackageModuleHost::Importers */
     std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> NativePackageModuleHost::Importers(const HoroPackageId &package,
-                                                                                                   const std::string_view module,
+                                                                                                   const std::string_view selectedModule,
                                                                                                    const std::uint64_t generation) const {
         for (const auto &weak : impl_->roles)
-            if (auto state = weak.lock(); state && !state->retired && !state->failure && state->module.Identity().package == package &&
-                                          state->module.Module().id == module && state->module.Identity().generation == generation) {
+            if (auto state = weak.lock();
+                state && !state->retired && !state->failure && state->selectedModule.Identity().package == package &&
+                state->selectedModule.Module().id == selectedModule && state->selectedModule.Identity().generation == generation) {
                 const auto snapshot = state->composition->Snapshot();
                 return snapshot ? snapshot->importers : nullptr;
             }

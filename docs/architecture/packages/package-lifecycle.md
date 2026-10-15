@@ -176,6 +176,27 @@ retain the original empty-selection behavior. Descriptor parsing remains inert,
 and neither selection path rewrites archive descriptors or invents contribution
 ownership.
 
+### Native Callback Exception Containment
+
+Host activation and lifecycle callbacks are an executable-module boundary. Foreign
+code may throw arbitrary C++ objects, including values outside `std::exception`.
+Each boundary converts that failure to a typed diagnostic while returning or
+retaining the already allocated rollback owner. Narrowing those handlers to
+standard exception types would allow a rejected partial registration to escape
+without its explicit retirement handoff. The `std::exception` handlers preserve
+available diagnostic text before the final non-standard exception fallback.
+Line-local Sonar exceptions on those handlers document this required containment;
+they do not weaken validation, capability admission or retirement prerequisites.
+A throwing finalizer is treated as incomplete and its complete resource closure
+stays queued for a later owner-lane drain. A failed final queue destruction cannot
+release that closure safely and terminates, enforcing the existing explicit-close
+precondition.
+
+The retirement queue's mutating operations retain non-const signatures: reserving,
+transferring, draining and releasing executable generations change the queue's
+lifecycle even though the implementation state is held through a shared pointer.
+Line-local const-suggestion exceptions preserve that public mutation contract.
+
 ### Explicit Retirement Owner And Migration
 
 Existing native-only `Activate` callers retain their complete-package semantics.

@@ -25,7 +25,20 @@ namespace Horo::Gameplay {
 
     /** @brief Loaded module whose registry and callable objects are destroyed before its library unloads. */
     class LoadedGameModule final {
+        struct Impl;
+
     public:
+        /** @brief Non-aggregate construction authority issued only by the validating host. */
+        class ConstructionKey final {
+            ConstructionKey() = default;
+            friend class GameModuleHost;
+        };
+
+        /** @brief Adopts a validated host state into its unique candidate wrapper.
+         * @param key Unforgeable validating-host authority. @param impl Exact retained code-image and partial initialization owner.
+         * @details Public only so standard make_unique can allocate the sealed wrapper before any module factory executes.
+         */
+        LoadedGameModule(const ConstructionKey &key, std::shared_ptr<Impl> impl) noexcept;
         ~LoadedGameModule();
         LoadedGameModule(const LoadedGameModule &) = delete;
         LoadedGameModule &operator=(const LoadedGameModule &) = delete;
@@ -106,8 +119,6 @@ namespace Horo::Gameplay {
 
     private:
         friend class GameModuleHost;
-        struct Impl;
-        explicit LoadedGameModule(std::shared_ptr<Impl> impl) noexcept;
         std::shared_ptr<Impl> impl_;
     };
 
@@ -166,10 +177,10 @@ namespace Horo::Gameplay {
 
     private:
         /** @brief Admit exact host principals and pin their native cleanup before module factories run.
-         * @param module Owned candidate receiving both validated runtime contexts.
+         * @param selectedModule Owned candidate receiving both validated runtime contexts.
          * @return Success or the original principal/admission/image-pin failure.
          */
-        [[nodiscard]] Result<void> BindContexts(LoadedGameModule::Impl &module) const;
+        [[nodiscard]] Result<void> BindContexts(LoadedGameModule::Impl &selectedModule) const;
         /** @brief Load one validated artifact with explicit host-owned shadow cleanup from the first code-image lease.
          * @param libraryPath Absolute prepared artifact. @param expectation Exact module compatibility.
          * @param ownedShadow True only for the unique canonical artifact created by LoadShadowCopy.

@@ -9,6 +9,7 @@
 #include "Horo/Math/WorldCoordinate64.h"
 #include "Horo/WorldStreaming/StreamingSourceDescriptor.h"
 #include "Horo/WorldStreaming/WorldCellQuantization.h"
+#include "Horo/WorldStreaming/WorldPartitionDescriptor.h"
 
 #include <algorithm>
 #include <array>
@@ -127,4 +128,36 @@ namespace Horo::WorldStreaming {
                                                                 const StreamingSourceAdmissionContext &admission,
                                                                 const StreamingSourceShape &shape, StreamingSourceShapeSupport support,
                                                                 const WorldCellQuantizationPolicy &policy, StreamingCellId cell);
+    /**
+     * @brief Measures exact Chebyshev millimeter distance from the source anchor to a cell AABB.
+     * @param shape Valid source geometry; box minimum, sphere center, frustum anchor or first path point is its relevance origin.
+     * @param policy Exact immutable grid.
+     * @param cell Manifest cell identity.
+     * @return Non-negative integer distance or typed geometry/grid failure; no floating-point position conversion occurs.
+     */
+    [[nodiscard]] Result<std::uint64_t> StreamingSourceCellDistance(const StreamingSourceShape &shape,
+                                                                    const WorldCellQuantizationPolicy &policy, StreamingCellId cell);
+
+    /**
+     * @brief Computes conservative exact query bounds for a validated shape, with outward hysteresis padding.
+     * @param shape Owned source geometry.
+     * @param expansionMillimeters Non-negative bounded exit margin; endpoints saturate at canonical coordinate limits.
+     * @return Inclusive spatial-index query bounds or typed invalid geometry failure.
+     */
+    [[nodiscard]] Result<WorldPartitionBounds> StreamingSourceQueryBounds(const StreamingSourceShape &shape,
+                                                                          std::int64_t expansionMillimeters);
+    /**
+     * @brief Produces threshold evidence for existing cell stability without estimating an unmeasured geometric distance.
+     * @param shape Validated source geometry.
+     * @param policy Exact immutable grid.
+     * @param cell Manifest cell identity.
+     * @param enterMarginMillimeters Non-negative inward admission margin.
+     * @param exitMarginMillimeters Non-negative outward retention margin.
+     * @return Signed evidence meeting precisely the enter/exit thresholds, or typed invalid/range failure.
+     * @details Zero means original overlap without sufficient entry depth. This value is threshold evidence, not a metric distance.
+     */
+    [[nodiscard]] Result<std::int64_t> EvaluateStreamingSourceCellBoundary(const StreamingSourceShape &shape,
+                                                                           const WorldCellQuantizationPolicy &policy, StreamingCellId cell,
+                                                                           std::int64_t enterMarginMillimeters,
+                                                                           std::int64_t exitMarginMillimeters);
 }  // namespace Horo::WorldStreaming

@@ -21,6 +21,17 @@ namespace Horo::Packages {
         bool inDrain{};
     };
 
+    namespace {
+        /** @brief Keeps a throwing foreign finalizer owned for an explicit later drain attempt. */
+        bool FinalizeSafely(Detail::PackageComposition &composition) noexcept {
+            try {
+                return composition.Finalize();
+            } catch (...) {  // NOSONAR(cpp:S2738) Foreign finalizers may throw non-standard objects; retain the complete resource owner.
+                return false;
+            }
+        }
+    }  // namespace
+
     /** @copydoc PackageModuleRetirementQueue::PackageModuleRetirementQueue */
     PackageModuleRetirementQueue::PackageModuleRetirementQueue(const std::size_t maximumCompositions) {
         if (maximumCompositions == 0 || maximumCompositions > 64)
@@ -32,7 +43,8 @@ namespace Horo::Packages {
     PackageModuleRetirementQueue::~PackageModuleRetirementQueue() noexcept {
         try {
             (void)Drain();
-        } catch (...) {
+        } catch (...) {  // NOSONAR(cpp:S2738) A failed final owner drain cannot safely release executable resources.
+            std::terminate();
         }
         // Violating the explicit owner lifetime precondition cannot safely unload executable work.
         if (!state_->pending.empty() || state_->reserved != 0)
@@ -40,18 +52,14 @@ namespace Horo::Packages {
     }
 
     /** @copydoc PackageModuleRetirementQueue::Drain */
-    std::size_t PackageModuleRetirementQueue::Drain() {
+    std::size_t PackageModuleRetirementQueue::Drain() {  // NOSONAR(cpp:S5817) Mutates the retirement queue lifecycle through its shared
+                                                         // state.
         if (std::this_thread::get_id() != state_->owner || state_->inDrain)
             return Pending();
         state_->inDrain = true;
         state_->draining.swap(state_->pending);
         for (auto &composition : state_->draining) {
-            bool complete = false;
-            try {
-                complete = composition->Finalize();
-            } catch (...) {
-            }
-            if (complete) {
+            if (FinalizeSafely(*composition)) {
                 composition.reset();
                 --state_->reserved;
             } else
@@ -76,7 +84,7 @@ namespace Horo::Packages {
     }
 
     /** @copydoc PackageModuleRetirementQueue::Reserve */
-    bool PackageModuleRetirementQueue::Reserve() noexcept {
+    bool PackageModuleRetirementQueue::Reserve() noexcept {  // NOSONAR(cpp:S5817) Mutates lifecycle authority.
         if (std::this_thread::get_id() != state_->owner || state_->inDrain || state_->reserved >= state_->maximum)
             return false;
         ++state_->reserved;
@@ -84,13 +92,14 @@ namespace Horo::Packages {
     }
 
     /** @copydoc PackageModuleRetirementQueue::Retain */
-    void PackageModuleRetirementQueue::Retain(std::unique_ptr<Detail::PackageComposition> composition) noexcept {
+    void PackageModuleRetirementQueue::Retain(  // NOSONAR(cpp:S5817) Mutates lifecycle authority.
+        std::unique_ptr<Detail::PackageComposition> composition) noexcept {
         composition->Retire();
         state_->pending.push_back(std::move(composition));
     }
 
     /** @copydoc PackageModuleRetirementQueue::Release */
-    void PackageModuleRetirementQueue::Release() noexcept {
+    void PackageModuleRetirementQueue::Release() noexcept {  // NOSONAR(cpp:S5817) Mutates lifecycle authority.
         --state_->reserved;
     }
 }  // namespace Horo::Packages

@@ -9,8 +9,7 @@
 namespace Horo::Packages::Detail {
     /** @copydoc CreatePrivatePackageRoot */
     Result<std::filesystem::path> CreatePrivatePackageRoot(const std::filesystem::path &parent, const ErrorCodeDescriptor &storageError) {
-        std::error_code parentError;
-        if (!parent.is_absolute() || std::filesystem::canonical(parent, parentError) != parent || parentError)
+        if (std::error_code parentError; !parent.is_absolute() || std::filesystem::canonical(parent, parentError) != parent || parentError)
             return Result<std::filesystem::path>::Failure(MakeError(storageError));
         static std::atomic<std::uint64_t> sequence{};  // Only unique temporary names are shared across service owners.
         for (unsigned attempt = 0; attempt < 16U; ++attempt) {
@@ -39,13 +38,14 @@ namespace Horo::Packages::Detail {
         if (packageIndex >= install.Graph()->packages.size())
             return Result<void>::Failure(MakeError(errors.invalid));
         const auto &package = install.Graph()->packages[packageIndex];
-        const auto slash = descriptor.Value().rfind('/');
-        if (!package.archive || slash == std::string::npos || slash == 0 || !destination.is_absolute())
+        if (const auto slash = descriptor.Value().rfind('/');
+            !package.archive || slash == std::string::npos || slash == 0 || !destination.is_absolute())
             return Result<void>::Failure(MakeError(errors.invalid));
-        const auto declared = std::ranges::find_if(package.archive->Manifest().Entries(), [&descriptor](const auto &entry) {
+        if (const auto declared = std::ranges::find_if(package.archive->Manifest().Entries(),
+                                                       [&descriptor](const auto &entry) {
             return entry.id.path.Value() == descriptor.Value();
         });
-        if (declared == package.archive->Manifest().Entries().end())
+            declared == package.archive->Manifest().Entries().end())
             return Result<void>::Failure(MakeError(errors.invalid));
         const auto descriptorRoot = descriptor.Value().substr(0, descriptor.Value().rfind('/'));
         for (const auto &entry : package.archive->Manifest().Entries()) {

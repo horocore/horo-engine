@@ -10,6 +10,7 @@
 #include "Horo/WorldStreaming/WorldPartitionDescriptor.h"
 #include "Horo/WorldStreaming/WorldStreamingRuntimeComposition.h"
 
+#include <array>
 #include <atomic>
 #include <compare>
 #include <cstddef>
@@ -80,6 +81,38 @@ namespace Horo::WorldStreaming {
         std::size_t nodesVisited{};              /**< Immutable spatial-index nodes visited. */
     };
 
+    /** @brief Fixed-storage continuation issued by one immutable spatial index; copies advance independently. */
+    class WorldPartitionSpatialCursor final {
+    public:
+        /** @brief Reports terminal traversal. @return True after every intersecting branch was visited. */
+        [[nodiscard]] bool Complete() const noexcept {
+            return complete_;
+        }
+
+    private:
+        friend class WorldPartitionRegistrySnapshot;
+        WorldPartitionRegistryBinding binding_{};
+        WorldPartitionSpatialQuery query_{};
+        std::array<std::uint32_t, 64> pending_{};
+        std::uint32_t pendingCount_{};
+        std::uint32_t leafOffset_{};
+        bool complete_{};
+    };
+
+    /** @brief Per-call spatial work ceilings; neither exhausted work nor a full output is a failure. */
+    struct WorldPartitionSpatialWorkBudget final {
+        std::uint32_t nodes{};      /**< Maximum BVH nodes visited, including rejected branches. */
+        std::uint32_t candidates{}; /**< Maximum leaf candidates examined, including filtered cells. */
+    };
+
+    /** @brief One resumable spatial batch; handles are deterministic BVH order, not canonical cell order. */
+    struct WorldPartitionSpatialBatch final {
+        std::size_t matches{};
+        std::size_t nodesVisited{};
+        std::size_t candidatesExamined{};
+        bool complete{};
+    };
+
     /** @brief Lifecycle gate for registry publication and new snapshot capture. */
     enum class WorldPartitionRegistryState : std::uint8_t {
         Active,
@@ -124,6 +157,28 @@ namespace Horo::WorldStreaming {
          */
         [[nodiscard]] Result<WorldPartitionSpatialQueryResult> Query(const WorldPartitionSpatialQuery &query,
                                                                      std::span<WorldPartitionCellHandle> output) const;
+
+        /** @brief Returns the immutable grid or null for an empty snapshot. @return Snapshot-owned grid. */
+        [[nodiscard]] const WorldCellQuantizationPolicy *Grid() const noexcept;
+        /** @brief Returns immutable canonical layer metadata. @return Snapshot-owned layers. */
+        [[nodiscard]] std::span<const WorldLayerDescriptor> Layers() const noexcept;
+        /**
+         * @brief Starts a fixed-storage resumable query without traversing the index.
+         * @param query Ordered inclusive bounds and declared filters.
+         * @return Exact-publication continuation or typed invalid/unsupported failure.
+         */
+        [[nodiscard]] Result<WorldPartitionSpatialCursor> BeginQuery(const WorldPartitionSpatialQuery &query) const;
+        /**
+         * @brief Advances a query under explicit independent node and candidate ceilings without allocation.
+         * @param cursor Continuation issued by this exact publication; advanced only on success.
+         * @param budget Positive node and candidate work ceilings.
+         * @param output Nonempty caller storage; matching handles occupy the returned prefix.
+         * @return Work evidence and completion, or typed invalid/stale failure with cursor/output unchanged.
+         * @details Output order is deterministic BVH traversal order. Canonical consumers must reduce/sort their bounded staging rows.
+         */
+        [[nodiscard]] Result<WorldPartitionSpatialBatch> QueryNext(WorldPartitionSpatialCursor &cursor,
+                                                                   WorldPartitionSpatialWorkBudget budget,
+                                                                   std::span<WorldPartitionCellHandle> output) const;
 
     private:
         friend class WorldPartitionRegistry;

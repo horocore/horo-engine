@@ -675,8 +675,7 @@ namespace Horo::Editor {
             activeScreen_->OnLeave();
             activeScreen_.reset();
         }
-        auto closed = gameplayRetirements_->Close();
-        if (closed.HasError()) {
+        if (auto closed = gameplayRetirements_->Close(); closed.HasError()) {
             gameplayClosePending_ = true;
             return closed;
         }

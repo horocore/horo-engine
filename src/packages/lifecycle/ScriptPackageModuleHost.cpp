@@ -9,7 +9,7 @@ namespace Horo::Packages {
     namespace {
         /** @brief Pins native code and exact verified module through actual provider registration teardown. */
         struct ScriptRoleState final {
-            VerifiedPackageModule module;
+            VerifiedPackageModule selectedModule;
             std::shared_ptr<Extensions::ScriptInvocationRegistry> registry;
             std::unique_ptr<IPackageModuleActivation> native;
             std::optional<Extensions::ScriptInvocationProviderRegistration> provider;
@@ -52,10 +52,10 @@ namespace Horo::Packages {
         };
 
         /** @brief Matches immutable package role identity without consulting ambient registries. */
-        bool Matches(const ScriptRoleState &state, const HoroPackageId &package, const std::string_view module,
+        bool Matches(const ScriptRoleState &state, const HoroPackageId &package, const std::string_view selectedModule,
                      const std::uint64_t generation) {
-            return !state.retired && !state.failure && state.provider && state.module.Identity().package == package &&
-                   state.module.Module().id == module && state.module.Identity().generation == generation;
+            return !state.retired && !state.failure && state.provider && state.selectedModule.Identity().package == package &&
+                   state.selectedModule.Module().id == selectedModule && state.selectedModule.Identity().generation == generation;
         }
     }  // namespace
 
@@ -99,38 +99,38 @@ namespace Horo::Packages {
 
     /** @copydoc ScriptPackageModuleHost::Activate */
     Result<std::unique_ptr<IPackageModuleActivation>> ScriptPackageModuleHost::Activate(
-        const VerifiedPackageModule &module, const std::span<const std::shared_ptr<IPackageModuleActivation>> dependencies,
+        const VerifiedPackageModule &selectedModule, const std::span<const std::shared_ptr<IPackageModuleActivation>> dependencies,
         const CancellationToken &cancellation) {
         std::erase_if(impl_->roles, [](const auto &role) {
             return role.expired();
         });
-        if (!Supports(module.Identity().role) || impl_->roles.size() >= 64)
+        if (!Supports(selectedModule.Identity().role) || impl_->roles.size() >= 64)
             return Result<std::unique_ptr<IPackageModuleActivation>>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
-        const auto realm = std::ranges::find_if(impl_->realms, [&module](const auto &value) {
-            return value.package == module.Identity().package && value.module == module.Module().id;
+        const auto realm = std::ranges::find_if(impl_->realms, [&selectedModule](const auto &value) {
+            return value.package == selectedModule.Identity().package && value.module == selectedModule.Module().id;
         });
         if (realm == impl_->realms.end())
             return Result<std::unique_ptr<IPackageModuleActivation>>::Failure(
                 MakeError(PackageLifecycleErrors::InvalidCandidate, "The script module has no exact injected registry realm."));
-        auto state = std::make_shared<ScriptRoleState>(ScriptRoleState{module, realm->registry, {}});
+        auto state = std::make_shared<ScriptRoleState>(ScriptRoleState{selectedModule, realm->registry, {}});
         auto receipt = std::make_unique<ScriptRoleReceipt>(state);
         impl_->roles.push_back(state);
         auto activationFailure = MakeError(PackageLifecycleErrors::InvalidCandidate);
         try {
-            auto native = impl_->native->Activate(module, dependencies, cancellation);
+            auto native = impl_->native->Activate(selectedModule, dependencies, cancellation);
             if (native.HasError())
                 return native;
             state->native = std::move(native).Value();
             if (!state->native->IsActive())
                 state->failure = state->native->Diagnostic().value_or(activationFailure);
             else {
-                auto provider = realm->registry->RegisterProvider({module.Identity().generation, 64});
+                auto provider = realm->registry->RegisterProvider({selectedModule.Identity().generation, 64});
                 if (provider.HasError())
                     state->failure = provider.ErrorValue();
                 else
                     state->provider.emplace(std::move(provider).Value());
             }
-        } catch (...) {
+        } catch (...) {  // NOSONAR(cpp:S2738) Native module boundary contains arbitrary plugin exceptions and preserves rollback ownership.
             // Diagnostic allocation failure must also return the already-created rollback owner.
             state->failure = std::move(activationFailure);
         }
@@ -138,34 +138,38 @@ namespace Horo::Packages {
     }
 
     /** @copydoc ScriptPackageModuleHost::Provider */
-    Extensions::ScriptInvocationProviderLease ScriptPackageModuleHost::Provider(const HoroPackageId &package, const std::string_view module,
+    Extensions::ScriptInvocationProviderLease ScriptPackageModuleHost::Provider(const HoroPackageId &package,
+                                                                                const std::string_view selectedModule,
                                                                                 const std::uint64_t generation) const {
         for (const auto &weak : impl_->roles)
-            if (auto state = weak.lock(); state && Matches(*state, package, module, generation))
+            if (auto state = weak.lock(); state && Matches(*state, package, selectedModule, generation))
                 return state->provider->Lease();
         return {};
     }
 
     /** @copydoc ScriptPackageModuleHost::Capability */
     Result<Extensions::ExtensionCapabilityHandle> ScriptPackageModuleHost::Capability(
-        const HoroPackageId &package, const std::string_view module, const std::uint64_t generation,
+        const HoroPackageId &package, const std::string_view selectedModule, const std::uint64_t generation,
         const Extensions::ExtensionCapabilityId &capability) const {
-        for (const auto &weak : impl_->roles)
-            if (auto state = weak.lock(); state && Matches(*state, package, module, generation))
-                for (const auto &grant : state->module.Capabilities())
-                    if (grant.Capability() == capability)
-                        return Result<Extensions::ExtensionCapabilityHandle>::Success(grant);
+        for (const auto &weak : impl_->roles) {
+            auto state = weak.lock();
+            if (!state || !Matches(*state, package, selectedModule, generation))
+                continue;
+            for (const auto &grant : state->selectedModule.Capabilities())
+                if (grant.Capability() == capability)
+                    return Result<Extensions::ExtensionCapabilityHandle>::Success(grant);
+        }
         return Result<Extensions::ExtensionCapabilityHandle>::Failure(MakeError(PackageLifecycleErrors::TrustRequired));
     }
 
     /** @copydoc ScriptPackageModuleHost::Begin */
     Result<Extensions::ScriptInvocationController> ScriptPackageModuleHost::Begin(const HoroPackageId &package,
-                                                                                  const std::string_view module,
+                                                                                  const std::string_view selectedModule,
                                                                                   const std::uint64_t generation,
                                                                                   const Extensions::ScriptCapabilityBinding &binding,
                                                                                   Extensions::ScriptInvocationRequest request) const {
         for (const auto &weak : impl_->roles)
-            if (auto state = weak.lock(); state && Matches(*state, package, module, generation))
+            if (auto state = weak.lock(); state && Matches(*state, package, selectedModule, generation))
                 return binding.Begin(*state->provider, std::move(request));
         return Result<Extensions::ScriptInvocationController>::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
     }

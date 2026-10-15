@@ -990,6 +990,7 @@ horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
     Horo/WorldStreaming/StreamingPriorityPolicy.h
     Horo/WorldStreaming/StreamingEvictionPolicy.h
     Horo/WorldStreaming/StreamingFairQueue.h
+    Horo/WorldStreaming/StreamingSourcePlanner.h
     Horo/WorldStreaming/StreamingSourceDescriptor.h
     Horo/WorldStreaming/StreamingSourcePrefetch.h
     Horo/WorldStreaming/StreamingSourceRange.h

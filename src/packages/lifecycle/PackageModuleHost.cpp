@@ -65,10 +65,11 @@ namespace Horo::Packages {
         const auto &name = state_->descriptor.Value();
         const auto root = name.substr(0, name.rfind('/'));
         const auto entries = Package().archive->Manifest().Entries();
-        const auto file = std::ranges::find(entries, path.Value(), [](const auto &entry) {
+        if (const auto file = std::ranges::find(entries, path.Value(),
+                                                [](const auto &entry) {
             return entry.id.path.Value();
         });
-        if (file == entries.end() || !file->contributionRoot || file->contributionRoot->Value() != root ||
+            file == entries.end() || !file->contributionRoot || file->contributionRoot->Value() != root ||
             !path.Value().starts_with(root + '/'))
             return Result<std::vector<std::byte>>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
         return Package().archive->ReadDeclaredFile(path, maximumBytes);

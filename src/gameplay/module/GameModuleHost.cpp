@@ -108,17 +108,17 @@ namespace Horo::Gameplay {
     }  // namespace
 
     /** @copydoc GameModuleHost::BindContexts */
-    Result<void> GameModuleHost::BindContexts(LoadedGameModule::Impl &module) const {
-        auto resolvedPhysics = ResolvePhysicsContext(physics_, module.moduleId);
+    Result<void> GameModuleHost::BindContexts(LoadedGameModule::Impl &selectedModule) const {
+        auto resolvedPhysics = ResolvePhysicsContext(physics_, selectedModule.moduleId);
         if (resolvedPhysics.HasError())
             return Result<void>::Failure(resolvedPhysics.ErrorValue());
-        auto resolvedNavigation = ResolveNavigationContext(navigation_, module.moduleId);
+        auto resolvedNavigation = ResolveNavigationContext(navigation_, selectedModule.moduleId);
         if (resolvedNavigation.HasError())
             return Result<void>::Failure(resolvedNavigation.ErrorValue());
-        if (auto pinned = resolvedNavigation.Value()->RetainCodeImage(module.codeImage); pinned.HasError())
+        if (auto pinned = resolvedNavigation.Value()->RetainCodeImage(selectedModule.codeImage); pinned.HasError())
             return Result<void>::Failure(pinned.ErrorValue());
-        module.navigation = std::move(resolvedNavigation).Value();
-        module.physics = std::move(resolvedPhysics).Value();
+        selectedModule.navigation = std::move(resolvedNavigation).Value();
+        selectedModule.physics = std::move(resolvedPhysics).Value();
         return Result<void>::Success();
     }
 
@@ -130,8 +130,7 @@ namespace Horo::Gameplay {
         auto image = Platform::LoadDynamicLibrary(libraryPath.string());
         if (image.HasError())
             return Result<void>::Failure(image.ErrorValue());
-        auto validated = ReadValidatedExports(*image.Value(), expectation);
-        if (validated.HasError())
+        if (auto validated = ReadValidatedExports(*image.Value(), expectation); validated.HasError())
             return Result<void>::Failure(validated.ErrorValue());
         return Result<void>::Success();
     }
@@ -174,7 +173,7 @@ namespace Horo::Gameplay {
         impl->registries.registry = std::move(registry).Value();
 
         // Allocate the exported RAII wrapper before any module factory can publish work.
-        GameModuleLoadCandidate candidate{std::unique_ptr<LoadedGameModule>{new LoadedGameModule{impl}}, {}};
+        GameModuleLoadCandidate candidate{std::make_unique<LoadedGameModule>(LoadedGameModule::ConstructionKey{}, impl), {}};
         auto initializationFailure =
             MakeError(GameplayErrors::GameplayFactoryFailed, "Gameplay host initialization failed after factory admission.");
         try {
@@ -184,7 +183,7 @@ namespace Horo::Gameplay {
                     MakeError(GameplayErrors::InvalidBehaviorComponent, "Gameplay module factory returned no module object.");
             else if (auto activated = impl->RegisterAndStart(hostCapabilities_); activated.HasError())
                 candidate.diagnostic = activated.ErrorValue();
-        } catch (...) {
+        } catch (...) {  // NOSONAR(cpp:S2738) Native module boundary contains arbitrary plugin exceptions and preserves rollback ownership.
             candidate.diagnostic = std::move(initializationFailure);
         }
         if (candidate.diagnostic)

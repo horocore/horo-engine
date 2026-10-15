@@ -6,6 +6,21 @@
 #include <algorithm>
 
 namespace Horo::Extensions::Detail {
+    namespace {
+        /** @brief Adds all providers of required imports to the selected module closure. */
+        void SelectRequiredProviders(const ExtensionManifest &manifest, const ExtensionModuleManifest &selectedModule,
+                                     std::set<std::string, std::less<>> &selected) {
+            for (const auto &imported : selectedModule.imports) {
+                if (!imported.required)
+                    continue;
+                for (const auto &provider : manifest.modules)
+                    if (std::ranges::find(provider.exports, imported.service, &ExtensionServiceExportManifest::id) !=
+                        provider.exports.end())
+                        selected.insert(provider.id);
+            }
+        }
+    }  // namespace
+
     /** @copydoc SelectModuleClosure */
     Result<std::set<std::string, std::less<>>> SelectModuleClosure(const ExtensionManifest &manifest,
                                                                    const std::span<const std::string> roots) {
@@ -16,20 +31,15 @@ namespace Horo::Extensions::Detail {
                     MakeError(ExtensionErrors::ModuleResolutionFailed, "Selected module is absent."));
             selected.insert(id);
         }
-        for (std::size_t pass = 0; pass < manifest.modules.size(); ++pass) {
+        std::size_t remainingPasses = manifest.modules.size();
+        while (remainingPasses != 0) {
+            --remainingPasses;
             const auto previous = selected.size();
-            for (const auto &module : manifest.modules) {
-                if (!selected.contains(module.id))
+            for (const auto &selectedModule : manifest.modules) {
+                if (!selected.contains(selectedModule.id))
                     continue;
-                selected.insert(module.dependencies.begin(), module.dependencies.end());
-                for (const auto &imported : module.imports) {
-                    if (!imported.required)
-                        continue;
-                    for (const auto &provider : manifest.modules)
-                        if (std::ranges::find(provider.exports, imported.service, &ExtensionServiceExportManifest::id) !=
-                            provider.exports.end())
-                            selected.insert(provider.id);
-                }
+                selected.insert(selectedModule.dependencies.begin(), selectedModule.dependencies.end());
+                SelectRequiredProviders(manifest, selectedModule, selected);
             }
             if (selected.size() == previous)
                 break;

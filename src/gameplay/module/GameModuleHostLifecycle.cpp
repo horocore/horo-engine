@@ -27,7 +27,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] Result<void> InvokeRegister(IGameModule &gameModule, GameRegistrationContext &context) {
             try {
                 return gameModule.Register(context);
-            } catch (...) {
+            } catch (
+                ...) {  // NOSONAR(cpp:S2738) Native module boundary contains arbitrary plugin exceptions and preserves rollback ownership.
                 return Result<void>::Failure(
                     MakeError(GameplayErrors::GameplayFactoryFailed, "Gameplay module registration threw an exception."));
             }
@@ -36,7 +37,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] Result<void> InvokeStart(IGameModule &gameModule, GameRuntimeContext &context) {
             try {
                 return gameModule.Start(context);
-            } catch (...) {
+            } catch (
+                ...) {  // NOSONAR(cpp:S2738) Native module boundary contains arbitrary plugin exceptions and preserves rollback ownership.
                 return Result<void>::Failure(
                     MakeError(GameplayErrors::GameplayFactoryFailed, "Gameplay module startup threw an exception."));
             }
@@ -45,7 +47,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] Result<GameModuleReloadSnapshot> InvokePrepareReload(IGameModule &gameModule, GameRuntimeContext &context) {
             try {
                 return gameModule.PrepareReload(context);
-            } catch (...) {
+            } catch (
+                ...) {  // NOSONAR(cpp:S2738) Native module boundary contains arbitrary plugin exceptions and preserves rollback ownership.
                 return Result<GameModuleReloadSnapshot>::Failure(
                     MakeError(GameplayErrors::GameplayReloadRestartRequired, "Gameplay reload quiescence callback threw an exception."));
             }
@@ -55,7 +58,8 @@ namespace Horo::Gameplay {
                                                        GameRuntimeContext &context) {
             try {
                 return gameModule.RestoreReload(snapshot, context);
-            } catch (...) {
+            } catch (
+                ...) {  // NOSONAR(cpp:S2738) Native module boundary contains arbitrary plugin exceptions and preserves rollback ownership.
                 return Result<void>::Failure(
                     MakeError(GameplayErrors::GameplayReloadRestoreFailed, "Gameplay reload restore callback threw an exception."));
             }
