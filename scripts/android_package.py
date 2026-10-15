@@ -80,7 +80,8 @@ def write_project(stage: Path, tools: dict, profile: dict, abis: list[str], acti
     (java_root / "PackageActivity.java").write_text(source, encoding="utf-8")
     input_root = stage / "java/org/horocore/platform"
     input_root.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(ROOT / "apps/android-input/HoroInputActivity.java", input_root / "HoroInputActivity.java")
+    input_source = ROOT / "apps/android-input/java/org/horocore/platform/HoroInputActivity.java"
+    shutil.copyfile(input_source, input_root / "HoroInputActivity.java")
     shutil.copyfile(activity, stage / "game-activity.aar")
     if digest(stage / "game-activity.aar") != tools["gameActivity"]["sha256"]:
         raise AndroidError("GameActivity changed during staging; retry with the admitted AAR.")

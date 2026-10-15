@@ -20,37 +20,39 @@ namespace Horo::Platform::Android {
 
     /** @brief Reject wrong-thread and retired calls before touching borrowed Input storage. */
     InputAdmission AndroidInputSession::Check(const bool requireFocus) const noexcept {
+        using enum InputAdmission;
         if (owner_ != std::this_thread::get_id())
-            return InputAdmission::WrongThread;
+            return WrongThread;
         if (stopped_)
-            return InputAdmission::Stopped;
-        return requireFocus && !focused_ ? InputAdmission::Unavailable : InputAdmission::Accepted;
+            return Stopped;
+        return requireFocus && !focused_ ? Unavailable : Accepted;
     }
 
     /** @brief Publish loss evidence before another native sensor can enter the Input frame. */
     void AndroidInputSession::RefreshSensors() noexcept {
+        using enum SensorAvailability;
         for (std::size_t i = 0; i < sensors_.size(); ++i) {
-            auto availability = SensorAvailability::Available;
+            auto availability = Available;
             if (failed_[i])
-                availability = SensorAvailability::NativeFailure;
+                availability = NativeFailure;
             else if (!supported_[i])
-                availability = SensorAvailability::Unsupported;
+                availability = Unsupported;
             else if (!enabled_[i])
-                availability = SensorAvailability::Disabled;
+                availability = Disabled;
             else if (i == Index(SensorKind::StepCounter) && permission_ != PermissionState::Granted)
-                availability = SensorAvailability::PermissionRequired;
+                availability = PermissionRequired;
             else if (!focused_ || stopped_)
-                availability = SensorAvailability::Suspended;
-            if (availability != SensorAvailability::Available || sensors_[i].availability != availability)
-                sensors_[i] = {.availability =
-                                   availability == SensorAvailability::Available ? SensorAvailability::AwaitingSample : availability};
+                availability = Suspended;
+            if (availability != Available || sensors_[i].availability != availability)
+                sensors_[i] = {.availability = availability == Available ? AwaitingSample : availability};
             static_cast<void>(collector_.SetSensorSample(static_cast<SensorKind>(i), sensors_[i]));
         }
     }
 
     /** @copydoc AndroidInputSession::SetFocus */
     InputAdmission AndroidInputSession::SetFocus(const bool resumed, const bool focused) noexcept {
-        if (const auto check = Check(false); check != InputAdmission::Accepted)
+        using enum InputAdmission;
+        if (const auto check = Check(false); check != Accepted)
             return check;
         focused_ = resumed && focused;
         collector_.SetWindowState({.focused = focused_, .pointerDeviceAvailable = focused_});
@@ -60,16 +62,18 @@ namespace Horo::Platform::Android {
                 pad.directionHat = {};
             }
         RefreshSensors();
-        return InputAdmission::Accepted;
+        return Accepted;
     }
 
     /** @copydoc AndroidInputSession::SetPermission */
     InputAdmission AndroidInputSession::SetPermission(const PermissionState state) noexcept {
-        if (const auto check = Check(false); check != InputAdmission::Accepted)
+        using enum InputAdmission;
+        using enum PermissionState;
+        if (const auto check = Check(false); check != Accepted)
             return check;
-        if (state > PermissionState::Revoked)
-            return InputAdmission::Invalid;
-        const bool lostGrant = permission_ == PermissionState::Granted && state != PermissionState::Granted;
+        if (state > Revoked)
+            return Invalid;
+        const bool lostGrant = permission_ == Granted && state != Granted;
         permission_ = state;
         if (lostGrant) {
             collector_.Neutralize();
@@ -80,42 +84,45 @@ namespace Horo::Platform::Android {
             sensors_ = {};
         }
         RefreshSensors();
-        return InputAdmission::Accepted;
+        return Accepted;
     }
 
     /** @copydoc AndroidInputSession::Key */
     InputAdmission AndroidInputSession::Key(const Input::Key key, const bool down) noexcept {
-        if (const auto check = Check(); check != InputAdmission::Accepted)
+        using enum InputAdmission;
+        if (const auto check = Check(); check != Accepted)
             return check;
         if (key <= Input::Key::Unknown || key >= Input::Key::Count)
-            return InputAdmission::Invalid;
+            return Invalid;
         collector_.SetKey(key, down);
-        return InputAdmission::Accepted;
+        return Accepted;
     }
 
     /** @copydoc AndroidInputSession::Modifiers */
     InputAdmission AndroidInputSession::Modifiers(const Input::ModifierState modifiers) noexcept {
-        if (const auto check = Check(); check != InputAdmission::Accepted)
+        using enum InputAdmission;
+        if (const auto check = Check(); check != Accepted)
             return check;
         collector_.SetModifiers(modifiers);
-        return InputAdmission::Accepted;
+        return Accepted;
     }
 
     /** @copydoc AndroidInputSession::Touch */
     InputAdmission AndroidInputSession::Touch(const Input::TouchContactId id, const float x, const float y, const bool down) noexcept {
-        if (const auto check = Check(); check != InputAdmission::Accepted)
+        using enum InputAdmission;
+        if (const auto check = Check(); check != Accepted)
             return check;
         switch (collector_.SetTouchContact(id, x, y, down)) {
             case Input::TouchCollectionStatus::Accepted:
-                return InputAdmission::Accepted;
+                return Accepted;
             case Input::TouchCollectionStatus::Invalid:
-                return InputAdmission::Invalid;
+                return Invalid;
             case Input::TouchCollectionStatus::Stale:
-                return InputAdmission::Stale;
+                return Stale;
             case Input::TouchCollectionStatus::CapacityExceeded:
-                return InputAdmission::Capacity;
+                return Capacity;
             default:
-                return InputAdmission::Unavailable;
+                return Unavailable;
         }
     }
 
@@ -127,119 +134,127 @@ namespace Horo::Platform::Android {
 
     /** @copydoc AndroidInputSession::ConnectGamepad */
     InputAdmission AndroidInputSession::ConnectGamepad(const std::int32_t nativeDevice) {
-        if (const auto check = Check(false); check != InputAdmission::Accepted)
+        using enum InputAdmission;
+        if (const auto check = Check(false); check != Accepted)
             return check;
         if (nativeDevice < 0)
-            return InputAdmission::Invalid;
+            return Invalid;
         if (std::ranges::find(pads_, nativeDevice, &Pad::nativeDevice) != pads_.end())
-            return InputAdmission::Accepted;
+            return Accepted;
         const auto free = std::ranges::find(pads_, -1, &Pad::nativeDevice);
         if (free == pads_.end())
-            return InputAdmission::Capacity;
+            return Capacity;
         try {
             const auto id = collector_.ConnectGamepad("Android canonical controller");
             *free = {.nativeDevice = nativeDevice, .id = id};
         } catch (const std::bad_alloc &) {
-            return InputAdmission::Capacity;
+            return Capacity;
         }
-        return InputAdmission::Accepted;
+        return Accepted;
     }
 
     /** @copydoc AndroidInputSession::DisconnectGamepad */
     InputAdmission AndroidInputSession::DisconnectGamepad(const std::int32_t nativeDevice) {
-        if (const auto check = Check(false); check != InputAdmission::Accepted)
+        using enum InputAdmission;
+        if (const auto check = Check(false); check != Accepted)
             return check;
         const auto pad = std::ranges::find(pads_, nativeDevice, &Pad::nativeDevice);
         if (nativeDevice < 0 || pad == pads_.end())
-            return InputAdmission::Stale;
+            return Stale;
         static_cast<void>(collector_.DisconnectGamepad(pad->id));
         *pad = {};
-        return InputAdmission::Accepted;
+        return Accepted;
     }
 
     /** @copydoc AndroidInputSession::Button */
     InputAdmission AndroidInputSession::Button(const std::int32_t device, const Input::GamepadButton button, const bool down) noexcept {
-        if (const auto check = Check(); check != InputAdmission::Accepted)
+        using enum InputAdmission;
+        if (const auto check = Check(); check != Accepted)
             return check;
         const auto pad = std::ranges::find(pads_, device, &Pad::nativeDevice);
         if (device < 0 || pad == pads_.end())
-            return InputAdmission::Stale;
-        constexpr auto firstDirection = Index(Input::GamepadButton::DPadUp);
-        if (Index(button) >= firstDirection && Index(button) < firstDirection + pad->directionKeys.size()) {
+            return Stale;
+        if (constexpr auto firstDirection = Index(Input::GamepadButton::DPadUp);
+            Index(button) >= firstDirection && Index(button) < firstDirection + pad->directionKeys.size()) {
             const auto direction = Index(button) - firstDirection;
             pad->directionKeys[direction] = down;
-            return collector_.SetGamepadButton(pad->id, button, down || pad->directionHat[direction]) ? InputAdmission::Accepted
-                                                                                                      : InputAdmission::Invalid;
+            return collector_.SetGamepadButton(pad->id, button, down || pad->directionHat[direction]) ? Accepted : Invalid;
         }
-        return collector_.SetGamepadButton(pad->id, button, down) ? InputAdmission::Accepted : InputAdmission::Invalid;
+        return collector_.SetGamepadButton(pad->id, button, down) ? Accepted : Invalid;
     }
 
     /** @copydoc AndroidInputSession::Hat */
     InputAdmission AndroidInputSession::Hat(const std::int32_t device, const float x, const float y) noexcept {
-        if (const auto check = Check(); check != InputAdmission::Accepted)
+        using enum InputAdmission;
+        if (const auto check = Check(); check != Accepted)
             return check;
         const auto pad = std::ranges::find(pads_, device, &Pad::nativeDevice);
         if (device < 0 || pad == pads_.end())
-            return InputAdmission::Stale;
+            return Stale;
         if (!std::isfinite(x) || !std::isfinite(y))
-            return InputAdmission::Invalid;
+            return Invalid;
         pad->directionHat = {y < -0.5F, y > 0.5F, x < -0.5F, x > 0.5F};
         for (std::size_t i = 0; i < pad->directionHat.size(); ++i)
             static_cast<void>(collector_.SetGamepadButton(pad->id,
                                                           static_cast<Input::GamepadButton>(Index(Input::GamepadButton::DPadUp) + i),
                                                           pad->directionKeys[i] || pad->directionHat[i]));
-        return InputAdmission::Accepted;
+        return Accepted;
     }
 
     /** @copydoc AndroidInputSession::Axis */
     InputAdmission AndroidInputSession::Axis(const std::int32_t device, const Input::GamepadAxis axis, const float value) noexcept {
-        if (const auto check = Check(); check != InputAdmission::Accepted)
+        using enum InputAdmission;
+        if (const auto check = Check(); check != Accepted)
             return check;
         const auto pad = std::ranges::find(pads_, device, &Pad::nativeDevice);
         if (device < 0 || pad == pads_.end())
-            return InputAdmission::Stale;
-        return collector_.SetGamepadAxis(pad->id, axis, value) ? InputAdmission::Accepted : InputAdmission::Invalid;
+            return Stale;
+        return collector_.SetGamepadAxis(pad->id, axis, value) ? Accepted : Invalid;
     }
 
     /** @copydoc AndroidInputSession::ConfigureSensor */
     InputAdmission AndroidInputSession::ConfigureSensor(const SensorKind sensor, const bool supported, const bool enabled) noexcept {
-        if (const auto check = Check(false); check != InputAdmission::Accepted)
+        using enum InputAdmission;
+        if (const auto check = Check(false); check != Accepted)
             return check;
         if (Index(sensor) >= sensors_.size())
-            return InputAdmission::Invalid;
+            return Invalid;
         failed_[Index(sensor)] = false;
         supported_[Index(sensor)] = supported;
         enabled_[Index(sensor)] = enabled;
         RefreshSensors();
-        return InputAdmission::Accepted;
+        return Accepted;
     }
 
     /** @copydoc AndroidInputSession::FailSensor */
     InputAdmission AndroidInputSession::FailSensor(const SensorKind sensor) noexcept {
-        if (const auto check = Check(false); check != InputAdmission::Accepted)
+        using enum InputAdmission;
+        if (const auto check = Check(false); check != Accepted)
             return check;
         if (Index(sensor) >= sensors_.size())
-            return InputAdmission::Invalid;
+            return Invalid;
         failed_[Index(sensor)] = true;
         RefreshSensors();
-        return InputAdmission::Accepted;
+        return Accepted;
     }
 
     /** @copydoc AndroidInputSession::Sample */
     InputAdmission AndroidInputSession::Sample(const SensorKind sensor, const std::array<float, 3> value,
                                                const std::int64_t timestampNanoseconds, const std::uint64_t counter) noexcept {
-        if (const auto check = Check(); check != InputAdmission::Accepted)
+        using enum InputAdmission;
+        using enum SensorAvailability;
+        if (const auto check = Check(); check != Accepted)
             return check;
         if (Index(sensor) >= sensors_.size())
-            return InputAdmission::Invalid;
+            return Invalid;
         auto &sample = sensors_[Index(sensor)];
-        if (sample.availability != SensorAvailability::Available && sample.availability != SensorAvailability::AwaitingSample)
-            return InputAdmission::Unavailable;
-        const SensorSample next{SensorAvailability::Available, value, counter, timestampNanoseconds};
+        if (sample.availability != Available && sample.availability != AwaitingSample)
+            return Unavailable;
+        const SensorSample next{Available, value, counter, timestampNanoseconds};
         if (!collector_.SetSensorSample(sensor, next))
-            return InputAdmission::Invalid;
+            return Invalid;
         sample = next;
-        return InputAdmission::Accepted;
+        return Accepted;
     }
 
     /** @copydoc AndroidInputSession::Sensor */

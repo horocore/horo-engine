@@ -403,7 +403,8 @@ class AndroidAssemblyTests(unittest.TestCase):
         stage.mkdir()
         android_package.write_project(stage, tools, self.profile, ["arm64-v8a"], arguments.game_activity)
         activity = stage / "java/org/horocore/platform/HoroInputActivity.java"
-        self.assertEqual(activity.read_bytes(), (android_package.ROOT / "apps/android-input/HoroInputActivity.java").read_bytes())
+        input_source = android_package.ROOT / "apps/android-input/java/org/horocore/platform/HoroInputActivity.java"
+        self.assertEqual(activity.read_bytes(), input_source.read_bytes())
         entry = stage / "java/org/horocore/packagequalification/PackageActivity.java"
         self.assertIn("extends org.horocore.platform.HoroInputActivity", entry.read_text())
         self.assertIn("android.permission.ACTIVITY_RECOGNITION", (stage / "AndroidManifest.xml").read_text())

@@ -60,10 +60,18 @@ public class HoroInputActivity extends com.google.androidgamesdk.GameActivity im
         if (nativePeer == 0) return;
         final boolean granted = checkSelfPermission(Manifest.permission.ACTIVITY_RECOGNITION) == PackageManager.PERMISSION_GRANTED;
         final boolean asked = getPreferences(MODE_PRIVATE).getBoolean("horo.activityRecognitionAsked", false);
-        final int state = requesting ? 1 : granted ? 2 : wasGranted ? 5 : !asked ? 0 :
-                shouldShowRequestPermissionRationale(Manifest.permission.ACTIVITY_RECOGNITION) ? 3 : 4;
+        final int state = permissionState(granted, asked);
         wasGranted = granted;
         horoInputEvent(nativePeer, 1, state);
+    }
+    /** Preserve request/grant/revocation precedence when Android returns from settings or a permission dialog. */
+    private int permissionState(boolean granted, boolean asked) {
+        if (requesting) return 1;
+        if (granted) return 2;
+        if (wasGranted) return 5;
+        if (!asked) return 0;
+        if (shouldShowRequestPermissionRationale(Manifest.permission.ACTIVITY_RECOGNITION)) return 3;
+        return 4;
     }
     @Override public void onResume() {
         super.onResume();
