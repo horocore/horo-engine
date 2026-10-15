@@ -33,3 +33,27 @@ def test_gameplay_ai_dependency_policy_matches_only_the_real_downstream_edges() 
     host = policy.split("TARGET HoroGameplayModuleHost", 1)[1].split(")", 1)[0].split()
     assert host == ["DEPENDENCIES", "HoroGameplayRuntime", "HoroPlatform",
                     "HoroGameplayPhysicsIntegration", "HoroGameplayAiIntegration"]
+
+
+def test_native_ai_module_links_only_position_independent_static_owners() -> None:
+    source = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    loop = source.split("foreach(target HoroPrefabRuntime", 1)[1].split("endforeach()", 1)[0]
+    owners = loop.split("get_target_property", 1)[0].split(")", 1)[0].split()
+    assert {"HoroGameplayAiIntegration", "HoroAISceneIntegration"} <= set(owners)
+    assert 'if(target_type STREQUAL "STATIC_LIBRARY")' in loop
+    assert "set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)" in loop
+    fixture = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    assert "target_link_libraries(HoroTestAiGameModule PRIVATE HoroEngine::GameplayAiIntegration)" in fixture
+
+
+def test_two_module_qualification_executes_as_a_cross_platform_ctest() -> None:
+    tests = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    registration = tests.split("add_test(NAME HoroGameplayModuleInputManifestTest", 1)[1].split("add_test(", 1)[0]
+    assert 'COMMAND "${CMAKE_COMMAND}"' in registration
+    assert '-P "${PROJECT_SOURCE_DIR}/tests/cmake/RunGameplayModuleInputManifestTest.cmake"' in registration
+    assert 'LABELS "gameplay;cmake;ci-windows" TIMEOUT 90' in registration
+    runner = (ROOT / "tests/cmake/RunGameplayModuleInputManifestTest.cmake").read_text(encoding="utf-8")
+    assert 'file(REMOVE_RECURSE "${HORO_TEST_BINARY_DIR}")' in runner
+    assert 'COMMAND "${CMAKE_COMMAND}" -S "${source_dir}" -B "${build_dir}" -G Ninja' in runner
+    assert 'if(NOT result EQUAL 0)' in runner
+    assert "Project with spaces" in runner and "build with spaces" in runner

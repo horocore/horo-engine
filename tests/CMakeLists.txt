@@ -44,6 +44,18 @@ add_test(NAME HoroGameplayManifestRevisionValidationTest
 set_tests_properties(HoroGameplayManifestRevisionValidationTest PROPERTIES
     LABELS "gameplay;cmake")
 
+add_test(NAME HoroGameplayModuleInputManifestTest
+    COMMAND "${CMAKE_COMMAND}"
+        "-DHORO_ENGINE_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+        "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/gameplay-input-manifest"
+        "-DPYTHON_EXECUTABLE=${Python3_EXECUTABLE}"
+        "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+        "-DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}"
+        "-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+        -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunGameplayModuleInputManifestTest.cmake")
+set_tests_properties(HoroGameplayModuleInputManifestTest PROPERTIES
+    LABELS "gameplay;cmake;ci-windows" TIMEOUT 90)
+
 add_test(NAME HoroExtensionSdkExternalConsumerTest
     COMMAND "${CMAKE_COMMAND}"
         "-DHORO_EXTENSION_SDK_PACKAGE_DIR=${HORO_EXTENSION_SDK_PACKAGE_DIR}"

@@ -137,3 +137,17 @@ projection, real native module unload and legacy brace constructors. A real
 public consumer and owning generated header consumers belong to the Windows
 build/discovery closure. Authored tests are not evidence of execution; local and
 hosted results are recorded separately in the delivery PR.
+
+## Native fixture qualification
+
+The actual AI module statically links the two AI integration owners. Both join
+the existing host-only position-independent Scene/AI static closure so Linux can
+link the native image; this does not expand the exported Physics SDK.
+
+`HoroGameplayModuleInputManifestTest` is an owning CTest external-project configure
+qualification, selected on Windows and in the ordinary Linux/macOS suite. Each
+run creates fresh source/build paths containing spaces and configures two actual
+gameplay module targets. It checks the primary default freshness manifest remains
+unchanged, the secondary owns its distinct manifest, and both retain generated
+descriptor bundles, revision paths, module IDs and SDK fingerprints. Python tests
+only verify metadata registration; they no longer launch external commands.
