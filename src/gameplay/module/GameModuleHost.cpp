@@ -107,19 +107,18 @@ namespace Horo::Gameplay {
         }
     }  // namespace
 
-    /** @copydoc LoadedGameModule::Impl::BindContexts */
-    Result<void> LoadedGameModule::Impl::BindContexts(const std::shared_ptr<GameplayPhysicsContext> &hostPhysics,
-                                                      const std::shared_ptr<GameplayNavigationContext> &hostNavigation) {
-        auto resolvedPhysics = ResolvePhysicsContext(hostPhysics, moduleId);
+    /** @copydoc GameModuleHost::BindContexts */
+    Result<void> GameModuleHost::BindContexts(LoadedGameModule::Impl &module) const {
+        auto resolvedPhysics = ResolvePhysicsContext(physics_, module.moduleId);
         if (resolvedPhysics.HasError())
             return Result<void>::Failure(resolvedPhysics.ErrorValue());
-        auto resolvedNavigation = ResolveNavigationContext(hostNavigation, moduleId);
+        auto resolvedNavigation = ResolveNavigationContext(navigation_, module.moduleId);
         if (resolvedNavigation.HasError())
             return Result<void>::Failure(resolvedNavigation.ErrorValue());
-        if (auto pinned = resolvedNavigation.Value()->RetainCodeImage(codeImage); pinned.HasError())
+        if (auto pinned = resolvedNavigation.Value()->RetainCodeImage(module.codeImage); pinned.HasError())
             return Result<void>::Failure(pinned.ErrorValue());
-        navigation = std::move(resolvedNavigation).Value();
-        physics = std::move(resolvedPhysics).Value();
+        module.navigation = std::move(resolvedNavigation).Value();
+        module.physics = std::move(resolvedPhysics).Value();
         return Result<void>::Success();
     }
 
@@ -166,7 +165,7 @@ namespace Horo::Gameplay {
         impl->buildFingerprint = validated.descriptor->buildFingerprint;
         impl->descriptorRevision = validated.bundle->descriptorRevision;
         impl->destroy = validated.bundle->lifecycle.destroy;
-        if (const auto bound = impl->BindContexts(physics_, navigation_); bound.HasError())
+        if (const auto bound = BindContexts(*impl); bound.HasError())
             return Result<GameModuleLoadCandidate>::Failure(bound.ErrorValue());
 
         auto registry = BuildRegistry(*validated.bundle);

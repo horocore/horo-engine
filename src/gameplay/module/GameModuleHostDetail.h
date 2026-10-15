@@ -74,13 +74,6 @@ namespace Horo::Gameplay {
     struct LoadedGameModule::Impl : std::enable_shared_from_this<LoadedGameModule::Impl> {
         ~Impl();
 
-        /** @brief Bind exact host principals and pin native context cleanup before module factories run.
-         * @param hostPhysics Optional immutable host Physics principal.
-         * @param hostNavigation Optional immutable host Navigation principal.
-         * @return Success after both bindings are admitted, or the original principal/pin failure.
-         */
-        [[nodiscard]] Result<void> BindContexts(const std::shared_ptr<GameplayPhysicsContext> &hostPhysics,
-                                                const std::shared_ptr<GameplayNavigationContext> &hostNavigation);
         [[nodiscard]] Result<void> RegisterAndStart(std::span<const GameplayCapabilityId> hostCapabilities);
         [[nodiscard]] Result<GameModuleReloadSnapshot> PrepareReload();
         [[nodiscard]] Result<void> RestoreReload(const GameModuleReloadSnapshot &snapshot);

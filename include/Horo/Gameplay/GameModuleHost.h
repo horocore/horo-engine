@@ -165,6 +165,11 @@ namespace Horo::Gameplay {
                                                                      const GameModuleLoadExpectation &expectation) const;
 
     private:
+        /** @brief Admit exact host principals and pin their native cleanup before module factories run.
+         * @param module Owned candidate receiving both validated runtime contexts.
+         * @return Success or the original principal/admission/image-pin failure.
+         */
+        [[nodiscard]] Result<void> BindContexts(LoadedGameModule::Impl &module) const;
         /** @brief Load one validated artifact with explicit host-owned shadow cleanup from the first code-image lease.
          * @param libraryPath Absolute prepared artifact. @param expectation Exact module compatibility.
          * @param ownedShadow True only for the unique canonical artifact created by LoadShadowCopy.
