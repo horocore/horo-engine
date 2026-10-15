@@ -1,5 +1,6 @@
 #include "GameModuleHostDetail.h"
 #include "Horo/Gameplay/GameModuleHost.h"
+#include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 
@@ -8,7 +9,19 @@
 namespace Horo::Gameplay {
     LoadedGameModule::LoadedGameModule(std::shared_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
-    LoadedGameModule::~LoadedGameModule() = default;
+    LoadedGameModule::~LoadedGameModule() {
+        if (impl_->ai) {
+            impl_->ai->Revoke();
+            impl_->ai->RetireOwnedTasksAtSafePoint();
+        }
+        if (impl_->navigation)
+            impl_->navigation->Revoke();
+    }
+
+    /** @copydoc LoadedGameModule::NavigationContext */
+    std::shared_ptr<const GameplayNavigationContext> LoadedGameModule::NavigationContext() const noexcept {
+        return impl_->navigation;
+    }
 
     /** @copydoc LoadedGameModule::ModuleId */
     const std::string &LoadedGameModule::ModuleId() const noexcept {
@@ -154,11 +167,16 @@ namespace Horo::Gameplay {
     /** @copydoc GameModuleHost::GameModuleHost */
     GameModuleHost::GameModuleHost(GameModuleHostOptions options)
         : hostCapabilities_(std::move(options.hostCapabilities)), physics_(std::move(options.runtimeServices.physics)),
-          ai_(std::move(options.runtimeServices.ai)) {}
+          ai_(std::move(options.runtimeServices.ai)), navigation_(std::move(options.runtimeServices.navigation)) {}
 
     /** @copydoc GameModuleHost::GameModuleHost */
     GameModuleHost::GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities)
         : GameModuleHost(GameModuleHostOptions{std::move(hostCapabilities), {}}) {}
+
+    /** @copydoc GameModuleHost::GameModuleHost */
+    GameModuleHost::GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics,
+                                   std::shared_ptr<GameplayNavigationContext> navigation)
+        : GameModuleHost(GameModuleHostOptions{std::move(hostCapabilities), {std::move(physics), {}, std::move(navigation)}}) {}
 
     /** @copydoc GameModuleHost::GameModuleHost */
     GameModuleHost::GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics)

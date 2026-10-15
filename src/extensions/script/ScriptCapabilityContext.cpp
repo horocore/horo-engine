@@ -169,8 +169,7 @@ namespace Horo::Extensions {
                                                               std::string type) const {
         if (!IsUsable())
             return Denied<ScriptHandle>();
-        const auto &imported = state_->context->descriptor.imports[state_->importIndex];
-        if (!imported.provider.Matches(provider))
+        if (const auto &imported = state_->context->descriptor.imports[state_->importIndex]; !imported.provider.Matches(provider))
             return Denied<ScriptHandle>();
         return state_->context->registry->IssueHandle(state_->context->registration, provider, std::move(type));
     }
@@ -179,8 +178,8 @@ namespace Horo::Extensions {
     Result<void> ScriptCapabilityBinding::ValidateHandle(const ScriptHandle &handle) const {
         if (!IsUsable())
             return Denied<void>();
-        const auto &imported = state_->context->descriptor.imports[state_->importIndex];
-        if (handle.context != state_->context->registration.Id() || handle.providerGeneration != imported.provider.Generation())
+        if (const auto &imported = state_->context->descriptor.imports[state_->importIndex];
+            handle.context != state_->context->registration.Id() || handle.providerGeneration != imported.provider.Generation())
             return Denied<void>();
         return state_->context->registry->ValidateHandle(handle);
     }

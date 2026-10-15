@@ -55,7 +55,7 @@ namespace Horo::Destruction {
                     .content = Content(),
                     .configuration = Id<DestructionConfigurationRevision>(6),
                     .effectiveFeatures = {.bits = DestructionFeatureBit<DestructionFeature::AuthoritativeReplication>},
-                    .authority = Network::ReplicationAuthorityEpoch::Create(7).Value(),
+                    .authority = DestructionAuthorityEpoch::Create(7).Value(),
                     .revision = Id<DestructionStateRevision>(8),
                     .phase = DestructionStatePhase::Damaged,
                     .healthQ16 = 0x00098000U,
@@ -76,7 +76,7 @@ namespace Horo::Destruction {
                     .content = state.content,
                     .configuration = state.configuration,
                     .effectiveFeatures = state.effectiveFeatures,
-                    .authority = state.authority};
+                    .authority = Network::ReplicationAuthorityEpoch::Create(state.authority.Value()).Value()};
         }
 
         [[nodiscard]] std::vector<DestructionChunkId> ChunkTable() {

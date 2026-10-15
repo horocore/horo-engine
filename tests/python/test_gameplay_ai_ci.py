@@ -32,7 +32,7 @@ def test_gameplay_ai_dependency_policy_matches_only_the_real_downstream_edges() 
     assert "TARGET HoroGameplayAiScriptBridge DEPENDENCIES HoroGameplayAiIntegration HoroExtensions)" in policy
     host = policy.split("TARGET HoroGameplayModuleHost", 1)[1].split(")", 1)[0].split()
     assert host == ["DEPENDENCIES", "HoroGameplayRuntime", "HoroPlatform",
-                    "HoroGameplayPhysicsIntegration", "HoroGameplayAiIntegration"]
+                    "HoroGameplayPhysicsIntegration", "HoroGameplayNavigationIntegration", "HoroGameplayAiIntegration"]
 
 
 def test_native_ai_module_links_only_position_independent_static_owners() -> None:
@@ -56,4 +56,5 @@ def test_two_module_qualification_executes_as_a_cross_platform_ctest() -> None:
     assert 'file(REMOVE_RECURSE "${HORO_TEST_BINARY_DIR}")' in runner
     assert 'COMMAND "${CMAKE_COMMAND}" -S "${source_dir}" -B "${build_dir}" -G Ninja' in runner
     assert 'if(NOT result EQUAL 0)' in runner
-    assert "Project with spaces" in runner and "build with spaces" in runner
+    assert "Project with spaces" in runner
+    assert "build with spaces" in runner

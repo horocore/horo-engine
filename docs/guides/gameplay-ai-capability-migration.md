@@ -121,7 +121,7 @@ dispatch rather than merely copying `shared_ptr` values.
 ## SDK boundary and integration
 
 This independent layout uses reserved gameplay boundary **11** and
-`gameplay-sdk11`. Rebuild native modules, generated descriptor bundles, runtime
+`gameplay-sdk16`. Rebuild native modules, generated descriptor bundles, runtime
 hosts and public consumers together; boundary 9 modules fail exact compatibility
 validation. The C ABI extension version remains a separate contract.
 
@@ -172,3 +172,10 @@ gameplay module targets. It checks the primary default freshness manifest remain
 unchanged, the secondary owns its distinct manifest, and both retain generated
 descriptor bundles, revision paths, module IDs and SDK fingerprints. Python tests
 only verify metadata registration; they no longer launch external commands.
+
+The merged navigation runtime layout used boundary10. This combined Navigation
+and AI layout uses a newly allocated boundary16, not either independent layout's
+identity. Rebuild the host, all modules and generated bundles together. Existing
+navigation-aware three-argument constructors forward into the canonical typed
+options and retain their explicit navigation service; Physics and AI grants remain
+separate fields. Character15 and UI17 reservations do not identify this layout.

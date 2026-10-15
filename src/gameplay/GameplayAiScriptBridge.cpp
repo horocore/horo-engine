@@ -65,7 +65,7 @@ namespace Horo::Gameplay {
     }
 
     /** @copydoc GameplayAiScriptBridge::RollbackResource */
-    void GameplayAiScriptBridge::RollbackResource(Resource &record) noexcept {
+    void GameplayAiScriptBridge::RollbackResource(const Resource &record) noexcept {
         try {
             if (context_ && record.task.IsValid()) {
                 static_cast<void>(context_->CancelTask(record.agent, record.task));
@@ -90,7 +90,12 @@ namespace Horo::Gameplay {
             return Result<Extensions::ScriptInvocationHandle>::Failure(Missing());
         invoking_ = true;
 
+        /** @brief Restores bridge admission and unpublished-resource ownership on every exit. */
         struct InvocationExit final {
+            explicit InvocationExit(GameplayAiScriptBridge &value) : owner(value) {}
+
+            InvocationExit(const InvocationExit &) = delete;
+            InvocationExit &operator=(const InvocationExit &) = delete;
             GameplayAiScriptBridge &owner;
 
             ~InvocationExit() {
@@ -99,15 +104,16 @@ namespace Horo::Gameplay {
                 owner.pendingPublication_ = nullptr;
                 owner.invoking_ = false;
             }
-        } exit{*this};
+        };
+
+        InvocationExit exit{*this};
 
         auto admitted = binding.Begin(provider, std::move(request));
         if (admitted.HasError())
             return Result<Extensions::ScriptInvocationHandle>::Failure(admitted.ErrorValue());
         auto controller = std::move(admitted).Value();
         const auto handle = controller.Handle();
-        auto cancellation = controller.ObserveCancellation();
-        if (cancellation.HasError())
+        if (auto cancellation = controller.ObserveCancellation(); cancellation.HasError())
             return Result<Extensions::ScriptInvocationHandle>::Failure(cancellation.ErrorValue());
         if (controller.Cancellation().IsCancellationRequested())
             return Result<Extensions::ScriptInvocationHandle>::Success(handle);
@@ -159,9 +165,9 @@ namespace Horo::Gameplay {
                 ScriptCallResult::Success({ScriptValue{static_cast<std::uint64_t>(state.Value().state)}}));
         }
         if (request.functionId == "cancel-task" || request.functionId == "complete-task") {
-            auto transition = request.functionId == "cancel-task" ? context_->CancelTask(record.agent, record.task)
-                                                                  : context_->CompleteTask(record.agent, record.task);
-            if (transition.HasError())
+            if (auto transition = request.functionId == "cancel-task" ? context_->CancelTask(record.agent, record.task)
+                                                                      : context_->CompleteTask(record.agent, record.task);
+                transition.HasError())
                 return Result<ScriptCallResult>::Failure(transition.ErrorValue());
             return Result<ScriptCallResult>::Success(ScriptCallResult::Success());
         }
@@ -172,15 +178,13 @@ namespace Horo::Gameplay {
 
     /** @copydoc GameplayAiScriptBridge::ReleaseResource */
     Result<Extensions::ScriptCallResult> GameplayAiScriptBridge::ReleaseResource(const Extensions::ScriptCapabilityBinding &binding,
-                                                                                 Resource &record) {
+                                                                                 const Resource &record) {
         using Extensions::ScriptCallResult;
         if (record.task.IsValid()) {
-            auto released = context_->ReleaseTask(record.agent, record.task);
-            if (released.HasError())
+            if (auto released = context_->ReleaseTask(record.agent, record.task); released.HasError())
                 return Result<ScriptCallResult>::Failure(released.ErrorValue());
         }
-        auto released = binding.ReleaseHandle(record.script);
-        if (released.HasError())
+        if (auto released = binding.ReleaseHandle(record.script); released.HasError())
             return Result<ScriptCallResult>::Failure(released.ErrorValue());
         for (auto &slot : resources_)
             if (slot && &*slot == &record) {
@@ -204,7 +208,7 @@ namespace Horo::Gameplay {
         auto agent = context_->ResolveAgent(identity.Value());
         if (agent.HasError())
             return Result<ScriptCallResult>::Failure(agent.ErrorValue());
-        auto vacant = std::find_if(resources_.begin(), resources_.end(), [](const auto &slot) {
+        auto vacant = std::ranges::find_if(resources_, [](const auto &slot) {
             return !slot;
         });
         if (vacant == resources_.end())
@@ -213,7 +217,13 @@ namespace Horo::Gameplay {
         if (script.HasError())
             return Result<ScriptCallResult>::Failure(script.ErrorValue());
 
+        /** @brief Retires an issued registry handle unless its native projection was published. */
         struct HandleRollback final {
+            HandleRollback(const Extensions::ScriptCapabilityBinding &owner, const Extensions::ScriptHandle &resource)
+                : binding(owner), handle(resource) {}
+
+            HandleRollback(const HandleRollback &) = delete;
+            HandleRollback &operator=(const HandleRollback &) = delete;
             const Extensions::ScriptCapabilityBinding &binding;
             const Extensions::ScriptHandle &handle;
             bool committed{};
@@ -223,19 +233,23 @@ namespace Horo::Gameplay {
                     try {
                         static_cast<void>(binding.ReleaseHandle(handle));
                     } catch (const std::bad_alloc &) {
+                        // Retirement can only allocate on an invalid/revoked error path; never replace the active failure.
+                        return;
                     }
             }
-        } handleRollback{binding, script.Value()};
+        };
+
+        HandleRollback handleRollback{binding, script.Value()};
 
         ScriptCallResult result = ScriptCallResult::Success({ScriptValue{script.Value()}});
-        vacant->emplace(Resource{binding, std::move(script).Value(), agent.Value(), {}});
+        vacant->emplace(binding, std::move(script).Value(), agent.Value(), AI::TaskHandle{});
         handleRollback.committed = true;
         pendingPublication_ = &**vacant;
         return Result<ScriptCallResult>::Success(std::move(result));
     }
 
     /** @copydoc GameplayAiScriptBridge::StartTask */
-    Result<Extensions::ScriptCallResult> GameplayAiScriptBridge::StartTask(Resource &record,
+    Result<Extensions::ScriptCallResult> GameplayAiScriptBridge::StartTask(const Resource &record,
                                                                            const Extensions::ScriptCapabilityBinding &binding,
                                                                            const Extensions::ScriptInvocationProviderRegistration &provider,
                                                                            const Extensions::ScriptInvocationRequest &request) {
@@ -246,7 +260,7 @@ namespace Horo::Gameplay {
         auto taskId = AI::TaskId::Create(*request.arguments[1].AsUnsignedInteger());
         if (taskId.HasError())
             return Result<ScriptCallResult>::Failure(taskId.ErrorValue());
-        auto vacant = std::find_if(resources_.begin(), resources_.end(), [](const auto &slot) {
+        auto vacant = std::ranges::find_if(resources_, [](const auto &slot) {
             return !slot;
         });
         if (vacant == resources_.end())
@@ -255,7 +269,13 @@ namespace Horo::Gameplay {
         if (script.HasError())
             return Result<ScriptCallResult>::Failure(script.ErrorValue());
 
+        /** @brief Retires an issued registry handle unless its native projection was published. */
         struct HandleRollback final {
+            HandleRollback(const Extensions::ScriptCapabilityBinding &owner, const Extensions::ScriptHandle &resource)
+                : binding(owner), handle(resource) {}
+
+            HandleRollback(const HandleRollback &) = delete;
+            HandleRollback &operator=(const HandleRollback &) = delete;
             const Extensions::ScriptCapabilityBinding &binding;
             const Extensions::ScriptHandle &handle;
             bool committed{};
@@ -265,24 +285,28 @@ namespace Horo::Gameplay {
                     try {
                         static_cast<void>(binding.ReleaseHandle(handle));
                     } catch (const std::bad_alloc &) {
+                        // Retirement can only allocate on an invalid/revoked error path; never replace the active failure.
+                        return;
                     }
             }
-        } handleRollback{binding, script.Value()};
+        };
+
+        HandleRollback handleRollback{binding, script.Value()};
 
         auto result = ScriptCallResult::Success({ScriptValue{script.Value()}});
         auto started = context_->StartTask(record.agent, taskId.Value(), request.diagnostics.CaptureOperationContext());
         if (started.HasError()) {
             return Result<ScriptCallResult>::Failure(started.ErrorValue());
         }
-        vacant->emplace(Resource{binding, std::move(script).Value(), record.agent, started.Value()});
+        vacant->emplace(binding, std::move(script).Value(), record.agent, started.Value());
         handleRollback.committed = true;
         pendingPublication_ = &**vacant;
         return Result<ScriptCallResult>::Success(std::move(result));
     }
 
     /** @copydoc GameplayAiScriptBridge::ReadBlackboard */
-    Result<Extensions::ScriptCallResult> GameplayAiScriptBridge::ReadBlackboard(Resource &record,
-                                                                                const Extensions::ScriptInvocationRequest &request) {
+    Result<Extensions::ScriptCallResult> GameplayAiScriptBridge::ReadBlackboard(const Resource &record,
+                                                                                const Extensions::ScriptInvocationRequest &request) const {
         using Extensions::ScriptCallResult;
         using Extensions::ScriptValue;
         if (record.task.IsValid() || request.arguments.size() != 2 || !request.arguments[1].AsUnsignedInteger())
@@ -298,8 +322,8 @@ namespace Horo::Gameplay {
     }
 
     /** @copydoc GameplayAiScriptBridge::WriteBlackboard */
-    Result<Extensions::ScriptCallResult> GameplayAiScriptBridge::WriteBlackboard(Resource &record,
-                                                                                 const Extensions::ScriptInvocationRequest &request) {
+    Result<Extensions::ScriptCallResult> GameplayAiScriptBridge::WriteBlackboard(const Resource &record,
+                                                                                 const Extensions::ScriptInvocationRequest &request) const {
         using Extensions::ScriptCallResult;
         using Extensions::ScriptValue;
         if (record.task.IsValid() || request.arguments.size() != 2 || request.arguments[1].GetKind() != ScriptValue::Kind::Array ||
@@ -310,7 +334,8 @@ namespace Horo::Gameplay {
             return Result<ScriptCallResult>::Failure(admittedBatch.ErrorValue());
         auto batch = std::move(admittedBatch).Value();
         for (const auto &write : request.arguments[1].AsArray()) {
-            const ScriptValue *key{}, *input{};
+            const ScriptValue *key{};
+            const ScriptValue *input{};
             for (const auto &[name, field] : write.AsStruct()) {
                 if (name == "key")
                     key = &field;

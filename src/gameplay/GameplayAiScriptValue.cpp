@@ -17,15 +17,28 @@ namespace Horo::Gameplay::Detail {
             return nullptr;
         }
 
+        /** @brief Copies the exact canonical asset identity into the script byte algebra. */
+        ScriptValue::Bytes AssetBytes(const AI::BlackboardStoredAssetReference &input) {
+            ScriptValue::Bytes bytes;
+            bytes.reserve(input.canonicalBytes.size());
+            for (const auto byte : input.canonicalBytes)
+                bytes.push_back(static_cast<std::byte>(byte));
+            return bytes;
+        }
+
         /** @brief Encodes one closed scalar using explicit exact-width logical fields. */
         ScriptValue Scalar(const AI::BlackboardScalarValue &value) {
             bool boolean{};
-            std::int64_t integer{}, x{}, y{}, z{};
+            std::int64_t integer{};
+            std::int64_t x{};
+            std::int64_t y{};
+            std::int64_t z{};
             double number{};
-            std::uint64_t incarnation{}, slot{}, generation{};
+            std::uint64_t incarnation{};
+            std::uint64_t slot{};
+            std::uint64_t generation{};
             ScriptValue::Bytes asset;
-            std::visit([&](const auto &input) {
-                using T = std::decay_t<decltype(input)>;
+            std::visit([&]<typename T>(const T &input) {
                 if constexpr (std::is_same_v<T, bool>)
                     boolean = input;
                 else if constexpr (std::is_same_v<T, std::int64_t>)
@@ -37,8 +50,7 @@ namespace Horo::Gameplay::Detail {
                     slot = input.slot;
                     generation = input.generation;
                 } else if constexpr (std::is_same_v<T, AI::BlackboardStoredAssetReference>) {
-                    for (auto byte : input.canonicalBytes)
-                        asset.push_back(static_cast<std::byte>(byte));
+                    asset = AssetBytes(input);
                 } else {
                     const auto mm = input.Millimeters();
                     x = mm[0];
@@ -65,7 +77,9 @@ namespace Horo::Gameplay::Detail {
                 return Result<AI::BlackboardScalarValue>::Failure(MakeError(AI::AIErrors::BlackboardValueInvalid));
             };
 
-            auto *i = Field(value, "incarnation"), *s = Field(value, "slot"), *g = Field(value, "generation");
+            const auto *i = Field(value, "incarnation");
+            const auto *s = Field(value, "slot");
+            const auto *g = Field(value, "generation");
             if (!i || !s || !g || !i->AsUnsignedInteger() || !s->AsUnsignedInteger() || !g->AsUnsignedInteger() ||
                 *s->AsUnsignedInteger() > std::numeric_limits<std::uint32_t>::max() ||
                 *g->AsUnsignedInteger() > std::numeric_limits<std::uint32_t>::max())
@@ -100,7 +114,9 @@ namespace Horo::Gameplay::Detail {
                 return Result<AI::BlackboardScalarValue>::Failure(MakeError(AI::AIErrors::BlackboardValueInvalid));
             };
 
-            auto *x = Field(value, "x"), *y = Field(value, "y"), *z = Field(value, "z");
+            const auto *x = Field(value, "x");
+            const auto *y = Field(value, "y");
+            const auto *z = Field(value, "z");
             if (!x || !y || !z || !x->AsSignedInteger() || !y->AsSignedInteger() || !z->AsSignedInteger())
                 return bad();
             return Result<AI::BlackboardScalarValue>::Success(
@@ -156,7 +172,8 @@ namespace Horo::Gameplay::Detail {
                 return Result<AI::BlackboardValue>::Failure(MakeError(AI::AIErrors::BlackboardValueInvalid));
             };
 
-            const auto *type = Field(value, "element-kind"), *elements = Field(value, "elements");
+            const auto *type = Field(value, "element-kind");
+            const auto *elements = Field(value, "elements");
             if (!type || !elements || !type->AsUnsignedInteger() ||
                 *type->AsUnsignedInteger() >= static_cast<std::uint64_t>(AI::BlackboardValueKind::Count) ||
                 elements->GetKind() != ScriptValue::Kind::Array || elements->AsArray().size() > AI::MaximumBlackboardCollectionElements)
@@ -179,7 +196,9 @@ namespace Horo::Gameplay::Detail {
             const auto bad = [] {
                 return Result<AI::BlackboardValue>::Failure(MakeError(AI::AIErrors::BlackboardValueInvalid));
             };
-            const auto *version = Field(value, "opaque-version"), *type = Field(value, "opaque-type"), *bytes = Field(value, "opaque");
+            const auto *version = Field(value, "opaque-version");
+            const auto *type = Field(value, "opaque-type");
+            const auto *bytes = Field(value, "opaque");
             if (!version || !type || !bytes || !version->AsUnsignedInteger() || !type->AsUnsignedInteger() ||
                 *version->AsUnsignedInteger() == 0 || *version->AsUnsignedInteger() > std::numeric_limits<std::uint32_t>::max() ||
                 *type->AsUnsignedInteger() == 0 || *type->AsUnsignedInteger() > std::numeric_limits<std::uint32_t>::max() ||
@@ -189,7 +208,7 @@ namespace Horo::Gameplay::Detail {
             opaque.schemaVersion = static_cast<std::uint32_t>(*version->AsUnsignedInteger());
             opaque.serializedType = static_cast<std::uint32_t>(*type->AsUnsignedInteger());
             opaque.size = bytes->AsBytes().size();
-            std::copy(bytes->AsBytes().begin(), bytes->AsBytes().end(), opaque.bytes.begin());
+            std::ranges::copy(bytes->AsBytes(), opaque.bytes.begin());
             return Result<AI::BlackboardValue>::Success(opaque);
         }
     }  // namespace
@@ -199,19 +218,22 @@ namespace Horo::Gameplay::Detail {
         AI::BlackboardScalarValue scalar{false};
         ScriptValue::ArrayElements elements;
         ScriptValue::Bytes opaque;
-        std::uint64_t elementKind{}, version{}, type{};
-        if (const auto *v = std::get_if<AI::BlackboardScalarValue>(&value))
-            scalar = *v;
-        else if (const auto *v = std::get_if<AI::BlackboardCollectionValue>(&value)) {
-            elementKind = static_cast<std::uint64_t>(v->elementKind);
-            for (std::size_t i = 0; i < v->count; ++i)
-                elements.push_back(Scalar(v->elements[i]));
-        } else {
-            const auto &opaqueValue = std::get<AI::BlackboardOpaqueValue>(value);
-            version = opaqueValue.schemaVersion;
-            type = opaqueValue.serializedType;
-            opaque.assign(opaqueValue.bytes.begin(), opaqueValue.bytes.begin() + opaqueValue.size);
-        }
+        std::uint64_t elementKind{};
+        std::uint64_t version{};
+        std::uint64_t type{};
+        std::visit([&]<typename T>(const T &input) {
+            if constexpr (std::is_same_v<T, AI::BlackboardScalarValue>) {
+                scalar = input;
+            } else if constexpr (std::is_same_v<T, AI::BlackboardCollectionValue>) {
+                elementKind = static_cast<std::uint64_t>(input.elementKind);
+                for (std::size_t i = 0; i < input.count; ++i)
+                    elements.push_back(Scalar(input.elements[i]));
+            } else {
+                version = input.schemaVersion;
+                type = input.serializedType;
+                opaque.assign(input.bytes.begin(), input.bytes.begin() + input.size);
+            }
+        }, value);
         return ScriptValue::Struct("ai-value", {{"kind", ScriptValue{static_cast<std::uint64_t>(value.index())}},
                                                 {"scalar", Scalar(scalar)},
                                                 {"element-kind", ScriptValue{elementKind}},

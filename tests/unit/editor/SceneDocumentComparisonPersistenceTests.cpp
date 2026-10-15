@@ -119,3 +119,15 @@ TEST_CASE("Scene Comparison Classifies Typed Added Removed And Modified Objects"
     RequireComparisonSummary(comparison);
     RequireModifiedObjectComparison(comparison, ids.instanceOne);
 }
+
+TEST_CASE("Scene Comparison Detects Ownership Only Changes", "[unit][editor][persistence][compare]") {
+    SceneObjectSnapshot disk{.id = SceneObjectId{1}, .name = "Generated"};
+    auto document = disk;
+    document.generated = Horo::SceneSource::SceneGeneratedOwnership{};
+    const auto comparison = CompareSceneDocuments({.objects = {document}}, {.objects = {disk}});
+    REQUIRE(comparison.HasDifferences());
+    REQUIRE(comparison.modified == 1);
+    REQUIRE(comparison.objects.front().fields.generatedOwnership);
+    REQUIRE_FALSE(comparison.objects.front().fields.components);
+    REQUIRE_FALSE(comparison.objects.front().fields.editorState);
+}

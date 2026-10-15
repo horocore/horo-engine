@@ -285,7 +285,9 @@ namespace Horo::PCG {
     /** @copydoc FingerprintPCGSceneOutput */
     Result<PCGGenerationDigest> FingerprintPCGSceneOutput(const SceneSource::SceneObjectSnapshot &desired, const std::size_t maximumBytes) {
         try {
-            auto encoded = Encode(desired, maximumBytes);
+            auto authored = desired;
+            authored.generated.reset();
+            auto encoded = Encode(authored, maximumBytes);
             if (encoded.HasError())
                 return Result<PCGGenerationDigest>::Failure(encoded.ErrorValue());
             return Result<PCGGenerationDigest>::Success(

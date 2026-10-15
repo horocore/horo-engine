@@ -46,8 +46,7 @@ namespace Horo::Gameplay {
             if (!owned.task.IsValid())
                 continue;
             try {
-                auto cancelled = capability_.CancelTask(owned.agent, owned.task);
-                if (cancelled.HasError())
+                if (auto cancelled = capability_.CancelTask(owned.agent, owned.task); cancelled.HasError())
                     continue;
                 auto released = capability_.ReleaseTask(owned.agent, owned.task);
                 if (released.HasError())
@@ -96,7 +95,7 @@ namespace Horo::Gameplay {
         const auto descriptor = declarations_.Find(task);
         if (!descriptor)
             return Result<AI::TaskHandle>::Failure(MakeError(AI::AIErrors::CapabilityUnavailable));
-        auto vacant = std::find_if(tasks_.begin(), tasks_.end(), [](const OwnedTask &slot) {
+        auto vacant = std::ranges::find_if(tasks_, [](const OwnedTask &slot) {
             return !slot.task.IsValid();
         });
         if (vacant == tasks_.end())
@@ -109,7 +108,7 @@ namespace Horo::Gameplay {
 
     /** @copydoc GameplayAiContext::Owns */
     bool GameplayAiContext::Owns(AI::AgentHandle agent, AI::TaskHandle task) const noexcept {
-        return std::any_of(tasks_.begin(), tasks_.end(), [&](const OwnedTask &owned) {
+        return std::ranges::any_of(tasks_, [&](const OwnedTask &owned) {
             return owned.agent == agent && owned.task == task && task.IsValid();
         });
     }

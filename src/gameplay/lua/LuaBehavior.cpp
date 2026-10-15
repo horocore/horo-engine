@@ -3,6 +3,7 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "LuaBehaviorMetadata.h"
+#include "LuaNavigationBinding.h"
 #include "LuaPhysicsBinding.h"
 #include "LuaReplicationDeclaration.h"
 
@@ -199,6 +200,7 @@ namespace Horo::Gameplay {
             lua_State *state{};
             int behaviorRef{LUA_NOREF};
             std::uint64_t revision{};
+            std::optional<CancellationSource> navigationLifetime;
         };
 
         static BehaviorContext &Context(lua_State *state) {
@@ -293,8 +295,10 @@ namespace Horo::Gameplay {
             lua_setfield(state, -2, name);
         }
 
-        static void PushContext(lua_State *state, BehaviorContext &context) {
+        void PushContext(lua_State *state, BehaviorContext &context) {
             lua_newtable(state);
+            Detail::PushLuaNavigationContext(state, context, vm_.navigationLifetime->Token());
+            lua_setfield(state, -2, "navigation");
             Detail::PushLuaPhysicsContext(state, context);
             lua_setfield(state, -2, "physics");
             lua_newtable(state);
@@ -323,6 +327,8 @@ namespace Horo::Gameplay {
         }
 
         void Close() noexcept {
+            if (vm_.navigationLifetime)
+                vm_.navigationLifetime->RequestCancellation();
             if (vm_.state != nullptr)
                 lua_close(vm_.state);
             vm_ = {};
@@ -344,6 +350,7 @@ namespace Horo::Gameplay {
         /** @brief Recreates the instance VM only after its source generation changes. */
         [[nodiscard]] bool LoadCurrentProgram() {
             const auto &impl = *program_->impl_;
+            vm_.navigationLifetime.emplace();
             vm_.budget = {0, impl.limits.maximumMemoryBytes};
             vm_.state = lua_newstate(BudgetAllocate, &vm_.budget);
             if (vm_.state == nullptr)

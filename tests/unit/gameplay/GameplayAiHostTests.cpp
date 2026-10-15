@@ -44,8 +44,9 @@ namespace Horo::Gameplay {
         GameModuleHost defaultHost;
         GameModuleHost emptyVector({});
         GameModuleHost legacyPhysics({}, {});
+        GameModuleHost legacyNavigation({}, {}, {});
         GameModuleHost typed{GameModuleHostOptions{{}, {}}};
-        for (auto *host : {&defaultHost, &emptyVector, &legacyPhysics, &typed}) {
+        for (auto *host : {&defaultHost, &emptyVector, &legacyPhysics, &legacyNavigation, &typed}) {
             auto loaded = host->Load(HORO_TEST_AI_MODULE_PATH, AiExpectation());
             REQUIRE(loaded.HasValue());
             CHECK_FALSE(loaded.Value()->AiContext());

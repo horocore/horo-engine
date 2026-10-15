@@ -54,6 +54,17 @@ namespace Horo::Editor::SceneDocumentDetail {
         return sizeof(delta) + EstimateSceneObjectOwnedMemoryBytes(delta.object);
     }
 
+    [[nodiscard]] inline std::size_t EstimateTypedDeltaMemoryBytes(const SceneObjectsReplacedDelta &delta) noexcept {
+        std::size_t bytes = sizeof(delta) + delta.objects.size() * sizeof(SceneObjectReplacementDelta);
+        for (const auto &object : delta.objects) {
+            if (object.before)
+                bytes += EstimateSceneObjectOwnedMemoryBytes(object.before->object);
+            if (object.after)
+                bytes += EstimateSceneObjectOwnedMemoryBytes(object.after->object);
+        }
+        return bytes;
+    }
+
     [[nodiscard]] inline std::size_t EstimateTypedDeltaMemoryBytes(const RenamedObjectDelta &delta) noexcept {
         return sizeof(delta) + delta.before.size() + delta.after.size();
     }
@@ -105,7 +116,7 @@ namespace Horo::Editor::SceneDocumentDetail {
                 return typedDelta.object.id;
             } else if constexpr (std::is_same_v<Delta, DeletedObjectsDelta>) {
                 return typedDelta.roots.empty() ? SceneObjectId{} : typedDelta.roots.front();
-            } else if constexpr (std::is_same_v<Delta, TransformedObjectsDelta>) {
+            } else if constexpr (std::is_same_v<Delta, TransformedObjectsDelta> || std::is_same_v<Delta, SceneObjectsReplacedDelta>) {
                 return typedDelta.objects.empty() ? SceneObjectId{} : typedDelta.objects.front().object;
             } else if constexpr (std::is_same_v<Delta, CreatedPrefabInstanceDelta> || std::is_same_v<Delta, PrefabInstanceTransformDelta> ||
                                  std::is_same_v<Delta, PrefabInstanceReparentDelta> || std::is_same_v<Delta, DeletedPrefabInstancesDelta>) {
@@ -205,6 +216,31 @@ namespace Horo::Editor::SceneDocumentDetail {
             default:
                 break;
         }
+    }
+
+    /** @brief Rebuild only the changed semantic objects in a detached/current candidate, preserving exact order. */
+    inline void ReplaceObjects(std::vector<SceneObjectSnapshot> &objects, const SceneObjectsReplacedDelta &delta, const bool revert) {
+        std::erase_if(objects, [&delta](const SceneObjectSnapshot &object) {
+            return std::ranges::any_of(delta.objects, [&object](const auto &change) {
+                return change.object == object.id;
+            });
+        });
+        std::vector<const IndexedSceneObject *> desired;
+        desired.reserve(delta.objects.size());
+        for (const auto &change : delta.objects)
+            if (const auto &value = revert ? change.before : change.after; value)
+                desired.push_back(&*value);
+        std::ranges::sort(desired, {}, &IndexedSceneObject::index);
+        for (const auto *value : desired)
+            objects.insert(objects.begin() + static_cast<std::ptrdiff_t>(std::min(value->index, objects.size())), value->object);
+    }
+
+    inline void ApplyTypedDelta(std::vector<SceneObjectSnapshot> &objects, const SceneObjectsReplacedDelta &delta) {
+        ReplaceObjects(objects, delta, false);
+    }
+
+    inline void RevertTypedDelta(std::vector<SceneObjectSnapshot> &objects, const SceneObjectsReplacedDelta &delta) {
+        ReplaceObjects(objects, delta, true);
     }
 
     inline void ApplyTypedDelta(std::vector<SceneObjectSnapshot> &objects, const CreatedObjectDelta &delta) {

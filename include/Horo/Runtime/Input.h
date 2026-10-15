@@ -131,6 +131,32 @@ namespace Horo::Input {
         Count,
     };
 
+    /** @brief Canonical non-XR sensor vocabulary; native sensor handles remain in the platform adapter. */
+    enum class SensorKind : std::uint8_t {
+        Accelerometer,
+        Gyroscope,
+        StepCounter,
+        Count
+    };
+    /** @brief Typed publication state; unavailable evidence always has zero values and timestamp. */
+    enum class SensorAvailability : std::uint8_t {
+        Unsupported,
+        Disabled,
+        PermissionRequired,
+        Suspended,
+        AwaitingSample,
+        NativeFailure,
+        Available
+    };
+
+    /** @brief Copied SI motion sample or exact monotonically counted steps at a monotonic native timestamp. */
+    struct SensorSample final {
+        SensorAvailability availability{SensorAvailability::Unsupported};
+        std::array<float, 3> value{};
+        std::uint64_t counter{};
+        std::int64_t timestampNanoseconds{};
+    };
+
     /** @brief Held and frame-edge state for one digital control. */
     struct ButtonState {
         bool down{false};
@@ -257,6 +283,8 @@ namespace Horo::Input {
         ModifierState modifiers{};
         WindowInputState window{};
 
+        std::array<SensorSample, static_cast<std::size_t>(SensorKind::Count)> sensors{}; /**< Owned permission-filtered sensor evidence. */
+
         [[nodiscard]] const ButtonState &State(Key key) const noexcept;
         [[nodiscard]] const ButtonState &State(PointerButton button) const noexcept;
         [[nodiscard]] const GamepadState *FindGamepad(GamepadDeviceId id) const noexcept;
@@ -294,6 +322,11 @@ namespace Horo::Input {
         void CancelTouchContacts(TouchCancellationReason reason) noexcept;
         void AppendText(std::string_view utf8);
         void SetTextComposition(std::string_view utf8, std::int32_t selectionStart, std::int32_t selectionLength);
+        /** @brief Replace one finite monotonic sensor sample; invalid data never changes the last valid sample.
+         * @param sensor Canonical sensor kind. @param sample Owned value; unavailable values are forcibly zeroed.
+         * @return False for invalid kind, nonfinite data, nonpositive or regressing available timestamp.
+         */
+        [[nodiscard]] bool SetSensorSample(SensorKind sensor, SensorSample sample) noexcept;
         void SetModifiers(ModifierState modifiers) noexcept;
         void SetWindowState(WindowInputState state) noexcept;
         /** @brief Release all held controls and zero axes after focus or device ownership is lost. */

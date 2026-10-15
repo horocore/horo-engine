@@ -173,5 +173,12 @@ namespace Horo::Character {
             impl.controllers.Drain();
             impl.shutdownRequested = false;
         }
+
+        /** @brief Captures the exact Character owner and Physics publication required by one synchronous query. */
+        [[nodiscard]] CharacterPhysicsQueryExpectations QueryExpectations(const auto &impl, const std::uint64_t tick) noexcept {
+            return {impl.descriptor.sceneGeneration,           impl.descriptor.identity,         impl.descriptor.physicsWorld,
+                    impl.descriptor.collisionFilterGeneration, impl.descriptor.originGeneration, tick,
+                    impl.descriptor.physicsSnapshotRevision};
+        }
     }  // namespace Detail
 }  // namespace Horo::Character

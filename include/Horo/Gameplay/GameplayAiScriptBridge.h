@@ -55,23 +55,24 @@ namespace Horo::Gameplay {
                                                                    const Extensions::ScriptInvocationRequest &request);
         /** @brief Releases terminal native execution and its existing-registry resource together. */
         [[nodiscard]] Result<Extensions::ScriptCallResult> ReleaseResource(const Extensions::ScriptCapabilityBinding &binding,
-                                                                           Resource &record);
+                                                                           const Resource &record);
         /** @brief Resolves durable identity and publishes an existing-registry opaque agent resource. */
         [[nodiscard]] Result<Extensions::ScriptCallResult> ResolveAgent(const Extensions::ScriptCapabilityBinding &binding,
                                                                         const Extensions::ScriptInvocationProviderRegistration &provider,
                                                                         const Extensions::ScriptInvocationRequest &request);
         /** @brief Admits exact module-owned task work before publishing its opaque resource. */
-        [[nodiscard]] Result<Extensions::ScriptCallResult> StartTask(Resource &record, const Extensions::ScriptCapabilityBinding &binding,
+        [[nodiscard]] Result<Extensions::ScriptCallResult> StartTask(const Resource &record,
+                                                                     const Extensions::ScriptCapabilityBinding &binding,
                                                                      const Extensions::ScriptInvocationProviderRegistration &provider,
                                                                      const Extensions::ScriptInvocationRequest &request);
         /** @brief Projects one authorized native value into the typed script algebra. */
-        [[nodiscard]] Result<Extensions::ScriptCallResult> ReadBlackboard(Resource &record,
-                                                                          const Extensions::ScriptInvocationRequest &request);
+        [[nodiscard]] Result<Extensions::ScriptCallResult> ReadBlackboard(const Resource &record,
+                                                                          const Extensions::ScriptInvocationRequest &request) const;
         /** @brief Stages and atomically commits all script writes through the existing blackboard owner. */
-        [[nodiscard]] Result<Extensions::ScriptCallResult> WriteBlackboard(Resource &record,
-                                                                           const Extensions::ScriptInvocationRequest &request);
+        [[nodiscard]] Result<Extensions::ScriptCallResult> WriteBlackboard(const Resource &record,
+                                                                           const Extensions::ScriptInvocationRequest &request) const;
         /** @brief Retires a resource whose admission result could not be published, without invoking module code. */
-        void RollbackResource(Resource &record) noexcept;
+        void RollbackResource(const Resource &record) noexcept;
         Resource *pendingPublication_{};
         bool invoking_{};
         const std::thread::id owner_{std::this_thread::get_id()};

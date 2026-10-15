@@ -1,6 +1,8 @@
 #include "GameplayAiScriptValue.h"
 #include "Horo/Gameplay/GameplayAiScriptBridge.h"
 
+#include <format>
+
 namespace Horo::Gameplay {
     namespace {
         using namespace Extensions;
@@ -18,35 +20,35 @@ namespace Horo::Gameplay {
 
         /** @brief Builds bounded value projections without ABI layout or native handles. */
         std::vector<ScriptExportTypeDescriptor> ValueTypes() {
-            using P = ScriptExportPrimitiveKind;
+            using enum ScriptExportPrimitiveKind;
             using K = ScriptExportNamedTypeKind;
             ScriptExportTypeDescriptor scalar{.id = "ai-scalar", .kind = K::Struct, .introducedVersion = Version};
-            scalar.fields = {PrimitiveField("kind", P::UnsignedInteger),
-                             PrimitiveField("boolean", P::Boolean),
-                             PrimitiveField("integer", P::SignedInteger),
-                             PrimitiveField("number", P::Number),
-                             PrimitiveField("incarnation", P::UnsignedInteger),
-                             PrimitiveField("slot", P::UnsignedInteger),
-                             PrimitiveField("generation", P::UnsignedInteger),
-                             PrimitiveField("asset", P::Bytes),
-                             PrimitiveField("x", P::SignedInteger),
-                             PrimitiveField("y", P::SignedInteger),
-                             PrimitiveField("z", P::SignedInteger)};
+            scalar.fields = {PrimitiveField("kind", UnsignedInteger),
+                             PrimitiveField("boolean", Boolean),
+                             PrimitiveField("integer", SignedInteger),
+                             PrimitiveField("number", Number),
+                             PrimitiveField("incarnation", UnsignedInteger),
+                             PrimitiveField("slot", UnsignedInteger),
+                             PrimitiveField("generation", UnsignedInteger),
+                             PrimitiveField("asset", Bytes),
+                             PrimitiveField("x", SignedInteger),
+                             PrimitiveField("y", SignedInteger),
+                             PrimitiveField("z", SignedInteger)};
             ScriptExportTypeDescriptor elements{.id = "ai-elements",
                                                 .kind = K::Array,
                                                 .introducedVersion = Version,
                                                 .elementType = {.namedType = "ai-scalar"},
                                                 .maximumElements = AI::MaximumBlackboardCollectionElements};
             ScriptExportTypeDescriptor value{.id = "ai-value", .kind = K::Struct, .introducedVersion = Version};
-            value.fields = {PrimitiveField("kind", P::UnsignedInteger),
+            value.fields = {PrimitiveField("kind", UnsignedInteger),
                             NamedField("scalar", "ai-scalar"),
-                            PrimitiveField("element-kind", P::UnsignedInteger),
+                            PrimitiveField("element-kind", UnsignedInteger),
                             NamedField("elements", "ai-elements"),
-                            PrimitiveField("opaque-version", P::UnsignedInteger),
-                            PrimitiveField("opaque-type", P::UnsignedInteger),
-                            PrimitiveField("opaque", P::Bytes)};
+                            PrimitiveField("opaque-version", UnsignedInteger),
+                            PrimitiveField("opaque-type", UnsignedInteger),
+                            PrimitiveField("opaque", Bytes)};
             ScriptExportTypeDescriptor write{.id = "ai-write", .kind = K::Struct, .introducedVersion = Version};
-            write.fields = {PrimitiveField("key", P::UnsignedInteger), NamedField("value", "ai-value")};
+            write.fields = {PrimitiveField("key", UnsignedInteger), NamedField("value", "ai-value")};
             ScriptExportTypeDescriptor writes{.id = "ai-writes",
                                               .kind = K::Array,
                                               .introducedVersion = Version,
@@ -63,7 +65,7 @@ namespace Horo::Gameplay {
                                                     .invocation = ScriptExportInvocationMode::Synchronous};
             for (std::size_t i = 0; i < parameters.size(); ++i)
                 function.parameters.push_back(
-                    {.id = "argument" + std::to_string(i), .type = std::move(parameters[i]), .introducedVersion = Version});
+                    {.id = std::format("argument{}", i), .type = std::move(parameters[i]), .introducedVersion = Version});
             if (result)
                 function.results.push_back({.id = "result", .type = std::move(*result), .introducedVersion = Version});
             return function;

@@ -38,8 +38,7 @@ namespace Horo::AI {
 
     /** @copydoc AiRuntimeCapability::ValidateAtSafePoint */
     Result<void> AiRuntimeCapability::ValidateAtSafePoint() const {
-        auto state = Lock();
-        if (state.HasError())
+        if (auto state = Lock(); state.HasError())
             return Result<void>::Failure(state.ErrorValue());
         return Result<void>::Success();
     }
@@ -145,11 +144,9 @@ namespace Horo::AI {
             if (removed.HasError())
                 return Result<void>::Failure(removed.ErrorValue());
         }
-        auto claimed = lifecycle.Value()->ClaimCleanup();
-        if (claimed.HasError())
+        if (auto claimed = lifecycle.Value()->ClaimCleanup(); claimed.HasError())
             return Result<void>::Failure(claimed.ErrorValue());
-        auto cleaned = lifecycle.Value()->CompleteCleanup();
-        if (cleaned.HasError())
+        if (auto cleaned = lifecycle.Value()->CompleteCleanup(); cleaned.HasError())
             return Result<void>::Failure(cleaned.ErrorValue());
         slot.Value()->task.reset();
         slot.Value()->record.hasRunningTask = false;

@@ -207,6 +207,23 @@ namespace Horo::Navigation {
         return Return::Success(*publication_);
     }
 
+    /** @copydoc NavigationVelocityPipeline::ValidatePublicationAtSafePoint */
+    Result<void> NavigationVelocityPipeline::ValidatePublicationAtSafePoint(const NavigationVelocityPublication &publication,
+                                                                            const NavigationMovementObservation &current) const {
+        if (std::this_thread::get_id() != ownerThread_)
+            return Result<void>::Failure(MakeError(NavigationErrors::AgentDescriptorInvalid));
+        if (retired_)
+            return Result<void>::Failure(MakeError(NavigationErrors::AdmissionRejected));
+        if (!publication_ || publication.binding != binding_ || publication.characterRevision != characterRevision_ ||
+            publication.intent.operation != publication_->intent.operation || publication.intent.path != publication_->intent.path ||
+            publication.intent.tick != publication_->intent.tick || publication.intent.state != publication_->intent.state ||
+            publication.intent.desiredVelocity != publication_->intent.desiredVelocity ||
+            publication.disposition != publication_->disposition || publication.stopReason != publication_->stopReason ||
+            publication.preferredVelocity != publication_->preferredVelocity || current.stepSeconds != publishedStepSeconds_)
+            return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
+        return movement_->ValidateIntentAtSafePoint(publication.intent, current);
+    }
+
     /** @copydoc NavigationVelocityPipeline::CancelPending */
     bool NavigationVelocityPipeline::CancelPending(const NavigationVelocityWork &work) noexcept {
         if (std::this_thread::get_id() != ownerThread_)
