@@ -82,7 +82,7 @@ namespace Horo::WorldStreaming {
     struct StreamingCellPriorityCandidate final {
         StreamingSourceDescriptor source{};          /**< Exact source identity, intent, base priority, owner, and revision. */
         StreamingCellId cell{};                      /**< Stable cell tuple used as the primary equal-score tie break. */
-        std::uint64_t distanceMillimeters{};         /**< Non-negative exact distance to the source volume. */
+        std::uint64_t distanceMillimeters{};         /**< Non-negative exact host-declared distance to the source relevance origin. */
         double priorityOverride{1.0};                /**< Explicit multiplier in the closed [0.5, 2.0] range. */
         std::uint64_t queuedAtServiceMilliseconds{}; /**< Unscaled monotonic service timestamp captured at enqueue. */
     };

@@ -28,14 +28,23 @@ namespace Horo::WorldStreaming {
         void ApplyContribution(const StreamingSourceDesiredState &desiredState, StreamingDesiredResidency &effectiveResidency,
                                std::optional<StreamingDesiredResidency> &pinnedResidencyFloor,
                                std::vector<StreamingDesiredStateContribution> &contributors) {
-            effectiveResidency = Stronger(effectiveResidency, desiredState.Residency());
-            if (desiredState.IsPinned())
-                pinnedResidencyFloor =
-                    Stronger(pinnedResidencyFloor.value_or(StreamingDesiredResidency::Unloaded), desiredState.Residency());
+            const auto summary = CombineStreamingDesiredState({effectiveResidency, pinnedResidencyFloor}, desiredState);
+            effectiveResidency = summary.effectiveResidency;
+            pinnedResidencyFloor = summary.pinnedResidencyFloor;
             const auto &source = desiredState.Source();
             contributors.emplace_back(source.id, source.owner, source.revision, desiredState.Residency(), desiredState.Retention());
         }
     }  // namespace
+
+    /** @copydoc CombineStreamingDesiredState */
+    StreamingDesiredStateSummary CombineStreamingDesiredState(StreamingDesiredStateSummary summary,
+                                                              const StreamingSourceDesiredState &desiredState) noexcept {
+        summary.effectiveResidency = Stronger(summary.effectiveResidency, desiredState.Residency());
+        if (desiredState.IsPinned())
+            summary.pinnedResidencyFloor =
+                Stronger(summary.pinnedResidencyFloor.value_or(StreamingDesiredResidency::Unloaded), desiredState.Residency());
+        return summary;
+    }
 
     /** @copydoc StreamingDesiredStateReduction::StreamingDesiredStateReduction */
     StreamingDesiredStateReduction::StreamingDesiredStateReduction(const StreamingDesiredStateReductionContext &context,
