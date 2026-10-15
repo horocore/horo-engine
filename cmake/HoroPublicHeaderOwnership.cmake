@@ -1027,7 +1027,13 @@ horo_configure_target_header_boundary(HoroPrefabRuntime PUBLIC_HEADERS
     Horo/Prefab/PrefabSpawnService.h
 )
 
+horo_configure_target_header_boundary(HoroPrefabOverrideModel PUBLIC_HEADERS
+    Horo/Prefab/PrefabSourceRevision.h
+    Horo/Prefab/PrefabValueOverrideTypes.h
+)
+
 horo_configure_target_header_boundary(HoroPrefabAuthoring PUBLIC_HEADERS
+    Horo/Prefab/PrefabValueOverrides.h
 Horo/Prefab/PrefabAssetDependencyClosure.h
 Horo/Prefab/PrefabDependencyGraph.h
     Horo/Prefab/PrefabDiagnostics.h

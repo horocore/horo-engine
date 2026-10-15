@@ -114,6 +114,7 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # One translation unit per registered public header verifies that consumers can
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
+target_sources(HoroPrefabAuthoringPublicHeaderConsumer PRIVATE support/PrefabValueOverridePublicContract.cpp)
 target_sources(HoroPCGPublicHeaderConsumer PRIVATE support/PCGNodeCatalogPublicHeaderConsumer.cpp)
 target_sources(HoroShaderBuildPublicHeaderConsumer PRIVATE support/ShaderBuildPublicHeaderConsumer.cpp)
 target_sources(HoroVfxApiPublicHeaderConsumer PRIVATE support/VfxWorldPublicHeaderConsumer.cpp)
@@ -1561,7 +1562,7 @@ set_tests_properties(HoroPrefabTemplateCookPublicHeaderConsumer PROPERTIES LABEL
 
 add_executable(HoroSceneRuntimeConversionTests unit/scene/SceneRuntimeConversionTests.cpp unit/scene/CookedSceneDefinitionTests.cpp
         unit/scene/ScenePrefabExpansionTests.cpp unit/scene/ScenePrefabExpansionOwnerTests.cpp
-        unit/scene/ScenePrefabCanonicalWireTests.cpp support/AllocationProbe.cpp)
+        unit/scene/ScenePrefabCanonicalWireTests.cpp unit/scene/ScenePrefabValueOverrideTests.cpp support/AllocationProbe.cpp)
 target_sources(HoroSceneRuntimeConversionTests PRIVATE unit/scene/ScenePrefabExpansionQualificationTests.cpp)
 target_include_directories(HoroSceneRuntimeConversionTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_compile_features(HoroSceneRuntimeConversionTests PRIVATE cxx_std_20)
@@ -1625,6 +1626,7 @@ add_executable(HoroPrefabTests
         unit/runtime/prefab/PrefabLimitsTests.cpp
         unit/runtime/prefab/PrefabSceneIdentityRemapTests.cpp
         unit/runtime/prefab/PrefabSourceResolverTests.cpp
+        unit/runtime/prefab/PrefabValueOverrideTests.cpp
 )
 target_compile_features(HoroPrefabTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPrefabTests PRIVATE HoroEngine::PrefabAuthoring)
@@ -2773,6 +2775,7 @@ add_executable(HoroSceneDocumentTests
         unit/editor/SceneDocumentEditingTests.cpp
         unit/editor/SceneDocumentExtractionTests.cpp
         unit/editor/SceneDocumentPrefabTests.cpp
+        unit/editor/SceneDocumentPrefabValueTests.cpp
 )
 target_compile_features(HoroSceneDocumentTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSceneDocumentTests PRIVATE HoroEngine::EditorRenderExtraction)
@@ -4841,6 +4844,14 @@ target_compile_features(HoroPCGSceneOutputContractConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroPCGSceneOutputContractConsumer PRIVATE HoroEngine::PCGSceneAdapter)
 add_test(NAME HoroPCGSceneOutputContractConsumer COMMAND HoroPCGSceneOutputContractConsumer)
 set_tests_properties(HoroPCGSceneOutputContractConsumer PROPERTIES LABELS "unit;pcg;headless;public_headers;ci-windows")
+
+add_test(NAME HoroSceneAllocationJunitPathContract
+    COMMAND "${CMAKE_COMMAND}" "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/scene_junit_path_contract"
+        "-DCTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+        "-DPYTHON_EXECUTABLE=${Python3_EXECUTABLE}"
+        "-DVERIFIER=${PROJECT_SOURCE_DIR}/scripts/ci/run_scene_allocation_qualification.py"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/SceneAllocationJunitPathContract.cmake")
+set_tests_properties(HoroSceneAllocationJunitPathContract PROPERTIES LABELS "unit;headless" TIMEOUT 30)
 
 add_test(NAME HoroCharacterAllocationJunitPathContract
     COMMAND "${CMAKE_COMMAND}" "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/character_junit_path_contract"

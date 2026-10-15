@@ -1,4 +1,5 @@
 #include "AllocationProbe.h"
+#include "SceneAllocationQualification.h"
 #include "ScenePrefabExpansionTestSupport.h"
 
 #include <algorithm>
@@ -173,6 +174,8 @@ TEST_CASE("Document close replacement and shutdown cancel and join actual queued
 
 TEST_CASE("Scene encoding admission reports each allocation failure without accepting invalid authored bytes",
           "[native][prefab][allocation]") {
+    Tests::RequireSupportedSceneAllocationInjection();
+
     ExpansionFixture fixture;
     const auto request = fixture.Request();
     const auto canonical = EncodeSceneSource({request.document.objects, request.document.prefabInstances});
@@ -319,6 +322,8 @@ TEST_CASE("Expansion admission cannot inherit a host permission to block on a fu
 }
 
 TEST_CASE("Cache pressure after validated worker completion does not discard complete Scene output", "[native][prefab][jobs][allocation]") {
+    Tests::RequireSupportedSceneAllocationInjection();
+
     ExpansionFixture fixture;
     JobSystem jobs{JobSystemConfig{.workerCount = 0}};
     const auto request = fixture.Request();
@@ -360,6 +365,8 @@ TEST_CASE("Cache pressure after validated worker completion does not discard com
 }
 
 TEST_CASE("Cancellation during completion memoization cannot publish a validated definition", "[native][prefab][jobs][allocation]") {
+    Tests::RequireSupportedSceneAllocationInjection();
+
     ExpansionFixture fixture;
     JobSystem jobs{JobSystemConfig{.workerCount = 0}};
     const auto request = fixture.Request();

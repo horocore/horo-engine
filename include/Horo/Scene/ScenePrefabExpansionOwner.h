@@ -15,6 +15,8 @@ namespace Horo::SceneSource {
         SceneSourceDocument document;
         Prefab::PrefabSourceResolverSnapshot resolver;
         Prefab::PrefabLimitProfile limits;
+        std::optional<Prefab::PrefabValueSchemaSnapshot>
+            valueSchemas; /**< Owned copied metadata retained through worker completion and module reload. */
     };
 
     /**

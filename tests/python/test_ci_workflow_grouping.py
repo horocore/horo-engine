@@ -84,6 +84,9 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroEditorSurfaceIdentityTests", "HoroSourceFileOpenServiceTests",
     "HoroCameraCutRuntimeTests", "HoroCameraCutPublicHeaderConsumer",
     "HoroPrefabTests", "HoroPrefabSceneExpansionTests", "HoroPrefabSceneExpansionContractConsumer",
+    "HoroPrefabOverrideModelPublicHeaderConsumer", "HoroPrefabAuthoringPublicHeaderConsumer",
+    "HoroSceneSourceModelPublicHeaderConsumer", "HoroSceneSourcePublicHeaderConsumer",
+    "HoroSceneRuntimeConversionPublicHeaderConsumer", "HoroSceneRuntimeConversionTests", "HoroSceneDocumentTests",
     "HoroAssetRegistryTests", "HoroInputTests", "HoroAndroidInputTests", "HoroAndroidInputIntegrationPublicHeaderConsumer",
     "HoroInputSdlTests", "HoroRuntimeUiInputTests",
     "HoroRuntimeUiAnimationIntegrationTests", "HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer",
@@ -420,7 +423,7 @@ def test_instrumented_render_graph_pane_keeps_sonar_coverage() -> None:
 
 
 def test_windows_restore_allocation_sweep_has_mandatory_release_coverage() -> None:
-    build = re.search(r"      - name: Build Windows Release MCP restore and Character allocation qualification\n(.*?)(?=\n      - name:|\Z)", WORKFLOW, re.S)
+    build = re.search(r"        id: mcp_release_build\n(.*?)(?=\n      - name:|\Z)", WORKFLOW, re.S)
     assert build
     assert "--target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests" in build.group(1)
     test = re.search(r"      - name: Test Windows Release restore allocation qualification\n(.*?)(?=\n      - name:|\Z)", WORKFLOW, re.S)
