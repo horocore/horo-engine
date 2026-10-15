@@ -117,3 +117,10 @@ namespace {
         REQUIRE((create->children.size() == items.size()));
     }
 }  // namespace
+
+TEST_CASE("Package management is reachable through the actual File menu", "[unit][editor][packages]") {
+    const auto &menu = GetEditorMenuModel().menus.front();
+    const auto *packages = FindAction(menu, EditorMenuAction::ManagePackages);
+    REQUIRE(packages != nullptr);
+    CHECK(packages->labelKey == "workspace.packages.button");
+}

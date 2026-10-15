@@ -36,6 +36,7 @@ namespace Horo::SceneSource {
      * @brief Encodes existing authored values using the unchanged Scene schema-1 codec.
      * @param source Coherent values admitted by their owning document.
      * @return The existing two-space-indented JSON representation, with a trailing newline.
+     * @throws std::invalid_argument If an instance contains an invalid value-override envelope.
      * This pure projection performs no file I/O, migration, publication or runtime activation.
      */
     [[nodiscard]] std::string EncodeSceneSource(const SceneSourceView &source);

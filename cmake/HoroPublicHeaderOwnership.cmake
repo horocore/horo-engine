@@ -957,6 +957,11 @@ horo_configure_target_header_boundary(HoroNavigationCrowdDetour PUBLIC_HEADERS
     Horo/Navigation/Backends/RecastDetourCrowdProvider.h
 )
 horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
+    Horo/WorldStreaming/StreamingCellEncoding.h
+    Horo/WorldStreaming/StreamingCellInspection.h
+    Horo/WorldStreaming/WorldIndexArtifact.h
+    Horo/WorldStreaming/WorldDependencyArtifact.h
+    Horo/WorldStreaming/WorldArtifactErrors.h
     Horo/WorldStreaming/CellAttachmentManifest.h
     Horo/WorldStreaming/NetworkStreamingAuthority.h
     Horo/WorldStreaming/OriginFrame.h
@@ -1022,7 +1027,13 @@ horo_configure_target_header_boundary(HoroPrefabRuntime PUBLIC_HEADERS
     Horo/Prefab/PrefabSpawnService.h
 )
 
+horo_configure_target_header_boundary(HoroPrefabOverrideModel PUBLIC_HEADERS
+    Horo/Prefab/PrefabSourceRevision.h
+    Horo/Prefab/PrefabValueOverrideTypes.h
+)
+
 horo_configure_target_header_boundary(HoroPrefabAuthoring PUBLIC_HEADERS
+    Horo/Prefab/PrefabValueOverrides.h
 Horo/Prefab/PrefabAssetDependencyClosure.h
 Horo/Prefab/PrefabDependencyGraph.h
     Horo/Prefab/PrefabDiagnostics.h
@@ -1034,6 +1045,7 @@ Horo/Prefab/PrefabDependencyGraph.h
 )
 
 horo_configure_target_header_boundary(HoroSceneCellPayload PUBLIC_HEADERS
+    Horo/Runtime/Scene/SceneCellPayloadCodec.h
     Horo/Runtime/Scene/SceneCellAttachments.h
     Horo/Runtime/Scene/RuntimeSceneCellPayload.h
     Horo/Runtime/Scene/RuntimeSceneCellLayers.h
@@ -1305,6 +1317,12 @@ horo_configure_target_header_boundary(HoroGameplayAiScriptBridge PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroPCGSceneBake PUBLIC_HEADERS
     Horo/PCGScene/SceneBake.h
 )
+
+horo_configure_target_header_boundary(HoroWorldCookIntegration PUBLIC_HEADERS Horo/WorldCook/WorldCookPublication.h)
+horo_configure_target_header_boundary(HoroPackageApplication PUBLIC_HEADERS Horo/Application/PackageApplication.h)
+horo_configure_target_header_boundary(HoroCliPackageAdapters PUBLIC_HEADERS Horo/Cli/PackageCommands.h)
+horo_configure_target_header_boundary(HoroMcpPackageAdapters PUBLIC_HEADERS Horo/Mcp/PackageTools.h)
+horo_configure_target_header_boundary(HoroEditorPackageAdapters PUBLIC_HEADERS Horo/Editor/PackageModalSession.h)
 
 horo_verify_public_header_inventory()
 message(STATUS "Target-specific public header inventory is complete")

@@ -209,3 +209,27 @@ TEST_CASE("Headless MCP rejects missing host policy before polling input", "[cli
     REQUIRE(reads == 0);
     REQUIRE(channel.output.empty());
 }
+
+TEST_CASE("Headless MCP independently pumps injected application work between idle reads", "[cli][mcp][packages]") {
+    Channel channel{.reads = {{}, {}, {}}};
+    auto view = channel.View();
+    unsigned pumps{};
+    view.pumpApplication = [&] {
+        ++pumps;
+        return Result<void>::Success();
+    };
+    REQUIRE(ServeApprovedMcp(Registry(), view).HasValue());
+    CHECK(pumps == 3);
+}
+
+TEST_CASE("Headless MCP preserves application pump diagnostics through reverse shutdown", "[cli][mcp][packages]") {
+    Channel channel{.reads = {{}}};
+    auto view = channel.View();
+    view.pumpApplication = [] {
+        return Result<void>::Failure(Error{ErrorCode{"fixture.project.revoked"}, ErrorDomainId{"fixture.project"}});
+    };
+    auto result = ServeApprovedMcp(Registry(), view);
+    REQUIRE(result.HasError());
+    CHECK(result.ErrorValue().code.Value() == "fixture.project.revoked");
+    CHECK(channel.output.empty());
+}

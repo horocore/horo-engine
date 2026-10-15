@@ -4,6 +4,7 @@
 #include "Horo/Cli/CliDispatcher.h"
 
 namespace Horo::Application::Internal {
+    class PackageCliHost;
     /** @brief Executes the shared application observability smoke operation, used by CLI and MCP.
      * @return Success after recording the declared metrics and structured host event.
      */
@@ -16,5 +17,6 @@ namespace Horo::Application::Internal {
      * @return Owned adapter registrations.
      */
     [[nodiscard]] std::vector<Cli::CliCommandAdapterRegistration> HostCommandAdapters(
-        std::span<const Cli::CliCommandDescriptor> descriptors, std::shared_ptr<HostObservabilitySession> session, std::string help);
+        std::span<const Cli::CliCommandDescriptor> descriptors, std::shared_ptr<HostObservabilitySession> session, std::string help,
+        PackageCliHost *packages = nullptr);
 }  // namespace Horo::Application::Internal

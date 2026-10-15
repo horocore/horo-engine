@@ -7,6 +7,7 @@ from html import escape
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
+PARSER_STEP_ID = "id: qualification_python"
 SPEC = importlib.util.spec_from_file_location(
     "character_allocation_qualification", ROOT / "scripts/ci/run_character_allocation_qualification.py"
 )
@@ -88,11 +89,11 @@ def test_release_step_is_independent_of_debug_test_outcome():
     assert "steps.mcp_release_build.outcome == 'success'" in block
     assert "debug" not in block.lower()
     assert "run_character_allocation_qualification.py" in block
-    install = workflow.split("- name: Install native Character allocation verifier dependency", 1)[1]
+    install = workflow.split(PARSER_STEP_ID, 1)[1]
     install = install.split("\n      - name:", 1)[0]
     assert "defusedxml==0.7.1" in install
     assert "--no-deps" in install
-    assert workflow.index("Install native Character allocation verifier dependency") < workflow.index("- name: Test Debug")
+    assert workflow.index(PARSER_STEP_ID) < workflow.index("- name: Test Debug")
 
 
 def test_unexpected_template_instantiation_is_not_silently_omitted():
@@ -208,7 +209,7 @@ def test_direct_reader_rejects_symlink_escape(tmp_path):
 
 def test_native_reader_reuses_the_installed_parser_interpreter():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    install = workflow.split("- name: Install native Character allocation verifier dependency", 1)[1]
+    install = workflow.split(PARSER_STEP_ID, 1)[1]
     install = install.split("\n      - name:", 1)[0]
     assert "Path(sys.executable).resolve().as_posix()" in install
     assert 'HORO_QUALIFICATION_PYTHON=$verifier_python' in install
@@ -216,7 +217,7 @@ def test_native_reader_reuses_the_installed_parser_interpreter():
     assert "defusedxml==0.7.1" in install
     configure = workflow.split("- name: Configure Debug", 1)[1].split("\n      - name:", 1)[0]
     assert '-DPython3_EXECUTABLE="$HORO_QUALIFICATION_PYTHON"' in configure
-    assert workflow.index("Install native Character allocation verifier dependency") < workflow.index("- name: Configure Debug")
+    assert workflow.index(PARSER_STEP_ID) < workflow.index("- name: Configure Debug")
 
 
 @pytest.mark.parametrize("absolute", [False, True])

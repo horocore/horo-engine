@@ -960,3 +960,73 @@ complete scene after every required placement succeeds. Conversion failure leave
 both authored references and any previously activated runtime definition intact.
 This introduces an additive headless API; existing editor conversion callers and
 component payload schemas require no migration.
+
+## Implemented instance AssignValue contract (HORO-1028 / PFB-003.2)
+
+`PrefabValueOverrideTypes.h` owns value-only instance deltas. `PrefabValueOverrides.h`
+owns bounded schema capture, canonical encoding, detached resolution and semantic
+edit preparation. `HoroPrefabOverrideModel` exposes these source-model values without
+requiring authoring services; `HoroPrefabAuthoring` owns the executable operations.
+`PrefabSourceRevision` moved to its own model header. Existing callers including
+`PrefabDocument.h` continue to see the same type and representation.
+
+A property schema explicitly associates an existing `PrefabPropertyId` with its
+registered stable component payload property ID. The snapshot copies all validation
+metadata and creation defaults and hashes that complete metadata. It retains no
+provider callback, registry pointer or executable module. Creation defaults remain
+separate inspection evidence; an absent source property is never filled from a
+future registry default. Assignment applies only to an existing exact property.
+The source value remains authoritative for redundant assignment comparison.
+
+`PreparePrefabValueEdit` produces a detached owned result. The synchronous `SceneDocumentPrefabValueCommands` adapter borrows the existing
+`SceneDocument` and `EditorHistory`; it owns no additional state or history. Its
+`EditScenePrefabValueCommand` fences document revision, complete registry/reachable-source revision and schema
+identity plus the successful-load replacement epoch before preparing one semantic history entry.
+The owner-local epoch increments only after successful canonical load validation;
+failed loads preserve it. Pending value commands and value-history entries from a
+replaced opening reject even when revision, state and instance IDs repeat. Assignment, revert and rebase
+publish once; validation, allocation failure and cancellation leave content,
+revision, state and history unchanged. Undo/redo prepare the owned value and result
+before moving history. Revert removes the selected normal/conflict/orphan record;
+undo restores its exact intent and source/schema evidence. Apply-to-source remains
+the distinct multi-document operation defined by ADR-093, not an implicit side
+effect of instance assignment.
+
+Source changes use exact canonical value preconditions. Unchanged values retain the
+assignment, a new source equal to the assigned value removes the redundant record,
+and incompatible edits preserve an explicit conflict. Missing targets or unavailable
+or changed schemas preserve owned orphan records with their original source/schema
+context. No display-name, offset, index or closest-name retargeting occurs. Unresolved
+records remain serializable but cannot produce a runtime candidate.
+
+Scene schema 1 appends the optional `valueOverrides` field to a prefab placement.
+It stores the bounded canonical schema-1 override envelope as a UTF-8 JSON string,
+so the override wire has one canonical authority independent of outer Scene JSON
+field ordering. Old placements omit this field and keep their existing wire bytes.
+Decoding validates the envelope and requires its source asset to match the placement;
+loading a document validates it again. No arbitrary property map becomes authoring
+state. Unknown operation/envelope versions reject admission without modifying the
+input rather than executing or discarding unknown intent.
+
+Existing editor document/preview conversion adapters forward the same explicit
+schema snapshot to the shared headless implementation; they do not discover a
+provider or define another resolver.
+
+Fresh, cached and owned-worker Scene conversion resolve instance values after the
+source-only expansion cache. The cache rejects modified candidates. Effective
+candidates carry an exact override-envelope commitment, and retained conversion
+checks it along with current schema identity and ordinary source evidence. Workers
+copy optional immutable schema metadata, and completion rejects schema retirement or
+replacement. Runtime definitions contain only resolved component/transform values,
+never source override records, conflicts or schema service pointers.
+
+Migration: value-edit callers construct `SceneDocumentPrefabValueCommands` with
+their existing document/history pair and call its typed `Execute`; ordinary
+commands and Undo/Redo continue through `SceneDocumentCommandExecutor`. Cached
+conversion callers pass `ScenePrefabCachedConversionOptions{cancellation, schemas}`
+for explicit cancellation/schema context. Existing six-argument cached conversion
+calls retain their defaults. Other callers remain source compatible through
+appended/defaulted fields and optional schema arguments. Callers resolving property overrides must
+explicitly supply the owned schema snapshot to conversion and retained publication;
+omitting it produces typed repairable unavailability. Transform-only overrides need
+no project schema. No SDK ABI or native capability layout changes in this delivery.
