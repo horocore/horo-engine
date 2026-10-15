@@ -3,9 +3,9 @@
 #include "Horo/PCG/PCGErrors.h"
 
 #include <algorithm>
-#include <exception>
-#include <limits>
+#include <memory>
 #include <new>
+#include <nlohmann/json.hpp>
 
 namespace Horo::PCG {
     namespace {
@@ -13,35 +13,44 @@ namespace Horo::PCG {
             return Result<T>::Failure(MakeError(error));
         }
 
+        /** @brief Charge only after proving that addition fits the finite caller envelope. */
+        bool Charge(const std::size_t amount, const std::size_t limit, std::size_t &bytes) {
+            if (amount > limit || bytes > limit - amount)
+                return false;
+            bytes += amount;
+            return true;
+        }
+
+        /** @brief Bound nested behavior field storage before invoking the scene codec. */
+        bool FitsBehavior(const Gameplay::BehaviorComponent &behavior, const std::size_t limit, std::size_t &bytes) {
+            if (behavior.fields.size() > 256 || !Charge(behavior.typeId.Value().size(), limit, bytes))
+                return false;
+            for (const auto &field : behavior.fields) {
+                if (!Charge(field.name.size(), limit, bytes))
+                    return false;
+                if (const auto *value = std::get_if<std::string>(&field.value); value && !Charge(value->size(), limit, bytes))
+                    return false;
+            }
+            return true;
+        }
+
         /** @brief Bound variable payloads before canonical codec allocation. */
         bool FitsInput(const SceneSource::SceneObjectSnapshot &object, const std::size_t limit) {
             std::size_t bytes = object.name.size();
-            const auto charge = [&](const std::size_t amount) {
-                if (amount > limit || bytes > limit - amount)
-                    return false;
-                bytes += amount;
-                return true;
-            };
             const auto &components = object.components;
             if (bytes > limit || components.colliders.size() > 128 || components.physicsConstraints.size() > 128 ||
                 components.behaviors.size() > 128 || components.gameplayComponents.size() > 128)
                 return false;
             for (const auto &collider : components.colliders)
-                if (collider.materials.size() > 128 || !charge(collider.materials.size() * sizeof(Runtime::PhysicsColliderMaterialBinding)))
+                if (collider.materials.size() > 128 ||
+                    !Charge(collider.materials.size() * sizeof(Runtime::PhysicsColliderMaterialBinding), limit, bytes))
                     return false;
             for (const auto &component : components.gameplayComponents)
-                if (!charge(component.payload.size()) || !charge(component.typeId.Value().size()))
+                if (!Charge(component.payload.size(), limit, bytes) || !Charge(component.typeId.Value().size(), limit, bytes))
                     return false;
-            for (const auto &behavior : components.behaviors) {
-                if (behavior.fields.size() > 256 || !charge(behavior.typeId.Value().size()))
+            for (const auto &behavior : components.behaviors)
+                if (!FitsBehavior(behavior, limit, bytes))
                     return false;
-                for (const auto &field : behavior.fields) {
-                    if (!charge(field.name.size()))
-                        return false;
-                    if (const auto *value = std::get_if<std::string>(&field.value); value && !charge(value->size()))
-                        return false;
-                }
-            }
             return true;
         }
 
@@ -74,13 +83,20 @@ namespace Horo::PCG {
             if (!object.id.IsValid() || (object.parent && (!object.parent->IsValid() || *object.parent == object.id)) ||
                 (object.meshAsset && (!object.meshAsset->IsValid() || object.primitiveMesh)))
                 return Reject<std::string>(PCGErrors::GenerationPlanInvalid);
-            auto bytes = SceneSource::EncodeSceneSource({std::span{&object, 1}, {}});
-            if (bytes.size() > limit)
-                return Reject<std::string>(PCGErrors::GenerationPlanCapacityExceeded);
-            auto decoded = SceneSource::DecodeSceneSource(bytes);
-            if (decoded.HasError())
-                return Result<std::string>::Failure(decoded.ErrorValue());
-            return Result<std::string>::Success(std::move(bytes));
+            try {
+                auto bytes = SceneSource::EncodeSceneSource({std::span{&object, 1}, {}});
+                if (bytes.size() > limit)
+                    return Reject<std::string>(PCGErrors::GenerationPlanCapacityExceeded);
+                if (auto decoded = SceneSource::DecodeSceneSource(bytes); decoded.HasError())
+                    return Result<std::string>::Failure(decoded.ErrorValue());
+                return Result<std::string>::Success(std::move(bytes));
+            } catch (const nlohmann::json::type_error &) {
+                return Reject<std::string>(PCGErrors::GenerationPlanInvalid);
+            } catch (const nlohmann::json::parse_error &) {
+                return Reject<std::string>(PCGErrors::GenerationPlanInvalid);
+            } catch (const nlohmann::json::out_of_range &) {
+                return Reject<std::string>(PCGErrors::GenerationPlanInvalid);
+            }
         }
 
         /** @brief Preserve the existing generation-plan owner, provenance, capability and lifecycle validation. */
@@ -145,7 +161,7 @@ namespace Horo::PCG {
             };
             std::ranges::sort(objects, {}, objectId);
             const auto terminal = commands.size();
-            std::vector<std::size_t> parents(commands.size(), terminal);
+            std::vector parents(commands.size(), terminal);
             for (std::size_t index = 0; index < commands.size(); ++index) {
                 const auto &command = commands[index];
                 if (!command.desired || !command.desired->parent)
@@ -185,8 +201,8 @@ namespace Horo::PCG {
                                   const PCGGenerationPlan &plan, const PCGSceneOutputContext &context, std::size_t &bytes) {
             const auto &delta = command.delta;
             command.object = intent.desired.id;
-            const bool occupied = std::ranges::binary_search(context.occupiedObjects, command.object);
-            if ((delta.kind == PCGOutputDeltaKind::Create && (occupied || mapping)) ||
+            if (const bool occupied = std::ranges::binary_search(context.occupiedObjects, command.object);
+                (delta.kind == PCGOutputDeltaKind::Create && (occupied || mapping)) ||
                 (delta.kind == PCGOutputDeltaKind::Update && (!mapping || mapping->object != command.object)))
                 return Reject<void>(PCGErrors::GenerationOwnershipMismatch);
             if (!ValidMesh(intent, delta, plan))
@@ -212,7 +228,7 @@ namespace Horo::PCG {
                                                      const std::span<const PCGSceneOutputIntent> intents,
                                                      const PCGSceneOutputContext &context, std::size_t &bytes, std::size_t &usedIntents) {
             const auto found = std::ranges::find(context.currentMappings, delta.provenance.logicalOutput, &PCGSceneOutputMapping::logical);
-            const auto *mapping = found == context.currentMappings.end() ? nullptr : &*found;
+            const auto *mapping = found == context.currentMappings.end() ? nullptr : std::to_address(found);
             PCGSceneOutputCommand command{delta, {}, {}, {}};
             if (delta.kind == PCGOutputDeltaKind::Remove) {
                 if (!mapping)
@@ -260,8 +276,7 @@ namespace Horo::PCG {
             if (hierarchyBytes > context.maximumRetainedBytes - bytes)
                 return Reject<Commands>(PCGErrors::GenerationPlanCapacityExceeded);
             bytes += hierarchyBytes;
-            auto parents = ValidateParents(commands, context.occupiedObjects);
-            if (parents.HasError())
+            if (auto parents = ValidateParents(commands, context.occupiedObjects); parents.HasError())
                 return Result<Commands>::Failure(parents.ErrorValue());
             return Result<Commands>::Success(std::move(commands));
         }
@@ -277,8 +292,6 @@ namespace Horo::PCG {
                 ComputeSha256(std::as_bytes(std::span{encoded.Value().data(), encoded.Value().size()})));
         } catch (const std::bad_alloc &) {
             return Reject<PCGGenerationDigest>(PCGErrors::GenerationPlanCapacityExceeded);
-        } catch (const std::exception &) {
-            return Reject<PCGGenerationDigest>(PCGErrors::GenerationPlanInvalid);
         }
     }
 
@@ -293,11 +306,9 @@ namespace Horo::PCG {
         if (!plan.RequiredCapabilities().Contains(PCGCapability::SceneOutput))
             return Reject<PCGSceneOutputBatch>(PCGErrors::UnsupportedCapability);
         try {
-            auto valid = ValidateMappings(context);
-            if (valid.HasError())
+            if (auto valid = ValidateMappings(context); valid.HasError())
                 return Result<PCGSceneOutputBatch>::Failure(valid.ErrorValue());
-            auto checked = Revalidate(plan, context.generation);
-            if (checked.HasError())
+            if (auto checked = Revalidate(plan, context.generation); checked.HasError())
                 return Result<PCGSceneOutputBatch>::Failure(checked.ErrorValue());
             std::size_t bytes{};
             auto commands = TranslateCommands(plan, intents, context, bytes);
@@ -306,8 +317,6 @@ namespace Horo::PCG {
             return Result<PCGSceneOutputBatch>::Success(PCGSceneOutputBatch{plan, std::move(commands).Value(), bytes});
         } catch (const std::bad_alloc &) {
             return Reject<PCGSceneOutputBatch>(PCGErrors::GenerationPlanCapacityExceeded);
-        } catch (const std::exception &) {
-            return Reject<PCGSceneOutputBatch>(PCGErrors::GenerationPlanInvalid);
         }
     }
 }  // namespace Horo::PCG

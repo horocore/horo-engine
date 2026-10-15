@@ -181,6 +181,33 @@ namespace Horo::PCG {
         Failure(FingerprintPCGSceneOutput(f.intent.desired, 1024), PCGErrors::GenerationPlanCapacityExceeded);
     }
 
+    TEST_CASE("PCG scene owns nested behavior and opaque gameplay component payloads", "[pcg][scene-adapter]") {
+        Fixture f;
+        f.intent.desired.components.behaviors.push_back({.instanceId = {1},
+                                                         .typeId = Gameplay::BehaviorTypeId::Parse("game.test.mover").Value(),
+                                                         .fields = {{"label", std::string("before")}}});
+        f.intent.desired.components.gameplayComponents.push_back(
+            {.typeId = Gameplay::ComponentTypeId::Parse("game.test.marker").Value(), .payload = {std::byte{'{'}, std::byte{'}'}}});
+        f.SetContent();
+        auto staged = f.Translate();
+        REQUIRE(staged.HasValue());
+        f.intent.desired.components.behaviors[0].fields[0].value = std::string("after");
+        f.intent.desired.components.gameplayComponents[0].payload[0] = std::byte{'x'};
+        const auto &components = staged.Value().Commands()[0].desired->components;
+        CHECK(std::get<std::string>(components.behaviors[0].fields[0].value) == "before");
+        CHECK(components.gameplayComponents[0].payload[0] == std::byte{'{'});
+    }
+
+    TEST_CASE("PCG scene rejects nested behavior storage before codec preparation", "[pcg][scene-adapter]") {
+        Fixture f;
+        f.intent.desired.components.behaviors.push_back({.instanceId = {1},
+                                                         .typeId = Gameplay::BehaviorTypeId::Parse("game.test.mover").Value(),
+                                                         .fields = {{"label", std::string(2048, 'a')}}});
+        Failure(FingerprintPCGSceneOutput(f.intent.desired, 1024), PCGErrors::GenerationPlanCapacityExceeded);
+        f.intent.desired.components.behaviors[0].fields.resize(257);
+        Failure(FingerprintPCGSceneOutput(f.intent.desired, 1024 * 1024), PCGErrors::GenerationPlanCapacityExceeded);
+    }
+
     TEST_CASE("PCG scene staged hierarchy rejects a cycle and preserves canonical output ordering", "[pcg][scene-adapter]") {
         Fixture f;
         auto second = f.intent;
