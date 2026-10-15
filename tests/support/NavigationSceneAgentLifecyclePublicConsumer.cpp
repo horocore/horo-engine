@@ -18,6 +18,8 @@ static_assert(
                    bool (Horo::Navigation::NavigationSceneAgentLifecycle::*)(const Horo::Navigation::NavigationVelocityWork &) noexcept>);
 
 int main() {
+    const Horo::Navigation::NavigationSceneAgentLifecycleDescriptor descriptor;
+    static_cast<void>(descriptor);
     Horo::JobSystem jobs{{.workerCount = 0}};
     auto created = Horo::Navigation::NavigationCoordinator::Create(jobs, {});
     if (created.HasError())
