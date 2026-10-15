@@ -19,6 +19,24 @@ This host edge grants no Prefab dependency to Network runtime or Physics
 integration. Module descriptors remain inert; the host supplies the provider,
 Scene service and independent permission before activating gameplay.
 
+## Behavior host factory bindings
+
+`BehaviorRuntimeServiceBindings` is an inert Gameplay-owned host value containing
+explicit Physics, Navigation, Character and Runtime UI holders. Both context-bearing
+`BehaviorRuntime::Create` factories consume this value; they validate the exact Scene
+and preserve independent runtime child derivation, error precedence and revocation.
+The value selects no backend, discovers no service and grants no authority by itself.
+`RuntimeSceneService` creation accepts the prefab scope as a separate argument because
+only that owner supplies structural transaction authority. A bare `RuntimeScene`
+factory cannot accept prefab scope. The three-argument bare-Scene convenience factory
+continues to construct the explicit withheld Physics context.
+
+This replaces positional service arguments in the host Runtime API, avoiding two
+competing activation contracts. Header ownership remains `HoroGameplayRuntime`;
+there is no reverse dependency on `GameModuleHost` service aggregates. Callers and
+binary/source migration scope are recorded in the
+[Runtime UI capability migration](../../guides/gameplay-runtime-ui-capability-migration.md#host-behavior-factory-migration).
+
 ## Purpose
 
 This document defines how project-owned gameplay modules integrate with runtime systems: game-owned assets, input actions, scheduled systems, scene/play lifecycle, game-owned component persistence, and deferred runtime extension points.
@@ -63,6 +81,39 @@ including the private static-link closure and staged target-owned headers.
 Boundary 9 changes `GameRuntimeContext` and the behavior backend vtable: all native
 modules must rebuild with the matching sdk9 fingerprint. See
 [migration and consumer contract](../../guides/gameplay-physics-capability-migration.md).
+
+### Runtime UI execution context (RUI-006.7)
+
+The application owns `RuntimeUiService` and its canonical `UiSceneReconciliation`
+registry. It explicitly issues a `RuntimeUiClient` for an exact module, Scene
+activation generation, UI instance and canvas, with independent permissions and
+an explicit bounded writable-provider inventory. `GameModuleHostOptions` carries
+this binding in `GameModuleRuntimeServices`; the legacy Physics constructor only
+forwards to those same options. No module descriptor registers a service or selects
+an input/renderer backend.
+
+`GameplayRuntime`, `GameplayModuleHost` and `GameplayLua` privately depend on
+`RuntimeUi` to derive and revoke their own scopes and translate closed typed
+values. `GameplayApi` only forward-declares the client. Runtime UI has no reverse
+Gameplay dependency. Native `GameRuntimeContext::runtimeUi` and behavior access
+refer to the same host-issued authority; the host retains a separate authoritative
+child even if module code resets its exposed shared holder. Retirement revokes
+before callbacks and releases holders before image unload. Public derivation inherits immutable parent
+cancellation and accepts no caller token or callback; only the application issues
+the root cancellation fence. Provider callbacks,
+renderer/input handles, mutable Scene pointers and VM pointers never become
+retained client state. Queued commands recheck revocation before canonical owner
+publication or consumer dispatch.
+
+The optional build-tree SDK `RuntimeUi` component exports the existing canonical
+Runtime UI target and its static-link dependencies, including text shaping and
+Unicode support. This larger opt-in closure follows the existing target boundary;
+it selects no renderer or input backend. The default Gameplay SDK remains narrow.
+Standalone boundary13 changes native context layout and the behavior backend
+vtable, requiring all native modules and fingerprints to rebuild together. It is
+independent of other unpublished capability layouts; combining layouts requires
+a new boundary15 or later, rather than selecting the largest prior number. The
+[capability migration guide](../../guides/gameplay-runtime-ui-capability-migration.md) records callers, Lua transport and rollback.
 
 ## Game-Owned Asset Types
 
@@ -461,3 +512,20 @@ historical context; this layout requires the exact SDK12 fingerprint.
 
 See the [owning Character scope contract](../runtime/character-controller-architecture.md#gameplay-runtime-scope-and-revocation)
 and [migration/affected callers](../../guides/gameplay-character-capability-migration.md).
+
+## SDK21 AI and Runtime UI composition
+
+The combined native boundary preserves merged SDK20 `GameRuntimeContext` fields
+in Physics/Navigation/AI/Character order and appends Runtime UI. The inert AI
+registration registry remains in `GameRegistrationContext`; host runtime services
+preserve Physics/Character/Navigation/AI and append UI. SDK21 and its exact
+fingerprint identify this new layout; SDK19 and SDK20 cannot be loaded as it.
+AI task retirement and UI revocation both use authoritative host holders before
+module callbacks or image unload. Neither exposed context assignment can replace
+those holders. AI diagnostics retain immutable host-owned snapshots.
+
+`BehaviorRuntimeServiceBindings` remains the host factory's inert four-service
+value (Physics, Navigation, Character, UI), with SceneService-only prefab admission
+separate. AI script capabilities remain in their existing explicit bridge rather
+than creating an ambient service or expanding this binding value. Header ownership
+and SDK optional component export sets retain their existing target owners.

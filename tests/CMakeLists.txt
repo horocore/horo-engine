@@ -1677,8 +1677,8 @@ horo_add_gameplay_module(HoroTestGameModule
         SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_module/TestGameModule.cpp
 )
 target_include_directories(HoroTestGameModule PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
-target_compile_definitions(HoroTestGameModule PRIVATE HORO_TEST_GAMEPLAY_PHYSICS=1 HORO_TEST_GAMEPLAY_NAVIGATION=1)
-target_link_libraries(HoroTestGameModule PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::PrefabRuntime HoroEngine::GameplayNavigationIntegration)
+target_compile_definitions(HoroTestGameModule PRIVATE HORO_TEST_GAMEPLAY_PHYSICS=1 HORO_TEST_GAMEPLAY_NAVIGATION=1 HORO_TEST_GAMEPLAY_UI=1)
+target_link_libraries(HoroTestGameModule PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::PrefabRuntime HoroEngine::GameplayNavigationIntegration HoroEngine::RuntimeUi)
 get_property(HORO_TEST_GAME_MODULE_REVISION_FILE TARGET HoroTestGameModule PROPERTY HORO_GAMEPLAY_DESCRIPTOR_REVISION_FILE)
 target_include_directories(HoroCinematicRuntimeTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
 target_compile_definitions(HoroCinematicRuntimeTests PRIVATE
@@ -1793,6 +1793,31 @@ add_test(NAME HoroGameplayPhysicsSdkContract COMMAND ${CMAKE_COMMAND}
     "-DBUILD_CONFIG=$<CONFIG>"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GameplayPhysicsSdkContract.cmake")
 set_tests_properties(HoroGameplayPhysicsSdkContract PROPERTIES LABELS "gameplay;physics;sdk;headless" RUN_SERIAL TRUE TIMEOUT 120)
+add_executable(HoroGameplayRuntimeUiSdkHostConsumer
+        support/GameplayRuntimeUiSdkHostConsumer.cpp
+        unit/runtime/ui/UiHotReloadTestFixture.cpp
+        support/AllocationProbe.cpp)
+target_compile_features(HoroGameplayRuntimeUiSdkHostConsumer PRIVATE cxx_std_20)
+target_include_directories(HoroGameplayRuntimeUiSdkHostConsumer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/helpers" "${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/ui")
+target_link_libraries(HoroGameplayRuntimeUiSdkHostConsumer PRIVATE HoroEngine::RuntimeUi HoroEngine::GameplayModuleHost
+        HoroEngine::Platform Catch2::Catch2)
+add_test(NAME HoroGameplayRuntimeUiSdkContract COMMAND ${CMAKE_COMMAND}
+    "-DSDK_DIR=${HORO_GAMEPLAY_SDK_PACKAGE_DIR}"
+    "-DFIXTURE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_runtime_ui_sdk"
+    "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/runtime_ui_sdk_contract"
+    "-DHOST_CONSUMER=$<TARGET_FILE:HoroGameplayRuntimeUiSdkHostConsumer>"
+    "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+    "-DCMAKE_LINKER=${CMAKE_LINKER}"
+    "-DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}"
+    "-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}"
+    "-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+    "-DGENERATOR=${CMAKE_GENERATOR}"
+    "-DGENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+    "-DGENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+    "-DBUILD_CONFIG=$<CONFIG>"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GameplayRuntimeUiSdkContract.cmake")
+set_tests_properties(HoroGameplayRuntimeUiSdkContract PROPERTIES LABELS "gameplay;runtime_ui;sdk;headless" RUN_SERIAL TRUE TIMEOUT 120)
 add_executable(HoroLuaReplicationPublicHeaderConsumer support/LuaReplicationPublicHeaderConsumer.cpp)
 target_compile_features(HoroLuaReplicationPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroLuaReplicationPublicHeaderConsumer PRIVATE HoroEngine::GameplayLua)
@@ -3216,6 +3241,28 @@ target_compile_features(HoroRuntimeUiScreenTransitionPublicHeaderConsumer PRIVAT
 target_link_libraries(HoroRuntimeUiScreenTransitionPublicHeaderConsumer PRIVATE HoroEngine::RuntimeUi)
 add_test(NAME HoroRuntimeUiScreenTransitionPublicHeaderConsumer COMMAND HoroRuntimeUiScreenTransitionPublicHeaderConsumer)
 set_tests_properties(HoroRuntimeUiScreenTransitionPublicHeaderConsumer PROPERTIES LABELS "unit;runtime_ui;headless")
+add_executable(HoroRuntimeUiCapabilityTests
+        unit/runtime/ui/RuntimeUiCapabilityTests.cpp
+        integration/gameplay/GameplayRuntimeUiHostTests.cpp
+        integration/gameplay/LuaRuntimeUiTransportTests.cpp
+        integration/gameplay/LuaRuntimeUiLifecycleTests.cpp
+        unit/runtime/ui/UiHotReloadTestFixture.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeUiCapabilityTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiCapabilityTests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/helpers"
+        "${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/ui")
+target_compile_definitions(HoroRuntimeUiCapabilityTests PRIVATE
+        HORO_TEST_SOURCE_ROOT="${PROJECT_SOURCE_DIR}"
+        HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
+        HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}")
+target_link_libraries(HoroRuntimeUiCapabilityTests PRIVATE HoroEngine::RuntimeUi HoroEngine::GameplayModuleHost
+        HoroEngine::Platform HoroEngine::GameplayLua HoroRuntimeUiLuaTestingInternal HoroNetworkProductHost HoroEngine::GameplayAiIntegration)
+add_dependencies(HoroRuntimeUiCapabilityTests HoroTestGameModule)
+target_sources(HoroRuntimeUiPublicHeaderConsumer PRIVATE support/RuntimeUiCapabilityPublicContract.cpp)
+target_sources(HoroGameplayModuleHostPublicHeaderConsumer PRIVATE support/GameplayRuntimeUiHostPublicContract.cpp)
 add_executable(HoroRuntimeUiHotReloadTests
         unit/runtime/ui/UiHotReloadTests.cpp
         unit/runtime/ui/UiHotReloadTestFixture.cpp
@@ -4653,6 +4700,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiBindingStoreTests
         HoroRuntimeUiBindingWriteTests
         HoroRuntimeUiDocumentTests
+        HoroRuntimeUiCapabilityTests
         HoroRuntimeUiHotReloadTests
         HoroRuntimeUiSceneReconciliationTests
         HoroRuntimeUiScreenTransitionTests

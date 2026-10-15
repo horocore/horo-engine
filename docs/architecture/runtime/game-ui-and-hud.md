@@ -54,6 +54,16 @@ belongs to runtime scene/game content.
   renderer backend handles, live input focus pointers, or editor widget state.
 - Templates are presets over core UI elements, not special runtime systems.
 
+## Explicit gameplay access
+
+The application-owned `RuntimeUiService` exposes host-issued `RuntimeUiClient`
+scopes for gameplay and Lua through the [gameplay integration contract](../extensions/gameplay-runtime-integration.md#runtime-ui-execution-context-rui-0067).
+These clients project the canonical screen stack, binding store, action router
+and event dispatcher. They introduce no second UI registry, widget hierarchy,
+provider authority, renderer selection or input backend. Commands have bounded
+owned mailboxes and run at explicit owner cutoffs; module/script retirement and
+successful UI generation replacement invalidate outstanding access.
+
 ## Ownership Boundary
 
 ```text
@@ -1430,3 +1440,28 @@ Rebuild RuntimeUi consumers for the new symbols. Hosts carry the EVER-issued
 layer incarnation when recreating an owner. No aggregate RuntimeUiService,
 frontend/editor composition, durable authoring schema or renderer activation is
 claimed by this backend contract.
+
+### Runtime UI command authority and Lua transport boundaries
+
+`RuntimeUiService` const access permits observation (`Acquire`, transition checks,
+and reclamation checks). Its eleven command/lifecycle methods deliberately remain
+mutable-only even though the facade stores state through a private shared pointer:
+`Admit` transfers publisher ownership; `Issue` reserves scope and dispatcher inventory;
+`ApplyQueuedCommands` consumes mailboxes; `DispatchActions` consumes canonical actions
+and attribution; `DispatchEvent` invokes a consumer and fills mailboxes; `Reload`
+commits a generation; `PrepareTransition` reserves a candidate; `CommitTransition`
+publishes it; `WithdrawProvider` changes bindings; `CollectRetired` destroys retired
+owners; and `Shutdown` revokes grants and retires publishers. Treating those operations
+as const would grant mutation through an observation-only service reference. Exact
+S5817 exceptions on their definitions preserve this authority boundary; paired
+compile-time invocation checks protect both mutable availability and const rejection.
+
+Lua uses the exact `lua_Alloc` signature, including opaque `void*` context/storage.
+The allocator's S5008 exception is confined to that ABI declaration and checked
+against `lua_Alloc`. Private Runtime UI C callbacks are `noexcept`: C++ exceptions
+are caught and classified before any Lua error operation. Typed memory-error
+projection may itself fail, in which case a static Lua error is used after all C++
+catch frames unwind. Lua C longjmp is permitted only through POD/reference-only
+marshaller frames; outer native owners and exception storage remain behind the
+protected `lua_pcall` boundary. No host callback or native owner is hidden in Lua
+projection scratch.

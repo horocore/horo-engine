@@ -1,6 +1,9 @@
 #include "LuaBehaviorSandbox.h"
 
+#include <cstdlib>
 #include <initializer_list>
+#include <type_traits>
+
 extern "C" {
 #include <lauxlib.h>
 #include <lua.h>
@@ -17,6 +20,30 @@ namespace Horo::Gameplay::Detail {
         }
 
     }  // namespace
+
+    /** @copydoc BudgetAllocate */
+    void *BudgetAllocate(  // NOSONAR(cpp:S5008) lua_Alloc requires opaque allocation storage as its return ABI.
+        void *userData,    // NOSONAR(cpp:S5008) lua_Alloc requires opaque allocator context.
+        void *pointer,     // NOSONAR(cpp:S5008) lua_Alloc requires opaque existing allocation storage.
+        const std::size_t oldSize, const std::size_t newSize) {
+        auto &budget = *static_cast<LuaBudget *>(userData);
+        // For a fresh Lua allocation oldSize is an object-type tag, not an allocation size.
+        const std::size_t accountedOldSize = pointer != nullptr ? oldSize : 0;
+        if (newSize == 0) {
+            budget.used = accountedOldSize > budget.used ? 0 : budget.used - accountedOldSize;
+            std::free(pointer);  // NOSONAR(cpp:S5025) Lua's allocator ABI is the C realloc/free contract.
+            return nullptr;
+        }
+        const std::size_t retained = accountedOldSize > budget.used ? 0 : budget.used - accountedOldSize;
+        if (newSize > budget.maximum || retained > budget.maximum - newSize)
+            return nullptr;
+        void *resized = std::realloc(pointer, newSize);  // NOSONAR(cpp:S5025) Preserves Lua realloc semantics and performance.
+        if (resized != nullptr)
+            budget.used = retained + newSize;
+        return resized;
+    }
+
+    static_assert(std::is_same_v<decltype(&BudgetAllocate), lua_Alloc>);
 
     /** @copydoc OpenLuaBehaviorSandbox */
     void OpenLuaBehaviorSandbox(lua_State *state) {

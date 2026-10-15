@@ -14,6 +14,10 @@
 #include <span>
 #include <vector>
 
+namespace Horo::Runtime::Ui {
+    class RuntimeUiClient;
+}
+
 namespace Horo::Gameplay {
     class GameplayPhysicsContext;
     class GameplayCharacterContext;
@@ -131,6 +135,11 @@ namespace Horo::Gameplay {
                 return {};
             }
 
+            /** @brief Returns the explicit module/UI generation capability, or no grant. */
+            [[nodiscard]] virtual std::shared_ptr<const Runtime::Ui::RuntimeUiClient> RuntimeUiContext() const noexcept {
+                return {};
+            }
+
             /** @brief Returns the explicitly granted cooked-prefab module scope, or no grant. */
             [[nodiscard]] virtual std::shared_ptr<const GameplayPrefabContext> PrefabContext() const noexcept {
                 return {};
@@ -179,6 +188,13 @@ namespace Horo::Gameplay {
         /** @brief Returns the same host Physics binding for native and script callbacks; no world discovery. */
         [[nodiscard]] std::shared_ptr<const GameplayPhysicsContext> PhysicsContext() const noexcept {
             return backend_->PhysicsContext();
+        }
+
+        /** @brief Returns the explicit revocable UI client; null requires a typed unavailable result at the consumer boundary.
+         * @return Exact host-issued module/scene capability, never a UI owner or native render/input object.
+         */
+        [[nodiscard]] std::shared_ptr<const Runtime::Ui::RuntimeUiClient> RuntimeUiContext() const noexcept {
+            return backend_->RuntimeUiContext();
         }
 
         /** @brief Returns the same exact Character scope to native and script callbacks. @return Holder or no admitted grant. */

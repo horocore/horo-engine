@@ -99,6 +99,7 @@ namespace Horo::Prefab::SpawnTest {
         std::unique_ptr<PrefabSpawnService> service;
         std::shared_ptr<Gameplay::GameplayPrefabContext> context;
         CancellationSource cancellation;
+        const CancellationToken cancellationToken{cancellation.Token()};
         std::uint64_t tick{1};
         Sha256Digest digest;
         std::size_t fieldCount;
@@ -198,7 +199,7 @@ namespace Horo::Prefab::SpawnTest {
         }
 
         Runtime::FrameContext Frame() const {
-            return {1, {}, 0.0, 0, {}, false, cancellation.Token()};
+            return {1, {}, 0.0, 0, {}, false, cancellationToken};
         }
 
         void Commit() {
