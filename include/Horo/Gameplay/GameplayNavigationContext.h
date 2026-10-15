@@ -77,7 +77,17 @@ namespace Horo::Gameplay {
      * remains pinned privately through retained record/handle destruction; this does not permit retired callbacks.
      */
     class GameplayNavigationContext final {
+        /** @brief Private nonaggregate admission key; only Create can construct a context. */
+        class CreationKey final {
+            friend class GameplayNavigationContext;
+            CreationKey() = default;
+        };
+
     public:
+        /** @brief Factory implementation constructor, inaccessible without the private admission key.
+         * @param key Private factory admission. @param state Host-created bounded state.
+         */
+        GameplayNavigationContext(CreationKey key, std::shared_ptr<GameplayNavigationState> state);
         /** @brief Prepare one module/scene grant and finite request storage.
          * @param binding Explicit principal (nonempty module identity up to 256 bytes, without embedded NUL), exact scene and operation
          * grants.
@@ -127,7 +137,6 @@ namespace Horo::Gameplay {
          * @return Success or typed rejection of a replacement generation; existing grants are unchanged.
          */
         [[nodiscard]] Result<void> RetainCodeImage(std::shared_ptr<void> image) const;
-        explicit GameplayNavigationContext(std::shared_ptr<GameplayNavigationState> state);
         std::shared_ptr<GameplayNavigationState> state_;
     };
 }  // namespace Horo::Gameplay

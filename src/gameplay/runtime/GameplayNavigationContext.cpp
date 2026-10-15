@@ -132,15 +132,16 @@ namespace Horo::Gameplay {
                     }
                 }
             } else if (record.movement) {
+                using enum Navigation::NavigationMovementState;
                 if (record.cancellation.Token().IsCancellationRequested())
                     static_cast<void>(movement->Cancel(*record.movement));
                 const auto &currentStatus = movement->Status();
-                if (currentStatus.id == *record.movement && currentStatus.state < Navigation::NavigationMovementState::Arrived)
+                if (currentStatus.id == *record.movement && currentStatus.state < Arrived)
                     return;
                 auto status = currentStatus;
                 if (status.id != *record.movement)
-                    status = {*record.movement, Navigation::NavigationMovementState::Superseded, {}};
-                if (status.state >= Navigation::NavigationMovementState::Arrived) {
+                    status = {*record.movement, Superseded, {}};
+                if (status.state >= Arrived) {
                     record.storage->movement = std::move(status);
                     record.completed = record.storage;
                 }
@@ -177,7 +178,9 @@ namespace Horo::Gameplay {
         return Result<bool>::Success(true);
     }
 
-    GameplayNavigationContext::GameplayNavigationContext(std::shared_ptr<GameplayNavigationState> state) : state_(std::move(state)) {}
+    /** @copydoc GameplayNavigationContext::GameplayNavigationContext */
+    GameplayNavigationContext::GameplayNavigationContext(CreationKey, std::shared_ptr<GameplayNavigationState> state)
+        : state_(std::move(state)) {}
 
     /** @copydoc GameplayNavigationContext::Create */
     Result<std::shared_ptr<GameplayNavigationContext>> GameplayNavigationContext::Create(
@@ -208,7 +211,7 @@ namespace Horo::Gameplay {
             state->maximum = maximumPending;
             state->records.reserve(maximumPending);
             return Result<std::shared_ptr<GameplayNavigationContext>>::Success(
-                std::shared_ptr<GameplayNavigationContext>{new GameplayNavigationContext{std::move(state)}});
+                std::make_shared<GameplayNavigationContext>(CreationKey{}, std::move(state)));
         } catch (const std::bad_alloc &) {
             return Result<std::shared_ptr<GameplayNavigationContext>>::Failure(MakeError(Navigation::NavigationErrors::CapacityExceeded));
         }
@@ -224,7 +227,7 @@ namespace Horo::Gameplay {
             return Result<bool>::Failure(MakeError(NavigationCapabilityErrors::WrongThread));
         if (!state_->revoked)
             return Result<bool>::Success(false);
-        for (auto &record : state_->records)
+        for (const auto &record : state_->records)
             state_->Poll(*record);
         std::erase_if(state_->records, [](const auto &record) {
             return record->completed || record->error;
@@ -260,7 +263,7 @@ namespace Horo::Gameplay {
             current.path.provenance.world != current.binding.world || (state_->current && current.path.tick < state_->current->path.tick))
             return Result<void>::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
         state_->current = current;
-        for (auto &record : state_->records)
+        for (const auto &record : state_->records)
             state_->Poll(*record);
         std::erase_if(state_->records, [](const auto &record) {
             return record->completed || record->error;

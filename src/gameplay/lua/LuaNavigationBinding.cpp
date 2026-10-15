@@ -201,13 +201,15 @@ namespace Horo::Gameplay::Detail {
         /** @brief Marshal primitive inputs into the same bounded host policy used by native callers. */
         template <GameplayNavigationOperation Operation> int Submit(lua_State *state) {
             const auto &scope = *static_cast<Scope *>(luaL_checkudata(state, lua_upvalueindex(1), ScopeType));
-            Math::Vec3 start{}, destination{};
+            Math::Vec3 start{};
+            Math::Vec3 destination{};
             if constexpr (Operation == GameplayNavigationOperation::Path) {
                 start = ReadVector(state, 1);
                 destination = ReadVector(state, 4);
             } else
                 destination = ReadVector(state, 1);
-            lua_Integer index{}, generation{};
+            lua_Integer index{};
+            lua_Integer generation{};
             if constexpr (Operation == GameplayNavigationOperation::Follow) {
                 index = luaL_checkinteger(state, 4);
                 generation = luaL_checkinteger(state, 5);
@@ -259,14 +261,14 @@ namespace Horo::Gameplay::Detail {
             lua_setfield(state, -2, "__gc");
         }
         lua_setmetatable(state, -2);
-        const auto bind = [&](lua_CFunction function, const char *name) {
+        const auto bind = [&]<lua_CFunction Function>(const char *name) {
             lua_pushvalue(state, -1);
-            lua_pushcclosure(state, function, 1);
+            lua_pushcclosure(state, Function, 1);
             lua_setfield(state, -3, name);
         };
-        bind(Submit<GameplayNavigationOperation::Path>, "path");
-        bind(Submit<GameplayNavigationOperation::MoveTo>, "move_to");
-        bind(Submit<GameplayNavigationOperation::Follow>, "follow");
+        bind.operator()<Submit<GameplayNavigationOperation::Path>>("path");
+        bind.operator()<Submit<GameplayNavigationOperation::MoveTo>>("move_to");
+        bind.operator()<Submit<GameplayNavigationOperation::Follow>>("follow");
         lua_pop(state, 1);
     }
 }  // namespace Horo::Gameplay::Detail
