@@ -35,7 +35,7 @@ namespace Horo::Application::Internal {
         Sha256Digest requestDigest;
         Sha256Digest lockDigest;
 
-        Impl(PackageProjectHostServices hostServices, PackageProjectPolicy p, Duration age, Packages::IPackageRestoreSource *s,
+        Impl(const PackageProjectHostServices &hostServices, PackageProjectPolicy p, Duration age, Packages::IPackageRestoreSource *s,
              Packages::PackagePublisherVerificationService *v)
             : services(hostServices), policy(std::move(p)), maximumAge(age), source(s), publishers(v) {}
 

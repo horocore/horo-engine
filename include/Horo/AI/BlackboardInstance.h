@@ -246,6 +246,9 @@ namespace Horo::AI {
         [[nodiscard]] Result<BlackboardCanonicalState> CaptureCanonical() const;
         /** @brief Captures an immutable value copy for worker observation. @return Snapshot or stale failure. */
         [[nodiscard]] Result<BlackboardSnapshot> Snapshot() const;
+        /** @brief Copies one authorized key on the owner safe-point thread without allocating a snapshot.
+         * @param key Stable schema key. @return Copied optional value or typed stale/unknown-key failure. */
+        [[nodiscard]] Result<std::optional<BlackboardValue>> ReadAtSafePoint(BlackboardKeyId key) const;
         /** @brief Starts a detached fixed-capacity batch. @return Revision-fenced batch or stale failure. */
         [[nodiscard]] Result<BlackboardWriteBatch> BeginWriteBatch() const;
         /**

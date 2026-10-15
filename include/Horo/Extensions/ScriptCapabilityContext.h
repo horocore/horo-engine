@@ -110,6 +110,17 @@ namespace Horo::Extensions {
         [[nodiscard]] Result<ScriptInvocationController> Begin(const ScriptInvocationProviderRegistration &provider,
                                                                ScriptInvocationRequest request, std::uint64_t operationId = 0) const;
 
+        /** @brief Issues a resource through the binding's existing context/provider authority.
+         * @param provider Exact admitted provider. @param type Stable opaque resource type.
+         * @return Existing registry-issued identity or typed denied/capacity failure; no resource callback runs. */
+        [[nodiscard]] Result<ScriptHandle> IssueHandle(const ScriptInvocationProviderRegistration &provider, std::string type) const;
+        /** @brief Validates both registry liveness and this exact binding context/provider.
+         * @param handle Copied resource identity. @return Success or typed stale/foreign/denied failure. */
+        [[nodiscard]] Result<void> ValidateHandle(const ScriptHandle &handle) const;
+        /** @brief Releases a resource issued to this exact binding. @param handle Copied identity.
+         * @return Success or typed stale/foreign/denied failure; provider retains resource cleanup authority. */
+        [[nodiscard]] Result<void> ReleaseHandle(const ScriptHandle &handle) const;
+
     private:
         friend class ScriptCapabilityContext;
         explicit ScriptCapabilityBinding(std::shared_ptr<const ScriptCapabilityBindingState> state);

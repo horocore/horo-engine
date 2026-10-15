@@ -13,13 +13,16 @@ set_property(GLOBAL PROPERTY HORO_GAMEPLAY_PYTHON_EXECUTABLE "${Python3_EXECUTAB
 set_property(GLOBAL PROPERTY HORO_GAMEPLAY_SDK_FINGERPRINT "${HORO_GAMEPLAY_SDK_FINGERPRINT}")
 
 # Adds one primary project gameplay dynamic library with a generated complete
-# HORO_BEHAVIOR descriptor bundle.
+# HORO_BEHAVIOR descriptor bundle. INPUT_MANIFEST_OUTPUT optionally gives an
+# additional target its own freshness metadata path; the primary project default
+# remains .horo/local/gameplay_build_inputs.txt. NO_MANIFEST only suppresses the
+# runtime artifact JSON, never descriptor/fingerprint or input evidence.
 function(horo_add_gameplay_module target)
     get_property(gameplay_module_cmake_dir GLOBAL PROPERTY HORO_GAMEPLAY_MODULE_CMAKE_DIR)
     get_property(gameplay_codegen_script GLOBAL PROPERTY HORO_GAMEPLAY_CODEGEN_SCRIPT)
     get_property(gameplay_python_executable GLOBAL PROPERTY HORO_GAMEPLAY_PYTHON_EXECUTABLE)
     get_property(gameplay_sdk_fingerprint GLOBAL PROPERTY HORO_GAMEPLAY_SDK_FINGERPRINT)
-    cmake_parse_arguments(ARG "NO_MANIFEST" "MODULE_ID;BUILD_FINGERPRINT;MANIFEST_OUTPUT" "SOURCES;INPUTS" ${ARGN})
+    cmake_parse_arguments(ARG "NO_MANIFEST" "MODULE_ID;BUILD_FINGERPRINT;MANIFEST_OUTPUT;INPUT_MANIFEST_OUTPUT" "SOURCES;INPUTS" ${ARGN})
     if(NOT ARG_MODULE_ID OR NOT ARG_SOURCES)
         message(FATAL_ERROR "horo_add_gameplay_module requires MODULE_ID and SOURCES")
     endif()
@@ -76,7 +79,11 @@ function(horo_add_gameplay_module target)
         target_link_options(${target} PRIVATE --coverage)
     endif()
 
-    set(input_manifest "${CMAKE_SOURCE_DIR}/.horo/local/gameplay_build_inputs.txt")
+    if(ARG_INPUT_MANIFEST_OUTPUT)
+        set(input_manifest "${ARG_INPUT_MANIFEST_OUTPUT}")
+    else()
+        set(input_manifest "${CMAKE_SOURCE_DIR}/.horo/local/gameplay_build_inputs.txt")
+    endif()
     set(input_manifest_contents "")
     foreach(input IN LISTS gameplay_sources gameplay_inputs)
         if(IS_ABSOLUTE "${input}")

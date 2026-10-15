@@ -49,6 +49,18 @@ add_test(NAME HoroGameplayManifestRevisionValidationTest
 set_tests_properties(HoroGameplayManifestRevisionValidationTest PROPERTIES
     LABELS "gameplay;cmake")
 
+add_test(NAME HoroGameplayModuleInputManifestTest
+    COMMAND "${CMAKE_COMMAND}"
+        "-DHORO_ENGINE_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+        "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/gameplay-input-manifest"
+        "-DPYTHON_EXECUTABLE=${Python3_EXECUTABLE}"
+        "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+        "-DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}"
+        "-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+        -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunGameplayModuleInputManifestTest.cmake")
+set_tests_properties(HoroGameplayModuleInputManifestTest PROPERTIES
+    LABELS "gameplay;cmake;ci-windows" TIMEOUT 90)
+
 add_test(NAME HoroExtensionSdkExternalConsumerTest
     COMMAND "${CMAKE_COMMAND}"
         "-DHORO_EXTENSION_SDK_PACKAGE_DIR=${HORO_EXTENSION_SDK_PACKAGE_DIR}"
@@ -200,6 +212,7 @@ if (HORO_ENABLE_IMGUI_UI_TESTS)
     add_executable(HoroEditorUiAutomationTests
             gui/EditorUiAutomationHarnessTests.cpp
             gui/FullEditorUiAutomationScenarios.cpp
+            gui/PackageModalUiTests.cpp
             helpers/editor_ui/EditorUiTestHarness.cpp
             helpers/editor_ui/EditorUiTestSurface.cpp
             helpers/editor_ui/InteractiveEditorUiTestRenderer.cpp
@@ -209,6 +222,7 @@ if (HORO_ENABLE_IMGUI_UI_TESTS)
     )
     target_include_directories(HoroEditorUiAutomationTests PRIVATE
             ${PROJECT_SOURCE_DIR}/tests/helpers/editor_ui
+            ${PROJECT_SOURCE_DIR}/tests/support
             ${PROJECT_SOURCE_DIR}/src
             ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
             ${imgui_test_engine_SOURCE_DIR}
@@ -223,8 +237,11 @@ if (HORO_ENABLE_IMGUI_UI_TESTS)
             HoroEngine::Gui
             HoroEngine::ProjectMigrations
             HoroEngine::RenderFrontend
+            HoroEngine::PackageApplication
+            HoroEngine::EditorPackageAdapters
             HoroThirdParty::ImGui
             nlohmann_json::nlohmann_json
+            miniz
     )
     if (HORO_BUILD_RENDER_OPENGL)
         target_sources(HoroEditorUiAutomationTests PRIVATE
@@ -1672,6 +1689,32 @@ target_compile_definitions(HoroGameModuleHostTests PRIVATE
 )
 target_link_libraries(HoroGameModuleHostTests PRIVATE HoroEngine::GameplayModuleHost)
 add_dependencies(HoroGameModuleHostTests HoroTestGameModule)
+horo_add_gameplay_module(HoroTestAiGameModule
+    MODULE_ID game.ai.tests
+    INPUT_MANIFEST_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/HoroTestAiGameModule/input-manifest.txt"
+    NO_MANIFEST
+    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_module/AiGameModule.cpp)
+target_link_libraries(HoroTestAiGameModule PRIVATE HoroEngine::GameplayAiIntegration)
+get_property(HORO_TEST_AI_MODULE_REVISION_FILE TARGET HoroTestAiGameModule PROPERTY HORO_GAMEPLAY_DESCRIPTOR_REVISION_FILE)
+add_executable(HoroGameplayAiTests
+    support/AllocationProbe.cpp
+    unit/gameplay/GameplayAiCapabilityTests.cpp
+    unit/gameplay/GameplayAiScriptTests.cpp
+    unit/gameplay/GameplayAiHostTests.cpp)
+target_compile_features(HoroGameplayAiTests PRIVATE cxx_std_20)
+target_include_directories(HoroGameplayAiTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
+target_link_libraries(HoroGameplayAiTests PRIVATE HoroEngine::GameplayAiScriptBridge HoroEngine::GameplayModuleHost)
+target_compile_definitions(HoroGameplayAiTests PRIVATE
+    HORO_TEST_AI_MODULE_PATH="$<TARGET_FILE:HoroTestAiGameModule>"
+    HORO_TEST_AI_MODULE_REVISION_PATH="${HORO_TEST_AI_MODULE_REVISION_FILE}")
+add_dependencies(HoroGameplayAiTests HoroTestAiGameModule)
+horo_register_catch_test(HoroGameplayAiTests LABELS "unit;gameplay;ai;headless")
+add_executable(HoroGameplayAiContractConsumer support/GameplayAiContractConsumer.cpp)
+target_compile_features(HoroGameplayAiContractConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroGameplayAiContractConsumer PRIVATE HoroEngine::GameplayAiScriptBridge HoroEngine::GameplayModuleHost)
+add_test(NAME HoroGameplayAiContractConsumer COMMAND HoroGameplayAiContractConsumer)
+set_tests_properties(HoroGameplayAiContractConsumer PROPERTIES LABELS "public_headers;ci-windows;sonar-coverage")
+
 add_executable(HoroGameplayPhysicsTests unit/gameplay/GameplayPhysicsContextTests.cpp
     integration/gameplay/GameplayCharacterContextTests.cpp
     integration/gameplay/LuaCharacterLifecycleTests.cpp
@@ -3988,11 +4031,14 @@ endforeach()
 add_executable(HoroPackageApplicationTests
     unit/packages/PackageApplicationServiceTests.cpp
     unit/packages/PackageApplicationAdapterTests.cpp
-    unit/packages/PackageProjectHostTests.cpp)
+    unit/packages/PackageProjectHostTests.cpp
+    unit/packages/PackageCliHostTests.cpp
+    "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/PackageCliHost.cpp")
 target_link_libraries(HoroPackageApplicationTests PRIVATE
     HoroPackageProjectHost HoroEngine::PackageApplication HoroEngine::CliPackageAdapters HoroEngine::McpPackageAdapters
     HoroEngine::EditorPackageAdapters HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
-target_include_directories(HoroPackageApplicationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_include_directories(HoroPackageApplicationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support
+    "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host")
 horo_register_catch_test(HoroPackageApplicationTests LABELS "packages;application;cli;mcp;editor;headless")
 
 add_executable(HoroPackageLifecycleTests unit/packages/PackageLifecycleTests.cpp)

@@ -209,7 +209,7 @@ namespace Horo::Application::Internal {
                 return CompleteError(presenter, configuration.ErrorValue());
             auto adapters = HostCommandAdapters(descriptors, session.observability, {}, &packages);
             auto packageAdapters =
-                Cli::MakePackageCommandAdapters([&packages](const CliCommandRequest &command, CliExecutionContext &context) {
+                Cli::MakePackageCommandAdapters([&packages](const CliCommandRequest &command, const CliExecutionContext &context) {
                 return packages.Bind(command, context);
             }, [&packages] {
                 return packages.Boundary();
